@@ -1,0 +1,22 @@
+# rustfmt config. Verified against tikv (nightly + unstable features) and
+# wasmer (stable + defaults) on 2026-06-26. We choose the wasmer path — pin a
+# stable toolchain and use only stable rustfmt options, to avoid nightly
+# breakage in a young project. Move to tikv-style nightly rustfmt later if
+# we want imports_granularity/group_imports/wrap_comments.
+style_edition = "2024"
+edition = "2024"
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# Nightly-only (tikv uses these). Enable when we pin a nightly rustfmt:
+# unstable_features = true
+# imports_granularity = "Crate"
+# group_imports = "StdExternalCrate"
+# wrap_comments = true
+# comment_width = 100
+# normalize_comments = true
+# normalize_doc_attributes = true
+# format_code_in_doc_comments = true
+# condense_wildcard_suffixes = true

@@ -1,0 +1,71 @@
+[workspace]
+members = ["crates/*"]
+# Agent worktrees are full repo checkouts (their own Cargo.toml declares the
+# same workspace). Without excluding .claude, cargo's manifest discovery picks
+# them up as members, so a `cargo` command in the main repo compiles the
+# worktree's copy instead — every gate runs against the wrong tree.
+exclude = [".claude"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+authors = ["hicoder contributors"]
+license = "MIT"
+repository = "https://github.com/YiLabsAI/HouYiCoder"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+future_incompatible = { level = "warn", priority = -1 }
+let_underscore = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Pedantic is intentionally NOT enabled as a group — it's too opinionated for
+# stubs and capability-flag structs. Enable individual pedantic lints on demand.
+module_name_repetitions = "allow"
+needless_pass_by_value = "allow"
+# Complexity / size gates (world-class, no garbage): functions >100 lines or
+# cognitive-complexity > threshold fail the gate (-D warnings). Refactor trigger.
+too_many_lines = "warn"
+cognitive_complexity = "warn"
+
+# Forbid tier: bugs that have no correct use in this codebase. Zero hits at
+# adoption (verified across the workspace). forbid (not deny) so a future
+# violation is a compile error, not a gate the next commit can weaken.
+await_holding_lock = "forbid"
+await_holding_refcell_ref = "forbid"
+mem_forget = "forbid"
+rc_buffer = "forbid"
+large_types_passed_by_value = "forbid"
+fn_params_excessive_bools = "forbid"
+upper_case_acronyms = "forbid"
+
+# Debug info is the single largest cost of the local build, and the commit gate
+# does not need the full form. Line tables keep panic backtraces pointing at the
+# right file and line, which is what the gate and day-to-day test failures
+# actually read; the variable and type descriptions that full debug info adds
+# are only consumed by a step-debugger session.
+#
+# Measured on the tree that prompted this: the artifact directory had grown to
+# 45 GB, 41 GB of it in one directory holding 899,572 files, because on macOS
+# debug info is left beside each binary in one object file per codegen unit
+# (the default is 256 units, and one test binary alone produced 93 objects),
+# multiplied by every historical build hash, and none of it is ever collected.
+# Rebuilding after touching a single source file took 91 seconds of wall time at
+# 5 percent CPU: the time went to walking and linking that tree, not to
+# compiling.
+#
+# Deliberately NOT set here: the packed form of split debug info. Packing runs
+# dsymutil on every link, which trades a large one-off directory for a slow step
+# on the path we care most about. The default unpacked form plus small line
+# tables is the fast combination. A step-debugger session needs the full form, so
+# override it for that run rather than for everyone:
+#   CARGO_PROFILE_DEV_DEBUG=2 cargo test ...
+[profile.dev]
+debug = "line-tables-only"
+
+# The test profile inherits from dev, but spell it out so a future edit to one
+# does not silently leave the other on the full form.
+[profile.test]
+debug = "line-tables-only"

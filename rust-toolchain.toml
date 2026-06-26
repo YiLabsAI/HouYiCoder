@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned to a specific stable version (wasmer-style) for reproducibility,
+# not a floating "stable". Bump deliberately.
+channel = "1.96"
+components = ["rustfmt", "clippy", "rust-src"]
+profile = "default"

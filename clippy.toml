@@ -1,0 +1,22 @@
+# clippy config — verified against tikv/clippy.toml on 2026-06-26.
+# Pre-1.0: allow clippy to suggest breaking changes to exported APIs.
+avoid-breaking-exported-api = false
+
+# Cognitive complexity threshold (refactor trigger). Lower = stricter.
+cognitive-complexity-threshold = 30
+
+# Ban footgun APIs with reasons (tikv pattern). Add entries as the codebase
+# grows.
+#
+# Process spawn chokepoint: every spawn routes through the ProcessLauncher port
+# so the resource fence, wrapper, and audit policy apply uniformly. Both the
+# std and tokio Command constructors are banned — the tokio one is the escape
+# sibling a new spawn would most likely reach for. The known existing direct
+# spawns are allow-flagged at their call sites as the migration list; a NEW
+# direct spawn fails the gate.
+[[disallowed-methods]]
+path = "std::process::Command::new"
+reason = "route spawns through ProcessLauncher so the fence/wrapper/audit policy applies"
+[[disallowed-methods]]
+path = "tokio::process::Command::new"
+reason = "route spawns through ProcessLauncher so the fence/wrapper/audit policy applies"
