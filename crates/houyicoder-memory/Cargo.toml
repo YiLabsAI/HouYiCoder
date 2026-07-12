@@ -1,0 +1,24 @@
+[package]
+name = "houyicoder-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+houyicoder-context = { path = "../houyicoder-context" }
+houyicoder-api = { path = "../houyicoder-api" }
+houyicoder-async = { path = "../houyicoder-async" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+unicode-normalization = "0.1"
+tracing = "0.1.44"
+
+[dev-dependencies]
+pollster = "0.4"
