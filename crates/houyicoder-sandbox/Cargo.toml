@@ -1,0 +1,79 @@
+[package]
+name = "houyicoder-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# Default-on marker. When enabled AND the host is Linux, the
+# LinuxLandlockSession applies a real Landlock fence at construction via the
+# landlock crate (pure-Rust, safe wrappers over the Landlock syscalls).
+# Turning it off, or building for a non-Linux target, leaves the audited
+# no-op stub in place so the crate still compiles and runs unfenced. The
+# marker is a plain feature (not dep-gated) because Cargo has no
+# target-conditional feature table: the dep lives under a linux target
+# section and the CODE is gated on both the feature and the target.
+default = ["enforce"]
+enforce = []
+
+[lints]
+workspace = true
+
+[dependencies]
+houyicoder-context = { path = "../houyicoder-context" }
+houyicoder-api = { path = "../houyicoder-api" }
+houyicoder-async = { path = "../houyicoder-async" }
+houyicoder-resilience = { path = "../houyicoder-resilience" }
+dunce = "1"
+tokio = { version = "1", features = ["process", "time", "rt", "macros", "io-util"] }
+tracing = "0.1.44"
+
+# nix is a unix-only crate (no Windows support). Target-gate it so this
+# crate compiles on Windows; only the macOS + Linux backends reference it.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal", "process"] }
+
+# landlock is a Linux-only crate (pure-Rust safe wrappers over the Landlock
+# LSM syscalls). Target-gated so mac/Windows builds do not pull it in; the
+# code that references it is itself cfg-gated to linux + the enforce feature.
+# The nono crate was the original intended backend but pulls sigstore-verify
+# (and transitively aws-lc-sys, which needs a C cross-compiler), breaking
+# cargo check --target x86_64-unknown-linux-gnu on a mac dev host. The
+# landlock crate is the same Landlock enforcement surface with a safe API and
+# no native build deps.
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+
+# The windows crate is the Microsoft-maintained Rust binding to the Win32
+# API (MIT OR Apache-2.0). Target-gated to Windows so mac/Linux builds do not
+# pull it in; the code that references it is itself cfg-gated to Windows plus
+# the enforce feature. Only the Job Object + Threading + Foundation feature
+# trees are enabled to keep compile time and the binary surface minimal.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+    "Win32_Security",
+] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread", "process", "time"] }
+
+# Smoke binary that applies the fence and asserts denied paths return
+# EACCES/EPERM. required-features keeps it out of the default mac build
+# path's run; the source is cfg-gated to linux so mac compiles a no-op main.
+[[example]]
+name = "landlock_smoke"
+required-features = ["enforce"]
+
+# Smoke binary that creates a Job Object session and asserts the resource
+# limits are set on the kernel object. required-features keeps it out of the
+# default mac build path's run; the source is cfg-gated to windows so mac
+# compiles a no-op main.
+[[example]]
+name = "jobobject_smoke"
+required-features = ["enforce"]
