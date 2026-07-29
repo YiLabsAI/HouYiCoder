@@ -1,0 +1,179 @@
+//! Path-confinement utilities shared by the filesystem-access tools. Every
+//! tool that walks the filesystem or resolves a model-supplied path routes
+//! the candidate through confine_path so the workspace boundary is enforced
+//! in one place, not per-tool. Extracted from the tools module proper so the
+//! tool implementations file stays under the file-size gate.
+
+use std::path::{Path, PathBuf};
+
+use houyicoder_protocol::extension::ToolError;
+
+/// Canonicalize a candidate path under root and verify it stays within the
+/// workspace or a user-authorized additional dir. The candidate is joined to
+/// root, canonicalized (resolving parent directory references, dot components,
+/// and symlinks), then checked against the canonicalized root plus any granted
+/// dirs. A path that escapes both is rejected with a ToolError the model can
+/// see and recover from. The additional dirs flow here so glob/grep honor a
+/// /permissions working-dir grant at the application layer (the sandbox resolve
+/// is the kernel fence; this is the supplementary application guard).
+pub(crate) fn confine_path(
+    root: &Path,
+    additional: &[String],
+    p: &str,
+) -> Result<PathBuf, ToolError> {
+    let candidate = root.join(p);
+    let croot = canonical_root(root)?;
+    // Granted dirs beyond the root. canonicalize so symlinks + the macOS
+    // /var -> /private/var prefix compare cleanly with the canonical
+    // candidate. The fence's working_dirs() already returns canonical, so a
+    // future gate-side caller can use is_within_bounds directly without
+    // re-canonicalizing; confine_path keeps the canonicalize as a defensive
+    // measure for callers that have not been through the fence.
+    let extra: Vec<PathBuf> = additional
+        .iter()
+        .filter_map(|d| std::fs::canonicalize(d).ok())
+        .collect();
+    match std::fs::canonicalize(&candidate) {
+        Ok(canonical) => {
+            if houyicoder_api::sandbox::is_within_bounds(&canonical, &croot, &extra) {
+                Ok(canonical)
+            } else {
+                Err(ToolError::PathEscapes("path escapes workspace".into()))
+            }
+        }
+        // No such path: lexical check so an escaping path that does not exist
+        // is still reported as an escape (not a generic access failure) — the
+        // rejection wording stays stable whether or not the escaped target
+        // exists. A non-escaping path that simply does not exist yet (e.g. a
+        // file in a granted dir before it is written) surfaces as Io.
+        Err(e) => {
+            if lexical_escape(root, &candidate) {
+                Err(ToolError::PathEscapes("path escapes workspace".into()))
+            } else {
+                Err(ToolError::Io(format!("path not accessible: {e}")))
+            }
+        }
+    }
+}
+
+/// Lexically detect whether a candidate path resolves outside the root by
+/// folding cur-dir and parent-dir segments without following symlinks or
+/// requiring any component to exist. True when the normalized candidate does
+/// not start with the normalized root.
+fn lexical_escape(root: &Path, candidate: &Path) -> bool {
+    !normalize_lexical(candidate).starts_with(normalize_lexical(root))
+}
+
+/// Fold a path lexically: keep normal segments, drop cur-dir, pop on
+/// parent-dir. Root and prefix components are preserved so absolute paths
+/// stay absolute. Does not touch the filesystem, so it works on paths that
+/// do not yet exist.
+fn normalize_lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Canonicalize the workspace root, resolving any symlinks in the root path
+/// itself. Used by confine_path and by tools that need the canonical root for
+/// result filtering or relativization.
+pub(crate) fn canonical_root(root: &Path) -> Result<PathBuf, ToolError> {
+    std::fs::canonicalize(root)
+        .map_err(|e| ToolError::Io(format!("workspace root not accessible: {e}")))
+}
+
+/// Validate that a confined path is a directory. Used by tools that require
+/// a directory input (e.g. glob) to give the model a clear error instead of
+/// an empty result when the path points to a file.
+pub(crate) fn require_dir(p: &Path) -> Result<(), ToolError> {
+    if !p.is_dir() {
+        return Err(ToolError::Failed(format!(
+            "path is not a directory: {}",
+            p.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A path inside the root confines to itself. Pins the happy path so a
+    /// regression that over-rejects is caught.
+    #[test]
+    fn test_confine_path_accepts_inside() {
+        let dir = std::env::temp_dir().join(format!("path-util-inside-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, b"x").expect("write");
+        let confined = confine_path(&dir, &[], "a.txt").expect("inside root");
+        assert_eq!(confined, std::fs::canonicalize(&file).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A parent-dir escape is rejected lexically without touching the
+    /// escaped target, so the wording is stable whether or not the target
+    /// exists outside the workspace.
+    #[test]
+    fn test_confine_path_rejects_escape() {
+        let dir = std::env::temp_dir().join(format!("path-util-esc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let err = confine_path(&dir, &[], "../../etc").expect_err("escape rejected");
+        assert!(
+            matches!(err, ToolError::PathEscapes(_)),
+            "escape surfaces as PathEscapes"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// require_dir rejects a file path with a clear error naming the path.
+    #[test]
+    fn test_require_dir_rejects_file() {
+        let dir = std::env::temp_dir().join(format!("path-util-dir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, b"x").expect("write");
+        assert!(require_dir(&file).is_err(), "a file is not a directory");
+        assert!(require_dir(&dir).is_ok(), "the dir itself is a directory");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The shared boundary predicate: a canonical candidate is within bounds
+    /// under the root or an additional authorized dir; outside both it is not.
+    /// Single source of truth for confine_path + the gate so the two layers
+    /// cannot drift on what "inside the workspace" means.
+    #[test]
+    fn test_within_bounds_covers_extra() {
+        let root = std::env::temp_dir().join(format!("path-util-bounds-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let extra = std::env::temp_dir().join(format!("path-util-extra-{}", std::process::id()));
+        std::fs::create_dir_all(&extra).expect("mkdir extra");
+        let croot = std::fs::canonicalize(&root).unwrap();
+        let cextra = std::fs::canonicalize(&extra).unwrap();
+        let additional = vec![cextra.clone()];
+        assert!(
+            houyicoder_api::sandbox::is_within_bounds(&croot.join("a.txt"), &croot, &additional),
+            "inside root is within bounds"
+        );
+        assert!(
+            houyicoder_api::sandbox::is_within_bounds(&cextra.join("b.txt"), &croot, &additional),
+            "inside an additional dir is within bounds"
+        );
+        let outside = std::env::temp_dir().join(format!("path-util-out-{}", std::process::id()));
+        assert!(
+            !houyicoder_api::sandbox::is_within_bounds(&outside, &croot, &additional),
+            "outside both is not within bounds"
+        );
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&extra).ok();
+    }
+}
