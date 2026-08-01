@@ -1,0 +1,26 @@
+[package]
+name = "houyicoder-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+houyicoder-protocol = { path = "../houyicoder-protocol" }
+houyicoder-async = { path = "../houyicoder-async" }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# The contract test drives the in-memory transport futures through the
+# runtime the production client uses, so the test exercises the same carrier
+# semantics the app runs.
+tokio = { version = "1", features = ["rt", "macros"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
