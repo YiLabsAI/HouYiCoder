@@ -1,0 +1,78 @@
+[package]
+name = "houyicoder-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# Dependencies fill in as the composition root lands (build_runner migration,
+# server, lifecycle). The crate is the single composition root: it may depend
+# on core and every L1 + L0, per 03 §6.2. No deps yet — the empty modules
+# declare their contracts first; the build_runner migration wires them.
+
+[dependencies]
+houyicoder-core = { path = "../houyicoder-core" }
+houyicoder-context = { path = "../houyicoder-context" }
+houyicoder-api = { path = "../houyicoder-api" }
+houyicoder-async = { path = "../houyicoder-async" }
+houyicoder-protocol = { path = "../houyicoder-protocol" }
+houyicoder-config = { path = "../houyicoder-config" }
+houyicoder-session = { path = "../houyicoder-session" }
+houyicoder-memory = { path = "../houyicoder-memory" }
+houyicoder-permission = { path = "../houyicoder-permission" }
+houyicoder-provider = { path = "../houyicoder-provider" }
+houyicoder-sandbox = { path = "../houyicoder-sandbox" }
+houyicoder-resilience = { path = "../houyicoder-resilience" }
+futures = "0.3"
+tokio = { version = "1", features = ["macros", "rt", "sync", "net", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Optional, feature-gated: the ACP SDK, used only by the cross-decode
+# fidelity test. Service-only by design (the protocol layer never depends on
+# it); optional so the default test pass does not compile schemars +
+# derive_more. Pinned to an exact patch (0.x patch releases have broken
+# before).
+agent-client-protocol = { version = "=0.10.4", features = ["unstable"], optional = true }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "registry"] }
+
+[features]
+# Gates the ACP cross-decode fidelity tests. The agent-client-protocol dep
+# pulls schemars + derive_more, whose cold compile pushes the workspace
+# test-compile past the 120s gate; the dep is optional so the default
+# cargo test stays fast. Run with the acp-cross-decode feature enabled to
+# verify the SessionUpdate mirror against the upstream crate.
+acp-cross-decode = ["dep:agent-client-protocol"]
+
+# The four ACP E2E test binaries (drop-in, dual-transport equivalence, server
+# probes, cross-decode) are whole-file `#![cfg(feature = "acp-cross-decode")]`.
+# Without required-features cargo still compiles each to an empty harness and
+# spawns it for zero work pure spawn overhead on every default run. Declaring
+# the targets with required-features skips compile + spawn entirely when the
+# feature is off, so the default gate measures only the work that runs.
+[[test]]
+name = "acp_drop_in"
+path = "tests/acp_drop_in.rs"
+required-features = ["acp-cross-decode"]
+[[test]]
+name = "acp_equivalence"
+path = "tests/acp_equivalence.rs"
+required-features = ["acp-cross-decode"]
+[[test]]
+name = "acp_server_probes"
+path = "tests/acp_server_probes.rs"
+required-features = ["acp-cross-decode"]
+[[test]]
+name = "acpx_cross_decode"
+path = "tests/acpx_cross_decode.rs"
+required-features = ["acp-cross-decode"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+serde = { version = "1", features = ["derive"] }
+houyicoder-client = { path = "../houyicoder-client" }
