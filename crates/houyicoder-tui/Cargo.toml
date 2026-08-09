@@ -1,0 +1,44 @@
+[package]
+name = "houyicoder-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ratatui = "0"
+crossterm = { version = "0", features = ["osc52"] }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+houyicoder-protocol = { path = "../houyicoder-protocol" }
+houyicoder-client = { path = "../houyicoder-client" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }
+unicode-segmentation = "1"
+unicode-width = "0.2"
+pulldown-cmark = { version = "0", default-features = false, features = ["simd"] }
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+similar = { version = "2", features = ["unicode", "inline"] }
+regex = "1"
+tracing = "0.1.44"
+
+[dev-dependencies]
+houyicoder-core = { path = "../houyicoder-core" }
+houyicoder-api = { path = "../houyicoder-api" }
+houyicoder-permission = { path = "../houyicoder-permission" }
+houyicoder-session = { path = "../houyicoder-session" }
+houyicoder-provider = { path = "../houyicoder-provider" }
+houyicoder-memory = { path = "../houyicoder-memory" }
+houyicoder-context = { path = "../houyicoder-context" }
+houyicoder-async = { path = "../houyicoder-async" }
+houyicoder-service = { path = "../houyicoder-service" }
+houyicoder-config = { path = "../houyicoder-config" }
+futures = "0.3"
+portable-pty = "0.9"
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.29", features = ["signal", "process"] }
+
+[lints]
+workspace = true
