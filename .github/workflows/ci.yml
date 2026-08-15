@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0
+      - name: Cache cargo registry + bins
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/bin
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install nextest
+        run: ./scripts/ensure_nextest.sh
+      - name: Install jscpd (clone detector for L3 report)
+        run: ./scripts/ensure_jscpd.sh
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: check
+        run: cargo check --workspace --all-targets
+      - name: test (unit)
+        run: python3 scripts/run_tests.py
+      - name: test (integration)
+        run: python3 scripts/run_tests.py --full
+      - name: L2 Python gates (skip Rust, CI already ran them)
+        run: CHECK_SKIP_RUST=1 bash scripts/check_code.sh
+        env:
+          HOUYICODER_FAST_TOKENS: "1"
+      - name: L3 Structure facts (report-only, visible in CI logs)
+        run: python3 scripts/report_structure_facts.py
