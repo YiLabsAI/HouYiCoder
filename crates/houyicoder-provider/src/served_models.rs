@@ -48,7 +48,6 @@ fn sort_longest_first(mut ids: Vec<String>) -> Vec<String> {
 /// advisory, the process still runs without it.
 pub(crate) fn write_cache(path: &std::path::Path, ids: &[String]) {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     if let Err(e) = std::fs::create_dir_all(dir) {
         tracing::warn!("served-models cache: create_dir_all failed: {e}");
@@ -66,13 +65,7 @@ pub(crate) fn write_cache(path: &std::path::Path, ids: &[String]) {
         return;
     };
     let tmp = path.with_extension("json.tmp");
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)
-    {
+    match open_cache_file(&tmp) {
         Ok(mut f) => {
             if let Err(e) = f.write_all(json.as_bytes()) {
                 tracing::warn!("served-models cache: write failed: {e}");
@@ -87,6 +80,28 @@ pub(crate) fn write_cache(path: &std::path::Path, ids: &[String]) {
         }
         Err(e) => tracing::warn!("served-models cache: open tmp failed: {e}"),
     }
+}
+
+/// Open the cache temp file with restrictive permissions on Unix (0o600).
+/// On non-Unix platforms the default permissions are used.
+#[cfg(unix)]
+fn open_cache_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_cache_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
 }
 
 #[cfg(test)]
