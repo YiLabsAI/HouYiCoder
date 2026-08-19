@@ -2,9 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [dev]
   pull_request:
     branches: [main, dev]
+
+# Supersede stale runs: a newer commit on the same ref cancels the in-flight
+# run, so consecutive pushes do not pile up a queue of obsolete jobs. Push
+# CI runs only on dev (main only fast-forwards to a SHA dev already ran),
+# so nothing here is a release verdict that must run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,7 +33,7 @@ jobs:
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   test:
     strategy:
@@ -43,7 +51,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: check
-        run: cargo check --workspace --all-targets
+        run: cargo check --locked --workspace --all-targets
       - name: test (unit)
         shell: bash
         run: python3 scripts/run_tests.py
