@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
     branches: [main]
 
@@ -11,43 +11,79 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  check:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0
-      - name: Cache cargo registry + bins
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/bin
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-      - name: Install nextest
-        run: ./scripts/ensure_nextest.sh
-      - name: Install jscpd (clone detector for L3 report)
-        run: ./scripts/ensure_jscpd.sh
+      - uses: Swatinem/rust-cache@v2
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - name: check
         run: cargo check --workspace --all-targets
       - name: test (unit)
+        shell: bash
         run: python3 scripts/run_tests.py
+        env:
+          HOUYICODER_FAST_TOKENS: "1"
       - name: test (integration)
+        if: runner.os != 'Windows'
+        shell: bash
         run: python3 scripts/run_tests.py --full
-      - name: L2 Python gates (skip Rust, CI already ran them)
+        env:
+          HOUYICODER_FAST_TOKENS: "1"
+      - name: L2 Python gates
+        if: runner.os == 'Linux'
+        shell: bash
         run: CHECK_SKIP_RUST=1 bash scripts/check_code.sh
         env:
           HOUYICODER_FAST_TOKENS: "1"
-      - name: L3 Structure facts (report-only, visible in CI logs)
+      - name: L3 Structure facts
+        if: runner.os == 'Linux'
         run: python3 scripts/report_structure_facts.py
+
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@nextest
+      - name: Generate coverage
+        run: cargo llvm-cov nextest --workspace --codecov --output-path codecov.json
+        env:
+          HOUYICODER_FAST_TOKENS: "1"
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: codecov.json
+          fail_ci_if_error: true

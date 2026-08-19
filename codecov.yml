@@ -1,0 +1,23 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 2%
+    patch:
+      default:
+        target: 80%
+        threshold: 5%
+
+comment:
+  layout: "reach,diff,flags,files,footer"
+  behavior: default
+  require_changes: false
+
+ignore:
+  - "crates/*/tests/**"
+  - "crates/*/src/*_tests.rs"
+  - "crates/*/src/**/*_tests.rs"
+  - "spikes/**"
+  - "scripts/**"
+  - ".github/**"
