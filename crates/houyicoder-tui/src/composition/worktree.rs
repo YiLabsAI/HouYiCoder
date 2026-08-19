@@ -106,7 +106,7 @@ mod worktree_display_tests {
             Command::new("git")
                 .arg("-C")
                 .arg(&dir)
-                .args(["init", "-q"])
+                .args(["init", "-q", "--initial-branch=main"])
                 .status(),
         );
         drop(

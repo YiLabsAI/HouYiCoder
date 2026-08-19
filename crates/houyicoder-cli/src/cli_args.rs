@@ -93,7 +93,7 @@ fn parse_flag(
         }
         #[cfg(not(unix))]
         {
-            let _ = path;
+            drop(path);
             return Err("--serve is unix-only; detached sessions need a Unix domain socket".into());
         }
     } else if arg == "-h" || arg == "--help" {
