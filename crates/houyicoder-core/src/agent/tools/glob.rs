@@ -16,7 +16,7 @@ use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_async::PFut;
 use serde_json::{Value, json};
 
-use super::path_util::{canonical_root, confine_path, require_dir};
+use super::path_util::{canonical_root, confine_path, relativize, require_dir};
 use super::{Tool, ToolCtx, ToolError};
 
 /// Placeholder cap pending the isolate seam (context lifecycle will make
@@ -181,7 +181,7 @@ fn glob_files(
     // the workspace (via a symlink, or a wildcard-expanded path that escapes
     // through parent-directory segments after a wildcard) is dropped.
         .filter(|p| {
-            std::fs::canonicalize(p)
+            dunce::canonicalize(p)
                 .map(|c| c.starts_with(&croot))
                 .unwrap_or(false)
         })
@@ -236,8 +236,8 @@ fn check_pattern_confined(croot: &Path, full_pattern: &str) -> Result<(), ToolEr
     if dir.is_empty() {
         return Ok(());
     }
-    let canonical = std::fs::canonicalize(dir)
-        .map_err(|e| ToolError::Io(format!("path not accessible: {e}")))?;
+    let canonical =
+        dunce::canonicalize(dir).map_err(|e| ToolError::Io(format!("path not accessible: {e}")))?;
     if !canonical.starts_with(croot) {
         return Err(ToolError::PathEscapes("pattern escapes workspace".into()));
     }
@@ -265,15 +265,6 @@ fn glob_options() -> MatchOptions {
         require_literal_separator: false,
         require_literal_leading_dot: false,
     }
-}
-
-/// Convert an absolute path under root into a relative path string. Falls
-/// back to the absolute path if the path is not under root (should not
-/// happen for sandbox-resolved paths, but is safe).
-fn relativize(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }
 
 mod subprocess;
@@ -502,16 +493,6 @@ mod tests {
         assert!(files.is_empty());
         assert!(!trunc);
         fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn test_relativize_strips_root() {
-        let root = Path::new("/workspace");
-        let file = Path::new("/workspace/src/main.rs");
-        assert_eq!(relativize(root, file), "src/main.rs");
-        // Outside root falls back to the full path.
-        let outside = Path::new("/etc/passwd");
-        assert_eq!(relativize(root, outside), "/etc/passwd");
     }
 
     #[test]

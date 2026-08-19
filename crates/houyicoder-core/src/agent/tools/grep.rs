@@ -18,7 +18,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 use walkdir::WalkDir;
 
-use super::path_util::{canonical_root, confine_path};
+use super::path_util::{canonical_root, confine_path, relativize};
 use super::{Tool, ToolCtx, ToolError};
 
 /// VCS metadata directories excluded from search to reduce noise.
@@ -775,14 +775,6 @@ fn apply_limit<T: Clone>(items: Vec<T>, limit: usize, offset: usize) -> (Vec<T>,
     let was_truncated = total.saturating_sub(offset) > limit;
     let sliced: Vec<T> = items.into_iter().skip(offset).take(limit).collect();
     (sliced, was_truncated)
-}
-
-/// Relativize an absolute path under root to a string. Falls back to the
-/// full path string if not under root.
-fn relativize(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

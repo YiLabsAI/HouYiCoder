@@ -170,9 +170,10 @@ fn run_git(repo_root: &Path, args: &[&str]) -> Result<String, WorktreeError> {
 }
 
 /// Canonicalize so the macOS /var to /private/var symlink does not make a
-/// seatbelt realpath starts_with check reject legitimate paths.
+/// seatbelt realpath starts_with check reject legitimate paths. dunce keeps
+/// Windows from returning a \\?\ path, which git cannot consume.
 fn canonicalize(p: &Path) -> Result<PathBuf, WorktreeError> {
-    std::fs::canonicalize(p).map_err(|e| WorktreeError::Git {
+    dunce::canonicalize(p).map_err(|e| WorktreeError::Git {
         stderr: format!("canonicalize {}: {e}", p.display()),
     })
 }
