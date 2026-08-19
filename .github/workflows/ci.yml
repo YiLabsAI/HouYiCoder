@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 env:
   CARGO_TERM_COLOR: always
@@ -73,24 +73,44 @@ jobs:
     permissions:
       contents: read
     steps:
+      # fetch-depth: 0 — the diff-coverage gate below diffs against
+      # origin/main, which a shallow clone does not have.
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: llvm-tools-preview
+          fetch-depth: 0
+      # llvm-tools-preview is NOT requested here: rust-toolchain.toml pins the
+      # channel and overrides whatever this action makes default, so a
+      # component installed for "stable" would land on the wrong toolchain the
+      # moment stable moves past the pin. The pin carries the component list.
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: taiki-e/install-action@nextest
-      - name: Generate coverage
-        run: cargo llvm-cov nextest --workspace --codecov --output-path codecov.json
+      # Whole-workspace unit coverage, one instrumented pass. The lcov it
+      # writes is reused by the diff gate below, so the two gates cost one
+      # compile between them, not two. cargo-llvm-cov is installed above, so
+      # the script's skip-if-missing path cannot silently pass here.
+      - name: Coverage gate (workspace total)
+        run: bash scripts/check_coverage.sh
         env:
           HOUYICODER_FAST_TOKENS: "1"
           # Skip the kernel fence, not the session: see run_tests.py. Set here
-          # too because this job invokes nextest directly.
+          # too because this job drives the instrumented run directly.
           HOUYICODER_SANDBOX_NO_ENFORCE: "1"
+      # Blocking gate on NEW code: percent of the lines this branch adds or
+      # modifies that unit tests cover. Reuses the lcov from the step above.
+      - name: Coverage gate (new lines)
+        run: python3 scripts/check_diff_coverage.py
+        env:
+          COV_BASE: origin/main
+          HOUYICODER_FAST_TOKENS: "1"
+          HOUYICODER_SANDBOX_NO_ENFORCE: "1"
+      # always(): the report is worth publishing precisely when a gate above
+      # failed, since that is when someone needs to see which lines are bare.
       - name: Upload to Codecov
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: YiLabsAI/HouYiCoder
-          files: codecov.json
+          files: target/cov/houyi-cov.lcov
           fail_ci_if_error: false

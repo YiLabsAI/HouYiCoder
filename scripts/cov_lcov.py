@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Shared lcov parser + stale-mapping detector for the two coverage gates.
 
-Both check_diff_coverage.py (diff-cov) and check_coverage.sh (per-crate
-threshold) consume an lcov report. A stale report -- one whose baked-in
+Both check_diff_coverage.py (diff-cov) and check_coverage.sh (workspace
+total) consume an lcov report. A stale report -- one whose baked-in
 line table predates the last source edit -- attributes every number to the
 wrong code, and the error runs both ways: it invents uncovered lines where
 nothing executable now sits, and it credits new code with hits that belong

@@ -84,7 +84,7 @@ unreliably, so the gate itself is guarded).
 | `check_code.sh` | The `make check` runner — fail-fast, stops at the first red gate |
 | `test.sh` | The `make test` dispatcher — unit / integration / ui / live categories |
 | `quick_check.sh` | Dev fast path — fmt + clippy only, no tests |
-| `check_coverage.sh` | The `make verify` coverage gate (cargo-llvm-cov; opt-in until the tool is installed) |
+| `check_coverage.sh` | Workspace unit-coverage total, one global threshold — `make check-full` and CI (cargo-llvm-cov; opt-in locally until the tool is installed, installed explicitly in CI) |
 | `ensure_nextest.sh` | Installs nextest if absent, before the test runner needs it |
 | `ensure_jscpd.sh` | Installs jscpd if absent, before the duplicate-code report needs it |
 | `pre_commit_hook.sh` | Git `pre-commit` wrapper — runs `make check` |

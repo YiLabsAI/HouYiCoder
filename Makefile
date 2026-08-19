@@ -36,7 +36,7 @@ help:
 	@echo "  make test integration Integration tests (tests/ binaries; live self-skip w/o .env)"
 	@echo "  make test ui          PTY UI tests: build the houyi bin + run tests/ui_*.rs --ignored"
 	@echo "  make test sandbox     Live sandbox tests: real sandbox-exec, needs macOS, #[ignore]"
-	@echo "  make test-cov         Coverage gate (per-crate thresholds + diff-cov)"
+	@echo "  make test-cov         Coverage gates (workspace unit total + diff-cov)"
 	@echo "  (NEXTEST=1 selects cargo-nextest for unit/integration legs)"
 	@echo ""
 	@echo "  make check-deps       Layering dep-graph assertion (binding; exits 1 on runtime-dep violation)"
@@ -99,10 +99,11 @@ quick-check:
 check:
 	@./scripts/check_code.sh
 
-# Full gate: make check + one instrumented nextest run that covers unit +
-# integration tests WITH coverage in a single parallel pass. The tests run
-# once (with coverage), not three times (unit in check + standalone + cov).
-# Run before a merge or push.
+# Full gate: make check + the workspace coverage total. One instrumented
+# unit-suite pass, whose lcov the diff gate in make check reuses rather than
+# compiling a second instrumented build. Integration tests are deliberately
+# outside the number: they validate end-to-end journeys, which are reviewed as
+# story coverage rather than as a line percentage. Run before a merge or push.
 check-full: check
 	@./scripts/check_coverage.sh
 

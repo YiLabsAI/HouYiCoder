@@ -158,8 +158,8 @@ ecosystem:
 
 The repo enforces its standards as gates, not aspirations:
 
-- **~90% line coverage** across the workspace, with per-crate ratchet
-  thresholds that only ever go up
+- **~90% line coverage** across the workspace, gated two ways: a workspace
+  unit-coverage floor and an 85% floor on every line a change adds or modifies
 - **2,770 tests** — unit, integration, and PTY-driven UI tests that render
   the real app to a test backend and assert on the buffer
 - **Zero clippy warnings** (`-D warnings`), no `unsafe`, rustfmt clean

@@ -10,9 +10,10 @@ The gate fails when the coverage of NEW or MODIFIED lines (the diff vs
 COV_BASE, default HEAD for pre-commit; set origin/main for CI) drops below
 COV_DIFF_THRESHOLD (85 starter, raise to 90 once green).
 
-Why diff coverage not global: the existing per-crate gate (check_coverage.sh)
-holds a floor on legacy code; this gate forces NEW code to be tested as it
-lands, so coverage improves without a one-shot global push.
+Why diff coverage as well as a total: the workspace gate (check_coverage.sh)
+holds a floor on the codebase as a whole, where one module can regress several
+points without moving the number; this gate forces NEW code to be tested as it
+lands, which is where a regression actually enters.
 
 Skipped (warn) if cargo-llvm-cov is not installed -- opt-in until the env
 has it, same as check_coverage.sh.

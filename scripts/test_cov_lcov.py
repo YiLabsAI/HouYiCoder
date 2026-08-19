@@ -2,7 +2,7 @@
 """Regression tests for the shared lcov stale-mapping detector (cov_lcov).
 
 Every coverage verdict in the repo rides on this one module -- diff-cov
-(check_diff_coverage.py) and the per-crate threshold (check_coverage.sh)
+(check_diff_coverage.py) and the workspace total (check_coverage.sh)
 both take their truth from it. A future edit that weakens the detector
 (normalize() doing a prefix match instead of find, or the boundary going
 from > to >=) would reopen the stale-mapping gap silently, and the gate is

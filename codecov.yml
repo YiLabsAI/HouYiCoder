@@ -1,12 +1,17 @@
+# Targets match the blocking gates in scripts/check_coverage.sh (workspace
+# total) and scripts/check_diff_coverage.py (new lines), so the dashboard and
+# the gates report the same number instead of two numbers that drift. The
+# uploaded report is unit-only, matching those gates; integration tests and bin
+# targets are deliberately outside it.
 coverage:
   status:
     project:
       default:
-        target: 80%
+        target: 85%
         threshold: 2%
     patch:
       default:
-        target: 80%
+        target: 85%
         threshold: 5%
 
 comment:

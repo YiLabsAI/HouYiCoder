@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
-# Coverage gate: fails the build when line coverage drops below a per-crate
-# threshold. Uses cargo-llvm-cov. Skipped (warn) if the tool is not installed
-# so the gate is opt-in until the environment has it.
+# Coverage gate: fails the build when workspace UNIT-test line coverage drops
+# below one global threshold. Uses cargo-llvm-cov. Skipped (warn) if the tool
+# is not installed so the gate is opt-in until the environment has it -- CI
+# installs it explicitly so the skip path cannot silently pass there.
 #
 # Install once:
 #   rustup component add llvm-tools-preview
 #   cargo install cargo-llvm-cov
 #
-# Runs one workspace --lib coverage pass, then aggregates the per-file report
-# by crate (the report has no per-crate rows, only per-file + TOTAL) and
-# compares each crate's line coverage to its threshold.
+# Unit-only (--lib): integration tests do not count toward this number. They
+# validate end-to-end journeys, and journey completeness is reviewed as story
+# coverage, not as a line percentage. Counting them here would let an
+# end-to-end path stand in for unit tests a module still owes. Bin targets fall
+# outside --lib for the same reason they fall outside the unit suite: they are
+# wiring, exercised by the integration and PTY suites instead. Measured on this
+# workspace the difference is small either way (integration tests move the
+# total by well under a point), so including them would buy noise, not signal.
 #
-# Threshold rationale: thresholds are pinned to each crate's current
-# coverage floor (a ratchet, not a fixed target -- see threshold_for below),
-# so the gate is green at today's level and fails on any regression. Raise a
-# number only when coverage improves. Override all with COV_THRESHOLD=<n>.
+# One global threshold, not one per crate. A per-crate floor has to be pinned on
+# the platform that pinned it, and this workspace has crates whose entire module
+# set is target_os-gated -- the sandbox backends share no source file at all
+# between macOS and Linux, so the same per-crate floor measures a disjoint code
+# set on a different runner and then passes or fails for a reason that has
+# nothing to do with the change under test. A workspace total dilutes any single
+# platform-gated crate to well under a point, which is what makes one number
+# meaningful on every runner.
 #
-# Bash 3.2 compatible (no associative arrays — macOS /bin/bash is 3.2).
+# The trade-off is real and worth stating: one crate can regress several points
+# without moving the workspace total. The NEW-code gate carries that load --
+# check_diff_coverage.py holds every added or modified line to the same
+# threshold, per change, which is where a regression actually enters.
+#
+# The lcov lands where check_diff_coverage.py looks for it, so running this gate
+# leaves the diff gate nothing to recompile.
 
 set -eo pipefail
 
@@ -26,84 +42,45 @@ if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
   exit 0
 fi
 
-DEFAULT=${COV_THRESHOLD:-80}
+THRESHOLD=${COV_THRESHOLD:-85}
 
-# Per-crate line-coverage threshold (case fallback to DEFAULT).
-#
-# Ratchet, not a fixed target: each crate's threshold is pinned to its
-# CURRENT coverage floor -- the gate is green at today's level, and any
-# regression fails. Raise a threshold only when coverage actually improves
-# (commit the new floor in the same commit that raised it), so the number
-# only ever goes up. A green gate that is never run is the same as no gate,
-# so this runs from `make check-full` (pre-push), not `make check`
-# (the full-workspace instrumented run does not fit the unit-gate budget).
-#
-# Tiny-crate exemption: houyicoder-async has ~11 executable lines, where an
-# 85% threshold is one line of statistical noise -- a config error, not a
-# coverage gap. It is exempt (0) rather than accommodated by a global
-# threshold drop, which would also mask the genuinely-under-covered crates.
-threshold_for() {
-  case "$1" in
-    houyicoder-core)       echo 86 ;;
-    houyicoder-protocol)   echo 90 ;;
-    houyicoder-context)   echo 90 ;;
-    houyicoder-config)    echo 90 ;;
-    houyicoder-permission) echo 90 ;;
-    houyicoder-provider)  echo 85 ;;
-    houyicoder-async)     echo 0  ;;
-    houyicoder-resilience) echo 85 ;;
-    houyicoder-memory)    echo 85 ;;
-    houyicoder-session)   echo 85 ;;
-    houyicoder-sandbox)   echo 80 ;;
-    houyicoder-api)       echo 71 ;;
-    houyicoder-service)   echo 75 ;;
-    houyicoder-tui)       echo 70 ;;
-    houyicoder-cli)       echo 0  ;;
-    *)                    echo "$DEFAULT" ;;
-  esac
-}
-
-# One instrumented nextest run for the whole workspace: runs unit + integration
-# tests WITH coverage in one parallel pass + writes the lcov inline. Isolate
-# the cov build cache (target/cov) so it does not thrash the plain dev cache.
+# Isolate the instrumented build cache (target/cov) so it does not thrash the
+# plain dev cache. Clean profraw only (not the build): llvm-cov merges every
+# sample it finds, and the instrumented binary is cargo-dep-tracked so only the
+# samples go stale.
 COV_DIR="target/cov"
-# Clean profraw only (not the build): llvm-cov merges every sample it finds,
-# and the instrumented binary is cargo-dep-tracked so only the samples go stale.
+LCOV="$COV_DIR/houyi-cov.lcov"
 find "$COV_DIR" -name '*.profraw' -delete 2>/dev/null || true
-LCOV_TMP="$COV_DIR/per-crate.lcov"
-CARGO_TARGET_DIR="$COV_DIR" cargo llvm-cov nextest --no-cfg-coverage --workspace --lcov --output-path "$LCOV_TMP"
-# Stale-mapping guard: the line table is baked into the instrumented binary,
-# so a binary older than the last edit attributes every number to the wrong
-# code. check() is the sole decider for all three outcomes (missing file /
-# stale / clean) -- calling it unconditionally, not under [ -f ], is what
-# keeps a report that produced no file from silently skipping the guard and
-# letting the threshold loop below print a misleading percentage.
-if ! python3 scripts/cov_lcov.py --check "$LCOV_TMP"; then
-  rm -f "$LCOV_TMP"
+CARGO_TARGET_DIR="$COV_DIR" cargo llvm-cov --no-cfg-coverage --lib --workspace \
+  --lcov --output-path "$LCOV"
+
+# Stale-mapping guard: the line table is baked into the instrumented binary, so
+# a binary older than the last edit attributes every number to the wrong code.
+# check() is the sole decider for all three outcomes (missing file / stale /
+# clean) -- calling it unconditionally, not under [ -f ], is what keeps a report
+# that produced no file from silently skipping the guard and letting the
+# comparison below print a misleading percentage.
+if ! python3 scripts/cov_lcov.py --check "$LCOV"; then
+  rm -f "$LCOV"
   exit 1
 fi
-rm -f "$LCOV_TMP"
 
-# Aggregate per-file line coverage by crate, then compare to thresholds.
-status=0
-while IFS=' ' read -r c total missed; do
-  [ -n "$c" ] || continue
-  th=$(threshold_for "$c")
-  pct=$(awk -v t="$total" -v m="$missed" 'BEGIN{if(t+0==0){print 0}else{printf "%.1f", 100*(t-m)/t}}')
-  if awk -v p="$pct" -v t="$th" 'BEGIN{exit !(p+0 < t+0)}'; then
-    echo "error: $c line coverage ${pct}% < ${th}% threshold (${total}-${missed}/${total})" >&2
-    status=1
-  else
-    echo "ok: $c ${pct}% >= ${th}%"
-  fi
-done < <(CARGO_TARGET_DIR="$COV_DIR" cargo llvm-cov report --summary-only 2>/dev/null | awk '
-  /^TOTAL/ || /^File/ || /^---/ {next}
-  /\/src\// {
-    path=$1; sub(/\/src\/.*/,"",path); sub(/.*\//,"",path)
-    total=$8; missed=$9
-    if (total+0>0) { t[path]+=total; m[path]+=missed }
-  }
-  END { for (c in t) printf "%s %d %d\n", c, t[c], m[c] }
-')
+# Workspace total from the lcov's own per-file summaries: LF is lines found, LH
+# is lines hit. Summing them needs no second cargo invocation.
+read -r found hit < <(awk -F: '
+  /^LF:/ {f += $2}
+  /^LH:/ {h += $2}
+  END    {print f+0, h+0}
+' "$LCOV")
 
-exit $status
+if [ "$found" -eq 0 ]; then
+  echo "error: lcov reports zero executable lines; refusing to pass a vacuous gate." >&2
+  exit 1
+fi
+
+pct=$(awk -v h="$hit" -v f="$found" 'BEGIN{printf "%.2f", 100*h/f}')
+if awk -v p="$pct" -v t="$THRESHOLD" 'BEGIN{exit !(p+0 < t+0)}'; then
+  echo "error: workspace unit line coverage ${pct}% < ${THRESHOLD}% threshold (${hit}/${found})" >&2
+  exit 1
+fi
+echo "ok: workspace unit line coverage ${pct}% >= ${THRESHOLD}% (${hit}/${found})"
