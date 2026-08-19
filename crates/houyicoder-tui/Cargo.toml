@@ -10,7 +10,7 @@ path = "src/lib.rs"
 [dependencies]
 ratatui = "0"
 crossterm = { version = "0", features = ["osc52"] }
-base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+base64 = { version = "0.23", default-features = false, features = ["alloc"] }
 houyicoder-protocol = { path = "../houyicoder-protocol" }
 houyicoder-client = { path = "../houyicoder-client" }
 serde_json = "1"
