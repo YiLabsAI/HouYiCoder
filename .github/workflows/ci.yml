@@ -116,7 +116,7 @@ jobs:
       # failed, since that is when someone needs to see which lines are bare.
       - name: Upload to Codecov
         if: always()
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: YiLabsAI/HouYiCoder
