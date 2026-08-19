@@ -34,7 +34,7 @@ tracing = "0.1.44"
 # nix is a unix-only crate (no Windows support). Target-gate it so this
 # crate compiles on Windows; only the macOS + Linux backends reference it.
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", features = ["signal", "process"] }
+nix = { version = "0.31", features = ["signal", "process"] }
 
 # landlock is a Linux-only crate (pure-Rust safe wrappers over the Landlock
 # LSM syscalls). Target-gated so mac/Windows builds do not pull it in; the

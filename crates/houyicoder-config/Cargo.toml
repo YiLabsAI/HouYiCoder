@@ -17,4 +17,4 @@ serde_json = { version = "1", features = ["preserve_order"] }
 tracing = "0.1.44"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", default-features = false, features = ["fs"] }
+nix = { version = "0.31", default-features = false, features = ["fs"] }

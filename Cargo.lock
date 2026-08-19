@@ -969,7 +969,7 @@ dependencies = [
  "houyicoder-service",
  "houyicoder-session",
  "houyicoder-tui",
- "nix 0.29.0",
+ "nix 0.31.3",
  "pollster 0.3.0",
  "serde",
  "serde_json",
@@ -993,7 +993,7 @@ name = "houyicoder-config"
 version = "0.1.0"
 dependencies = [
  "houyicoder-protocol",
- "nix 0.29.0",
+ "nix 0.31.3",
  "serde",
  "serde_json",
  "tracing",
@@ -1128,7 +1128,7 @@ dependencies = [
  "houyicoder-context",
  "houyicoder-resilience",
  "landlock",
- "nix 0.29.0",
+ "nix 0.31.3",
  "tokio",
  "tracing",
  "windows",
@@ -1192,7 +1192,7 @@ dependencies = [
  "houyicoder-provider",
  "houyicoder-service",
  "houyicoder-session",
- "nix 0.29.0",
+ "nix 0.31.3",
  "portable-pty",
  "pulldown-cmark",
  "ratatui",
@@ -1704,6 +1704,18 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "memoffset",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "cfg_aliases 0.2.1",
+ "libc",
 ]
 
 [[package]]
