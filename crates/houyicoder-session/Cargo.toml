@@ -14,7 +14,7 @@ workspace = true
 houyicoder-context = { path = "../houyicoder-context" }
 houyicoder-api = { path = "../houyicoder-api" }
 houyicoder-async = { path = "../houyicoder-async" }
-sha2 = "0.10"
+sha2 = "0.11"
 serde_json = "1"
 tokio = { version = "1", features = ["sync"] }
 
