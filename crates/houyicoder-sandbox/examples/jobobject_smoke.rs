@@ -17,6 +17,16 @@
 fn main() {
     use std::process;
 
+    // With the hatch set no job is created, so job_limits returns None and the
+    // smoke would report SKIP -- indistinguishable from a real creation failure.
+    // This binary is the only check of the real fence, so refuse.
+    if std::env::var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
+        eprintln!(
+            "FAIL: HOUYICODER_SANDBOX_NO_ENFORCE=1 disables the fence this binary verifies; unset it and re-run"
+        );
+        process::exit(2);
+    }
+
     // Construction applies the Job Object fence to this process. The
     // workspace is a fresh temp dir the session owns and removes on Drop.
     let session =

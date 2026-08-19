@@ -91,17 +91,15 @@ impl WindowsJobSession {
         })
     }
 
-    /// Attach an aggregate resource breaker. The Job Object fence applies
-    /// its own CPU/memory caps at the kernel level, so the breaker is
-    /// accepted for API parity with PlatformSession but not stored.
+    /// No-op: the job applies its own CPU and memory caps in the kernel.
+    /// Present for PlatformSession parity.
     #[must_use]
     pub fn with_breaker(self, _breaker: Arc<ResourceBreaker>) -> Self {
         self
     }
 
-    /// Set the network posture. The Job Object fence does not narrow or
-    /// widen network access, so the posture is accepted for API parity
-    /// with PlatformSession but not stored.
+    /// No-op: a job object does not fence network access. Present for
+    /// PlatformSession parity.
     #[must_use]
     pub fn with_network(self, _network: NetworkPolicy) -> Self {
         self
@@ -141,6 +139,18 @@ fn apply_fence() -> (Option<usize>, FenceStatus) {
         JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     };
+
+    // Test-suite escape hatch, debug builds only (see the linux backend). The
+    // job caps CPU and memory for assigned children and reaps the tree on handle
+    // close, so a test spawning helpers can be killed by a fence it never asked
+    // for. One env var covers every platform fence.
+    #[cfg(debug_assertions)]
+    if std::env::var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
+        tracing::warn!(
+            "sandbox audit: job object enforcement skipped via HOUYICODER_SANDBOX_NO_ENFORCE (test builds only); running unfenced"
+        );
+        return (None, FenceStatus::Unavailable);
+    }
 
     let result = (|| {
         let job = ffi::create_job_object().map_err(|e| format!("create job object: {e}"))?;
@@ -374,10 +384,9 @@ impl SandboxSession for WindowsJobSession {
             // kill_on_drop only, with an audit line so the gap is visible.
             if let Some(raw) = job_raw
                 && let Some(pid) = child.id()
+                && let Err(e) = assign_child_to_job(raw, pid)
             {
-                if let Err(e) = assign_child_to_job(raw, pid) {
-                    tracing::warn!("sandbox audit: assign child to job failed: {e}");
-                }
+                tracing::warn!("sandbox audit: assign child to job failed: {e}");
             }
             let outcome = tokio::time::timeout(wall, child.wait_with_output()).await;
             match outcome {
@@ -421,6 +430,13 @@ fn assign_child_to_job(job_raw: usize, pid: u32) -> Result<(), String> {
 
 #[cfg(not(all(target_os = "windows", feature = "enforce")))]
 impl SandboxSession for WindowsJobSession {
+    // Report what construction recorded rather than the trait default. They
+    // agree today, but reading the field keeps this symmetric with the linux
+    // stub, so a change to what construction records stays reported.
+    fn fence_status(&self) -> FenceStatus {
+        self.fence.clone()
+    }
+
     // No kernel fence available (non-Windows or enforce feature off). The
     // command runs unfenced with an audit line so the gap is visible, not
     // silent. The application-level path resolver is the only boundary.

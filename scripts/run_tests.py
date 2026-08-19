@@ -169,7 +169,16 @@ try:
     # (it asserts turns/outcomes), so skip the ~300ms tiktoken BPE load and
     # use a char-based estimate. Tokenizer accuracy tests opt out via
     # Tokenizer::real(). Production never sets this.
-    env = {**os.environ, "HOUYICODER_FAST_TOKENS": "1"}
+    #
+    # HOUYICODER_SANDBOX_NO_ENFORCE: skip the KERNEL fence while still building
+    # the session. Landlock restricts the calling process irreversibly, so one
+    # test constructing a sandbox fences the whole test binary and every sibling
+    # temp-dir write then fails with EACCES. Production never sets this.
+    env = {
+        **os.environ,
+        "HOUYICODER_FAST_TOKENS": "1",
+        "HOUYICODER_SANDBOX_NO_ENFORCE": "1",
+    }
     # Route the instrumented build to the isolated cov cache so it does not
     # displace the plain dev cache (see COV_TARGET_DIR above). Plain
     # cargo test (the clean-tree branch) keeps the default target/.

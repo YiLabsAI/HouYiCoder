@@ -84,21 +84,17 @@ impl LinuxLandlockSession {
         })
     }
 
-    /// Attach an aggregate resource breaker. The Landlock fence is applied
-    /// at construction and cannot be widened per-exec, so the breaker is
-    /// stored but not consulted here — the macOS backend uses it for
-    /// per-spawn try_acquire; Linux relies on the wall-timeout plus
-    /// kill_on_drop. Accepted for API parity with PlatformSession.
+    /// No-op: this backend has no per-spawn hook to consult a breaker from, so
+    /// the wall-timeout plus kill_on_drop are the resource fence. Present for
+    /// PlatformSession parity.
     #[must_use]
     pub fn with_breaker(self, _breaker: Arc<ResourceBreaker>) -> Self {
         self
     }
 
-    /// Set the network posture. The Landlock fence is applied at
-    /// construction and is irreversible, so the posture cannot widen or
-    /// narrow the fence after the fact. Accepted for API parity with
-    /// PlatformSession; the posture is not stored because it has no effect
-    /// on this backend.
+    /// No-op: the fence is applied at construction and is irreversible, so a
+    /// posture set afterwards cannot change it. Present for PlatformSession
+    /// parity.
     #[must_use]
     pub fn with_network(self, _network: NetworkPolicy) -> Self {
         self
@@ -129,6 +125,19 @@ fn apply_fence(workspace: &Path) -> FenceStatus {
         ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
         path_beneath_rules,
     };
+
+    // Test-suite escape hatch, debug builds only so a release binary can never
+    // be unfenced through the environment. This fence restricts the CALLING
+    // process irreversibly and cargo test shares one process per binary, so one
+    // test constructing a session would make every sibling test's temp-dir write
+    // fail with EACCES. The session still constructs; only enforcement is off.
+    #[cfg(debug_assertions)]
+    if std::env::var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
+        tracing::warn!(
+            "sandbox audit: landlock enforcement skipped via HOUYICODER_SANDBOX_NO_ENFORCE (test builds only); running unfenced"
+        );
+        return FenceStatus::Unavailable;
+    }
 
     // Target a recent ABI. The landlock crate degrades gracefully on older
     // kernels via the default BestEffort compatibility level, and

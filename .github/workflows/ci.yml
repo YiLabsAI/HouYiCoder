@@ -84,6 +84,9 @@ jobs:
         run: cargo llvm-cov nextest --workspace --codecov --output-path codecov.json
         env:
           HOUYICODER_FAST_TOKENS: "1"
+          # Skip the kernel fence, not the session: see run_tests.py. Set here
+          # too because this job invokes nextest directly.
+          HOUYICODER_SANDBOX_NO_ENFORCE: "1"
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:

@@ -20,6 +20,16 @@ fn main() {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    // With the hatch set nothing is fenced, so every probe below would pass and
+    // the smoke would report SKIP -- indistinguishable from a kernel with no
+    // Landlock. This binary is the only check of the real fence, so refuse.
+    if std::env::var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
+        eprintln!(
+            "FAIL: HOUYICODER_SANDBOX_NO_ENFORCE=1 disables the fence this binary verifies; unset it and re-run"
+        );
+        process::exit(2);
+    }
+
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
