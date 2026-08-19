@@ -180,10 +180,10 @@ review:
 
 deny:
 	@if command -v cargo-deny >/dev/null 2>&1; then \
-		$(CARGO) deny check; \
+		$(CARGO) deny check advisories licenses bans; \
 	else \
 		echo "cargo-deny not installed — run: cargo install cargo-deny"; \
 	fi
 
-	clean:
+clean:
 	$(CARGO) clean

@@ -1,0 +1,37 @@
+name: Dependencies
+
+on:
+  # No paths filter: if this job were ever made a required status check, a
+  # path-scoped trigger would skip it on commits that don't touch a manifest,
+  # and a required-but-absent check blocks the branch forever. Running it on
+  # every push keeps the check always present (and cheap).
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [main, dev]
+  # New advisories publish for crates we already depend on, independent of
+  # any manifest change — a schedule catches those between dependency bumps.
+  schedule:
+    - cron: '23 6 * * 1'
+
+# concurrency is per-workflow: the group in ci.yml does not cover this one,
+# so a run of its own supersedes stale runs on the same ref. github.workflow
+# in the group keeps the two workflows from cancelling each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # Explicit install: cargo-deny is not preinstalled on the runner. The
+      # Makefile's `deny` target skips when absent, which would read as a
+      # green gate here; installing it makes the check real.
+      - uses: taiki-e/install-action@cargo-deny
+      - name: cargo deny (advisories + licenses + bans)
+        run: cargo deny check advisories licenses bans

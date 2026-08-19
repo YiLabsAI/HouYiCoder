@@ -1,0 +1,41 @@
+version: 2
+updates:
+  # Rust crates: security patches + version bumps from crates.io.
+  # target-branch is dev, not the default branch (main): dependency bumps
+  # must flow dev -> CI -> fast-forward to main like any other change. A PR
+  # merged straight into main would leave main ahead of dev and break the
+  # next fast-forward.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:40"
+    open-pull-requests-limit: 10
+    # Batch minor/patch bumps into one PR so a weekly run opens a handful of
+    # PRs, not one per crate (each PR triggers the 3-OS matrix + coverage).
+    # Major bumps stay individual — they carry breaking-change risk.
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # GitHub Actions: keep workflow action pins current; stale action pins are
+  # a supply-chain vector too. Same dev-target + batching rationale.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:40"
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "ci(deps)"

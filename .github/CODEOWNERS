@@ -1,0 +1,3 @@
+# Default owner for everything in the repo. New PRs request this owner as
+# reviewer. Split into per-path owners as the maintainer set grows.
+* @vongosling

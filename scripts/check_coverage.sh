@@ -51,7 +51,10 @@ THRESHOLD=${COV_THRESHOLD:-85}
 COV_DIR="target/cov"
 LCOV="$COV_DIR/houyi-cov.lcov"
 find "$COV_DIR" -name '*.profraw' -delete 2>/dev/null || true
-CARGO_TARGET_DIR="$COV_DIR" cargo llvm-cov --no-cfg-coverage --lib --workspace \
+# --locked: this runs as its own CI job in parallel with the lint/test jobs,
+# so it cannot rely on an earlier `cargo check --locked` in the same job to
+# catch a stale Cargo.lock -- pin the dependency set here too.
+CARGO_TARGET_DIR="$COV_DIR" cargo llvm-cov --locked --no-cfg-coverage --lib --workspace \
   --lcov --output-path "$LCOV"
 
 # Stale-mapping guard: the line table is baked into the instrumented binary, so
