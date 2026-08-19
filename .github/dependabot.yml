@@ -5,6 +5,11 @@ updates:
   # must flow dev -> CI -> fast-forward to main like any other change. A PR
   # merged straight into main would leave main ahead of dev and break the
   # next fast-forward.
+  # Cargo dependency bumps are managed manually for now: most pending updates
+  # are major (breaking) versions that need deliberate review, and an auto-PR
+  # per crate floods the PR list and burns 3-OS CI runs. Set the limit to 0
+  # to stop version-update PRs; re-enable by raising the limit when the deps
+  # are brought current.
   - package-ecosystem: "cargo"
     directory: "/"
     target-branch: "dev"
@@ -12,14 +17,7 @@ updates:
       interval: "weekly"
       day: "monday"
       time: "06:40"
-    open-pull-requests-limit: 10
-    # Batch minor/patch bumps into one PR so a weekly run opens a handful of
-    # PRs, not one per crate (each PR triggers the 3-OS matrix + coverage).
-    # Major bumps stay individual — they carry breaking-change risk.
-    groups:
-      minor-and-patch:
-        applies-to: version-updates
-        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "chore(deps)"
 
