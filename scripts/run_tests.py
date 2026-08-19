@@ -23,7 +23,9 @@ for the unit-gate budget); check-full uses a larger ceiling for the
 integration binaries.
 
 The unit-gate timeout is GATE_SECS; over CHECK_BUDGET_WARN is a warning
-signal -- prune slow steps or raise CHECK_BUDGET_WARN.
+signal -- prune slow steps or raise CHECK_BUDGET_WARN. The gate covers test
+EXECUTION only: the test binaries are compiled in a separate, ungated pass
+first, so a cold build cannot trip a ceiling meant to catch a slow test.
 """
 import os
 import shutil
@@ -131,6 +133,10 @@ def drop_stale_profraw():
 
 
 cmd = ["cargo"]
+# True when the gated command is a plain cargo test, the only shape whose
+# compile step can be lifted out of the gate by a --no-run pass. The
+# instrumented and nextest builds manage their own build lifecycle.
+plain_test = False
 if use_nextest:
     cmd += ["nextest", "run", "--workspace"]
     if not FULL:
@@ -158,32 +164,51 @@ elif use_cov:
         # so skip the instrumented build + run plain cargo test (no coverage
         # overhead). diff-cov reports "nothing new to gate".
         cmd += ["test", "--workspace", "--lib", "--", "--format", "terse"]
+        plain_test = True
 else:
     cmd += ["test", "--workspace"]
     if not FULL:
         cmd.append("--lib")
     cmd += ["--", "--format", "terse"]
+    plain_test = True
+
+# HOUYICODER_FAST_TOKENS: the unit suite does not assert on token counts
+# (it asserts turns/outcomes), so skip the ~300ms tiktoken BPE load and
+# use a char-based estimate. Tokenizer accuracy tests opt out via
+# Tokenizer::real(). Production never sets this.
+#
+# HOUYICODER_SANDBOX_NO_ENFORCE: skip the KERNEL fence while still building
+# the session. Landlock restricts the calling process irreversibly, so one
+# test constructing a sandbox fences the whole test binary and every sibling
+# temp-dir write then fails with EACCES. Production never sets this.
+env = {
+    **os.environ,
+    "HOUYICODER_FAST_TOKENS": "1",
+    "HOUYICODER_SANDBOX_NO_ENFORCE": "1",
+}
+# Route the instrumented build to the isolated cov cache so it does not
+# displace the plain dev cache (see COV_TARGET_DIR above). Plain
+# cargo test (the clean-tree branch) keeps the default target/.
+if use_cov:
+    env["CARGO_TARGET_DIR"] = COV_TARGET_DIR
+
+# Compile the test binaries BEFORE starting the clock, so the gate measures
+# test execution and not the compiler. The gate exists to catch a slow test,
+# but the timeout wrapped the whole cargo invocation, so a cold build counted
+# against it. The build is cold on every CI run: the preceding cargo check
+# emits the check profile (no codegen, no link), and rust-cache keeps only
+# third-party deps -- the workspace's own test binaries are always rebuilt.
+# Locally that costs ~22s versus ~9s of actual test time; on Windows the MSVC
+# link is slow enough to blow a 120s gate outright. The same env is used for
+# both invocations so the gated run is a guaranteed cache hit. Left to their
+# own build lifecycle: nextest, and the coverage passes (instrumented build).
+if plain_test:
+    pre_cmd = ["cargo", "test", "--workspace", "--no-run"]
+    if not FULL:
+        pre_cmd.append("--lib")
+    subprocess.run(pre_cmd, env=env, check=False)
 
 try:
-    # HOUYICODER_FAST_TOKENS: the unit suite does not assert on token counts
-    # (it asserts turns/outcomes), so skip the ~300ms tiktoken BPE load and
-    # use a char-based estimate. Tokenizer accuracy tests opt out via
-    # Tokenizer::real(). Production never sets this.
-    #
-    # HOUYICODER_SANDBOX_NO_ENFORCE: skip the KERNEL fence while still building
-    # the session. Landlock restricts the calling process irreversibly, so one
-    # test constructing a sandbox fences the whole test binary and every sibling
-    # temp-dir write then fails with EACCES. Production never sets this.
-    env = {
-        **os.environ,
-        "HOUYICODER_FAST_TOKENS": "1",
-        "HOUYICODER_SANDBOX_NO_ENFORCE": "1",
-    }
-    # Route the instrumented build to the isolated cov cache so it does not
-    # displace the plain dev cache (see COV_TARGET_DIR above). Plain
-    # cargo test (the clean-tree branch) keeps the default target/.
-    if use_cov:
-        env["CARGO_TARGET_DIR"] = COV_TARGET_DIR
     # Merge stderr into stdout (cargo prints "Running unittests ..." and
     # "Finished" to stderr; interleaving keeps real order). Then filter out
     # the per-binary "Running unittests" / "running N tests" headers and
