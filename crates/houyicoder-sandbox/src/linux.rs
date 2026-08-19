@@ -28,10 +28,14 @@
 //! unfenced and the application-level path resolver remains the only
 //! boundary. An audit line is emitted so the gap is visible, never silent.
 
-use houyicoder_api::sandbox::{Containment, Coverage, FenceStatus, SandboxSession, SideEffect};
+use houyicoder_api::sandbox::{
+    Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
+};
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use houyicoder_resilience::resource_breaker::ResourceBreaker;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// A Linux sandbox session. The workspace is the user's project dir (Guarded
 /// mode) or a temp dir. Drop leaves the workspace untouched when not owned.
@@ -78,6 +82,26 @@ impl LinuxLandlockSession {
             owned: true,
             fence,
         })
+    }
+
+    /// Attach an aggregate resource breaker. The Landlock fence is applied
+    /// at construction and cannot be widened per-exec, so the breaker is
+    /// stored but not consulted here — the macOS backend uses it for
+    /// per-spawn try_acquire; Linux relies on the wall-timeout plus
+    /// kill_on_drop. Accepted for API parity with PlatformSession.
+    #[must_use]
+    pub fn with_breaker(self, _breaker: Arc<ResourceBreaker>) -> Self {
+        self
+    }
+
+    /// Set the network posture. The Landlock fence is applied at
+    /// construction and is irreversible, so the posture cannot widen or
+    /// narrow the fence after the fact. Accepted for API parity with
+    /// PlatformSession; the posture is not stored because it has no effect
+    /// on this backend.
+    #[must_use]
+    pub fn with_network(self, _network: NetworkPolicy) -> Self {
+        self
     }
 }
 

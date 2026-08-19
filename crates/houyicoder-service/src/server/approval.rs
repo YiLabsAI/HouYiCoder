@@ -311,7 +311,7 @@ mod tests {
     fn test_consent_directory_grants_layers() {
         use houyicoder_api::sandbox::SandboxSession;
         use houyicoder_permission::{FileRuleStore, RuleStore};
-        use houyicoder_sandbox::MacSeatbeltSession;
+        use houyicoder_sandbox::PlatformSession;
         use std::sync::Arc;
         let root = std::env::temp_dir().join(format!("consent-dir-{}", std::process::id()));
         drop(std::fs::remove_dir_all(&root));
@@ -328,7 +328,7 @@ mod tests {
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).expect("mkdir repo");
         let session: Arc<dyn SandboxSession> =
-            Arc::new(MacSeatbeltSession::new_in_cwd(&repo).expect("sandbox"));
+            Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
         let sess_store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         )));
@@ -378,7 +378,7 @@ mod tests {
     fn test_route_consent_by_reason() {
         use houyicoder_api::sandbox::SandboxSession;
         use houyicoder_permission::{FileRuleStore, RuleStore};
-        use houyicoder_sandbox::MacSeatbeltSession;
+        use houyicoder_sandbox::PlatformSession;
         use std::sync::Arc;
         let root = std::env::temp_dir().join(format!("route-{}-{}", std::process::id(), line!()));
         drop(std::fs::remove_dir_all(&root));
@@ -395,7 +395,7 @@ mod tests {
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).expect("mkdir repo");
         let session: Arc<dyn SandboxSession> =
-            Arc::new(MacSeatbeltSession::new_in_cwd(&repo).expect("sandbox"));
+            Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
         let sess_store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         )));
@@ -458,7 +458,7 @@ mod tests {
     fn test_none_reason_no_rule() {
         use houyicoder_api::sandbox::SandboxSession;
         use houyicoder_permission::{Effect, FileRuleStore, RuleStore};
-        use houyicoder_sandbox::MacSeatbeltSession;
+        use houyicoder_sandbox::PlatformSession;
         use std::sync::Arc;
         let root = std::env::temp_dir().join(format!("none-{}-{}", std::process::id(), line!()));
         drop(std::fs::remove_dir_all(&root));
@@ -476,7 +476,7 @@ mod tests {
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).expect("mkdir repo");
         let session: Arc<dyn SandboxSession> =
-            Arc::new(MacSeatbeltSession::new_in_cwd(&repo).expect("sandbox"));
+            Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
         let sess_store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         )));

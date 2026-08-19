@@ -383,12 +383,12 @@ fn test_worktree_controller_registers_tools() {
     use houyicoder_api::sandbox::SandboxSession;
     use houyicoder_core::agent::ToolRegistry;
     use houyicoder_permission::{DefaultModeGate, ModeGate};
-    use houyicoder_sandbox::MacSeatbeltSession;
+    use houyicoder_sandbox::PlatformSession;
     let dir = std::env::temp_dir().join(format!("houyi-wire-wt-{}", std::process::id()));
     drop(std::fs::remove_dir_all(&dir));
     std::fs::create_dir_all(&dir).expect("mkdir");
     let sandbox: Arc<dyn SandboxSession> =
-        Arc::new(MacSeatbeltSession::new_in_cwd(&dir).expect("sandbox"));
+        Arc::new(PlatformSession::new_in_cwd(&dir).expect("sandbox"));
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let mut tools = ToolRegistry::new();
@@ -433,7 +433,7 @@ fn test_worktree_controller_registers_tools() {
 fn test_rehydrate_pours_dirs_fence() {
     use houyicoder_api::sandbox::SandboxSession;
     use houyicoder_permission::{FileRuleStore, RuleStore, Scope};
-    use houyicoder_sandbox::MacSeatbeltSession;
+    use houyicoder_sandbox::PlatformSession;
     let root = std::env::temp_dir().join(format!("houyi-rehydrate-{}", std::process::id()));
     drop(std::fs::remove_dir_all(&root));
     std::fs::create_dir_all(&root).expect("mkdir root");
@@ -453,7 +453,7 @@ fn test_rehydrate_pours_dirs_fence() {
     let repo = root.join("repo");
     std::fs::create_dir_all(&repo).expect("mkdir repo");
     let session: Arc<dyn SandboxSession> =
-        Arc::new(MacSeatbeltSession::new_in_cwd(&repo).expect("sandbox"));
+        Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
     assert!(
         session.working_dirs().is_empty(),
         "fence starts empty before rehydrate"
@@ -475,7 +475,7 @@ fn test_rehydrate_pours_dirs_fence() {
         .add_directory(&stale, houyicoder_permission::Scope::Project)
         .expect("add stale dir");
     let session2: Arc<dyn SandboxSession> =
-        Arc::new(MacSeatbeltSession::new_in_cwd(&repo).expect("sandbox2"));
+        Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox2"));
     super::rehydrate_directories(session2.as_ref(), store.as_ref());
     let dirs2 = session2.working_dirs();
     assert!(
@@ -494,20 +494,20 @@ fn test_rehydrate_pours_dirs_fence() {
 
 /// ContainmentAdapter delegates boundary_root + boundary_dirs to the wrapped
 /// SandboxSession (workspace_root + working_dirs), so the gate's path-bounds
-/// pre-check sees the real fence bounds without MacSeatbeltSession having to
+/// pre-check sees the real fence bounds without PlatformSession having to
 /// also implement Containment for those. Pins the adapter bridge so a future
 /// refactor of the gate's Containment query cannot silently lose the root.
 #[test]
 fn test_containment_adapter_delegates_boundary() {
     use houyicoder_api::sandbox::{Containment, SandboxSession};
-    use houyicoder_sandbox::MacSeatbeltSession;
+    use houyicoder_sandbox::PlatformSession;
     let root = std::env::temp_dir().join(format!("adapter-bound-{}", std::process::id()));
     drop(std::fs::remove_dir_all(&root));
     std::fs::create_dir_all(&root).expect("mkdir root");
     let extra = root.join("extra");
     std::fs::create_dir_all(&extra).expect("mkdir extra");
     let session: Arc<dyn SandboxSession> =
-        Arc::new(MacSeatbeltSession::new_in_cwd(&root).expect("sandbox"));
+        Arc::new(PlatformSession::new_in_cwd(&root).expect("sandbox"));
     session
         .add_working_dir(&extra.to_string_lossy())
         .expect("add working dir");

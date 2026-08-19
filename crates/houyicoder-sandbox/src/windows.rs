@@ -26,10 +26,14 @@
 //! the session stays a no-op fence — exec runs unfenced and the
 //! application-level path resolver remains the only boundary.
 
-use houyicoder_api::sandbox::{Containment, Coverage, FenceStatus, SandboxSession, SideEffect};
+use houyicoder_api::sandbox::{
+    Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
+};
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use houyicoder_resilience::resource_breaker::ResourceBreaker;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// A Windows sandbox session. The workspace is the user's project dir (Guarded
 /// mode) or a temp dir. Drop leaves the workspace untouched when not owned.
@@ -85,6 +89,22 @@ impl WindowsJobSession {
             job_handle,
             fence,
         })
+    }
+
+    /// Attach an aggregate resource breaker. The Job Object fence applies
+    /// its own CPU/memory caps at the kernel level, so the breaker is
+    /// accepted for API parity with PlatformSession but not stored.
+    #[must_use]
+    pub fn with_breaker(self, _breaker: Arc<ResourceBreaker>) -> Self {
+        self
+    }
+
+    /// Set the network posture. The Job Object fence does not narrow or
+    /// widen network access, so the posture is accepted for API parity
+    /// with PlatformSession but not stored.
+    #[must_use]
+    pub fn with_network(self, _network: NetworkPolicy) -> Self {
+        self
     }
 }
 

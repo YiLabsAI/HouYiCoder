@@ -49,12 +49,14 @@ jobs:
         run: python3 scripts/run_tests.py
         env:
           HOUYICODER_FAST_TOKENS: "1"
+          GATE_SECS: "120"
       - name: test (integration)
         if: runner.os != 'Windows'
         shell: bash
         run: python3 scripts/run_tests.py --full
         env:
           HOUYICODER_FAST_TOKENS: "1"
+          GATE_SECS: "300"
       - name: L2 Python gates
         if: runner.os == 'Linux'
         shell: bash

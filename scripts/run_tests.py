@@ -30,7 +30,7 @@ import shutil
 import subprocess
 import sys
 
-GATE_SECS = 60
+GATE_SECS = int(os.environ.get("GATE_SECS", "60"))
 
 FULL = "--full" in sys.argv
 
