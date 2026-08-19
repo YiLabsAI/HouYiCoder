@@ -54,7 +54,7 @@ use houyicoder_memory::LocalFileBackend;
 use houyicoder_permission::{DefaultModeGate, GuardedTool, ModeGate, RuleStore};
 use houyicoder_provider::{FakeProvider, OpenAiCompatibleProvider};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
-use houyicoder_sandbox::MacSeatbeltSession;
+use houyicoder_sandbox::PlatformSession;
 use houyicoder_session::SessionStore;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -244,7 +244,7 @@ pub fn assemble(
     // three construction paths below cannot drift apart — a path that forgot the
     // network posture would silently fall back to the contained default and make
     // an opened fence look broken.
-    let fence = |s: MacSeatbeltSession| {
+    let fence = |s: PlatformSession| {
         s.with_breaker(breaker.clone())
             .with_network(network.clone())
     };
@@ -254,7 +254,7 @@ pub fn assemble(
     // filesystem or run a command, and nothing on screen says why.
     let tempdir_session = || {
         degrade_with_notice(
-            MacSeatbeltSession::new(),
+            PlatformSession::new(),
             "sandbox unavailable: no isolated tempdir session could be created",
             "the agent starts with no filesystem or command tools.",
         )
@@ -264,7 +264,7 @@ pub fn assemble(
         // A workspace that cannot be fenced (a non-existent --project path, or a
         // canonicalize failure) degrades to the tempdir rather than to no fence.
         Some(ws) => degrade_with_notice(
-            MacSeatbeltSession::new_in_cwd(ws),
+            PlatformSession::new_in_cwd(ws),
             &format!("sandbox could not pin to workspace {ws:?}"),
             "falling back to an isolated tempdir -- the agent's bash will NOT see your repo.",
         )
