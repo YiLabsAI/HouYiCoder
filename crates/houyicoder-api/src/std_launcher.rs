@@ -291,7 +291,15 @@ mod tests {
     async fn test_workspace_as_cwd() {
         let launcher = StdProcessLauncher::new();
         let tmp = std::env::temp_dir();
-        let req = SpawnRequest::new("pwd")
+        // pwd (Git Bash on Windows) translates the Windows path to a Unix
+        // form (/tmp for the temp dir), so the basename check fails. Use
+        // cmd /c cd on Windows to get the native path; pwd on Unix.
+        #[cfg(windows)]
+        let (program, args): (&str, Vec<&str>) = ("cmd", vec!["/c", "cd"]);
+        #[cfg(not(windows))]
+        let (program, args): (&str, Vec<&str>) = ("pwd", vec![]);
+        let req = SpawnRequest::new(program)
+            .with_args(args)
             .with_workspace(tmp.clone())
             .piped_output();
         let child = launcher.spawn(req, SpawnPolicy::default()).unwrap();
@@ -303,7 +311,7 @@ mod tests {
             .unwrap_or_default();
         assert!(
             out.contains(&basename),
-            "pwd output should contain the temp dir basename"
+            "cwd output should contain the temp dir basename, got: {out}"
         );
     }
 

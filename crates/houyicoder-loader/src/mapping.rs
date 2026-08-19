@@ -34,19 +34,18 @@ pub(crate) fn map_record(
 ) -> Vec<TurnEvent> {
     let ty = rec.get("type").and_then(Value::as_str).unwrap_or("");
     // Session origin fields appear on every record; capture the first seen.
-    if model_out.is_none() {
-        if let Some(m) = rec
+    if model_out.is_none()
+        && let Some(m) = rec
             .get("message")
             .and_then(|m| m.get("model"))
             .and_then(Value::as_str)
-        {
-            *model_out = Some(m.to_string());
-        }
+    {
+        *model_out = Some(m.to_string());
     }
-    if cwd_out.is_none() {
-        if let Some(c) = rec.get("cwd").and_then(Value::as_str) {
-            *cwd_out = Some(c.to_string());
-        }
+    if cwd_out.is_none()
+        && let Some(c) = rec.get("cwd").and_then(Value::as_str)
+    {
+        *cwd_out = Some(c.to_string());
     }
 
     let mut out: Vec<TurnEvent> = Vec::new();

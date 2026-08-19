@@ -1,7 +1,7 @@
 [package]
 name = "houyicoder-loader"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 
 [[bin]]
 name = "houyi-load"

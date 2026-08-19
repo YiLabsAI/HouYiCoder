@@ -8,7 +8,7 @@
 
 use crate::decision::Outcome;
 use crate::mode::{PermissionMode, ToolRequest};
-use crate::{Decision, DefaultModeGate, ModeGate};
+use crate::{DefaultModeGate, ModeGate};
 use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -78,6 +78,7 @@ impl Drop for Workspace {
 #[test]
 #[cfg(unix)]
 fn test_symlinked_git_dir_asks() {
+    use crate::Decision;
     let ws = Workspace::new(line!());
     let d = ws.gate().decide(&write_req("gitlink/hooks/pre-commit"));
     assert_eq!(

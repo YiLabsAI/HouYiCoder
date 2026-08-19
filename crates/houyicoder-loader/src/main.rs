@@ -108,13 +108,13 @@ fn find_session_id(cc_path: &str) -> Result<SessionId, Box<dyn std::error::Error
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if let Some(sid_str) = v.get("sessionId").and_then(|s| s.as_str()) {
-                if let Some(sid) = SessionId::from_display_string(sid_str) {
-                    return Ok(sid);
-                }
-                return Err(format!("sessionId {sid_str:?} is not a UUID").into());
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed)
+            && let Some(sid_str) = v.get("sessionId").and_then(|s| s.as_str())
+        {
+            if let Some(sid) = SessionId::from_display_string(sid_str) {
+                return Ok(sid);
             }
+            return Err(format!("sessionId {sid_str:?} is not a UUID").into());
         }
     }
 }
