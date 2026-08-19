@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Explicit install: cargo-deny is not preinstalled on the runner. The
       # Makefile's `deny` target skips when absent, which would read as a
       # green gate here; installing it makes the check real.
