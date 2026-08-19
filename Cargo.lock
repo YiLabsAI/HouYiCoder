@@ -933,7 +933,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "houyicoder-api"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-stream",
  "dunce",
@@ -947,7 +947,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-async"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "futures",
  "tokio-util",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-cli"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "futures",
  "houyicoder-api",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-client"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "futures",
  "houyicoder-async",
@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-config"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "houyicoder-protocol",
  "nix 0.29.0",
@@ -1001,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-context"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "houyicoder-async",
  "serde",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "futures",
  "glob",
@@ -1040,11 +1040,11 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-graph"
-version = "0.0.1"
+version = "0.1.0"
 
 [[package]]
 name = "houyicoder-loader"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "houyicoder-context",
@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-memory"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "houyicoder-api",
  "houyicoder-async",
@@ -1070,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-permission"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "glob",
  "houyicoder-api",
@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-protocol"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-provider"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-stream",
  "futures",
@@ -1112,14 +1112,14 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-resilience"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "houyicoder-sandbox"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "dunce",
  "houyicoder-api",
@@ -1135,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-service"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "futures",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-session"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "houyicoder-api",
  "houyicoder-async",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-tui"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
@@ -1207,7 +1207,7 @@ dependencies = [
 
 [[package]]
 name = "houyicoder-wasm"
-version = "0.0.1"
+version = "0.1.0"
 
 [[package]]
 name = "http"

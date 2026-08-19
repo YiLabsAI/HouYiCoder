@@ -395,7 +395,7 @@ mod status_tests {
             name: Some("fix login bug".to_string()),
             cwd: "/work/app".to_string(),
             model: model.into(),
-            version: "0.0.1".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
             provenance: SessionProvenance::Fresh,
         });
         s
@@ -475,7 +475,7 @@ mod status_tests {
         // Identity order: Version, Session name, Session ID, cwd, then
         // Auth token / base URL / Model / sandbox / Setting sources, then
         // provenance last.
-        let v = s.find("0.0.1").unwrap();
+        let v = s.find(env!("CARGO_PKG_VERSION")).unwrap();
         let n = s.find("fix login bug").unwrap();
         let id = s.find("sess-123").unwrap();
         let cwd = s.find("/work/app").unwrap();

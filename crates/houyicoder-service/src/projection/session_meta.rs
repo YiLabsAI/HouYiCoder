@@ -45,7 +45,7 @@ mod tests {
             cwd: "/work/app".to_string(),
             model: "glm-5".to_string(),
             provenance,
-            version: "0.0.1".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
             created_at: 0,
         }
     }
@@ -59,7 +59,7 @@ mod tests {
         let w = project_session_meta(&m);
         assert_eq!(w.name.as_deref(), Some("fix bug"));
         assert_eq!(w.cwd, "/work/app");
-        assert_eq!(w.version, "0.0.1");
+        assert_eq!(w.version, env!("CARGO_PKG_VERSION"));
         assert!(matches!(w.provenance, SessionProvenance::Fresh));
     }
 
