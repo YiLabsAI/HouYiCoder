@@ -171,8 +171,8 @@ fn glob_files(
     max_files: usize,
 ) -> Result<(Vec<String>, bool), ToolError> {
     let croot = canonical_root(root)?;
+    check_pattern_confined(&croot, base, pattern)?;
     let full_pattern = join_pattern(base, pattern);
-    check_pattern_confined(&croot, &full_pattern)?;
     let opts = glob_options();
     let entries: Vec<(PathBuf, SystemTime)> = glob::glob_with(&full_pattern, opts)
         .map_err(|e| ToolError::Failed(format!("glob: invalid pattern: {e}")))?
@@ -215,29 +215,55 @@ fn glob_files(
 /// any filesystem enumeration starts, giving the model a clear error.
 /// Patterns that start with a wildcard (e.g. **/*.rs) are safe because
 /// enumeration begins from the already-confined base.
-fn check_pattern_confined(croot: &Path, full_pattern: &str) -> Result<(), ToolError> {
-    let first = full_pattern.chars().next();
-    if first.is_none() || ['*', '?', '['].contains(&first.unwrap()) {
+///
+/// Takes the base as a Path and the pattern as a string, and scans only the
+/// pattern. Scanning a joined base-plus-pattern string is what made this
+/// fragile: a Windows canonical base can carry a verbatim prefix whose
+/// question mark is a path character, not a glob wildcard, and joining a
+/// backslash base to a forward-slash pattern mixes separators, so the scan
+/// could split in the wrong place. The base never reaches the scanner now.
+///
+/// Separator detection uses is_separator, which is platform-aware: both / and
+/// \ on Windows, only / on Unix, where a backslash is a legal filename char.
+fn check_pattern_confined(croot: &Path, base: &Path, pattern: &str) -> Result<(), ToolError> {
+    if pattern.is_empty() {
         return Ok(());
     }
-    let wildcard_pos = full_pattern.find(['*', '?', '[']);
-    let prefix = match wildcard_pos {
-        Some(pos) => &full_pattern[..pos],
-        None => full_pattern,
-    };
-    // Canonicalize only the directory portion of the prefix so patterns
-    // with wildcards in the filename (e.g. file?.rs, test[12].rs) do not
-    // fail on a non-existent prefix path.
-    let dir = match prefix.rfind('/') {
-        Some(i) => &prefix[..i],
-        None => prefix,
-    };
-    let dir = dir.trim_end_matches('/');
-    if dir.is_empty() {
+    let mut wildcard_pos = pattern.len();
+    let mut last_sep = None;
+    for (i, c) in pattern.char_indices() {
+        if matches!(c, '*' | '?' | '[') {
+            wildcard_pos = i;
+            break;
+        }
+        if std::path::is_separator(c) {
+            last_sep = Some(i);
+        }
+    }
+    // A leading wildcard enumerates from the already-confined base.
+    if wildcard_pos == 0 {
         return Ok(());
     }
-    let canonical =
-        dunce::canonicalize(dir).map_err(|e| ToolError::Io(format!("path not accessible: {e}")))?;
+    // The fixed directory portion is everything up to the last separator
+    // preceding the first wildcard, so a wildcard in the filename (file?.rs,
+    // test[12].rs) does not make this canonicalize a path that cannot exist.
+    // No separator means the pattern names an entry directly in the base, so
+    // the base itself is what needs checking.
+    let dir_part = match last_sep {
+        Some(i) => pattern[..i].trim_end_matches(std::path::is_separator),
+        None => "",
+    };
+    // Mirror join_pattern's notion of absolute so this check and the
+    // enumeration that follows reason about the same path.
+    let dir = if pattern.starts_with('/') {
+        PathBuf::from(if dir_part.is_empty() { "/" } else { dir_part })
+    } else if dir_part.is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(dir_part)
+    };
+    let canonical = dunce::canonicalize(&dir)
+        .map_err(|e| ToolError::Io(format!("path not accessible: {e}")))?;
     if !canonical.starts_with(croot) {
         return Err(ToolError::PathEscapes("pattern escapes workspace".into()));
     }
@@ -616,6 +642,21 @@ mod tests {
         // Bracket wildcards in filename also work.
         let (files, _) = glob_files(&dir, &cdir, "src/file[12].rs", 200).unwrap();
         assert_eq!(files.len(), 2);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_backslash_not_separator() {
+        let dir = test_dir();
+        let croot = canonical_root(&dir).unwrap();
+        // A backslash is a legal Unix filename character. Treating it as a
+        // separator would split the directory at "weird", which does not
+        // exist, and turn a valid pattern into a spurious Io error.
+        assert!(
+            check_pattern_confined(&croot, &croot, "weird\\name*.rs").is_ok(),
+            "backslash in a Unix filename must not split the directory"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 

@@ -559,7 +559,13 @@ fn test_rebuild_heals_external_edit() {
     // (overlayfs on CI runners can round to whole seconds).
     let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
     let times = std::fs::FileTimes::new().set_modified(future);
-    std::fs::File::open(&ext_path)
+    // Open with write access: on Windows, set_times maps to SetFileTime,
+    // which requires FILE_WRITE_ATTRIBUTES. File::open is GENERIC_READ only
+    // and yields Access Denied there; OpenOptions with write(true) includes it.
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&ext_path)
         .expect("open ext topic for set_times")
         .set_times(times)
         .expect("set ext topic mtime");
