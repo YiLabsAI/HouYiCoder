@@ -30,7 +30,7 @@
 
 use houyicoder_api::sandbox::{Containment, Coverage, FenceStatus, SandboxSession, SideEffect};
 use houyicoder_async::PFut;
-use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError};
+use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use std::path::{Path, PathBuf};
 
 /// A Linux sandbox session. The workspace is the user's project dir (Guarded
