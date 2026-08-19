@@ -2,6 +2,7 @@
 name = "houyicoder-loader"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "houyi-load"

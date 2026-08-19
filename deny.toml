@@ -21,9 +21,14 @@ allow = [
     "Unicode-DFS-2016",
     "Unicode-3.0",
     "CC0-1.0",
+    # webpki-roots ships Mozilla's root-certificate set under a permissive
+    # data license (certificate data, not code).
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+# Workspace-internal path deps carry no version field, which this lint
+# reports as wildcards; Cargo.lock already pins every version, so allow.
+wildcards = "allow"
