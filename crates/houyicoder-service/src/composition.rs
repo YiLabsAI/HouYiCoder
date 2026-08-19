@@ -729,6 +729,4 @@ pub(crate) struct RunnerHandleClone {
 
 #[cfg(test)]
 #[path = "composition_tests.rs"]
-#[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-// tests spawn git directly to build temp repos/worktrees
 mod tests;

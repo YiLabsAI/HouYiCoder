@@ -302,13 +302,13 @@ mod tests {
         );
     }
 
-    /// A path-bounds approval (grep/glob, scope "always") grants the directory
-    /// to BOTH layers: the kernel fence (additional_dirs, so the gate's
-    /// re-check on resume passes + confine_path runs) and the durable store
-    /// (so the fence rehydrates the dir on restart). Pins the two-layer
-    /// consistency the review contract checks.
+    /// Answering "always" must reach both layers: the fence makes this run
+    /// work, the store makes it survive a restart. Fence only and the grant is
+    /// forgotten next launch; store only and the run that just asked still
+    /// refuses the path. macOS-only: widening a live fence is Seatbelt-only.
+    #[cfg(target_os = "macos")]
     #[test]
-    fn test_consent_directory_grants_layers() {
+    fn test_consent_reaches_both_layers() {
         use houyicoder_api::sandbox::SandboxSession;
         use houyicoder_permission::{FileRuleStore, RuleStore};
         use houyicoder_sandbox::PlatformSession;
@@ -369,13 +369,14 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// Routing consent by the ASK REASON, not the tool name: a grep approval
-    /// whose ask was a user-Ask rule (not path-bounds) must NOT grant a
-    /// directory — it takes the rule path. A grep approval whose ask WAS
-    /// path-bounds grants the directory. Pins the fix-2 contract: the tool
-    /// name alone never selects the directory grant.
+    /// What the user authorized depends on WHY the gate asked, not on the tool.
+    /// A path-bounds ask is about a location, so always grants the directory; a
+    /// rule ask is about the tool, so always persists a rule and leaves the
+    /// fence alone. Keying off the tool name would widen the fence on an answer
+    /// that was never about a path. macOS-only: see the sibling test.
+    #[cfg(target_os = "macos")]
     #[test]
-    fn test_route_consent_by_reason() {
+    fn test_ask_reason_selects_grant() {
         use houyicoder_api::sandbox::SandboxSession;
         use houyicoder_permission::{FileRuleStore, RuleStore};
         use houyicoder_sandbox::PlatformSession;

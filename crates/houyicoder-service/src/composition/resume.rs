@@ -410,3 +410,7 @@ fn write_fork_session_meta(
         tracing::warn!("session meta: fork write failed: {e}; /status will show less");
     }
 }
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod tests;

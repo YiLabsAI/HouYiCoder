@@ -1,8 +1,8 @@
-//! Resume-path composition tests, split out of composition_tests on the
-//! file-size gate. Covers build_runner_for_resume_export (seed + assemble +
-//! model restore) and build_runner_for_resume_sid (re-open + sidecar
-//! fallback + chain verify). The mod is included via #[path] so the
-//! super::super:: paths still reach the composition root's re-exports.
+//! Peer tests for the resume entry points: from an export file, from a session
+//! id, and forking into a new id. A resumed session must carry the source
+//! history forward without mutating the source, restore the model that session
+//! used rather than the configured default, and refuse an untrusted source
+//! instead of silently starting a blank session the user thinks is their old one.
 
 use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
 
@@ -62,7 +62,7 @@ fn test_resume_export_seeds_log() {
         &two_events(sid),
     );
 
-    let resumed = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_export(&export_path, &sessions, None, None)
         .expect("resume export seeds");
     let runner = resumed.assembled.runner;
     let new_sid = resumed.assembled.session;
@@ -100,7 +100,7 @@ fn test_resume_export_sidecar_provenance() {
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA";
     let sid = SessionId::from_display_string(legacy_sid).unwrap();
     write_export(&export_path, legacy_sid, "prov-model", &two_events(sid));
-    let resumed = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_export(&export_path, &sessions, None, None)
         .expect("resume export seeds");
     let new_sid = resumed.assembled.session;
 
@@ -140,7 +140,7 @@ fn test_fork_chain_propagates_history() {
     write_export(&export_a, legacy_sid, "chain-model", &two_events(src_sid));
 
     // Generation B: resume A -> a new sid with A's history seeded.
-    let resumed = super::super::build_runner_for_resume_export(&export_a, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_export(&export_a, &sessions, None, None)
         .expect("resume A -> B");
     let sid_b = resumed.assembled.session;
 
@@ -162,7 +162,7 @@ fn test_fork_chain_propagates_history() {
     write_export(&export_b, &sid_b.to_string(), "chain-model", &events_b);
 
     // Generation C: resume B -> a new sid with B's (=A's) history seeded.
-    let resumed = super::super::build_runner_for_resume_export(&export_b, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_export(&export_b, &sessions, None, None)
         .expect("resume B -> C");
     let sid_c = resumed.assembled.session;
 
@@ -191,12 +191,12 @@ fn test_resume_sid_reopens_errors() {
         "sid-resume-model",
         &two_events(src_sid),
     );
-    let resumed = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_export(&export_path, &sessions, None, None)
         .expect("seed via export");
     let existing_sid = resumed.assembled.session;
 
     // Re-open by sid: the same log + model restored from the sidecar.
-    let resumed = super::super::build_runner_for_resume_sid(existing_sid, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_sid(existing_sid, &sessions, None, None)
         .expect("resume sid reopens");
     let runner = resumed.assembled.runner;
     let sid = resumed.assembled.session;
@@ -213,7 +213,7 @@ fn test_resume_sid_reopens_errors() {
 
     // A sid with no log on disk errors (no silent fresh session).
     let missing = SessionId::new();
-    let err = super::super::build_runner_for_resume_sid(missing, &sessions, None, None)
+    let err = super::build_runner_for_resume_sid(missing, &sessions, None, None)
         .err()
         .expect("missing sid errors");
     assert!(
@@ -238,7 +238,7 @@ fn test_resume_sid_warns_unverified() {
         "tamper-model",
         &two_events(src_sid),
     );
-    let resumed = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_export(&export_path, &sessions, None, None)
         .expect("seed via export");
     let existing_sid = resumed.assembled.session;
 
@@ -247,7 +247,7 @@ fn test_resume_sid_warns_unverified() {
     let body = std::fs::read_to_string(&log).unwrap();
     std::fs::write(&log, body.replacen("resume-unit-prompt", "TAMPERED", 1)).unwrap();
     // Resume still succeeds (warns to stderr, proceeds).
-    let resumed = super::super::build_runner_for_resume_sid(existing_sid, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_sid(existing_sid, &sessions, None, None)
         .expect("resume proceeds despite unverified chain");
     let sid = resumed.assembled.session;
 
@@ -272,7 +272,7 @@ fn test_resume_sid_missing_sidecar() {
         "sidecar-model",
         &two_events(src_sid),
     );
-    let resumed = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_export(&export_path, &sessions, None, None)
         .expect("seed via export");
     let existing_sid = resumed.assembled.session;
 
@@ -281,7 +281,7 @@ fn test_resume_sid_missing_sidecar() {
     assert!(sidecar.exists(), "sidecar should exist after seed");
     std::fs::remove_file(&sidecar).expect("remove sidecar");
     // Resume still succeeds; the model falls back to resolve_model.
-    let resumed = super::super::build_runner_for_resume_sid(existing_sid, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_sid(existing_sid, &sessions, None, None)
         .expect("resume succeeds without sidecar");
     let sid = resumed.assembled.session;
     let model = resumed.model;
@@ -309,7 +309,7 @@ fn test_resume_export_truncated_errors() {
         r#"{"session_id":"01KZ5RDH4DG6YV0EDBX1KSKTRA","model":"m","trajectory":[{"id":"#,
     )
     .unwrap();
-    let result = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None);
+    let result = super::build_runner_for_resume_export(&export_path, &sessions, None, None);
     assert!(
         result.is_err(),
         "a truncated export must surface an error, not proceed"
@@ -348,7 +348,7 @@ fn test_export_empty_trajectory_errors() {
         "empty-model",
         &[],
     );
-    let result = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None);
+    let result = super::build_runner_for_resume_export(&export_path, &sessions, None, None);
     assert!(
         result.is_err(),
         "an empty-trajectory export must error, not mint a fresh session"
@@ -376,7 +376,7 @@ fn test_resume_export_garbage_errors() {
     let sessions = temp_root();
     let export_path = sessions.join("garbage.txt");
     std::fs::write(&export_path, "this is not json, sorry").unwrap();
-    let result = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None);
+    let result = super::build_runner_for_resume_export(&export_path, &sessions, None, None);
     assert!(result.is_err(), "a non-JSON export must error, not proceed");
     std::fs::remove_dir_all(&sessions).ok();
 }
@@ -394,7 +394,7 @@ fn test_fork_keeps_source_untouched() {
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA";
     let src_sid = SessionId::from_display_string(legacy_sid).unwrap();
     write_export(&export_path, legacy_sid, "fork-model", &two_events(src_sid));
-    let resumed = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_export(&export_path, &sessions, None, None)
         .expect("seed source via export");
     let source_sid = resumed.assembled.session;
 
@@ -402,7 +402,7 @@ fn test_fork_keeps_source_untouched() {
         std::fs::read_to_string(sessions.join(source_sid.to_string()).join("log.jsonl")).unwrap();
 
     // Fork the source: a new sid seeded with the source's durable events.
-    let resumed = super::super::build_runner_for_fork(source_sid, &sessions, None, None)
+    let resumed = super::build_runner_for_fork(source_sid, &sessions, None, None)
         .expect("fork seeds new session");
     let runner = resumed.assembled.runner;
     let forked_sid = resumed.assembled.session;
@@ -456,7 +456,7 @@ fn test_fork_keeps_source_untouched() {
 fn test_fork_empty_source_errors() {
     let sessions = temp_root();
     let empty_sid = SessionId::new();
-    let result = super::super::build_runner_for_fork(empty_sid, &sessions, None, None);
+    let result = super::build_runner_for_fork(empty_sid, &sessions, None, None);
     let err = result
         .err()
         .expect("forking a sid with no log must error, not mint an empty session");
@@ -485,7 +485,7 @@ fn test_fork_warns_unverified_source() {
         "tamper-model",
         &two_events(src_sid),
     );
-    let resumed = super::super::build_runner_for_resume_export(&export_path, &sessions, None, None)
+    let resumed = super::build_runner_for_resume_export(&export_path, &sessions, None, None)
         .expect("seed source via export");
     let source_sid = resumed.assembled.session;
 
@@ -494,7 +494,7 @@ fn test_fork_warns_unverified_source() {
     let body = std::fs::read_to_string(&log).unwrap();
     std::fs::write(&log, body.replacen("resume-unit-prompt", "TAMPERED", 1)).unwrap();
     // Fork still succeeds (warns to stderr, proceeds).
-    let resumed = super::super::build_runner_for_fork(source_sid, &sessions, None, None)
+    let resumed = super::build_runner_for_fork(source_sid, &sessions, None, None)
         .expect("fork proceeds despite unverified source chain");
     let forked_sid = resumed.assembled.session;
 
@@ -510,15 +510,14 @@ fn test_fork_warns_unverified_source() {
 fn test_latest_picks_active_cwd() {
     let sessions = temp_root();
     // No sessions -> None.
-    assert!(super::super::latest_session_sid(&sessions).is_none());
+    assert!(super::latest_session_sid(&sessions).is_none());
 
     // A: an active session in the test workspace (seeded via export -> has a
     // log + sidecar, cwd = workspace_cwd(None) the same way --continue sees).
     let export_a = sessions.join("a.json");
     let sid_a = SessionId::new();
     write_export(&export_a, &sid_a.to_string(), "ma", &two_events(sid_a));
-    let resumed =
-        super::super::build_runner_for_resume_export(&export_a, &sessions, None, None).unwrap();
+    let resumed = super::build_runner_for_resume_export(&export_a, &sessions, None, None).unwrap();
     let minted_a = resumed.assembled.session;
 
     // B: a sidecar-only session in the SAME workspace but with no durable log
@@ -549,7 +548,7 @@ fn test_latest_picks_active_cwd() {
     let export_c = sessions.join("c.json");
     let sid_c = SessionId::new();
     write_export(&export_c, &sid_c.to_string(), "mc", &two_events(sid_c));
-    let resumed = super::super::build_runner_for_resume_export(
+    let resumed = super::build_runner_for_resume_export(
         &export_c,
         &sessions,
         Some(other_ws.to_string_lossy().into_owned()),
@@ -559,7 +558,7 @@ fn test_latest_picks_active_cwd() {
     let minted_c = resumed.assembled.session;
 
     // --continue picks A: B is excluded (no log), C is excluded (other cwd).
-    let latest = super::super::latest_session_sid(&sessions).expect("A is pickable");
+    let latest = super::latest_session_sid(&sessions).expect("A is pickable");
     assert_eq!(
         latest, minted_a,
         "latest_session_sid picks the active in-cwd session, not the no-log or other-cwd ones"
