@@ -88,11 +88,12 @@ impl ConsentStore for InMemoryConsentStore {
     fn record(&self, tool: &str, args_key: &str) {
         let mut entries = self.entries.lock().expect("consent mutex");
         // Replace any existing entry for the same key (refresh the TTL).
+        let now = self.effective_now();
         entries.retain(|e| !(e.tool == tool && e.args_key == args_key));
         entries.push(Entry {
             tool: tool.into(),
             args_key: args_key.into(),
-            recorded_at: Instant::now(),
+            recorded_at: now,
         });
     }
 }
@@ -110,7 +111,6 @@ pub fn args_key(input: Option<&serde_json::Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
 
     #[test]
     fn test_recall_miss_when_empty() {
@@ -137,9 +137,9 @@ mod tests {
     fn test_record_refreshes_ttl() {
         let s = InMemoryConsentStore::new(Duration::from_millis(50));
         s.record("edit", "k1");
-        thread::sleep(Duration::from_millis(30));
+        s.advance_clock(Duration::from_millis(30));
         s.record("edit", "k1"); // refresh
-        thread::sleep(Duration::from_millis(30));
+        s.advance_clock(Duration::from_millis(30));
         assert!(s.recall("edit", "k1")); // still fresh after refresh
     }
 
@@ -148,7 +148,7 @@ mod tests {
         let s = InMemoryConsentStore::new(Duration::from_millis(20));
         s.record("edit", "k1");
         assert!(s.recall("edit", "k1"));
-        thread::sleep(Duration::from_millis(30));
+        s.advance_clock(Duration::from_millis(30));
         assert!(!s.recall("edit", "k1")); // expired
     }
 
@@ -165,7 +165,7 @@ mod tests {
     fn test_expired_entries_pruned() {
         let s = InMemoryConsentStore::new(Duration::from_millis(10));
         s.record("edit", "expired");
-        thread::sleep(Duration::from_millis(20));
+        s.advance_clock(Duration::from_millis(20));
         s.recall("edit", "expired"); // triggers prune
         assert_eq!(s.entries.lock().unwrap().len(), 0);
     }
