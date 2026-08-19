@@ -267,6 +267,7 @@ async fn test_forget_archives_and_refreshes() {
 
 /// Drain frames until the Error response paired to req_id lands; return its
 /// message. Mirrors recv_list for the failure path.
+#[cfg(unix)]
 async fn recv_error(
     resp_id: RequestId,
     rx: &mut futures::channel::mpsc::Receiver<String>,

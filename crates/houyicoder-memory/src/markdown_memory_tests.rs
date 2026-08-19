@@ -552,7 +552,17 @@ fn test_rebuild_heals_external_edit() {
         .unwrap();
     // Externally write a second topic, bypassing add (no index update).
     let ext = "---\nname: bravo\ndescription: bravo fox\nsource: project\n---\nbravo fox body\n";
-    fs::write(root.join("bravo.md"), ext).unwrap();
+    let ext_path = root.join("bravo.md");
+    fs::write(&ext_path, ext).unwrap();
+    // Pin bravo.md's mtime strictly ahead of the index so root_is_stale
+    // detects it even on filesystems with coarse mtime resolution
+    // (overlayfs on CI runners can round to whole seconds).
+    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    let times = std::fs::FileTimes::new().set_modified(future);
+    std::fs::File::open(&ext_path)
+        .expect("open ext topic for set_times")
+        .set_times(times)
+        .expect("set ext topic mtime");
     p.rebuild_if_stale().unwrap();
     let idx = fs::read_to_string(root.join(INDEX_FILE)).unwrap();
     assert!(
