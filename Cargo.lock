@@ -1255,7 +1255,6 @@ name = "houyicoder-config"
 version = "0.1.0"
 dependencies = [
  "houyicoder-protocol",
- "nix 0.31.3",
  "serde",
  "serde_json",
  "tracing",

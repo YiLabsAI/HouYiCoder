@@ -3,10 +3,11 @@
 //! Reads the settings file as a serde_json::Value (preserving all unknown
 //! keys), runs a caller-supplied mutator to edit only the target keys, and
 //! writes back via a pid- and timestamp-suffixed temp file + rename.
-//! Concurrent writers are serialised by an advisory flock on a sibling
-//! .lock file (fd-based: a crash frees it, a leftover file does not block),
-//! with a content-hash token as a second guard against a writer that does
-//! not take the lock (e.g. a user hand-editing the file).
+//! Concurrent writers are serialised by an exclusive file lock on a
+//! sibling .lock file (handle-based: a crash frees it, a leftover file
+//! does not block), with a content-hash token as a second guard against
+//! a writer that does not take the lock (e.g. a user hand-editing the
+//! file).
 
 /// Error from a merge-preserving settings write. Separate from ConfigError
 /// (provider resolution) so a settings failure never masquerades as an auth
@@ -41,8 +42,8 @@ pub enum SettingsWriteError {
 /// (only mutates the Value, no external side effects) because CAS retry
 /// re-invokes it — hence Fn, not FnOnce.
 ///
-/// Concurrency: an advisory flock on a sibling .lock file serialises all
-/// update_settings callers, so the content-hash CAS below never races
+/// Concurrency: an exclusive file lock on a sibling .lock file serialises
+/// all update_settings callers, so the content-hash CAS below never races
 /// another in-process writer. The CAS stays as a second guard against a
 /// change made outside update_settings (a user hand-editing the file
 /// mid-write) — the lock does not fence that out, the hash does.
@@ -110,10 +111,14 @@ pub fn update_settings(
         }
         let current_token = content_token(&std::fs::read_to_string(path).unwrap_or_default());
         if current_token == token {
-            // TOCTOU: another thread between our read and rename may also
-            // pass the token check and rename. After our rename, re-read +
-            // verify our mutation survived. If not, another writer won the
-            // race — retry against the latest content.
+            // Under the lock no in-process caller races us, so the token
+            // + verify guard only against an OUT-OF-BAND change (a hand-edit
+            // made without taking the lock): the token detects a change
+            // since our read, this verify detects one after our rename.
+            // The verify cannot protect an earlier caller we might have
+            // overwritten — that caller already returned Ok with no chance
+            // to retry — which is exactly why inter-caller exclusion lives
+            // in the lock, not in this CAS loop.
             if std::fs::rename(&temp, path).is_err() {
                 drop(std::fs::remove_file(&temp));
                 return Err(SettingsWriteError::Io("failed to rename temp".into()));
@@ -153,32 +158,30 @@ fn content_token(text: &str) -> u64 {
     hasher.finish()
 }
 
-#[cfg(unix)]
 fn acquire_settings_lock(
     lock_path: &std::path::Path,
 ) -> Result<SettingsLockGuard, SettingsWriteError> {
-    use nix::fcntl::{Flock, FlockArg};
+    // std::fs::File::lock is an exclusive file lock: flock on unix,
+    // LockFileEx on windows — same primitive the previous unix-only flock
+    // used, now covering both. Opened .write(true) (windows refuses to
+    // lock an append-only handle) and .truncate(false) explicitly: the
+    // file is a zero-byte sentinel, so truncating is pointless and on
+    // windows can fail while another handle holds the exclusive lock. The
+    // guard holds the File; dropping it closes the handle and releases
+    // the lock.
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
-        .truncate(true)
+        .truncate(false)
         .open(lock_path)
         .map_err(|e| SettingsWriteError::Io(format!("open lock {lock_path:?}: {e}")))?;
-    match Flock::lock(file, FlockArg::LockExclusive) {
-        Ok(lock) => Ok(SettingsLockGuard { _lock: lock }),
-        Err((_, e)) => Err(SettingsWriteError::Io(format!("flock {lock_path:?}: {e}"))),
-    }
+    file.lock()
+        .map_err(|e| SettingsWriteError::Io(format!("lock {lock_path:?}: {e}")))?;
+    Ok(SettingsLockGuard { _file: file })
 }
 
-#[cfg(unix)]
 struct SettingsLockGuard {
-    _lock: nix::fcntl::Flock<std::fs::File>,
-}
-
-#[cfg(not(unix))]
-fn acquire_settings_lock(_lock_path: &std::path::Path) -> Result<(), SettingsWriteError> {
-    // No flock off unix; the content-hash CAS is the only guard.
-    Ok(())
+    _file: std::fs::File,
 }
 
 #[cfg(test)]
