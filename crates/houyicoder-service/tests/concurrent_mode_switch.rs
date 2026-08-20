@@ -420,3 +420,61 @@ async fn test_non_mode_request_dropped() {
          (handle_mode_cycle_during_run handles only PermissionCycleMode mid-run)"
     );
 }
+
+/// A /compact sent while a run is active is dropped, not dispatched: compact
+/// rewrites the session manifest, so firing it during the parallel-tool
+/// PostToolUse batch would race that batch's reference to the old manifest.
+/// /compact only dispatches between runs.
+#[tokio::test]
+async fn test_active_run_drops_compact() {
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let provider: Arc<dyn ModelProvider> = Arc::new(BlockingProvider {
+        notify: notify.clone(),
+    });
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let session = houyicoder_context::SessionId::new();
+    let wire_session_id = houyicoder_protocol::frontend::SessionId(session.to_string());
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
+    let runner = Arc::new(Runner::with_shared_store(
+        store,
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "test".into(),
+            instructions: "test".into(),
+            max_turns: 5,
+            ..RunnerConfig::default()
+        },
+    ));
+    let (mut client_tx, mut client_rx) = handshake(Server::new(runner, session, gate)).await;
+
+    // Start the run (blocks on the provider), then send /compact while active.
+    let req = RequestEnvelope::new(
+        RequestId(1),
+        FrontendRequest::MessageSend {
+            session_id: wire_session_id,
+            content: vec![ContentBlock::Text { text: "go".into() }],
+        },
+    );
+    send_frame(&mut client_tx, &ClientFrame::Request(req)).await;
+    let compact_req = RequestEnvelope::new(RequestId(2), FrontendRequest::Compact);
+    send_frame(&mut client_tx, &ClientFrame::Request(compact_req)).await;
+
+    // Unblock + drain to the run's outcome (req_id 1), counting /compact replies.
+    notify.notify_one();
+    let mut compact_replies: u32 = 0;
+    loop {
+        match recv_frame_within(&mut client_rx, std::time::Duration::from_secs(5)).await {
+            ServerFrame::Response(env) if env.req_id == RequestId(2) => {
+                compact_replies += 1;
+            }
+            ServerFrame::Response(env) if env.req_id == RequestId(1) => break,
+            _ => continue,
+        }
+    }
+    assert_eq!(
+        compact_replies, 0,
+        "/compact sent during an active run must be dropped, not dispatched: \
+         a compact firing here races the parallel-tool PostToolUse batch"
+    );
+}
