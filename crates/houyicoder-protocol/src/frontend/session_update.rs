@@ -260,15 +260,16 @@ impl ToolCallUpdate {
 
 /// One ACP session/update notification, wire form. Internally tagged by
 /// sessionUpdate with snake_case variant names, matching the
-/// SessionUpdate enum so the cross-decode fixture gates fidelity. The five
-/// variants here are the standard kinds the current server emits; a future
-/// variant lands without reworking every match (non_exhaustive).
+/// SessionUpdate enum so the cross-decode fixture gates fidelity. The
+/// variants cover the session-update kinds the server emits or accepts; a
+/// future variant lands without reworking every match (non_exhaustive).
 ///
 /// - UserMessageChunk: a chunk of the user's message.
 /// - AgentMessageChunk: a chunk of the agent's reply.
 /// - AgentThoughtChunk: a chunk of the agent's reasoning.
 /// - ToolCall: a new tool call was initiated.
 /// - ToolCallUpdate: a tool call's status or results updated.
+/// - UsageUpdate: context window usage (tokens used / window size).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "sessionUpdate", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -289,6 +290,8 @@ pub enum SessionUpdate {
     /// Session metadata (title, updated_at) changed. Uses MaybeUndefined so
     /// a null field clears the value, an absent field leaves it unchanged.
     SessionInfoUpdate(SessionInfoUpdate),
+    /// Context window usage report (tokens in use vs window size).
+    UsageUpdate(UsageUpdate),
 }
 
 /// A plan entry: a content line, a priority, and a status.
@@ -387,6 +390,18 @@ pub struct SessionInfoUpdate {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<crate::acp_wire::Meta>,
+}
+
+/// Context window usage: tokens in use vs total window size. The monetary
+/// cost some peers attach is deliberately not modeled — usage reporting
+/// stays token-based. A peer-emitted cost field is ignored on decode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageUpdate {
+    pub used: u64,
+    pub size: u64,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
     pub meta: Option<crate::acp_wire::Meta>,
 }

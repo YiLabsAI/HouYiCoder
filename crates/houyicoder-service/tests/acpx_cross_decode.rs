@@ -5,25 +5,29 @@
 //! the real ACP SDK accepts.
 //!
 //! Semantic comparison only — our copy intentionally omits optional
-//! fields (annotations, uri, unstable message_id, _meta) and skips
-//! default-valued fields, so bit-equality would fail; the fields we both carry
-//! must match. Each variant is tested in both directions (ACP to ours, ours to
-//! ACP).
+//! fields (annotations, uri, message_id, the monetary cost on usage updates,
+//! _meta) and skips default-valued fields, so bit-equality would fail; the
+//! fields we both carry must match. Each variant is tested in both directions
+//! (ACP to ours, ours to ACP).
 //!
-//! Feature-gated: the agent-client-protocol dev-dep pulls schemars +
-//! derive_more, whose cold compile pushes the workspace test-compile past the
-//! 120s gate. Run with the acp-cross-decode feature enabled; the default test
-//! pass skips this file so the gate stays fast. The fidelity gate runs when
-//! the protocol mirror changes or on CI, not on every commit.
+//! The SDK reorganized its schema types under schema::v1 in the 2.0 release;
+//! the v1 module is the stable wire this gate targets.
+//!
+//! Feature-gated: the agent-client-protocol dev-dep pulls the schema crate
+//! and its serde machinery, whose cold compile pushes the workspace
+//! test-compile past the 120s gate. Run with the acp-cross-decode feature
+//! enabled; the default test pass skips this file so the gate stays fast. The
+//! fidelity gate runs when the protocol mirror changes or on CI, not on every
+//! commit.
 
 #![cfg(feature = "acp-cross-decode")]
 
-use agent_client_protocol as acp;
+use agent_client_protocol::schema::v1 as acp;
 use houyicoder_protocol::frontend::run::ContentBlock as OurContentBlock;
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk as OurContentChunk, SessionUpdate as OurSessionUpdate, ToolCall as OurToolCall,
     ToolCallStatus as OurToolCallStatus, ToolCallUpdate as OurToolCallUpdate,
-    ToolCallUpdateFields as OurToolCallUpdateFields,
+    ToolCallUpdateFields as OurToolCallUpdateFields, UsageUpdate as OurUsageUpdate,
 };
 use serde_json::Value;
 
@@ -269,9 +273,8 @@ fn test_ours_acp_tool_update() {
 
 #[test]
 fn test_ignores_acp_message_id() {
-    // With the unstable feature enabled, ACP ContentChunk carries an optional
-    // message_id field. Our mirror omits it; serde must ignore the extra key
-    // so decode parity holds.
+    // ACP ContentChunk carries an optional message_id field. Our mirror omits
+    // it; serde must ignore the extra key so decode parity holds.
     let acp_val = acp::SessionUpdate::AgentMessageChunk(
         acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new("chunk")))
             .message_id("msg-uuid-1"),
@@ -317,16 +320,69 @@ fn test_ignores_acp_meta_annotations() {
 }
 
 // ---------------------------------------------------------------------------
+// UsageUpdate — used + size (monetary cost ignored on decode)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_acp_ours_usage_update() {
+    let acp_val = acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1200, 200_000));
+    let ours = acp_to_ours(&acp_val);
+    match &ours {
+        OurSessionUpdate::UsageUpdate(usage) => {
+            assert_eq!(usage.used, 1200, "used");
+            assert_eq!(usage.size, 200_000, "size");
+        }
+        _ => panic!("expected UsageUpdate, got {ours:?}"),
+    }
+}
+
+#[test]
+fn test_ignores_acp_usage_cost() {
+    // A peer may attach a monetary cost; our mirror stays token-based and
+    // must decode the update while ignoring the cost object.
+    let acp_val = acp::SessionUpdate::UsageUpdate(
+        acp::UsageUpdate::new(1200, 200_000).cost(acp::Cost::new(0.03, "USD")),
+    );
+    let json = serde_json::to_string(&acp_val).expect("ACP serialize");
+    assert!(json.contains(r#""cost""#), "ACP must emit cost: {json}");
+    let ours: OurSessionUpdate = serde_json::from_str(&json).expect("decode ignores cost");
+    match &ours {
+        OurSessionUpdate::UsageUpdate(usage) => {
+            assert_eq!(usage.used, 1200, "used");
+            assert_eq!(usage.size, 200_000, "size");
+        }
+        _ => panic!("expected UsageUpdate, got {ours:?}"),
+    }
+}
+
+#[test]
+fn test_ours_acp_usage_update() {
+    let ours = OurSessionUpdate::UsageUpdate(OurUsageUpdate {
+        used: 1200,
+        size: 200_000,
+        meta: None,
+    });
+    let acp_val = ours_to_acp(&ours);
+    match acp_val {
+        acp::SessionUpdate::UsageUpdate(usage) => {
+            assert_eq!(usage.used, 1200, "used");
+            assert_eq!(usage.size, 200_000, "size");
+            assert!(usage.cost.is_none(), "ours never emits cost");
+        }
+        _ => panic!("expected UsageUpdate"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unknown SessionUpdate variant is rejected (not silently dropped)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_unknown_session_update_fails() {
-    // A variant our copy does not model (UsageUpdate, gated in the spec
-    // and omitted here) must fail to decode — it is not silently dropped to a
-    // default. This catches a peer emitting a variant we have no
-    // representation for.
-    let json = r#"{"sessionUpdate":"usage_update","usage_update":{}}"#;
+    // A variant our copy does not model must fail to decode — it is not
+    // silently dropped to a default. This catches a peer emitting a variant
+    // we have no representation for.
+    let json = r#"{"sessionUpdate":"holographic_projection_update"}"#;
     let result: Result<OurSessionUpdate, _> = serde_json::from_str(json);
     assert!(
         result.is_err(),
