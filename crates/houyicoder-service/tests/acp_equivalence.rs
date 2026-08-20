@@ -17,7 +17,7 @@ use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::acp_wire::AcpRequest;
 use houyicoder_protocol::acpx::AcpxCapabilities;
-use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId, ServerFrame};
+use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::{FrontendRequest, SessionId as WireSessionId};

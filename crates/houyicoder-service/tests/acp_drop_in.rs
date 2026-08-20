@@ -114,7 +114,7 @@ fn test_drop_drives_init_prompt() {
     );
 
     drop(stdin);
-    let _ = child.wait();
+    drop(child.wait());
 }
 
 /// An unknown method replies method-not-found (-32601) on the request id,
@@ -129,7 +129,7 @@ fn test_drop_unknown_method_fails() {
     let reply = send_and_recv(&mut stdin, &mut stdout, bogus, r#""id":7"#);
     assert!(reply.contains(r#""code":-32601"#), "{reply}");
     drop(stdin);
-    let _ = child.wait();
+    drop(child.wait());
 }
 
 /// Malformed JSON replies ParseError (-32700) on the null id, per
@@ -143,5 +143,5 @@ fn test_drop_malformed_frame_fails() {
     let reply = send_and_recv(&mut stdin, &mut stdout, "not json at all", r#""id":null"#);
     assert!(reply.contains(r#""code":-32700"#), "{reply}");
     drop(stdin);
-    let _ = child.wait();
+    drop(child.wait());
 }
