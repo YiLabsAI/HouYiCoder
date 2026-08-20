@@ -42,37 +42,17 @@ pub fn failing_checks() -> Vec<String> {
 }
 
 /// /context view built from the stub breakdown so the inline block renders
-/// the real layout before the analyzer is wired.
+/// the real layout before the analyzer is wired. The drill-down is empty,
+/// matching every wired path (the server reply and the cache fast-path both
+/// serve a default drill until real drill data lands): a canned view must
+/// not fabricate memory files or skills that look like live telemetry.
 pub fn context_view() -> crate::records::ContextView {
-    use crate::records::{ContextDrillDown, ContextFileEntry, ContextSkillEntry, ContextView};
+    use crate::records::{ContextDrillDown, ContextView};
     let breakdown = houyicoder_protocol::frontend::context::stub_breakdown();
-    let drill = ContextDrillDown {
-        memory_files: vec![ContextFileEntry {
-            path: "~/.claude/projects/.../MEMORY.md".to_string(),
-            tokens: 6_600,
-        }],
-        skills: vec![
-            ContextSkillEntry {
-                source: "Built-in".to_string(),
-                name: "claude-api".to_string(),
-                tokens: 360,
-            },
-            ContextSkillEntry {
-                source: "Built-in".to_string(),
-                name: "update-config".to_string(),
-                tokens: 240,
-            },
-            ContextSkillEntry {
-                source: "Built-in".to_string(),
-                name: "run".to_string(),
-                tokens: 800,
-            },
-        ],
-    };
     let suggestions = super::suggestions_for(&breakdown);
     ContextView {
         breakdown,
-        drill,
+        drill: ContextDrillDown::default(),
         suggestions,
     }
 }

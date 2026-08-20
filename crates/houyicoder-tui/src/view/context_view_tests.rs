@@ -13,6 +13,34 @@ fn working_app() -> crate::state::App {
     app
 }
 
+/// An app showing a context grid whose drill-down carries data. The canned
+/// no-session view serves an empty drill (matching the wired paths), so the
+/// drill-section render tests feed their own fixture directly.
+fn working_app_with_drill() -> crate::state::App {
+    use crate::records::{ContextDrillDown, ContextFileEntry, ContextSkillEntry, ContextView};
+    let breakdown = houyicoder_protocol::frontend::context::stub_breakdown();
+    let suggestions = composition::suggestions_for(&breakdown);
+    let view = ContextView {
+        breakdown,
+        drill: ContextDrillDown {
+            memory_files: vec![ContextFileEntry {
+                path: "~/.houyicoder/memory/MEMORY.md".to_string(),
+                tokens: 6_600,
+            }],
+            skills: vec![ContextSkillEntry {
+                source: "Built-in".to_string(),
+                name: "design-review".to_string(),
+                tokens: 360,
+            }],
+        },
+        suggestions,
+    };
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.push_transcript_line(crate::state::TranscriptLine::ContextGrid(view));
+    app
+}
+
 fn dump(buf: &ratatui::buffer::Buffer) -> String {
     let area = buf.area();
     let mut rows: Vec<String> = Vec::with_capacity(area.height as usize);
@@ -423,7 +451,7 @@ fn test_grid_inline_renders_usage() {
 
 #[test]
 fn test_grid_inline_renders_memory() {
-    let app = working_app();
+    let app = working_app_with_drill();
     let buf = render_buffer(&app, 100, 40);
     let text = dump(&buf);
     assert!(text.contains("Memory files"), "memory files header missing");
@@ -432,7 +460,7 @@ fn test_grid_inline_renders_memory() {
 
 #[test]
 fn test_grid_inline_renders_skills() {
-    let app = working_app();
+    let app = working_app_with_drill();
     let buf = render_buffer(&app, 100, 40);
     let text = dump(&buf);
     assert!(text.contains("Skills"), "skills header missing");
