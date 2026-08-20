@@ -67,8 +67,10 @@ fn main() {
             limits.cpu_100ns
         );
     }
-    // as_bytes default is 2 GiB.
-    let two_gib = 2 * 1024 * 1024 * 1024;
+    // as_bytes default is 2 GiB. Annotated usize: 2 * 1024^3 overflows the
+    // default i32 literal type (2 GiB > i32::MAX), and this example only
+    // compiles on windows, so the overflow surfaces only there.
+    let two_gib: usize = 2 * 1024 * 1024 * 1024;
     if limits.process_memory != two_gib as usize {
         eprintln!(
             "FAIL: process memory cap is {}, expected {two_gib}",
