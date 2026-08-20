@@ -59,7 +59,6 @@ jobs:
           HOUYICODER_FAST_TOKENS: "1"
           GATE_SECS: "120"
       - name: test (integration)
-        if: runner.os != 'Windows'
         shell: bash
         run: python3 scripts/run_tests.py --full
         env:
