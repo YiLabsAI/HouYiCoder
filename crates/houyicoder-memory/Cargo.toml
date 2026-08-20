@@ -21,4 +21,4 @@ unicode-normalization = "0.1"
 tracing = "0.1.44"
 
 [dev-dependencies]
-pollster = "0.4"
+pollster = "1.0"
