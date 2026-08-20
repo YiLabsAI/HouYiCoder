@@ -109,7 +109,7 @@ pub struct EventId(Ulid);
 impl EventId {
     /// Mint a fresh event id.
     pub fn new() -> Self {
-        Self(Ulid::new())
+        Self(Ulid::generate())
     }
 }
 
@@ -140,7 +140,7 @@ pub struct CheckpointId(Ulid);
 impl CheckpointId {
     /// Mint a fresh checkpoint id.
     pub fn new() -> Self {
-        Self(Ulid::new())
+        Self(Ulid::generate())
     }
 }
 
