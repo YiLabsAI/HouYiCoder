@@ -28,6 +28,37 @@ fn test_tokenizer_no_cjk_undercount() {
 }
 
 #[test]
+fn test_tokenizer_exact_counts() {
+    // Exact counts on reference strings pin the bundled BPE tables: any
+    // tokenizer change that shifts tokenization fails loudly here instead of
+    // drifting through the /context budget math unnoticed. The cases divide
+    // two jobs, so prune with care:
+    //
+    // - All four pin the o200k table itself (a table change moves a count).
+    // - Only the CJK and the mixed strings detect a silent o200k -> cl100k
+    //   fallback: they count differently under the two encodings (cl100k
+    //   yields 5 and 11 here). The two ASCII strings count identically under
+    //   both encodings, so they alone cannot catch a fallback.
+    //
+    // When a number legitimately changes, re-baseline deliberately and check
+    // the /context sizing impact before accepting.
+    let t = Tokenizer::real();
+    let cases = [
+        ("hello world", 2),
+        ("fn main() { println!(\"hello\"); }", 9),
+        ("\u{4f60}\u{597d}\u{4e16}\u{754c}", 2),
+        ("token counts come from tiktoken, not chars/4", 12),
+    ];
+    for (text, expected) in cases {
+        assert_eq!(
+            t.count(text),
+            expected,
+            "BPE drift on {text:?}: expected {expected}"
+        );
+    }
+}
+
+#[test]
 fn test_section_label_all_kinds() {
     assert_eq!(SectionKind::SystemPrompt.label(), "System prompt");
     assert_eq!(SectionKind::Tools.label(), "System tools");
