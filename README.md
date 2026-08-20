@@ -1,20 +1,12 @@
 <div align="center">
 
-```
-    ..::..
-  .::::::::::.
-  ::::::::::::::
-->|*:::::::::::
-  ::::::::::::::
-  '::::::::::'
-    '..::..'
-```
-
 # houyicoder
 
-### One harness. Every surface. Evidence for everything.
+### Models converge. Engineering compounds.
 
-An enterprise-grade coding agent, built as a harness rather than an app.
+An enterprise-grade AI software engineering system — the workflow,
+knowledge, and evidence of real engineering, built as a system around
+any model.
 
 [![CI](https://github.com/YiLabsAI/HouYiCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/YiLabsAI/HouYiCoder/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/YiLabsAI/HouYiCoder/branch/main/graph/badge.svg)](https://codecov.io/gh/YiLabsAI/HouYiCoder)
@@ -25,166 +17,205 @@ An enterprise-grade coding agent, built as a harness rather than an app.
 
 </div>
 
-Most coding agents are an application with a UI bolted on. houyicoder is
-a Rust core behind one versioned protocol — every surface is a client, so
-the agent you drive from your terminal is byte-for-byte the agent your
-IDE drives, and the one a web or mobile client will drive.
+The first generation of coding agents traded away fifty years of
+engineering infrastructure for a chat loop. Symbol graphs, refactoring
+safety, review surfaces, project knowledge — abandoned, because text in
+and diffs out was enough to demo, and the model's raw capability covered
+the difference.
 
-That architecture buys the thing single-surface agents cannot offer:
-**you can work either way.** Stay in the terminal for the AI-native
-loop — describe the outcome, let the agent drive. Or connect from your
-editor over ACP and keep the IDE workflow you already have. Same core,
-same session, same audit trail.
+That trade stops paying. Models are converging: whichever one you rent
+this quarter, everyone rents next quarter. The model is not where an
+agent can win — and a prompt can *request* discipline, but it cannot
+enforce it, and it accumulates nothing.
 
-And because the core owns everything, it can prove what it did. Every
-turn lands in a hash-chained, replayable event log. Every token is
-accounted against an explicit budget. Every wasted action feeds a reward
-loop that distills the failure into a durable lesson the next session
-recalls — so the agent measurably improves on *your* codebase the longer
-you use it.
+houyicoder is built on the other side of that argument. The engineering
+lives in the system, not the prompt: a design and its acceptance criteria
+before code, adversarial review between every stage, evidence behind
+every claim, and knowledge that accrues to your repository instead of
+evaporating with the session. Swap the model and it gets faster. Keep
+using it and it gets better — and that part is yours.
 
-> **houyicoder doesn't ask you to trust the output. It shows you the evidence.**
+## The workflow it runs
 
-**Five things it does that others don't:**
+```mermaid
+flowchart LR
+    US["User story"] --> DS["Design +<br/>acceptance"] --> A1(["adversarial<br/>audit"]) --> IM["Implement"] --> A2(["verified<br/>against design"]) --> TS["Tests +<br/>gates"] --> A3(["adversarial<br/>review"]) --> SH["Ship"]
+```
 
-1. **One harness, every surface** — one Rust core, one protocol; frontends
-   are untrusted clients, never forks
-2. **Two ways to work** — AI-native terminal loop, or IDE-driven over ACP,
-   against the same session
-3. **Evidence by construction** — hash-chained event log, replay, per-tool
-   cost accounting, secret redaction
-4. **Gets better with use** — a closed reward loop turns the agent's own
-   mistakes into recalled lessons
-5. **Enterprise-grade defaults** — fail-closed permissions, real OS
-   sandboxes, cross-platform single binary
+Every stage produces an artifact; every transition passes a gate; the
+audits are adversarial — independent agent reviewers whose job is to
+break the design before code exists and to break the claim before it
+ships. The agent cannot jump from a one-line request to a pile of diffs,
+because the system offers no such path. Your own gates — lint, tests,
+policy — plug into the same mechanism as hooks and run inside the loop.
 
-## Key Features
+## Quick start
 
-| Category | Feature | What it means |
-|----------|---------|---------------|
-| **Trust & Reproducibility** | Hash-chained session log | Every event is appended to a hash-chained log; the chain verifies itself on load, so a tampered or corrupted history is detected, not silently trusted |
-| | Replay & audit | `/trajectory` drills turn → event → payload with byte positions, token counts, and cost; `/export` writes the full record to JSON |
-| | Immutable state | Checkpoints and session versions are append-only; undo never rewrites history |
-| **Observability** | Context as a budget | `/context` shows exactly where your tokens went; `/tools` shows per-tool call counts, failure rates, and cost |
-| | Redundancy nudge | The agent detects when it is repeating a wasteful call and nudges itself to stop — waste is visible, not absorbed |
-| | Secret redaction | Secrets in trajectories and exports are redacted by default |
-| **Self-Improvement** | Closed reward loop | Blind-retry detection → consolidated reflection → a distilled lesson written to structured memory → recalled on the next matching query. The loop is end-to-end observable |
-| | Structured memory | Typed, versioned entries with origin tracking (user vs agent) and promote/demote lifecycle — not a flat text file |
-| **Token Economy** | Explicit budget planner | Cache-aware prefix ordering and multi-layer compaction with originals preserved; spending is planned, not hoped |
-| **Safety** | Fail-closed permissions | Destructive tools default to deny; the permission pipeline judges the *resolved* file path, so symlink bypasses are caught |
-| | OS-level sandbox | Shell runs in a real OS sandbox: macOS seatbelt, Linux landlock, Windows Job Objects |
-| | Capability-scoped guests | Every frontend and plugin is an untrusted guest over the wire; nothing shares the host heap |
-| **Harness** | One protocol, every surface | Frontends are untrusted clients over one versioned JSON-RPC protocol with capability tokens. The TUI holds no engine state — a new frontend is a new client, not a fork (see [Protocol](#protocol)) |
-| | Terminal *and* IDE | Drive the AI-native loop from the terminal, or let your editor drive the same core over ACP. Not two products — two clients |
-| | Project-aware discipline | The agent reads your `AGENTS.md` and structured memory on every session, and works through explicit Design → Implement → Verify stages instead of one undifferentiated chat |
-| **Platform** | Single binary | No runtime dependencies; builds for macOS, Linux, and Windows |
-| | Any OpenAI-compatible API | Point it at any OpenAI-compatible endpoint; a model catalog tracks per-model context windows, priority, and cost |
-
-## Quick Start
+Built from source today; signed binaries and package-manager installs
+are coming.
 
 ```bash
+# 1. build (Rust stable, pinned in rust-toolchain.toml)
 git clone https://github.com/YiLabsAI/HouYiCoder.git
-cd HouYiCoder
-cargo build --release
+cd HouYiCoder && cargo build --release
+
+# 2. point it at any OpenAI-compatible endpoint
+export OPENAI_API_KEY=sk-...
+export OPENAI_BASE_URL=https://...
+
+# 3. run
+./target/release/houyi
 ```
 
-Configure any OpenAI-compatible provider and launch:
+Inside the app, `/help` lists every command: `/context` shows exactly
+where your tokens went, `/trajectory` replays the session, `/status`
+reports model, sandbox, and connectivity. Preferences persist in
+`~/.houyicoder/settings.json` — including an `apiKeyHelper` hook that
+fetches the key from your secret manager at startup, so it never has to
+live in a file or an exported variable.
 
-```bash
-export OPENAI_API_KEY=sk-...        # or DASHSCOPE_API_KEY / HOUYICODER_API_KEY
-export OPENAI_BASE_URL=https://...  # any OpenAI-compatible endpoint
-./target/release/houyi              # launch the TUI
-```
+## Capabilities
 
-Type `/help` inside the TUI for the command palette. `/context` shows the
-token budget, `/trajectory` replays the session event log, and `/status`
-reports model, sandbox, and connectivity.
+| | Capability | What it means |
+|---|---|---|
+| **Engineering Workflow** | Spec-driven development | Design → implement → verify as enforced stages, each with an artifact and an approval — structure, not a system-prompt suggestion |
+| | Design first | Module boundaries, interface contracts, core types and algorithms are decided and reviewed as artifacts — the decisions that determine whether code survives its second year |
+| | Adversarial review | Independent reviewer agents audit the design before code and the implementation before merge — review is a stage, not a favor you remember to ask |
+| | Multi-agent delegation | A subtask runs as its own session: own token budget, own git worktree, same fail-closed gates |
+| | Workflow hooks | Pre-use, post-use, and post-failure hooks let your own gates allow, deny, or amend real tool calls |
+| **Context Engineering** | Measured context | `/context` decomposes the served view — system, tools, memory, skills, messages — with real token counts; nothing is a guess |
+| | CodeGraph | LSP-fed, repository-scale symbol and impact queries, so a change is planned against what it actually touches |
+| | Structured memory | Typed, versioned entries with origin tracking and a promote/demote lifecycle — project knowledge, not a flat text file |
+| | Team knowledge | Conventions and lessons that outlive the session and travel across a team |
+| **Governed Autonomy** | Human-in-the-loop | Per-change diff approval, permission prompts, mid-run steering — redirect the agent without killing the run |
+| | Human-on-the-loop | Watch without interrupting: live trajectory, token budget, per-tool cost and failure rates |
+| | Reviewable artifacts | The spec, the design, and every diff are inspectable records — anyone who asks "what did the AI actually do" can see, trace, and verify |
+| **Observability & Audit** | Hash-chained session log | Every event appends to a self-verifying chain; tampered or corrupted history is detected, never silently trusted |
+| | Replay & export | Drill turn → event → payload with token counts and cost; export the full record — with secrets redacted by default |
+| **Self-Evolution** | Closed evidence loop | Wasted work is detected, distilled into a durable lesson, and recalled on the next matching task — measurable improvement on *your* codebase, not fine-tuning folklore |
+| **Token Economy** | Budget as an input | Cache-aware prefix ordering and multi-layer compaction with originals preserved; spending is planned and measured, not hoped |
+| **Security & Isolation** | Fail-closed permissions | Destructive tools default to deny; the pipeline judges the *resolved* path, so symlink bypasses are caught |
+| | OS-level sandbox | Shell runs behind macOS seatbelt, Linux landlock, or Windows job objects |
+| **Harness Architecture** | One kernel, every endpoint | Terminal, IDE, web, and native apps are clients of one protocol — the same agent, the same session, everywhere |
+| | Single binary, any platform | No runtime dependencies; macOS, Linux, Windows; local or cloud |
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Guests["Guests — never share the host heap"]
-        TUI["TUI<br/>(Rust)"]
-        IDE["IDE<br/>(via ACP)"]
-        MCP["MCP server"]
-        Web["Web / mobile<br/>(planned)"]
+    subgraph G["ENDPOINTS — every surface is a client of one kernel"]
+        direction LR
+        TUI["Terminal"] ~~~ IDE["IDE / Editor"] ~~~ WEB["Web"] ~~~ APP["Native apps"]
     end
-    subgraph Proto["Open protocol (JSON-RPC + capability tokens)"]
-        F["frontend methods"]
-        M["mcp bridge"]
-    end
-    subgraph Host["Rust daemon — all trust, all logic"]
-        subgraph Ctrl["control plane (deterministic)"]
-            TB["token budget"]
-            SS["session store<br/>(hash-chained)"]
-            PM["permission pipeline<br/>(fail-closed)"]
+
+    SEAM["ONE VERSIONED PROTOCOL — ACP + ACPX over JSON-RPC"]
+
+    subgraph H["THE HARNESS — one Rust kernel: all state, all discipline"]
+        direction TB
+        subgraph WF["ENGINEERING WORKFLOW"]
+            direction LR
+            SPEC["Design +<br/>acceptance"] ~~~ IMPL["Implement"] ~~~ REV["Adversarial<br/>review"] ~~~ AGT["Child agents<br/>own budget · own worktree"]
         end
-        subgraph Mod["model plane (one bounded step)"]
-            AR["agent runtime"]
-            TR["tool registry"]
-            MP["model provider"]
+        subgraph CP["CONTROL PLANE — deterministic, replayable"]
+            direction LR
+            BUD["Token budget"] ~~~ SES["Session log<br/>hash-chained"] ~~~ PRM["Permission gate<br/>fail-closed"]
         end
-        Sbx["sandbox<br/>(seatbelt / landlock / job objects)"]
+        subgraph MP["EXECUTION PLANE — one bounded model step per turn"]
+            direction LR
+            CTX["Context engine<br/>memory · CodeGraph · skills"] ~~~ RUN["Agent runtime"] ~~~ TLS["Tools + hooks"]
+        end
+        subgraph EV["SELF-EVOLUTION"]
+            direction LR
+            OBS["Measure every turn"] --> RWD["Reward gate"] --> MEM["Durable lesson"]
+        end
+        WF ==> CP
+        CP ==> MP
+        MP ==> EV
+        EV -.->|"lessons feed the next task"| MP
     end
-    Guests <-->|protocol| Proto
-    Proto <--> Host
-    Ctrl ==>|drives| Mod
-    Sbx -.->|enforce| Guests
+
+    SBX["OS SANDBOX — seatbelt · landlock · job objects"]
+
+    subgraph W["WORKSPACE AND PROVIDERS — local or cloud"]
+        direction LR
+        FS["Repository<br/>files · git worktrees"] ~~~ MCPS["MCP servers"] ~~~ LLM["Model endpoints<br/>any OpenAI-compatible"]
+    end
+
+    G <==> SEAM
+    SEAM <==> H
+    H ==> SBX
+    SBX ==> W
 ```
 
-One Rust daemon holds all trust. Everything else — TUI, IDE, plugins,
-sidecars — is a guest that speaks the open protocol; guests never share
-the host heap. The control plane (budget, session, permissions) is
-deterministic; the model plane executes one bounded step. Untrusted
-leaves (model responses, memory recall) are snapshot-persisted, so a run
-can be replayed.
+- **A surface is a client, not a fork.** The kernel holds all state, so
+  the agent you drive from the terminal is the same agent, in the same
+  session, your editor drives.
+- **Determinism is separated from the model.** The control plane decides
+  what is allowed and records what happened; the execution plane runs
+  exactly one bounded step. Non-deterministic results are snapshot-
+  persisted, so any run replays without re-running.
+- **Many agents are the default, not a feature.** An agent is a session
+  in the harness — a child inherits the budget, the isolation, and the
+  gates rather than opting into them.
 
-## Protocol
+## Open by design
 
-The boundary between the host and every guest is a versioned JSON-RPC
-protocol with typed capability tokens — the seam that makes the TUI a
-pure client and any third-party frontend possible.
+Every boundary is a published wire format or an open standard — which is
+what makes houyicoder embeddable, auditable, and extendable rather than
+merely usable.
 
-Externally, houyicoder speaks the two open standards of the agent
-ecosystem:
-
-- **[MCP](https://modelcontextprotocol.io)** — external tool servers are
-  consumed through the standard Model Context Protocol
-- **[ACP](https://agentclientprotocol.com)** — an Agent Client Protocol
-  adapter lets an IDE drive houyicoder as its agent backend
+| Standard | Role | What it gives you |
+|---|---|---|
+| **[ACP](https://agentclientprotocol.com)** | Drive the agent | Any ACP client — your editor, your pipeline — runs houyicoder as its backend |
+| **ACPX** | Extend the protocol | Our open extension namespace over ACP for what the base standard lacks, such as token-level streaming; standard clients ignore it and keep working |
+| **[MCP](https://modelcontextprotocol.io)** | Add tools | External MCP servers register like native tools, behind the same permission gate |
+| **[LSP](https://microsoft.github.io/language-server-protocol/)** | Understand code | Language servers feed symbol-precise, compiler-grade code intelligence |
+| **CodeGraph** | Query the repository | An open graph of symbols and impact over the whole repo — your tooling queries what the agent queries |
+| **OpenTrajectory** | Audit the run | Our open execution-record format, built on the hash-chained session log: turns, tool calls, tokens, cost. Diff it, replay it, feed it to your own analytics |
+| **OpenEvolution** | Audit the learning | Our open standard for observable self-evolution: every reward signal, lesson, and recall is an inspectable event — "the agent improved" becomes a claim you can verify |
+| **Skills** | Package procedures | Reusable procedures loaded on demand, budgeted and measured like all context |
 
 ## Engineering
 
-The repo enforces its standards as gates, not aspirations:
+houyicoder is built by houyicoder — every commit goes through the agent
+and the same discipline it enforces for you.
 
-- **~90% line coverage** across the workspace, gated two ways: a workspace
-  unit-coverage floor and an 85% floor on every line a change adds or modifies
-- **2,770 tests** — unit, integration, and PTY-driven UI tests that render
-  the real app to a test backend and assert on the buffer
-- **Zero clippy warnings** (`-D warnings`), no `unsafe`, rustfmt clean
-- Custom gates for comment style, naming, file size, and the crate
-  dependency graph — all wired into `make check`
+- **Design as an artifact, per feature.** Each feature carries a design
+  document — architecture and sequence diagrams, core types, algorithms
+  with performance constraints — plus an acceptance document that fixes
+  what "done" means before implementation begins.
+- **A twelve-step delivery pipeline** from user story to shipped change,
+  with adversarial multi-agent audits between stages: the design is
+  attacked before code exists, the implementation is verified against
+  its design, and review runs as a two-agent opposed gate.
+- **Structure is enforced, not documented.** The crate dependency graph,
+  naming, file size, dead modules, and comment style are machine-checked;
+  a dependency edge outside the allowed layering fails the build.
+- **Tests assert what users see.** Unit, integration, and UI layers; the
+  terminal is tested by rendering to a real backend and by driving the
+  actual binary through a PTY, keystroke by keystroke. Cross-path
+  invariant tests are mutation-verified before they are allowed to count.
+- **Coverage is a gate, twice** — a floor across the workspace and a
+  floor on every line a change adds or modifies.
+- **Three platforms on every push** — Linux, macOS, and Windows in CI,
+  with dependency license and security-advisory audits.
+- **The loop itself is budgeted.** Incremental check under thirty
+  seconds, the full pre-commit gate under a minute — discipline only
+  holds if it is fast enough to run every time.
 
-## Status & Roadmap
+```bash
+make check   # the full gate: fmt, clippy, typecheck, tests, structure
+```
 
-**Active development.** houyicoder builds itself daily — every commit in
-this repo went through the agent and its gates. The wire protocol and
-config formats are still moving, so expect breaking changes between
-releases until 1.0.
+## Status
 
-| Area | State |
-|------|-------|
-| TUI, protocol wire, session store + replay | shipped |
-| Permission pipeline, OS sandboxes, redaction | shipped |
-| Structured memory + reward loop | shipped |
-| MCP tool servers, ACP adapter | shipped |
-| Code graph (LSP-backed symbol + impact queries) | in design |
-| Multi-agent orchestration and workflow replay | in design |
-| Web and mobile frontends | in design |
-| OpenTelemetry export for operations pipelines | in design |
+**Active development, in the open.** The architecture above is the
+terminal state houyicoder is built to, and the system builds itself
+toward it daily — every commit in this repository went through the agent
+and its gates. Wire and config formats are still moving; expect breaking
+changes until 1.0.
 
-## Terminal Notes
+## Terminal notes
 
 **iTerm2 (macOS)**: for mouse-wheel transcript scrolling, open
 Preferences → Profiles → [profile] → Terminal, then **uncheck** "Save
@@ -194,20 +225,17 @@ Keyboard fallback: `PageUp`/`PageDown` to scroll, `End` to return to tail.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Engineering rules live in
-[AGENTS.md](AGENTS.md).
+houyicoder is built in the open, and contributions of every kind are
+welcome — code, tests, docs, bug reports, and hard questions about the
+design.
 
-## Community
-
-- [GitHub Issues](https://github.com/YiLabsAI/HouYiCoder/issues)
-- [GitHub Discussions](https://github.com/YiLabsAI/HouYiCoder/discussions)
+- Start with [CONTRIBUTING.md](CONTRIBUTING.md); the engineering rules
+  the gates enforce live in [AGENTS.md](AGENTS.md)
+- `make check` runs the full local gate — if it is green, CI will be too
+- Open an [issue](https://github.com/YiLabsAI/HouYiCoder/issues) for
+  bugs, or a [discussion](https://github.com/YiLabsAI/HouYiCoder/discussions)
+  for design and direction — we read both
 
 ## License
 
-[MIT](LICENSE) · Copyright © 2026 The houyicoder authors
-
-<div align="center">
-
-houyicoder · hi = HouYi (后羿), the archer who shot down nine suns
-
-</div>
+[MIT](LICENSE)
