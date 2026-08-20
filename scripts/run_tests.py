@@ -32,9 +32,12 @@ import shutil
 import subprocess
 import sys
 
-GATE_SECS = int(os.environ.get("GATE_SECS", "60"))
-
+# FULL needs a higher default ceiling (heavier subprocess E2E), but both
+# paths honor GATE_SECS so CI can tune the budget per step (ci.yml sets 120
+# for the unit step, 300 for the integration step). The old code hardcoded
+# 120 for FULL and ignored the env, making ci.yml's 300 a dead config.
 FULL = "--full" in sys.argv
+GATE_SECS = int(os.environ.get("GATE_SECS", "120" if FULL else "60"))
 
 
 def changed_crates():
@@ -66,11 +69,12 @@ def changed_crates():
     return with_lib
 
 
-# The full suite compiles integration binaries + runs subprocess E2E; the
-# unit-gate timeout does not fit. The full ceiling is generous enough for a
-# cold compile of the integration binaries, tight enough that a real
-# slowdown fails closed for investigation instead of hiding.
-gate = 120 if FULL else GATE_SECS
+# Both paths use GATE_SECS (FULL-defaulted higher above). The gate covers
+# test EXECUTION only. On the plain-cargo path the binaries are pre-built
+# with --no-run below, so a cold compile does not count there; the coverage
+# and nextest paths build inside the gate (see the pre-build block). A real
+# slowdown still fails closed for investigation instead of hiding.
+gate = GATE_SECS
 
 use_nextest = os.environ.get("NEXTEST") == "1"
 # When cargo-llvm-cov is installed, run the unit suite through it so the test
