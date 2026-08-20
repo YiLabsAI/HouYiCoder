@@ -29,6 +29,5 @@ nix = { version = "0.31", features = ["signal", "process", "fs"] }
 [dev-dependencies]
 houyicoder-memory = { path = "../houyicoder-memory" }
 houyicoder-session = { path = "../houyicoder-session" }
-pollster = "0.4"
 [lints]
 workspace = true
