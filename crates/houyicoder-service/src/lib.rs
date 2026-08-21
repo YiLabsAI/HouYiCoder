@@ -19,6 +19,7 @@
 pub mod acp_adapter;
 pub mod acp_serve;
 pub mod acp_server;
+pub mod agent_registry;
 pub mod composition;
 pub mod diagnostics;
 pub mod lifecycle;
