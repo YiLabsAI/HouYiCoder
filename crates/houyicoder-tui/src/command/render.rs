@@ -301,13 +301,11 @@ pub(crate) fn render_status(
     let mut s = String::new();
     // Identity fields, in display order: Version, Session name, Session ID,
     // cwd, Auth token, Anthropic base URL, Model, sandbox, Setting sources.
-    // Provenance (resume/fork lineage) appends. Version + cwd + provenance
-    // come from the sidecar; absent on the stub path, those lines drop. The
-    // Session name row is spliced into an editable line by the pane when the
-    // user presses e (the inline hint lives there, not here).
-    if let Some(meta) = snap.meta.as_ref() {
-        s.push_str(&field("Version", &meta.version));
-    }
+    // Version is the running build (always known, set by the server on the
+    // snapshot itself); name/cwd/provenance come from the sidecar and drop
+    // honestly when it is not materialized yet. The Session name row is
+    // spliced into an editable line by the pane when the user presses e.
+    s.push_str(&field("Version", &snap.version));
     let name = snap
         .meta
         .as_ref()
@@ -385,6 +383,7 @@ mod status_tests {
             tool_success: 2,
             tool_errors: 1,
             meta: None,
+            version: env!("CARGO_PKG_VERSION").to_string(),
             ..Default::default()
         }
     }
@@ -495,11 +494,12 @@ mod status_tests {
             "mac-seatbelt",
             &[],
         );
-        // No sidecar: Session name still renders (an
-        // unnamed session shows a placeholder, never blank), falling to
-        // "(unnamed)"; Version and cwd come from the sidecar so they drop.
+        // No sidecar: Session name still renders (an unnamed session shows a
+        // placeholder, never blank), falling to "(unnamed)". Version is the
+        // running build (top-level on the snapshot, set by the server) so it
+        // always renders; cwd and provenance come from the sidecar and drop.
         assert!(s.contains("(unnamed)") && s.contains("Session name:"));
-        assert!(!s.contains("Version:"));
+        assert!(s.contains("Version:"));
         assert!(!s.contains("cwd:"));
         assert!(!s.contains("provenance:"));
         assert!(s.contains("sess-123") && s.contains("Session ID:"));

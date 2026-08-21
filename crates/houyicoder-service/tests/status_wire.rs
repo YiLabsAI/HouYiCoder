@@ -113,3 +113,42 @@ async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
 // of the payload tag assertion above; the tag string mirrors the variant).
 #[allow(unused_imports)]
 use ResponsePayload as _Resp;
+
+/// A fresh session (no turn run, so no durable append and no sidecar on
+/// disk) still carries the running build version on the wire StatusSnapshot.
+/// Version is a compile-time constant the server sets on the snapshot itself,
+/// not a sidecar-sourced field, so it is present before the sidecar lands.
+/// Asserting the concrete value (not just the label) guards the server-side
+/// set: deleting the assignment leaves the field empty on the wire, and this
+/// goes red.
+#[tokio::test]
+async fn test_status_carries_build_version() {
+    let (runner, session) = stub_runner();
+    let (server_io, mut client_tx, mut client_rx) = pair();
+    let server = Server::new(
+        runner,
+        session,
+        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
+    );
+    let handle = tokio::spawn(async move { server.serve(server_io).await });
+
+    send(&mut client_tx, &Hello::local()).await;
+    drop(recv(&mut client_rx).await);
+
+    let req = RequestEnvelope::new(RequestId(7), FrontendRequest::Status);
+    send(&mut client_tx, &ClientFrame::Request(req)).await;
+
+    let mut got = String::new();
+    for _ in 0..32 {
+        let line = recv(&mut client_rx).await;
+        if line.contains(r#""req_id":7"#) {
+            got = line;
+            break;
+        }
+    }
+    let expected = format!("\"version\":\"{}\"", env!("CARGO_PKG_VERSION"));
+    assert!(got.contains(&expected), "build version on wire: {got}");
+
+    drop(client_tx);
+    drop(handle.await);
+}

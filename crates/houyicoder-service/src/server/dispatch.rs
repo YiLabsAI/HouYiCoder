@@ -595,6 +595,8 @@ impl Server {
             }
             wire.meta = Some(crate::projection::project_session_meta(&meta));
         }
+        // Running build version; always known, not sidecar-gated.
+        wire.version = env!("CARGO_PKG_VERSION").to_string();
         // Attach the env-config display fields (auth token source, base URL,
         // setting sources) so the TUI renders them without importing the
         // config crate. The token source is the env var NAME, never the

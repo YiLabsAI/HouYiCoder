@@ -27,8 +27,9 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 445
+STRUCT_FIELD_BASELINE = 446
 # 2026-08-21: +16 AgentDefinition (new multi_agent struct, not a split-and-add).
+# +1 StatusSnapshot.version (running build version, top-level not sidecar-gated).
 # Lower when a field becomes pub(crate)/pub(super): the counter regex only
 # matches private and pub fields, so pub(crate) fields drop from the count
 # (known gap). Re-raise when the regex is fixed to count them again.

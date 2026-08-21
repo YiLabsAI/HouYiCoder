@@ -66,6 +66,12 @@ pub struct StatusSnapshot {
     /// settings file.
     #[serde(default)]
     pub setting_sources: String,
+    /// The running build version, set by the server (env CARGO_PKG_VERSION).
+    /// Always known, so /status shows Version even before the sidecar is
+    /// materialized. Distinct from the sidecar's creation-version field,
+    /// which carries the build that created the session.
+    #[serde(default)]
+    pub version: String,
     /// Whether turn-entry recall injection + the background extractor run.
     /// Read from the settings file server-side so the TUI never imports the
     /// config crate. Display-only: the user edits the settings file to flip it.
