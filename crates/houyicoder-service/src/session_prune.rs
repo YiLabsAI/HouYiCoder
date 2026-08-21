@@ -38,6 +38,13 @@ pub struct PrunePolicy {
     pub max_count: usize,
     /// Sessions the caller is live in - never pruned, never counted.
     pub protected: Vec<SessionId>,
+    /// Shell-snapshot files older than this are prunable (the crash-orphan
+    /// net; the Drop path handles clean exits). 0 = no snapshot prune.
+    pub snapshot_ttl_secs: u64,
+    /// Truncate a debug log past this many bytes to its tail. 0 = no
+    /// rotation. Debug logs are diagnostic; they rotate by size (keep the
+    /// recent tail), not by age (age would lose the live scene).
+    pub debug_max_bytes: u64,
 }
 
 /// What subsystem a prunable entry belongs to. Step one only produces
@@ -60,6 +67,16 @@ pub enum PruneReason {
     CapOverflow,
 }
 
+/// What apply_prune does to an entry. Sessions and snapshots are removed
+/// (dir vs file); a debug log is truncated to its tail (rotation, not
+/// deletion - the live scene stays, the bulk goes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PruneAction {
+    RemoveDir,
+    RemoveFile,
+    TruncateFile { keep_bytes: u64 },
+}
+
 /// One prunable target. The path is what apply_prune removes; the kind +
 /// reason + last-active let a caller render the plan before deleting.
 #[derive(Debug, Clone)]
@@ -68,6 +85,7 @@ pub struct PruneEntry {
     pub kind: PruneKind,
     pub reason: PruneReason,
     pub last_active: u64,
+    pub action: PruneAction,
 }
 
 /// The decision: what to remove, and how many sessions survive the TTL pass
@@ -148,6 +166,7 @@ pub fn plan_prune(root: &Path, policy: &PrunePolicy) -> PrunePlan {
                     PruneReason::EmptyTtl
                 },
                 last_active,
+                action: PruneAction::RemoveDir,
             });
         } else {
             kept.push((path, last_active));
@@ -165,6 +184,7 @@ pub fn plan_prune(root: &Path, policy: &PrunePolicy) -> PrunePlan {
                 kind: PruneKind::Session,
                 reason: PruneReason::CapOverflow,
                 last_active,
+                action: PruneAction::RemoveDir,
             });
         }
         return PrunePlan {
@@ -186,13 +206,59 @@ pub fn plan_prune(root: &Path, policy: &PrunePolicy) -> PrunePlan {
 pub fn apply_prune(plan: &PrunePlan) -> PruneReport {
     let mut report = PruneReport::default();
     for entry in &plan.entries {
-        if std::fs::remove_dir_all(&entry.path).is_ok() {
+        let ok = match entry.action {
+            PruneAction::RemoveDir => std::fs::remove_dir_all(&entry.path).is_ok(),
+            PruneAction::RemoveFile => std::fs::remove_file(&entry.path).is_ok(),
+            PruneAction::TruncateFile { keep_bytes } => truncate_tail(&entry.path, keep_bytes),
+        };
+        if ok {
             report.removed += 1;
         } else {
             report.errors += 1;
         }
     }
     report
+}
+
+/// Keep the last keep_bytes of a file, dropping the head. A debug log grows
+/// at the tail (recent events), so the head is the stale half to drop.
+fn truncate_tail(path: &Path, keep_bytes: u64) -> bool {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if metadata.len() <= keep_bytes {
+        return true; // Already under the cap; nothing to do.
+    }
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+    else {
+        return false;
+    };
+    let start = metadata.len() - keep_bytes;
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return false;
+    }
+    let mut tail = Vec::new();
+    if f.read_to_end(&mut tail).is_err() {
+        return false;
+    }
+    // Drop the leading partial line so the log stays line-aligned (a
+    // half-line at the head reads as corrupt otherwise). The tail begins at
+    // a byte boundary; walk forward to the next newline.
+    if let Some(nl) = tail.iter().position(|&b| b == b'\n') {
+        tail = tail[nl + 1..].to_vec();
+    }
+    if f.seek(SeekFrom::Start(0)).is_err() {
+        return false;
+    }
+    if f.set_len(keep_bytes).is_err() || f.write_all(&tail).is_err() {
+        return false;
+    }
+    let _r = f.set_len(tail.len() as u64);
+    true
 }
 
 fn log_mtime(dir: &Path) -> Option<u64> {
@@ -217,6 +283,104 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// The roots the unified plan scans. Each is optional so a caller that
+/// owns only some of them (a test, a headless run with no debug log) skips
+/// the rest rather than pointing at a path that does not exist.
+#[derive(Debug, Clone, Default)]
+pub struct PruneTargets {
+    pub sessions_root: Option<PathBuf>,
+    pub shell_snapshots_root: Option<PathBuf>,
+    pub debug_log: Option<PathBuf>,
+}
+
+/// Plan shell-snapshot files for removal by age. Each is a per-PID env
+/// dump; a crash leaves orphans the Drop path never reaped. Files older
+/// than the TTL are slated for RemoveFile.
+pub fn plan_shell_snapshots(root: &Path, ttl_secs: u64) -> Vec<PruneEntry> {
+    if ttl_secs == 0 {
+        return Vec::new();
+    }
+    let now = now_secs();
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let last_active = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(now);
+        if now.saturating_sub(last_active) > ttl_secs {
+            out.push(PruneEntry {
+                path,
+                kind: PruneKind::Snapshot,
+                reason: PruneReason::Ttl,
+                last_active,
+                action: PruneAction::RemoveFile,
+            });
+        }
+    }
+    out
+}
+
+/// Plan a debug log for tail-truncation if it exceeds the size cap. One
+/// entry max (a single file); rotation keeps the recent tail, drops the
+/// stale head. Returns empty when the file is under the cap or absent.
+pub fn plan_debug_log(path: &Path, max_bytes: u64) -> Vec<PruneEntry> {
+    if max_bytes == 0 {
+        return Vec::new();
+    }
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Vec::new();
+    };
+    if metadata.len() <= max_bytes {
+        return Vec::new();
+    }
+    let last_active = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    vec![PruneEntry {
+        path: path.to_path_buf(),
+        kind: PruneKind::DebugLog,
+        reason: PruneReason::Ttl,
+        last_active,
+        action: PruneAction::TruncateFile {
+            keep_bytes: max_bytes,
+        },
+    }]
+}
+
+/// The unified plan: sessions + shell-snapshots + debug-log rotation, one
+/// PrunePlan. The routing threshold, the cleanup subcommand stdout, and a
+/// future /status all read this one value. A None target is skipped, so a
+/// caller owns only the stores it has.
+pub fn plan_all(targets: &PruneTargets, policy: &PrunePolicy) -> PrunePlan {
+    let mut plan = if let Some(root) = &targets.sessions_root {
+        plan_prune(root, policy)
+    } else {
+        PrunePlan::default()
+    };
+    if let Some(snap) = &targets.shell_snapshots_root {
+        plan.entries
+            .extend(plan_shell_snapshots(snap, policy.snapshot_ttl_secs));
+    }
+    if let Some(dbg) = &targets.debug_log {
+        plan.entries
+            .extend(plan_debug_log(dbg, policy.debug_max_bytes));
+    }
+    plan
 }
 
 #[cfg(test)]
@@ -266,6 +430,8 @@ mod tests {
             empty_ttl_secs: 24 * 3600,
             max_count: 1000,
             protected: Vec::new(),
+            snapshot_ttl_secs: 7 * 24 * 3600,
+            debug_max_bytes: 10 * 1024 * 1024,
         }
     }
 
@@ -390,5 +556,109 @@ mod tests {
         let plan = PrunePlan::default();
         let report = apply_prune(&plan);
         assert_eq!(report, PruneReport::default());
+    }
+
+    #[test]
+    fn test_plan_snapshots_old_file() {
+        let root = temp_root();
+        let snap = root.join("snapshot-sh-123-456.sh");
+        fs::write(&snap, "env").expect("write snap");
+        age(&snap, 8 * 24 * 3600); // past the 7d snapshot ttl
+        let entries = plan_shell_snapshots(&root, 7 * 24 * 3600);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, PruneKind::Snapshot);
+        assert_eq!(entries[0].action, PruneAction::RemoveFile);
+        let _r = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_plan_snapshots_keeps_recent() {
+        let root = temp_root();
+        let snap = root.join("snapshot-sh-123-456.sh");
+        fs::write(&snap, "env").expect("write snap");
+        age(&snap, 3600); // 1h, within 7d
+        let entries = plan_shell_snapshots(&root, 7 * 24 * 3600);
+        assert!(entries.is_empty());
+        let _r = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_plan_debug_under_cap() {
+        let root = temp_root();
+        let log = root.join("debug.log");
+        fs::write(&log, b"small").expect("write log");
+        let entries = plan_debug_log(&log, 10 * 1024 * 1024);
+        assert!(entries.is_empty(), "under the cap = no rotation");
+        let _r = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_plan_debug_over_cap() {
+        let root = temp_root();
+        let log = root.join("debug.log");
+        // 20 bytes content, cap at 10: over the cap.
+        fs::write(&log, b"0123456789\nfirst\nsecond\n").expect("write log");
+        let entries = plan_debug_log(&log, 10);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, PruneKind::DebugLog);
+        assert!(matches!(
+            entries[0].action,
+            PruneAction::TruncateFile { .. }
+        ));
+        let _r = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_apply_truncates_to_tail() {
+        let root = temp_root();
+        let log = root.join("debug.log");
+        // Two lines; cap keeps the tail, line-aligned.
+        fs::write(&log, b"head-line-1\nsecond-line-2\n").expect("write log");
+        let entries = plan_debug_log(&log, 15);
+        let plan = PrunePlan { entries, kept: 0 };
+        let report = apply_prune(&plan);
+        assert_eq!(report.removed, 1);
+        let after = fs::read_to_string(&log).expect("read");
+        assert!(
+            after.starts_with("second-line"),
+            "tail kept, head dropped: {after}"
+        );
+        let _r = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_plan_all_merges_three() {
+        let root = temp_root();
+        // One old session + one old snapshot + (debug under cap, skipped).
+        let sid = fresh_sid();
+        let d = session(&root, &sid, true);
+        age(&d.join("log.jsonl"), 31 * 24 * 3600);
+        let snap_dir = root.join("shell-snapshots");
+        fs::create_dir_all(&snap_dir).expect("mkdir snaps");
+        let snap = snap_dir.join("snapshot-sh-1-2.sh");
+        fs::write(&snap, "env").expect("write snap");
+        age(&snap, 8 * 24 * 3600);
+        let targets = PruneTargets {
+            sessions_root: Some(root.clone()),
+            shell_snapshots_root: Some(snap_dir),
+            debug_log: None,
+        };
+        let plan = plan_all(&targets, &default_policy());
+        assert_eq!(plan.entries.len(), 2);
+        assert_eq!(
+            plan.entries
+                .iter()
+                .filter(|e| e.kind == PruneKind::Session)
+                .count(),
+            1
+        );
+        assert_eq!(
+            plan.entries
+                .iter()
+                .filter(|e| e.kind == PruneKind::Snapshot)
+                .count(),
+            1
+        );
+        let _r = fs::remove_dir_all(&root);
     }
 }
