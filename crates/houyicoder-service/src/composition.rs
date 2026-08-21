@@ -167,16 +167,22 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
     let backend = options
         .backend
         .unwrap_or_else(|| Box::new(InMemoryBackend::new()));
-    let store = Arc::new(SessionStore::new(backend).with_append_notify(append_notify.clone()));
     let session = SessionId::new();
     let model = houyicoder_config::resolve_model();
-    // Write the initial session.json sidecar at creation so /status can
-    // show name/cwd/model/provenance + a later resume can restore them.
     let meta_store = options
         .meta_store
         .unwrap_or_else(|| Arc::new(InMemoryMetaStore::new()));
     let project = options.project;
-    session_meta::write_initial_session_meta(&meta_store, session, &model, project.as_deref());
+    let initial_meta = session_meta::build_initial_meta(&model, project.as_deref());
+    // The sidecar lands on the first durable append, not at build time, so a
+    // build that never runs a turn leaves no dir. Resume/fork write directly.
+    let store = SessionStore::new(backend)
+        .with_append_notify(append_notify.clone())
+        .with_first_durable(session_meta::materialize_hook(
+            Arc::clone(&meta_store),
+            initial_meta,
+        ));
+    let store = Arc::new(store);
     assemble(
         store,
         session,

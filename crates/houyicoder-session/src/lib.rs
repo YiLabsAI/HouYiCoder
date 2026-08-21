@@ -24,7 +24,7 @@
 //! counter is in-memory only; the event log is lossless (rewind never drops
 //! events). Non-optional in this engine.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -65,6 +65,17 @@ pub struct SessionStore {
     /// today's (events push only at run resolve). Shared by Arc with the host
     /// at the composition root.
     append_notify: Option<Arc<Notify>>,
+    /// One-shot hook fired the first time a DURABLE event lands for a
+    /// session (deltas do not trigger it). The composition root installs it
+    /// so a fresh session's sidecar - which carries the model/cwd/provenance
+    /// a resume needs - is written only once the session has real content,
+    /// not at build time. A build that never runs a turn leaves no sidecar,
+    /// no directory, no orphan. Resume/fork paths do not install it: their
+    /// sidecar already exists on disk, so they write it directly.
+    first_durable: Option<Arc<dyn Fn(SessionId) + Send + Sync>>,
+    /// Sessions whose first-durable hook has already fired. Guards the
+    /// one-shot contract across appends to the same store.
+    first_durable_fired: Mutex<HashSet<SessionId>>,
 }
 
 /// Outcome of verifying an imported session's source chain. The chain is
@@ -108,6 +119,8 @@ impl SessionStore {
             persisted: Mutex::new(HashMap::new()),
             trajectory: Mutex::new(HashMap::new()),
             append_notify: None,
+            first_durable: None,
+            first_durable_fired: Mutex::new(HashSet::new()),
         }
     }
 
@@ -117,6 +130,15 @@ impl SessionStore {
     /// events push only at run resolve).
     pub fn with_append_notify(mut self, notify: Arc<Notify>) -> Self {
         self.append_notify = Some(notify);
+        self
+    }
+
+    /// Install a one-shot hook fired on the first durable append for a
+    /// session. Used to materialize a fresh session's sidecar only once it
+    /// has real content, so a build that never runs a turn leaves nothing
+    /// on disk. The hook receives the session the durable event is for.
+    pub fn with_first_durable(mut self, hook: Arc<dyn Fn(SessionId) + Send + Sync>) -> Self {
+        self.first_durable = Some(hook);
         self
     }
 
@@ -163,6 +185,19 @@ impl SessionStore {
         let finalized = event.clone();
         let new_hash = Self::hash_event(&event)?;
         let id = self.backend.append(event).await?;
+        // First durable event for a session materializes its sidecar. Fired
+        // here, after the backend accepted the event, so the session dir the
+        // sidecar lands in already exists on a disk backend. Best-effort by
+        // contract (the hook swallows write errors): a missing sidecar
+        // degrades resume, not the running turn.
+        if let Some(hook) = &self.first_durable {
+            let mut fired = self.first_durable_fired.lock().expect("first-durable set");
+            if !fired.contains(&session) {
+                fired.insert(session);
+                drop(fired);
+                hook(session);
+            }
+        }
         self.last_hashes
             .lock()
             .expect("last_hashes mutex poisoned")

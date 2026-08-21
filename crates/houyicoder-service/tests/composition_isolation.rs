@@ -52,9 +52,13 @@ async fn test_disk_options_write_durable() {
         houyicoder_service::composition::BuildRunnerOptions::disk_at(root.clone(), None, None),
     );
     let sid_dir = root.join(bundle.session.to_string());
+    // Lazy materialization: a build that has not run a turn leaves no dir,
+    // no sidecar. The 45k empty-session pollution was the sidecar written
+    // eagerly at build time; deferring to the first durable append removes
+    // the orphan at the source.
     assert!(
-        sid_dir.join("session.json").is_file(),
-        "disk preset must write the sidecar at build time under {}",
+        !sid_dir.exists(),
+        "disk build before any turn must leave no session dir under {}",
         root.display()
     );
     let store = bundle.runner.store();
@@ -70,6 +74,13 @@ async fn test_disk_options_write_durable() {
         })
         .await
         .expect("append");
+    // The first durable append materializes the sidecar (the deferred build
+    // meta) alongside the event log the backend writes.
+    assert!(
+        sid_dir.join("session.json").is_file(),
+        "first durable append must materialize the sidecar under {}",
+        root.display()
+    );
     let body = std::fs::read_to_string(sid_dir.join("log.jsonl")).unwrap_or_default();
     assert!(
         body.contains("durable"),
