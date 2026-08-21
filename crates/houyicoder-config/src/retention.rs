@@ -23,16 +23,25 @@ pub struct RetentionConfig {
     pub session_retention_days: u32,
     /// Remove the oldest sessions past this count. 0 = no count cap.
     pub session_retention_count: u32,
+    /// A plan with this many entries or more is not auto-applied: the
+    /// background sweep reports it and points the user at the cleanup
+    /// subcommand instead. Below it, the sweep applies silently. The
+    /// threshold bounds the auto path's run time (the slow first sweep
+    /// routes to the manual path), so 0 is not a legal opt-out here - it
+    /// would make every plan a manual one; use a high value to quiet it.
+    pub prune_confirm_threshold: u32,
 }
 
 const DEFAULT_DAYS: u32 = 30;
 const DEFAULT_COUNT: u32 = 1000;
+const DEFAULT_THRESHOLD: u32 = 100;
 
 impl Default for RetentionConfig {
     fn default() -> Self {
         Self {
             session_retention_days: DEFAULT_DAYS,
             session_retention_count: DEFAULT_COUNT,
+            prune_confirm_threshold: DEFAULT_THRESHOLD,
         }
     }
 }
@@ -75,10 +84,17 @@ pub fn load_retention_from(path: &std::path::Path) -> (RetentionConfig, Vec<Conf
         DEFAULT_COUNT,
         &mut warnings,
     );
+    let prune_confirm_threshold = extract_u32_field(
+        &value,
+        "prune_confirm_threshold",
+        DEFAULT_THRESHOLD,
+        &mut warnings,
+    );
     (
         RetentionConfig {
             session_retention_days,
             session_retention_count,
+            prune_confirm_threshold,
         },
         warnings,
     )
@@ -137,10 +153,13 @@ mod tests {
 
     #[test]
     fn test_load_reads_both_fields() {
-        let p = temp_settings(r#"{"session_retention_days": 14, "session_retention_count": 200}"#);
+        let p = temp_settings(
+            r#"{"session_retention_days": 14, "session_retention_count": 200, "prune_confirm_threshold": 50}"#,
+        );
         let (cfg, w) = load_retention_from(&p);
         assert_eq!(cfg.session_retention_days, 14);
         assert_eq!(cfg.session_retention_count, 200);
+        assert_eq!(cfg.prune_confirm_threshold, 50);
         assert!(w.is_empty());
         fs::remove_file(&p).ok();
     }
