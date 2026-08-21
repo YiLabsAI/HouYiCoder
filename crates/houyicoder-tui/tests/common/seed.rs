@@ -106,8 +106,7 @@ pub fn seed_session_with_checkpoint(
     summary: &str,
 ) {
     use houyicoder_context::{
-        CheckpointId, CheckpointManifest, Disposition, SessionId, TurnGroup,
-        backend::ContextBackend,
+        CheckpointId, CheckpointManifest, ContextBackend, Disposition, SessionId, TurnGroup,
     };
     // Reuse seed_session_with_cwd for the log + sidecar write + the event id,
     // so the two seed paths share one source of truth (a schema change to the

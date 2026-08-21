@@ -187,16 +187,13 @@ impl houyicoder_api::sandbox::SandboxSession for StubSession {
     fn exec_with_config(
         &self,
         _command: &str,
-        _config: houyicoder_context::sandbox_types::ExecConfig,
+        _config: houyicoder_context::ExecConfig,
     ) -> houyicoder_async::PFut<
         '_,
-        Result<
-            houyicoder_context::sandbox_types::ExecResult,
-            houyicoder_context::sandbox_types::SandboxError,
-        >,
+        Result<houyicoder_context::ExecResult, houyicoder_context::SandboxError>,
     > {
         Box::pin(async move {
-            Ok(houyicoder_context::sandbox_types::ExecResult {
+            Ok(houyicoder_context::ExecResult {
                 stdout: String::new(),
                 stderr: String::new(),
                 exit_code: Some(0),
@@ -207,16 +204,14 @@ impl houyicoder_api::sandbox::SandboxSession for StubSession {
         &self,
         _path: &str,
         _max_bytes: usize,
-    ) -> houyicoder_async::PFut<'_, Result<Vec<u8>, houyicoder_context::sandbox_types::SandboxError>>
-    {
+    ) -> houyicoder_async::PFut<'_, Result<Vec<u8>, houyicoder_context::SandboxError>> {
         Box::pin(async move { Ok(Vec::new()) })
     }
     fn write_file(
         &self,
         _path: &str,
         _content: Vec<u8>,
-    ) -> houyicoder_async::PFut<'_, Result<(), houyicoder_context::sandbox_types::SandboxError>>
-    {
+    ) -> houyicoder_async::PFut<'_, Result<(), houyicoder_context::SandboxError>> {
         Box::pin(async move { Ok(()) })
     }
     fn list_dir(
@@ -224,18 +219,14 @@ impl houyicoder_api::sandbox::SandboxSession for StubSession {
         _path: &str,
     ) -> houyicoder_async::PFut<
         '_,
-        Result<
-            Vec<houyicoder_context::sandbox_types::DirEntry>,
-            houyicoder_context::sandbox_types::SandboxError,
-        >,
+        Result<Vec<houyicoder_context::DirEntry>, houyicoder_context::SandboxError>,
     > {
         Box::pin(async move { Ok(Vec::new()) })
     }
     fn path_exists(
         &self,
         _path: &str,
-    ) -> houyicoder_async::PFut<'_, Result<bool, houyicoder_context::sandbox_types::SandboxError>>
-    {
+    ) -> houyicoder_async::PFut<'_, Result<bool, houyicoder_context::SandboxError>> {
         Box::pin(async move { Ok(false) })
     }
     fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
