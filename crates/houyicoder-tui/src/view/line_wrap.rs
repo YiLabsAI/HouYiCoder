@@ -85,14 +85,35 @@ pub fn wrap_line(text: &str, avail: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut cur_w = 0usize;
+    // first_row: true until the first row is flushed. A space token at the
+    // start of the FIRST row is line indentation and is kept (Python/YAML
+    // semantics depend on it); a space token at the start of a CONTINUATION
+    // row is the inter-word space at the wrap point and is dropped (standard
+    // greedy word-wrap — a wrapped row does not start with the space that
+    // was the wrap boundary).
+    let mut first_row = true;
+    // Flush cur as a row, but skip it when it trims to empty. A row that is
+    // only whitespace (indentation wider than the column) would otherwise
+    // become a phantom blank row after trim_trailing — dropping it at flush
+    // time keeps the indentation on rows that DO carry content (greedy fit
+    // pushes the spaces into cur, and they survive until a real token forces
+    // a non-empty flush).
+    let flush = |cur: &mut String, lines: &mut Vec<String>, first_row: &mut bool| {
+        let row = trim_trailing(cur);
+        if !row.is_empty() {
+            lines.push(row);
+        }
+        cur.clear();
+        *first_row = false;
+    };
     for tok in tokens {
         let tok_w = UnicodeWidthStr::width(tok);
+        let is_space_tok = tok.chars().all(|c| c == ' ');
         // A single non-space token wider than avail: hard-break it on grapheme
         // boundaries so it cannot overflow the column.
-        if tok_w > avail && !tok.chars().all(|c| c == ' ') {
+        if tok_w > avail && !is_space_tok {
             if !cur.is_empty() {
-                lines.push(trim_trailing(&cur));
-                cur.clear();
+                flush(&mut cur, &mut lines, &mut first_row);
                 cur_w = 0;
             }
             let mut chunk = String::new();
@@ -113,22 +134,18 @@ pub fn wrap_line(text: &str, avail: usize) -> Vec<String> {
             }
             continue;
         }
-        // Drop a leading space token at the start of a row (cur is empty):
-        // indentation wider than the column is trimmed, not kept as an empty
-        // row. Without this a line like "        self" (8-space indent) at
-        // avail 5 would produce an empty first row (the spaces trimmed by
-        // trim_trailing) then "self" on the second row — a phantom blank row
-        // + a premature break.
-        if cur.is_empty() && tok.chars().all(|c| c == ' ') {
+        // Drop a space token at the start of a CONTINUATION row (the
+        // wrap-point inter-word space). On the first row, keep it — it is
+        // indentation.
+        if cur.is_empty() && is_space_tok && !first_row {
             continue;
         }
         // Greedy fit: flush the current row if this token would overflow.
         if cur_w + tok_w > avail && !cur.is_empty() {
-            lines.push(trim_trailing(&cur));
-            cur.clear();
+            flush(&mut cur, &mut lines, &mut first_row);
             cur_w = 0;
-            // Drop a leading space token at the start of a fresh row.
-            if tok.chars().all(|c| c == ' ') {
+            // After flushing, a space token is the wrap-point space — drop it.
+            if is_space_tok {
                 continue;
             }
         }
@@ -136,10 +153,13 @@ pub fn wrap_line(text: &str, avail: usize) -> Vec<String> {
         cur_w += tok_w;
     }
     if !cur.is_empty() {
-        lines.push(trim_trailing(&cur));
+        flush(&mut cur, &mut lines, &mut first_row);
     }
     if lines.is_empty() {
-        vec![text.to_string()]
+        // Input was all whitespace wider than avail: every flush was skipped.
+        // Return one empty row rather than the original (the caller asked for
+        // a wrap and the content has no visible columns).
+        vec![String::new()]
     } else {
         lines
     }
@@ -273,13 +293,31 @@ pub fn wrap_styled_line(line: Line<'static>, avail: usize) -> Vec<Line<'static>>
     let mut rows: Vec<Vec<(String, Style)>> = Vec::new();
     let mut cur: Vec<(String, Style)> = Vec::new();
     let mut cur_w = 0usize;
+    // first_row: true until the first row is flushed. A space token at the
+    // start of the FIRST row is indentation (kept); at the start of a
+    // continuation row it is the wrap-point space (dropped). Matches the
+    // plain wrap_line path.
+    let mut first_row = true;
+    // Flush cur as a row, skipping it when it trims to empty (a whitespace-only
+    // row would be a phantom blank). Matches the plain wrap_line path: leading
+    // indentation that fits is preserved on content rows, indentation wider
+    // than the column is dropped at flush rather than kept as an empty row.
+    let flush = |cur: &mut Vec<(String, Style)>,
+                 rows: &mut Vec<Vec<(String, Style)>>,
+                 first_row: &mut bool| {
+        let row = trim_trailing_styled(std::mem::take(cur));
+        if !row.is_empty() {
+            rows.push(row);
+        }
+        *first_row = false;
+    };
     for (tok, style, is_space) in tokens {
         let tok_w = UnicodeWidthStr::width(tok.as_str());
         // Hard-break a single non-space token wider than avail on grapheme
         // boundaries (cannot overflow the column).
         if tok_w > avail && !is_space {
             if !cur.is_empty() {
-                rows.push(std::mem::take(&mut cur));
+                flush(&mut cur, &mut rows, &mut first_row);
                 cur_w = 0;
             }
             let mut chunk = String::new();
@@ -300,17 +338,16 @@ pub fn wrap_styled_line(line: Line<'static>, avail: usize) -> Vec<Line<'static>>
             }
             continue;
         }
-        // Drop a leading space token at the start of a row (cur is empty):
-        // indentation wider than the column is trimmed, not kept as a phantom
-        // empty row. Matches the plain wrap_line path.
-        if cur.is_empty() && is_space {
+        // Drop a space token at the start of a CONTINUATION row (wrap-point
+        // space). On the first row, keep it (indentation).
+        if cur.is_empty() && is_space && !first_row {
             continue;
         }
-        // Greedy: flush if this token would overflow, dropping a leading
-        // space token at the fresh row's start.
+        // Greedy: flush if this token would overflow.
         if cur_w + tok_w > avail && !cur.is_empty() {
-            rows.push(trim_trailing_styled(std::mem::take(&mut cur)));
+            flush(&mut cur, &mut rows, &mut first_row);
             cur_w = 0;
+            // After flushing, a space token is the wrap-point space — drop it.
             if is_space {
                 continue;
             }
@@ -319,7 +356,7 @@ pub fn wrap_styled_line(line: Line<'static>, avail: usize) -> Vec<Line<'static>>
         cur_w += tok_w;
     }
     if !cur.is_empty() {
-        rows.push(trim_trailing_styled(cur));
+        flush(&mut cur, &mut rows, &mut first_row);
     }
     if rows.is_empty() {
         vec![line.clone()]
@@ -491,8 +528,8 @@ mod tests {
     /// spaces instead of producing a phantom empty row. Without the fix
     /// "        self" (8-space indent) at avail 5 produced ["", "self"] —
     /// an empty first row (spaces trimmed by trim_trailing) then "self".
-    /// The fix drops leading spaces at the start of a row, so the result
-    /// is ["self"] — no phantom blank, no premature break.
+    /// The fix skips a flush that trims to empty, so the result is
+    /// ["self"] — no phantom blank, no premature break.
     #[test]
     fn test_leading_spaces_wider_dropped() {
         let rows = wrap_line("        self", 5);
@@ -504,18 +541,31 @@ mod tests {
         );
     }
 
-    /// Leading spaces that fit within avail are preserved (indentation is
-    /// only trimmed when it would overflow the column).
+    /// Leading spaces that fit within avail are preserved on a content row
+    /// that WRAPS — the indentation survives the flush because the row
+    /// carries real content. This exercises the wrap loop (the input is
+    /// wider than avail), not the early-return path.
     #[test]
-    fn test_leading_spaces_within_avail() {
-        let rows = wrap_line("  self", 10);
-        assert_eq!(rows, vec!["  self".to_string()]);
+    fn test_indent_survives_wrap() {
+        // 2-space indent + content that forces a wrap at avail 20. The first
+        // row must keep the 2-space indent (Python/YAML semantics depend on
+        // it); the regression dropped all leading spaces unconditionally.
+        let rows = wrap_line("  self.foo() and more text here", 20);
+        assert_eq!(
+            rows[0], "  self.foo() and",
+            "indent must survive the wrap: {rows:?}"
+        );
+        assert!(rows.len() > 1);
+        // No phantom empty rows anywhere.
+        assert!(
+            !rows.iter().any(|r| r.trim().is_empty()),
+            "no phantom empty rows: {rows:?}"
+        );
     }
 
     /// A deeply-indented source line (16 spaces + short content) at a
-    /// narrow pane wraps the content, not the indentation. The excess
-    /// indentation is dropped so the user sees the content, not a wall of
-    /// spaces.
+    /// narrow pane drops the excess indentation (it would be a phantom
+    /// blank row) and keeps the content.
     #[test]
     fn test_deep_indent_drops_excess() {
         let rows = wrap_line("                self.value", 10);
