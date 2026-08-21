@@ -139,6 +139,36 @@ make clean
   in the gate). Pedantic is NOT enabled as a group — enable individual
   pedantic lints on demand.
 
+### Public surface is declared, not inherited
+- No glob re-export (`pub use foo::*`) at a crate root. A glob makes any
+  pub item in a submodule crate-public the moment it is written, with no
+  line in the diff to review as an API decision, and leaves two public
+  paths per type. Re-export by name.
+- Prefer a crate root that holds no types: module declarations plus the
+  named public surface. A root that carries content is both a file that
+  hits the size gate and an API surface, and every edit then negotiates
+  with the gate first.
+- Modules split on file-size grounds stay private behind the named
+  re-exports. Making them pub freezes an incidental layout into public
+  contract, so a later re-split becomes a breaking change.
+- Inside the crate, import from the defining module (crate::ids::X), not
+  through the crate's own facade (crate::X). Routing internal deps through
+  the public surface hides the real dependency graph.
+
+### Read-modify-write belongs behind one call
+- A store trait that exposes read and write separately invites a lost
+  update: two callers each write a whole record derived from the state
+  they read, and the later write silently reverts the earlier one's
+  field. Expose the composed operation (update taking an edit closure)
+  and serialize the read and the write inside the impl.
+- Make it a required trait method, not a defaulted one. A default that
+  composes read and write is non-atomic, so every future impl inherits
+  the bug instead of being made to decide.
+- A shared temp-file name in an atomic write is the same class, one level
+  down: two writers truncate the same tmp, so one can rename a file
+  holding the other's half-written bytes. Name it per writer (pid plus a
+  counter).
+
 ### Code comment style
 .rs comments must be plain English prose. Forbidden in code comments:
 Chinese characters; backtick-quoted identifiers (write the bare identifier,
@@ -315,6 +345,22 @@ Choosing the sink is a design decision, not a matter of taste:
   has no silent-agreement surface and does not need this — do not blanket the
   whole suite; the mutate-run-restore cost is wasted where it cannot silently
   pass.
+
+### Flaky tests: widen the window, do not count green runs
+- N green runs is not evidence for a test that fails 1 in N. Twenty passes
+  against a 1-in-20 flake is a coin flip, and it is the wrong environment
+  anyway: the gate runs the ignored suite 8-way parallel, which is where
+  the contention that reddens it lives.
+- Diagnose by widening the window, then mutate both ways: inject a delay
+  at the suspected point, confirm the OLD form reddens deterministically
+  and the NEW form passes. That turns a probability into a proof, and it
+  tells you which window you actually fixed. Remove the probe after.
+- A one-shot filesystem check after a UI sync point is the recurring
+  shape. The render does not wait for the durable write, so at the moment
+  the text is on screen the directory may not exist, and an atomic publish
+  (write tmp, fsync, rename) may be mid-flight. Poll the whole discovery
+  including the directory, not just the leaf file; polling one level down
+  leaves the same bug one level up.
 
 ### Shared test helpers (no duplication)
 - Helpers shared across more than one tests/ binary (stub runner, channel
