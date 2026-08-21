@@ -15,7 +15,6 @@ mod common;
 
 use common::{Key, PtySession, RENDER_TIMEOUT, session_on_working_with_script};
 use houyicoder_core::{EventId, SessionId, TurnEvent, TurnEventKind};
-use std::path::Path;
 
 /// A single-response script: plain text only, so the run completes in one
 /// step (no tool call, no approval pause). The durable events that land on
@@ -37,18 +36,24 @@ fn test_turn_writes_durable_log() {
     s.send_key(&Key::Enter);
     s.wait_for("logged", RENDER_TIMEOUT);
 
-    // The sessions root holds one sid dir; that dir holds log.jsonl with
-    // the durable events from the turn just driven.
+    // The sessions root holds one sid dir; that dir holds log.jsonl (the
+    // durable events from the turn just driven) plus the session.json
+    // sidecar the lazy-materialize hook writes on the first durable append.
+    // Poll for the whole shape rather than checking once: the reply renders
+    // without waiting for the durable append to complete, so at the moment
+    // the reply text is on screen the sid dir may not exist yet and the
+    // sidecar's write-tmp-then-rename publish may still be in flight. A
+    // one-shot check can land inside that window and see a stray tmp with no
+    // session.json. Polling is the correct wait, not a sleep.
     let root = s.sessions_dir();
-    let sid_dir = std::fs::read_dir(root)
-        .unwrap_or_else(|e| panic!("read sessions root {root:?}: {e}"))
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .find(|p| p.is_dir());
-    let sid_dir =
-        sid_dir.unwrap_or_else(|| panic!("no session dir under {root:?}:\n{}", s.output()));
+    let sid_dir = wait_for_session_files(root, &["log.jsonl", "session.json"], RENDER_TIMEOUT);
+    let sid_dir = sid_dir.unwrap_or_else(|| {
+        panic!(
+            "no session dir under {root:?} holding log.jsonl + session.json:\n{}",
+            s.output()
+        )
+    });
     let log = sid_dir.join("log.jsonl");
-    assert!(log.exists(), "session log missing: {log:?}");
     let body = std::fs::read_to_string(&log).unwrap();
     assert!(!body.is_empty(), "session log empty: {log:?}");
     // The log is one JSON object per durable line; the assistant reply text
@@ -58,14 +63,13 @@ fn test_turn_writes_durable_log() {
         body.contains("logged") || body.contains("say logged"),
         "session log should carry the turn text:\n{body}"
     );
-    assert!(Path::new(&log).is_file(), "log path is a file: {log:?}");
 
-    // The session.json sidecar is written at creation, so it exists + holds
-    // the model + the workspace cwd the session started in. Proves the
-    // metadata sidecar wiring (composition -> FileMetaStore -> disk) lands
-    // on the prod path the resume + /status paths will read.
+    // The session.json sidecar is written on the first durable append (the
+    // lazy-materialize hook), so it holds the model + the workspace cwd the
+    // session started in. Proves the metadata sidecar wiring (composition ->
+    // FileMetaStore -> disk) lands on the prod path the resume + /status
+    // paths will read.
     let meta_path = sid_dir.join("session.json");
-    assert!(meta_path.exists(), "session.json missing: {meta_path:?}");
     let meta = std::fs::read_to_string(&meta_path).unwrap();
     assert!(!meta.is_empty(), "session.json empty: {meta_path:?}");
     assert!(
@@ -76,6 +80,36 @@ fn test_turn_writes_durable_log() {
         meta.contains("cwd"),
         "session.json should carry the cwd field:\n{meta}"
     );
+}
+
+/// Poll the sessions root until one session dir holds every named file,
+/// and return that dir. The directory lookup is inside the loop, not just
+/// the leaf files: the sid dir is created by the durable append, which the
+/// reply render does not wait for, so the dir is exactly as racy as the
+/// files under it. Each name is checked with is_file, so a directory of
+/// that name does not satisfy it. None on timeout, so the caller attaches
+/// the PTY output to the failure the way the wait_for helpers do.
+fn wait_for_session_files(
+    root: &std::path::Path,
+    names: &[&str],
+    timeout: std::time::Duration,
+) -> Option<std::path::PathBuf> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let found = std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| p.is_dir() && names.iter().all(|n| p.join(n).is_file()));
+        if found.is_some() {
+            return found;
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// A fixture export file: two durable events (a user prompt + an assistant
