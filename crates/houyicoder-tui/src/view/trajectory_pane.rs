@@ -111,6 +111,26 @@ pub struct TrajectoryView {
 mod mock;
 use mock::mock_trajectory;
 
+/// The display title for a turn: the user input when present, otherwise a
+/// derived fallback so a tool-continuation turn (no user input — the model
+/// auto-continued after a tool result) does not show a blank title. The
+/// fallback is the first event's summary (the first tool call or LLM step),
+/// prefixed with "(continued)" to distinguish it from a real prompt. When
+/// the turn has no events either, "(no input)" surfaces.
+fn turn_title(turn: &TrajectoryTurn) -> String {
+    if !turn.user_input.trim().is_empty() {
+        return turn.user_input.clone();
+    }
+    if let Some(first) = turn.events.first() {
+        if first.summary.trim().is_empty() {
+            return "(continued)".to_string();
+        }
+        format!("(continued) {}", first.summary)
+    } else {
+        "(no input)".to_string()
+    }
+}
+
 // Rendering
 
 /// Main entry: dispatch on the drill level. Each level builder returns
@@ -243,7 +263,7 @@ fn draw_turn_list(
                     sp(prefix, Color::Cyan),
                     sp(format!("T{} ", t.n), Color::Cyan),
                     sp(
-                        format!("{:32} ", truncate_width(&t.user_input, 32)),
+                        format!("{:32} ", truncate_width(&turn_title(t), 32)),
                         Color::White,
                     ),
                     sp(
@@ -351,7 +371,11 @@ fn draw_turn_detail(
             let clamped = cursor.min(turn.events.len().saturating_sub(1));
             header.push(line(vec![
                 sp(
-                    format!(" T{}  \"{}\"", turn.n, truncate_width(&turn.user_input, 30)),
+                    format!(
+                        " T{}  \"{}\"",
+                        turn.n,
+                        truncate_width(&turn_title(&turn), 30)
+                    ),
                     Color::Cyan,
                 ),
                 sp(

@@ -626,3 +626,86 @@ fn test_per_turn_model_one() {
         "per-turn model hidden when single: {text}"
     );
 }
+
+/// A turn with a user input uses it as the title.
+#[test]
+fn test_turn_title_user_input() {
+    let turn = TrajectoryTurn {
+        n: 1,
+        user_input: "fix the bug".into(),
+        tokens_in: None,
+        tokens_out: None,
+        cache_read: None,
+        cache_write: None,
+        model: None,
+        effort: None,
+        reasoning_tokens: None,
+        tool_count: 0,
+        tool_fail: 0,
+        retries: 0,
+        duration_ms: 0,
+        success: true,
+        events: vec![],
+    };
+    assert_eq!(turn_title(&turn), "fix the bug");
+}
+
+/// A turn with no user input (a tool-continuation turn) derives a fallback
+/// title from the first event's summary so the row is not blank.
+#[test]
+fn test_turn_title_falls_back() {
+    let turn = TrajectoryTurn {
+        n: 2,
+        user_input: String::new(),
+        tokens_in: None,
+        tokens_out: None,
+        cache_read: None,
+        cache_write: None,
+        model: None,
+        effort: None,
+        reasoning_tokens: None,
+        tool_count: 1,
+        tool_fail: 0,
+        retries: 0,
+        duration_ms: 0,
+        success: true,
+        events: vec![TrajectoryEvent {
+            kind: "tool_call".into(),
+            summary: "Bash: ls -la".into(),
+            start_ms: 0,
+            duration_ms: 10,
+            success: true,
+            thinking: None,
+            input: None,
+            output: None,
+        }],
+    };
+    let title = turn_title(&turn);
+    assert!(
+        title.contains("(continued)") && title.contains("Bash: ls -la"),
+        "fallback title must mark continuation + carry the event summary: {title}"
+    );
+}
+
+/// A turn with no user input and no events shows "(no input)" — never blank.
+#[test]
+fn test_turn_title_empty() {
+    let turn = TrajectoryTurn {
+        n: 3,
+        user_input: String::new(),
+        tokens_in: None,
+        tokens_out: None,
+        cache_read: None,
+        cache_write: None,
+        model: None,
+        effort: None,
+        reasoning_tokens: None,
+        tool_count: 0,
+        tool_fail: 0,
+        retries: 0,
+        duration_ms: 0,
+        success: true,
+        events: vec![],
+    };
+    assert_eq!(turn_title(&turn), "(no input)");
+}
