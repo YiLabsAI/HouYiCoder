@@ -1,34 +1,25 @@
 #!/usr/bin/env python3
 """Check .rs file line-count limits, split by test vs production.
 
-Production and test files carry different cognitive cost: a 1500-line
-production file is 1500 lines of interacting logic (superlinear load);
-a 1500-line test file is ~40 independent 35-line blocks (near-linear
-load). One line-count threshold for both mixed two cost curves (test
-and production metrics don't mix) and the 800 error gate parked 22
-files in the 750-799 band -- a cliff whose pressure produced overflow
-test files named by production history (_extra_tests) rather than by
-behavior domain.
+Production and test files sit on different cost curves, so they get
+different limits. Production lines interact, so cost grows superlinearly
+with length; test files are independent blocks, so cost grows about
+linearly. One threshold for both averages two curves and fits neither.
 
-Production keeps the 500 warn / 800 error cliff (a per-file cap, stops
-one file ballooning) AND gains a continuous excess ratchet (an aggregate
-cap, stops proliferation). The excess metric sums max(0, lines - 700)
-over production files; it is continuous: 699 -> 700 adds +0 (no new
-cliff at 700), 700 -> 705 adds +5, a 798-line file split into 400 + 398
-drops the sum by 98. Pressure falls only on files already past 700
-lines; ~90% of production files are unaffected.
+Production gets two limits that catch different failures. The per-file
+cliff stops a single file ballooning. The excess ratchet -- the sum of
+max(0, lines - threshold) across production files, compared against a
+ceiling -- stops many files each parking just under the cliff, which no
+per-file rule can see. Summing an overage rather than counting offenders
+keeps it continuous, so crossing the threshold costs nothing and a split
+repays exactly what it removes; there is no second cliff to game.
 
-Test files relax to 800 warn / 2000 error. 2000 is a pathological
-backstop (a single test file so large something is structurally wrong),
-NOT a target -- the right test-file size is driven by cohesion (one
-behavior domain), which is review judgment, not a countable proxy. The
-old 800 gate polluted the test data (max test file 799, pressed down by
-the gate), so no calibration from it would be honest. The real test-side
-pressure is the 800 warn (large test files surface in make check) +
-Q7 cohesion review on touch. There is NO test-side excess ratchet:
-test cognitive load is near-linear, so a ratchet degenerates to a cliff
-at 800 -- the asymmetry with production is the application of judgment 16
-(test/production metrics don't mix), not a gap to close.
+Test files get the per-file limits only. Their error limit is a
+pathological backstop, not a target: the right size for a test file is
+one behavior domain, which is a review judgment and not a countable
+proxy. No excess ratchet here -- on a linear cost curve the sum carries
+no information the per-file limit lacks, so it would only recreate the
+cliff it exists to soften.
 """
 import argparse
 import sys
@@ -40,12 +31,13 @@ from rules.paths import is_test_file  # noqa: E402
 PROD_WARN, PROD_ERR = 500, 800
 TEST_WARN, TEST_ERR = 800, 2000
 EXCESS_THRESHOLD = 700
-# Raise only for real production growth (not prose) on files already past the
-# 700 floor, after absorption is exhausted; lower back when a split absorbs it.
-# Composition-root + config growth on churn-magnet files: a Runner read-side
-# accessor, the lazy-sidecar materialization hook, a retention config submodule
-# decl. To be absorbed back by a Runner/composition/config SOLID split.
-EXCESS_BASELINE = 2145
+# Ceiling for production excess. Raise only for real API growth on files
+# already past the floor, after absorption is exhausted, in the same commit
+# that grows them; lower it back when a split absorbs it. Why a given bump
+# happened belongs in that commit message -- recording it here builds a
+# changelog in a file that never forgets, and the reasons go stale while the
+# number moves on.
+EXCESS_BASELINE = 2155
 
 
 def ratchet_status(excess, baseline=EXCESS_BASELINE) -> int:

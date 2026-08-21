@@ -796,3 +796,29 @@ async fn test_login_snapshot_restores_path() {
         "login snapshot restored a PATH beyond the bare floor: {path}"
     );
 }
+
+/// The session must report its fence as enforced. Every command it runs goes
+/// through sandbox-exec with the rendered profile, so the fence is live
+/// whenever the session exists. The trait supplies a default returning
+/// Unavailable, which the composition root turns into a user-visible
+/// "running unfenced" notice; inheriting that default told the user the
+/// opposite of the truth while the fence was in fact refusing their writes,
+/// with nothing failing to catch it. Assert the reported status so the
+/// omission cannot come back silently.
+#[test]
+fn test_fence_status_reports_enforced() {
+    use houyicoder_api::sandbox::{FenceStatus, SandboxSession};
+    let root = std::env::temp_dir().join(format!(
+        "houyi-fence-status-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&root).expect("mkdir root");
+    let s = MacSeatbeltSession::new_in_cwd(&root).expect("session");
+    assert_eq!(
+        s.fence_status(),
+        FenceStatus::Enforced,
+        "a live seatbelt session must not report the trait default"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}

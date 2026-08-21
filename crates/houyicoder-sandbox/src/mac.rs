@@ -13,7 +13,8 @@
 
 use crate::{ProfileSpec, ShellSnapshot, render};
 use houyicoder_api::sandbox::{
-    Containment, Coverage, NetworkPolicy, SandboxSession, SideEffect, WorktreeFenceGuard,
+    Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
+    WorktreeFenceGuard,
 };
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
@@ -468,6 +469,12 @@ impl MacSeatbeltSession {
 }
 
 impl SandboxSession for MacSeatbeltSession {
+    /// Enforced whenever the session exists: every command goes through
+    /// sandbox-exec with the rendered profile.
+    fn fence_status(&self) -> FenceStatus {
+        FenceStatus::Enforced
+    }
+
     fn as_containment(&self) -> Option<&dyn houyicoder_api::sandbox::Containment> {
         Some(self)
     }
