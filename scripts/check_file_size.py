@@ -42,10 +42,10 @@ TEST_WARN, TEST_ERR = 800, 2000
 EXCESS_THRESHOLD = 700
 # Raise only for real production growth (not prose) on files already past the
 # 700 floor, after absorption is exhausted; lower back when a split absorbs it.
-# 2138 = a Runner read-side accessor + the lazy-sidecar materialization hook
-# wired in the composition root; both are real mechanism on the churn-magnet
-# composition.rs/mod.rs, to be absorbed back by a Runner/composition SOLID split.
-EXCESS_BASELINE = 2144
+# Composition-root + config growth on churn-magnet files: a Runner read-side
+# accessor, the lazy-sidecar materialization hook, a retention config submodule
+# decl. To be absorbed back by a Runner/composition/config SOLID split.
+EXCESS_BASELINE = 2145
 
 
 def ratchet_status(excess, baseline=EXCESS_BASELINE) -> int:

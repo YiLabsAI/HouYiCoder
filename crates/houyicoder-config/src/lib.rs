@@ -16,6 +16,7 @@
 //! and this workspace denies). The resolve_* fns are thin env-reading wrappers
 //! over those helpers.
 
+pub mod retention;
 pub mod sandbox_network;
 pub mod settings_store;
 
