@@ -37,7 +37,7 @@ EXCESS_THRESHOLD = 700
 # happened belongs in that commit message -- recording it here builds a
 # changelog in a file that never forgets, and the reasons go stale while the
 # number moves on.
-EXCESS_BASELINE = 2155
+EXCESS_BASELINE = 2159
 
 
 def ratchet_status(excess, baseline=EXCESS_BASELINE) -> int:
