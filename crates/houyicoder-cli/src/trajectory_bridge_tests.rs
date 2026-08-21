@@ -470,3 +470,70 @@ fn test_cancelled_turn_omits_tokens() {
     assert!(turn.model.is_none(), "cancelled turn model None");
     assert!(turn.effort.is_none(), "cancelled turn effort None");
 }
+
+/// A failed bash tool result projects to a trajectory event whose L2 output
+/// is the human-readable extract_body form (exit code + stderr), NOT the raw
+/// JSON dump. Before the fix the trajectory pane showed
+/// {"error":"...","exit_code":1,"stdout":"","stderr":"..."} on drill-down
+/// while the transcript showed the formatted body — two renderings of the
+/// same tool output. Now both route through extract_body.
+#[test]
+fn test_tool_result_extracts_body() {
+    let events = vec![
+        ev(100, TurnEventKind::UserInput { text: "go".into() }),
+        ev(
+            105,
+            TurnEventKind::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            TurnEventKind::ToolCall {
+                call_id: "c1".into(),
+                tool: "bash".into(),
+                input: serde_json::json!({"command": "false"}),
+            },
+        ),
+        ev(
+            120,
+            TurnEventKind::ToolResult {
+                call_id: "c1".into(),
+                output: serde_json::json!({
+                    "stdout": "",
+                    "stderr": "boom",
+                    "exit_code": 1,
+                    "success": false,
+                }),
+                duration_ms: 5,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let tr = turn
+        .events
+        .iter()
+        .find(|e| e.kind == "tool_result")
+        .expect("tool_result event");
+    let body = tr.output.as_deref().unwrap_or("");
+    assert!(
+        body.contains("Exit code 1") && body.contains("boom"),
+        "L2 output is the formatted body, not raw JSON: {body}"
+    );
+    assert!(
+        !body.starts_with('{'),
+        "L2 output must not be a raw JSON dump: {body}"
+    );
+    // The L1 summary previews the formatted body too (so the row reads
+    // "Exit code 1", not "{\"stdout\":\"\",...}").
+    assert!(
+        tr.summary.contains("Exit code 1") || tr.summary.contains("boom"),
+        "L1 summary previews the formatted body: {}",
+        tr.summary
+    );
+}

@@ -35,7 +35,7 @@ pub(crate) fn write_result_body(output: &Value, call_input: Option<&Value>) -> S
 /// list; grep content mode carries its matched lines in content. Write results
 /// carry a byte count. Errors surface as an error: line. Anything else falls
 /// back to a brief JSON glimpse so nothing is silently dropped.
-pub(crate) fn extract_body(output: &str) -> String {
+pub fn extract_body(output: &str) -> String {
     let Ok(v) = serde_json::from_str::<Value>(output) else {
         // Not JSON (a plain-string result from a stub) — show it verbatim.
         return output.to_string();

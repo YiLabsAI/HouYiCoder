@@ -76,14 +76,25 @@ fn project_event(ev: &TurnEvent, start_ms: u64) -> Option<TrajectoryEvent> {
             output,
             duration_ms,
             ..
-        } => (
-            "tool_result",
-            preview(&output.to_string()),
-            None,
-            None,
-            Some(output.to_string()),
-            *duration_ms,
-        ),
+        } => {
+            // Format the tool output the SAME way the transcript does — a
+            // failed bash command shows "Exit code N" + stderr, an edit shows
+            // its diff summary + body, an error shows "error: <msg>". Routing
+            // the trajectory L2 through the same extract_body the transcript
+            // uses means one rendering path for tool results, not two that
+            // drift (the transcript got exit-code formatting; the trajectory
+            // kept the raw JSON dump and showed {"error":"...","exit_code":1}
+            // to the user on drill-down).
+            let body = houyicoder_tui::result_body::extract_body(&output.to_string());
+            (
+                "tool_result",
+                preview(&body),
+                None,
+                None,
+                Some(body),
+                *duration_ms,
+            )
+        }
         TurnEventKind::HookSignal {
             verdict, reason, ..
         } => ("hook", format!("{verdict:?} {reason}"), None, None, None, 0),
