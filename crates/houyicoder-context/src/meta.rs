@@ -82,6 +82,27 @@ pub trait SessionMetaStore: Send + Sync {
     /// leave a half-written sidecar.
     fn write_meta(&self, session: SessionId, meta: &SessionMeta) -> Result<(), ContextMetaError>;
 
+    /// Read, edit, and write the sidecar as one indivisible step, returning
+    /// whether there was a sidecar to edit.
+    ///
+    /// Every caller that changes one field must use this rather than
+    /// read_meta followed by write_meta. Those two calls each write a whole
+    /// sidecar derived from the state they read, so two of them interleaving
+    /// leaves the later write erasing the earlier one's field: a rename and
+    /// a model switch racing lose the name or the model, not a conflict but
+    /// a silent revert. Implementations serialize the read and the write
+    /// against their own concurrent calls. The scope of that guarantee is
+    /// one store instance in one process; a second process writing the same
+    /// sidecar is still last-writer-wins.
+    ///
+    /// The edit closure runs while the store holds its lock, so it must not
+    /// call back into the store.
+    fn update_meta(
+        &self,
+        session: SessionId,
+        edit: &mut dyn FnMut(&mut SessionMeta),
+    ) -> Result<MetaUpdate, ContextMetaError>;
+
     /// Delete the sidecar (session dir teardown). Best-effort: a missing
     /// sidecar is not an error.
     fn delete_meta(&self, session: SessionId);
@@ -89,6 +110,19 @@ pub trait SessionMetaStore: Send + Sync {
     /// List all sessions with a sidecar, newest updated first. The picker
     /// uses this to populate the global session list.
     fn list_metas(&self) -> Vec<(SessionId, SessionMeta)>;
+}
+
+/// Whether an update_meta call found a sidecar to edit. Absent is not an
+/// error: a session whose sidecar has not materialized yet is a normal
+/// state (the sidecar is written on the first durable append), and callers
+/// differ on whether it deserves a message - a rename reports it to the
+/// user, a background model write ignores it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetaUpdate {
+    /// The sidecar existed; the edit was applied and written back.
+    Written,
+    /// No sidecar for the session; nothing was edited or written.
+    Absent,
 }
 
 /// A sidecar read/write failure. Distinct from ContextError (the event-log

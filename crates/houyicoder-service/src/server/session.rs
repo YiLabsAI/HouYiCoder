@@ -83,11 +83,7 @@ impl Server {
         let Some(store) = self.meta_store.as_ref() else {
             return;
         };
-        let Some(mut meta) = store.read_meta(self.session) else {
-            return;
-        };
-        meta.model = model.to_string();
-        drop(store.write_meta(self.session, &meta));
+        drop(store.update_meta(self.session, &mut |meta| meta.model = model.to_string()));
     }
 }
 

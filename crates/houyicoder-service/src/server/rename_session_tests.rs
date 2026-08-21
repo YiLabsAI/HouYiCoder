@@ -301,6 +301,17 @@ impl SessionMetaStore for FailingMetaStore {
             "simulated write failure".into(),
         ))
     }
+    fn update_meta(
+        &self,
+        _session: houyicoder_context::SessionId,
+        _edit: &mut dyn FnMut(&mut SessionMeta),
+    ) -> Result<houyicoder_context::MetaUpdate, houyicoder_context::ContextMetaError> {
+        // Fails like write_meta: the edit is never applied, so the rename
+        // path still sees a write failure rather than a silent success.
+        Err(houyicoder_context::ContextMetaError(
+            "simulated write failure".into(),
+        ))
+    }
     fn delete_meta(&self, session: houyicoder_context::SessionId) {
         self.0.delete_meta(session);
     }

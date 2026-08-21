@@ -8,13 +8,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use houyicoder_context::{
-    ContextMetaError, SessionId, SessionMeta, SessionMetaStore, SessionProvenance,
+    ContextMetaError, MetaUpdate, SessionId, SessionMeta, SessionMetaStore, SessionProvenance,
 };
 
 /// Disk-backed meta store. Writes <root>/<sid>/session.json atomically. The
@@ -22,11 +23,38 @@ use houyicoder_context::{
 /// session_log_root), so session.json + log.jsonl share a per-session dir.
 pub struct FileMetaStore {
     root: PathBuf,
+    /// One lock per session, guarding a whole write or read-modify-write so
+    /// two callers touching the same sidecar serialize instead of each
+    /// publishing a copy derived from the state it read. Per session, not
+    /// one lock for the store: the write ends in an fsync, and one session's
+    /// slow flush must not stall an unrelated session's write. Entries are
+    /// never evicted - removing one while another thread holds it would hand
+    /// the next caller a fresh lock and silently drop the exclusion - so the
+    /// map grows with the number of distinct sessions touched in a process,
+    /// which is the session count, not a leak that tracks time.
+    locks: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
 }
 
 impl FileMetaStore {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            locks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The lock for a session, created on first use. The map guard is
+    /// released before the caller takes the session lock, so a slow fsync
+    /// under one session never blocks another session from looking its own
+    /// lock up.
+    fn session_lock(&self, session: SessionId) -> Arc<Mutex<()>> {
+        Arc::clone(
+            self.locks
+                .lock()
+                .expect("meta lock map poisoned")
+                .entry(session)
+                .or_default(),
+        )
     }
 
     fn session_dir(&self, session: SessionId) -> PathBuf {
@@ -60,8 +88,20 @@ impl FileMetaStore {
             .map_err(|e| ContextMetaError(format!("serialize meta: {e}")))?;
         // Atomic: write to a sibling tmp file, then rename over the target so
         // a crash mid-write cannot leave a half-written sidecar (the resume
-        // path would read a truncated JSON + fail to parse).
-        let tmp = dir.join("session.json.tmp");
+        // path would read a truncated JSON + fail to parse). The tmp name is
+        // unique per write: sharing one name lets a writer rename a file
+        // holding another's half-written bytes, and a corrupt sidecar reads
+        // back as absent, so the cwd and model vanish silently. The pid
+        // covers a second process on the same root, which no in-process lock
+        // reaches; the counter covers two store instances in one process,
+        // holding separate lock maps. A crash between create and rename now
+        // leaves an orphan, pruned with the session dir - no reaper needed.
+        static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+        let tmp = dir.join(format!(
+            "session.json.tmp.{}.{}",
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
         {
             #[cfg(unix)]
             let mut opts = {
@@ -118,10 +158,35 @@ impl SessionMetaStore for FileMetaStore {
     }
 
     fn write_meta(&self, session: SessionId, meta: &SessionMeta) -> Result<(), ContextMetaError> {
+        let lock = self.session_lock(session);
+        let _guard = lock.lock().expect("meta session lock poisoned");
         self.write_sync(session, meta)
     }
 
+    fn update_meta(
+        &self,
+        session: SessionId,
+        edit: &mut dyn FnMut(&mut SessionMeta),
+    ) -> Result<MetaUpdate, ContextMetaError> {
+        // The read and the write are inside one lock: that is the whole
+        // point of the method. Taking it around the write alone would still
+        // let a second caller read the pre-edit sidecar and write it back.
+        let lock = self.session_lock(session);
+        let _guard = lock.lock().expect("meta session lock poisoned");
+        let Some(mut meta) = self.read_sync(session) else {
+            return Ok(MetaUpdate::Absent);
+        };
+        edit(&mut meta);
+        self.write_sync(session, &meta)?;
+        Ok(MetaUpdate::Written)
+    }
+
     fn delete_meta(&self, session: SessionId) {
+        // Under the same lock as the writes: a delete landing between an
+        // update's read and its write would otherwise be undone by that
+        // write, resurrecting the sidecar of a torn-down session.
+        let lock = self.session_lock(session);
+        let _guard = lock.lock().expect("meta session lock poisoned");
         let dir = self.session_dir(session);
         // Best-effort: a missing dir is not an error (idempotent teardown).
         drop(fs::remove_dir_all(&dir));
@@ -168,6 +233,21 @@ impl SessionMetaStore for InMemoryMetaStore {
             .expect("meta mutex poisoned")
             .insert(session, meta.clone());
         Ok(())
+    }
+
+    fn update_meta(
+        &self,
+        session: SessionId,
+        edit: &mut dyn FnMut(&mut SessionMeta),
+    ) -> Result<MetaUpdate, ContextMetaError> {
+        // One lock acquisition spans the lookup and the edit, so the map
+        // entry is mutated in place rather than read out and put back.
+        let mut metas = self.metas.lock().expect("meta mutex poisoned");
+        let Some(meta) = metas.get_mut(&session) else {
+            return Ok(MetaUpdate::Absent);
+        };
+        edit(meta);
+        Ok(MetaUpdate::Written)
     }
 
     fn delete_meta(&self, session: SessionId) {
@@ -236,6 +316,64 @@ mod tests {
         drop(fs::remove_dir_all(&root));
     }
 
+    /// Concurrent edits to one sidecar all survive. Each update appends a
+    /// char, so the final length counts the edits that landed: a
+    /// read-modify-write that is not serialized loses whichever edits were
+    /// derived from a snapshot another writer had already replaced, and the
+    /// count comes up short. Counting is the point - asserting two named
+    /// fields both survive passes whenever the interleaving happens to be
+    /// benign, while a missing char is a lost edit by construction.
+    #[test]
+    fn test_concurrent_updates_all_land() {
+        const WRITERS: usize = 4;
+        const EDITS: usize = 8;
+        let root = temp_root();
+        let store = FileMetaStore::new(root.clone());
+        let sid = SessionId::new();
+        store
+            .write_meta(sid, &sample_meta(Some(""), 1))
+            .expect("seed");
+        std::thread::scope(|scope| {
+            for _ in 0..WRITERS {
+                scope.spawn(|| {
+                    for _ in 0..EDITS {
+                        store
+                            .update_meta(sid, &mut |meta| {
+                                meta.name.get_or_insert_with(String::new).push('x');
+                            })
+                            .expect("update");
+                    }
+                });
+            }
+        });
+        let back = store.read_meta(sid).expect("read");
+        assert_eq!(
+            back.name.as_deref().map(str::len),
+            Some(WRITERS * EDITS),
+            "every concurrent edit should survive, none overwritten"
+        );
+        drop(fs::remove_dir_all(&root));
+    }
+
+    /// An update against a session with no sidecar reports Absent rather
+    /// than creating one. A sidecar materializes on the first durable
+    /// append; an update is an edit to an existing descriptor, so a rename
+    /// before that point must not mint a sidecar with default fields.
+    #[test]
+    fn test_update_absent_writes_nothing() {
+        let root = temp_root();
+        let store = FileMetaStore::new(root.clone());
+        let sid = SessionId::new();
+        let mut ran = false;
+        let outcome = store
+            .update_meta(sid, &mut |_| ran = true)
+            .expect("update should not error on a missing sidecar");
+        assert_eq!(outcome, MetaUpdate::Absent, "no sidecar -> Absent");
+        assert!(!ran, "the edit closure should not run without a sidecar");
+        assert!(store.read_meta(sid).is_none(), "no sidecar was created");
+        drop(fs::remove_dir_all(&root));
+    }
+
     #[test]
     fn test_file_lists_all_sessions() {
         let root = temp_root();
@@ -279,6 +417,33 @@ mod tests {
         let sid = SessionId::new();
         assert!(store.read_meta(sid).is_none(), "no sidecar -> None");
         drop(fs::remove_dir_all(&root));
+    }
+
+    /// The in-memory store honors the same update contract: an edit applies
+    /// in place and reports Written, a missing session reports Absent. The
+    /// test tier runs against this impl, so a divergence here would let a
+    /// caller pass its tests and lose an edit on disk.
+    #[test]
+    fn test_in_memory_update_applies() {
+        let store = InMemoryMetaStore::new();
+        let sid = SessionId::new();
+        assert_eq!(
+            store.update_meta(sid, &mut |_| ()).expect("absent update"),
+            MetaUpdate::Absent,
+            "no entry -> Absent"
+        );
+        store
+            .write_meta(sid, &sample_meta(Some("before"), 1))
+            .expect("write");
+        let outcome = store
+            .update_meta(sid, &mut |meta| meta.name = Some("after".into()))
+            .expect("update");
+        assert_eq!(outcome, MetaUpdate::Written, "entry present -> Written");
+        assert_eq!(
+            store.read_meta(sid).and_then(|m| m.name).as_deref(),
+            Some("after"),
+            "the edit is visible on the next read"
+        );
     }
 
     #[test]

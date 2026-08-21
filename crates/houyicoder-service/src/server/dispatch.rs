@@ -105,38 +105,36 @@ impl Server {
                         )
                         .await;
                 };
-                let Some(mut meta) = store.read_meta(self.session) else {
-                    return self
-                        .send_response(
-                            io,
-                            req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::Internal,
-                                "rename: no session sidecar to rename",
-                                false,
-                            )),
-                        )
-                        .await;
-                };
                 // Empty/whitespace clears back to Auto so the display reverts
                 // to the first-prompt slug; non-empty marks User so a later
-                // auto-derivation does not clobber the custom name.
-                let trimmed = name.trim();
-                if trimmed.is_empty() {
-                    meta.name = None;
-                    meta.name_source = houyicoder_context::NameSource::Auto;
-                } else {
-                    meta.name = Some(trimmed.to_string());
-                    meta.name_source = houyicoder_context::NameSource::User;
-                }
-                if let Err(e) = store.write_meta(self.session, &meta) {
+                // auto-derivation does not clobber the custom name. Applied
+                // through update_meta so a model switch landing at the same
+                // moment does not write back the pre-rename name.
+                let trimmed = name.trim().to_string();
+                let outcome = store.update_meta(self.session, &mut |meta| {
+                    if trimmed.is_empty() {
+                        meta.name = None;
+                        meta.name_source = houyicoder_context::NameSource::Auto;
+                    } else {
+                        meta.name = Some(trimmed.clone());
+                        meta.name_source = houyicoder_context::NameSource::User;
+                    }
+                });
+                let detail = match outcome {
+                    Ok(houyicoder_context::MetaUpdate::Written) => None,
+                    Ok(houyicoder_context::MetaUpdate::Absent) => {
+                        Some("rename: no session sidecar to rename".to_string())
+                    }
+                    Err(e) => Some(format!("rename: write failed: {e}")),
+                };
+                if let Some(detail) = detail {
                     return self
                         .send_response(
                             io,
                             req_id,
                             ResponsePayload::Error(WireError::new(
                                 WireErrorKind::Internal,
-                                format!("rename: write failed: {e}"),
+                                detail,
                                 false,
                             )),
                         )
