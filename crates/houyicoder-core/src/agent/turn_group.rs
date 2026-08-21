@@ -23,6 +23,7 @@
 
 use houyicoder_context::{ContextBackend, TurnEvent, TurnEventKind};
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
+#[cfg(debug_assertions)]
 use std::collections::HashSet;
 
 use super::retention::{AgeRetentionPolicy, RetentionPolicy};
