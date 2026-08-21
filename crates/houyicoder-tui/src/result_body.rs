@@ -61,15 +61,44 @@ pub(crate) fn extract_body(output: &str) -> String {
         // outcome, so for a failed command (success=false -> Error) the
         // joined stdout+stderr renders red. Append non-empty stderr so a
         // failed command's error message is not lost (was an empty body
-        // before).
+        // before). A failed command also surfaces its exit code so the user
+        // sees the numeric verdict, not just the stderr text.
         let stderr = v.get("stderr").and_then(|s| s.as_str()).unwrap_or("");
-        if !stderr.is_empty() && stdout.is_empty() {
-            return stderr.to_string();
+        let exit_code = v.get("exit_code").and_then(|c| c.as_i64());
+        let failed = v.get("success").and_then(|s| s.as_bool()) == Some(false);
+        let mut parts: Vec<&str> = Vec::new();
+        if !stdout.is_empty() {
+            parts.push(stdout);
         }
         if !stderr.is_empty() {
-            return format!("{stdout}\n{stderr}");
+            parts.push(stderr);
         }
-        return stdout.to_string();
+        if failed && let Some(code) = exit_code {
+            let label = format!("Exit code {code}");
+            // Insert the exit code line before stderr so it reads as a
+            // header for the error text, not a footer after it.
+            if parts.is_empty() {
+                return label;
+            }
+            // parts[0] is stdout (if any), parts[1..] is stderr. Insert
+            // the exit code between stdout and stderr so the order is
+            // stdout, exit code, stderr.
+            let stderr_idx = if stdout.is_empty() { 0 } else { 1 };
+            let mut combined = parts[stderr_idx..].join("\n");
+            if !combined.is_empty() {
+                combined = format!("{label}\n{combined}");
+            } else {
+                combined = label;
+            }
+            if stdout.is_empty() {
+                return combined;
+            }
+            return format!("{stdout}\n{combined}");
+        }
+        if parts.is_empty() {
+            return String::new();
+        }
+        return parts.join("\n");
     }
     // Search tools (grep/glob): the expand body is the matched content or
     // file list. grep content mode carries its matched lines in content;
@@ -212,5 +241,81 @@ mod tests {
         let input = serde_json::json!({"path": "f", "content": "a\nb"});
         let body = write_result_body(&out, Some(&input));
         assert_eq!(body, "Wrote 2 lines to f\na\nb");
+    }
+
+    /// A failed bash command surfaces its exit code before stderr so the
+    /// user sees the numeric verdict, not just the error text.
+    #[test]
+    fn test_bash_error_exit_stderr() {
+        let out = serde_json::json!({
+            "stdout": "",
+            "stderr": "error: could not write index",
+            "exit_code": 1,
+            "success": false,
+        })
+        .to_string();
+        let body = extract_body(&out);
+        assert!(
+            body.contains("Exit code 1"),
+            "exit code must surface: {body}"
+        );
+        assert!(
+            body.contains("error: could not write index"),
+            "stderr must surface: {body}"
+        );
+        // Exit code comes before stderr (header, not footer).
+        let ec_pos = body.find("Exit code 1").unwrap();
+        let err_pos = body.find("error: could not write index").unwrap();
+        assert!(ec_pos < err_pos, "exit code before stderr: {body}");
+    }
+
+    /// A failed bash command with stdout + stderr + exit code: order is
+    // stdout, exit code, stderr.
+    #[test]
+    fn test_bash_error_stdout_exit() {
+        let out = serde_json::json!({
+            "stdout": "partial output",
+            "stderr": "fatal: bad ref",
+            "exit_code": 128,
+            "success": false,
+        })
+        .to_string();
+        let body = extract_body(&out);
+        let stdout_pos = body.find("partial output").unwrap();
+        let ec_pos = body.find("Exit code 128").unwrap();
+        let err_pos = body.find("fatal: bad ref").unwrap();
+        assert!(stdout_pos < ec_pos, "stdout before exit code: {body}");
+        assert!(ec_pos < err_pos, "exit code before stderr: {body}");
+    }
+
+    /// A successful bash command does NOT surface an exit code line —
+    /// exit code 0 is not worth a row.
+    #[test]
+    fn test_bash_success_no_exit() {
+        let out = serde_json::json!({
+            "stdout": "hello",
+            "stderr": "",
+            "exit_code": 0,
+            "success": true,
+        })
+        .to_string();
+        let body = extract_body(&out);
+        assert_eq!(body, "hello");
+        assert!(!body.contains("Exit code"), "no exit code for success");
+    }
+
+    /// A failed bash command with only exit code (no stdout, no stderr)
+    /// still surfaces the exit code.
+    #[test]
+    fn test_bash_error_exit_only() {
+        let out = serde_json::json!({
+            "stdout": "",
+            "stderr": "",
+            "exit_code": 2,
+            "success": false,
+        })
+        .to_string();
+        let body = extract_body(&out);
+        assert_eq!(body, "Exit code 2");
     }
 }

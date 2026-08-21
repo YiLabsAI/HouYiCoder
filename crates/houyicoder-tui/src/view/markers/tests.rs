@@ -21,9 +21,14 @@ fn test_row_call_error_red() {
 }
 
 #[test]
-fn test_row_result_green() {
+fn test_row_result_success_default() {
+    // A successful result body uses the default foreground (Reset), not
+    // green — stdout is plain text, not a semantic signal. Green-washing
+    // it drowns the color channel reserved for errors.
     let line = styled_row("  ⎿  {\"success\":true}", Some(ToolOutcome::Success)).expect("chip");
     assert_eq!(line.spans.len(), 2);
+    // The body span (index 1) must be Reset, not green.
+    assert_eq!(line.spans[1].style.fg, Some(Color::Reset));
 }
 
 #[test]
