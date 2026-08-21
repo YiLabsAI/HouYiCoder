@@ -222,12 +222,20 @@ pub(crate) fn result_body_rows(
         };
         (w, estimated)
     };
+    // When exactly 1 row is hidden, show it instead of writing a
+    // "… +1 lines" hint — a single hidden row is worth a row, not a
+    // placeholder (matches the CC terminal.ts renderTruncatedContent
+    // behavior: remaining 1 line → show the 4th line, no ellipsis).
+    let show_extra = !expanded && hidden == 1;
     let shown = if expanded {
         wrows.len()
+    } else if show_extra {
+        (COLLAPSE_SHOW + 1).min(wrows.len())
     } else {
         COLLAPSE_SHOW.min(wrows.len())
     };
-    let mut out = Vec::with_capacity(shown + usize::from(hidden > 0));
+    let suppress_hint = show_extra;
+    let mut out = Vec::with_capacity(shown + usize::from(hidden > 0 && !suppress_hint));
     // Guard the empty-after-marker bug: a result whose body is empty or whose
     // first line is blank would render a bare "⎿ " with no text. Show a
     // "(no output)" placeholder instead so the marker always carries text.
@@ -250,7 +258,7 @@ pub(crate) fn result_body_rows(
         // re-glyphed every line, so the eye reads the body as one block.
         out.push((plain, format!("     {l}"), None, None, None));
     }
-    if hidden > 0 {
+    if hidden > 0 && !suppress_hint {
         // In-app collapse form: the expand-hint
         // suffix is suppressed inside the virtual list (no terminal scrollback
         // to expand into) and leaves a clean "+N lines" tail aligned to the

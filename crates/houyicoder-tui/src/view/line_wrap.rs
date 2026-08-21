@@ -113,6 +113,15 @@ pub fn wrap_line(text: &str, avail: usize) -> Vec<String> {
             }
             continue;
         }
+        // Drop a leading space token at the start of a row (cur is empty):
+        // indentation wider than the column is trimmed, not kept as an empty
+        // row. Without this a line like "        self" (8-space indent) at
+        // avail 5 would produce an empty first row (the spaces trimmed by
+        // trim_trailing) then "self" on the second row — a phantom blank row
+        // + a premature break.
+        if cur.is_empty() && tok.chars().all(|c| c == ' ') {
+            continue;
+        }
         // Greedy fit: flush the current row if this token would overflow.
         if cur_w + tok_w > avail && !cur.is_empty() {
             lines.push(trim_trailing(&cur));
@@ -289,6 +298,12 @@ pub fn wrap_styled_line(line: Line<'static>, avail: usize) -> Vec<Line<'static>>
                 cur.push((chunk, style));
                 cur_w = chunk_w;
             }
+            continue;
+        }
+        // Drop a leading space token at the start of a row (cur is empty):
+        // indentation wider than the column is trimmed, not kept as a phantom
+        // empty row. Matches the plain wrap_line path.
+        if cur.is_empty() && is_space {
             continue;
         }
         // Greedy: flush if this token would overflow, dropping a leading
@@ -469,6 +484,47 @@ mod tests {
                 .into_iter()
                 .map(String::from)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    /// A line with leading indentation wider than avail drops the excess
+    /// spaces instead of producing a phantom empty row. Without the fix
+    /// "        self" (8-space indent) at avail 5 produced ["", "self"] —
+    /// an empty first row (spaces trimmed by trim_trailing) then "self".
+    /// The fix drops leading spaces at the start of a row, so the result
+    /// is ["self"] — no phantom blank, no premature break.
+    #[test]
+    fn test_leading_spaces_wider_dropped() {
+        let rows = wrap_line("        self", 5);
+        assert_eq!(rows, vec!["self".to_string()]);
+        // No empty first row.
+        assert!(
+            !rows[0].is_empty(),
+            "leading spaces must not produce an empty row: {rows:?}"
+        );
+    }
+
+    /// Leading spaces that fit within avail are preserved (indentation is
+    /// only trimmed when it would overflow the column).
+    #[test]
+    fn test_leading_spaces_within_avail() {
+        let rows = wrap_line("  self", 10);
+        assert_eq!(rows, vec!["  self".to_string()]);
+    }
+
+    /// A deeply-indented source line (16 spaces + short content) at a
+    /// narrow pane wraps the content, not the indentation. The excess
+    /// indentation is dropped so the user sees the content, not a wall of
+    /// spaces.
+    #[test]
+    fn test_deep_indent_drops_excess() {
+        let rows = wrap_line("                self.value", 10);
+        // The 16 spaces are dropped (wider than avail); "self.value"
+        // (10) fits exactly.
+        assert_eq!(rows, vec!["self.value".to_string()]);
+        assert!(
+            !rows.iter().any(|r| r.trim().is_empty()),
+            "no phantom empty rows: {rows:?}"
         );
     }
 
