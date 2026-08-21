@@ -68,7 +68,9 @@ fn drain(app: &mut houyicoder_tui::state::App, timeout_ms: u64) -> bool {
 /// live_bash_tool_roundtrip spine needs that HITL pause; the chat-reply test
 /// stays Auto (no tool call, no approval).
 fn live_app_with_tools(manual: bool) -> houyicoder_tui::state::App {
-    let bundle = houyicoder_service::composition::build_runner(None, None, None);
+    let bundle = houyicoder_service::composition::build_runner(
+        houyicoder_service::composition::BuildRunnerOptions::default(),
+    );
     let runner = bundle.runner;
     let session = bundle.session;
     let gate = bundle.gate;

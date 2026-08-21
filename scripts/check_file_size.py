@@ -40,7 +40,9 @@ from rules.paths import is_test_file  # noqa: E402
 PROD_WARN, PROD_ERR = 500, 800
 TEST_WARN, TEST_ERR = 800, 2000
 EXCESS_THRESHOLD = 700
-EXCESS_BASELINE = 2135
+# Raise only for real production growth (not prose) on files already past the
+# 700 floor, after absorption is exhausted; lower back when a split absorbs it.
+EXCESS_BASELINE = 2138
 
 
 def ratchet_status(excess, baseline=EXCESS_BASELINE) -> int:

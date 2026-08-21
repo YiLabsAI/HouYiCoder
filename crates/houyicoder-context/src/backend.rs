@@ -185,4 +185,14 @@ pub trait ContextBackend: Send + Sync {
     ) -> ReverseRead {
         ReverseRead::default()
     }
+
+    /// The sessions root this backend persists under, for cross-session
+    /// readers (the dream's retry scan). Derived, not configured, so the
+    /// reader can never disagree with the writer about the root: a
+    /// disk-backed build exposes its own root, an in-memory build returns
+    /// None and carries no cross-session history at all - it must not read
+    /// the real home. Default None (no on-disk log).
+    fn session_log_root(&self) -> Option<&std::path::Path> {
+        None
+    }
 }

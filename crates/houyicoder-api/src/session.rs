@@ -57,4 +57,14 @@ pub trait SessionLog: Send + Sync {
     /// Borrow the underlying backend for CAS operations (block_put /
     /// block_get) from the projection layer without owning the store.
     fn backend(&self) -> &dyn ContextBackend;
+
+    /// The durable sessions root this log's backend persists under, for
+    /// cross-session readers (the dream's retry scan). Derived from the
+    /// backend, not configured, so a reader can never disagree with the
+    /// writer about the root. None on a backend that is not disk-backed -
+    /// an in-memory build carries no cross-session history and must not
+    /// read the real home.
+    fn session_log_root(&self) -> Option<std::path::PathBuf> {
+        None
+    }
 }

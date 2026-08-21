@@ -544,6 +544,11 @@ impl houyicoder_api::session::SessionLog for SessionStore {
     fn backend(&self) -> &dyn ContextBackend {
         Self::backend(self)
     }
+    fn session_log_root(&self) -> Option<std::path::PathBuf> {
+        self.backend
+            .session_log_root()
+            .map(std::path::Path::to_path_buf)
+    }
 }
 
 #[cfg(test)]

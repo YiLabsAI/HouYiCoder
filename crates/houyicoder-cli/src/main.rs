@@ -207,6 +207,20 @@ fn acquire_resume_lock(_sid_str: &str) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+/// The runner wiring every binary entry shares: the disk persistence
+/// preset plus the default permission rule store. One site so a future
+/// entry cannot drift onto a different store configuration by accident.
+fn production_runner(
+    project: Option<String>,
+) -> houyicoder_service::composition::BuildRunnerOptions {
+    houyicoder_service::composition::BuildRunnerOptions::disk(
+        project,
+        Some(std::sync::Arc::new(
+            houyicoder_permission::FileRuleStore::default_paths(),
+        )),
+    )
+}
+
 /// The detached-session entry. Builds the runner through the composition
 /// root, registers it under a fresh session in a SessionHost, and binds a
 /// Unix domain socket. With a custom socket path, binds there; with None,
@@ -228,13 +242,7 @@ fn run_serve(
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
 
-    let bundle = build_runner(
-        project,
-        Some(Arc::new(
-            houyicoder_permission::FileRuleStore::default_paths(),
-        )),
-        None,
-    );
+    let bundle = build_runner(production_runner(project));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
@@ -323,13 +331,7 @@ fn run_acp_stdio(
     use houyicoder_service::lifecycle::SessionLeaseStore;
     use std::io::{BufRead, Write};
 
-    let bundle = houyicoder_service::composition::build_runner(
-        project,
-        Some(Arc::new(
-            houyicoder_permission::FileRuleStore::default_paths(),
-        )),
-        None,
-    );
+    let bundle = houyicoder_service::composition::build_runner(production_runner(project));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
@@ -477,13 +479,7 @@ fn build_bundle(
     project: Option<String>,
     model_override: Option<String>,
 ) -> houyicoder_tui::composition::RunnerBundle {
-    let bundle = houyicoder_service::composition::build_runner(
-        project,
-        Some(Arc::new(
-            houyicoder_permission::FileRuleStore::default_paths(),
-        )),
-        None,
-    );
+    let bundle = houyicoder_service::composition::build_runner(production_runner(project));
     // --model overrides the settings-seeded active model for a fresh session
     // (resolution chain: --model flag > settings.json > DEFAULT). A resumed
     // session restores its own model from the sidecar (higher priority), so
@@ -563,7 +559,7 @@ pub(crate) fn assemble_bundle(
     // name/cwd/model). Built at the same sid-keyed sessions root the file
     // backend uses.
     let meta_store: std::sync::Arc<dyn houyicoder_context::SessionMetaStore> =
-        houyicoder_service::composition::default_meta_store();
+        houyicoder_service::composition::disk_meta_store();
     // The snapshot bridge loads the durable log into a TranscriptLine
     // snapshot for the search view (read-whole path under the threshold).
     // Shares the same SessionLog as the trajectory/export bridges (an Arc

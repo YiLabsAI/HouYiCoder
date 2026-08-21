@@ -218,7 +218,9 @@ fn test_parse_project_then_acp() {
 /// the wiring path the TUI takes on startup is exercised end-to-end.
 #[test]
 fn test_pair_completes_handshake() {
-    let bundle = houyicoder_service::composition::build_runner(None, None, None);
+    let bundle = houyicoder_service::composition::build_runner(
+        houyicoder_service::composition::BuildRunnerOptions::default(),
+    );
     let (runner_arc, mut client, _startup_warnings) = pair_inproc_server(
         bundle.runner,
         bundle.session,

@@ -3,7 +3,9 @@ use crate::pending_queue::PendingItem;
 use crate::state::TranscriptLine;
 
 fn test_bundle() -> RunnerBundle {
-    let bundle = houyicoder_service::composition::build_runner(None, None, None);
+    let bundle = houyicoder_service::composition::build_runner(
+        houyicoder_service::composition::BuildRunnerOptions::default(),
+    );
     let runner = bundle.runner;
     let session = bundle.session;
     let gate = bundle.gate;
@@ -31,7 +33,9 @@ fn test_bundle() -> RunnerBundle {
 /// Like test_bundle but returns the server task's JoinHandle so a test can
 /// assert the serve loop exited after the session is torn down.
 fn test_bundle_tracked() -> (RunnerBundle, tokio::task::JoinHandle<()>) {
-    let bundle = houyicoder_service::composition::build_runner(None, None, None);
+    let bundle = houyicoder_service::composition::build_runner(
+        houyicoder_service::composition::BuildRunnerOptions::default(),
+    );
     let runner = bundle.runner;
     let session = bundle.session;
     let gate = bundle.gate;

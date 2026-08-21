@@ -423,6 +423,10 @@ impl ContextBackend for LocalFileBackend {
             .unwrap_or(0)
     }
 
+    fn session_log_root(&self) -> Option<&std::path::Path> {
+        Some(&self.root)
+    }
+
     fn read_log(&self, session: SessionId) -> Result<Vec<TurnEvent>, ContextError> {
         // Strict: a corrupt line errors here. The snapshot's tolerant read
         // (skip + count) is a separate path, not this trait method.

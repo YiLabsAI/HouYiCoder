@@ -3,30 +3,12 @@
 //! Split out of the composition module on size grounds (the same pattern as
 //! the memory + worktree submodules): the composition file is the sole
 //! assembly site and an acknowledged churn magnet, so a whole concern moves
-//! out rather than trimming prose. The functions here write the initial
-//! <sid>/session.json at creation and choose the build's default meta store
-//! (disk in release, in-memory under test); nothing outside the composition
-//! root consumes them.
+//! out rather than trimming prose. The function here writes the initial
+//! <sid>/session.json at creation; nothing outside the composition root
+//! consumes it.
 
 use super::*;
 use houyicoder_context::{NameSource, SessionMeta, SessionMetaStore, SessionProvenance};
-#[cfg(not(test))]
-use houyicoder_memory::FileMetaStore;
-#[cfg(test)]
-use houyicoder_memory::InMemoryMetaStore;
-
-/// The default meta store. Disk in release (at the sid-keyed sessions root,
-/// same path the file backend uses), in-memory under test so unit tests do
-/// not write session.json into the real home.
-#[cfg(test)]
-pub fn default_meta_store() -> Arc<dyn SessionMetaStore> {
-    Arc::new(InMemoryMetaStore::new())
-}
-
-#[cfg(not(test))]
-pub fn default_meta_store() -> Arc<dyn SessionMetaStore> {
-    Arc::new(FileMetaStore::new(session_log_root()))
-}
 
 /// Write the initial session.json at session creation. name starts None
 /// (auto-derived from the first prompt at display time); /rename later sets

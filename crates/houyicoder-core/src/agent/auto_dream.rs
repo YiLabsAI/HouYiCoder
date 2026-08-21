@@ -465,7 +465,7 @@ pub struct DreamRunner {
     /// sessions' RewardObservation events for cross-session retry
     /// patterns. None in tests or when the session log root is not
     /// known (the dream falls back to the in-memory snapshot only).
-    session_log_root: Option<PathBuf>,
+    pub(crate) session_log_root: Option<PathBuf>,
 }
 
 impl DreamRunner {

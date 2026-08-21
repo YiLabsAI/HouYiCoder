@@ -399,6 +399,12 @@ impl Runner {
         self.store.clone()
     }
 
+    /// The dream's cross-session scan root, or None when in-memory.
+    pub fn dream_session_log_root(&self) -> Option<&std::path::Path> {
+        let dream = self.dream.as_ref();
+        dream.and_then(|d| d.session_log_root.as_deref())
+    }
+
     /// The active model id (the /model pane select). The runner reads this per
     /// request; set_model swaps it so the next completion serves the new id
     /// without rebuilding the provider (the id is per-request).

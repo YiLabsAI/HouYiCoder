@@ -73,6 +73,12 @@ pub(super) fn wire_background_memory(
     cwd: std::path::PathBuf,
     model: String,
 ) -> (Runner, Vec<houyicoder_config::ConfigWarning>) {
+    // The dream's cross-session scan root is derived from the runner's own
+    // store backend, so it can only point where this build actually persists:
+    // a disk-backed build exposes its own root, an in-memory build gets None
+    // and never reads the real home - the read side of the isolation bug the
+    // write side fixed.
+    let session_log_root = runner.store().session_log_root();
     let (toggles, settings_warnings) = houyicoder_config::load_toggles();
     let auto_memory = Arc::new(std::sync::atomic::AtomicBool::new(toggles.auto_memory));
     let auto_dream = Arc::new(std::sync::atomic::AtomicBool::new(toggles.auto_dream));
@@ -89,18 +95,20 @@ pub(super) fn wire_background_memory(
             memory,
             cwd,
             model,
-            super::session_log_root(),
+            session_log_root,
         ));
     (runner, settings_warnings)
 }
 
 /// Build the consolidation dream firing at query-loop end. Shares provider + memory; ephemeral store; max_turns 25.
+/// Some root = disk-backed build, the dream scans past sessions for retry
+/// patterns; None = in-memory build, the scan is skipped entirely.
 fn build_dream_runner(
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: std::path::PathBuf,
     model: String,
-    session_log_root: std::path::PathBuf,
+    session_log_root: Option<std::path::PathBuf>,
 ) -> Arc<DreamRunner> {
     let ephemeral: Arc<dyn SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -112,10 +120,11 @@ fn build_dream_runner(
         max_output_tokens,
         ..RunnerConfig::default()
     };
-    Arc::new(
-        DreamRunner::new(ephemeral, provider, memory, cwd, config)
-            .with_session_log_root(session_log_root),
-    )
+    let mut dream = DreamRunner::new(ephemeral, provider, memory, cwd, config);
+    if let Some(root) = session_log_root {
+        dream = dream.with_session_log_root(root);
+    }
+    Arc::new(dream)
 }
 
 /// Self-heal the memory index at session start. Best-effort: a failure logs
@@ -131,7 +140,6 @@ pub(super) fn heal_memory_index(provider: &houyicoder_memory::MarkdownMemoryProv
 #[cfg(test)]
 mod tests {
     use super::heal_memory_index;
-
     fn temp_root() -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);

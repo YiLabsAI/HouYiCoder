@@ -25,8 +25,6 @@ pub use resume::{
     ResumeError, build_runner_for_fork, build_runner_for_resume_export,
     build_runner_for_resume_sid, latest_session_sid, log_last_active_secs,
 };
-pub use session_meta::default_meta_store;
-
 use std::sync::Arc;
 
 use tokio::sync::Notify;
@@ -37,6 +35,7 @@ use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::SessionId;
+use houyicoder_context::SessionMetaStore;
 use houyicoder_context::backend::ContextBackend;
 use houyicoder_core::agent::auto_dream::{DEFAULT_DREAM_MAX_TURNS, DreamRunner};
 use houyicoder_core::agent::extractor::MemoryExtractor;
@@ -48,9 +47,7 @@ use houyicoder_core::agent::{
     MultiEditTool, ReadTool, Runner, TodoWriteTool, ToolRegistry, WebFetchTool, WriteTool,
     parse_event,
 };
-use houyicoder_memory::InMemoryBackend;
-#[cfg(not(test))]
-use houyicoder_memory::LocalFileBackend;
+use houyicoder_memory::{FileMetaStore, InMemoryBackend, InMemoryMetaStore, LocalFileBackend};
 use houyicoder_permission::{DefaultModeGate, GuardedTool, ModeGate, RuleStore};
 use houyicoder_provider::{FakeProvider, OpenAiCompatibleProvider};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
@@ -112,6 +109,49 @@ pub struct ResumedRunner {
     pub model: String,
 }
 
+/// Options for build_runner: None on a store field selects the in-memory
+/// default; persistence is opt-in, named at every production entry.
+#[non_exhaustive]
+#[derive(Default)]
+pub struct BuildRunnerOptions {
+    pub project: Option<String>,
+    pub rule_store: Option<Arc<dyn RuleStore>>,
+    pub backend: Option<Box<dyn ContextBackend>>,
+    pub meta_store: Option<Arc<dyn SessionMetaStore>>,
+}
+
+impl BuildRunnerOptions {
+    /// Production persistence opt-in: both stores on disk at the sid-keyed
+    /// sessions root (still redirectable via the sessions-dir env).
+    pub fn disk(project: Option<String>, rule_store: Option<Arc<dyn RuleStore>>) -> Self {
+        Self::disk_at(session_log_root(), project, rule_store)
+    }
+
+    /// The same preset at an explicit root, for a caller that owns one (a
+    /// test isolating its session dir) - the exact store wiring the binary
+    /// entries get, without rebuilding it by hand.
+    pub fn disk_at(
+        root: std::path::PathBuf,
+        project: Option<String>,
+        rule_store: Option<Arc<dyn RuleStore>>,
+    ) -> Self {
+        Self {
+            project,
+            rule_store,
+            backend: Some(Box::new(LocalFileBackend::new(root.clone()))),
+            meta_store: Some(Arc::new(FileMetaStore::new(root))),
+        }
+    }
+}
+
+/// A disk meta store at the sid-keyed sessions root, for production entries
+/// that read sidecars without assembling a runner (the session picker); the
+/// composition root constructs stores so the binary never names the storage
+/// crate directly.
+pub fn disk_meta_store() -> Arc<dyn SessionMetaStore> {
+    Arc::new(FileMetaStore::new(session_log_root()))
+}
+
 /// Build the Runner plus the handles the host needs to render host-side
 /// state without dispatching a tool call. Returns the runner, the fresh
 /// session id, and the shared permission gate (so the host can drive mode
@@ -120,46 +160,31 @@ pub struct ResumedRunner {
 /// resolution lives in the config layer; when no key is set a stub
 /// provider keeps the loop driving with a canned reply, never silently
 /// going offline.
-pub fn build_runner(
-    project: Option<String>,
-    rule_store: Option<Arc<dyn RuleStore>>,
-    backend: Option<Box<dyn ContextBackend>>,
-) -> AssembledRunner {
-    // .env is no longer auto-loaded — settings.json (user + project-local
-    // merge) is the config source. Env vars still work as a fallback for
-    // the key/base_url, but they must be set externally (export), not via a
-    // .env file the binary reads.
+pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
     let append_notify = Arc::new(Notify::new());
-    // The backend is the durable event log. None = the build's default: a
-    // disk-backed LocalFileBackend in release builds (every durable event
-    // lands on disk so a later --resume can pick the session back up), and
-    // an InMemoryBackend under cfg(test) so the unit + integration test
-    // suites never write to the real sessions dir under HOME. A caller that
-    // needs a specific backend (a resume path mounting an existing session
-    // log, or a test that deliberately wants disk) passes Some(...).
-    let backend = backend.unwrap_or_else(default_backend);
+    // A caller mounting a specific backend/meta store (a resume path, or a
+    // test that deliberately wants disk) passes it in.
+    let backend = options
+        .backend
+        .unwrap_or_else(|| Box::new(InMemoryBackend::new()));
     let store = Arc::new(SessionStore::new(backend).with_append_notify(append_notify.clone()));
     let session = SessionId::new();
     let model = houyicoder_config::resolve_model();
     // Write the initial session.json sidecar at creation so /status can
-    // show name/cwd/model/provenance + a later resume can restore them. The
-    // store is cfg-gated the same way as the backend (disk in release, an
-    // in-memory map under test) so unit tests never touch the real home.
-    let meta_store = session_meta::default_meta_store();
+    // show name/cwd/model/provenance + a later resume can restore them.
+    let meta_store = options
+        .meta_store
+        .unwrap_or_else(|| Arc::new(InMemoryMetaStore::new()));
+    let project = options.project;
     session_meta::write_initial_session_meta(&meta_store, session, &model, project.as_deref());
-    assemble(store, session, model, project, rule_store, append_notify)
-}
-
-/// The default backend chosen when the caller passes None. Disk in release
-/// builds, in-memory under test so tests stay isolated from the home dir.
-#[cfg(test)]
-fn default_backend() -> Box<dyn ContextBackend> {
-    Box::new(InMemoryBackend::new())
-}
-
-#[cfg(not(test))]
-fn default_backend() -> Box<dyn ContextBackend> {
-    Box::new(LocalFileBackend::new(session_log_root()))
+    assemble(
+        store,
+        session,
+        model,
+        project,
+        options.rule_store,
+        append_notify,
+    )
 }
 
 #[expect(clippy::too_many_lines, reason = "composition root")]

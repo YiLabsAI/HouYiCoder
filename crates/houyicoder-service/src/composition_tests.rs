@@ -146,7 +146,10 @@ fn test_build_runner_outside_grep() {
     std::fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("manifest");
     let outside = root.join("outside");
     std::fs::create_dir_all(&outside).expect("mkdir outside");
-    let bundle = super::build_runner(Some(repo.to_string_lossy().into_owned()), None, None);
+    let bundle = super::build_runner(BuildRunnerOptions {
+        project: Some(repo.to_string_lossy().into_owned()),
+        ..Default::default()
+    });
     let gate = bundle.gate;
     let input = serde_json::json!({"pattern":"x","path":outside.to_string_lossy()});
     // native_requires_approval=false + read-only so the ONLY Ask source is the
@@ -182,10 +185,31 @@ fn test_build_runner_wires_summarizer() {
     let root = std::env::temp_dir().join(format!("houyi-sum-{}-{}", std::process::id(), line!()));
     drop(std::fs::remove_dir_all(&root));
     std::fs::create_dir_all(&root).expect("mkdir root");
-    let bundle = super::build_runner(Some(root.to_string_lossy().into_owned()), None, None);
+    let bundle = super::build_runner(BuildRunnerOptions {
+        project: Some(root.to_string_lossy().into_owned()),
+        ..Default::default()
+    });
     assert!(
         bundle.runner.summarizer_is_llm(),
         "production runner must carry an LlmSummarizer, not the heuristic placeholder"
     );
     std::fs::remove_dir_all(&root).ok();
+}
+
+/// The production persistence constructors are pure construction - no
+/// directory creation, no I/O - until the first append/write, so calling
+/// them touches nothing on disk. Covers the opt-in surface the in-memory
+/// default path never reaches.
+#[test]
+fn test_disk_options_construct_clean() {
+    let opts = super::BuildRunnerOptions::disk(None, None);
+    assert!(opts.backend.is_some(), "disk() must wire a backend");
+    assert!(opts.meta_store.is_some(), "disk() must wire a meta store");
+    let opts = super::BuildRunnerOptions::disk_at(std::env::temp_dir(), None, None);
+    assert!(opts.backend.is_some(), "disk_at() must wire a backend");
+    assert!(
+        opts.meta_store.is_some(),
+        "disk_at() must wire a meta store"
+    );
+    let _store = super::disk_meta_store();
 }

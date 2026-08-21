@@ -27,7 +27,10 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 430
+STRUCT_FIELD_BASELINE = 429
+# Lower when a field becomes pub(crate)/pub(super): the counter regex only
+# matches private and pub fields, so pub(crate) fields drop from the count
+# (known gap). Re-raise when the regex is fixed to count them again.
 
 
 def evaluate(total, baseline=STRUCT_FIELD_BASELINE) -> int:

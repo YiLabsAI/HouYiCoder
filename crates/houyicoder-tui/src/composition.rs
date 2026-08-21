@@ -305,7 +305,9 @@ impl App {
 /// lives in the CLI bin at runtime.
 #[cfg(test)]
 pub fn build_app_for_test(project: Option<String>) -> App {
-    let bundle = houyicoder_service::composition::build_runner(project, None, None);
+    let mut options = houyicoder_service::composition::BuildRunnerOptions::default();
+    options.project = project;
+    let bundle = houyicoder_service::composition::build_runner(options);
     let wire_session = houyicoder_protocol::frontend::SessionId(bundle.session.to_string());
     let (tx, rx) = mpsc::channel::<crate::run_control::AgentMessage>();
     let (runner, client, startup_warnings) = pair_inproc_server(

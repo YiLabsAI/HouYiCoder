@@ -87,11 +87,9 @@ async fn run_pair() -> (QueryMetrics, bool, QueryMetrics) {
     let repo_name = format!("smoke-{}", std::process::id());
     let repo = root.join(&repo_name);
     write_fail_project(&repo);
-    let bundle = houyicoder_service::composition::build_runner(
-        Some(repo.to_string_lossy().into_owned()),
-        None,
-        None,
-    );
+    let mut options = houyicoder_service::composition::BuildRunnerOptions::default();
+    options.project = Some(repo.to_string_lossy().into_owned());
+    let bundle = houyicoder_service::composition::build_runner(options);
     let runner = bundle.runner;
     let session1 = bundle.session;
     let baseline_dream = dream_count(&runner);
