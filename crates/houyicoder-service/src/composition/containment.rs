@@ -66,6 +66,40 @@ pub(crate) fn rehydrate_directories(session: &dyn SandboxSession, store: &dyn Ru
     }
 }
 
+/// Allow-back the repo git common dir when the workspace is a linked
+/// worktree, so git can write there.
+///
+/// A linked worktree holds a .git FILE pointing at the main repo's shared
+/// .git dir, and that is where git actually writes: the index lives at
+/// <common>/worktrees/<name>/index, and every commit writes objects and refs
+/// under <common>. The fence's write allow-back covers the workspace, and for
+/// a linked worktree the common dir sits OUTSIDE it, so without this bridge
+/// every git write fails -- add, commit, and stash all abort with
+/// "Unable to create <common>/worktrees/<name>/index.lock: Operation not
+/// permitted". The enter-worktree path already allow-backs the common dir
+/// when it narrows the fence; a session that simply STARTS with its cwd
+/// inside an existing worktree never went through that path, so it was left
+/// unable to commit.
+///
+/// A main repo needs nothing: its common dir is <workspace>/.git, already
+/// inside the workspace allow-back, so the call is skipped. The write denies
+/// that matter survive either way -- hooks and config stay write-denied by
+/// the mandatory deny segment, which lands after every allow-back.
+pub(crate) fn attach_git_common_dir(session: &dyn SandboxSession, workspace: &Path) {
+    let Some(common) = super::worktree::git_common_dir(workspace) else {
+        return;
+    };
+    if common.starts_with(workspace) {
+        return;
+    }
+    if let Err(e) = session.add_working_dir(&common.to_string_lossy()) {
+        tracing::warn!(
+            "startup: could not allow-back the git common dir {}: {e}; git writes from this worktree will be refused by the fence",
+            common.display()
+        );
+    }
+}
+
 // macOS-only: every test here widens a live fence, which only Seatbelt
 // supports. Landlock is irreversible once applied and a Job Object carries no
 // path fence, so both correctly report add_working_dir as Unsupported.
@@ -156,6 +190,90 @@ mod tests {
         assert!(
             !dirs.iter().any(|d| d.contains("stale-deleted")),
             "the stale directory must not re-attach: {dirs:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Init a git repo with one commit, and link a worktree under it. Returns
+    /// None when git is unavailable or any step fails, so the caller skips
+    /// rather than failing on a missing tool.
+    #[expect(clippy::disallowed_methods, reason = "test fixture, not model-driven")]
+    fn git_repo_with_worktree(root: &Path) -> Option<(PathBuf, PathBuf)> {
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).ok()?;
+        let git = |args: &[&str], cwd: &Path| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+        };
+        git(&["init"], &repo)?;
+        git(&["config", "user.email", "t@t"], &repo)?;
+        git(&["config", "user.name", "t"], &repo)?;
+        std::fs::write(repo.join("f.txt"), b"x").ok()?;
+        git(&["add", "."], &repo)?;
+        git(&["commit", "-m", "init"], &repo)?;
+        let wt = root.join("wt");
+        git(&["worktree", "add", wt.to_str()?], &repo)?;
+        Some((repo, wt))
+    }
+
+    /// A session whose workspace IS a linked worktree must get the main repo
+    /// git dir into the fence. That dir holds the worktree's index, plus the
+    /// objects and refs a commit writes, and it sits outside the worktree, so
+    /// without the allow-back git cannot write at all -- add, commit and stash
+    /// all abort on index.lock. The enter-worktree path allow-backs it when it
+    /// narrows; a session that merely STARTS inside an existing worktree never
+    /// goes through that path.
+    #[test]
+    fn test_worktree_attaches_git_common() {
+        let root = temp_root("houyi-wt-gitcommon");
+        let Some((repo, wt)) = git_repo_with_worktree(&root) else {
+            std::fs::remove_dir_all(&root).ok();
+            return;
+        };
+        let wt_canon = std::fs::canonicalize(&wt).expect("canonicalize worktree");
+        let session: Arc<dyn SandboxSession> =
+            Arc::new(PlatformSession::new_in_cwd(&wt_canon).expect("sandbox"));
+        assert!(
+            session.working_dirs().is_empty(),
+            "fence starts with no extra dirs"
+        );
+
+        attach_git_common_dir(session.as_ref(), &wt_canon);
+
+        let main_git = std::fs::canonicalize(repo.join(".git")).expect("canonicalize main .git");
+        let dirs = session.working_dirs();
+        assert!(
+            dirs.iter().any(|d| Path::new(d.as_str()) == main_git),
+            "the main repo git dir must be in the fence so git can write from the worktree: {dirs:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A main repo needs no allow-back: its git dir is inside the workspace,
+    /// already covered. Adding it anyway would widen nothing but would show up
+    /// as a working dir in /permissions, telling the user the fence was
+    /// extended when it was not.
+    #[test]
+    fn test_main_repo_attaches_nothing() {
+        let root = temp_root("houyi-main-gitcommon");
+        let Some((repo, _wt)) = git_repo_with_worktree(&root) else {
+            std::fs::remove_dir_all(&root).ok();
+            return;
+        };
+        let repo_canon = std::fs::canonicalize(&repo).expect("canonicalize repo");
+        let session: Arc<dyn SandboxSession> =
+            Arc::new(PlatformSession::new_in_cwd(&repo_canon).expect("sandbox"));
+
+        attach_git_common_dir(session.as_ref(), &repo_canon);
+
+        assert!(
+            session.working_dirs().is_empty(),
+            "a main repo's git dir is already inside the workspace: {:?}",
+            session.working_dirs()
         );
         std::fs::remove_dir_all(&root).ok();
     }
