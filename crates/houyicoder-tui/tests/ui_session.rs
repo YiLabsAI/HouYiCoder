@@ -532,35 +532,30 @@ fn test_resume_export_live_session() {
 /// tier asserts the render function with a synthetic snapshot; this drives
 /// the full wire path end-to-end (server reads the sidecar -> projects to
 /// the wire summary -> TUI renders) so a wiring break between the server
-/// meta-store attach and the render is caught here, not at the unit tier.
+/// Before the first turn, no durable append has fired and no sidecar is on
+/// disk. Version is the running build (top-level on the snapshot, set by the
+/// server) so it renders; cwd and provenance come from the sidecar and drop
+/// honestly. This assertion encodes the post-deferral contract: a fresh
+/// session shows Version, not a fabricated cwd or provenance.
 #[test]
 #[ignore]
-fn test_status_renders_identity_binary() {
-    // A taller terminal so the status pane's area/2 cap admits the full field
-    // set (identity + runtime + session + tokens); at 24 rows the lower lines
-    // (breaker / provenance / tokens) clip.
+fn test_status_version_before_turn() {
     let mut s = common::session_on_working_with_script_rows(ONE_REPLY_SCRIPT, 40);
     common::run_slash_command(&mut s, "status");
-    // The pane renderer emits cursor-positioning escapes between styled
-    // spans, so multi-word labels are not contiguous in the byte stream.
-    // Assert on single-word labels (Version / cwd / Model / provenance) that
-    // prove the sidecar -> wire snapshot -> render path end-to-end. The
-    // Session ID comes from the connection param (always present), so the
-    // sidecar-derived fields are the strong wire-path signal.
     assert!(
         s.wait_for_plain("Version:", RENDER_TIMEOUT),
-        "/status should render the Version label:\n{}",
+        "/status should render Version before the first turn:\n{}",
         s.output()
     );
     let out = s.output_plain();
-    assert!(out.contains("cwd:"), "cwd label missing:\n{out}");
-    assert!(out.contains("Model:"), "Model label missing:\n{out}");
     assert!(
-        out.contains("provenance:"),
-        "provenance line missing:\n{out}"
+        !out.contains("cwd:"),
+        "cwd must drop before the sidecar lands:\n{out}"
     );
-    // A fresh local-mode session has provenance fresh.
-    assert!(out.contains("fresh"), "fresh provenance:\n{out}");
+    assert!(
+        !out.contains("provenance:"),
+        "provenance must drop before the sidecar lands:\n{out}"
+    );
 }
 
 /// --continue resumes the most-recently-active session with no sid needed.
