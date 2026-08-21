@@ -25,5 +25,6 @@ pub mod lifecycle;
 pub mod projection;
 pub mod sandbox_policy;
 pub mod server;
+pub mod session_prune;
 #[cfg(unix)]
 pub mod uds;
