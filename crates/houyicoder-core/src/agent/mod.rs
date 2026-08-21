@@ -53,6 +53,8 @@ mod verify;
 pub mod worktree_controller;
 pub mod worktree_session;
 
+pub mod multi_agent;
+
 pub use effort::{
     EffortResolver, apply_effort_settings, effort_default_for, resolve_applied_effort,
 };
