@@ -200,9 +200,128 @@ pub fn built_in_general_purpose() -> AgentDefinition {
     }
 }
 
+/// Read-only codebase search. Disallows every file-mutating tool and the
+/// sub-agent tool (no nesting); runs on the fast model tier because search
+/// is high-throughput, low-reasoning work.
+pub fn built_in_explore() -> AgentDefinition {
+    AgentDefinition {
+        subagent_type: "explore".to_string(),
+        when_to_use: "Fast read-only agent for exploring a codebase: finding files by pattern, searching code for keywords, answering how parts of the system work. Caller specifies thoroughness: quick / medium / very thorough.".to_string(),
+        tools: None,
+        disallowed_tools: vec!["write".into(), "edit".into(), "multiedit".into(), "agent".into()],
+        model: Some("flash".into()),
+        effort: None,
+        permission_mode: None,
+        max_turns: None,
+        skills: Vec::new(),
+        mcp_servers: Vec::new(),
+        hooks: Vec::new(),
+        initial_prompt: None,
+        memory: MemoryScope::Disabled,
+        isolation: IsolationMode::None,
+        color: None,
+        system_prompt: PromptSource::Owned(
+            "You are a read-only codebase search agent. Find files and code by pattern or keyword, read and analyze, report findings concisely. You cannot create, modify, or delete files. Be fast: prefer parallel tool calls, return findings as soon as you have them. Match search breadth to the thoroughness the caller named.".to_string()
+        ),
+    }
+}
+
+/// Read-only software architect. Explores the codebase, finds existing
+/// patterns, designs an implementation plan. Runs on the strongest model
+/// tier because architectural reasoning is the whole point.
+pub fn built_in_plan() -> AgentDefinition {
+    AgentDefinition {
+        subagent_type: "plan".to_string(),
+        when_to_use: "Read-only architect agent: explores the codebase and designs a step-by-step implementation plan for a task, identifying critical files and trade-offs. Use before writing code when the approach is not obvious.".to_string(),
+        tools: None,
+        disallowed_tools: vec!["write".into(), "edit".into(), "multiedit".into(), "agent".into()],
+        model: Some("max".into()),
+        effort: None,
+        permission_mode: None,
+        max_turns: None,
+        skills: Vec::new(),
+        mcp_servers: Vec::new(),
+        hooks: Vec::new(),
+        initial_prompt: None,
+        memory: MemoryScope::Disabled,
+        isolation: IsolationMode::None,
+        color: None,
+        system_prompt: PromptSource::Owned(
+            "You are a read-only software architect. Explore the codebase, find existing patterns and conventions, and design an implementation plan for the given requirements. You cannot modify files. End your response with a 'Critical Files for Implementation' section listing 3-5 files most relevant to executing the plan, each with a one-line reason.".to_string()
+        ),
+    }
+}
+
+/// Adversarial verification agent. Tries to break the implementation, not
+/// confirm it. Strongest model tier: finding real bugs is harder than
+/// writing the first 80%. Output ends with a machine-parsed VERDICT line.
+pub fn built_in_verify() -> AgentDefinition {
+    AgentDefinition {
+        subagent_type: "verify".to_string(),
+        when_to_use: "Adversarial verification agent that tries to break an implementation rather than confirm it. Runs real commands, checks outputs, probes edge cases. Returns a machine-parsed VERDICT. Use before claiming work done, especially for security- or correctness-critical changes.".to_string(),
+        tools: None,
+        disallowed_tools: vec!["write".into(), "edit".into(), "multiedit".into(), "agent".into()],
+        model: Some("max".into()),
+        effort: None,
+        permission_mode: None,
+        max_turns: None,
+        skills: Vec::new(),
+        mcp_servers: Vec::new(),
+        hooks: Vec::new(),
+        initial_prompt: None,
+        memory: MemoryScope::Disabled,
+        isolation: IsolationMode::None,
+        color: Some("red".into()),
+        system_prompt: PromptSource::Owned(
+            "You are an adversarial verification agent. Your job is to break the implementation, not confirm it. Two failure modes to avoid: (1) verification avoidance -- reading code, narrating what you would test, writing PASS without running; (2) being seduced by the first 80% -- a polished surface or passing suite hides the broken 20%. Run real commands, check outputs against expectations, probe edge cases the implementer did not. You may write ephemeral scripts to a temp directory but must not modify the project. End with a line: VERDICT: PASS or VERDICT: FAIL or VERDICT: PARTIAL.".to_string()
+        ),
+    }
+}
+
+/// Houyi guide agent. Helps the user understand and use the tool itself --
+/// configuration, hooks, skills, slash commands, settings, model selection.
+/// Fast model tier: doc lookup is high-frequency, low-reasoning.
+pub fn built_in_code_guide() -> AgentDefinition {
+    AgentDefinition {
+        subagent_type: "code-guide".to_string(),
+        when_to_use: "Guide agent for the tool itself: configuration, hooks, skills, slash commands, settings, model selection. Fetches the docs map for authoritative answers.".to_string(),
+        tools: Some(vec!["read".into(), "grep".into(), "glob".into(), "WebFetch".into(), "web_search".into()]),
+        disallowed_tools: Vec::new(),
+        model: Some("flash".into()),
+        effort: None,
+        permission_mode: None,
+        max_turns: None,
+        skills: Vec::new(),
+        mcp_servers: Vec::new(),
+        hooks: Vec::new(),
+        initial_prompt: None,
+        memory: MemoryScope::Disabled,
+        isolation: IsolationMode::None,
+        color: None,
+        system_prompt: PromptSource::Owned(
+            "You are the houyi guide agent. Help the user understand and use the tool: configuration, hooks, skills, slash commands, settings, model selection. Fetch the docs map for authoritative answers, keep answers actionable, cite the doc section.".to_string()
+        ),
+    }
+}
+
+/// All built-in agents in registration order. Order is stable so catalog
+/// injection (the directory the model sees) is byte-stable across sessions.
+pub fn built_in_all() -> Vec<AgentDefinition> {
+    vec![
+        built_in_general_purpose(),
+        built_in_explore(),
+        built_in_plan(),
+        built_in_verify(),
+        built_in_code_guide(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AgentError, AgentRegistry, BuiltInRegistry, ResolveCtx, built_in_general_purpose};
+    use super::{
+        AgentError, AgentRegistry, BuiltInRegistry, ResolveCtx, built_in_all,
+        built_in_general_purpose,
+    };
 
     /// A registered built-in must resolve to its definition, unchanged.
     #[test]
@@ -266,5 +385,45 @@ mod tests {
         let all = reg.list();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].subagent_type, "general-purpose");
+    }
+
+    /// explore is read-only: the file-mutating tools and the sub-agent tool
+    /// are denied, and it runs on the fast model tier (search is throughput,
+    /// not deep reasoning).
+    #[test]
+    fn test_explore_disallows_write() {
+        let def = super::built_in_explore();
+        assert!(def.disallowed_tools.contains(&"write".to_string()));
+        assert!(def.disallowed_tools.contains(&"edit".to_string()));
+        assert!(def.disallowed_tools.contains(&"agent".to_string()));
+        assert_eq!(def.model.as_deref(), Some("flash"));
+    }
+
+    #[test]
+    fn test_plan_model_is_max() {
+        assert_eq!(super::built_in_plan().model.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn test_verify_model_is_max() {
+        assert_eq!(super::built_in_verify().model.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn test_guide_uses_flash() {
+        assert_eq!(super::built_in_code_guide().model.as_deref(), Some("flash"));
+    }
+
+    /// built_in_all returns the five built-ins in a stable order so catalog
+    /// injection is byte-stable across sessions.
+    #[test]
+    fn test_builtin_count_five() {
+        let all = built_in_all();
+        assert_eq!(all.len(), 5);
+        let types: Vec<&str> = all.iter().map(|d| d.subagent_type.as_str()).collect();
+        assert_eq!(
+            types,
+            ["general-purpose", "explore", "plan", "verify", "code-guide"]
+        );
     }
 }
