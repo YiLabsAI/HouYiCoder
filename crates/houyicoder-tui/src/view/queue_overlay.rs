@@ -11,20 +11,7 @@ use ratatui::{
 };
 
 use crate::state::App;
-
-/// Truncate to a char budget with ellipsis when cut.
-fn truncate_chars(s: &str, max: usize) -> String {
-    if max == 0 {
-        return String::new();
-    }
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max {
-        return s.to_string();
-    }
-    let mut t: String = chars[..max - 1].iter().collect();
-    t.push('\u{2026}');
-    t
-}
+use crate::view::line_wrap::truncate_width;
 
 /// Full queue overlay (Ctrl+G). Covers the transcript: every pending item as
 /// a numbered row with a cursor, plus the action footer. e recalls, d deletes,
@@ -53,7 +40,7 @@ pub fn draw_queue_overlay(f: &mut Frame, area: Rect, app: &App) {
         let marker = if is_focus { "\u{276f} " } else { "  " };
         let prefix = format!("{marker}{} ", i + 1);
         let avail = (area.width as usize).saturating_sub(prefix.chars().count());
-        let body = truncate_chars(item.display(), avail);
+        let body = truncate_width(item.display(), avail);
         lines.push(Line::from(vec![
             Span::styled(prefix, style),
             Span::styled(body, style),

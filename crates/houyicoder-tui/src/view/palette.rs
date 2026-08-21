@@ -14,6 +14,7 @@ use ratatui::{
 };
 
 use crate::state::App;
+use crate::view::line_wrap::truncate_width;
 
 /// Maximum rows of commands the popover shows before scrolling. Keeps the
 /// popover small so it never covers the whole working surface.
@@ -121,30 +122,10 @@ fn format_one(cmd: SlashCommand, help_max: usize) -> Line<'static> {
         ),
         Span::raw("  "),
         Span::styled(
-            truncate_help(cmd.help().to_string(), help_max),
+            truncate_width(cmd.help(), help_max),
             Style::new().fg(Color::DarkGray),
         ),
     ])
-}
-
-/// Truncate a help string to fit within the max column count, appending an
-/// ellipsis when it does not fit. A max of 0 yields an empty string. The
-/// returned string never exceeds max chars (the ellipsis counts toward the
-/// budget), so the help never overflows into the popover border.
-fn truncate_help(help: String, max: usize) -> String {
-    if max == 0 {
-        return String::new();
-    }
-    if help.chars().count() <= max {
-        return help;
-    }
-    // Reserve 3 cols for the ellipsis; if max is too small to keep any text
-    // plus the ellipsis, just take the first max chars (no ellipsis).
-    if max <= 3 {
-        return help.chars().take(max).collect();
-    }
-    let kept: String = help.chars().take(max - 3).collect();
-    format!("{kept}...")
 }
 
 /// Pad a command name to a fixed column so help text aligns across rows.
@@ -212,24 +193,23 @@ mod tests {
 
     #[test]
     fn test_truncate_help_keeps_short() {
-        assert_eq!(truncate_help("short".to_string(), 10), "short");
+        assert_eq!(truncate_width("short", 10), "short");
     }
 
     #[test]
     fn test_truncate_help_adds_ellipsis() {
-        let out = truncate_help("a very long help string".to_string(), 10);
-        assert!(out.ends_with("..."));
+        let out = truncate_width("a very long help string", 10);
+        assert!(out.ends_with('\u{2026}'));
         assert!(
-            out.chars().count() <= 10,
-            "got {} chars: {out}",
-            out.chars().count()
+            unicode_width::UnicodeWidthStr::width(out.as_str()) <= 10,
+            "width overflow: {out}"
         );
     }
 
     #[test]
     fn test_truncate_help_never_exceeds() {
         // The bug we are guarding against: help must not overflow the popover
-        // border. Any help, any max, the result must be <= max chars.
+        // border. Any help, any max, the result width must be <= max.
         for (help, max) in [
             ("short", 10),
             ("a very long help string", 10),
@@ -238,18 +218,18 @@ mod tests {
             ("a very long help string", 2),
             ("a very long help string", 0),
         ] {
-            let out = truncate_help(help.to_string(), max);
+            let out = truncate_width(help, max);
             assert!(
-                out.chars().count() <= max,
-                "max={max} got {}: [{out}]",
-                out.chars().count()
+                unicode_width::UnicodeWidthStr::width(out.as_str()) <= max,
+                "max={max} width={}: [{out}]",
+                unicode_width::UnicodeWidthStr::width(out.as_str())
             );
         }
     }
 
     #[test]
     fn test_truncate_zero_max_empty() {
-        assert_eq!(truncate_help("anything".to_string(), 0), "");
+        assert_eq!(truncate_width("anything", 0), "");
     }
 
     /// A query that is a command name + space resolves to that command's arg

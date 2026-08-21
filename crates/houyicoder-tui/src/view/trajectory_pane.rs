@@ -18,6 +18,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::view::line_wrap::truncate_width;
+
 // Data types
 
 #[derive(Clone)]
@@ -240,7 +242,10 @@ fn draw_turn_list(
                 body.push(line(vec![
                     sp(prefix, Color::Cyan),
                     sp(format!("T{} ", t.n), Color::Cyan),
-                    sp(format!("{:32} ", trunc(&t.user_input, 32)), Color::White),
+                    sp(
+                        format!("{:32} ", truncate_width(&t.user_input, 32)),
+                        Color::White,
+                    ),
                     sp(
                         format!("{}↓ {}↑", fmt_k_opt(t.tokens_in), fmt_k_opt(t.tokens_out),),
                         Color::Gray,
@@ -298,7 +303,7 @@ fn draw_turn_list(
                     sp(prefix, Color::Cyan),
                     sp("[bg] ", Color::DarkGray),
                     sp(format!("{:8} ", bg.kind), Color::DarkGray),
-                    sp(trunc(&bg.summary, 50), Color::DarkGray),
+                    sp(truncate_width(&bg.summary, 50), Color::DarkGray),
                     sp(
                         format!("  {:.1}s", bg.duration_ms as f64 / 1000.0),
                         Color::DarkGray,
@@ -346,7 +351,7 @@ fn draw_turn_detail(
             let clamped = cursor.min(turn.events.len().saturating_sub(1));
             header.push(line(vec![
                 sp(
-                    format!(" T{}  \"{}\"", turn.n, trunc(&turn.user_input, 30)),
+                    format!(" T{}  \"{}\"", turn.n, truncate_width(&turn.user_input, 30)),
                     Color::Cyan,
                 ),
                 sp(
@@ -383,7 +388,7 @@ fn draw_turn_detail(
                         Color::Gray,
                     ),
                     sp(" ", Color::DarkGray),
-                    sp(trunc(&ev.summary, summary_w), Color::White),
+                    sp(truncate_width(&ev.summary, summary_w), Color::White),
                     sp(format!(" {}", mark), bc),
                 ]));
             }
@@ -402,7 +407,7 @@ fn draw_turn_detail(
             app.trajectory_at_bg.set(true);
             header.push(line(vec![
                 sp(format!(" [bg] {} ", bg.kind), Color::Cyan),
-                sp(trunc(&bg.summary, 50), Color::White),
+                sp(truncate_width(&bg.summary, 50), Color::White),
                 sp(
                     format!("  {:.1}s", bg.duration_ms as f64 / 1000.0),
                     Color::Gray,
@@ -457,7 +462,7 @@ fn draw_event_detail(
     let mc = if ev.success { Color::Green } else { Color::Red };
     header.push(line(vec![
         sp(format!(" {} ", ev.kind), Color::Cyan),
-        sp(trunc(&ev.summary, 48), Color::White),
+        sp(truncate_width(&ev.summary, 48), Color::White),
         sp(
             format!("  {:.1}s ", ev.duration_ms as f64 / 1000.0),
             Color::Gray,
@@ -532,13 +537,6 @@ fn blank() -> Line<'static> {
 }
 fn sp(text: impl Into<String>, color: Color) -> Span<'static> {
     Span::styled(text.into(), Style::default().fg(color))
-}
-fn trunc(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.into()
-    } else {
-        format!("{}...", &s[..max.saturating_sub(3)])
-    }
 }
 fn fmt_k(n: usize) -> String {
     if n >= 1000 {

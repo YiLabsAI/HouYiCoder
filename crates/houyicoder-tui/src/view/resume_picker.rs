@@ -16,6 +16,7 @@ use ratatui::{
 };
 
 use crate::state::App;
+use crate::view::line_wrap::truncate_width;
 
 /// Maximum rows the list shows before scrolling. Keeps the pane small so it
 /// never covers the whole working surface (the design ~10 visible).
@@ -91,8 +92,8 @@ fn format_row(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> L
 fn format_line(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> Line<'static> {
     let time = crate::resume_picker::relative_time(row.last_active, now);
     let title_max = title_max(width);
-    let title = truncate(&row.title, title_max);
-    let cwd = truncate(&row.cwd_basename, 24);
+    let title = truncate_width(&row.title, title_max);
+    let cwd = truncate_width(&row.cwd_basename, 24);
     Line::from(vec![
         Span::styled(format!("{time:>4} "), Style::new().fg(Color::DarkGray)),
         Span::styled(title, Style::new().fg(Color::White)),
@@ -104,20 +105,6 @@ fn format_line(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> 
 fn title_max(width: u16) -> usize {
     // time(5) + cwd(24) + separators(4) + highlight symbol(2)
     (width as usize).saturating_sub(5 + 24 + 4 + 2).max(8)
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if max == 0 {
-        return String::new();
-    }
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    if max <= 3 {
-        return s.chars().take(max).collect();
-    }
-    let kept: String = s.chars().take(max - 3).collect();
-    format!("{kept}...")
 }
 
 #[cfg(test)]
@@ -150,8 +137,13 @@ mod tests {
     #[test]
     fn test_truncate_appends_ellipsis() {
         let s = "abcdefghij";
-        assert_eq!(truncate(s, 5), "ab...");
-        assert_eq!(truncate(s, 10), "abcdefghij");
-        assert_eq!(truncate(s, 0), "");
+        assert_eq!(truncate_width(s, 10), "abcdefghij");
+        assert_eq!(truncate_width(s, 0), "");
+        let out = truncate_width(s, 5);
+        assert!(out.ends_with('\u{2026}'));
+        assert!(
+            unicode_width::UnicodeWidthStr::width(out.as_str()) <= 5,
+            "width overflow: {out}"
+        );
     }
 }

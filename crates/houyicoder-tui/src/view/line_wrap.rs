@@ -15,7 +15,46 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+/// Truncate a string so its display width is at most max_width columns,
+/// appending an ellipsis when truncation occurs. Width-aware: a CJK
+/// ideograph (width 2) is counted correctly, and the cut point never
+/// lands inside a multi-byte character. max_width 0 returns empty.
+///
+/// This is the single shared truncation helper for the view layer. All
+/// one-line previews (trajectory titles, palette help, queue items, resume
+/// picker rows) route through here so no code path can panic on a
+/// multi-byte boundary.
+pub fn truncate_width(s: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if s.is_empty() {
+        return String::new();
+    }
+    let total = UnicodeWidthStr::width(s);
+    if total <= max_width {
+        return s.to_string();
+    }
+    // max_width 1: only the ellipsis fits.
+    if max_width == 1 {
+        return "\u{2026}".to_string();
+    }
+    let target = max_width - 1; // reserve 1 column for the ellipsis
+    let mut acc = 0usize;
+    let mut out = String::new();
+    for ch in s.chars() {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if acc + cw > target {
+            break;
+        }
+        acc += cw;
+        out.push(ch);
+    }
+    out.push('\u{2026}');
+    out
+}
 
 /// Split a single logical line into display rows each no wider than the avail
 /// display columns. Returns at least one row (the input unchanged when it
@@ -314,6 +353,75 @@ fn rebuild_spans(row: Vec<(String, Style)>) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_truncate_width_keeps_short() {
+        assert_eq!(truncate_width("short", 10), "short");
+    }
+
+    #[test]
+    fn test_truncate_width_exact_fit() {
+        assert_eq!(truncate_width("abcde", 5), "abcde");
+    }
+
+    #[test]
+    fn test_truncate_width_adds_ellipsis() {
+        let out = truncate_width("abcdefghij", 5);
+        assert!(out.ends_with('\u{2026}'));
+        assert!(
+            unicode_width::UnicodeWidthStr::width(out.as_str()) <= 5,
+            "width overflow: {out}"
+        );
+    }
+
+    #[test]
+    fn test_truncate_width_zero_empty() {
+        assert_eq!(truncate_width("anything", 0), "");
+    }
+
+    #[test]
+    fn test_truncate_one_col_ellipsis() {
+        assert_eq!(truncate_width("abc", 1), "\u{2026}");
+    }
+
+    #[test]
+    fn test_truncate_cjk_no_panic() {
+        // The crash that motivated this helper: a byte-slice truncation
+        // landed inside a 3-byte CJK codepoint and panicked. A width-aware
+        // helper never cuts mid-codepoint.
+        let title = "你在 dev 上改动吧";
+        let out = truncate_width(title, 10);
+        assert!(unicode_width::UnicodeWidthStr::width(out.as_str()) <= 10);
+        // Must not panic — that IS the test.
+    }
+
+    #[test]
+    fn test_truncate_cjk_counted() {
+        // Each CJK ideograph is display width 2; at max 5 we keep 2
+        // ideographs (width 4) + ellipsis (width 1) = 5.
+        let out = truncate_width("\u{4e2d}\u{6587}\u{6d4b}\u{8bd5}", 5);
+        assert_eq!(out, "\u{4e2d}\u{6587}\u{2026}");
+    }
+
+    #[test]
+    fn test_truncate_width_never_exceeds() {
+        for (s, max) in [
+            ("short", 10),
+            ("a very long help string", 10),
+            ("a very long help string", 38),
+            ("a very long help string", 3),
+            ("a very long help string", 2),
+            ("a very long help string", 0),
+            ("\u{4e2d}\u{6587}\u{6d4b}\u{8bd5}\u{4e2d}\u{6587}", 7),
+        ] {
+            let out = truncate_width(s, max);
+            assert!(
+                unicode_width::UnicodeWidthStr::width(out.as_str()) <= max,
+                "max={max} width={}: [{out}]",
+                unicode_width::UnicodeWidthStr::width(out.as_str())
+            );
+        }
+    }
 
     #[test]
     fn test_fits_returns_one_row() {

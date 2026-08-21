@@ -154,7 +154,7 @@ mod tests {
             .copied()
             .expect("/clear row present");
         assert!(
-            truncated_row.contains("..."),
+            truncated_row.contains('\u{2026}'),
             "long /clear help should be truncated with ellipsis: [{truncated_row}]"
         );
         assert!(
