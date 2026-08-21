@@ -11,6 +11,7 @@ use houyicoder_protocol::frontend::status::StatusSnapshot;
 use crate::composition;
 use crate::pending_queue::{PendingItem, is_state_changing};
 use crate::state::{App, ArtifactSession, Pane, Screen, Stage, TranscriptLine, pane_for_stage};
+use crate::view::model_pane::row_for_model_id;
 
 /// /memory sub-command + pane-action methods (toggle / forget / cursor),
 /// split out so this file stays under the file-size gate.
@@ -69,14 +70,8 @@ impl App {
                 // for the ModelInfoResult reply. If the catalog is empty
                 // (first open), the reply will position it; if stale, the
                 // reply corrects it.
-                if let Some(ref active) = self.model_catalog.active_id
-                    && let Some(idx) = self
-                        .model_catalog
-                        .catalog
-                        .iter()
-                        .position(|e| e.id == *active)
-                {
-                    self.model_sel = idx;
+                if let Some(ref active) = self.model_catalog.active_id {
+                    self.model_sel = row_for_model_id(self, Some(active));
                 }
                 if let Some(req_id) = self.mint_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::ModelInfoQuery { req_id });

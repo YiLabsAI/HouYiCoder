@@ -11,6 +11,7 @@ use crate::agent_message::AgentMessage;
 use crate::pending_queue::PendingItem;
 use crate::records::TranscriptLine;
 use crate::state::{App, Pane};
+use crate::view::model_pane::row_for_model_id;
 
 impl App {
     /// Apply one inbound agent message: stream a delta, raise a permission ask,
@@ -238,19 +239,13 @@ impl App {
                 self.model_catalog = catalog;
                 // Jump the cursor to the active model's row so opening the
                 // pane after a switch does not flash from the old position.
-                let max_sel = self.model_catalog.catalog.len().saturating_sub(1);
+                // row_for_model_id owns the +1 for the Default sentinel row;
+                // max_sel is catalog.len() (Default + catalog rows - 1).
+                let max_sel = self.model_catalog.catalog.len();
                 if let Some(ref active) = self.model_catalog.active_id {
-                    if let Some(idx) = self
-                        .model_catalog
-                        .catalog
-                        .iter()
-                        .position(|e| e.id == *active)
-                    {
-                        self.model_sel = idx;
-                    } else if self.model_sel > max_sel {
-                        self.model_sel = 0;
-                    }
-                } else if self.model_sel > max_sel {
+                    self.model_sel = row_for_model_id(self, Some(active));
+                }
+                if self.model_sel > max_sel {
                     self.model_sel = 0;
                 }
             }

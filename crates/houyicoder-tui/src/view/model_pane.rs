@@ -37,6 +37,25 @@ pub fn model_id_at(app: &App, idx: usize) -> Option<String> {
     }
 }
 
+/// The row index for a given model id, or 0 (Default) when the id is None
+/// or not found in the catalog. The inverse of model_id_at: row 0 is the
+/// Default sentinel, row i+1 is catalog[i]. Callers that position the
+/// cursor from a catalog index must add 1 to account for the Default row
+/// — this helper is the single point that owns that +1 so the two spaces
+/// (row index vs catalog index) never get conflated.
+pub fn row_for_model_id(app: &App, id: Option<&str>) -> usize {
+    match id {
+        None => 0,
+        Some(id) => app
+            .model_catalog
+            .catalog
+            .iter()
+            .position(|e| e.id == id)
+            .map(|idx| idx + 1)
+            .unwrap_or(0),
+    }
+}
+
 /// Render the /model content into the Pane inner rect. Header + list + footer.
 pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     let chunks = Layout::default()
@@ -264,5 +283,82 @@ mod tests {
         assert!(!supports_effort("deepseek-chat"));
         assert!(!supports_effort("glm-5.2"));
         assert!(!supports_effort(""));
+    }
+
+    fn app_with_catalog(ids: &[&str], active: Option<&str>) -> App {
+        let mut app = crate::composition::app();
+        app.model_catalog.catalog = ids
+            .iter()
+            .map(|id| ModelCatalogEntry {
+                id: (*id).into(),
+                display_name: Some((*id).into()),
+                description: None,
+                effort: None,
+            })
+            .collect();
+        app.model_catalog.active_id = active.map(|s| s.to_string());
+        app
+    }
+
+    /// row_for_model_id is the inverse of model_id_at: row 0 is Default,
+    /// row i+1 is catalog[i]. None or not-found maps to 0 (Default).
+    #[test]
+    fn test_row_for_model_inverse() {
+        let app = app_with_catalog(&["fable", "max", "mini"], Some("max"));
+        assert_eq!(row_for_model_id(&app, None), 0, "None -> Default row 0");
+        assert_eq!(
+            row_for_model_id(&app, Some("fable")),
+            1,
+            "catalog[0] -> row 1"
+        );
+        assert_eq!(
+            row_for_model_id(&app, Some("max")),
+            2,
+            "catalog[1] -> row 2"
+        );
+        assert_eq!(
+            row_for_model_id(&app, Some("mini")),
+            3,
+            "catalog[2] -> row 3"
+        );
+        assert_eq!(
+            row_for_model_id(&app, Some("nonexistent")),
+            0,
+            "not found -> Default row 0"
+        );
+        // Round-trip: model_id_at(row_for_model_id(id)) == id
+        for id in &["fable", "max", "mini"] {
+            let row = row_for_model_id(&app, Some(id));
+            let back = model_id_at(&app, row);
+            assert_eq!(back.as_deref(), Some(*id), "round-trip {id}");
+        }
+        // Default round-trips to None
+        let row = row_for_model_id(&app, None);
+        assert_eq!(model_id_at(&app, row), None, "Default round-trips to None");
+    }
+
+    /// The cursor lands on the active model's row, not one row above it.
+    /// This is the bug: catalog index was used as the row index, missing
+    /// the +1 for the Default sentinel. With the active model at
+    /// catalog[1], the cursor must be on row 2 (the model's row), not
+    /// row 1 (the previous model's row).
+    #[test]
+    fn test_cursor_on_active_row() {
+        let mut app = app_with_catalog(&["fable", "max", "mini"], Some("max"));
+        // Simulate the command.rs positioning path
+        if let Some(ref active) = app.model_catalog.active_id {
+            app.model_sel = row_for_model_id(&app, Some(active));
+        }
+        assert_eq!(
+            app.model_sel, 2,
+            "active model at catalog[1] -> row 2, not row 1"
+        );
+        // The id at the cursor row must be the active model's id
+        let id_at_cursor = model_id_at(&app, app.model_sel);
+        assert_eq!(
+            id_at_cursor.as_deref(),
+            Some("max"),
+            "cursor row resolves to the active model"
+        );
     }
 }

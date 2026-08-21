@@ -385,8 +385,8 @@ fn test_jumps_cursor_to_active() {
         },
     });
     assert_eq!(
-        app.model_sel, 2,
-        "cursor jumped to the active model's row, not left at 0"
+        app.model_sel, 3,
+        "cursor jumped to the active model's row (row 3 = Default + catalog[2]), not left at 0"
     );
 }
 
