@@ -233,18 +233,20 @@ fn test_debug_palette_visible_runs() {
     );
 }
 
-/// The resume picker disambiguates empty sessions: several sessions with no
-/// name + no prompt render distinguishable titles (a short sid suffix), not
-/// all "(session)". The user journey: /resume in a dir with two empty
-/// sessions → two distinct rows.
+/// The resume picker disambiguates unnamed sessions: several sessions with
+/// no sidecar name + an empty first prompt render distinguishable titles
+/// (a short sid suffix), not a single undifferentiated "(session)". The
+/// seeds carry a log (an empty UserInput) so each row is resumable -- the
+/// picker must not list sessions resume_sid would refuse. The user journey:
+/// /resume in a dir with two such sessions → two distinct rows.
 #[test]
 #[ignore]
 fn test_resume_picker_disambiguates_empty() {
     let sessions_dir = fresh_temp_dir("sessions-picker-disambig");
     let sid_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     let sid_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-    common::seed_meta_only(&sessions_dir, sid_a);
-    common::seed_meta_only(&sessions_dir, sid_b);
+    common::seed_session_on_disk(&sessions_dir, sid_a, "test", "");
+    common::seed_session_on_disk(&sessions_dir, sid_b, "test", "");
     let mut s = PtySession::launch_with_sessions_dir(None, None, None, None, &[], sessions_dir);
     assert!(
         s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),

@@ -61,29 +61,6 @@ pub fn seed_session_with_cwd(
     event.id
 }
 
-/// Seed a session sidecar (session.json) with NO log and NO name/prompt, so the
-/// /resume picker sees an "empty" session whose title falls back to the
-/// disambiguating placeholder. Used by the picker-disambiguation PTY test to
-/// create several tellable-apart empty sessions.
-pub fn seed_meta_only(root: &std::path::Path, sid_str: &str) {
-    let dir = root.join(sid_str);
-    std::fs::create_dir_all(&dir).expect("mkdir session dir");
-    let meta = serde_json::json!({
-        "name": null,
-        "name_source": "auto",
-        "cwd": houyicoder_service::composition::workspace_cwd(None),
-        "model": "meta-only",
-        "provenance": {"kind": "fresh"},
-        "version": "test",
-        "created_at": 1000,
-    });
-    std::fs::write(
-        dir.join("session.json"),
-        serde_json::to_string_pretty(&meta).expect("serialize meta"),
-    )
-    .expect("write sidecar");
-}
-
 /// Seed a session on disk WITH a checkpoint manifest — a post-compact state —
 /// so a launched --resume <sid> followed by /context shows the folded
 /// summary + the Compact buffer category. Writes the log (one UserInput

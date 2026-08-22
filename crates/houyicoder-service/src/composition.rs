@@ -152,6 +152,13 @@ pub fn disk_meta_store() -> Arc<dyn SessionMetaStore> {
     Arc::new(FileMetaStore::new(session_log_root()))
 }
 
+/// A disk meta store at an explicit sessions root. The bridge uses this to
+/// derive its meta store from the same root it discovers sessions on, so
+/// the two never disagree about which sessions exist.
+pub fn disk_meta_store_at(root: std::path::PathBuf) -> Arc<dyn SessionMetaStore> {
+    Arc::new(FileMetaStore::new(root))
+}
+
 /// Build the Runner plus the handles the host needs to render host-side
 /// state without dispatching a tool call. Returns the runner, the fresh
 /// session id, and the shared permission gate (so the host can drive mode

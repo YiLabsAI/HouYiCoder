@@ -140,7 +140,7 @@ fn run_cleanup(apply: bool) -> Result<(), Box<dyn std::error::Error>> {
         .join("debug.log");
     // No current session for a standalone cleanup invocation — the
     // protected set is just the lock-held sessions from the probe.
-    let (policy, targets) =
+    let (policy, targets, _threshold) =
         housekeeping::build_prune_context(&sessions_root, &shell_snapshots, Some(&debug_log), None);
     let plan = houyicoder_service::session_prune::plan_all(&targets, &policy);
     if plan.entries.is_empty() {
@@ -183,8 +183,14 @@ fn run_cleanup(apply: bool) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
-    let report = houyicoder_service::session_prune::apply_prune(&plan);
-    println!("Removed {}, errors {}.", report.removed, report.errors);
+    // Each session is deleted while this process holds that session's lock,
+    // so a session resumed between the plan above and the delete below is
+    // held out instead of deleted underneath the resume.
+    let (report, skipped) = housekeeping::apply_prune_locked(&plan);
+    println!(
+        "Removed {}, truncated {} logs, {} skipped (live), errors {}.",
+        report.removed, report.truncated, skipped, report.errors
+    );
     Ok(())
 }
 
@@ -673,7 +679,6 @@ pub(crate) fn assemble_bundle(
         snapshot,
         session_lister: Some(std::sync::Arc::new(
             session_lister_bridge::SessionListerBridge::new(
-                meta_store,
                 session_log,
                 houyicoder_service::composition::session_log_root(),
             ),

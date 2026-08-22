@@ -107,12 +107,16 @@ impl PrunePlan {
     }
 }
 
-/// How many entries were removed, and how many dir removes errored. Errors
-/// are best-effort: a prune that fails on one entry still removes the rest,
-/// and the count surfaces via tracing so a silent half-run is not hidden.
+/// How many entries were removed, how many debug logs were truncated to
+/// their tail, and how many entries failed. A truncation is not a
+/// removal -- the file stays (rotation, not deletion) -- so it counts
+/// separately, else "removed N" overstates what vanished. A failure
+/// counts once whatever the action was: one bad entry does not stop the
+/// rest, and the count surfaces so a silent half-run is not hidden.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PruneReport {
     pub removed: usize,
+    pub truncated: usize,
     pub errors: usize,
 }
 
@@ -156,7 +160,7 @@ pub fn plan_prune(root: &Path, policy: &PrunePolicy) -> PrunePlan {
         } else {
             policy.empty_ttl_secs
         };
-        if policy.ttl_secs > 0 && now.saturating_sub(last_active) > ttl {
+        if ttl > 0 && now.saturating_sub(last_active) > ttl {
             entries.push(PruneEntry {
                 path,
                 kind: PruneKind::Session,
@@ -212,7 +216,10 @@ pub fn apply_prune(plan: &PrunePlan) -> PruneReport {
             PruneAction::TruncateFile { keep_bytes } => truncate_tail(&entry.path, keep_bytes),
         };
         if ok {
-            report.removed += 1;
+            match entry.action {
+                PruneAction::TruncateFile { .. } => report.truncated += 1,
+                _ => report.removed += 1,
+            }
         } else {
             report.errors += 1;
         }
@@ -222,6 +229,11 @@ pub fn apply_prune(plan: &PrunePlan) -> PruneReport {
 
 /// Keep the last keep_bytes of a file, dropping the head. A debug log grows
 /// at the tail (recent events), so the head is the stale half to drop.
+/// Crash-safe: the tail is written to a sibling tmp file, fsynced, then
+/// renamed over the original. An in-place rewrite (seek to 0, truncate,
+/// write) leaves a half-written hybrid on a crash mid-write; the rename is
+/// atomic, so a crash leaves either the old full file or the new tail,
+/// never a corrupt mix.
 fn truncate_tail(path: &Path, keep_bytes: u64) -> bool {
     use std::io::{Read, Seek, SeekFrom, Write};
     let Ok(metadata) = std::fs::metadata(path) else {
@@ -230,34 +242,62 @@ fn truncate_tail(path: &Path, keep_bytes: u64) -> bool {
     if metadata.len() <= keep_bytes {
         return true; // Already under the cap; nothing to do.
     }
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-    else {
+    let start = metadata.len() - keep_bytes;
+    let Ok(mut src) = std::fs::File::open(path) else {
         return false;
     };
-    let start = metadata.len() - keep_bytes;
-    if f.seek(SeekFrom::Start(start)).is_err() {
+    if src.seek(SeekFrom::Start(start)).is_err() {
         return false;
     }
     let mut tail = Vec::new();
-    if f.read_to_end(&mut tail).is_err() {
+    if src.read_to_end(&mut tail).is_err() {
         return false;
     }
-    // Drop the leading partial line so the log stays line-aligned (a
-    // half-line at the head reads as corrupt otherwise). The tail begins at
-    // a byte boundary; walk forward to the next newline.
+    // Drop the leading partial line so the log stays line-aligned (a half-line
+    // at the head reads as corrupt otherwise). The tail begins at a byte
+    // boundary; walk forward to the next newline.
     if let Some(nl) = tail.iter().position(|&b| b == b'\n') {
-        tail = tail[nl + 1..].to_vec();
+        tail.drain(..=nl);
     }
-    if f.seek(SeekFrom::Start(0)).is_err() {
-        return false;
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("log");
+    // Per-writer tmp name (pid + process-local counter): two processes
+    // rotating the same debug log must not share a tmp, or one rename
+    // ships the other's half-written bytes. Nothing in this function's
+    // signature stops two threads entering it for the same path, so the
+    // counter keeps the name unique without the caller having to prove
+    // they cannot.
+    // A crash between create and rename leaves the tmp behind; nothing
+    // reaps it today (the debug-log plan looks at the log itself, not its
+    // siblings). One orphan per crashed rotation, so it is bounded by
+    // crashes, not by time.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(".{file_name}.{}.{}.tmp", std::process::id(), seq));
+    let cleanup = |tmp: &Path| {
+        let _r = std::fs::remove_file(tmp);
+        false
+    };
+    let Ok(mut out) = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&tmp)
+    else {
+        return cleanup(&tmp);
+    };
+    if out.write_all(&tail).is_err() {
+        return cleanup(&tmp);
     }
-    if f.set_len(keep_bytes).is_err() || f.write_all(&tail).is_err() {
-        return false;
+    // fsync the tmp before rename so the renamed file's bytes are durable;
+    // without it a crash after rename could expose unwritten pages.
+    if out.sync_all().is_err() {
+        return cleanup(&tmp);
     }
-    let _r = f.set_len(tail.len() as u64);
+    drop(out);
+    if std::fs::rename(&tmp, path).is_err() {
+        return cleanup(&tmp);
+    }
     true
 }
 
@@ -388,10 +428,14 @@ pub fn plan_all(targets: &PruneTargets, policy: &PrunePolicy) -> PrunePlan {
 /// The caller parses only these N sidecars (read_meta), not all -- on a
 /// 50k backlog the stat phase is readdir + one metadata() per dir (fast,
 /// no JSON), and only the visible N pay the serde cost. last-active is
-/// the log.jsonl mtime, falling back to the dir mtime when no log exists
-/// (a session that never appended).
+/// the log.jsonl mtime. A session without a log is skipped: a log is the
+/// precondition for both /resume (resume_sid hard-errors on a missing
+/// log) and --continue (nothing to continue), so listing a no-log
+/// session -- even one with a sidecar -- is a row the user cannot act
+/// on. The skip happens in the stat phase, before the limit is applied,
+/// so the N returned are N actionable sessions -- filtering after the
+/// truncate would spend slots on rows a caller has to discard.
 pub fn list_recent_sessions(root: &Path, limit: usize) -> Vec<(SessionId, u64)> {
-    let now = now_secs();
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
@@ -404,292 +448,14 @@ pub fn list_recent_sessions(root: &Path, limit: usize) -> Vec<(SessionId, u64)> 
             }
             let sid_str = path.file_name()?.to_str()?;
             let sid = SessionId::from_display_string(sid_str)?;
-            let last_active = log_mtime(&path).unwrap_or_else(|| dir_mtime(&path));
-            Some((sid, last_active))
+            Some((sid, log_mtime(&path)?))
         })
         .collect();
     sessions.sort_by_key(|(_, la)| std::cmp::Reverse(*la));
     sessions.truncate(limit);
-    let _ = now;
     sessions
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::{Duration, SystemTime};
-
-    use houyicoder_context::SessionId;
-
-    fn temp_root() -> PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let d = std::env::temp_dir().join(format!("houyi-plan-{seq}-{}", std::process::id()));
-        let _r = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).expect("mkdir root");
-        d
-    }
-
-    /// Stamp a path's mtime to N seconds ago so the TTL rule sees it as old.
-    fn age(path: &Path, secs_ago: u64) {
-        let t = SystemTime::now() - Duration::from_secs(secs_ago);
-        let f = fs::File::open(path).expect("open");
-        f.set_times(fs::FileTimes::new().set_modified(t))
-            .expect("set mtime");
-    }
-
-    fn session(root: &Path, sid: &str, with_log: bool) -> PathBuf {
-        let d = root.join(sid);
-        fs::create_dir_all(&d).expect("mkdir sid");
-        fs::write(d.join("session.json"), "{}").expect("sidecar");
-        if with_log {
-            fs::write(d.join("log.jsonl"), "[]").expect("log");
-        }
-        d
-    }
-
-    fn fresh_sid() -> String {
-        SessionId::new().to_string()
-    }
-
-    fn default_policy() -> PrunePolicy {
-        PrunePolicy {
-            ttl_secs: 30 * 24 * 3600,
-            empty_ttl_secs: 24 * 3600,
-            max_count: 1000,
-            protected: Vec::new(),
-            snapshot_ttl_secs: 7 * 24 * 3600,
-            debug_max_bytes: 10 * 1024 * 1024,
-        }
-    }
-
-    /// A plan entry for a given sid dir, if present.
-    fn entry_for<'a>(plan: &'a PrunePlan, sid: &str) -> Option<&'a PruneEntry> {
-        plan.entries
-            .iter()
-            .find(|e| e.path.file_name().and_then(|n| n.to_str()) == Some(sid))
-    }
-
-    #[test]
-    fn test_plan_old_logged() {
-        let root = temp_root();
-        let sid = fresh_sid();
-        let d = session(&root, &sid, true);
-        age(&d.join("log.jsonl"), 31 * 24 * 3600); // past the 30d ttl
-        let plan = plan_prune(&root, &default_policy());
-        let e = entry_for(&plan, &sid).expect("old logged session is prunable");
-        assert_eq!(e.reason, PruneReason::Ttl);
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_plan_keeps_recent() {
-        let root = temp_root();
-        let sid = fresh_sid();
-        let d = session(&root, &sid, true);
-        age(&d.join("log.jsonl"), 3600); // within the 30d ttl
-        let plan = plan_prune(&root, &default_policy());
-        assert!(plan.entries.is_empty());
-        assert_eq!(plan.kept, 1);
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_plan_empty_shorter_ttl() {
-        let root = temp_root();
-        // Two sessions equally old (2 days): one with a log (within 30d),
-        // one without (past the 24h empty ttl). Only the empty one is prunable.
-        let sid_log = fresh_sid();
-        let d_log = session(&root, &sid_log, true);
-        age(&d_log.join("log.jsonl"), 2 * 24 * 3600);
-        let sid_empty = fresh_sid();
-        let d_empty = session(&root, &sid_empty, false);
-        age(&d_empty, 2 * 24 * 3600);
-        let plan = plan_prune(&root, &default_policy());
-        assert!(entry_for(&plan, &sid_log).is_none());
-        let e = entry_for(&plan, &sid_empty).expect("empty old session is prunable");
-        assert_eq!(e.reason, PruneReason::EmptyTtl);
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_plan_protected_spared() {
-        let root = temp_root();
-        let sid = fresh_sid();
-        let d = session(&root, &sid, true);
-        age(&d.join("log.jsonl"), 31 * 24 * 3600); // past ttl
-        let protected = SessionId::from_display_string(&sid).expect("sid");
-        let policy = PrunePolicy {
-            protected: vec![protected],
-            ..default_policy()
-        };
-        let plan = plan_prune(&root, &policy);
-        assert!(entry_for(&plan, &sid).is_none());
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_plan_cap_drops_oldest() {
-        let root = temp_root();
-        // Three recent sessions (within ttl), cap at 1: the oldest two drop.
-        let sids: Vec<String> = (0..3).map(|_| fresh_sid()).collect();
-        for (i, sid) in sids.iter().enumerate() {
-            let d = session(&root, sid, true);
-            // Older i = older mtime: 1h, 2h, 3h ago.
-            age(&d.join("log.jsonl"), (i as u64 + 1) * 3600);
-        }
-        let policy = PrunePolicy {
-            max_count: 1,
-            ..default_policy()
-        };
-        let plan = plan_prune(&root, &policy);
-        assert_eq!(plan.entries.len(), 2);
-        // The newest (1h ago, i=0) survives; the other two are prunable.
-        assert!(entry_for(&plan, &sids[0]).is_none());
-        assert!(entry_for(&plan, &sids[1]).is_some());
-        assert!(entry_for(&plan, &sids[2]).is_some());
-        for e in &plan.entries {
-            assert_eq!(e.reason, PruneReason::CapOverflow);
-        }
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_plan_skips_non_session() {
-        let root = temp_root();
-        // An index/ sub-dir is not a session id - never prunable, even if old.
-        let idx = root.join("index");
-        fs::create_dir_all(&idx).expect("mkdir index");
-        age(&idx, 100 * 24 * 3600);
-        let plan = plan_prune(&root, &default_policy());
-        assert!(plan.entries.is_empty());
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_apply_removes_entries() {
-        let root = temp_root();
-        let sid = fresh_sid();
-        let d = session(&root, &sid, true);
-        age(&d.join("log.jsonl"), 31 * 24 * 3600);
-        let plan = plan_prune(&root, &default_policy());
-        let report = apply_prune(&plan);
-        assert_eq!(report.removed, 1);
-        assert!(!d.exists());
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_apply_empty_plan_noop() {
-        let plan = PrunePlan::default();
-        let report = apply_prune(&plan);
-        assert_eq!(report, PruneReport::default());
-    }
-
-    #[test]
-    fn test_plan_snapshots_old_file() {
-        let root = temp_root();
-        let snap = root.join("snapshot-sh-123-456.sh");
-        fs::write(&snap, "env").expect("write snap");
-        age(&snap, 8 * 24 * 3600); // past the 7d snapshot ttl
-        let entries = plan_shell_snapshots(&root, 7 * 24 * 3600);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].kind, PruneKind::Snapshot);
-        assert_eq!(entries[0].action, PruneAction::RemoveFile);
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_plan_snapshots_keeps_recent() {
-        let root = temp_root();
-        let snap = root.join("snapshot-sh-123-456.sh");
-        fs::write(&snap, "env").expect("write snap");
-        age(&snap, 3600); // 1h, within 7d
-        let entries = plan_shell_snapshots(&root, 7 * 24 * 3600);
-        assert!(entries.is_empty());
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_plan_debug_under_cap() {
-        let root = temp_root();
-        let log = root.join("debug.log");
-        fs::write(&log, b"small").expect("write log");
-        let entries = plan_debug_log(&log, 10 * 1024 * 1024);
-        assert!(entries.is_empty(), "under the cap = no rotation");
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_plan_debug_over_cap() {
-        let root = temp_root();
-        let log = root.join("debug.log");
-        // 20 bytes content, cap at 10: over the cap.
-        fs::write(&log, b"0123456789\nfirst\nsecond\n").expect("write log");
-        let entries = plan_debug_log(&log, 10);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].kind, PruneKind::DebugLog);
-        assert!(matches!(
-            entries[0].action,
-            PruneAction::TruncateFile { .. }
-        ));
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_apply_truncates_to_tail() {
-        let root = temp_root();
-        let log = root.join("debug.log");
-        // Two lines; cap keeps the tail, line-aligned.
-        fs::write(&log, b"head-line-1\nsecond-line-2\n").expect("write log");
-        let entries = plan_debug_log(&log, 15);
-        let plan = PrunePlan { entries, kept: 0 };
-        let report = apply_prune(&plan);
-        assert_eq!(report.removed, 1);
-        let after = fs::read_to_string(&log).expect("read");
-        assert!(
-            after.starts_with("second-line"),
-            "tail kept, head dropped: {after}"
-        );
-        let _r = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_plan_all_merges_three() {
-        let root = temp_root();
-        // One old session + one old snapshot + (debug under cap, skipped).
-        let sid = fresh_sid();
-        let d = session(&root, &sid, true);
-        age(&d.join("log.jsonl"), 31 * 24 * 3600);
-        let snap_dir = root.join("shell-snapshots");
-        fs::create_dir_all(&snap_dir).expect("mkdir snaps");
-        let snap = snap_dir.join("snapshot-sh-1-2.sh");
-        fs::write(&snap, "env").expect("write snap");
-        age(&snap, 8 * 24 * 3600);
-        let targets = PruneTargets {
-            sessions_root: Some(root.clone()),
-            shell_snapshots_root: Some(snap_dir),
-            debug_log: None,
-        };
-        let plan = plan_all(&targets, &default_policy());
-        assert_eq!(plan.entries.len(), 2);
-        assert_eq!(
-            plan.entries
-                .iter()
-                .filter(|e| e.kind == PruneKind::Session)
-                .count(),
-            1
-        );
-        assert_eq!(
-            plan.entries
-                .iter()
-                .filter(|e| e.kind == PruneKind::Snapshot)
-                .count(),
-            1
-        );
-        let _r = fs::remove_dir_all(&root);
-    }
-}
+#[path = "session_prune_tests.rs"]
+mod tests;

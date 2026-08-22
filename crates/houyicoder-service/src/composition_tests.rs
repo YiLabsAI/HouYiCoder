@@ -213,3 +213,45 @@ fn test_disk_options_construct_clean() {
     );
     let _store = super::disk_meta_store();
 }
+
+/// disk_meta_store_at(root) derives the store from the given root, so a
+/// caller that discovers sessions on the same root reads + writes sidecars
+/// that agree with discovery. A meta written via the store round-trips at
+/// the same root, and a store at a different root sees nothing -- the single
+/// truth source the bridge relies on.
+#[test]
+fn test_meta_store_root_scoped() {
+    use houyicoder_context::{NameSource, SessionMeta, SessionProvenance};
+    let root = std::env::temp_dir().join(format!("houyi-dms-{}-{}", std::process::id(), line!()));
+    let _r = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir dms root");
+    let store = super::disk_meta_store_at(root.clone());
+    let sid = SessionId::new();
+    let meta = SessionMeta {
+        name: Some("named".into()),
+        name_source: NameSource::Auto,
+        cwd: "/repo".into(),
+        model: "test-model".into(),
+        provenance: SessionProvenance::Fresh,
+        version: "t".into(),
+        created_at: 1,
+        child_session_ids: Vec::new(),
+    };
+    store.write_meta(sid, &meta).expect("write_meta");
+    let back = store
+        .read_meta(sid)
+        .expect("read_meta roundtrips at same root");
+    assert_eq!(back.name.as_deref(), Some("named"));
+    let other = std::env::temp_dir().join(format!(
+        "houyi-dms-other-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let other_store = super::disk_meta_store_at(other.clone());
+    assert!(
+        other_store.read_meta(sid).is_none(),
+        "a store at a different root must not see the meta"
+    );
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&other).ok();
+}

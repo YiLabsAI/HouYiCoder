@@ -19,11 +19,12 @@ pub struct SessionListerBridge {
 }
 
 impl SessionListerBridge {
-    pub fn new(
-        meta_store: Arc<dyn SessionMetaStore>,
-        session_log: Arc<dyn SessionLog>,
-        sessions_root: std::path::PathBuf,
-    ) -> Self {
+    /// Construct from one truth source: sessions_root. The meta store is
+    /// derived from the same root (a FileMetaStore pointed at it), so
+    /// discovery (readdir) and metadata reading (read_meta) can never
+    /// disagree about which sessions exist.
+    pub fn new(session_log: Arc<dyn SessionLog>, sessions_root: std::path::PathBuf) -> Self {
+        let meta_store = houyicoder_service::composition::disk_meta_store_at(sessions_root.clone());
         Self {
             meta_store,
             session_log,
@@ -38,11 +39,12 @@ impl SessionLister for SessionListerBridge {
         // Stat-first: read_dir + stat log.jsonl mtime for ALL sessions
         // (no JSON parse), sort by last-active, take the top 100. Only
         // those 100 pay the sidecar serde cost (read_meta). On a 50k
-        // backlog this replaces 50k JSON parses with 50k stats (micro-
-        // seconds each, no serde) + 100 parses. The stat phase is the
-        // same readdir + metadata() the old list_metas path did for
-        // every session anyway -- the saving is purely the parse, and
-        // the parse is the expensive half.
+        // backlog this replaces 50k JSON parses with 50k stats + 100
+        // parses. A session without a log is skipped: resume_sid
+        // hard-errors on a missing log, so a no-log row -- even one
+        // with a sidecar -- is a row the user cannot resume. Skipping
+        // them at the stat phase keeps the visible slots full of rows
+        // that are actually actionable.
         const VISIBLE_LIMIT: usize = 100;
         let recent = houyicoder_service::session_prune::list_recent_sessions(
             &self.sessions_root,
@@ -77,12 +79,12 @@ impl SessionLister for SessionListerBridge {
             .collect();
         // Already sorted by last_active desc from list_recent_sessions,
         // but filter_map may have dropped entries (read_meta None), so
-        // the order is preserved — no re-sort needed.
+        // the order is preserved -- no re-sort needed.
         // Dedup by the cheap title: when multiple sessions share the same
         // sidecar name (the common "re-running + naming alike" case), keep
         // only the most recently active one. The sort put the newest first,
         // so the first occurrence of each title wins. Placeholder titles are
-        // unique (short sid suffix), so unnamed sessions never dedup here —
+        // unique (short sid suffix), so unnamed sessions never dedup here --
         // their slug-dedup happens lazily in the picker after resolve_detail
         // fills the real title (see run_control's hidden-row pass).
         let mut seen_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -112,7 +114,7 @@ impl SessionLister for SessionListerBridge {
         if let Some(prompt) = first_user_prompt(self.session_log.as_ref(), sid) {
             let slug = slugify(&prompt);
             // Guard: a prompt with no alphanumeric chars (e.g. "???", pure
-            // whitespace) slugifies to empty — keep the disambiguating
+            // whitespace) slugifies to empty -- keep the disambiguating
             // placeholder rather than show a blank row.
             if !slug.is_empty() {
                 row.title = slug;
@@ -169,7 +171,7 @@ mod tests {
     use houyicoder_context::{
         EventId, NameSource, SessionId, SessionMeta, SessionProvenance, TurnEvent, TurnEventKind,
     };
-    use houyicoder_memory::{FileMetaStore, InMemoryBackend, InMemoryMetaStore};
+    use houyicoder_memory::{FileMetaStore, LocalFileBackend};
     use houyicoder_session::SessionStore;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -177,6 +179,7 @@ mod tests {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let p = std::env::temp_dir().join(format!("lister-bridge-{}-{n}", std::process::id()));
+        let _r = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
     }
@@ -194,63 +197,70 @@ mod tests {
         }
     }
 
-    /// list_sessions is the cheap phase: sidecar read + one log-mtime stat
-    /// per session (no log-head read/parse). It sorts by real last activity
-    /// (log mtime, created_at fallback), excludes the current session, and
-    /// uses the sidecar name or a placeholder title (the expensive first-
-    /// prompt slug is resolve_detail's job, proven below).
-    #[tokio::test]
-    async fn test_bridge_lists_derives_titles() {
-        let root = temp_root();
-        let meta_store = InMemoryMetaStore::new();
-        let cur = SessionId::new();
-        let older = SessionId::new();
-        let newer = SessionId::new();
-        meta_store
-            .write_meta(older, &meta(None, "/repo/a", 100))
-            .unwrap();
-        meta_store
-            .write_meta(newer, &meta(Some("named session"), "/repo/b", 200))
-            .unwrap();
-        meta_store
-            .write_meta(cur, &meta(None, "/repo/c", 50))
-            .unwrap();
-        // A disk-backed SessionStore so the bridge can read the first prompt
-        // from the older session log head (InMemoryBackend has no
-        // read_log_range, so the disk path is the one that exercises title
-        // derivation).
-        let store = SessionStore::new(Box::new(houyicoder_memory::LocalFileBackend::new(
-            root.clone(),
-        )));
+    /// Write a sidecar for a session at the root (real disk, one truth
+    /// source with the bridge's sessions_root).
+    fn write_sidecar(root: &std::path::Path, sid: SessionId, m: &SessionMeta) {
+        let store = FileMetaStore::new(root.to_path_buf());
+        store.write_meta(sid, m).unwrap();
+    }
+
+    /// Stamp a path's mtime to N seconds ago so the stat-first sort is
+    /// deterministic. list_recent_sessions resolves mtime at whole-second
+    /// granularity, so two sessions written in the same second tie and the
+    /// sort falls back to readdir order (non-deterministic); ageing each to
+    /// a distinct second pins the order the tests assert on. The sidecar's
+    /// created_at field does NOT participate in the sort -- only this mtime
+    /// does -- so age() is the single ordering signal in these tests.
+    fn age(path: &std::path::Path, secs_ago: u64) {
+        use std::time::{Duration, SystemTime};
+        let t = SystemTime::now() - Duration::from_secs(secs_ago);
+        let f = std::fs::File::open(path).expect("open for set_times");
+        f.set_times(std::fs::FileTimes::new().set_modified(t))
+            .expect("set mtime");
+    }
+
+    /// Append a UserInput to a session's log so it is resumable + listed by
+    /// the picker (a session without a log is skipped -- resume_sid
+    /// hard-errors on a missing log).
+    async fn append_log(store: &SessionStore, sid: SessionId, text: &str) {
         store
             .append(TurnEvent {
                 id: EventId::new(),
-                session: older,
+                session: sid,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::UserInput {
-                    text: "hello world prompt".into(),
-                },
+                kind: TurnEventKind::UserInput { text: text.into() },
             })
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_bridge_lists_derives_titles() {
+        let root = temp_root();
+        let cur = SessionId::new();
+        let older = SessionId::new();
+        let newer = SessionId::new();
+        write_sidecar(&root, older, &meta(None, "/repo/a", 1));
+        write_sidecar(&root, newer, &meta(Some("named session"), "/repo/b", 1));
+        write_sidecar(&root, cur, &meta(None, "/repo/c", 1));
+        let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+        append_log(&store, older, "hello world prompt").await;
+        append_log(&store, newer, "named session prompt").await;
+        // Pin distinct whole-second log mtimes: older newest (sorts first),
+        // newer second. age() is the only ordering signal (created_at above
+        // is constant and does not sort).
+        age(&root.join(older.to_string()).join("log.jsonl"), 100);
+        age(&root.join(newer.to_string()).join("log.jsonl"), 200);
         let log: Arc<dyn SessionLog> = Arc::new(store);
-        let bridge = SessionListerBridge::new(Arc::new(meta_store), log, root.clone());
+        let bridge = SessionListerBridge::new(log, root.clone());
         let mut rows = bridge.list_sessions(&cur.to_string());
         assert_eq!(rows.len(), 2, "current session excluded: {rows:?}");
-        // Phase 1 (list_sessions) sorts by log.jsonl mtime (last activity).
-        // The older session has a log (just appended) so it is most-active
-        // -> first; the newer session has no log (created_at fallback=200)
-        // -> second despite the later created timestamp. This proves the
-        // sort is by real mtime, not created_at.
         assert_eq!(
             rows[0].sid_str,
             older.to_string(),
-            "session with a log sorts first by mtime"
+            "newer log mtime sorts first"
         );
-        // Phase 1 titles are CHEAP: sidecar name or a placeholder, NOT the
-        // first-prompt slug (that read is deferred). The older session has
-        // no sidecar name -> placeholder.
         assert!(
             rows[0].title.starts_with("(session) "),
             "list_sessions returns a placeholder, not the slug: {}",
@@ -259,15 +269,13 @@ mod tests {
         assert_eq!(
             rows[1].sid_str,
             newer.to_string(),
-            "no-log session falls back to created_at + sorts second"
+            "older log mtime sorts second"
         );
         assert_eq!(
             rows[1].title, "named session",
             "sidecar name is the cheap title (no log read)"
         );
         assert_eq!(rows[1].cwd_basename, "b");
-        // Phase 2 (resolve_detail) fills the expensive title from the log
-        // head, only for placeholder rows (sidecar name wins stays).
         bridge.resolve_detail(&mut rows[0]);
         assert_eq!(
             rows[0].title, "hello-world-prompt",
@@ -278,22 +286,21 @@ mod tests {
             rows[1].title, "named session",
             "resolve_detail leaves a sidecar name untouched"
         );
-        std::fs::remove_dir_all(&root).ok();
+        let _r = std::fs::remove_dir_all(&root);
     }
 
-    /// A session with no name + no UserInput in the log head keeps its
-    /// disambiguating placeholder (short sid suffix, so several empty
-    /// sessions are tellable apart) after resolve_detail — not an error
-    /// (the picker must not fail to open).
     #[tokio::test]
     async fn test_bridge_placeholder_no_prompt() {
-        let meta_store = InMemoryMetaStore::new();
+        let root = temp_root();
         let sid = SessionId::new();
-        meta_store.write_meta(sid, &meta(None, "/repo", 1)).unwrap();
-        let store = SessionStore::new(Box::new(InMemoryBackend::new()));
-        // No UserInput appended; the log head has no prompt.
+        write_sidecar(&root, sid, &meta(None, "/repo", 1));
+        let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+        // Append an empty UserInput so the session has a log (resumable +
+        // listed) but slugifies to nothing -- the title stays the sid
+        // placeholder, the property under test.
+        append_log(&store, sid, "").await;
         let log: Arc<dyn SessionLog> = Arc::new(store);
-        let bridge = SessionListerBridge::new(Arc::new(meta_store), log, std::path::PathBuf::new());
+        let bridge = SessionListerBridge::new(log, root.clone());
         let mut rows = bridge.list_sessions(&SessionId::new().to_string());
         assert_eq!(rows.len(), 1);
         assert!(
@@ -306,60 +313,50 @@ mod tests {
             "the suffix must add distinguishing info: {}",
             rows[0].title
         );
-        // resolve_detail finds no UserInput in the log head -> placeholder
-        // stays (InMemoryBackend's read_log_range returns empty).
         bridge.resolve_detail(&mut rows[0]);
         assert!(
             rows[0].title.starts_with("(session) "),
             "placeholder survives resolve_detail when no prompt exists: {}",
             rows[0].title
         );
+        let _r = std::fs::remove_dir_all(&root);
     }
 
-    /// A disk FileMetaStore + a real disk backend round-trips through both
-    /// phases (the prod path the picker uses): list_sessions opens with a
-    /// placeholder + the log mtime, resolve_detail fills the slug from the
-    /// log head.
     #[tokio::test]
-    async fn test_bridge_with_disk_store() {
+    async fn test_bridge_dedup_by_title() {
         let root = temp_root();
-        let backend = houyicoder_memory::LocalFileBackend::new(root.clone());
-        let store = SessionStore::new(Box::new(backend));
-        let sid = SessionId::new();
-        store
-            .append(TurnEvent {
-                id: EventId::new(),
-                session: sid,
-                ts: 0,
-                prev_hash: None,
-                kind: TurnEventKind::UserInput {
-                    text: "disk prompt here".into(),
-                },
-            })
-            .await
-            .unwrap();
-        // The sidecar is written by the composition root; the bridge only
-        // reads. Write one manually so the bridge finds the session.
-        let fms = FileMetaStore::new(root.clone());
-        fms.write_meta(sid, &meta(None, "/repo", 1)).unwrap();
+        let a = SessionId::new();
+        let b = SessionId::new();
+        let c = SessionId::new();
+        write_sidecar(&root, a, &meta(Some("shared"), "/repo", 1));
+        write_sidecar(&root, b, &meta(Some("shared"), "/repo", 1));
+        write_sidecar(&root, c, &meta(Some("unique"), "/repo", 1));
+        let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+        append_log(&store, a, "a prompt").await;
+        append_log(&store, b, "b prompt").await;
+        append_log(&store, c, "c prompt").await;
+        // Pin distinct whole-second log mtimes: a newest (wins the "shared"
+        // dedup -- first occurrence kept), c middle (survives, unique
+        // title), b oldest (dropped). age() is the only ordering signal.
+        age(&root.join(a.to_string()).join("log.jsonl"), 100);
+        age(&root.join(b.to_string()).join("log.jsonl"), 300);
+        age(&root.join(c.to_string()).join("log.jsonl"), 200);
         let log: Arc<dyn SessionLog> = Arc::new(store);
-        let bridge = SessionListerBridge::new(
-            Arc::new(FileMetaStore::new(root.clone())),
-            log,
-            root.clone(),
-        );
-        let mut rows = bridge.list_sessions(&SessionId::new().to_string());
-        assert_eq!(rows.len(), 1);
+        let bridge = SessionListerBridge::new(log, root.clone());
+        let rows = bridge.list_sessions(&SessionId::new().to_string());
+        assert_eq!(rows.len(), 2, "dedup drops one of the shared-title pair");
         assert!(
-            rows[0].title.starts_with("(session) "),
-            "phase 1 returns a placeholder: {}",
-            rows[0].title
+            rows.iter().any(|r| r.sid_str == a.to_string()),
+            "newer shared-title session wins the dedup"
         );
-        bridge.resolve_detail(&mut rows[0]);
-        assert_eq!(
-            rows[0].title, "disk-prompt-here",
-            "phase 2 fills the first-prompt slug"
+        assert!(
+            rows.iter().any(|r| r.sid_str == c.to_string()),
+            "unique title session survives dedup"
         );
-        std::fs::remove_dir_all(&root).ok();
+        assert!(
+            !rows.iter().any(|r| r.sid_str == b.to_string()),
+            "older shared-title session is dropped"
+        );
+        let _r = std::fs::remove_dir_all(&root);
     }
 }

@@ -22,24 +22,14 @@ pub fn latest_session_sid(sessions_root: &Path) -> Option<SessionId> {
     let cwd = workspace_cwd(None);
     let meta_store: Arc<dyn SessionMetaStore> =
         Arc::new(FileMetaStore::new(sessions_root.to_path_buf()));
-    // Stat-first: take the 200 most recently active sessions (stat only,
-    // no sidecar parse), then parse only those for cwd match. On a 50k
-    // backlog this replaces 50k JSON parses with 200. The cwd's session
-    // is almost always recent (the user just worked in it); if it is
-    // older than the top 200, the full scan fallback below catches it.
+    // Stat-first: take the 200 most recently active sessions WITH a log
+    // (stat only, no sidecar parse), then parse only those for cwd match.
+    // On a 50k backlog this replaces 50k JSON parses with 200. A session
+    // without a log is skipped at the stat phase -- --continue needs
+    // something to continue, and resume_sid hard-errors on a missing log.
     let recent = crate::session_prune::list_recent_sessions(sessions_root, 200);
-    // Only sessions WITH a log.jsonl are continue candidates — a session
-    // without a log has no activity to continue. list_recent_sessions
-    // includes no-log sessions (dir mtime fallback) so the picker can show
-    // them; here we skip them.
     let found = recent
         .iter()
-        .filter(|(sid, _)| {
-            sessions_root
-                .join(sid.to_string())
-                .join("log.jsonl")
-                .exists()
-        })
         .filter_map(|(sid, _)| {
             let m = meta_store.read_meta(*sid)?;
             (m.cwd == cwd).then_some((sid, ()))
