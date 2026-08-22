@@ -35,12 +35,24 @@ impl SessionListerBridge {
 impl SessionLister for SessionListerBridge {
     fn list_sessions(&self, current_sid: &str) -> Vec<SessionRow> {
         let current = SessionId::from_display_string(current_sid).unwrap_or_default();
-        let mut rows: Vec<SessionRow> = self
-            .meta_store
-            .list_metas()
+        // Stat-first: read_dir + stat log.jsonl mtime for ALL sessions
+        // (no JSON parse), sort by last-active, take the top 100. Only
+        // those 100 pay the sidecar serde cost (read_meta). On a 50k
+        // backlog this replaces 50k JSON parses with 50k stats (micro-
+        // seconds each, no serde) + 100 parses. The stat phase is the
+        // same readdir + metadata() the old list_metas path did for
+        // every session anyway -- the saving is purely the parse, and
+        // the parse is the expensive half.
+        const VISIBLE_LIMIT: usize = 100;
+        let recent = houyicoder_service::session_prune::list_recent_sessions(
+            &self.sessions_root,
+            VISIBLE_LIMIT,
+        );
+        let mut rows: Vec<SessionRow> = recent
             .into_iter()
             .filter(|(sid, _)| *sid != current)
-            .map(|(sid, meta)| {
+            .filter_map(|(sid, last_active)| {
+                let meta = self.meta_store.read_meta(sid)?;
                 let cwd_basename = meta
                     .cwd
                     .rsplit('/')
@@ -48,38 +60,24 @@ impl SessionLister for SessionListerBridge {
                     .filter(|s| !s.is_empty())
                     .unwrap_or("?")
                     .to_string();
-                // Cheap title: sidecar name if set, else placeholder. The
-                // expensive title (first-prompt slug from a log-head READ +
-                // serde parse) is filled by resolve_detail, lazily, for
-                // visible rows only. list_sessions does NOT read the log.
                 let title = meta
                     .name
                     .as_ref()
                     .filter(|n| !n.trim().is_empty())
                     .cloned()
                     .unwrap_or_else(|| format!("(session) {}", short_sid(sid)));
-                // last_active from a log mtime STAT (one metadata() call,
-                // no read/parse) so the sort reflects real activity, not just
-                // creation order — a session resumed 5m ago but created
-                // weeks ago must sort above one created 1h ago and idle
-                // since. Falls back to the sidecar created_at when no log
-                // exists. The expensive log-head read for the title stays
-                // in resolve_detail.
-                let last_active = houyicoder_service::composition::log_last_active_secs(
-                    &self.sessions_root,
-                    &sid,
-                )
-                .unwrap_or(meta.created_at);
-                SessionRow {
+                Some(SessionRow {
                     sid_str: sid.to_string(),
                     title,
                     cwd_basename,
                     last_active,
                     ..Default::default()
-                }
+                })
             })
             .collect();
-        rows.sort_by_key(|r| std::cmp::Reverse(r.last_active));
+        // Already sorted by last_active desc from list_recent_sessions,
+        // but filter_map may have dropped entries (read_meta None), so
+        // the order is preserved — no re-sort needed.
         // Dedup by the cheap title: when multiple sessions share the same
         // sidecar name (the common "re-running + naming alike" case), keep
         // only the most recently active one. The sort put the newest first,

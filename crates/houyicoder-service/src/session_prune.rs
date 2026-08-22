@@ -383,6 +383,37 @@ pub fn plan_all(targets: &PruneTargets, policy: &PrunePolicy) -> PrunePlan {
     plan
 }
 
+/// List sessions by last-active, stat-only (no sidecar parse). Returns
+/// (sid, last_active_secs) sorted newest-first, limited to the top N.
+/// The caller parses only these N sidecars (read_meta), not all -- on a
+/// 50k backlog the stat phase is readdir + one metadata() per dir (fast,
+/// no JSON), and only the visible N pay the serde cost. last-active is
+/// the log.jsonl mtime, falling back to the dir mtime when no log exists
+/// (a session that never appended).
+pub fn list_recent_sessions(root: &Path, limit: usize) -> Vec<(SessionId, u64)> {
+    let now = now_secs();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut sessions: Vec<(SessionId, u64)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let sid_str = path.file_name()?.to_str()?;
+            let sid = SessionId::from_display_string(sid_str)?;
+            let last_active = log_mtime(&path).unwrap_or_else(|| dir_mtime(&path));
+            Some((sid, last_active))
+        })
+        .collect();
+    sessions.sort_by_key(|(_, la)| std::cmp::Reverse(*la));
+    sessions.truncate(limit);
+    let _ = now;
+    sessions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
