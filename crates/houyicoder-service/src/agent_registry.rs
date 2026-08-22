@@ -6,7 +6,7 @@
 //! registry is the Arc<dyn AgentRegistry> the runtime and the agent tool
 //! consult.
 //!
-//! Model-tier tokens (flash/max) and permission-mode tokens on the
+//! Model-tier tokens (Flash/Max) and permission-mode tokens on the
 //! definitions resolve to concrete ids and permission modes at spawn time,
 //! where config and the permission crate are available; this assembly only
 //! layers sources.

@@ -71,7 +71,11 @@ async fn test_sidechain_isolates_sessions() {
                 status: "completed".into(),
                 summary: "auth lives in crates/api".into(),
                 result_ref: "evt-42".into(),
-                usage: serde_json::json!({"total_tokens": 1200}),
+                input_tokens: 800,
+                output_tokens: 400,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
             },
         ))
         .await
@@ -107,8 +111,12 @@ async fn test_sidechain_isolates_sessions() {
         .await
         .expect("append child 2");
 
-    // Parent log: spawn + return boundaries present; child's turn text absent.
-    let parent_events = store.trajectory_snapshot(parent);
+    // Parent log: read from DISK (not the in-memory mirror) so the
+    // assertion proves routing-level isolation, not just HashMap partition.
+    let parent_events = store
+        .backend()
+        .read_log(parent)
+        .expect("read parent log from disk");
     assert!(
         parent_events
             .iter()
@@ -135,8 +143,11 @@ async fn test_sidechain_isolates_sessions() {
         parent_events
     );
 
-    // Child log: its own turns present; parent's spawn/return absent.
-    let child_events = store.trajectory_snapshot(child);
+    // Child log: read from DISK too.
+    let child_events = store
+        .backend()
+        .read_log(child)
+        .expect("read child log from disk");
     assert!(
         child_events.iter().any(|e| {
             matches!(

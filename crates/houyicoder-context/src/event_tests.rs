@@ -60,7 +60,11 @@ fn test_subagent_return_round_trip() {
             status: "completed".into(),
             summary: "auth lives in crates/api".into(),
             result_ref: "evt-42".into(),
-            usage: serde_json::json!({"total_tokens": 1200}),
+            input_tokens: 800,
+            output_tokens: 400,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");

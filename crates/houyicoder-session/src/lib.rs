@@ -243,7 +243,13 @@ impl SessionStore {
     /// to the inline summary the parent already holds. Not a mirror -- the
     /// parent carries the summary; this follows the ref for the full text.
     pub fn read_child_result(&self, child: SessionId) -> Vec<TurnEvent> {
-        self.backend.read_log(child).unwrap_or_default()
+        match self.backend.read_log(child) {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::warn!("child session log read failed, returning empty: {e}");
+                Vec::new()
+            }
+        }
     }
 
     /// Drop the in-memory trajectory mirror for a session (the /clear path).

@@ -79,7 +79,11 @@ mod tests {
                 status: String::new(),
                 summary: String::new(),
                 result_ref: String::new(),
-                usage: serde_json::Value::Null,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
             }),
             "return"
         );

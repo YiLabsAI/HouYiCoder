@@ -17,6 +17,7 @@ pub const DEFAULT_CATALOG: &[(&str, &str)] = &[
     ("qwen3.7-max", "Max"),
     ("glm-5.2", "Fable"),
     ("glm-5.1", "Pro"),
+    ("qwen3.6-flash", "Flash"),
 ];
 
 /// One catalog entry: a model id plus the per-model parameters the catalog
@@ -603,7 +604,7 @@ mod tests {
         std::fs::write(&path, r#"{"model":{"catalog":null}}"#).unwrap();
         let (s, w) = load_model_section_from(&path);
         assert!(!s.catalog.is_empty(), "null catalog falls back to default");
-        assert_eq!(s.catalog.len(), 3, "DEFAULT_CATALOG has 3 entries");
+        assert_eq!(s.catalog.len(), 4, "DEFAULT_CATALOG has 4 entries");
         assert!(
             s.catalog.iter().any(|e| e.id == "glm-5.2"),
             "glm-5.2 in default"
@@ -623,7 +624,7 @@ mod tests {
         std::fs::write(&path, r#"{"model":{"id":"glm-5.2"}}"#).unwrap();
         let (s, _) = load_model_section_from(&path);
         assert!(!s.catalog.is_empty(), "missing catalog field falls back");
-        assert_eq!(s.catalog.len(), 3);
+        assert_eq!(s.catalog.len(), 4);
         drop(std::fs::remove_file(&path));
     }
 
@@ -633,7 +634,7 @@ mod tests {
         std::fs::write(&path, r#"{"model":{"catalog":[]}}"#).unwrap();
         let (s, _) = load_model_section_from(&path);
         assert!(!s.catalog.is_empty(), "empty array falls back to default");
-        assert_eq!(s.catalog.len(), 3);
+        assert_eq!(s.catalog.len(), 4);
         drop(std::fs::remove_file(&path));
     }
 

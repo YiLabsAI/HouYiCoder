@@ -371,7 +371,9 @@ pub enum TurnEventKind {
     /// A spawned sub-agent returned. The status string drives retry policy
     /// (timeout retries, killed does not); summary is the inline result the
     /// parent model reads; result_ref points at the child log for the full
-    /// transcript; usage is the child's token cost reattributed to the parent.
+    /// transcript; the usage fields mirror TurnUsage so the parent can
+    /// reattribute the child's token cost without importing the provider
+    /// Usage type (keeps context a leaf).
     #[serde(rename = "SubagentReturn")]
     SubagentReturn {
         child_session_id: String,
@@ -381,7 +383,15 @@ pub enum TurnEventKind {
         #[serde(default)]
         result_ref: String,
         #[serde(default)]
-        usage: serde_json::Value,
+        input_tokens: u64,
+        #[serde(default)]
+        output_tokens: u64,
+        #[serde(default)]
+        cache_read_input_tokens: u64,
+        #[serde(default)]
+        cache_write_input_tokens: u64,
+        #[serde(default)]
+        reasoning_tokens: u64,
     },
     /// A sub-agent notification injected into the parent's context at a turn
     /// boundary. turn + order pin the injection point so a replay restores

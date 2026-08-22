@@ -60,7 +60,10 @@ fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
 /// retention policy + wall-clock now. The cache-liveness policy uses now to
 /// test the cached-prefix TTL; the default path (tests + the no-cache view)
 /// passes the age policy + 0, which never reports a live cache.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive match on a growing event enum; new variant arms pushed past the limit"
+)]
 pub fn project_input_items_with(
     events: &[TurnEvent],
     backend: Option<&dyn ContextBackend>,

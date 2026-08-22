@@ -209,7 +209,7 @@ pub fn built_in_explore() -> AgentDefinition {
         when_to_use: "Fast read-only agent for exploring a codebase: finding files by pattern, searching code for keywords, answering how parts of the system work. Caller specifies thoroughness: quick / medium / very thorough.".to_string(),
         tools: None,
         disallowed_tools: vec!["write".into(), "edit".into(), "multiedit".into(), "agent".into()],
-        model: Some("flash".into()),
+        model: Some("Flash".into()),
         effort: None,
         permission_mode: None,
         max_turns: None,
@@ -235,7 +235,7 @@ pub fn built_in_plan() -> AgentDefinition {
         when_to_use: "Read-only architect agent: explores the codebase and designs a step-by-step implementation plan for a task, identifying critical files and trade-offs. Use before writing code when the approach is not obvious.".to_string(),
         tools: None,
         disallowed_tools: vec!["write".into(), "edit".into(), "multiedit".into(), "agent".into()],
-        model: Some("max".into()),
+        model: Some("Max".into()),
         effort: None,
         permission_mode: None,
         max_turns: None,
@@ -261,7 +261,7 @@ pub fn built_in_verify() -> AgentDefinition {
         when_to_use: "Adversarial verification agent that tries to break an implementation rather than confirm it. Runs real commands, checks outputs, probes edge cases. Returns a machine-parsed VERDICT. Use before claiming work done, especially for security- or correctness-critical changes.".to_string(),
         tools: None,
         disallowed_tools: vec!["write".into(), "edit".into(), "multiedit".into(), "agent".into()],
-        model: Some("max".into()),
+        model: Some("Max".into()),
         effort: None,
         permission_mode: None,
         max_turns: None,
@@ -287,7 +287,7 @@ pub fn built_in_code_guide() -> AgentDefinition {
         when_to_use: "Guide agent for the tool itself: configuration, hooks, skills, slash commands, settings, model selection. Fetches the docs map for authoritative answers.".to_string(),
         tools: Some(vec!["read".into(), "grep".into(), "glob".into(), "WebFetch".into(), "web_search".into()]),
         disallowed_tools: Vec::new(),
-        model: Some("flash".into()),
+        model: Some("Flash".into()),
         effort: None,
         permission_mode: None,
         max_turns: None,
@@ -396,22 +396,22 @@ mod tests {
         assert!(def.disallowed_tools.contains(&"write".to_string()));
         assert!(def.disallowed_tools.contains(&"edit".to_string()));
         assert!(def.disallowed_tools.contains(&"agent".to_string()));
-        assert_eq!(def.model.as_deref(), Some("flash"));
+        assert_eq!(def.model.as_deref(), Some("Flash"));
     }
 
     #[test]
     fn test_plan_model_is_max() {
-        assert_eq!(super::built_in_plan().model.as_deref(), Some("max"));
+        assert_eq!(super::built_in_plan().model.as_deref(), Some("Max"));
     }
 
     #[test]
     fn test_verify_model_is_max() {
-        assert_eq!(super::built_in_verify().model.as_deref(), Some("max"));
+        assert_eq!(super::built_in_verify().model.as_deref(), Some("Max"));
     }
 
     #[test]
     fn test_guide_uses_flash() {
-        assert_eq!(super::built_in_code_guide().model.as_deref(), Some("flash"));
+        assert_eq!(super::built_in_code_guide().model.as_deref(), Some("Flash"));
     }
 
     /// built_in_all returns the five built-ins in a stable order so catalog
