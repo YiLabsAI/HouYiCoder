@@ -56,44 +56,44 @@ pub fn extract_body(output: &str) -> String {
         return format!("error: {err}");
     }
     if let Some(stdout) = v.get("stdout").and_then(|s| s.as_str()) {
-        // stdout and stderr render as separate blocks (stderr
-        // in error color); our single-body renderer colors the whole body by
-        // outcome, so for a failed command (success=false -> Error) the
-        // joined stdout+stderr renders red. Append non-empty stderr so a
-        // failed command's error message is not lost (was an empty body
-        // before). A failed command also surfaces its exit code so the user
-        // sees the numeric verdict, not just the stderr text.
+        // A failed bash command surfaces its exit code, a signal note when
+        // the process was killed by a signal, stderr, then stdout — in that
+        // order (exit code first as the header, stdout last as the least
+        // important). All four sections are rendered verbatim, no truncation
+        // or processing — the user sees the full error context. A successful
+        // command renders stdout alone (no exit code 0 line — 0 is not worth
+        // a row).
         let stderr = v.get("stderr").and_then(|s| s.as_str()).unwrap_or("");
         let exit_code = v.get("exit_code").and_then(|c| c.as_i64());
         let failed = v.get("success").and_then(|s| s.as_bool()) == Some(false);
+        let signal = v.get("signal").and_then(|s| s.as_i64());
+        if failed {
+            let mut sections: Vec<String> = Vec::new();
+            if let Some(code) = exit_code {
+                sections.push(format!("Exit code {code}"));
+            }
+            if let Some(sig) = signal {
+                sections.push(format!("Killed by signal {sig}"));
+            }
+            if !stderr.is_empty() {
+                sections.push(stderr.to_string());
+            }
+            if !stdout.is_empty() {
+                sections.push(stdout.to_string());
+            }
+            if sections.is_empty() {
+                return String::new();
+            }
+            return sections.join("\n");
+        }
+        // Success: stdout (and stderr if any — a warning on a successful
+        // command is still useful context, but no exit code line).
         let mut parts: Vec<&str> = Vec::new();
         if !stdout.is_empty() {
             parts.push(stdout);
         }
         if !stderr.is_empty() {
             parts.push(stderr);
-        }
-        if failed && let Some(code) = exit_code {
-            let label = format!("Exit code {code}");
-            // Insert the exit code line before stderr so it reads as a
-            // header for the error text, not a footer after it.
-            if parts.is_empty() {
-                return label;
-            }
-            // parts[0] is stdout (if any), parts[1..] is stderr. Insert
-            // the exit code between stdout and stderr so the order is
-            // stdout, exit code, stderr.
-            let stderr_idx = if stdout.is_empty() { 0 } else { 1 };
-            let mut combined = parts[stderr_idx..].join("\n");
-            if !combined.is_empty() {
-                combined = format!("{label}\n{combined}");
-            } else {
-                combined = label;
-            }
-            if stdout.is_empty() {
-                return combined;
-            }
-            return format!("{stdout}\n{combined}");
         }
         if parts.is_empty() {
             return String::new();
@@ -270,7 +270,8 @@ mod tests {
     }
 
     /// A failed bash command with stdout + stderr + exit code: order is
-    // stdout, exit code, stderr.
+    /// exit code, stderr, stdout (exit code first as the header, stdout
+    /// last as the least important section).
     #[test]
     fn test_bash_error_stdout_exit() {
         let out = serde_json::json!({
@@ -281,11 +282,31 @@ mod tests {
         })
         .to_string();
         let body = extract_body(&out);
-        let stdout_pos = body.find("partial output").unwrap();
         let ec_pos = body.find("Exit code 128").unwrap();
         let err_pos = body.find("fatal: bad ref").unwrap();
-        assert!(stdout_pos < ec_pos, "stdout before exit code: {body}");
+        let stdout_pos = body.find("partial output").unwrap();
         assert!(ec_pos < err_pos, "exit code before stderr: {body}");
+        assert!(err_pos < stdout_pos, "stderr before stdout: {body}");
+    }
+
+    /// A bash command killed by a signal surfaces the signal note between
+    /// the exit code and stderr.
+    #[test]
+    fn test_bash_signal_surfaces() {
+        let out = serde_json::json!({
+            "stdout": "",
+            "stderr": "",
+            "exit_code": 137,
+            "signal": 9,
+            "success": false,
+        })
+        .to_string();
+        let body = extract_body(&out);
+        assert!(body.contains("Exit code 137"), "exit code surfaces: {body}");
+        assert!(
+            body.contains("Killed by signal 9"),
+            "signal note surfaces: {body}"
+        );
     }
 
     /// A successful bash command does NOT surface an exit code line —

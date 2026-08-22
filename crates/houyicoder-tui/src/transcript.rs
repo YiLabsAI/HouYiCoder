@@ -79,7 +79,17 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
             TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(upd)) => {
                 let id = upd.tool_call_id.0.clone();
                 if let Some(out) = &upd.fields.raw_output {
-                    updates.push((id, Some(ToolOutcome::from_output(out)), Some(out.clone())));
+                    // Semantic error judgment needs the tool name + call input
+                    // (grep/diff exit 1 is not an error). The tools map is
+                    // populated by the ToolCall frame, which arrives before
+                    // its update, so the entry is present here.
+                    let (tool_name, call_input) = tools.get(&id).cloned().unwrap_or_default();
+                    let outcome = ToolOutcome::from_output_with(
+                        out,
+                        &tool_name,
+                        call_input.as_ref().unwrap_or(&serde_json::Value::Null),
+                    );
+                    updates.push((id, Some(outcome), Some(out.clone())));
                 } else if let Some(status) = upd.fields.status {
                     let oc = match status {
                         ToolCallStatus::Failed => ToolOutcome::Error,
@@ -160,7 +170,11 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
             tool: tool_name.to_string(),
             status: String::new(),
             invocation: String::new(),
-            outcome: ToolOutcome::from_output(output),
+            outcome: ToolOutcome::from_output_with(
+                output,
+                tool_name,
+                call_input.unwrap_or(&serde_json::Value::Null),
+            ),
             call_id: id.to_string(),
             body,
             is_diff: output_has_diff(&out_str),

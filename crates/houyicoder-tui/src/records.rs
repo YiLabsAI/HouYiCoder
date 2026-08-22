@@ -159,10 +159,105 @@ pub enum ToolOutcome {
 impl ToolOutcome {
     /// Derive the outcome from a tool result's output JSON. An error key or
     /// success == false → Error; otherwise Success (the call returned).
+    ///
+    /// For bash, a non-zero exit is NOT always an error: grep exits 1 when
+    /// there are no matches, diff exits 1 when files differ — both are
+    /// successful completions of the command's semantic job, not failures.
+    /// The command text (from the call's input) is inspected to recognize
+    /// these semantic-success cases so they do not render red. Other tools
+    /// keep the simple error-key / success==false rule.
     pub fn from_output(output: &serde_json::Value) -> Self {
-        let failed = output.get("error").is_some()
-            || output.get("success").and_then(|v| v.as_bool()) == Some(false);
-        if failed { Self::Error } else { Self::Success }
+        Self::from_output_with(output, "", &serde_json::Value::Null)
+    }
+
+    /// Same as from_output, but with the tool name + call input so bash
+    /// commands whose non-zero exit is semantic success (grep no-match,
+    /// diff files-differ) are not mis-colored as errors.
+    pub fn from_output_with(
+        output: &serde_json::Value,
+        tool_name: &str,
+        call_input: &serde_json::Value,
+    ) -> Self {
+        let has_error = output.get("error").is_some();
+        let success_false = output.get("success").and_then(|v| v.as_bool()) == Some(false);
+        if !has_error && !success_false {
+            return Self::Success;
+        }
+        // bash with a non-zero exit: check whether the command is one whose
+        // non-zero exit is semantic success, not a failure.
+        if tool_name == "bash" && !has_error {
+            let exit_code = output
+                .get("exit_code")
+                .and_then(|c| c.as_i64())
+                .unwrap_or(0);
+            let command = call_input
+                .get("command")
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
+            if exit_code != 0 && command_is_semantic_success(command, exit_code) {
+                return Self::Success;
+            }
+        }
+        Self::Error
+    }
+}
+
+/// Whether a bash command's non-zero exit is a semantic success (the command
+/// did its job), not a failure. grep exits 1 when no matches are found; diff
+/// exits 1 when files differ; both are the command reporting a result, not
+/// failing. CC's interpretCommandResult applies the same reasoning
+/// (commandSemantics.ts) — a non-zero exit is not always an error.
+fn command_is_semantic_success(command: &str, exit_code: i64) -> bool {
+    // Only the common, unambiguous cases. A pipeline or compound command is
+    // left as-is (treated as error on non-zero): the exit code of a pipeline
+    // is the LAST stage's, so "grep foo | head" exiting 1 means head failed,
+    // not grep found no match — recognizing grep here would mis-color a real
+    // head failure as success.
+    let trimmed = command.trim();
+    // Shell control operators that make the exit code NOT belong to the
+    // first command. Bail out — the semantic of a compound command is not
+    // worth parsing here.
+    if trimmed.contains('|')
+        || trimmed.contains(';')
+        || trimmed.contains("&&")
+        || trimmed.contains("||")
+    {
+        return false;
+    }
+    // Strip a leading env-assignment prefix (FOO=bar command...) so
+    // "GREP_COLOR=always grep ..." is still recognized.
+    let cmd = strip_env_prefix(trimmed);
+    let first_word = cmd.split_whitespace().next().unwrap_or("");
+    match (first_word, exit_code) {
+        ("grep", 1) => true, // no matches — the command succeeded
+        ("rg", 1) => true,   // ripgrep — same
+        ("diff", 1) => true, // files differ — the command succeeded
+        _ => false,
+    }
+}
+
+/// Strip leading VAR=value assignments from a command line so the actual
+/// command word is reachable (POSIX allows any number of leading env
+/// assignments).
+fn strip_env_prefix(cmd: &str) -> &str {
+    let mut rest = cmd;
+    loop {
+        let trimmed = rest.trim_start();
+        let Some(eq) = trimmed.find('=') else {
+            return trimmed;
+        };
+        let before = &trimmed[..eq];
+        if before.is_empty()
+            || !before
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return trimmed;
+        }
+        let after = &trimmed[eq + 1..];
+        // The value runs to the next whitespace.
+        let end = after.find(char::is_whitespace).unwrap_or(after.len());
+        rest = &after[end..];
     }
 }
 
@@ -622,3 +717,7 @@ mod tests {
         assert!(!r.contains("+"));
     }
 }
+
+#[cfg(test)]
+#[path = "records_tests.rs"]
+mod records_tests;
