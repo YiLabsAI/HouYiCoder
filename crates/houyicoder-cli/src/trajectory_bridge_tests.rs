@@ -537,3 +537,118 @@ fn test_tool_result_extracts_body() {
         tr.summary
     );
 }
+
+/// A MetaUser event (system reminder — redundancy nudge, blind-retry warning)
+/// must NOT enter the turn's user_input. The trajectory title reads
+/// user_input; a system reminder showing there would mislead the user into
+/// thinking they typed it. MetaUser is skipped in project_event (no
+/// trajectory event row) and never sets user_input in the projection loop.
+#[test]
+fn test_meta_user_excluded() {
+    let events = vec![
+        ev(
+            100,
+            TurnEventKind::UserInput {
+                text: "hello".into(),
+            },
+        ),
+        ev(
+            105,
+            TurnEventKind::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            TurnEventKind::MetaUser {
+                text: "Note: you just called bash with the same input earlier".into(),
+            },
+        ),
+        ev(
+            120,
+            TurnEventKind::TurnStarted {
+                turn: 2,
+                call_in_turn: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    // Two turns: first (hello + MetaUser reminder), second (empty prompt
+    // continuation).
+    let first = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let second = match &view.rows[1] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    // First turn's user_input is the real prompt, not the MetaUser reminder.
+    assert_eq!(first.user_input, "hello");
+    // Second turn's user_input is empty (no UserInput between the first
+    // turn's TurnStarted and the second's).
+    assert!(
+        second.user_input.is_empty(),
+        "second turn user_input must be empty, got: {}",
+        second.user_input
+    );
+    // The MetaUser reminder must NOT appear as a trajectory event in either
+    // turn.
+    for turn in [&first, &second] {
+        for ev in &turn.events {
+            assert!(
+                !ev.summary.contains("Note: you just called"),
+                "MetaUser leaked into trajectory events: {}",
+                ev.summary
+            );
+        }
+    }
+}
+
+/// A MemoryRecall event (system-reminder memories served to the model as
+/// InputItem::User) must NOT enter the turn's user_input either. Same
+/// class as MetaUser: system content the model sees as user, but the
+/// trajectory must not display as user input.
+#[test]
+fn test_memory_recall_excluded() {
+    let events = vec![
+        ev(
+            100,
+            TurnEventKind::UserInput {
+                text: "fix the bug".into(),
+            },
+        ),
+        ev(
+            105,
+            TurnEventKind::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            TurnEventKind::MemoryRecall {
+                text: "remembered: always run tests".into(),
+                keys: vec![],
+                bytes: 42,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        turn.user_input, "fix the bug",
+        "MemoryRecall must not overwrite user_input"
+    );
+    for ev in &turn.events {
+        assert!(
+            !ev.summary.contains("remembered:"),
+            "MemoryRecall leaked into trajectory events: {}",
+            ev.summary
+        );
+    }
+}
