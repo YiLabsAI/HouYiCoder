@@ -23,7 +23,12 @@ use houyicoder_tui::view::trajectory_pane::{
 /// Which tool a call id invoked, and with what input, so a later ToolResult
 /// can be judged against the call that produced it. Built from the ToolCall
 /// events, which always precede their result in append order.
-type CallIndex = HashMap<String, (String, serde_json::Value)>;
+///
+/// Borrowed from the event slice rather than owned: a tool input can be the
+/// whole payload the model sent (a write call carries the entire file body),
+/// and the index exists only for the length of one projection, so copying
+/// them would duplicate the session's writes for no gain.
+type CallIndex<'a> = HashMap<&'a str, (&'a str, &'a serde_json::Value)>;
 
 /// One line of preview text for an event (truncated so the L1 row stays one
 /// line). The L2 detail carries the full content separately.
@@ -42,7 +47,7 @@ fn preview(s: &str) -> String {
 /// own rather than while walking the turns: a result is judged against the
 /// call that produced it, and the two events need not sit in the same turn,
 /// so the index must be complete before the first result is judged.
-fn index_calls(events: &[TurnEvent]) -> CallIndex {
+fn index_calls(events: &[TurnEvent]) -> CallIndex<'_> {
     let mut calls = CallIndex::new();
     for ev in events {
         if let TurnEventKind::ToolCall {
@@ -51,7 +56,7 @@ fn index_calls(events: &[TurnEvent]) -> CallIndex {
             input,
         } = &ev.kind
         {
-            calls.insert(call_id.clone(), (tool.clone(), input.clone()));
+            calls.insert(call_id.as_str(), (tool.as_str(), input));
         }
     }
     calls
@@ -72,7 +77,7 @@ fn index_calls(events: &[TurnEvent]) -> CallIndex {
 /// both places.
 fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -> bool {
     let (tool, input) = match calls.get(call_id) {
-        Some((t, i)) => (t.as_str(), i),
+        Some(&(t, i)) => (t, i),
         // No matching call (a result whose call frame is outside this log
         // slice): judge on the output alone. from_output_with with an empty
         // tool name applies the plain error-or-success rule.
