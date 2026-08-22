@@ -43,7 +43,7 @@ pub fn model_id_at(app: &App, idx: usize) -> Option<String> {
 /// cursor from a catalog index must add 1 to account for the Default row
 /// — this helper is the single point that owns that +1 so the two spaces
 /// (row index vs catalog index) never get conflated.
-pub fn row_for_model_id(app: &App, id: Option<&str>) -> usize {
+pub(crate) fn row_for_model_id(app: &App, id: Option<&str>) -> usize {
     match id {
         None => 0,
         Some(id) => app

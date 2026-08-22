@@ -26,7 +26,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// one-line previews (trajectory titles, palette help, queue items, resume
 /// picker rows) route through here so no code path can panic on a
 /// multi-byte boundary.
-pub fn truncate_width(s: &str, max_width: usize) -> String {
+pub(crate) fn truncate_width(s: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
     }
