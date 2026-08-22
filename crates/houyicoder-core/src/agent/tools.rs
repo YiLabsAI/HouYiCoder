@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::extension::ToolError;
 
+pub mod agent;
 pub mod ask_user_question;
 pub mod bash_snapshot;
 pub mod bash_tool;

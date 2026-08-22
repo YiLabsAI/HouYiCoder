@@ -33,6 +33,7 @@ pub use super::status::{StatusSnapshot, UsageAccumulator};
 pub use super::step::{AgentId, ApprovalDecision, ApprovalRequest, NextStep, TurnOutcome};
 pub use super::thinking::{thinking_brief, turn_reasoning, turn_tool_summary};
 pub use super::tool::{StubTool, ToolRegistry};
+pub use super::tools::agent::AgentTool;
 pub use super::tools::ask_user_question::AskUserQuestionTool;
 pub use super::tools::conversation_search::ConversationSearchTool;
 pub use super::tools::glob::GlobTool;

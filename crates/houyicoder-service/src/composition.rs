@@ -43,7 +43,7 @@ use houyicoder_core::agent::extractor::MemoryExtractor;
 use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
-    AskUserQuestionTool, BashTool, CommandHook, ConversationSearchTool, EditTool,
+    AgentTool, AskUserQuestionTool, BashTool, CommandHook, ConversationSearchTool, EditTool,
     GitWorkspaceProbe, GlobTool, GrepTool, HookRegistry, HookSource, HotPathReducer, LlmSummarizer,
     MultiEditTool, ReadTool, Runner, TodoWriteTool, ToolRegistry, WebFetchTool, WriteTool,
     parse_event,
@@ -414,6 +414,18 @@ pub fn assemble(
     // reads.
     let conversation_search = ConversationSearchTool::new(store.clone(), recall_meter.clone());
     tools.register(Arc::new(conversation_search));
+    // The agent tool delegates a sub-task to a spawned child. Like the recall
+    // tool it is not sandbox-backed; it resolves the requested type against
+    // the agent registry (built-ins) and goes through the ToolCtx spawn port
+    // at call time. Registered unconditionally so the model can delegate even
+    // without a sandbox.
+    let agent_registry: Arc<dyn houyicoder_core::agent::multi_agent::registry::AgentRegistry> =
+        Arc::new(
+            houyicoder_core::agent::multi_agent::registry::BuiltInRegistry::from_agents(
+                houyicoder_core::agent::multi_agent::registry::built_in_all(),
+            ),
+        );
+    tools.register(Arc::new(AgentTool::new(agent_registry)));
     // LlmSummarizer shares the main provider + model so compress produces
     // real summaries; the self-overflow guard + heuristic fallback are in
     // lifecycle.rs. Cloned before the runner takes the provider.

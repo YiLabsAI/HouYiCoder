@@ -8,6 +8,7 @@ use houyicoder_async::{CancellationToken, PFut};
 use houyicoder_context::SessionId;
 use houyicoder_protocol::extension::ToolError;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::progress::ProgressSink;
@@ -51,6 +52,13 @@ pub struct ToolCtx {
     /// the way it threads the progress sink; a tool that does not spawn
     /// pays nothing.
     pub spawn_handle: Option<Arc<dyn SpawnHandle>>,
+    /// Agent types a deny rule (the Agent(x) permission form) blocks for
+    /// this dispatch. The agent tool consults this after registry lookup to
+    /// surface a denial as a distinct error from an unknown type. The agent
+    /// loop pre-computes the set where permission rules live and threads it
+    /// here so the engine never depends on the permission layer. Defaults to
+    /// an empty set; a tool that ignores it pays nothing.
+    pub denied_agents: Arc<HashSet<String>>,
 }
 
 impl ToolCtx {
@@ -67,6 +75,7 @@ impl ToolCtx {
             session_id: None,
             agent_identity: None,
             spawn_handle: None,
+            denied_agents: Arc::new(HashSet::new()),
         }
     }
 
@@ -100,6 +109,13 @@ impl ToolCtx {
     /// Attach the spawn port the agent tool calls to launch a child.
     pub fn with_spawn_handle(mut self, handle: Arc<dyn SpawnHandle>) -> Self {
         self.spawn_handle = Some(handle);
+        self
+    }
+
+    /// Attach the denied-agent set the agent tool consults after registry
+    /// lookup to surface a deny rule distinctly from an unknown type.
+    pub fn with_denied_agents(mut self, denied: Arc<HashSet<String>>) -> Self {
+        self.denied_agents = denied;
         self
     }
 }
