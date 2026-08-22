@@ -16,7 +16,10 @@ use std::sync::Arc;
 
 use crate::agent::append::new_event;
 use crate::agent::runner_config::RunnerConfig;
+use crate::agent::worktree_controller::{ChildWorktree, WorktreeController};
 use crate::agent::{Runner, ToolRegistry};
+
+use super::registry::IsolationMode;
 
 /// Cap on spawn nesting. A top-level agent is depth 0; each spawn adds 1.
 /// v0 limit per the multi-agent config (max_depth = 4): levels 0-3 spawn
@@ -38,14 +41,26 @@ pub struct SpawnRequest {
     /// from the session's spawn ancestry before calling spawn; the child is
     /// depth + 1. Used by the recursion guard to cap nesting.
     pub depth: u32,
+    /// The isolation mode the resolved agent definition asked for. Worktree
+    /// creates a per-child worktree + narrows the fence; None runs the child
+    /// in the parent's tree.
+    pub isolation: IsolationMode,
+    /// The worktree controller, required when isolation is Worktree. None
+    /// with Worktree is a wiring error the runtime must not produce; spawn
+    /// fail-closes to WorktreeFenceNarrowFail rather than degrading to no
+    /// isolation.
+    pub worktree_controller: Option<Arc<WorktreeController>>,
 }
 
 /// A handle to a spawned child. Carries the child session id + a cancel
-/// token the caller uses to abort the child run.
+/// token the caller uses to abort the child run. When the child was spawned
+/// with worktree isolation, worktree holds the per-child fence guard; the
+/// caller drops it on completion to restore the fence.
 pub struct ChildHandle {
     pub session: SessionId,
     pub runner: Arc<Runner>,
     pub cancel: CancellationToken,
+    pub worktree: Option<ChildWorktree>,
 }
 
 /// Why a spawn was rejected. Budget and capability failures are policy,
@@ -75,6 +90,27 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     let child_sid = SessionId::new();
     let cancel = CancellationToken::new();
 
+    // Per-child worktree + fence. Fail-closed: a missing controller or a
+    // fence failure rejects the spawn rather than degrading to no isolation,
+    // and no child session is built or boundary written. The guard travels
+    // with the child handle; the caller drops it on completion to restore
+    // the fence. The sync git + sandbox calls block the async caller for the
+    // one-shot worktree-setup cost (a git add + fence narrow).
+    let (worktree, isolation_str) = match req.isolation {
+        IsolationMode::None => (None, "none"),
+        IsolationMode::Worktree => {
+            let controller = req
+                .worktree_controller
+                .as_ref()
+                .ok_or(SpawnError::WorktreeFenceNarrowFail)?;
+            let slug = format!("agent-{}", &child_sid.to_string()[..8]);
+            let cw = controller
+                .enter_for_child(slug)
+                .map_err(|_| SpawnError::WorktreeFenceNarrowFail)?;
+            (Some(cw), "worktree")
+        }
+    };
+
     // Build the child Runner before recording the boundary, so a build
     // failure leaves no dangling spawn in the parent log (resume would
     // reconcile a child that never existed). The boundary records the child
@@ -101,7 +137,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
             child_session_id: child_sid.to_string(),
             subagent_type,
             prompt_summary,
-            isolation: "none".to_string(),
+            isolation: isolation_str.to_string(),
             policy: "delegate".to_string(),
         },
     );
@@ -114,6 +150,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         session: child_sid,
         runner,
         cancel,
+        worktree,
     })
 }
 

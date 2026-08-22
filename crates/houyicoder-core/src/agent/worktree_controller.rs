@@ -61,6 +61,16 @@ pub struct ExitOutcome {
     pub message: String,
 }
 
+/// A per-child worktree: the path + branch + the fence guard the child
+/// holds during its run. The guard keeps the child's sandbox execs fenced
+/// to the worktree; the caller drops it on completion and Drop restores the
+/// wide fence. Not Clone -- the guard is single-owner.
+pub struct ChildWorktree {
+    pub worktree_path: PathBuf,
+    pub worktree_branch: String,
+    pub fence_guard: houyicoder_api::sandbox::WorktreeFenceGuard,
+}
+
 pub struct WorktreeController {
     repo_root: PathBuf,
     git_common_dir: PathBuf,
@@ -223,6 +233,33 @@ impl WorktreeController {
             worktree_path: created.worktree_path.to_string_lossy().into_owned(),
             worktree_branch: created.worktree_branch,
             message,
+        })
+    }
+
+    /// Create a per-child worktree + narrow the fence, leaving the parent on
+    /// its original cwd and wide fence. The returned guard travels with the
+    /// child handle and is held for the child's run; Drop restores the wide
+    /// fence on completion. Refused while a sandbox exec is in flight (an
+    /// in-flight exec keeps its spawn-time profile and could escape the
+    /// narrow). Fail-closed: a fence failure returns an error, never a
+    /// degraded no-isolation spawn.
+    pub fn enter_for_child(&self, slug: String) -> Result<ChildWorktree, WorktreeError> {
+        if self.sandbox.active_exec_count() > 0 {
+            return Err(WorktreeError::Git {
+                stderr: "per-child worktree refused: a sandbox exec is in flight".into(),
+            });
+        }
+        let created = worktree_session::get_or_create_worktree(&self.repo_root, &slug)?;
+        let guard = self
+            .sandbox
+            .narrow_to_worktree(&created.worktree_path, &self.git_common_dir)
+            .map_err(|e| WorktreeError::Git {
+                stderr: format!("narrow_to_worktree: {e}"),
+            })?;
+        Ok(ChildWorktree {
+            worktree_path: created.worktree_path,
+            worktree_branch: created.worktree_branch,
+            fence_guard: guard,
         })
     }
 
@@ -409,6 +446,7 @@ mod tests {
     struct StubSandbox {
         narrows: AtomicU64,
         in_flight: usize,
+        narrow_err: bool,
     }
     impl SandboxSession for StubSandbox {
         fn exec_with_config(
@@ -444,6 +482,11 @@ mod tests {
             _worktree: &Path,
             _git_common_dir: &Path,
         ) -> Result<houyicoder_api::sandbox::WorktreeFenceGuard, SandboxError> {
+            if self.narrow_err {
+                return Err(SandboxError::Unsupported(
+                    "stub narrow failure for fail-closed test".into(),
+                ));
+            }
             self.narrows.fetch_add(1, Ordering::SeqCst);
             Ok(houyicoder_api::sandbox::WorktreeFenceGuard::new(Box::new(
                 || Ok(()),
@@ -454,7 +497,7 @@ mod tests {
         }
     }
 
-    fn make_repo(tag: u64) -> PathBuf {
+    pub(crate) fn make_repo(tag: u64) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("houyi-wt-ctrl-{}-{tag}", std::process::id()));
         drop(std::fs::remove_dir_all(&dir));
         std::fs::create_dir_all(&dir).expect("mkdir");
@@ -492,9 +535,27 @@ mod tests {
     /// Build a controller wired to a throwaway repo + a stub sandbox + a real
     /// in-memory session store. Returns the controller, the store (for replay
     /// assertions), + the shared cwd Arc.
-    fn wired(
+    pub(crate) fn wired(
         repo: &Path,
         in_flight: usize,
+    ) -> (
+        Arc<WorktreeController>,
+        Arc<SessionStore>,
+        Arc<RwLock<PathBuf>>,
+    ) {
+        wired_opt(repo, in_flight, false)
+    }
+
+    /// Same as wired but with a sandbox whose narrow always fails -- for the
+    /// fail-closed path (a fence failure must reject, not degrade).
+    pub(crate) fn wired_err(repo: &Path) -> Arc<WorktreeController> {
+        wired_opt(repo, 0, true).0
+    }
+
+    fn wired_opt(
+        repo: &Path,
+        in_flight: usize,
+        narrow_err: bool,
     ) -> (
         Arc<WorktreeController>,
         Arc<SessionStore>,
@@ -505,6 +566,7 @@ mod tests {
         let sandbox: Arc<dyn SandboxSession> = Arc::new(StubSandbox {
             narrows: AtomicU64::new(0),
             in_flight,
+            narrow_err,
         });
         let cwd = Arc::new(RwLock::new(repo.to_path_buf()));
         let session_id = SessionId::new();
@@ -712,3 +774,7 @@ mod tests {
         std::fs::remove_dir_all(&repo).ok();
     }
 }
+
+#[cfg(test)]
+#[path = "worktree_child_tests.rs"]
+mod child_tests;

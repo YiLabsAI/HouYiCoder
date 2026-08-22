@@ -7,6 +7,7 @@ use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
 use crate::agent::ToolRegistry;
+use crate::agent::multi_agent::registry::IsolationMode;
 use crate::agent::runner_config::RunnerConfig;
 use crate::provider::test_support::FakeProvider;
 
@@ -29,6 +30,8 @@ fn req_at_depth(
         prompt: "find the auth module".to_string(),
         prompt_summary: "find the auth module".to_string(),
         depth,
+        isolation: IsolationMode::None,
+        worktree_controller: None,
     }
 }
 
