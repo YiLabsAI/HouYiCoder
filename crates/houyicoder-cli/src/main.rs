@@ -121,7 +121,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fork,
         } => run_resume(value, project, fork),
         CliCommand::Continue { project, fork } => run_continue(project, fork),
+        CliCommand::Cleanup { apply } => run_cleanup(apply),
     }
+}
+
+/// The cleanup subcommand: review or apply the session prune plan. Default
+/// (dry-run) calls plan_all + prints the entries to stdout; --apply calls
+/// apply_prune + prints the report. No alternate screen here (CLI
+/// subcommand, not TUI), so print is the correct sink. A plan that
+/// exceeds the confirm threshold is still printable — the threshold
+/// gates the background sweep, not the manual review.
+fn run_cleanup(apply: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let sessions_root = houyicoder_service::composition::session_log_root();
+    let shell_snapshots = houyicoder_config::config_home().join("shell-snapshots");
+    let debug_log = std::env::current_dir()
+        .unwrap_or_default()
+        .join(".houyicoder")
+        .join("debug.log");
+    // No current session for a standalone cleanup invocation — the
+    // protected set is just the lock-held sessions from the probe.
+    let (policy, targets) =
+        housekeeping::build_prune_context(&sessions_root, &shell_snapshots, Some(&debug_log), None);
+    let plan = houyicoder_service::session_prune::plan_all(&targets, &policy);
+    if plan.entries.is_empty() {
+        println!("Nothing to prune.");
+        return Ok(());
+    }
+    for entry in &plan.entries {
+        let kind = match entry.kind {
+            houyicoder_service::session_prune::PruneKind::Session => "session",
+            houyicoder_service::session_prune::PruneKind::Snapshot => "snapshot",
+            houyicoder_service::session_prune::PruneKind::DebugLog => "debug-log",
+        };
+        let reason = match entry.reason {
+            houyicoder_service::session_prune::PruneReason::Ttl => "ttl",
+            houyicoder_service::session_prune::PruneReason::EmptyTtl => "empty-ttl",
+            houyicoder_service::session_prune::PruneReason::CapOverflow => "cap-overflow",
+        };
+        let name = entry
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        println!("{kind:8} {reason:12} {name}");
+    }
+    println!("\n{} entries prunable ({} kept).", plan.len(), plan.kept);
+    if !apply {
+        println!("Dry run -- pass --apply to execute.");
+        return Ok(());
+    }
+    // Acquire the same .prune.lock the background sweep uses so the two
+    // paths never delete concurrently. A held lock is not an error here --
+    // the user re-runs when the sweep is done. The guard lives until the
+    // end of this scope, so apply_prune runs under the lock.
+    let _guard = match housekeeping::try_prune_lock() {
+        Some(g) => g,
+        None => {
+            println!(
+                "Another prune is running (background sweep or another process). Try again later."
+            );
+            return Ok(());
+        }
+    };
+    let report = houyicoder_service::session_prune::apply_prune(&plan);
+    println!("Removed {}, errors {}.", report.removed, report.errors);
+    Ok(())
 }
 
 /// Dispatch --resume <value>. The value is an existing file path (resume from

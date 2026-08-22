@@ -81,25 +81,12 @@ fn run_once(
     }
 
     let (cfg, _warnings) = retention::load_retention();
-    // Probe session.lock on every session dir: a lock held by another live
-    // process means that session is in use, and pruning it deletes the
-    // directory from under the writer. mtime recency does not cover a held
-    // but idle session (its log is old), so the probe is the real guard.
-    let mut protected = scan_lock_held_sessions(sessions_root);
-    protected.push(*current_session);
-    let policy = PrunePolicy {
-        ttl_secs: (cfg.session_retention_days as u64) * 24 * 3600,
-        empty_ttl_secs: EMPTY_TTL_SECS,
-        max_count: cfg.session_retention_count as usize,
-        protected,
-        snapshot_ttl_secs: SNAPSHOT_TTL_SECS,
-        debug_max_bytes: DEBUG_MAX_BYTES,
-    };
-    let targets = PruneTargets {
-        sessions_root: Some(sessions_root.to_path_buf()),
-        shell_snapshots_root: Some(shell_snapshots.to_path_buf()),
-        debug_log: debug_log.map(|p| p.to_path_buf()),
-    };
+    let (policy, targets) = build_prune_context(
+        sessions_root,
+        shell_snapshots,
+        debug_log,
+        Some(*current_session),
+    );
 
     let plan = session_prune::plan_all(&targets, &policy);
     let threshold = cfg.prune_confirm_threshold as usize;
@@ -204,7 +191,7 @@ pub fn fire_after_bundle(session: SessionId) {
 /// fallback. Unix-only (flock); non-unix returns empty (no cross-process
 /// lock, single-process only).
 #[cfg(unix)]
-fn scan_lock_held_sessions(sessions_root: &Path) -> Vec<SessionId> {
+pub(crate) fn scan_lock_held_sessions(sessions_root: &Path) -> Vec<SessionId> {
     use houyicoder_context::SessionId;
     let Ok(entries) = std::fs::read_dir(sessions_root) else {
         return Vec::new();
@@ -237,6 +224,55 @@ fn scan_lock_held_sessions(sessions_root: &Path) -> Vec<SessionId> {
 }
 
 #[cfg(not(unix))]
-fn scan_lock_held_sessions(_sessions_root: &Path) -> Vec<SessionId> {
+pub(crate) fn scan_lock_held_sessions(_sessions_root: &Path) -> Vec<SessionId> {
     Vec::new()
+}
+
+/// Build the prune policy + targets from the retention config + the
+/// lock-held scan. Shared by the background sweep (run_once) and the
+/// manual cleanup subcommand (run_cleanup) so the two paths cannot drift
+/// onto different constants or a different protected set. The current
+/// session (Some for the sweep, None for standalone cleanup) is merged
+/// into the protected set alongside the lock-held sessions.
+pub(crate) fn build_prune_context(
+    sessions_root: &Path,
+    shell_snapshots: &Path,
+    debug_log: Option<&Path>,
+    current_session: Option<SessionId>,
+) -> (PrunePolicy, PruneTargets) {
+    let (cfg, _warnings) = retention::load_retention();
+    let mut protected = scan_lock_held_sessions(sessions_root);
+    if let Some(sid) = current_session {
+        protected.push(sid);
+    }
+    let policy = PrunePolicy {
+        ttl_secs: (cfg.session_retention_days as u64) * 24 * 3600,
+        empty_ttl_secs: EMPTY_TTL_SECS,
+        max_count: cfg.session_retention_count as usize,
+        protected,
+        snapshot_ttl_secs: SNAPSHOT_TTL_SECS,
+        debug_max_bytes: DEBUG_MAX_BYTES,
+    };
+    let targets = PruneTargets {
+        sessions_root: Some(sessions_root.to_path_buf()),
+        shell_snapshots_root: Some(shell_snapshots.to_path_buf()),
+        debug_log: debug_log.map(|p| p.to_path_buf()),
+    };
+    (policy, targets)
+}
+
+/// Try to acquire the prune lock for a manual cleanup --apply. Returns the
+/// guard (held until the caller drops it, so apply_prune runs under the
+/// lock) or None if held by another process. Dry-run planning does not
+/// need the lock. This is a thin pub(crate) wrapper around the private
+/// acquire_prune_lock so main.rs does not name the Flock type directly.
+#[cfg(unix)]
+pub(crate) fn try_prune_lock() -> Option<Flock<std::fs::File>> {
+    acquire_prune_lock()
+}
+
+#[cfg(not(unix))]
+#[allow(dead_code)]
+pub(crate) fn try_prune_lock() -> Option<()> {
+    Some(())
 }

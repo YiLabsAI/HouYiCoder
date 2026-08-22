@@ -45,6 +45,10 @@ pub(crate) enum CliCommand {
     Continue { project: Option<String>, fork: bool },
     /// Print usage help.
     Help,
+    /// Review or apply the session prune plan. Default (dry-run) prints the
+    /// plan to stdout; --apply executes it. A CLI maintenance subcommand
+    /// parallel to ps/attach, not a slash command.
+    Cleanup { apply: bool },
 }
 
 /// Parse CLI arguments into a command. Pure function: no I/O, no process
@@ -175,6 +179,19 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
     if first.as_deref() == Some("ps") {
         return Ok(CliCommand::Ps);
     }
+    if first.as_deref() == Some("cleanup") {
+        let mut apply = false;
+        for arg in iter.by_ref() {
+            if arg == "--apply" {
+                apply = true;
+            } else {
+                return Err(format!(
+                    "cleanup: unknown argument: {arg} (use --apply to execute the plan)"
+                ));
+            }
+        }
+        return Ok(CliCommand::Cleanup { apply });
+    }
 
     let mut rest: Vec<String> = first.into_iter().collect();
     rest.extend(iter);
@@ -202,6 +219,6 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
 /// Usage help text printed to stderr on -h / --help.
 pub(crate) fn print_help() {
     eprintln!(
-        "houyi [--project <path>] [--model <id>] [--acp | --detached | --serve <socket> | --resume <file|sid> | --continue]\n  --project <path>   sandbox workspace = <path>\n  --model <id>      run with this model id for the session (overrides settings.json; fresh sessions only — a resumed session restores its own model)\n  --acp             launch the ACP server over stdio instead of the TUI\n  --detached        run detached: bind a conventional per-user socket (prints\n                    session_id + pid to stderr); ps lists detached sessions.\n  --serve <socket>  run detached at a custom socket path (ps uses the\n                    conventional dir, so prefer --detached for discoverability).\n  --resume <file>   resume from an exported transcript file (one-time bootstrap).\n  --resume <sid>   resume a session already on disk by its session id.\n  -c, --continue    resume the most-recently-active session (no sid needed).\n  --fork-session    with --resume/--continue: mint a new sid seeded from the\n                    source so the original is untouched (non-destructive branch).\n  attach <socket> <session_id>  connect a TUI to a detached session\n  ps                             list detached session ids + pids (kill <pid> to stop)"
+        "houyi [--project <path>] [--model <id>] [--acp | --detached | --serve <socket> | --resume <file|sid> | --continue]\n  --project <path>   sandbox workspace = <path>\n  --model <id>      run with this model id for the session (overrides settings.json; fresh sessions only — a resumed session restores its own model)\n  --acp             launch the ACP server over stdio instead of the TUI\n  --detached        run detached: bind a conventional per-user socket (prints\n                    session_id + pid to stderr); ps lists detached sessions.\n  --serve <socket>  run detached at a custom socket path (ps uses the\n                    conventional dir, so prefer --detached for discoverability).\n  --resume <file>   resume from an exported transcript file (one-time bootstrap).\n  --resume <sid>   resume a session already on disk by its session id.\n  -c, --continue    resume the most-recently-active session (no sid needed).\n  --fork-session    with --resume/--continue: mint a new sid seeded from the\n                    source so the original is untouched (non-destructive branch).\n  attach <socket> <session_id>  connect a TUI to a detached session\n  ps                             list detached session ids + pids (kill <pid> to stop)\n  cleanup [--apply]             review (or with --apply, execute) the session prune plan"
     );
 }

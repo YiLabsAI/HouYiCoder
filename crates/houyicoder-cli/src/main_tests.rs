@@ -196,6 +196,23 @@ fn test_parse_ps() {
 // ── parse_args: flag ordering + edge cases ────────────────────────
 
 #[test]
+fn test_parse_cleanup_dry_run() {
+    let cmd = parse_args(vec!["cleanup".into()]).expect("must parse");
+    assert!(matches!(cmd, CliCommand::Cleanup { apply: false }));
+}
+
+#[test]
+fn test_parse_cleanup_apply() {
+    let cmd = parse_args(vec!["cleanup".into(), "--apply".into()]).expect("must parse");
+    assert!(matches!(cmd, CliCommand::Cleanup { apply: true }));
+}
+
+#[test]
+fn test_parse_cleanup_rejects_unknown() {
+    assert!(parse_args(vec!["cleanup".into(), "--bogus".into()]).is_err());
+}
+
+#[test]
 fn test_parse_first_flag() {
     // A leading flag (not a subcommand) must be re-parsed correctly.
     let cmd = parse_args(vec!["--acp".into()]).expect("must parse");
