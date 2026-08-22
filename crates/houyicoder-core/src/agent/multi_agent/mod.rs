@@ -5,6 +5,7 @@
 //! capability gating, token budget, and the bus bridge land later and plug
 //! into the types defined here.
 
+pub mod child_prompt;
 pub mod loader;
 pub mod registry;
 pub mod spawn;

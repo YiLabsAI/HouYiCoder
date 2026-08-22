@@ -75,6 +75,11 @@ pub struct AgentDefinition {
     pub initial_prompt: Option<String>,
     pub memory: MemoryScope,
     pub isolation: IsolationMode,
+    /// Drop the project memory file (AGENTS.md equivalent) from the child's
+    /// user context. Read-heavy agents fan out frequently and never act on
+    /// project rules, so the flag opts them out of paying the project-memory
+    /// tokens on every spawn.
+    pub omit_project_context: bool,
     pub color: Option<String>,
     pub system_prompt: PromptSource,
 }
@@ -193,6 +198,7 @@ pub fn built_in_general_purpose() -> AgentDefinition {
         initial_prompt: None,
         memory: MemoryScope::Disabled,
         isolation: IsolationMode::None,
+        omit_project_context: false,
         color: None,
         system_prompt: PromptSource::Owned(
             "You are a sub-agent. Complete the assigned task fully using your tools — not gold-plated, not half-done. When done, reply with a concise report: what you did and any key findings. The caller relays your report, so it only needs the essentials. Prefer editing existing files over creating new ones; do not create documentation files unless explicitly asked.".to_string()
@@ -219,6 +225,7 @@ pub fn built_in_explore() -> AgentDefinition {
         initial_prompt: None,
         memory: MemoryScope::Disabled,
         isolation: IsolationMode::None,
+        omit_project_context: true,
         color: None,
         system_prompt: PromptSource::Owned(
             "You are a read-only codebase search agent. Find files and code by pattern or keyword, read and analyze, report findings concisely. You cannot create, modify, or delete files. Be fast: prefer parallel tool calls, return findings as soon as you have them. Match search breadth to the thoroughness the caller named.".to_string()
@@ -245,6 +252,7 @@ pub fn built_in_plan() -> AgentDefinition {
         initial_prompt: None,
         memory: MemoryScope::Disabled,
         isolation: IsolationMode::None,
+        omit_project_context: true,
         color: None,
         system_prompt: PromptSource::Owned(
             "You are a read-only software architect. Explore the codebase, find existing patterns and conventions, and design an implementation plan for the given requirements. You cannot modify files. End your response with a 'Critical Files for Implementation' section listing 3-5 files most relevant to executing the plan, each with a one-line reason.".to_string()
@@ -271,6 +279,7 @@ pub fn built_in_verify() -> AgentDefinition {
         initial_prompt: None,
         memory: MemoryScope::Disabled,
         isolation: IsolationMode::None,
+        omit_project_context: false,
         color: Some("red".into()),
         system_prompt: PromptSource::Owned(
             "You are an adversarial verification agent. Your job is to break the implementation, not confirm it. Two failure modes to avoid: (1) verification avoidance -- reading code, narrating what you would test, writing PASS without running; (2) being seduced by the first 80% -- a polished surface or passing suite hides the broken 20%. Run real commands, check outputs against expectations, probe edge cases the implementer did not. You may write ephemeral scripts to a temp directory but must not modify the project. End with a line: VERDICT: PASS or VERDICT: FAIL or VERDICT: PARTIAL.".to_string()
@@ -297,6 +306,7 @@ pub fn built_in_code_guide() -> AgentDefinition {
         initial_prompt: None,
         memory: MemoryScope::Disabled,
         isolation: IsolationMode::None,
+        omit_project_context: false,
         color: None,
         system_prompt: PromptSource::Owned(
             "You are the houyi guide agent. Help the user understand and use the tool: configuration, hooks, skills, slash commands, settings, model selection. Fetch the docs map for authoritative answers, keep answers actionable, cite the doc section.".to_string()
@@ -425,5 +435,16 @@ mod tests {
             types,
             ["general-purpose", "explore", "plan", "verify", "code-guide"]
         );
+    }
+
+    /// Read-only search agents fan out frequently and never act on project
+    /// rules, so their user context drops the project memory; write-bearing
+    /// agents keep it.
+    #[test]
+    fn test_explore_plan_omit_memory() {
+        assert!(super::built_in_explore().omit_project_context);
+        assert!(super::built_in_plan().omit_project_context);
+        assert!(!super::built_in_general_purpose().omit_project_context);
+        assert!(!super::built_in_verify().omit_project_context);
     }
 }

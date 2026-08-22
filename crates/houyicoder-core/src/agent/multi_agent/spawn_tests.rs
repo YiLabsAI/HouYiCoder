@@ -136,3 +136,20 @@ async fn test_spawn_async_unlinks_cancel() {
         "async child's cancel must stay independent of the parent's"
     );
 }
+
+/// A spawned child's requests carry the lowest effort tier, so a fan-out of
+/// sub-agents does not multiply reasoning-token spend.
+#[tokio::test]
+async fn test_spawn_child_effort_gate() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::text("ok"));
+    let req = req_at_depth(parent_sid, store, provider, 0);
+    let handle = spawn_child(req).await.expect("spawn");
+    assert_eq!(
+        handle.runner.active_effort(),
+        Some(houyicoder_protocol::llm::EffortLevel::Low),
+        "child must pin the lowest effort tier at spawn"
+    );
+}

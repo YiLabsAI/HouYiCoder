@@ -338,7 +338,7 @@ fn using_tools_section() -> String {
 /// from the same directory when present. None when no project memory file is
 /// found; in that case the section is omitted entirely (not rendered empty)
 /// so the drill-down shows no Project context row.
-fn project_context_section(cwd: &Path) -> Option<String> {
+pub(crate) fn project_context_section(cwd: &Path) -> Option<String> {
     let (path, mut content) = find_memory_file(cwd)?;
     // Merge the local-private overlay from the same directory as the found
     // project memory file. Personal or machine-specific overrides sit on top

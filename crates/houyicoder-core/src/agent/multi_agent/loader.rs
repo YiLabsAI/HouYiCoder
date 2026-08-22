@@ -99,6 +99,9 @@ pub fn parse_agent_definition(text: &str) -> Result<AgentDefinition, LoadError> 
     let isolation = get("isolation")
         .and_then(parse_isolation)
         .unwrap_or_default();
+    let omit_project_context = get("omit_project_context")
+        .or_else(|| get("omitProjectContext"))
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
     let color = get("color").map(str::to_string);
 
     let body = match body_start {
@@ -121,6 +124,7 @@ pub fn parse_agent_definition(text: &str) -> Result<AgentDefinition, LoadError> 
         initial_prompt,
         memory,
         isolation,
+        omit_project_context,
         color,
         system_prompt: PromptSource::Owned(body),
     })
@@ -267,6 +271,21 @@ mod tests {
         let text = "---\nname: x\ndescription: y\nfutureField: anything\n---\nbody";
         let def = parse_agent_definition(text).unwrap();
         assert_eq!(def.subagent_type, "x");
+    }
+
+    #[test]
+    fn test_parse_omit_project_context() {
+        let on =
+            parse_agent_definition("---\nname: scanner\nomit_project_context: true\n---\nbody")
+                .unwrap();
+        assert!(on.omit_project_context);
+
+        let off = parse_agent_definition("---\nname: other\n---\nbody").unwrap();
+        assert!(!off.omit_project_context, "absent key defaults to false");
+
+        let camel = parse_agent_definition("---\nname: camel\nomitProjectContext: true\n---\nbody")
+            .unwrap();
+        assert!(camel.omit_project_context, "camelCase alias accepted");
     }
 
     #[test]

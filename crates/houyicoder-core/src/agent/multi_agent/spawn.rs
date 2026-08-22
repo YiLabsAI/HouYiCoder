@@ -19,6 +19,7 @@ use crate::agent::runner_config::RunnerConfig;
 use crate::agent::worktree_controller::{ChildWorktree, WorktreeController};
 use crate::agent::{Runner, ToolRegistry};
 
+use super::child_prompt::resolve_child_effort;
 use super::registry::IsolationMode;
 
 /// Cap on spawn nesting. A top-level agent is depth 0; each spawn adds 1.
@@ -147,6 +148,11 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         req.tools,
         req.config,
     ));
+    // Children run at the lowest effort tier: a fan-out of sub-agents must
+    // not multiply reasoning-token spend. Sticky on the runner so every
+    // child request carries it; the active pick outranks any catalog level
+    // the child model might default to.
+    runner.set_effort(resolve_child_effort());
 
     let spawn_event = new_event(
         parent_sid,
