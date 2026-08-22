@@ -90,6 +90,7 @@ pub fn load_retention_from(path: &std::path::Path) -> (RetentionConfig, Vec<Conf
         DEFAULT_THRESHOLD,
         &mut warnings,
     );
+    warn_near_miss_keys(&value, &mut warnings);
     (
         RetentionConfig {
             session_retention_days,
@@ -98,6 +99,28 @@ pub fn load_retention_from(path: &std::path::Path) -> (RetentionConfig, Vec<Conf
         },
         warnings,
     )
+}
+
+/// Warn on camelCase spellings of the retention keys. The loader looks up
+/// exact key names only, so a near-miss key sits in the file unread while
+/// every field silently defaults - the worst failure shape for a retention
+/// knob, because the store keeps growing and nothing ever says why. Warn,
+/// never accept: accepting would give one setting two valid spellings and
+/// split every config in the wild into two dialects.
+fn warn_near_miss_keys(value: &serde_json::Value, warnings: &mut Vec<ConfigWarning>) {
+    const NEAR_MISS: [(&str, &str); 3] = [
+        ("sessionRetentionDays", "session_retention_days"),
+        ("sessionRetentionCount", "session_retention_count"),
+        ("pruneConfirmThreshold", "prune_confirm_threshold"),
+    ];
+    for (alias, canonical) in NEAR_MISS {
+        if value.get(alias).is_some() {
+            warnings.push(ConfigWarning {
+                field: alias.to_string(),
+                reason: format!("the key is {canonical}; this spelling is ignored"),
+            });
+        }
+    }
 }
 
 /// Read a u32 field from a settings JSON object. Missing or null yields the
@@ -202,6 +225,35 @@ mod tests {
         assert_eq!(cfg.session_retention_days, 0);
         assert_eq!(cfg.session_retention_count, 0);
         assert!(w.is_empty(), "0 is a legal opt-out, not a warning");
+        fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn test_load_warns_camelcase_alias() {
+        let p = temp_settings(r#"{"sessionRetentionDays": 7}"#);
+        let (cfg, w) = load_retention_from(&p);
+        assert_eq!(
+            cfg.session_retention_days, DEFAULT_DAYS,
+            "the camelCase spelling must not be accepted"
+        );
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].field, "sessionRetentionDays");
+        assert!(
+            w[0].reason.contains("session_retention_days"),
+            "the warning must name the canonical key: {}",
+            w[0].reason
+        );
+        fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn test_load_alias_beside_canonical() {
+        // The snake_case key still reads normally next to the dead alias,
+        // and the dead alias is still flagged so the author removes it.
+        let p = temp_settings(r#"{"sessionRetentionDays": 7, "session_retention_days": 14}"#);
+        let (cfg, w) = load_retention_from(&p);
+        assert_eq!(cfg.session_retention_days, 14);
+        assert_eq!(w.len(), 1);
         fs::remove_file(&p).ok();
     }
 }
