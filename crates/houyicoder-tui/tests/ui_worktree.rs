@@ -167,11 +167,14 @@ fn test_exit_remove_asks_deletes() {
 /// approval card (approval is action-based, not state-based); confirming
 /// runs the controller exit, which must refuse because the worktree has
 /// uncommitted work and discard_changes is false.
+/// The closing text is deliberately not "done": the touch above is a
+/// silent-success command, whose result row renders the label "done", so
+/// "done" cannot serve as an end-of-run marker in this script.
 const EXIT_REMOVE_REFUSE_SCRIPT: &str = r#"[
   [{"type":"ToolCall","id":"c1","name":"enter_worktree","input":{"name":"u8d"}}],
   [{"type":"ToolCall","id":"c2","name":"bash","input":{"command":"touch wip.txt"}}],
   [{"type":"ToolCall","id":"c3","name":"exit_worktree","input":{"action":"remove"}}],
-  [{"type":"Text","text":"done"}]
+  [{"type":"Text","text":"turn wrapped up"}]
 ]"#;
 
 /// The fail-closed discard gate: exit_worktree(remove) with discard_changes
@@ -213,27 +216,15 @@ fn test_remove_refuses_uncommitted_work() {
     // worktree has 1 uncommitted file -> the discard gate refuses.
     s.send_key(&Key::Enter);
     let end_timeout = Duration::from_secs(15);
+    // Wait on the refuse text, not on a generic end-of-run word: the result
+    // row is what proves the user is told, and it is also the signal that the
+    // gate has run. The row body is previewed (truncated to the row width) in
+    // the live view, so the assertion targets the head of the message; the
+    // full three-part wording is pinned where it is not width-dependent, in
+    // the controller test that owns the message.
     assert!(
-        s.wait_for("done", end_timeout),
-        "confirming should resume the run; the refuse error feeds back + the run ends:\n{}",
-        s.output()
-    );
-    // The refuse message lists the work + points the model back to the user
-    // + names the discard flag the model must re-invoke with.
-    let plain = s.output_plain();
-    assert!(
-        plain.contains("Removing will discard"),
-        "the refuse error should explain the discard is permanent:\n{}",
-        s.output()
-    );
-    assert!(
-        plain.contains("Confirm with the user"),
-        "the refuse error should point back to the user:\n{}",
-        s.output()
-    );
-    assert!(
-        plain.contains("discard_changes"),
-        "the refuse error should name the discard flag to re-invoke with:\n{}",
+        s.wait_for_plain("1 uncommitted file", end_timeout),
+        "the refuse error should render in the exit_worktree result row:\n{}",
         s.output()
     );
     // Refused -> the worktree dir survives (no deletion).

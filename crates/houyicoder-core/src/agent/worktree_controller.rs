@@ -602,9 +602,23 @@ mod tests {
             .exit(ExitAction::Remove, false)
             .await
             .expect_err("refuse without discard");
+        // The refuse must carry all three parts the model and the user need:
+        // that the loss is permanent, that the user has to confirm, and the
+        // flag to re-invoke with. Pinned here rather than on a rendered row
+        // because the row previews the body at the row width, which would
+        // make the wording assertion depend on the terminal size.
+        let msg = err.to_string();
         assert!(
-            err.to_string().contains("discard"),
-            "mentions discard: {err}"
+            msg.contains("Removing will discard"),
+            "explains the discard is permanent: {msg}"
+        );
+        assert!(
+            msg.contains("Confirm with the user"),
+            "points back to the user: {msg}"
+        );
+        assert!(
+            msg.contains("discard_changes"),
+            "names the flag to re-invoke with: {msg}"
         );
         // With discard=true the remove proceeds.
         controller
