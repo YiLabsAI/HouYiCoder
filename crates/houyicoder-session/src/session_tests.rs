@@ -541,3 +541,25 @@ async fn test_seed_roundtrip_preserves_history() {
     assert!(texts.contains(&"first"), "first event preserved");
     assert!(texts.contains(&"second"), "second event preserved");
 }
+
+/// read_child_result reads the child's full log from disk; a missing child
+/// degrades to empty.
+#[tokio::test]
+async fn test_read_child_result() {
+    let root = std::env::temp_dir().join(format!("child-result-unit-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+    let child = SessionId::new();
+    store
+        .append(evt(
+            child,
+            EventId::new(),
+            TurnEventKind::UserInput { text: "go".into() },
+        ))
+        .await
+        .expect("append");
+    let result = store.read_child_result(child);
+    assert!(!result.is_empty(), "child result should have events");
+    assert!(store.read_child_result(SessionId::new()).is_empty());
+    std::fs::remove_dir_all(&root).ok();
+}

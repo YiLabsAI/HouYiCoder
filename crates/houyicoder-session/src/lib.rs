@@ -238,6 +238,14 @@ impl SessionStore {
             .unwrap_or_default()
     }
 
+    /// Read a child session's full transcript from disk. Returns empty when
+    /// the child log is gone (deleted or archived), so the caller falls back
+    /// to the inline summary the parent already holds. Not a mirror -- the
+    /// parent carries the summary; this follows the ref for the full text.
+    pub fn read_child_result(&self, child: SessionId) -> Vec<TurnEvent> {
+        self.backend.read_log(child).unwrap_or_default()
+    }
+
     /// Drop the in-memory trajectory mirror for a session (the /clear path).
     /// The backend's append-only log is untouched — this only frees the
     /// viewable mirror so /trajectory reads fresh after a clear.
