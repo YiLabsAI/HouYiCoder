@@ -1,6 +1,7 @@
 //! TDD anchor for spawn_child: the minimal contract before implementation.
 
 use super::{SpawnError, SpawnRequest, spawn_child};
+use houyicoder_async::CancellationToken;
 use houyicoder_context::{SessionId, TurnEventKind};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
@@ -32,6 +33,8 @@ fn req_at_depth(
         depth,
         isolation: IsolationMode::None,
         worktree_controller: None,
+        run_in_background: false,
+        parent_cancel: None,
     }
 }
 
@@ -90,5 +93,46 @@ async fn test_spawn_rejects_depth_cap() {
         parent_events.is_empty(),
         "a rejected spawn must write no boundary: {:?}",
         parent_events
+    );
+}
+
+/// A sync child shares the parent's cancel token (a linked clone), so
+/// cancelling the parent cancels the child -- an ESC on the parent must
+/// propagate to a blocking sync child.
+#[tokio::test]
+async fn test_spawn_sync_links_cancel() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::text("ok"));
+    let parent = CancellationToken::new();
+    let mut req = req_at_depth(parent_sid, store, provider, 0);
+    req.parent_cancel = Some(parent.clone());
+    let handle = spawn_child(req).await.expect("spawn");
+    parent.cancel();
+    assert!(
+        handle.cancel.is_cancelled(),
+        "sync child's cancel must be linked to the parent's"
+    );
+}
+
+/// An async child gets a fresh unlinked cancel token, so cancelling the
+/// parent does not propagate -- async children run on and are killed
+/// explicitly via the runtime's kill path, not by a parent ESC.
+#[tokio::test]
+async fn test_spawn_async_unlinks_cancel() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::text("ok"));
+    let parent = CancellationToken::new();
+    let mut req = req_at_depth(parent_sid, store, provider, 0);
+    req.run_in_background = true;
+    req.parent_cancel = Some(parent.clone());
+    let handle = spawn_child(req).await.expect("spawn");
+    parent.cancel();
+    assert!(
+        !handle.cancel.is_cancelled(),
+        "async child's cancel must stay independent of the parent's"
     );
 }

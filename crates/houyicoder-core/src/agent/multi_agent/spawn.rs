@@ -50,6 +50,13 @@ pub struct SpawnRequest {
     /// fail-closes to WorktreeFenceNarrowFail rather than degrading to no
     /// isolation.
     pub worktree_controller: Option<Arc<WorktreeController>>,
+    /// True for an async (unlinked) child that returns immediately and
+    /// completes later; false for a sync child that blocks the parent turn.
+    pub run_in_background: bool,
+    /// The parent's cancel token, shared by a sync child so a parent abort
+    /// cancels the child too. Ignored for an async child, which gets a fresh
+    /// unlinked token so the parent's ESC does not propagate.
+    pub parent_cancel: Option<CancellationToken>,
 }
 
 /// A handle to a spawned child. Carries the child session id + a cancel
@@ -88,7 +95,17 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     }
 
     let child_sid = SessionId::new();
-    let cancel = CancellationToken::new();
+    // A sync child shares the parent's cancel token (a linked clone), so a
+    // parent abort cancels the child; an async child gets a fresh unlinked
+    // token, so the parent's ESC does not propagate -- the caller cancels an
+    // async child through its own handle. A sync spawn with no parent token
+    // degrades to an unlinked child token (still cancellable via the handle,
+    // just not parent-linked).
+    let cancel = if req.run_in_background {
+        CancellationToken::new()
+    } else {
+        req.parent_cancel.clone().unwrap_or_default()
+    };
 
     // Per-child worktree + fence. Fail-closed: a missing controller or a
     // fence failure rejects the spawn rather than degrading to no isolation,

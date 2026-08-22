@@ -78,6 +78,8 @@ async fn test_spawn_child_worktree_isolation() {
         depth: 0,
         isolation: IsolationMode::Worktree,
         worktree_controller: Some(controller.clone()),
+        run_in_background: false,
+        parent_cancel: None,
     };
     let handle = spawn_child(req).await.expect("spawn");
     assert!(handle.worktree.is_some(), "child carries a worktree guard");
@@ -120,6 +122,8 @@ async fn test_spawn_child_fence_fail() {
         depth: 0,
         isolation: IsolationMode::Worktree,
         worktree_controller: Some(controller),
+        run_in_background: false,
+        parent_cancel: None,
     };
     match spawn_child(req).await {
         Ok(_) => panic!("fence failure must reject, not spawn"),
