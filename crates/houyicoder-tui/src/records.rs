@@ -205,8 +205,10 @@ impl ToolOutcome {
 /// Whether a bash command's non-zero exit is a semantic success (the command
 /// did its job), not a failure. grep exits 1 when no matches are found; diff
 /// exits 1 when files differ; both are the command reporting a result, not
-/// failing. CC's interpretCommandResult applies the same reasoning
-/// (commandSemantics.ts) — a non-zero exit is not always an error.
+/// failing. A non-zero exit is not always an error — the exit code is the
+/// command's verdict, and some commands use non-zero to mean "I found
+/// something" or "the inputs differ", which is the whole point of running
+/// them.
 fn command_is_semantic_success(command: &str, exit_code: i64) -> bool {
     // Only the common, unambiguous cases. A pipeline or compound command is
     // left as-is (treated as error on non-zero): the exit code of a pipeline

@@ -181,13 +181,14 @@ fn test_stdout_wraps_long_line() {
 /// about how much was dropped).
 #[test]
 fn test_stdout_caps_pathological_body() {
-    // A 22k-char single line. At width 24, avail = 19, so a full wrap would
-    // be ~1158 rows; the pre-truncate caps the wrapped work at max_chars =
-    // 3*19*4 = 228, and the estimate still reports ~1155 hidden rows.
+    // A 22k-char single line. At width 24, avail = 14 (24 - 10 column
+    // reserve), so a full wrap would be ~1572 rows; the pre-truncate caps
+    // the wrapped work at max_chars = 3*14*4 = 168, and the estimate still
+    // reports ~1569 hidden rows.
     let huge = "x".repeat(1000 * 22);
     let rows = result_body_rows(&huge, "c1", None, false, false, 24);
     // Collapsed: summary + 2 continuation + 1 hint = 4 rows (COLLAPSE_SHOW=3
-    // + the +N lines hint), NOT ~1158 wrapped rows.
+    // + the +N lines hint), NOT ~1572 wrapped rows.
     assert!(
         rows.len() <= COLLAPSE_SHOW + 1,
         "collapsed pathological body must pre-truncate before wrap, got {}",
@@ -198,11 +199,11 @@ fn test_stdout_caps_pathological_body() {
         joined.contains("… +"),
         "the capped tail must carry the +N lines estimate (from the original length): {joined}"
     );
-    // The estimate reflects the ORIGINAL length, not the pre-truncated prefix:
-    // ~22k chars / 19 ≈ 1158 rows - 3 shown ≈ 1155 hidden.
+    // The estimate reflects the ORIGINAL length, not the pre-truncated
+    // prefix: ~22k chars / 14 ≈ 1572 rows - 3 shown ≈ 1569 hidden.
     assert!(
-        joined.contains("1155") || joined.contains("1156") || joined.contains("1157"),
-        "the estimate should be ~1155 (original 22k / avail 19 - 3): {joined}"
+        joined.contains("1568") || joined.contains("1569") || joined.contains("1570"),
+        "the estimate should be ~1569 (original 22k / avail 14 - 3): {joined}"
     );
 }
 

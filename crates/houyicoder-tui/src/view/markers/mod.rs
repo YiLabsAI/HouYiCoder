@@ -181,7 +181,13 @@ pub(crate) fn result_body_rows(
     // (which would skew the collapse threshold and scroll totals).
     let trimmed = body.trim_end_matches('\n');
     let blines: Vec<&str> = trimmed.split('\n').collect();
-    let avail = usize::from(width).saturating_sub(5);
+    // Reserve 10 columns as a safety margin against overflow — a wide CJK
+    // char or an unexpected control sequence at the pane edge can push the
+    // cursor past the last column and wrap or scroll. 10 is the proven safe
+    // margin (5 was too tight: a single width-2 char at the boundary still
+    // overflowed). Floor at 10 so a very narrow pane still wraps rather than
+    // producing zero-width rows.
+    let avail = usize::from(width).saturating_sub(10).max(10);
     // Soft-wrap each logical line so a long stdout / read-content line shows
     // its full content across rows (an old renderer truncated
     // stdout to the pane edge — a limitation that lost the line tail; wrapping
@@ -224,8 +230,8 @@ pub(crate) fn result_body_rows(
     };
     // When exactly 1 row is hidden, show it instead of writing a
     // "… +1 lines" hint — a single hidden row is worth a row, not a
-    // placeholder (matches the CC terminal.ts renderTruncatedContent
-    // behavior: remaining 1 line → show the 4th line, no ellipsis).
+    // placeholder. The user came to read the content; one more row is
+    // cheaper than a hint they have to act on.
     let show_extra = !expanded && hidden == 1;
     let shown = if expanded {
         wrows.len()
