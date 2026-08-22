@@ -32,6 +32,7 @@ use houyicoder_service::server::{Server, ServerIo};
 #[cfg(unix)]
 mod detach;
 mod export_bridge;
+mod housekeeping;
 mod resume_bundle;
 mod session_lister_bridge;
 mod session_lock;
@@ -272,6 +273,7 @@ fn run_serve(
         .enable_all()
         .build()?;
     runtime.block_on(async move {
+        housekeeping::fire_after_bundle(session);
         if let Err(e) = uds::listen_uds(host, session, &socket_path).await {
             eprintln!("uds listener exited: {e}");
         }
@@ -380,6 +382,7 @@ fn run_acp_stdio(
         .enable_all()
         .build()?;
     runtime.block_on(async move {
+        housekeeping::fire_after_bundle(session);
         let server = AcpServer::new(adapter, runner, session);
         drop(server.serve(&mut io).await);
         // serve borrows io by reference, so io (which holds the outbound
@@ -673,6 +676,13 @@ fn pair_inproc_server(
     let runtime = houyicoder_tui::composition::shared_runtime();
     runtime.spawn(async move {
         let _serve = server.serve(server_io).await;
+    });
+    // Fire background housekeeping (session prune) on the shared runtime.
+    // The 10min delay + spawn_blocking run fire-and-forget; the task dies
+    // with the process. A short session that exits before 10min simply
+    // does not prune this run.
+    runtime.spawn(async move {
+        housekeeping::fire_after_bundle(session);
     });
     // Fire-and-forget: ask the provider which model ids it serves and cache
     // them for catalog existence validation. A no-op for the stub provider;
