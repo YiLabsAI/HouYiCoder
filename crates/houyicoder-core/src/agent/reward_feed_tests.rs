@@ -31,11 +31,14 @@ fn runner_with_empty_dream() -> Runner {
         Arc::new(crate::provider::test_support::FakeProvider::text("x"));
     let memory: Arc<dyn MemoryProvider> = Arc::new(EmptyMemory);
     let ephemeral: Arc<dyn houyicoder_api::session::SessionLog> = store.clone();
+    // The dream's cwd is only reached when execute_dream gets past the
+    // empty-memory gate; keep it per-call anyway so the day that gate
+    // moves, two tests running in parallel do not share one directory.
     let dream = Arc::new(DreamRunner::new(
         ephemeral,
         Arc::clone(&provider),
         memory,
-        std::path::PathBuf::from("/tmp/houyi-reward-feed-test"),
+        unique_dream_cwd(),
         crate::agent::runner_config::RunnerConfig::default(),
     ));
     Runner::with_shared_store(
@@ -45,6 +48,13 @@ fn runner_with_empty_dream() -> Runner {
         crate::agent::runner_config::RunnerConfig::default(),
     )
     .with_dream(dream)
+}
+
+fn unique_dream_cwd() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("houyi-reward-feed-{}-{seq}", std::process::id()))
 }
 
 #[tokio::test]
