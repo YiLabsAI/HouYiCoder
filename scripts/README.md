@@ -76,6 +76,7 @@ unreliably, so the gate itself is guarded).
 | `test_app_mut_borrows.py` | The composition-root borrow strict-pin |
 | `test_app_coupling.py` | The App-coupling measurement (default-include / explicit-exclude) |
 | `test_stderr_gate.py` | The console-write gate |
+| `test_run_tests_timeout.py` | The unit-gate timeout reaps cargo's test-binary grandchildren (no orphan spiral) |
 
 ## Shell helpers
 
