@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use crate::progress::ProgressSink;
+use crate::spawn::{AgentIdentity, SpawnHandle};
 
 /// Per-call context a tool receives alongside its input. Owned (no lifetime
 /// parameter) so the object-safe Tool trait does not roll two lifetimes into
@@ -38,19 +39,34 @@ pub struct ToolCtx {
     /// raw log (the conversation recall tool replays it) reads this to pick the
     /// session; a tool that ignores ctx pays nothing.
     pub session_id: Option<SessionId>,
+    /// The identity of the agent whose turn is running; None when the
+    /// dispatch is not agent-aware (a non-interactive run, a test). The
+    /// agent tool reads depth to pass into the spawn recursion guard and
+    /// subagent_type for the fork-recursion check; a tool that ignores it
+    /// pays nothing.
+    pub agent_identity: Option<AgentIdentity>,
+    /// The spawn port the agent tool calls to launch a child; None when the
+    /// dispatch cannot spawn (a non-interactive run, a test, or any tool
+    /// that is not the agent tool). The agent loop threads it at call time
+    /// the way it threads the progress sink; a tool that does not spawn
+    /// pays nothing.
+    pub spawn_handle: Option<Arc<dyn SpawnHandle>>,
 }
 
 impl ToolCtx {
     /// A minimal context carrying only the call id: no cancellation, no
-    /// progress sink, no session. Used by non-interactive runs, tests, and as
-    /// the base the agent loop extends with with_cancel / with_progress /
-    /// with_session.
+    /// progress sink, no session, no agent identity, no spawn handle. Used
+    /// by non-interactive runs, tests, and as the base the agent loop
+    /// extends with with_cancel / with_progress / with_session /
+    /// with_agent_identity / with_spawn_handle.
     pub fn new(call_id: impl Into<String>) -> Self {
         Self {
             call_id: call_id.into(),
             cancel: None,
             progress: None,
             session_id: None,
+            agent_identity: None,
+            spawn_handle: None,
         }
     }
 
@@ -71,6 +87,19 @@ impl ToolCtx {
     /// every dispatch site where the session is in scope.
     pub fn with_session(mut self, session: SessionId) -> Self {
         self.session_id = Some(session);
+        self
+    }
+
+    /// Attach the running agent's identity, set on dispatches inside a
+    /// spawned child's turn.
+    pub fn with_agent_identity(mut self, identity: AgentIdentity) -> Self {
+        self.agent_identity = Some(identity);
+        self
+    }
+
+    /// Attach the spawn port the agent tool calls to launch a child.
+    pub fn with_spawn_handle(mut self, handle: Arc<dyn SpawnHandle>) -> Self {
+        self.spawn_handle = Some(handle);
         self
     }
 }
