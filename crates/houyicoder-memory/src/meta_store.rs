@@ -289,6 +289,7 @@ mod tests {
             provenance: SessionProvenance::Fresh,
             version: "test".into(),
             created_at: ts,
+            child_session_ids: Vec::new(),
         }
     }
 

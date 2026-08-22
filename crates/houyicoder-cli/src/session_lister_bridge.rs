@@ -190,6 +190,7 @@ mod tests {
             provenance: SessionProvenance::Fresh,
             version: "t".into(),
             created_at: ts,
+            child_session_ids: Vec::new(),
         }
     }
 

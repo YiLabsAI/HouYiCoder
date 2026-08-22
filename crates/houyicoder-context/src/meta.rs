@@ -18,8 +18,9 @@ use serde::{Deserialize, Serialize};
 
 /// The provenance of a session: where it came from. Fresh = minted new;
 /// ForkedFrom = --fork-session off an existing session; ResumedFromExport =
-/// a one-time bootstrap from an exported transcript file. Recorded so /status
-/// can show the lineage and a resume can carry the forked-from sid forward.
+/// a one-time bootstrap from an exported transcript file; SpawnedBy = a
+/// sub-agent a parent runner spawned. Recorded so /status can show the
+/// lineage and a resume can carry the forked-from sid forward.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionProvenance {
@@ -30,6 +31,14 @@ pub enum SessionProvenance {
     },
     ResumedFromExport {
         source_session_id: String,
+    },
+    /// A sub-agent a parent runner spawned. Carries the parent's sid, the
+    /// agent type, and the task id so the parent can correlate the child's
+    /// result back to the spawn that produced it.
+    SpawnedBy {
+        parent_session_id: String,
+        subagent_type: String,
+        task_id: String,
     },
 }
 
@@ -66,6 +75,11 @@ pub struct SessionMeta {
     pub version: String,
     /// Unix-epoch seconds at creation.
     pub created_at: u64,
+    /// The child sessions this session spawned, in spawn order. Empty until a
+    /// spawn lands. serde default so sidecars written before this field stay
+    /// readable (an old sidecar simply has no children).
+    #[serde(default)]
+    pub child_session_ids: Vec<String>,
 }
 
 /// Read + write the per-session metadata sidecar. The trait is in the
@@ -137,3 +151,7 @@ impl std::fmt::Display for ContextMetaError {
 }
 
 impl std::error::Error for ContextMetaError {}
+
+#[cfg(test)]
+#[path = "meta_tests.rs"]
+mod meta_tests;

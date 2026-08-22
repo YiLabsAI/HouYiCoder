@@ -350,6 +350,11 @@ fn render_provenance(p: &houyicoder_protocol::frontend::status::SessionProvenanc
         P::ResumedFromExport { source_session_id } => {
             format!("resumed from export {source_session_id}")
         }
+        P::SpawnedBy {
+            parent_session_id,
+            subagent_type,
+            task_id: _,
+        } => format!("spawned by {parent_session_id} ({subagent_type})"),
     }
 }
 
@@ -522,6 +527,26 @@ mod status_tests {
             &[],
         );
         assert!(out.contains("forked from sess-aaa at turn 7") && out.contains("provenance:"));
+    }
+
+    #[test]
+    fn test_status_provenance_spawned_format() {
+        let mut s = snap_with_meta("glm-5.1");
+        s.meta = s.meta.map(|mut m| {
+            m.provenance = SessionProvenance::SpawnedBy {
+                parent_session_id: "parent-1".into(),
+                subagent_type: "explore".into(),
+                task_id: "task-7".into(),
+            };
+            m
+        });
+        let out = render_status(
+            &s,
+            &houyicoder_protocol::frontend::SessionId::new("sess-123"),
+            "mac-seatbelt",
+            &[],
+        );
+        assert!(out.contains("spawned by parent-1 (explore)") && out.contains("provenance:"));
     }
 
     #[test]

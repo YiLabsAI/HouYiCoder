@@ -46,6 +46,7 @@ fn seeded_store(session: houyicoder_context::SessionId) -> Arc<dyn SessionMetaSt
                 provenance: SessionProvenance::Fresh,
                 version: "test".into(),
                 created_at: 1000,
+                child_session_ids: Vec::new(),
             },
         )
         .unwrap();
@@ -339,6 +340,7 @@ async fn test_rename_write_failure_errors() {
                 provenance: SessionProvenance::Fresh,
                 version: "test".into(),
                 created_at: 1000,
+                child_session_ids: Vec::new(),
             },
         )
         .unwrap();

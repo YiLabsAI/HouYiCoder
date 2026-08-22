@@ -27,6 +27,15 @@ pub(crate) fn project_session_meta(meta: &houyicoder_context::SessionMeta) -> Se
                     source_session_id: source_session_id.clone(),
                 }
             }
+            houyicoder_context::SessionProvenance::SpawnedBy {
+                parent_session_id,
+                subagent_type,
+                task_id,
+            } => SessionProvenance::SpawnedBy {
+                parent_session_id: parent_session_id.clone(),
+                subagent_type: subagent_type.clone(),
+                task_id: task_id.clone(),
+            },
         },
     }
 }
@@ -47,6 +56,29 @@ mod tests {
             provenance,
             version: env!("CARGO_PKG_VERSION").to_string(),
             created_at: 0,
+            child_session_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_spawned_by_projects() {
+        let p = houyicoder_context::SessionProvenance::SpawnedBy {
+            parent_session_id: "parent-1".into(),
+            subagent_type: "explore".into(),
+            task_id: "task-7".into(),
+        };
+        let w = project_session_meta(&meta(None, p));
+        match w.provenance {
+            SessionProvenance::SpawnedBy {
+                parent_session_id,
+                subagent_type,
+                task_id,
+            } => {
+                assert_eq!(parent_session_id, "parent-1");
+                assert_eq!(subagent_type, "explore");
+                assert_eq!(task_id, "task-7");
+            }
+            other => panic!("wrong variant: {other:?}"),
         }
     }
 

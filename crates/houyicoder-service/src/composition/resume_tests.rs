@@ -537,6 +537,7 @@ fn test_latest_picks_active_cwd() {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs(),
+        child_session_ids: Vec::new(),
     };
     meta_store.write_meta(sid_b, &b_meta).unwrap();
     // B has no log.jsonl (never appended).

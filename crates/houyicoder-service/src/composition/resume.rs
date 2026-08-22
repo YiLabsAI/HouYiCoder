@@ -400,6 +400,7 @@ fn write_resume_session_meta(
         },
         version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: now,
+        child_session_ids: Vec::new(),
     };
     if let Err(e) = meta_store.write_meta(session, &meta) {
         tracing::warn!("session meta: resume write failed: {e}; /status will show less");
@@ -435,6 +436,7 @@ fn write_fork_session_meta(
         },
         version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: now,
+        child_session_ids: Vec::new(),
     };
     if let Err(e) = meta_store.write_meta(session, &meta) {
         tracing::warn!("session meta: fork write failed: {e}; /status will show less");

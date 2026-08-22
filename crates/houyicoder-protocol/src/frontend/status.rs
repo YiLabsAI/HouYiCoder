@@ -134,7 +134,8 @@ pub struct SessionMetaSummary {
 
 /// The provenance of a session, wire form. Fresh = minted new; ForkedFrom
 /// = split off an existing session; ResumedFromExport = bootstrapped from
-/// an exported transcript file.
+/// an exported transcript file; SpawnedBy = a sub-agent a parent runner
+/// spawned.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SessionProvenance {
@@ -146,5 +147,10 @@ pub enum SessionProvenance {
     },
     ResumedFromExport {
         source_session_id: String,
+    },
+    SpawnedBy {
+        parent_session_id: String,
+        subagent_type: String,
+        task_id: String,
     },
 }

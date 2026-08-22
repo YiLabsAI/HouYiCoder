@@ -32,6 +32,7 @@ pub(crate) fn build_initial_meta(model: &str, project: Option<&str>) -> SessionM
         provenance: SessionProvenance::Fresh,
         version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: now,
+        child_session_ids: Vec::new(),
     }
 }
 

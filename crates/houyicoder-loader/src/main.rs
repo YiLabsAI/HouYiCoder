@@ -163,6 +163,7 @@ fn write_sidecar(
         provenance: SessionProvenance::Fresh,
         version: "houyi-load".to_string(),
         created_at,
+        child_session_ids: Vec::new(),
     };
     let json = serde_json::to_string_pretty(&meta)?;
     std::fs::write(session_dir.join("session.json"), json + "\n")?;
