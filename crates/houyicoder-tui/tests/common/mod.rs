@@ -63,6 +63,15 @@ impl PtySession {
         Self::launch_inner(None, None, None, None)
     }
 
+    /// Like launch(), but runs the binary in the given dir instead of the
+    /// workspace root. For tests that assert on the workspace additional-dirs
+    /// list's empty state: launched from a linked worktree (the default
+    /// workspace root during a sprint), the startup allow-back adds the main
+    /// checkout's git dir, so the list is never empty there.
+    pub fn launch_in_dir(dir: std::path::PathBuf) -> Self {
+        Self::launch_inner(None, None, None, Some(dir))
+    }
+
     /// Like launch(), but sets HOUYICODER_STUB_DELAY_MS so the stub run streams
     /// slowly enough to drive mid-run keys (e.g. a Shift+Tab mode cycle while
     /// agent_busy). The default launch() streams back-to-back, so its busy
@@ -624,6 +633,15 @@ pub fn sid_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// the Working screen. Shared by every test.
 pub fn session_on_working() -> PtySession {
     session_on_working_inner(PtySession::launch())
+}
+
+/// Like session_on_working(), but runs the binary in the given dir instead
+/// of the workspace root. For tests that assert on the workspace
+/// additional-dirs list's empty state: from a linked worktree the startup
+/// allow-back adds the main checkout's git dir, so the workspace root's list
+/// is never empty.
+pub fn session_on_working_in_dir(dir: std::path::PathBuf) -> PtySession {
+    session_on_working_inner(PtySession::launch_in_dir(dir))
 }
 
 /// Like session_on_working, but the stub streams with an inter-chunk delay so

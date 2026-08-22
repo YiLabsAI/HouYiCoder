@@ -15,7 +15,7 @@ mod common;
 
 use common::{
     Key, RENDER_TIMEOUT, fresh_temp_dir, open_permissions, session_on_working,
-    session_on_working_with_script, tab_to_workspace,
+    session_on_working_in_dir, session_on_working_with_script, tab_to_workspace,
 };
 
 #[test]
@@ -152,7 +152,11 @@ fn test_esc_exits_pane() {
 #[test]
 #[ignore]
 fn test_workspace_remove_dir() {
-    let mut s = session_on_working();
+    // An isolated cwd, not the workspace root: from a linked worktree the
+    // startup allow-back lists the main checkout's git dir, so the
+    // post-removal empty-state assertion below would never hold there.
+    let cwd = fresh_temp_dir("ws-rm");
+    let mut s = session_on_working_in_dir(cwd);
     open_permissions(&mut s);
     tab_to_workspace(&mut s);
     // Add a dir first (reuse the add flow).
