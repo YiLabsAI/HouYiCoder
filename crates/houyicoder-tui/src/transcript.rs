@@ -16,7 +16,9 @@ use crate::records::{ToolOutcome, TranscriptLine};
 pub mod snapshot;
 #[cfg(test)]
 use crate::result_body::count_diff_lines;
-use crate::result_body::{extract_body, output_has_diff, write_result_body};
+use crate::result_body::{
+    command_is_silent_success, extract_body, output_has_diff, write_result_body,
+};
 
 /// One frame of the wire turn stream, preserved in arrival order so the
 /// transcript rebuild keeps the time-ordered interleave of session/update
@@ -148,7 +150,17 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
                 result_summary(tool_name, output).unwrap_or_default()
             }
         } else if tool_name == "bash" {
-            raw
+            // A silent command (mv, cp, rm, mkdir, chmod, touch, cd, ...)
+            // produces no output on success — that IS the success signal.
+            // An empty body would render a bare "(no output)" placeholder,
+            // which reads as "something went wrong". A "done" label tells
+            // the user the command completed, which is what they need to
+            // see for a command whose output is silence by design.
+            if raw.is_empty() && command_is_silent_success(call_input, output) {
+                "done".to_string()
+            } else {
+                raw
+            }
         } else if tool_name == "write" {
             // "Wrote N lines to {path}" chip + the full written content.
             // The content is pulled from the call's input (the model sent
@@ -718,40 +730,6 @@ mod tests {
     }
 
     #[test]
-    fn test_acpx_compaction_summary_surface() {
-        // Compaction boundary + summary ride the acpx stream; both become
-        // System lines at their ordered positions. The meta-user nudge and
-        // permission-decision audit do not surface.
-        let frames = vec![
-            user_msg("hi"),
-            TranscriptFrame::Acpx(AcpxNotification::new(
-                AcpxMethod::ContextCompactionBoundary,
-                serde_json::json!({ "checkpoint": "01J00000000000000000000000" }),
-            )),
-            TranscriptFrame::Acpx(AcpxNotification::new(
-                AcpxMethod::ContextSummary,
-                serde_json::json!({ "text": "prior turn condensed" }),
-            )),
-            TranscriptFrame::Acpx(AcpxNotification::new(
-                AcpxMethod::ContextMetaUser,
-                serde_json::json!({ "text": "nudge" }),
-            )),
-        ];
-        let lines = transcript_from_frames(&frames);
-        // User + compaction + summary; meta-user dropped.
-        assert_eq!(lines.len(), 3);
-        assert!(matches!(lines[0], TranscriptLine::User(_)));
-        assert!(matches!(
-            lines[1],
-            TranscriptLine::System(ref s) if s == "compaction checkpoint"
-        ));
-        assert!(matches!(
-            lines[2],
-            TranscriptLine::System(ref s) if s == "summary: prior turn condensed"
-        ));
-    }
-
-    #[test]
     fn test_turn_reasoning_last_user() {
         // Reasoning before the last user message is excluded; only the
         // current turn's thought chunks concatenate into the expand text.
@@ -788,3 +766,11 @@ mod tests {
 #[cfg(test)]
 #[path = "transcript_reattach_tests.rs"]
 mod reattach_tests;
+
+#[cfg(test)]
+#[path = "transcript_silent_tests.rs"]
+mod silent_tests;
+
+#[cfg(test)]
+#[path = "transcript_acpx_tests.rs"]
+mod acpx_tests;

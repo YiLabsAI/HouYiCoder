@@ -133,6 +133,74 @@ pub(crate) fn output_has_diff(output: &str) -> bool {
     v.get("diff").and_then(|d| d.as_str()).is_some()
 }
 
+/// The set of bash commands that produce no output on success by design.
+/// Their silence IS the success signal — an empty body for these commands
+/// should read as "done", not as the ambiguous "(no output)" placeholder
+/// that a failed-or-empty command shows. A command is recognized when its
+/// first word (after stripping leading env assignments) is in this set;
+/// pipelines and compound commands are excluded (their silence may belong
+/// to a stage that is NOT in the set).
+const SILENT_SUCCESS_COMMANDS: &[&str] = &[
+    "mv", "cp", "rm", "mkdir", "rmdir", "chmod", "chown", "touch", "cd", "ln", "install",
+];
+
+/// True when a bash tool call is a silent-success command that completed
+/// with no output. The caller uses this to render "done" instead of the
+/// "(no output)" placeholder — the user sees an explicit success signal
+/// for a command whose output is silence by design.
+pub(crate) fn command_is_silent_success(call_input: Option<&Value>, output: &Value) -> bool {
+    // Only a successful command qualifies: a failed silent command (e.g.
+    // rm on a missing file) has an error message that must surface.
+    if output.get("error").is_some()
+        || output.get("success").and_then(|v| v.as_bool()) == Some(false)
+    {
+        return false;
+    }
+    let Some(input) = call_input else {
+        return false;
+    };
+    let Some(command) = input.get("command").and_then(|c| c.as_str()) else {
+        return false;
+    };
+    let trimmed = command.trim();
+    // Bail out on shell control operators — the exit code and silence may
+    // belong to a stage that is not a silent-success command.
+    if trimmed.contains('|')
+        || trimmed.contains(';')
+        || trimmed.contains("&&")
+        || trimmed.contains("||")
+    {
+        return false;
+    }
+    let cmd = strip_env_prefix(trimmed);
+    let first_word = cmd.split_whitespace().next().unwrap_or("");
+    SILENT_SUCCESS_COMMANDS.contains(&first_word)
+}
+
+/// Strip leading VAR=value assignments from a command line so the actual
+/// command word is reachable (POSIX allows any number of leading env
+/// assignments). Mirrors the same helper in records.rs.
+fn strip_env_prefix(cmd: &str) -> &str {
+    let mut rest = cmd;
+    loop {
+        let trimmed = rest.trim_start();
+        let Some(eq) = trimmed.find('=') else {
+            return trimmed;
+        };
+        let before = &trimmed[..eq];
+        if before.is_empty()
+            || !before
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return trimmed;
+        }
+        let after = &trimmed[eq + 1..];
+        let end = after.find(char::is_whitespace).unwrap_or(after.len());
+        rest = &after[end..];
+    }
+}
+
 /// Count additions (+) and removals (-) in a unified-diff body, skipping the
 /// +++/--- file headers (defensive — the engine emits none) and @@ hunk
 /// headers. Context lines (leading space) and hunk headers are not counted.
@@ -338,5 +406,99 @@ mod tests {
         .to_string();
         let body = extract_body(&out);
         assert_eq!(body, "Exit code 2");
+    }
+
+    // --- silent-success detection ---
+
+    /// A silent command (mv) with empty stdout and no error is a silent
+    /// success — the caller renders "done" instead of "(no output)".
+    #[test]
+    fn test_silent_success_mv() {
+        let input = serde_json::json!({"command": "mv a b"});
+        let output = serde_json::json!({"stdout": "", "exit_code": 0});
+        assert!(command_is_silent_success(Some(&input), &output));
+    }
+
+    /// A non-silent command (echo) with empty stdout is NOT silent success
+    /// — echo producing no output is unexpected, not a done signal.
+    #[test]
+    fn test_silent_success_echo_rejected() {
+        let input = serde_json::json!({"command": "echo"});
+        let output = serde_json::json!({"stdout": "", "exit_code": 0});
+        assert!(!command_is_silent_success(Some(&input), &output));
+    }
+
+    /// A silent command that failed (error field present) is NOT silent
+    /// success — the error message must surface, not a "done" label.
+    #[test]
+    fn test_silent_success_failed_rejected() {
+        let input = serde_json::json!({"command": "mv missing target"});
+        let output = serde_json::json!({"error": "No such file", "success": false});
+        assert!(!command_is_silent_success(Some(&input), &output));
+    }
+
+    /// A silent command with success == false is NOT silent success even
+    /// without an error field — a failed rm has an error message in stderr.
+    #[test]
+    fn test_silent_success_false_rejected() {
+        let input = serde_json::json!({"command": "rm missing"});
+        let output = serde_json::json!({"stdout": "", "success": false, "exit_code": 1});
+        assert!(!command_is_silent_success(Some(&input), &output));
+    }
+
+    /// A pipeline (mv a b | cat) is NOT silent success — the exit code
+    /// belongs to the last stage, not mv, so silence may mean cat failed.
+    #[test]
+    fn test_silent_success_pipeline_excluded() {
+        let input = serde_json::json!({"command": "mv a b | cat"});
+        let output = serde_json::json!({"stdout": "", "exit_code": 0});
+        assert!(!command_is_silent_success(Some(&input), &output));
+    }
+
+    /// A compound command (mv a b && echo done) is NOT silent success —
+    /// the exit code belongs to the last stage.
+    #[test]
+    fn test_silent_success_compound_excluded() {
+        let input = serde_json::json!({"command": "mv a b && echo done"});
+        let output = serde_json::json!({"stdout": "", "exit_code": 0});
+        assert!(!command_is_silent_success(Some(&input), &output));
+    }
+
+    /// A leading env-assignment prefix (FOO=bar mv a b) is stripped so
+    /// the actual command word is recognized.
+    #[test]
+    fn test_silent_success_env_prefix() {
+        let input = serde_json::json!({"command": "FOO=bar mv a b"});
+        let output = serde_json::json!({"stdout": "", "exit_code": 0});
+        assert!(command_is_silent_success(Some(&input), &output));
+    }
+
+    /// Without call_input (a late-arriving result whose call frame passed)
+    /// the command text is unknown, so it is NOT treated as silent success.
+    #[test]
+    fn test_silent_success_no_input() {
+        let output = serde_json::json!({"stdout": "", "exit_code": 0});
+        assert!(!command_is_silent_success(None, &output));
+    }
+
+    /// Every command in the whitelist is recognized, not just mv.
+    #[test]
+    fn test_silent_success_all_whitelisted() {
+        let output = serde_json::json!({"stdout": "", "exit_code": 0});
+        for cmd in [
+            "cp a b",
+            "rm x",
+            "mkdir d",
+            "rmdir d",
+            "chmod 755 f",
+            "touch f",
+            "ln -s a b",
+        ] {
+            let input = serde_json::json!({"command": cmd});
+            assert!(
+                command_is_silent_success(Some(&input), &output),
+                "{cmd} should be silent success"
+            );
+        }
     }
 }
