@@ -12,6 +12,7 @@ use crate::agent::multi_agent::spawn::{SpawnError, SpawnRequest, spawn_child};
 use crate::agent::runner_config::RunnerConfig;
 use crate::provider::test_support::FakeProvider;
 
+use super::ChildCleanup;
 use super::tests::{make_repo, wired, wired_err};
 
 /// enter_for_child creates a worktree + returns a guard, without entering a
@@ -133,5 +134,52 @@ async fn test_spawn_child_fence_fail() {
         store.trajectory_snapshot(parent_sid).is_empty(),
         "a rejected spawn writes no boundary"
     );
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// cleanup_child on a clean worktree (no uncommitted files, no new commits)
+/// restores the fence + removes the worktree dir -- terminal-state
+/// auto-cleanup so finished children leave no stale trees behind.
+#[test]
+fn test_cleanup_clean_worktree_removed() {
+    let repo = make_repo(20);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let cw = controller
+        .enter_for_child("agent-clean".into())
+        .expect("enter");
+    let path = cw.worktree_path.clone();
+    let outcome = controller.cleanup_child(cw).expect("cleanup");
+    match outcome {
+        ChildCleanup::Removed { worktree_path } => assert_eq!(worktree_path, path),
+        ChildCleanup::Kept { .. } => panic!("clean worktree must be removed, not kept"),
+    }
+    assert!(!path.exists(), "clean worktree dir removed");
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// cleanup_child on a dirty worktree (uncommitted changes) restores the
+/// fence + keeps the worktree, reporting path + branch so the caller can
+/// continue on the branch -- never silently destroy work the child produced.
+#[test]
+fn test_cleanup_dirty_worktree_kept() {
+    let repo = make_repo(21);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let cw = controller
+        .enter_for_child("agent-dirty".into())
+        .expect("enter");
+    std::fs::write(cw.worktree_path.join("uncommitted.txt"), "dirty").expect("write");
+    let path = cw.worktree_path.clone();
+    let outcome = controller.cleanup_child(cw).expect("cleanup");
+    match outcome {
+        ChildCleanup::Kept {
+            worktree_path,
+            worktree_branch,
+        } => {
+            assert_eq!(worktree_path, path);
+            assert!(!worktree_branch.is_empty(), "branch reported back");
+        }
+        ChildCleanup::Removed { .. } => panic!("dirty worktree must be kept, not removed"),
+    }
+    assert!(path.exists(), "dirty worktree dir preserved");
     std::fs::remove_dir_all(&repo).ok();
 }
