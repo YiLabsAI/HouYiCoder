@@ -58,11 +58,11 @@ pub enum SpawnError {
     WorktreeFenceNarrowFail,
 }
 
-/// Spawn a child agent: create a fresh session, record the durable
-/// SubagentSpawn boundary in the parent log, build the child Runner, and
-/// return a handle. The child shares the parent SessionStore (the backend
-/// routes by session id, so child events land in the child sidechain log,
-/// not the parent log).
+/// Spawn a child agent: create a fresh session, build the child Runner
+/// sharing the parent SessionStore, record the durable SubagentSpawn
+/// boundary in the parent log, and return a handle. The child shares the
+/// parent SessionStore (the backend routes by session id, so child events
+/// land in the child sidechain log, not the parent log).
 pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     // Recursion guard: cap spawn nesting before any side effect. A reject
     // here must not write a boundary or build a child. Fork-recursion (a
@@ -75,35 +75,40 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     let child_sid = SessionId::new();
     let cancel = CancellationToken::new();
 
-    // Record the spawn boundary in the parent log before building the
-    // child. The durable boundary is part of the spawn fence: a failed
-    // write fail-closes the spawn (replay must not lose the boundary, so
-    // refuse to proceed without it). Worktree-fence setup failures route
-    // here too; the boundary write is the fence record.
-    let spawn_event = new_event(
-        req.parent_sid,
-        TurnEventKind::SubagentSpawn {
-            child_session_id: child_sid.to_string(),
-            subagent_type: req.subagent_type.clone(),
-            prompt_summary: req.prompt_summary.clone(),
-            isolation: "none".to_string(),
-            policy: "delegate".to_string(),
-        },
-    );
-    req.parent_store
-        .append(spawn_event)
-        .await
-        .map_err(|_| SpawnError::WorktreeFenceNarrowFail)?;
+    // Build the child Runner before recording the boundary, so a build
+    // failure leaves no dangling spawn in the parent log (resume would
+    // reconcile a child that never existed). The boundary records the child
+    // id minted above; a failed boundary write drops the unstarted runner
+    // shell -- no child events were appended, no phantom remains. This
+    // build-before-record order matches the design flow (isolation + child
+    // runner, then boundary) and keeps the future worktree fence slot
+    // before the boundary write, where a fence failure also leaves none.
+    let store_for_boundary = req.parent_store.clone();
+    let parent_sid = req.parent_sid;
+    let subagent_type = req.subagent_type.clone();
+    let prompt_summary = req.prompt_summary.clone();
 
-    // The child shares the parent store. The backend routes by session
-    // id: the child appends with child_sid, so its events land in the
-    // child's own log, not the parent's. This is the sidechain model.
     let runner = Arc::new(Runner::with_shared_store(
         req.parent_store,
         req.provider,
         req.tools,
         req.config,
     ));
+
+    let spawn_event = new_event(
+        parent_sid,
+        TurnEventKind::SubagentSpawn {
+            child_session_id: child_sid.to_string(),
+            subagent_type,
+            prompt_summary,
+            isolation: "none".to_string(),
+            policy: "delegate".to_string(),
+        },
+    );
+    store_for_boundary
+        .append(spawn_event)
+        .await
+        .map_err(|_| SpawnError::WorktreeFenceNarrowFail)?;
 
     Ok(ChildHandle {
         session: child_sid,
