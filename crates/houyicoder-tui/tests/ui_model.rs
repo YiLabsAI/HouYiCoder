@@ -203,9 +203,7 @@ fn test_empty_settings_shows_catalog() {
     assert!(out.contains("Max"), "Max row visible: {out}");
     assert!(out.contains("Fable"), "Fable row visible: {out}");
     assert!(out.contains("Pro"), "Pro row visible: {out}");
-    // Flash is a designed tier but not yet in the shipped default catalog —
-    // add it to DEFAULT_CATALOG (model_section.rs) when the Flash model id
-    // is known, then re-add the assertion here.
+    assert!(out.contains("Flash"), "Flash row visible: {out}");
 }
 
 /// --model <id> overrides the settings.json model for a fresh session: the
