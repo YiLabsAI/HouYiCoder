@@ -10,13 +10,20 @@
 //! sync (in-memory, no I/O — it reads the live log buffer), so the bridge
 //! does not need the async block_on the disk-search bridge uses for replay.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{SessionId, TurnEvent, TurnEventKind};
+use houyicoder_tui::records::ToolOutcome;
 use houyicoder_tui::view::trajectory_pane::{
     TrajectoryEvent, TrajectoryLog, TrajectoryRow, TrajectoryTurn, TrajectoryView,
 };
+
+/// Which tool a call id invoked, and with what input, so a later ToolResult
+/// can be judged against the call that produced it. Built from the ToolCall
+/// events, which always precede their result in append order.
+type CallIndex = HashMap<String, (String, serde_json::Value)>;
 
 /// One line of preview text for an event (truncated so the L1 row stays one
 /// line). The L2 detail carries the full content separately.
@@ -31,12 +38,59 @@ fn preview(s: &str) -> String {
     }
 }
 
+/// Index every tool call in the stream by its call id. Done in a pass of its
+/// own rather than while walking the turns: a result is judged against the
+/// call that produced it, and the two events need not sit in the same turn,
+/// so the index must be complete before the first result is judged.
+fn index_calls(events: &[TurnEvent]) -> CallIndex {
+    let mut calls = CallIndex::new();
+    for ev in events {
+        if let TurnEventKind::ToolCall {
+            call_id,
+            tool,
+            input,
+        } = &ev.kind
+        {
+            calls.insert(call_id.clone(), (tool.clone(), input.clone()));
+        }
+    }
+    calls
+}
+
+/// Whether a tool result records a failure, decided by the same judgment the
+/// transcript chip uses.
+///
+/// The pane and the transcript describe one event, so they must not reach
+/// opposite verdicts about it. Testing only for an error key does: a shell
+/// command that exits non-zero reports the failure in exit_code and success,
+/// and carries no error key at all (that key marks a tool-infrastructure
+/// failure, not a command that ran and failed). Under the error-key test a
+/// failed command was counted as a success here while the transcript painted
+/// it red, and the pane's failure total could read zero for a session in
+/// which every command failed. Routing through ToolOutcome also carries the
+/// semantic-exit exception, so grep finding no matches stays a success in
+/// both places.
+fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -> bool {
+    let (tool, input) = match calls.get(call_id) {
+        Some((t, i)) => (t.as_str(), i),
+        // No matching call (a result whose call frame is outside this log
+        // slice): judge on the output alone. from_output_with with an empty
+        // tool name applies the plain error-or-success rule.
+        None => ("", &serde_json::Value::Null),
+    };
+    ToolOutcome::from_output_with(output, tool, input) == ToolOutcome::Error
+}
+
 /// Project one TurnEvent into a TrajectoryEvent (the per-event row), or None
 /// for kinds that are pure metadata (TurnUsage carries tokens at the turn
 /// level, not as a displayable event; the rest are folded into the turn's
 /// counts or skipped as audit-only).
-fn project_event(ev: &TurnEvent, start_ms: u64) -> Option<TrajectoryEvent> {
-    let success = !matches!(&ev.kind, TurnEventKind::ToolResult { output, .. } if output.get("error").is_some());
+fn project_event(ev: &TurnEvent, start_ms: u64, calls: &CallIndex) -> Option<TrajectoryEvent> {
+    let success = !matches!(
+        &ev.kind,
+        TurnEventKind::ToolResult { output, call_id, .. }
+            if result_failed(output, call_id, calls)
+    );
     let (kind, summary, thinking, input, output, duration_ms) = match &ev.kind {
         TurnEventKind::UserInput { text } => {
             ("user", preview(text), None, Some(text.clone()), None, 0)
@@ -226,8 +280,8 @@ impl TurnBuilder {
         });
     }
 
-    fn push_event(&mut self, ev: &TurnEvent, offset: u64) {
-        if let Some(e) = project_event(ev, offset) {
+    fn push_event(&mut self, ev: &TurnEvent, offset: u64, calls: &CallIndex) {
+        if let Some(e) = project_event(ev, offset, calls) {
             self.events.push(e);
         }
     }
@@ -295,6 +349,7 @@ pub(crate) fn project(events: &[TurnEvent], model: &str) -> TrajectoryView {
     let mut total_tokens_in: u64 = 0;
     let mut total_tokens_out: u64 = 0;
     let mut total_failures: usize = 0;
+    let calls = index_calls(events);
 
     for ev in events {
         match &ev.kind {
@@ -304,7 +359,7 @@ pub(crate) fn project(events: &[TurnEvent], model: &str) -> TrajectoryView {
                 }
                 n += 1;
                 builder.reset(text.clone(), ev.ts);
-                builder.push_event(ev, 0);
+                builder.push_event(ev, 0, &calls);
             }
             TurnEventKind::UserInput { text } => {
                 pending_prompt = text.clone();
@@ -346,23 +401,26 @@ pub(crate) fn project(events: &[TurnEvent], model: &str) -> TrajectoryView {
             }
             TurnEventKind::ToolCall { .. } => {
                 builder.tool_count += 1;
-                builder.push_event(ev, builder.offset(ev.ts));
+                builder.push_event(ev, builder.offset(ev.ts), &calls);
             }
-            TurnEventKind::ToolResult { duration_ms, .. } => {
+            TurnEventKind::ToolResult {
+                duration_ms,
+                output,
+                call_id,
+            } => {
                 builder.duration_ms += *duration_ms;
-                if matches!(&ev.kind, TurnEventKind::ToolResult { output, .. } if output.get("error").is_some())
-                {
+                if result_failed(output, call_id, &calls) {
                     builder.tool_fail += 1;
                     total_failures += 1;
                 }
-                builder.push_event(ev, builder.offset(ev.ts));
+                builder.push_event(ev, builder.offset(ev.ts), &calls);
             }
             TurnEventKind::TurnAborted { .. } => {
                 builder.success = false;
-                builder.push_event(ev, builder.offset(ev.ts));
+                builder.push_event(ev, builder.offset(ev.ts), &calls);
             }
             _ => {
-                builder.push_event(ev, builder.offset(ev.ts));
+                builder.push_event(ev, builder.offset(ev.ts), &calls);
             }
         }
     }

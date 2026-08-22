@@ -538,6 +538,140 @@ fn test_tool_result_extracts_body() {
     );
 }
 
+/// A shell command that exits non-zero counts as a failure in the pane, the
+/// same verdict the transcript chip reaches. A failing command reports itself
+/// in exit_code and success and carries no error key, so an error-key-only
+/// test called it a success: the pane showed a green row and a zero failure
+/// total while the transcript painted the same command red.
+#[test]
+fn test_failed_bash_counted() {
+    let events = vec![
+        ev(100, TurnEventKind::UserInput { text: "go".into() }),
+        ev(
+            105,
+            TurnEventKind::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            TurnEventKind::ToolCall {
+                call_id: "c1".into(),
+                tool: "bash".into(),
+                input: serde_json::json!({"command": "false"}),
+            },
+        ),
+        // The exact shape the bash tool emits on a failure: no error key.
+        ev(
+            120,
+            TurnEventKind::ToolResult {
+                call_id: "c1".into(),
+                output: serde_json::json!({
+                    "stdout": "", "stderr": "", "exit_code": 1, "success": false,
+                }),
+                duration_ms: 5,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(view.failures, 1, "header failure total counts the failure");
+    assert_eq!(turn.tool_fail, 1, "per-turn failure count");
+    let tr = turn
+        .events
+        .iter()
+        .find(|e| e.kind == "tool_result")
+        .expect("tool_result event");
+    assert!(!tr.success, "the result row is marked failed");
+}
+
+/// grep exiting 1 (no matches) is the command reporting a result, not
+/// failing. The pane must agree with the transcript chip, which applies the
+/// same semantic-exit exception — otherwise a search that found nothing
+/// would inflate the session's failure total.
+#[test]
+fn test_grep_nomatch_ok() {
+    let events = vec![
+        ev(100, TurnEventKind::UserInput { text: "go".into() }),
+        ev(
+            105,
+            TurnEventKind::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            TurnEventKind::ToolCall {
+                call_id: "c1".into(),
+                tool: "bash".into(),
+                input: serde_json::json!({"command": "grep needle haystack.txt"}),
+            },
+        ),
+        ev(
+            120,
+            TurnEventKind::ToolResult {
+                call_id: "c1".into(),
+                output: serde_json::json!({
+                    "stdout": "", "stderr": "", "exit_code": 1, "success": false,
+                }),
+                duration_ms: 5,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(view.failures, 0, "no matches is not a failure");
+    assert_eq!(turn.tool_fail, 0, "per-turn count agrees");
+    let tr = turn
+        .events
+        .iter()
+        .find(|e| e.kind == "tool_result")
+        .expect("tool_result event");
+    assert!(tr.success, "the result row stays successful");
+}
+
+/// A tool-infrastructure failure (an error key, no exit code) is still a
+/// failure — the exit-code rule must not replace the error-key rule.
+#[test]
+fn test_error_key_counted() {
+    let events = vec![
+        ev(100, TurnEventKind::UserInput { text: "go".into() }),
+        ev(
+            105,
+            TurnEventKind::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            TurnEventKind::ToolCall {
+                call_id: "c1".into(),
+                tool: "read".into(),
+                input: serde_json::json!({"path": "/nope"}),
+            },
+        ),
+        ev(
+            120,
+            TurnEventKind::ToolResult {
+                call_id: "c1".into(),
+                output: serde_json::json!({"error": "permission denied"}),
+                duration_ms: 1,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    assert_eq!(view.failures, 1);
+}
+
 /// A MetaUser event (system reminder — redundancy nudge, blind-retry warning)
 /// must NOT enter the turn's user_input. The trajectory title reads
 /// user_input; a system reminder showing there would mislead the user into

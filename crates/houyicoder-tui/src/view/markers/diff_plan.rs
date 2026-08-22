@@ -141,7 +141,7 @@ pub(super) fn plan_diff_body(body: &str, width: u16) -> Option<Vec<PlanRow>> {
 /// word-diff. avail == 0 (unknown / too-narrow pane) skips wrapping so the
 /// caller falls back to the terminal's truncation, never panics.
 fn wrap_diff_plan(plan: &mut Vec<PlanRow>, width: u16) {
-    let avail = match width_width_avail(plan, width) {
+    let avail = match content_wrap_width(plan, width) {
         Some(a) if a > 0 => a,
         _ => return,
     };
@@ -193,11 +193,11 @@ fn wrap_diff_plan(plan: &mut Vec<PlanRow>, width: u16) {
     *plan = out;
 }
 
-/// The available content width for wrapping a diff content row = pane width
-/// minus the 4-space indent minus the gutter (max line-number width + space +
-/// sigil + space). None when there are no numbered rows (no gutter to reserve)
-/// or the width is too small to reserve a gutter.
-fn width_width_avail(plan: &[PlanRow], width: u16) -> Option<usize> {
+/// The content width available for wrapping a diff row: the pane width less
+/// the gutter (widest line number, plus the sigil and the two spaces framing
+/// it). None when no row is numbered, so there is no gutter to reserve, or
+/// when the pane is narrower than the gutter itself.
+fn content_wrap_width(plan: &[PlanRow], width: u16) -> Option<usize> {
     let max_w = plan
         .iter()
         .filter_map(|r| r.num)
