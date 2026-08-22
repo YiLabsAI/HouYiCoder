@@ -52,6 +52,11 @@ const RUN_DELAY_MS: u64 = 3000;
 /// submit happened, and its absence proves the input was cleared before Enter.
 const UNIQUE_TOKEN: &str = "zzqxwaffle";
 
+/// The queued message for the Esc-pop test: distinct from the first run's
+/// input ("first task") so a submit of the WRONG text (the interrupt-restore
+/// path re-filling the box with the aborted run's origin) fails the wait.
+const QUEUED_TOKEN: &str = "zzqueuedpony";
+
 /// #15: Esc while a run is in-flight AND the input has a draft must clear the
 /// draft (not abort the run), so a second Esc is needed to abort. The gate is
 /// the fix; without it the first Esc would abort, stranding any way to wipe a
@@ -85,6 +90,50 @@ fn test_esc_clears_keeps_run() {
     assert!(
         s.wait_for("input restored", RENDER_TIMEOUT),
         "first Esc should clear the draft (not abort); second Esc should abort + restore:\n{}",
+        s.output()
+    );
+}
+
+/// Esc while a run is in flight AND the queue holds a pending message: one
+/// keystroke aborts the run AND pops the queue head into the input box for
+/// editing. The popped text must NOT be auto-sent (the run ends Interrupted,
+/// the clean-end auto-drain gate holds) and must NOT be clobbered by the
+/// interrupt's input-restore path. Proven behaviorally: after the Esc, wait
+/// for the interrupt notice (the abort really landed through the server),
+/// then Enter. The queued token appearing as a contiguous user echo proves it
+/// was sitting in the input box at submit time: an auto-send leaves the box
+/// empty (no echo), and a clobber-by-restore submits the aborted run's origin
+/// instead (the first message's text, not the token).
+#[test]
+#[ignore]
+fn test_busy_esc_pops_queue() {
+    let mut s = session_on_working_slow_in_repo(make_temp_repo(2), RUN_DELAY_MS);
+    // Start a run (the stub's 3s delay keeps it in-flight with no content).
+    s.send_str("first task");
+    s.send_key(&Key::Enter);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Queue a message while busy (Enter routes to the pending queue).
+    s.send_str(QUEUED_TOKEN);
+    s.send_key(&Key::Enter);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Esc: abort + pop the queue head to the input box. The gap lets
+    // crossterm resolve the bare 0x1b as Esc before anything follows.
+    s.send_key(&Key::Esc);
+    // The abort resolves through the server and lands the interrupt notice.
+    assert!(
+        s.wait_for("What should Houyi do instead", RENDER_TIMEOUT),
+        "Esc should abort the in-flight run:\n{}",
+        s.output()
+    );
+    // Wipe history so only what renders after the submit is read; the queued
+    // token was typed char-by-char (never contiguous) and the popped input
+    // box may render it, so the contiguous USER ECHO is the proof it was
+    // submitted from the box - not auto-sent, not clobbered by the restore.
+    s.clear_output();
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for(QUEUED_TOKEN, RENDER_TIMEOUT),
+        "queued token should be popped to the input box and submit on Enter:\n{}",
         s.output()
     );
 }

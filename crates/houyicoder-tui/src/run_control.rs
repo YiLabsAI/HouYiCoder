@@ -427,6 +427,11 @@ impl App {
             return;
         };
         self.pending.remove(0);
+        // The pop is the user's explicit recall: it supersedes the aborted
+        // run's origin stash, so the Done(Interrupted) no-content restore must
+        // not re-fill the input box with the old origin and lose the popped
+        // text (which is already removed from the queue).
+        self.last_run_input = None;
         match &item {
             // A message with a live server copy (InjectUser'd): recall drops
             // it from the wire queue too so a follow-up run does not re-inject.

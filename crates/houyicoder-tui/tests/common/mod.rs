@@ -682,7 +682,8 @@ pub fn session_on_working_in_repo(repo: std::path::PathBuf, script_json: &str) -
 fn session_on_working_inner(mut s: PtySession) -> PtySession {
     assert!(
         s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
-        "login screen should render"
+        "login screen should render; raw output: {:?}",
+        s.output()
     );
     // '3' = local mode: skips auth, no network call even if a message is sent.
     s.send_key(&Key::Char('3'));

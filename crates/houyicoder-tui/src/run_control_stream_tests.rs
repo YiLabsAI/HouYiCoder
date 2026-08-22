@@ -174,6 +174,56 @@ fn test_interrupted_no_content_restores() {
     );
 }
 
+/// Esc during a busy run with a queued message pops the queue head into the
+/// input box (abort + pop in one keystroke). The pop is the user's explicit
+/// recall, so the no-content restore on the subsequent Done(Interrupted) -
+/// which re-fills the input with the aborted run's origin - must not clobber
+/// it: the queued text was already removed from pending, so an overwrite
+/// would lose it entirely.
+#[test]
+fn test_esc_pop_survives_interrupt() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.agent_busy = true;
+    app.last_run_input = Some("first".into());
+    app.handle_agent_message(AgentMessage::Frame(user_msg("first")));
+    // Queue a message while the run is in flight (spawn_run's busy path:
+    // pending push; no session is wired so the wire side is a no-op).
+    app.spawn_run("zzsecond".into());
+    assert!(!app.pending.is_empty(), "message queues while busy");
+    // Esc: abort the run + pop the queue head into the input box.
+    crate::keys::handle_working(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert_eq!(app.input.value(), "zzsecond", "Esc pops the queue head");
+    // The aborted run settles Interrupted with no real content.
+    app.handle_agent_message(AgentMessage::Done {
+        result: Ok(RunResult {
+            outcome: RunOutcome::Interrupted {
+                reason: "user".into(),
+            },
+            turns: 0,
+            usage: Usage::default(),
+            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+        }),
+    });
+    assert_eq!(
+        app.input.value(),
+        "zzsecond",
+        "popped text survives the interrupt's input restore"
+    );
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::Interrupted)),
+        "interrupt marker still lands"
+    );
+}
+
 /// The interrupt notice renders as a child row of the message above it, not
 /// as a top-level notice: it carries the same gutter prefix tool results use
 /// so the reader sees an annotation on that message, not a fresh utterance.

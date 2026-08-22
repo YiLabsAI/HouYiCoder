@@ -68,9 +68,14 @@ impl super::App {
                         // content after the last user input, restore the
                         // input so the user can edit and resend.
                         tracing::debug!(reason, "interrupted");
+                        // An automatic restore never clobbers a non-empty
+                        // input box: text the user is editing (e.g. a queue
+                        // head recalled via Esc) is their live intent and
+                        // wins over the stashed origin.
                         let restored = match self.last_run_input.take() {
                             Some(text)
-                                if !super::super::run_produced_real_content(&self.frames) =>
+                                if !super::super::run_produced_real_content(&self.frames)
+                                    && self.input.is_empty() =>
                             {
                                 // Rewind the frame log past the user echo and
                                 // any partial turn content so the transcript
