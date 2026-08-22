@@ -81,11 +81,17 @@ fn run_once(
     }
 
     let (cfg, _warnings) = retention::load_retention();
+    // Probe session.lock on every session dir: a lock held by another live
+    // process means that session is in use, and pruning it deletes the
+    // directory from under the writer. mtime recency does not cover a held
+    // but idle session (its log is old), so the probe is the real guard.
+    let mut protected = scan_lock_held_sessions(sessions_root);
+    protected.push(*current_session);
     let policy = PrunePolicy {
         ttl_secs: (cfg.session_retention_days as u64) * 24 * 3600,
         empty_ttl_secs: EMPTY_TTL_SECS,
         max_count: cfg.session_retention_count as usize,
-        protected: vec![*current_session],
+        protected,
         snapshot_ttl_secs: SNAPSHOT_TTL_SECS,
         debug_max_bytes: DEBUG_MAX_BYTES,
     };
@@ -188,4 +194,49 @@ pub fn fire_after_bundle(session: SessionId) {
         .join(".houyicoder")
         .join("debug.log");
     start_background_housekeeping(root, Some(debug), session);
+}
+
+/// Scan every session dir for a session.lock held by another live process.
+/// A non-blocking try-flock on each lock file: success means no holder (the
+/// probe releases immediately), failure (EAGAIN) means a live process holds
+/// it, so the session is protected from prune. mtime recency does not cover
+/// a held-but-idle session, so the probe is the real guard, not a
+/// fallback. Unix-only (flock); non-unix returns empty (no cross-process
+/// lock, single-process only).
+#[cfg(unix)]
+fn scan_lock_held_sessions(sessions_root: &Path) -> Vec<SessionId> {
+    use houyicoder_context::SessionId;
+    let Ok(entries) = std::fs::read_dir(sessions_root) else {
+        return Vec::new();
+    };
+    let mut held = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(sid_str) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(sid) = SessionId::from_display_string(sid_str) else {
+            continue;
+        };
+        let lock_path = path.join("session.lock");
+        if !lock_path.exists() {
+            continue;
+        }
+        let Ok(file) = OpenOptions::new().write(true).open(&lock_path) else {
+            continue;
+        };
+        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+            Ok(lock) => drop(lock),
+            Err(_) => held.push(sid),
+        }
+    }
+    held
+}
+
+#[cfg(not(unix))]
+fn scan_lock_held_sessions(_sessions_root: &Path) -> Vec<SessionId> {
+    Vec::new()
 }
