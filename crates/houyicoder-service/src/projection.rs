@@ -478,7 +478,10 @@ pub fn project_session_update(kind: &TurnEventKind) -> Option<SessionUpdate> {
         | TurnEventKind::TurnUsage { .. }
         | TurnEventKind::HookSignal { .. }
         | TurnEventKind::TurnStarted { .. }
-        | TurnEventKind::CacheBreak { .. } => return None,
+        | TurnEventKind::CacheBreak { .. }
+        | TurnEventKind::SubagentSpawn { .. }
+        | TurnEventKind::SubagentReturn { .. }
+        | TurnEventKind::NotificationInjected { .. } => return None,
         // TurnAborted is the user-visible boundary marker: project it as a
         // message chunk so the host renders the notice. The model-input
         // projection skips it (the partial turn events are already there).
@@ -532,7 +535,10 @@ pub(crate) fn project_acpx_context(kind: &TurnEventKind) -> Option<AcpxNotificat
         | TurnEventKind::TurnUsage { .. }
         | TurnEventKind::HookSignal { .. }
         | TurnEventKind::TurnStarted { .. }
-        | TurnEventKind::CacheBreak { .. } => return None,
+        | TurnEventKind::CacheBreak { .. }
+        | TurnEventKind::SubagentSpawn { .. }
+        | TurnEventKind::SubagentReturn { .. }
+        | TurnEventKind::NotificationInjected { .. } => return None,
         TurnEventKind::UserInput { .. }
         | TurnEventKind::MidTurnInput { .. }
         | TurnEventKind::MemoryRecall { .. }

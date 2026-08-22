@@ -317,3 +317,21 @@ async fn test_compact_persists_manifest() {
         "manifest covers through the last event"
     );
 }
+
+#[test]
+fn test_byte_len_spawn_zero() {
+    let ev = TurnEvent {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: 0,
+        prev_hash: None,
+        kind: TurnEventKind::SubagentSpawn {
+            child_session_id: "c".into(),
+            subagent_type: "explore".into(),
+            prompt_summary: "find auth".into(),
+            isolation: "worktree".into(),
+            policy: "delegate".into(),
+        },
+    };
+    assert_eq!(event_byte_len(&ev), 0);
+}

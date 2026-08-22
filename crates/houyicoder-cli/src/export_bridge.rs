@@ -327,6 +327,9 @@ fn collect_checkpoints_and_errors(events: &[TurnEvent]) -> (Vec<CheckpointEntry>
             | TurnEventKind::WorktreeEnter { .. }
             | TurnEventKind::WorktreeExit { .. }
             | TurnEventKind::CacheBreak { .. }
+            | TurnEventKind::SubagentSpawn { .. }
+            | TurnEventKind::SubagentReturn { .. }
+            | TurnEventKind::NotificationInjected { .. }
             | TurnEventKind::Unknown => {}
         }
     }

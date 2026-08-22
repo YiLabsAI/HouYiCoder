@@ -30,6 +30,65 @@ fn test_event_serde_round_trip() {
 }
 
 #[test]
+fn test_subagent_spawn_round_trip() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        TurnEventKind::SubagentSpawn {
+            child_session_id: "child-1".into(),
+            subagent_type: "explore".into(),
+            prompt_summary: "find the auth module".into(),
+            isolation: "worktree".into(),
+            policy: "delegate".into(),
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, e);
+    assert!(json.contains("\"type\":\"SubagentSpawn\""));
+}
+
+#[test]
+fn test_subagent_return_round_trip() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        TurnEventKind::SubagentReturn {
+            child_session_id: "child-1".into(),
+            status: "completed".into(),
+            summary: "auth lives in crates/api".into(),
+            result_ref: "evt-42".into(),
+            usage: serde_json::json!({"total_tokens": 1200}),
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, e);
+    assert!(json.contains("\"type\":\"SubagentReturn\""));
+}
+
+#[test]
+fn test_notification_round_trip() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        TurnEventKind::NotificationInjected {
+            child_session_id: "child-1".into(),
+            turn: 3,
+            order: 1,
+            topic: "task.child-1.completed".into(),
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, e);
+    assert!(json.contains("\"type\":\"NotificationInjected\""));
+}
+
+#[test]
 fn test_session_id_round_trips() {
     // A freshly minted SessionId serializes as a hyphenated UUID and
     // parses back to the same value, so a round trip is lossless.

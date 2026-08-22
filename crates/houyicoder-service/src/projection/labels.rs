@@ -26,6 +26,9 @@ pub fn trajectory_kind_label(kind: &TurnEventKind) -> &'static str {
         TurnEventKind::HookSignal { .. } => "hook",
         TurnEventKind::TurnStarted { .. } => "turn_start",
         TurnEventKind::RewardObservation { .. } => "reward",
+        TurnEventKind::SubagentSpawn { .. } => "spawn",
+        TurnEventKind::SubagentReturn { .. } => "return",
+        TurnEventKind::NotificationInjected { .. } => "notify",
         TurnEventKind::Unknown => "unknown",
     }
 }
@@ -56,5 +59,38 @@ mod tests {
     #[test]
     fn test_unknown_kind_labeled_unknown() {
         assert_eq!(trajectory_kind_label(&TurnEventKind::Unknown), "unknown");
+    }
+
+    #[test]
+    fn test_subagent_kinds_labeled() {
+        assert_eq!(
+            trajectory_kind_label(&TurnEventKind::SubagentSpawn {
+                child_session_id: String::new(),
+                subagent_type: String::new(),
+                prompt_summary: String::new(),
+                isolation: String::new(),
+                policy: String::new(),
+            }),
+            "spawn"
+        );
+        assert_eq!(
+            trajectory_kind_label(&TurnEventKind::SubagentReturn {
+                child_session_id: String::new(),
+                status: String::new(),
+                summary: String::new(),
+                result_ref: String::new(),
+                usage: serde_json::Value::Null,
+            }),
+            "return"
+        );
+        assert_eq!(
+            trajectory_kind_label(&TurnEventKind::NotificationInjected {
+                child_session_id: String::new(),
+                turn: 0,
+                order: 0,
+                topic: String::new(),
+            }),
+            "notify"
+        );
     }
 }

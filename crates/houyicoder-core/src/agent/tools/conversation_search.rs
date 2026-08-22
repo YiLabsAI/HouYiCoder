@@ -239,7 +239,10 @@ fn event_search_text(event: &TurnEvent) -> Option<String> {
         | TurnEventKind::TurnAborted { .. }
         | TurnEventKind::TruncationVerdict { .. }
         | TurnEventKind::WorktreeEnter { .. }
-        | TurnEventKind::WorktreeExit { .. } => return None,
+        | TurnEventKind::WorktreeExit { .. }
+        | TurnEventKind::SubagentSpawn { .. }
+        | TurnEventKind::SubagentReturn { .. }
+        | TurnEventKind::NotificationInjected { .. } => return None,
     };
     if text.is_empty() { None } else { Some(text) }
 }

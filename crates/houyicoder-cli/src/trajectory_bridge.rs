@@ -176,7 +176,10 @@ fn project_event(ev: &TurnEvent, start_ms: u64, calls: &CallIndex) -> Option<Tra
         | TurnEventKind::AssistantTextDelta { .. }
         | TurnEventKind::WorktreeEnter { .. }
         | TurnEventKind::WorktreeExit { .. }
-        | TurnEventKind::RewardObservation { .. } => return None,
+        | TurnEventKind::RewardObservation { .. }
+        | TurnEventKind::SubagentSpawn { .. }
+        | TurnEventKind::SubagentReturn { .. }
+        | TurnEventKind::NotificationInjected { .. } => return None,
         TurnEventKind::Unknown => return None,
     };
     Some(TrajectoryEvent {

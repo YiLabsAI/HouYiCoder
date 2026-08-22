@@ -60,6 +60,7 @@ fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
 /// retention policy + wall-clock now. The cache-liveness policy uses now to
 /// test the cached-prefix TTL; the default path (tests + the no-cache view)
 /// passes the age policy + 0, which never reports a live cache.
+#[allow(clippy::too_many_lines)]
 pub fn project_input_items_with(
     events: &[TurnEvent],
     backend: Option<&dyn ContextBackend>,
@@ -169,7 +170,10 @@ pub fn project_input_items_with(
             | TurnEventKind::WorktreeExit { .. }
             | TurnEventKind::TurnUsage { .. }
             | TurnEventKind::HookSignal { .. }
-            | TurnEventKind::TurnStarted { .. } => {
+            | TurnEventKind::TurnStarted { .. }
+            | TurnEventKind::SubagentSpawn { .. }
+            | TurnEventKind::SubagentReturn { .. }
+            | TurnEventKind::NotificationInjected { .. } => {
                 i += 1;
             }
         }

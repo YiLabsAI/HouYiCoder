@@ -352,6 +352,48 @@ pub enum TurnEventKind {
     CacheBreak {
         cause: String,
     },
+    /// A parent runner spawned a sub-agent. The durable boundary so a parent
+    /// log replay reconstructs the spawn + its config; the child's turns live
+    /// in the child's own sidechain log, not here. Fields are wire-stable
+    /// primitives: the runtime serializes its typed isolation + policy to
+    /// strings at append, matching the String-sid convention on ForkedFrom.
+    #[serde(rename = "SubagentSpawn")]
+    SubagentSpawn {
+        child_session_id: String,
+        subagent_type: String,
+        #[serde(default)]
+        prompt_summary: String,
+        #[serde(default)]
+        isolation: String,
+        #[serde(default)]
+        policy: String,
+    },
+    /// A spawned sub-agent returned. The status string drives retry policy
+    /// (timeout retries, killed does not); summary is the inline result the
+    /// parent model reads; result_ref points at the child log for the full
+    /// transcript; usage is the child's token cost reattributed to the parent.
+    #[serde(rename = "SubagentReturn")]
+    SubagentReturn {
+        child_session_id: String,
+        status: String,
+        #[serde(default)]
+        summary: String,
+        #[serde(default)]
+        result_ref: String,
+        #[serde(default)]
+        usage: serde_json::Value,
+    },
+    /// A sub-agent notification injected into the parent's context at a turn
+    /// boundary. turn + order pin the injection point so a replay restores
+    /// the exact order (the parent model saw the child's result here, not
+    /// later) -- the replay-critical field the bare event log would lose.
+    #[serde(rename = "NotificationInjected")]
+    NotificationInjected {
+        child_session_id: String,
+        turn: u32,
+        order: u32,
+        topic: String,
+    },
     /// An event kind this build does not know (written by a newer version).
     /// Lets an old binary read a newer log instead of failing the whole
     /// session read on one unrecognized line. A truly corrupt line also

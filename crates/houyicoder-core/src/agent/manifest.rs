@@ -456,7 +456,10 @@ fn estimate_event_tokens(event: &TurnEvent, tokenizer: &super::context::Tokenize
         TurnEventKind::WorktreeEnter { .. } | TurnEventKind::WorktreeExit { .. } => 0,
         TurnEventKind::TurnUsage { .. }
         | TurnEventKind::HookSignal { .. }
-        | TurnEventKind::TurnStarted { .. } => 0,
+        | TurnEventKind::TurnStarted { .. }
+        | TurnEventKind::SubagentSpawn { .. }
+        | TurnEventKind::SubagentReturn { .. }
+        | TurnEventKind::NotificationInjected { .. } => 0,
     }
 }
 

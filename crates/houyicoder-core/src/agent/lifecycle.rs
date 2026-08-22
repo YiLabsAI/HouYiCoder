@@ -219,7 +219,10 @@ fn event_byte_len(event: &TurnEvent) -> usize {
         TurnEventKind::WorktreeEnter { .. } | TurnEventKind::WorktreeExit { .. } => 0,
         TurnEventKind::TurnUsage { .. }
         | TurnEventKind::HookSignal { .. }
-        | TurnEventKind::TurnStarted { .. } => 0,
+        | TurnEventKind::TurnStarted { .. }
+        | TurnEventKind::SubagentSpawn { .. }
+        | TurnEventKind::SubagentReturn { .. }
+        | TurnEventKind::NotificationInjected { .. } => 0,
     }
 }
 
