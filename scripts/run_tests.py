@@ -29,6 +29,7 @@ first, so a cold build cannot trip a ceiling meant to catch a slow test.
 """
 import os
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -212,47 +213,58 @@ if plain_test:
         pre_cmd.append("--lib")
     subprocess.run(pre_cmd, env=env, check=False)
 
+# Merge stderr into stdout (cargo prints "Running unittests ..." and
+# "Finished" to stderr; interleaving keeps real order). Then filter out
+# the per-binary "Running unittests" / "running N tests" headers and
+# blank lines (noise); keep dots, test result, Finished, and failures.
+# cargo test has no flag to suppress the per-binary headers.
+# start_new_session puts cargo in its own session/process-group so a
+# timeout can kill the whole tree: cargo spawns test binaries as
+# grandchildren, and a bare kill on cargo orphans them under init - they
+# keep running (PTY tests hold a binary + a PTY alive), accumulate across
+# timed-out runs, and starve the next gate of CPU/PTYs. Killing the
+# session group reaps the grandchildren too.
+proc = subprocess.Popen(
+    cmd, env=env,
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    start_new_session=True,
+)
 try:
-    # Merge stderr into stdout (cargo prints "Running unittests ..." and
-    # "Finished" to stderr; interleaving keeps real order). Then filter out
-    # the per-binary "Running unittests" / "running N tests" headers and
-    # blank lines (noise); keep dots, test result, Finished, and failures.
-    # cargo test has no flag to suppress the per-binary headers.
-    result = subprocess.run(
-        cmd, timeout=gate, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    # Aggregate per-binary "test result" lines into ONE summary line (Python/go
-    # terse style). Drop dots, per-binary headers, Running/Finished/info lines.
-    # On failure, print the failure detail (kept in stdout after "failures:").
-    import re
-    passed = failed = ignored = 0
-    failures = []
-    in_failures = False
-    res_re = re.compile(r"test result: \w+\.\s+(\d+) passed;\s+(\d+) failed;\s+(\d+) ignored")
-    for line in result.stdout.splitlines():
-        s = line.strip()
-        m = res_re.search(s)
-        if m:
-            passed += int(m.group(1))
-            failed += int(m.group(2))
-            ignored += int(m.group(3))
-            in_failures = False
-            continue
-        if s == "failures:":
-            in_failures = True
-            continue
-        if in_failures and s and not s.startswith("----"):
-            failures.append(s)
-    status = "ok" if failed == 0 else "FAILED"
-    scope = "changed crates only; full suite runs at push" if not FULL else "full workspace"
-    print(f"test result: {status}. {passed} passed; {failed} failed; {ignored} ignored ({scope})")
-    for f in failures:
-        print(f)
-    sys.exit(result.returncode)
+    out, _ = proc.communicate(timeout=gate)
 except subprocess.TimeoutExpired:
+    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    out, _ = proc.communicate()
     print(f"error: tests exceeded {gate}s gate", file=sys.stderr)
     print("       (a slow test blocks every commit; mock external calls,", file=sys.stderr)
     print("        or a per-test lazy init is paid per process under nextest)", file=sys.stderr)
     print(f"       (running {'full' if FULL else 'unit'} suite)", file=sys.stderr)
     sys.exit(1)
+result = subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=out)
+# Aggregate per-binary "test result" lines into ONE summary line (Python/go
+# terse style). Drop dots, per-binary headers, Running/Finished/info lines.
+# On failure, print the failure detail (kept in stdout after "failures:").
+import re
+passed = failed = ignored = 0
+failures = []
+in_failures = False
+res_re = re.compile(r"test result: \w+\.\s+(\d+) passed;\s+(\d+) failed;\s+(\d+) ignored")
+for line in result.stdout.splitlines():
+    s = line.strip()
+    m = res_re.search(s)
+    if m:
+        passed += int(m.group(1))
+        failed += int(m.group(2))
+        ignored += int(m.group(3))
+        in_failures = False
+        continue
+    if s == "failures:":
+        in_failures = True
+        continue
+    if in_failures and s and not s.startswith("----"):
+        failures.append(s)
+status = "ok" if failed == 0 else "FAILED"
+scope = "changed crates only; full suite runs at push" if not FULL else "full workspace"
+print(f"test result: {status}. {passed} passed; {failed} failed; {ignored} ignored ({scope})")
+for f in failures:
+    print(f)
+sys.exit(result.returncode)

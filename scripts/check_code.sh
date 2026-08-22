@@ -97,7 +97,7 @@ if [ -f scripts/check_product_refs.py ]; then
   run_check "product-refs" python3 scripts/check_product_refs.py
 fi
 run_check "no-cjk"      python3 scripts/check_no_cjk.py
-run_check "script-tests"  bash -c 'python3 scripts/test_hook_rust.py && python3 scripts/test_cov_lcov.py && python3 scripts/test_flat_prefix.py && python3 scripts/test_diff_cov.py && python3 scripts/test_stderr_gate.py && python3 scripts/test_comment_block_length.py && python3 scripts/test_app_coupling.py && python3 scripts/test_file_size.py && python3 scripts/test_struct_fields.py && python3 scripts/test_app_mut_borrows.py && python3 scripts/test_module_dead_code.py'
+run_check "script-tests"  bash -c 'python3 scripts/test_hook_rust.py && python3 scripts/test_cov_lcov.py && python3 scripts/test_flat_prefix.py && python3 scripts/test_diff_cov.py && python3 scripts/test_stderr_gate.py && python3 scripts/test_comment_block_length.py && python3 scripts/test_app_coupling.py && python3 scripts/test_file_size.py && python3 scripts/test_struct_fields.py && python3 scripts/test_app_mut_borrows.py && python3 scripts/test_module_dead_code.py && python3 scripts/test_run_tests_timeout.py'
 run_check "rust-naming" python3 scripts/check_rust_naming.py $RS_FILES
 run_check "struct-fields" python3 scripts/check_struct_fields.py
 run_check "app-mut-borrows" python3 scripts/check_app_mut_borrows.py
