@@ -144,6 +144,18 @@ fn test_result_body_empty() {
     assert_eq!(rows[0].3.as_deref(), Some("c1"));
 }
 
+/// The done label a silent command produces reaches the screen as its own
+/// row, rather than being read as empty and replaced by the no-output
+/// placeholder. The transcript-level test pins that the body says done;
+/// this pins what the user actually sees, which is the claim that matters.
+#[test]
+fn test_result_body_done_row() {
+    let rows = result_body_rows("done", "c1", Some(ToolOutcome::Success), false, false, 80);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].1, "  ⎿  done");
+    assert_eq!(rows[0].2, Some(ToolOutcome::Success));
+}
+
 /// A long non-diff body line (bash stdout / read content) soft-wraps to the
 /// pane width: the full content is preserved across rows (not truncated to
 /// the pane edge), and count == render holds (the single-source invariant
