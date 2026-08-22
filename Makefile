@@ -136,7 +136,7 @@ verify: check-full
 	@start=$$(date +%s); \
 	$(CARGO) nextest run --workspace --run-ignored only -j 8 $(NEXTEST_IGNORED_BLOCKING); status=$$?; \
 	end=$$(date +%s); total=$$((end - start)); \
-	warn_budget=${VERIFY_BUDGET_WARN:-60}; \
+	warn_budget=$${VERIFY_BUDGET_WARN:-60}; \
 	if [ $$total -gt $$warn_budget ]; then \
 		printf "\033[1;33m⚠ verify ignored-suite %ds over %ds budget — prune slow tests (sleep→events, shared fixtures) or raise VERIFY_BUDGET_WARN\033[0m\n" $$total $$warn_budget; \
 	fi; \
