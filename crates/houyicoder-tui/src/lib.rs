@@ -27,6 +27,7 @@ pub mod app;
 pub mod approval;
 pub mod artifact;
 pub mod ask_question_model;
+mod bash_command;
 pub mod brief;
 pub mod command;
 pub mod composition;

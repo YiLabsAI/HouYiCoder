@@ -210,56 +210,17 @@ impl ToolOutcome {
 /// something" or "the inputs differ", which is the whole point of running
 /// them.
 fn command_is_semantic_success(command: &str, exit_code: i64) -> bool {
-    // Only the common, unambiguous cases. A pipeline or compound command is
-    // left as-is (treated as error on non-zero): the exit code of a pipeline
-    // is the LAST stage's, so "grep foo | head" exiting 1 means head failed,
-    // not grep found no match — recognizing grep here would mis-color a real
-    // head failure as success.
-    let trimmed = command.trim();
-    // Shell control operators that make the exit code NOT belong to the
-    // first command. Bail out — the semantic of a compound command is not
-    // worth parsing here.
-    if trimmed.contains('|')
-        || trimmed.contains(';')
-        || trimmed.contains("&&")
-        || trimmed.contains("||")
-    {
+    // Only the common, unambiguous cases. A compound command yields no
+    // command word (its exit code belongs to the last stage), so it stays
+    // an error on non-zero.
+    let Some(word) = crate::bash_command::simple_command_word(command) else {
         return false;
-    }
-    // Strip a leading env-assignment prefix (FOO=bar command...) so
-    // "GREP_COLOR=always grep ..." is still recognized.
-    let cmd = strip_env_prefix(trimmed);
-    let first_word = cmd.split_whitespace().next().unwrap_or("");
-    match (first_word, exit_code) {
+    };
+    match (word, exit_code) {
         ("grep", 1) => true, // no matches — the command succeeded
         ("rg", 1) => true,   // ripgrep — same
         ("diff", 1) => true, // files differ — the command succeeded
         _ => false,
-    }
-}
-
-/// Strip leading VAR=value assignments from a command line so the actual
-/// command word is reachable (POSIX allows any number of leading env
-/// assignments).
-fn strip_env_prefix(cmd: &str) -> &str {
-    let mut rest = cmd;
-    loop {
-        let trimmed = rest.trim_start();
-        let Some(eq) = trimmed.find('=') else {
-            return trimmed;
-        };
-        let before = &trimmed[..eq];
-        if before.is_empty()
-            || !before
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            return trimmed;
-        }
-        let after = &trimmed[eq + 1..];
-        // The value runs to the next whitespace.
-        let end = after.find(char::is_whitespace).unwrap_or(after.len());
-        rest = &after[end..];
     }
 }
 

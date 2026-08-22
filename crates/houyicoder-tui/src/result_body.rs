@@ -150,9 +150,18 @@ const SILENT_SUCCESS_COMMANDS: &[&str] = &[
 /// for a command whose output is silence by design.
 pub(crate) fn command_is_silent_success(call_input: Option<&Value>, output: &Value) -> bool {
     // Only a successful command qualifies: a failed silent command (e.g.
-    // rm on a missing file) has an error message that must surface.
+    // rm on a missing file) has an error that must surface, and labelling
+    // it done would state the opposite of what happened. A non-zero exit
+    // is checked directly rather than trusting the success field alone:
+    // success is a derived convenience, exit_code is the primitive the
+    // shell actually reported, and a result carrying only the latter must
+    // not read as done.
     if output.get("error").is_some()
         || output.get("success").and_then(|v| v.as_bool()) == Some(false)
+        || output
+            .get("exit_code")
+            .and_then(|c| c.as_i64())
+            .is_some_and(|c| c != 0)
     {
         return false;
     }
@@ -162,43 +171,10 @@ pub(crate) fn command_is_silent_success(call_input: Option<&Value>, output: &Val
     let Some(command) = input.get("command").and_then(|c| c.as_str()) else {
         return false;
     };
-    let trimmed = command.trim();
-    // Bail out on shell control operators — the exit code and silence may
-    // belong to a stage that is not a silent-success command.
-    if trimmed.contains('|')
-        || trimmed.contains(';')
-        || trimmed.contains("&&")
-        || trimmed.contains("||")
-    {
+    let Some(word) = crate::bash_command::simple_command_word(command) else {
         return false;
-    }
-    let cmd = strip_env_prefix(trimmed);
-    let first_word = cmd.split_whitespace().next().unwrap_or("");
-    SILENT_SUCCESS_COMMANDS.contains(&first_word)
-}
-
-/// Strip leading VAR=value assignments from a command line so the actual
-/// command word is reachable (POSIX allows any number of leading env
-/// assignments). Mirrors the same helper in records.rs.
-fn strip_env_prefix(cmd: &str) -> &str {
-    let mut rest = cmd;
-    loop {
-        let trimmed = rest.trim_start();
-        let Some(eq) = trimmed.find('=') else {
-            return trimmed;
-        };
-        let before = &trimmed[..eq];
-        if before.is_empty()
-            || !before
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            return trimmed;
-        }
-        let after = &trimmed[eq + 1..];
-        let end = after.find(char::is_whitespace).unwrap_or(after.len());
-        rest = &after[end..];
-    }
+    };
+    SILENT_SUCCESS_COMMANDS.contains(&word)
 }
 
 /// Count additions (+) and removals (-) in a unified-diff body, skipping the
@@ -434,6 +410,18 @@ mod tests {
     fn test_silent_success_failed_rejected() {
         let input = serde_json::json!({"command": "mv missing target"});
         let output = serde_json::json!({"error": "No such file", "success": false});
+        assert!(!command_is_silent_success(Some(&input), &output));
+    }
+
+    /// A non-zero exit alone rejects the done label, even when the result
+    /// carries no success field and no error field. The success field is a
+    /// derived convenience; exit_code is what the shell reported. Trusting
+    /// only success made a failed mv (exit 1, success absent) render "done"
+    /// — the exact opposite of what happened.
+    #[test]
+    fn test_silent_success_exit_nonzero() {
+        let input = serde_json::json!({"command": "mv a b"});
+        let output = serde_json::json!({"stdout": "", "exit_code": 1});
         assert!(!command_is_silent_success(Some(&input), &output));
     }
 
