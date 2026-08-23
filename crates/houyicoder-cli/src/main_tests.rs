@@ -198,13 +198,41 @@ fn test_parse_ps() {
 #[test]
 fn test_parse_cleanup_dry_run() {
     let cmd = parse_args(vec!["cleanup".into()]).expect("must parse");
-    assert!(matches!(cmd, CliCommand::Cleanup { apply: false }));
+    assert!(matches!(
+        cmd,
+        CliCommand::Cleanup {
+            apply: false,
+            verbose: false,
+            yes: false
+        }
+    ));
 }
 
 #[test]
 fn test_parse_cleanup_apply() {
     let cmd = parse_args(vec!["cleanup".into(), "--apply".into()]).expect("must parse");
-    assert!(matches!(cmd, CliCommand::Cleanup { apply: true }));
+    assert!(matches!(cmd, CliCommand::Cleanup { apply: true, .. }));
+}
+
+#[test]
+fn test_parse_cleanup_verbose_yes() {
+    let cmd = parse_args(vec![
+        "cleanup".into(),
+        "--apply".into(),
+        "--verbose".into(),
+        "--yes".into(),
+    ])
+    .expect("must parse");
+    match cmd {
+        CliCommand::Cleanup {
+            apply,
+            verbose,
+            yes,
+        } => {
+            assert!(apply && verbose && yes, "all three flags set");
+        }
+        _ => panic!("not a cleanup command"),
+    }
 }
 
 #[test]
