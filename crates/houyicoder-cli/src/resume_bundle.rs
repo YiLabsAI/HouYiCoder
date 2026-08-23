@@ -21,11 +21,7 @@ pub(super) fn build_bundle_for_resume_sid(
         Some(Arc::new(
             houyicoder_permission::FileRuleStore::default_paths(),
         )),
-    )
-    .map_err(|e| {
-        eprintln!("resume failed: {e}");
-        e
-    })?;
+    )?;
     Ok(crate::assemble_bundle(
         resumed.assembled.runner,
         resumed.assembled.session,
@@ -53,11 +49,7 @@ pub(super) fn build_bundle_for_fork(
         Some(Arc::new(
             houyicoder_permission::FileRuleStore::default_paths(),
         )),
-    )
-    .map_err(|e| {
-        eprintln!("fork failed: {e}");
-        e
-    })?;
+    )?;
     Ok(crate::assemble_bundle(
         resumed.assembled.runner,
         resumed.assembled.session,
