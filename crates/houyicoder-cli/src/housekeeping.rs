@@ -33,9 +33,12 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use houyicoder_config::{config_home, retention};
 use houyicoder_context::SessionId;
-use houyicoder_service::session_prune::{
-    self, PruneKind, PrunePlan, PrunePolicy, PruneReport, PruneTargets,
-};
+use houyicoder_service::session_prune::{self, PrunePlan, PrunePolicy, PruneReport, PruneTargets};
+// PruneKind is read only by the flock-guarded apply path, which exists on
+// unix alone. Importing it unconditionally is an unused import everywhere
+// else, and unused imports are denied.
+#[cfg(unix)]
+use houyicoder_service::session_prune::PruneKind;
 
 const DELAY_SECS: u64 = 10 * 60;
 const MARKER_THROTTLE_SECS: u64 = 24 * 60 * 60;
@@ -412,7 +415,11 @@ pub(crate) fn apply_prune_locked(plan: &PrunePlan) -> (PruneReport, usize) {
     (session_prune::apply_prune(plan), 0)
 }
 
-#[cfg(test)]
+// Every test here drives the flock-based delete lock, so the module as a
+// whole is unix-only. The gate belongs on the module rather than on each
+// test function: gating the functions leaves the helpers they share behind
+// as dead code on other platforms, which is denied.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use houyicoder_service::session_prune::{PruneAction, PruneEntry, PruneReason};
@@ -453,7 +460,6 @@ mod tests {
     /// A session nobody holds is deleted and reported as removed. It starts
     /// without a session.lock, so this also covers the acquire creating one
     /// on a directory that has never been opened by a live process.
-    #[cfg(unix)]
     #[test]
     fn test_apply_removes_free_session() {
         let root = temp_root();
@@ -468,7 +474,6 @@ mod tests {
 
     /// A session whose lock a live process holds survives, and the skip is
     /// counted rather than dropped. Fail-closed: protect, do not delete.
-    #[cfg(unix)]
     #[test]
     fn test_apply_spares_held_session() {
         let root = temp_root();
@@ -500,7 +505,6 @@ mod tests {
     /// has opened the session. An acquire that skipped an absent lock file
     /// left this case entirely unprotected: the resume created its own lock,
     /// succeeded, and the delete landed on a live session.
-    #[cfg(unix)]
     #[test]
     fn test_delete_lock_blocks_resume() {
         let root = temp_root();
