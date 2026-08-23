@@ -423,29 +423,73 @@ pub fn plan_all(targets: &PruneTargets, policy: &PrunePolicy) -> PrunePlan {
     plan
 }
 
-/// One readdir pass over the sessions root, no per-entry metadata: Some
-/// (notice) when the store holds more directories than the retention count
-/// cap. This is the startup backlog hint - it says "the store is over the
-/// cap, go review", not "exactly N are prunable": the precise plan is the
-/// cleanup subcommand's job, and computing it here would stat every
-/// directory on every launch. cap 0 opts out of the count rule and so out
-/// of this notice. A read failure yields None (an unreadable root is not a
-/// backlog signal).
-pub fn store_backlog_notice(sessions_root: &Path, cap: usize) -> Option<String> {
+/// Default empty-session TTL: a session whose durable log never landed (the
+/// lazy-materialize crash window) is pruned sooner than a logged one. Shared
+/// by the prune engine + the startup backlog notice so the two cannot drift
+/// onto different defaults.
+pub const EMPTY_TTL_SECS: u64 = 24 * 60 * 60;
+
+/// Ceiling on the gap-range precise plan at startup. A store this size or
+/// smaller gets a real plan to catch a TTL backlog under the count cap;
+/// larger stores fall back to the count path. A constant, not the
+/// user-configurable cap: a user who raises the cap to keep more sessions
+/// must not thereby pay a full stat on every launch.
+pub const GAP_PRECISE_MAX_DIRS: usize = 2000;
+
+/// The startup backlog notice. Two routes, no drift between them:
+/// - over the count cap: a count notice naming the store size (a directory
+///   count, not a prunable count, so it cannot disagree with cleanup's plan).
+/// - in the gap range (above the routing threshold, at or under the cap and
+///   the GAP_PRECISE_MAX_DIRS ceiling): a precise plan decides whether a TTL
+///   backlog exists. The notice then carries no number: the gap policy is
+///   approximate (no lock-held scan), so a prunable count here could disagree
+///   with cleanup's authoritative plan. The notice routes; cleanup counts.
+///
+/// cap 0 (count rule opted out) yields None. A read failure yields None.
+pub fn store_backlog_notice(
+    sessions_root: &Path,
+    cap: usize,
+    threshold: usize,
+    policy: &PrunePolicy,
+) -> Option<String> {
     if cap == 0 {
         return None;
     }
-    let entries = std::fs::read_dir(sessions_root).ok()?;
-    let count = entries
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .count();
-    (count > cap).then(|| {
-        format!(
+    let count = count_session_dirs(sessions_root)?;
+    if count > cap {
+        return Some(format!(
             "session store holds {count} sessions, over the retention count \
              of {cap}; run houyi cleanup to review"
-        )
-    })
+        ));
+    }
+    if count > threshold && count <= cap.min(GAP_PRECISE_MAX_DIRS) {
+        let plan = plan_prune(sessions_root, policy);
+        if plan.len() >= threshold {
+            return Some(
+                "sessions are past their retention window; run houyi cleanup to review".into(),
+            );
+        }
+    }
+    None
+}
+
+/// One readdir over the sessions root, no per-entry metadata: the count of
+/// session directories (a SessionId-shaped name + a directory). Non-session
+/// entries (an index/ subdirectory, a stray file) are excluded so the count
+/// the notice names is honest.
+fn count_session_dirs(root: &Path) -> Option<usize> {
+    let entries = std::fs::read_dir(root).ok()?;
+    Some(
+        entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|s| SessionId::from_display_string(s).is_some())
+            })
+            .count(),
+    )
 }
 
 /// List sessions by last-active, stat-only (no sidecar parse). Returns

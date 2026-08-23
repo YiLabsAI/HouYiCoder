@@ -510,7 +510,7 @@ pub fn assemble(
     {
         startup.push(notice);
     }
-    retention_notice::push_startup_notices(store_log_root, &mut startup);
+    retention_notice::push_startup_notices(store_log_root, session, &mut startup);
     let runner = runner.with_startup_warnings(startup);
     AssembledRunner {
         runner,

@@ -434,10 +434,12 @@ fn test_backlog_notice_over_cap() {
             true,
         );
     }
-    let notice = store_backlog_notice(&root, 2).expect("3 dirs over cap 2");
+    // Over the count cap: the count route names the store size. threshold is
+    // irrelevant on this route (count > cap wins first).
+    let notice = store_backlog_notice(&root, 2, 100, &default_policy()).expect("3 dirs over cap 2");
     assert!(
         notice.contains("3 sessions") && notice.contains("over the retention count"),
-        "notice states the size and the rule: {notice}"
+        "count route states the size and the rule: {notice}"
     );
     assert!(
         notice.contains("houyi cleanup"),
@@ -451,8 +453,8 @@ fn test_backlog_notice_under_cap() {
     let root = temp_root();
     session(&root, &fresh_sid(), true);
     assert!(
-        store_backlog_notice(&root, 2).is_none(),
-        "1 dir under cap 2 is no backlog"
+        store_backlog_notice(&root, 2, 100, &default_policy()).is_none(),
+        "1 dir under cap 2 and under threshold 100 is no backlog"
     );
     let _r = fs::remove_dir_all(&root);
 }
@@ -468,8 +470,74 @@ fn test_backlog_cap_zero() {
         );
     }
     assert!(
-        store_backlog_notice(&root, 0).is_none(),
+        store_backlog_notice(&root, 0, 100, &default_policy()).is_none(),
         "cap 0 opts out of the count rule, so out of the notice"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
+
+/// The gap range (above threshold, at or under cap): a TTL-expired backlog
+/// the count route misses (under cap) is caught by a precise plan. The notice
+/// carries no number - the gap policy is approximate (no lock-held scan), so
+/// a prunable count here could disagree with cleanup's authoritative plan.
+#[test]
+fn test_backlog_gap_ttl_backlog() {
+    let root = temp_root();
+    // 150 sessions, all past the 30d TTL, store under the 1000 cap.
+    for i in 0..150 {
+        let d = session(&root, &format!("00000000-0000-0000-0000-{i:012x}"), true);
+        age(&d.join("log.jsonl"), 31 * 24 * 3600);
+    }
+    let notice = store_backlog_notice(&root, 1000, 100, &default_policy())
+        .expect("150 TTL-expired sessions in the gap range fire the notice");
+    assert!(
+        notice.contains("retention window") && notice.contains("houyi cleanup"),
+        "gap notice routes without a number: {notice}"
+    );
+    assert!(
+        !notice.contains("150"),
+        "no prunable count in the gap notice (would drift with cleanup): {notice}"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
+
+/// Above the GAP_PRECISE_MAX_DIRS ceiling the precise plan is skipped even
+/// under the cap: a high cap must not turn every launch into a full stat.
+/// The store is large enough that the count route will take over once it
+/// grows past the cap; until then this range is silent.
+#[test]
+fn test_backlog_gap_above_ceiling() {
+    let root = temp_root();
+    // Just past the ceiling; names are SessionId-shaped so the filter counts
+    // them. No per-dir files: count_session_dirs only checks is_dir + name.
+    for i in 0..(crate::session_prune::GAP_PRECISE_MAX_DIRS + 1) as u64 {
+        fs::create_dir_all(root.join(format!("00000000-0000-0000-0000-{i:012x}"))).unwrap();
+    }
+    let cap = crate::session_prune::GAP_PRECISE_MAX_DIRS * 2; // cap above the ceiling
+    assert!(
+        store_backlog_notice(&root, cap, 100, &default_policy()).is_none(),
+        "above the precise-plan ceiling + under cap => silent, no full stat"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
+
+/// A non-session subdirectory (index/, a stray) is not counted: the size the
+/// count route names must be honest, or the notice overstates the store.
+#[test]
+fn test_backlog_skips_non_session() {
+    let root = temp_root();
+    fs::create_dir_all(root.join("index")).unwrap(); // not a SessionId
+    for i in 0..3 {
+        session(
+            &root,
+            &format!("00000000-0000-0000-0000-00000000000{i}"),
+            true,
+        );
+    }
+    let notice = store_backlog_notice(&root, 2, 100, &default_policy()).unwrap();
+    assert!(
+        notice.contains("3 sessions"),
+        "non-session dirs excluded from the count: {notice}"
     );
     let _r = fs::remove_dir_all(&root);
 }

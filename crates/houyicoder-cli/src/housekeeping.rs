@@ -39,9 +39,12 @@ use houyicoder_service::session_prune::{
 
 const DELAY_SECS: u64 = 10 * 60;
 const MARKER_THROTTLE_SECS: u64 = 24 * 60 * 60;
-const EMPTY_TTL_SECS: u64 = 24 * 60 * 60;
+// EMPTY_TTL_SECS lives in session_prune (the prune engine) so the startup
+// backlog notice + the sweep share one default; the snapshot + debug-log
+// ceilings below are sweep/cleanup-only and stay here.
 const SNAPSHOT_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 const DEBUG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+use houyicoder_service::session_prune::EMPTY_TTL_SECS;
 
 /// Fire-and-forget: after a 10-minute delay the prune runs on a
 /// spawn_blocking thread. Call from a long-lived entry's runtime context
