@@ -567,8 +567,10 @@ pub fn fresh_temp_dir(slug: &str) -> std::path::PathBuf {
 
 /// A one-response stub script: plain text only, so a run completes in one
 /// step (no tool call, no approval pause). Shared by the resume + status
-/// PTY tests.
-pub const ONE_REPLY_SCRIPT: &str = r#"[{"type":"Text","text":"logged"}]"#;
+/// PTY tests. The outer array is the per-call list -- the provider parses
+/// Vec<Vec<OutputItem>>, so a bare [{...}] does not parse and the stub
+/// silently fails to engage.
+pub const ONE_REPLY_SCRIPT: &str = r#"[[{"type":"Text","text":"logged"}]]"#;
 
 /// Write a fixture export file (a legacy-ULID session id + a model + two
 /// durable events) the resume path can deserialize. serde ignores the

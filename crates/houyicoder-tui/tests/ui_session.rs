@@ -16,10 +16,12 @@ mod common;
 use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, session_on_working_with_script};
 use houyicoder_core::{EventId, SessionId, TurnEvent, TurnEventKind};
 
-/// A single-response script: plain text only, so the run completes in one
-/// step (no tool call, no approval pause). The durable events that land on
-/// disk are the user input + the assistant text reply.
-const ONE_REPLY_SCRIPT: &str = r#"[{"type":"Text","text":"logged"}]"#;
+/// A single-response script: one call whose only item is a plain-text reply,
+/// so the run completes in one step (no tool call, no approval pause). The
+/// outer array is the per-call list -- the provider expects Vec<Vec<OutputItem>>
+/// (one inner array per call) -- so a bare [{...}] does not parse and the
+/// stub silently fails to engage, leaving the test on a real provider.
+const ONE_REPLY_SCRIPT: &str = r#"[[{"type":"Text","text":"logged"}]]"#;
 
 /// Drive one turn through the real binary and assert the session log file
 /// exists on disk with non-empty content. Proves the production wiring
@@ -110,6 +112,28 @@ fn wait_for_session_files(
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+}
+
+/// Poll a session log until it contains a marker, or the deadline. The event
+/// the test waits on is a durable line landing on disk -- not a guessed delay
+/// (a fixed sleep races the flush under load, and a partial log later reads
+/// as if another session wrote to it). Returns as soon as the marker lands.
+fn wait_for_log_contains(
+    path: &std::path::Path,
+    marker: &str,
+    timeout: std::time::Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if std::fs::read_to_string(path)
+            .map(|s| s.contains(marker))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
 }
 
 /// A fixture export file: two durable events (a user prompt + an assistant
@@ -439,6 +463,10 @@ fn sid_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// one covers the live-source fork the user actually hits.
 #[test]
 #[ignore]
+#[allow(
+    clippy::too_many_lines,
+    reason = "two live PTY processes: A exports mid-run, B resumes the export, then a durable-log isolation check"
+)]
 fn test_resume_export_live_session() {
     let sessions_dir = common::fresh_temp_dir("sessions-live-export");
     // Session A: alive, drives one turn, then exports mid-run.
@@ -471,14 +499,27 @@ fn test_resume_export_live_session() {
         "A user input should echo:\n{}",
         a.output()
     );
-    // Let the durable flush land on disk before the export reads the log.
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // A's turn is done when the stub reply renders; the export reads the log,
+    // so wait for the reply to land durably too (the render is ahead of the
+    // flush). Event-driven, not a fixed sleep -- a guessed delay races the
+    // flush under load, and a partial log later reads as if B wrote to A.
+    assert!(
+        a.wait_for("logged", RENDER_TIMEOUT),
+        "A's stub reply should render:\n{}",
+        a.output()
+    );
 
     // Snapshot A's sid before B spawns (A is the only sid so far).
     let sid_a = sid_dirs(&sessions_dir)
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("A sid dir missing under {sessions_dir:?}"));
+    let log_a_path = sid_a.join("log.jsonl");
+    assert!(
+        wait_for_log_contains(&log_a_path, "logged", RENDER_TIMEOUT),
+        "A's reply should land durably before the export reads the log:\n{}",
+        a.output()
+    );
 
     // Export to a known path while A is alive.
     let export_path = sessions_dir.join("live-export.json");
@@ -525,18 +566,30 @@ fn test_resume_export_live_session() {
         "B should be seeded with A's exported history:\n{log_b}"
     );
 
-    // A's log line count before B drives a turn.
-    let log_a_path = sid_a.join("log.jsonl");
+    // A's log line count before B drives a turn (log_a_path set above, after
+    // A's reply landed durably -- the full turn is on disk here).
     let a_before = std::fs::read_to_string(&log_a_path)
         .unwrap_or_else(|e| panic!("read A log: {e}"))
         .lines()
         .count();
 
-    // B drives its own turn -> appends to B's log, NOT A's.
+    // B drives its own turn -> appends to B's log, NOT A's. Wait for B's
+    // reply to render + the user input to land durably -- a fixed sleep would
+    // guess the flush timing.
     b.send_str("from B");
     b.send_key(&Key::Enter);
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    let log_b_after = std::fs::read_to_string(sid_b.join("log.jsonl")).unwrap();
+    assert!(
+        b.wait_for("logged", RENDER_TIMEOUT),
+        "B's stub reply should render:\n{}",
+        b.output()
+    );
+    let log_b_path = sid_b.join("log.jsonl");
+    assert!(
+        wait_for_log_contains(&log_b_path, "from B", RENDER_TIMEOUT),
+        "B's user input should land durably in B's log:\n{}",
+        b.output()
+    );
+    let log_b_after = std::fs::read_to_string(&log_b_path).unwrap();
     assert!(
         log_b_after.contains("from B"),
         "B's turn should land in B's log:\n{log_b_after}"
