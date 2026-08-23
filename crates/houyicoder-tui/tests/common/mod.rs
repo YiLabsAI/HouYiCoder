@@ -223,12 +223,12 @@ impl PtySession {
         // Force stub mode: set the API keys to EMPTY (not just removed). The
         // config layer treats an empty key as missing (resolve_api_key filters
         // !is_empty, checking DASHSCOPE / OPENAI / HOUYICODER in order), so
-        // build_provider falls to the stub path. dotenvy (which the binary
-        // calls at startup, reading .env from cwd) does NOT overwrite an
-        // already-set env var, so a stray .env in the worktree cannot revive
-        // a real provider + hit the network. All THREE key vars must be
-        // emptied — missing one (HOUYICODER_API_KEY) re-enables a real
-        // provider. This matters now that the dynamic mode-switch test sends
+        // build_provider falls to the stub path. The binary does not auto-load
+        // .env (dotenvy was removed; settings.json + env are the only sources),
+        // so no stray .env in the worktree can revive a real provider + hit the
+        // network. All THREE key vars must be emptied — missing one
+        // (HOUYICODER_API_KEY) re-enables a real provider. This matters now
+        // that the dynamic mode-switch test sends
         // a MessageSend — a real provider would make a network call mid-test.
         cmd.env("DASHSCOPE_API_KEY", "");
         cmd.env("OPENAI_API_KEY", "");

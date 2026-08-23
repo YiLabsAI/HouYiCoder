@@ -52,7 +52,7 @@ fn test_esc_aborts_restores_input() {
     // The stub's canned reply never streamed (cancelled before the first delta)
     // and the rewind dropped the user echo, so the reply marker is absent.
     assert!(
-        !s.output().contains("stub mode: no api key set"),
+        !s.output().contains("stub mode: no api key"),
         "the stub reply should not render after a pre-content abort:\n{}",
         s.output()
     );

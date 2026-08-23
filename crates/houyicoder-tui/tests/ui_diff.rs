@@ -159,9 +159,9 @@ fn test_edit_diff_renders_structured() {
         s.output()
     );
     // The scripted provider drove the run (not the default stub fallback that
-    // prints "stub mode: no api key set").
+    // prints "stub mode: no api key resolved").
     assert!(
-        !s.output().contains("stub mode: no api key set"),
+        !s.output().contains("stub mode: no api key"),
         "the scripted provider should drive the run, not the default stub:\n{}",
         s.output()
     );

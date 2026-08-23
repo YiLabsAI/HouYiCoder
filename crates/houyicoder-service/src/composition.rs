@@ -561,8 +561,9 @@ fn provider_or_stub(
         ),
         Err(_) => {
             let reply = format!(
-                "stub mode: no api key set, model {} not called. \
-                 set DASHSCOPE_API_KEY in .env for real replies.",
+                "stub mode: no api key resolved, model {} not called. \
+                 set apiKeyHelper in settings.json (~/.houyicoder/) or \
+                 export DASHSCOPE_API_KEY in the shell.",
                 houyicoder_config::DEFAULT_MODEL
             );
             // The warnings ride along on the stub path too: a skipped

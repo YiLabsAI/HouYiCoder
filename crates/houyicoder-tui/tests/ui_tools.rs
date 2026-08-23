@@ -53,7 +53,7 @@ fn test_scripted_read_renders_chip() {
     );
     // The script provider fired (not the default stub fallback).
     assert!(
-        !s.output().contains("stub mode: no api key set"),
+        !s.output().contains("stub mode: no api key"),
         "the scripted provider should drive the run, not the default stub:\n{}",
         s.output()
     );
