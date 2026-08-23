@@ -73,11 +73,55 @@ impl SpawnArgs {
 }
 
 /// The child reference a spawn returns. The engine's full handle carries
-/// the child Runner; the port exposes only the session id, which is all a
-/// tool needs to reference the child.
+/// the child Runner; the port exposes the child session id plus, for a sync
+/// spawn (run_in_background false), the terminal result the tool projects
+/// into its tool_result. Async spawns carry None for the result fields --
+/// completion reaches the parent later as a pending notification.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SpawnOutcome {
     pub child_session_id: String,
+    /// Terminal status label (completed / max_turns / interrupted / ...).
+    /// None on an async spawn.
+    pub status: Option<String>,
+    /// The child's final answer text (or last assistant text on a non-final
+    /// terminal). None on an async spawn.
+    pub summary: Option<String>,
+    /// A pointer back to the child transcript (the child session id) for
+    /// follow-up reads. None on an async spawn.
+    pub result_ref: Option<String>,
+    /// The child's cumulative token usage. None on an async spawn.
+    pub usage: Option<houyicoder_protocol::llm::Usage>,
+}
+
+impl SpawnOutcome {
+    /// A sync outcome: the child reached a terminal state, carry the result.
+    pub fn sync(
+        child_session_id: impl Into<String>,
+        status: impl Into<String>,
+        summary: impl Into<String>,
+        usage: houyicoder_protocol::llm::Usage,
+    ) -> Self {
+        let child = child_session_id.into();
+        Self {
+            result_ref: Some(child.clone()),
+            child_session_id: child,
+            status: Some(status.into()),
+            summary: Some(summary.into()),
+            usage: Some(usage),
+        }
+    }
+
+    /// An async outcome: the child started; completion comes later.
+    pub fn async_launched(child_session_id: impl Into<String>) -> Self {
+        Self {
+            child_session_id: child_session_id.into(),
+            status: None,
+            summary: None,
+            result_ref: None,
+            usage: None,
+        }
+    }
 }
 
 /// Why a spawn was rejected, mirroring the engine's SpawnError but neutral
@@ -88,6 +132,9 @@ pub enum SpawnFailure {
     CapabilityDenied,
     Recursive,
     FenceFail,
+    /// The type is not registered when the runtime materializes the child.
+    /// The tool surfaces it the same way as its own NotFound path.
+    UnknownAgent,
 }
 
 /// The spawn port a tool calls through its ToolCtx. The engine (the runner

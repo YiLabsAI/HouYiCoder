@@ -102,20 +102,42 @@ impl Tool for AgentTool {
                 .unwrap_or("general-purpose")
                 .to_string();
             let resolve_ctx = ResolveCtx::default().with_denied(ctx.denied_agents.iter().cloned());
-            match registry.resolve(&subagent_type, &resolve_ctx) {
-                Ok(_def) => Err(ToolError::Failed(
-                    "agent: cannot spawn a child agent yet".into(),
-                )),
-                Err(AgentError::NotFound {
-                    requested,
-                    available,
-                }) => Err(ToolError::Failed(format!(
-                    "agent: type {requested:?} is not registered; available types: {}",
-                    available.join(", ")
-                ))),
-                Err(AgentError::PermissionDenied { denied_type }) => Err(ToolError::Failed(
-                    format!("agent: type {denied_type:?} is denied by a permission rule"),
-                )),
+            // Resolve here for the deny check + a fast, useful error; the
+            // runtime re-resolves to materialize the child (same registry).
+            if let Err(e) = registry.resolve(&subagent_type, &resolve_ctx) {
+                return Err(ToolError::Failed(resolve_err_msg(e)));
+            }
+            let prompt = input
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::InvalidInput("agent: prompt (string) required".into()))?
+                .to_string();
+            let summary = input
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&subagent_type)
+                .to_string();
+            let run_in_background = input
+                .get("run_in_background")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let isolation = input
+                .get("isolation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("none")
+                .to_string();
+            let mut args =
+                houyicoder_api::spawn::SpawnArgs::new(subagent_type.clone(), prompt, summary);
+            args.isolation = isolation;
+            args.run_in_background = run_in_background;
+            let Some(handle) = ctx.spawn_handle.as_ref() else {
+                return Err(ToolError::Failed(
+                    "agent: no spawn port wired on this dispatch".into(),
+                ));
+            };
+            match handle.spawn(&ctx, args).await {
+                Ok(outcome) => Ok(build_tool_result(outcome)),
+                Err(failure) => Err(ToolError::Failed(spawn_failure_msg(failure))),
             }
         })
     }
@@ -131,6 +153,66 @@ impl Tool for AgentTool {
         // not an Ask gate on every call.
         false
     }
+}
+
+/// Surface a resolve error as the message the model sees: an unknown type
+/// lists the registered set so the model can retry; a denial says so by name.
+fn resolve_err_msg(e: AgentError) -> String {
+    match e {
+        AgentError::NotFound {
+            requested,
+            available,
+        } => format!(
+            "agent: type {requested:?} is not registered; available types: {}",
+            available.join(", "),
+        ),
+        AgentError::PermissionDenied { denied_type } => {
+            format!("agent: type {denied_type:?} is denied by a permission rule")
+        }
+    }
+}
+
+/// Map a spawn rejection to a message. A budget or capability denial is
+/// policy; recursion or fence failure is a wiring/depth issue; unknown agent
+/// is a rare registry race the model can retry.
+fn spawn_failure_msg(f: houyicoder_api::spawn::SpawnFailure) -> String {
+    match f {
+        houyicoder_api::spawn::SpawnFailure::BudgetExceeded => {
+            "agent: spawn rejected: token budget exceeded".into()
+        }
+        houyicoder_api::spawn::SpawnFailure::CapabilityDenied => {
+            "agent: spawn rejected: capability denied (or background spawn unsupported)".into()
+        }
+        houyicoder_api::spawn::SpawnFailure::Recursive => {
+            "agent: spawn rejected: recursion depth cap reached".into()
+        }
+        houyicoder_api::spawn::SpawnFailure::FenceFail => {
+            "agent: spawn rejected: worktree fence failed".into()
+        }
+        houyicoder_api::spawn::SpawnFailure::UnknownAgent => {
+            "agent: spawn rejected: type no longer registered".into()
+        }
+    }
+}
+
+/// Build the tool_result JSON from a sync spawn outcome: the child's summary
+/// text, its session id (the result ref for follow-up), terminal status, and
+/// usage.
+fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome) -> Value {
+    let usage = outcome.usage.unwrap_or_default();
+    json!({
+        "status": outcome.status.unwrap_or_default(),
+        "content": outcome.summary.unwrap_or_default(),
+        "agentId": outcome.child_session_id,
+        "result_ref": outcome.result_ref.unwrap_or_default(),
+        "usage": {
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cache_read_input_tokens": usage.cache_read_input_tokens,
+            "cache_write_input_tokens": usage.cache_write_input_tokens,
+            "reasoning_tokens": usage.reasoning_tokens,
+        },
+    })
 }
 
 #[cfg(test)]
@@ -245,6 +327,50 @@ mod tests {
         let msg = out.unwrap_err().to_string();
         assert!(msg.contains("denied"), "{msg}");
         assert!(!msg.contains("is not registered"), "{msg}");
+    }
+
+    #[test]
+    fn test_execute_builds_tool_result() {
+        // A spawn handle that returns a canned terminal outcome: the tool
+        // projects it into a tool_result carrying the summary, the child
+        // session id, and the usage block.
+        use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
+        use houyicoder_protocol::llm::Usage;
+        struct FakeSpawn;
+        impl SpawnHandle for FakeSpawn {
+            fn spawn(
+                &self,
+                _ctx: &houyicoder_api::tool::ToolCtx,
+                _args: SpawnArgs,
+            ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
+                Box::pin(async {
+                    Ok(SpawnOutcome::sync(
+                        "child-sid",
+                        "completed",
+                        "the child answer",
+                        Usage {
+                            input_tokens: 100,
+                            output_tokens: 20,
+                            ..Usage::default()
+                        },
+                    ))
+                })
+            }
+        }
+        let t = make_tool();
+        let ctx = ToolCtx::new("c1")
+            .with_session(SessionId::new())
+            .with_spawn_handle(std::sync::Arc::new(FakeSpawn));
+        let out = pollster::block_on(t.execute(
+            ctx,
+            json!({"description": "find auth", "prompt": "find the auth module"}),
+        ))
+        .expect("execute should succeed");
+        assert_eq!(out["status"], "completed");
+        assert_eq!(out["content"], "the child answer");
+        assert_eq!(out["agentId"], "child-sid");
+        assert_eq!(out["usage"]["input_tokens"], 100);
+        assert_eq!(out["usage"]["output_tokens"], 20);
     }
 
     #[test]

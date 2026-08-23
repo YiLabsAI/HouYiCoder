@@ -181,6 +181,40 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     })
 }
 
+/// Append the SubagentReturn boundary to the parent log: the durable marker
+/// that pairs with SubagentSpawn so replay reconstructs the delegation
+/// (child reached a terminal state, with its summary + usage). The runtime
+/// writes this after driving a sync child to terminal.
+pub async fn record_subagent_return(
+    store: &dyn SessionLog,
+    parent_sid: SessionId,
+    child_session_id: &str,
+    status: &str,
+    summary: &str,
+    result_ref: &str,
+    usage: &houyicoder_protocol::llm::Usage,
+) -> Result<(), SpawnError> {
+    let event = new_event(
+        parent_sid,
+        TurnEventKind::SubagentReturn {
+            child_session_id: child_session_id.to_string(),
+            status: status.to_string(),
+            summary: summary.to_string(),
+            result_ref: result_ref.to_string(),
+            input_tokens: usage.input_tokens as u64,
+            output_tokens: usage.output_tokens as u64,
+            cache_read_input_tokens: usage.cache_read_input_tokens as u64,
+            cache_write_input_tokens: usage.cache_write_input_tokens as u64,
+            reasoning_tokens: usage.reasoning_tokens as u64,
+        },
+    );
+    store
+        .append(event)
+        .await
+        .map(|_| ())
+        .map_err(|_| SpawnError::WorktreeFenceNarrowFail)
+}
+
 #[cfg(test)]
 #[path = "spawn_tests.rs"]
 mod tests;

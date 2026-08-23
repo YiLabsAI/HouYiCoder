@@ -24,7 +24,7 @@ use serde_json::Value;
 /// A registry of tools available to a run. Produces ToolDefs for the
 /// CompletionRequest and dispatches by name. A HashMap by name; the
 /// partition-by-safety batch dispatcher layers on later without changing this.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
 }

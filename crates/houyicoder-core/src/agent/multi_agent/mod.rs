@@ -10,3 +10,5 @@ pub mod dispatch;
 pub mod loader;
 pub mod registry;
 pub mod spawn;
+
+pub use spawn::{ChildHandle, SpawnError, SpawnRequest, record_subagent_return, spawn_child};

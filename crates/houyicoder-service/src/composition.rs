@@ -12,6 +12,7 @@ mod effort_resolver;
 pub use effort_resolver::{effort_to_persist, persist_model_pick};
 mod hooks;
 mod memory;
+mod multi_agent;
 mod resume;
 mod retention_notice;
 mod session_meta;
@@ -424,13 +425,19 @@ pub fn assemble(
         Some(rules) => houyicoder_permission::denied_agent_types(&rules.load()),
         None => std::collections::HashSet::new(),
     });
-    let agent_registry: Arc<dyn houyicoder_core::agent::multi_agent::registry::AgentRegistry> =
-        Arc::new(
-            houyicoder_core::agent::multi_agent::registry::BuiltInRegistry::from_agents(
-                houyicoder_core::agent::multi_agent::registry::built_in_all(),
-            ),
-        );
-    tools.register(Arc::new(AgentTool::new(agent_registry)));
+    let agent_registry = multi_agent::built_in_registry();
+    tools.register(Arc::new(AgentTool::new(agent_registry.clone())));
+    // The spawn port the agent tool spawns through; construction is in the
+    // multi_agent module so this file stays under the size gate.
+    let spawn_handle: Arc<dyn houyicoder_api::spawn::SpawnHandle> = multi_agent::build_runtime(
+        agent_registry,
+        store.clone(),
+        Arc::clone(&provider),
+        tools.clone(),
+        config.clone(),
+        worktree_controller.clone(),
+        workspace.clone(),
+    );
     // LlmSummarizer shares the main provider + model so compress produces
     // real summaries; the self-overflow guard + heuristic fallback are in
     // lifecycle.rs. Cloned before the runner takes the provider.
@@ -450,7 +457,8 @@ pub fn assemble(
         .with_breaker(breaker)
         .with_summarizer(summarizer)
         .with_effort_resolver(std::sync::Arc::new(effort_resolver))
-        .with_denied_agents(denied_agents);
+        .with_denied_agents(denied_agents)
+        .with_spawn_handle(spawn_handle);
     // Wire a workspace probe for the re-derivable compaction backbone's
     // derivation watermark. Shares the runner's cwd handle so a worktree
     // switch propagates to the next probe. Set after the builder chain (the
