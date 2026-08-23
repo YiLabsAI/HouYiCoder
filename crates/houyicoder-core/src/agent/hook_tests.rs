@@ -613,6 +613,55 @@ fn test_trust_untrusted_skips_local() {
 }
 
 #[test]
+fn test_untrusted_skip_notice() {
+    // The trust gate is scaffolded (Untrusted is never set in production
+    // yet), but the drain path must still surface a queued skip notice as a
+    // system line when a project hook is registered against an untrusted
+    // registry. The notice must name the skipped hooks and must not point at
+    // an escape hatch that does not exist.
+    use crate::agent::ToolRegistry;
+    use crate::agent::tests::runner_with;
+    use houyicoder_api::live::{LiveEvent, LiveSink};
+    use std::sync::{Arc, Mutex};
+
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let cap = Arc::clone(&captured);
+    let mut reg =
+        HookRegistry::with_policy_and_trust(HookPolicy::AllEnabled, TrustState::Untrusted);
+    reg.register(make_sourced_hook(
+        vec![HookEvent::PreToolUse],
+        HookVerdict::Allow,
+        HookSource::Project,
+    ));
+    let mut runner = runner_with(
+        Arc::new(crate::provider::test_support::FakeProvider::text("ok")),
+        ToolRegistry::new(),
+    );
+    runner.set_live_sink(Arc::new(move |ev: &LiveEvent| {
+        if let LiveEvent::SystemLine { text } = ev {
+            cap.lock().unwrap().push(text.clone());
+        }
+    }) as LiveSink);
+    let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
+    runner.dispatch_hooks(&reg, &ctx);
+    let lines = captured.lock().unwrap();
+    assert!(
+        !lines.is_empty(),
+        "the skip notice surfaces as a system line"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("untrusted project hooks skipped")),
+        "notice names the skip: {lines:?}"
+    );
+    assert!(
+        lines.iter().all(|l| !l.contains("/trust")),
+        "notice must not name an escape hatch that does not exist: {lines:?}"
+    );
+}
+
+#[test]
 fn test_trust_acknowledged_runs_all() {
     let project_hook = make_sourced_hook(
         vec![HookEvent::PreToolUse],

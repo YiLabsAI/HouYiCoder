@@ -75,8 +75,14 @@ impl Runner {
     pub(crate) fn dispatch_hooks(&self, reg: &HookRegistry, ctx: &HookContext) -> Vec<HookOutcome> {
         let outcomes = reg.dispatch(ctx);
         if let Some(skipped) = reg.take_skipped_untrusted() {
+            // The trust gate (TrustState::Untrusted) is scaffolded but not
+            // enforced today: no project-level hook source is wired yet, and
+            // nothing sets the registry to Untrusted, so this branch is
+            // unreachable. The message names no escape hatch because there
+            // is none to name; when a real project hook source lands, the
+            // surfacing here is the place to wire its trust prompt.
             self.emit_system_line(format!(
-                "untrusted project hooks skipped: {} (use /trust to enable)",
+                "untrusted project hooks skipped: {}",
                 skipped.join(", ")
             ));
         }
