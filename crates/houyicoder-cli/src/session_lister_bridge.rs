@@ -211,10 +211,17 @@ mod tests {
     /// a distinct second pins the order the tests assert on. The sidecar's
     /// created_at field does NOT participate in the sort -- only this mtime
     /// does -- so age() is the single ordering signal in these tests.
+    ///
+    /// Opened for write, not read: on windows the underlying call demands
+    /// the write-attributes right, which a read-only handle does not carry.
+    /// Every path passed here is a file, so one open serves both platforms.
     fn age(path: &std::path::Path, secs_ago: u64) {
         use std::time::{Duration, SystemTime};
         let t = SystemTime::now() - Duration::from_secs(secs_ago);
-        let f = std::fs::File::open(path).expect("open for set_times");
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open for set_times");
         f.set_times(std::fs::FileTimes::new().set_modified(t))
             .expect("set mtime");
     }

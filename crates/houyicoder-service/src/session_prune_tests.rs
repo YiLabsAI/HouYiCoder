@@ -23,9 +23,31 @@ fn temp_root() -> PathBuf {
 }
 
 /// Stamp a path's mtime to N seconds ago so the TTL rule sees it as old.
+/// Accepts directories as well as files: a session with no log is aged by
+/// its directory mtime, so a directory is one of the cases under test.
+///
+/// The handle this needs is the opposite shape on each platform, which is
+/// why the open is split rather than shared. On unix a read-only handle can
+/// set times, and read-only is the only way to open a directory at all. On
+/// windows the underlying call demands the write-attributes right, which a
+/// read-only handle does not carry, and a directory handle additionally
+/// requires backup semantics; asking for write plus that flag covers files
+/// and directories together there.
 fn age(path: &Path, secs_ago: u64) {
     let t = SystemTime::now() - Duration::from_secs(secs_ago);
-    let f = fs::File::open(path).expect("open");
+    let mut opts = fs::OpenOptions::new();
+    #[cfg(unix)]
+    opts.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_BACKUP_SEMANTICS, the flag that permits a directory
+        // handle. Spelled as its literal value because the constant lives
+        // in a windows binding crate this workspace does not depend on.
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        opts.write(true).custom_flags(BACKUP_SEMANTICS);
+    }
+    let f = opts.open(path).expect("open");
     f.set_times(fs::FileTimes::new().set_modified(t))
         .expect("set mtime");
 }
