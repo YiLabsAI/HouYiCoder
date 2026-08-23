@@ -18,10 +18,9 @@ use serde_json::{Value, json};
 
 use crate::agent::multi_agent::registry::{AgentError, AgentRegistry, ResolveCtx};
 
-/// The model-facing delegation tool. Holds the registry (to resolve the
-/// requested type and surface denial). The spawn goes through the ToolCtx's
-/// spawn port; the child transcript read (for the sync result) lands with
-/// the sync path and adds its store then.
+/// The model-facing delegation tool. Resolves the requested type against
+/// the registry and spawns through the ToolCtx spawn port; never holds the
+/// runner.
 pub struct AgentTool {
     registry: Arc<dyn AgentRegistry>,
 }

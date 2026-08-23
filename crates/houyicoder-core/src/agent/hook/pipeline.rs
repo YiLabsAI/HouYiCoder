@@ -234,6 +234,7 @@ impl Runner {
                                     ToolCtx::new(id.as_str())
                                         .with_cancel(token.clone())
                                         .with_session(session)
+                                        .with_denied_agents(self.denied_agents.clone())
                                         .with_progress(std::sync::Arc::new(LiveProgressSink::new(
                                             id.clone(),
                                             live,
@@ -302,6 +303,7 @@ impl Runner {
                     ToolCtx::new(id.as_str())
                         .with_cancel(token.clone())
                         .with_session(session)
+                        .with_denied_agents(self.denied_agents.clone())
                         .with_progress(std::sync::Arc::new(LiveProgressSink::new(
                             id.clone(),
                             self.live.clone(),

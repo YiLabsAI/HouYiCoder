@@ -334,6 +334,20 @@ pub fn evaluate(rules: &[Rule], tool_name: &str, input: &str) -> Option<Effect> 
     last
 }
 
+/// Denied agent type names from Agent(Type) deny rules, so the agent tool
+/// can tell a denial from an unknown type. Only exact type names; prefix
+/// and glob agent denies are not type-specific.
+pub fn denied_agent_types(rules: &[Rule]) -> std::collections::HashSet<String> {
+    rules
+        .iter()
+        .filter(|r| r.action.eq_ignore_ascii_case("agent") && r.effect == Effect::Deny)
+        .filter_map(|r| match r.content.as_ref()? {
+            RuleContent::Exact(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,6 +407,27 @@ mod tests {
             evaluate(std::slice::from_ref(&r), "bash", "npm uninstall"),
             None
         );
+    }
+
+    #[test]
+    fn test_denied_agents_exact_deny() {
+        let rules = vec![
+            Rule::with_content("agent", RuleContent::Exact("explore".into()), Effect::Deny)
+                .unwrap(),
+            Rule::with_content("agent", RuleContent::Exact("plan".into()), Effect::Deny).unwrap(),
+            // An allow on a type does not deny it.
+            Rule::with_content("agent", RuleContent::Exact("verify".into()), Effect::Allow)
+                .unwrap(),
+            // A non-agent deny is irrelevant.
+            Rule::new("bash", Effect::Deny).unwrap(),
+            // A prefix agent deny is ignored — a type deny is always exact.
+            Rule::with_content("agent", RuleContent::Prefix("ex".into()), Effect::Deny).unwrap(),
+        ];
+        let set = denied_agent_types(&rules);
+        assert!(set.contains("explore"));
+        assert!(set.contains("plan"));
+        assert!(!set.contains("verify"));
+        assert_eq!(set.len(), 2);
     }
 
     #[test]

@@ -52,12 +52,11 @@ pub struct ToolCtx {
     /// the way it threads the progress sink; a tool that does not spawn
     /// pays nothing.
     pub spawn_handle: Option<Arc<dyn SpawnHandle>>,
-    /// Agent types a deny rule (the Agent(x) permission form) blocks for
-    /// this dispatch. The agent tool consults this after registry lookup to
-    /// surface a denial as a distinct error from an unknown type. The agent
-    /// loop pre-computes the set where permission rules live and threads it
-    /// here so the engine never depends on the permission layer. Defaults to
-    /// an empty set; a tool that ignores it pays nothing.
+    /// Agent types a deny rule blocks for this dispatch. The agent tool
+    /// reads this after registry lookup to tell a denial from an unknown
+    /// type. Computed where permission rules live and threaded here, so the
+    /// engine never depends on the permission layer. Defaults to empty; a
+    /// tool that ignores it pays nothing.
     pub denied_agents: Arc<HashSet<String>>,
 }
 

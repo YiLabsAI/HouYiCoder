@@ -49,7 +49,7 @@ pub use metrics::{DecisionBucket, DecisionCounter, outcome_label};
 pub use mode::{ModeChange, ModeError, PermissionMode, ToolRequest};
 pub use rule::{
     Effect, GlobPattern, Rule, RuleContent, bash_always_allow_prefix, builtin_rule_id,
-    builtin_rules, evaluate, input_content,
+    builtin_rules, denied_agent_types, evaluate, input_content,
 };
 pub use safety::safety_check;
 pub use side_effect::side_effect_for;

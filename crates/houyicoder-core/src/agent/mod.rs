@@ -269,6 +269,10 @@ pub struct Runner {
     /// (resolve_turn); record runs next to fire_post_tool_use. Held behind a
     /// std Mutex, brief pure compute, no await in the lock.
     redundancy: std::sync::Mutex<redundancy::RedundancyTracker>,
+    /// Agent types deny rules block, threaded into every ToolCtx so the
+    /// agent tool can tell a denial from an unknown type. Set once at the
+    /// composition root (where permission rules live); empty by default.
+    denied_agents: std::sync::Arc<std::collections::HashSet<String>>,
 }
 
 impl Runner {
@@ -329,6 +333,7 @@ impl Runner {
             queued_input: std::sync::Mutex::new(std::collections::VecDeque::new()),
             consumed_input: std::sync::Mutex::new(Vec::new()),
             redundancy: std::sync::Mutex::new(redundancy::RedundancyTracker::new()),
+            denied_agents: Arc::new(std::collections::HashSet::new()),
         };
         runner.wire_cache_liveness_policy();
         runner
@@ -389,6 +394,7 @@ impl Runner {
             queued_input: std::sync::Mutex::new(std::collections::VecDeque::new()),
             consumed_input: std::sync::Mutex::new(Vec::new()),
             redundancy: std::sync::Mutex::new(redundancy::RedundancyTracker::new()),
+            denied_agents: Arc::new(std::collections::HashSet::new()),
         };
         runner.wire_cache_liveness_policy();
         runner
@@ -454,6 +460,12 @@ impl Runner {
     /// assembles in one statement.
     pub fn with_effort_resolver(mut self, resolver: Arc<dyn EffortResolver>) -> Self {
         self.effort_resolver = Some(resolver);
+        self
+    }
+
+    /// Set the denied-agent set the agent tool reads at resolve time.
+    pub fn with_denied_agents(mut self, denied: Arc<std::collections::HashSet<String>>) -> Self {
+        self.denied_agents = denied;
         self
     }
 
@@ -767,6 +779,8 @@ mod abort_tool_tests;
 mod ask_question_tests;
 #[cfg(test)]
 mod budget_pressure_gate_tests;
+#[cfg(test)]
+mod denied_agents_tests;
 mod outcome_counts;
 #[cfg(test)]
 mod tests;

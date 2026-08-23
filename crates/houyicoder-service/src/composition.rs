@@ -418,7 +418,12 @@ pub fn assemble(
     // tool it is not sandbox-backed; it resolves the requested type against
     // the agent registry (built-ins) and goes through the ToolCtx spawn port
     // at call time. Registered unconditionally so the model can delegate even
-    // without a sandbox.
+    // without a sandbox. The denied-agent set comes from the rule store here
+    // (the one place permission rules are readable) and rides the runner.
+    let denied_agents = Arc::new(match rule_store.as_ref() {
+        Some(rules) => houyicoder_permission::denied_agent_types(&rules.load()),
+        None => std::collections::HashSet::new(),
+    });
     let agent_registry: Arc<dyn houyicoder_core::agent::multi_agent::registry::AgentRegistry> =
         Arc::new(
             houyicoder_core::agent::multi_agent::registry::BuiltInRegistry::from_agents(
@@ -444,7 +449,8 @@ pub fn assemble(
         .with_recall_meter(recall_meter)
         .with_breaker(breaker)
         .with_summarizer(summarizer)
-        .with_effort_resolver(std::sync::Arc::new(effort_resolver));
+        .with_effort_resolver(std::sync::Arc::new(effort_resolver))
+        .with_denied_agents(denied_agents);
     // Wire a workspace probe for the re-derivable compaction backbone's
     // derivation watermark. Shares the runner's cwd handle so a worktree
     // switch propagates to the next probe. Set after the builder chain (the
