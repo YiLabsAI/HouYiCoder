@@ -423,6 +423,31 @@ pub fn plan_all(targets: &PruneTargets, policy: &PrunePolicy) -> PrunePlan {
     plan
 }
 
+/// One readdir pass over the sessions root, no per-entry metadata: Some
+/// (notice) when the store holds more directories than the retention count
+/// cap. This is the startup backlog hint - it says "the store is over the
+/// cap, go review", not "exactly N are prunable": the precise plan is the
+/// cleanup subcommand's job, and computing it here would stat every
+/// directory on every launch. cap 0 opts out of the count rule and so out
+/// of this notice. A read failure yields None (an unreadable root is not a
+/// backlog signal).
+pub fn store_backlog_notice(sessions_root: &Path, cap: usize) -> Option<String> {
+    if cap == 0 {
+        return None;
+    }
+    let entries = std::fs::read_dir(sessions_root).ok()?;
+    let count = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .count();
+    (count > cap).then(|| {
+        format!(
+            "session store holds {count} sessions, over the retention count \
+             of {cap}; run houyi cleanup to review"
+        )
+    })
+}
+
 /// List sessions by last-active, stat-only (no sidecar parse). Returns
 /// (sid, last_active_secs) sorted newest-first, limited to the top N.
 /// The caller parses only these N sidecars (read_meta), not all -- on a

@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{Key, PtySession, RENDER_TIMEOUT, session_on_working_with_script};
+use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, session_on_working_with_script};
 use houyicoder_core::{EventId, SessionId, TurnEvent, TurnEventKind};
 
 /// A single-response script: plain text only, so the run completes in one
@@ -700,5 +700,49 @@ fn test_fork_keeps_source_untouched() {
         after.lines().count(),
         before_lines,
         "fork's continued turn must NOT touch the source log:\nbefore({before_lines}):\n{before}\nafter:\n{after}"
+    );
+}
+
+/// A sessions store over the retention count cap surfaces as a startup
+/// system line pointing at the review path. The background sweep skips
+/// auto-apply above the threshold, so without this line a backlog is
+/// invisible until the user thinks to ask. Seeds a low cap (2) in the
+/// isolated HOME settings + three sessions in the isolated sessions dir,
+/// then asserts the notice reaches the transcript on launch - the same
+/// end-to-end wiring the stale-catalog startup warning proves by.
+#[test]
+#[ignore]
+fn test_backlog_notice_warns_startup() {
+    let home = fresh_temp_dir("backlog-warn-home");
+    std::fs::create_dir_all(home.join(".houyicoder")).unwrap();
+    std::fs::write(
+        home.join(".houyicoder").join("settings.json"),
+        r#"{"session_retention_count": 2}"#,
+    )
+    .unwrap();
+    let sessions_dir = fresh_temp_dir("backlog-warn-sessions");
+    for i in 0..3 {
+        seed_session_on_disk(
+            &sessions_dir,
+            &format!("00000000-0000-0000-0000-00000000000{i}"),
+            "test",
+            "",
+        );
+    }
+    let mut s =
+        PtySession::launch_with_sessions_dir(None, None, Some(home), None, &[], sessions_dir);
+    assert!(s.wait_for("sign in to houyicoder", RENDER_TIMEOUT), "login");
+    s.send_key(&Key::Char('3'));
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen"
+    );
+    assert!(
+        s.wait_for_plain(
+            "session store holds 3 sessions, over the retention count of 2",
+            RENDER_TIMEOUT,
+        ),
+        "backlog notice surfaces at startup: {}",
+        s.output_plain()
     );
 }

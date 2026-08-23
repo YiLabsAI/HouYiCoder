@@ -13,6 +13,7 @@ pub use effort_resolver::{effort_to_persist, persist_model_pick};
 mod hooks;
 mod memory;
 mod resume;
+mod retention_notice;
 mod session_meta;
 mod startup_warnings;
 mod worktree;
@@ -422,6 +423,11 @@ pub fn assemble(
     ));
     let (effort_resolver, effort_warnings) =
         effort_resolver::SettingsEffortResolver::load_with_warnings();
+    // The sessions root the store's backend owns, captured before the
+    // runner takes the store: the retention backlog notice reads it (never
+    // the global root - reader and writer must never disagree), and an
+    // in-memory backend yields None so the notice scans nothing.
+    let store_log_root = store.session_log_root();
     let mut runner = Runner::with_shared_store(store, provider, tools, config)
         .with_recall_meter(recall_meter)
         .with_breaker(breaker)
@@ -504,6 +510,7 @@ pub fn assemble(
     {
         startup.push(notice);
     }
+    retention_notice::push_startup_notices(store_log_root, &mut startup);
     let runner = runner.with_startup_warnings(startup);
     AssembledRunner {
         runner,

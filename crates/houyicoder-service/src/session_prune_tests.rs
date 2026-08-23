@@ -423,3 +423,53 @@ fn test_list_recent_newest_first() {
     assert_eq!(got[1].0.to_string(), sids[1], "second-newest second");
     let _r = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn test_backlog_notice_over_cap() {
+    let root = temp_root();
+    for i in 0..3 {
+        session(
+            &root,
+            &format!("00000000-0000-0000-0000-00000000000{i}"),
+            true,
+        );
+    }
+    let notice = store_backlog_notice(&root, 2).expect("3 dirs over cap 2");
+    assert!(
+        notice.contains("3 sessions") && notice.contains("over the retention count"),
+        "notice states the size and the rule: {notice}"
+    );
+    assert!(
+        notice.contains("houyi cleanup"),
+        "notice points at the review path: {notice}"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_backlog_notice_under_cap() {
+    let root = temp_root();
+    session(&root, &fresh_sid(), true);
+    assert!(
+        store_backlog_notice(&root, 2).is_none(),
+        "1 dir under cap 2 is no backlog"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_backlog_cap_zero() {
+    let root = temp_root();
+    for i in 0..3 {
+        session(
+            &root,
+            &format!("00000000-0000-0000-0000-00000000000{i}"),
+            true,
+        );
+    }
+    assert!(
+        store_backlog_notice(&root, 0).is_none(),
+        "cap 0 opts out of the count rule, so out of the notice"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
