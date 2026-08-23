@@ -54,7 +54,7 @@ impl SystemPrompt {
     /// context from the first AGENTS.md walking up from cwd, plus env) is
     /// appended after the boundary so a cache policy can carve the prefix.
     pub fn build(cwd: &Path) -> SystemPrompt {
-        Self::build_with_memory_index(cwd, None)
+        Self::build_with_memory_index(cwd, None, None)
     }
 
     /// Build the system prompt with an optional MEMORY.md index section
@@ -63,7 +63,11 @@ impl SystemPrompt {
     /// sits in the byte-stable cache prefix (changes only when memories are
     /// added or removed — infrequent, so the prefix stays cached between
     /// those turns).
-    pub fn build_with_memory_index(cwd: &Path, index: Option<&str>) -> SystemPrompt {
+    pub fn build_with_memory_index(
+        cwd: &Path,
+        index: Option<&str>,
+        agent_directory: Option<&str>,
+    ) -> SystemPrompt {
         let identity = identity_section();
         let system = system_section();
         let doing_tasks = doing_tasks_section();
@@ -135,6 +139,16 @@ impl SystemPrompt {
             text.push_str("\n\n");
             text.push_str(p);
             items.push("Project context".to_string());
+        }
+
+        // Agent directory (session-stable: the registry is fixed for the
+        // session, no hot reload). Sits in the dynamic suffix so the static
+        // prefix stays cross-session cacheable; the section itself is
+        // turn-stable within a session.
+        if let Some(dir) = agent_directory.filter(|s| !s.is_empty()) {
+            text.push_str("\n\n");
+            text.push_str(dir);
+            items.push("Agent directory".to_string());
         }
 
         text.push_str("\n\n");
@@ -433,6 +447,15 @@ mod tests {
         assert!(p.items.contains(&"Efficiency".to_string()));
         assert!(p.items.contains(&"Tool docs".to_string()));
         assert!(p.items.contains(&"Env".to_string()));
+    }
+
+    #[test]
+    fn test_agent_directory_injected() {
+        let dir = scratch_dir("empty");
+        let section = "## Available agents\n\n- explore: fast search";
+        let p = SystemPrompt::build_with_memory_index(&dir, None, Some(section));
+        assert!(p.text.contains("- explore: fast search"));
+        assert!(p.items.contains(&"Agent directory".to_string()));
     }
 
     #[test]

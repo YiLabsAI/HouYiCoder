@@ -31,4 +31,10 @@ impl Runner {
     pub(crate) fn spawn_handle(&self) -> Option<&Arc<dyn SpawnHandle>> {
         self.spawn_handle.as_ref()
     }
+
+    /// Install the agent directory section the system prompt carries so the
+    /// model can discover sub-agent types. Set once at the composition root.
+    pub fn set_agent_directory(&self, section: String) {
+        self.context_builder.set_agent_directory(section);
+    }
 }

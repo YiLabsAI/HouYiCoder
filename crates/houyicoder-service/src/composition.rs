@@ -427,10 +427,9 @@ pub fn assemble(
     });
     let agent_registry = multi_agent::built_in_registry();
     tools.register(Arc::new(AgentTool::new(agent_registry.clone())));
-    // The spawn port the agent tool spawns through; construction is in the
-    // multi_agent module so this file stays under the size gate.
+    // Spawn port + agent directory; construction is in the multi_agent module.
     let spawn_handle: Arc<dyn houyicoder_api::spawn::SpawnHandle> = multi_agent::build_runtime(
-        agent_registry,
+        agent_registry.clone(),
         store.clone(),
         Arc::clone(&provider),
         tools.clone(),
@@ -457,7 +456,7 @@ pub fn assemble(
         .with_breaker(breaker)
         .with_summarizer(summarizer)
         .with_effort_resolver(std::sync::Arc::new(effort_resolver))
-        .with_denied_agents(denied_agents)
+        .with_denied_agents(std::sync::Arc::clone(&denied_agents))
         .with_spawn_handle(spawn_handle);
     // Wire a workspace probe for the re-derivable compaction backbone's
     // derivation watermark. Shares the runner's cwd handle so a worktree
@@ -468,6 +467,7 @@ pub fn assemble(
     runner.set_workspace_probe(std::sync::Arc::new(GitWorkspaceProbe::new(
         runner.cwd_handle(),
     )));
+    multi_agent::wire_agent_directory(&runner, agent_registry.as_ref(), &denied_agents);
     // Wire the hot-path tool-output reducer so the Isolate stage strips ansi
     // + truncates a large bash result before serving it (the raw stays in the
     // CAS for on-demand retrieval).

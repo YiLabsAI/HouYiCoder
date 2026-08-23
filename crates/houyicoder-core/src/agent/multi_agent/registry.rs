@@ -128,6 +128,39 @@ pub trait AgentRegistry: Send + Sync {
     fn list(&self) -> Vec<AgentDefinition>;
 }
 
+/// One line of the agent directory injected into the parent system prompt:
+/// the type, its when-to-use, and (when the definition pins a tool set) the
+/// tools. A definition that inherits the parent's tools (tools = None) shows
+/// no tool suffix - the when-to-use already describes the agent.
+pub fn format_agent_line(def: &AgentDefinition) -> String {
+    let tools = match &def.tools {
+        Some(ts) if !ts.is_empty() => format!(" (Tools: {})", ts.join(", ")),
+        _ => String::new(),
+    };
+    format!("- {}: {}{}", def.subagent_type, def.when_to_use, tools)
+}
+
+/// The agent directory section for the parent system prompt: the registered
+/// types the model may delegate to, minus any a deny rule blocks, sorted by
+/// type so the bytes are stable within a session (no hot reload in v0).
+/// None when the registry is empty after filtering.
+pub fn agent_directory_section(
+    registry: &dyn AgentRegistry,
+    denied: &HashSet<String>,
+) -> Option<String> {
+    let mut defs: Vec<AgentDefinition> = registry
+        .list()
+        .into_iter()
+        .filter(|d| !denied.contains(&d.subagent_type))
+        .collect();
+    defs.sort_by(|a, b| a.subagent_type.cmp(&b.subagent_type));
+    if defs.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = defs.iter().map(format_agent_line).collect();
+    Some(format!("## Available agents\n\n{}", lines.join("\n")))
+}
+
 /// A registry backed by a fixed vector of definitions. Enough for the
 /// built-ins and for tests; the precedence-layered loader builds on this.
 pub struct BuiltInRegistry {
@@ -328,6 +361,8 @@ pub fn built_in_all() -> Vec<AgentDefinition> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::{
         AgentError, AgentRegistry, BuiltInRegistry, ResolveCtx, built_in_all,
         built_in_general_purpose,
@@ -446,5 +481,60 @@ mod tests {
         assert!(super::built_in_plan().omit_project_context);
         assert!(!super::built_in_general_purpose().omit_project_context);
         assert!(!super::built_in_verify().omit_project_context);
+    }
+
+    fn built_in() -> BuiltInRegistry {
+        BuiltInRegistry::from_agents(super::built_in_all())
+    }
+
+    #[test]
+    fn test_agent_directory_lists_sorted() {
+        let reg = built_in();
+        let dir = super::agent_directory_section(&reg, &HashSet::new()).expect("non-empty");
+        // Deterministic alphabetical order by type.
+        let code_pos = dir.find("- code-guide:").unwrap();
+        let explore_pos = dir.find("- explore:").unwrap();
+        let general_pos = dir.find("- general-purpose:").unwrap();
+        let plan_pos = dir.find("- plan:").unwrap();
+        assert!(code_pos < explore_pos);
+        assert!(explore_pos < general_pos);
+        assert!(general_pos < plan_pos);
+    }
+
+    #[test]
+    fn test_agent_directory_filters_denied() {
+        let reg = built_in();
+        let mut denied = HashSet::new();
+        denied.insert("explore".to_string());
+        let dir = super::agent_directory_section(&reg, &denied).expect("non-empty");
+        assert!(!dir.contains("- explore:"), "denied type must not appear");
+        assert!(dir.contains("- plan:"), "non-denied type stays");
+    }
+
+    #[test]
+    fn test_agent_directory_stable_bytes() {
+        let reg = built_in();
+        let a = super::agent_directory_section(&reg, &HashSet::new());
+        let b = super::agent_directory_section(&reg, &HashSet::new());
+        assert_eq!(a, b, "same registry + denied must yield identical bytes");
+    }
+
+    #[test]
+    fn test_agent_directory_all_denied() {
+        let reg = built_in();
+        let all: HashSet<String> = super::built_in_all()
+            .into_iter()
+            .map(|d| d.subagent_type)
+            .collect();
+        assert!(super::agent_directory_section(&reg, &all).is_none());
+    }
+
+    #[test]
+    fn test_format_agent_line() {
+        let mut def = super::built_in_explore();
+        def.tools = Some(vec!["read".into(), "grep".into()]);
+        let line = super::format_agent_line(&def);
+        assert!(line.starts_with("- explore:"));
+        assert!(line.contains("(Tools: read, grep)"));
     }
 }

@@ -69,6 +69,21 @@ pub(super) fn built_in_registry() -> Arc<dyn AgentRegistry> {
     )
 }
 
+/// Install the agent directory (registered sub-agent types, minus denied)
+/// on the runner's system prompt. Session-stable: the registry is fixed for
+/// the session, so the section's bytes do not change across turns.
+pub(super) fn wire_agent_directory(
+    runner: &houyicoder_core::agent::Runner,
+    registry: &dyn AgentRegistry,
+    denied: &std::collections::HashSet<String>,
+) {
+    if let Some(dir) =
+        houyicoder_core::agent::multi_agent::registry::agent_directory_section(registry, denied)
+    {
+        runner.set_agent_directory(dir);
+    }
+}
+
 /// Build the spawn port the composition root attaches to the runner. The
 /// workspace (or the process cwd when none resolved) is the child's env-block
 /// cwd. Splits the runtime construction out of the composition root so the

@@ -245,6 +245,11 @@ pub struct ContextBuilder {
     /// (tests + the stub path). Interior-mutable so the Runner can install it
     /// post-construction with the shared cached-prefix state.
     retention_policy: Mutex<Option<Arc<dyn retention::RetentionPolicy>>>,
+    /// The agent directory section (deterministic list of registered agent
+    /// types the model may delegate to), injected into the system prompt so
+    /// the model can discover sub-agent types. Interior-mutable so the
+    /// composition root installs it post-construction.
+    agent_directory: Mutex<Option<String>>,
 }
 
 impl ContextBuilder {
@@ -255,6 +260,15 @@ impl ContextBuilder {
             cwd: Arc::new(RwLock::new(cwd)),
             last_served: Mutex::new(None),
             retention_policy: Mutex::new(None),
+            agent_directory: Mutex::new(None),
+        }
+    }
+
+    /// Install the agent directory section for the system prompt. Set once
+    /// at the composition root (the registry is fixed for the session).
+    pub(crate) fn set_agent_directory(&self, section: String) {
+        if let Ok(mut g) = self.agent_directory.lock() {
+            *g = Some(section);
         }
     }
 
@@ -343,7 +357,12 @@ impl ContextBuilder {
         let msg_tokens: u32 = messages.iter().map(|m| self.tokenizer.count_input(m)).sum();
 
         let cwd = self.cwd.read().expect("cwd lock").clone();
-        let prompt = prompt::SystemPrompt::build_with_memory_index(&cwd, memory_index);
+        let agent_directory = self.agent_directory.lock().ok().and_then(|g| g.clone());
+        let prompt = prompt::SystemPrompt::build_with_memory_index(
+            &cwd,
+            memory_index,
+            agent_directory.as_deref(),
+        );
 
         // Measure the recalled-memory attachment already in the served view:
         // the memory-recall events the turn-entry step appended, which the
