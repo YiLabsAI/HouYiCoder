@@ -29,8 +29,7 @@ pub use houyicoder_protocol::llm::EffortLevel;
 pub use model_section::{ModelEntry, ModelSection, load_model_section_from};
 pub mod served_models;
 pub use served_models::{ServedModels, cache_path, cached_ids, load_ids_at, served_model_exists};
-pub mod api_key;
-pub use api_key::api_key_from_helper;
+mod api_key;
 pub mod settings_merge;
 pub use settings_merge::{merge_json, read_settings_value};
 
@@ -204,7 +203,7 @@ fn build_provider(
 /// process (the script runs once at startup); env is read fresh each call.
 pub fn resolve_api_key() -> Option<String> {
     static HELPER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let helper = HELPER.get_or_init(|| api_key_from_helper(&settings_path()));
+    let helper = HELPER.get_or_init(|| api_key::api_key_from_helper(&settings_path()));
     helper.clone().or_else(|| {
         first_non_empty(&[
             std::env::var(ENV_DASHSCOPE_API_KEY).ok(),

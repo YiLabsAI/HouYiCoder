@@ -16,7 +16,10 @@
 /// a helper; a user who hangs their own helper can see the process and fix
 /// their file. A timeout is liveness polish for that residual, deferred
 /// until it earns its keep.
-pub fn api_key_from_helper(settings_path: &std::path::Path) -> Option<String> {
+///
+/// Safety depends on which path the caller passes, and the signature cannot
+/// express that; keeping every call site in this crate is what holds the rule.
+pub(crate) fn api_key_from_helper(settings_path: &std::path::Path) -> Option<String> {
     let Ok(text) = std::fs::read_to_string(settings_path) else {
         return None;
     };
@@ -27,15 +30,13 @@ pub fn api_key_from_helper(settings_path: &std::path::Path) -> Option<String> {
 }
 
 /// Extract the apiKeyHelper from a parsed settings value + run it. Callers
-/// hand in the USER settings value only: the field names a shell command,
-/// and a repository-controlled settings file must not be able to supply
-/// one (opening a clone would execute it before the first keystroke). The
-/// merged-settings loader therefore never passes a merged value here.
+/// hand in the user settings value only: the field names a shell command, so
+/// a repository-controlled file supplying one would run on clone open.
 #[expect(
     clippy::disallowed_methods,
-    reason = "host-side key read, not an agent spawn"
+    reason = "user-settings provenance only; a repository cannot supply this string"
 )]
-pub fn api_key_from_value(v: &serde_json::Value) -> Option<String> {
+pub(crate) fn api_key_from_value(v: &serde_json::Value) -> Option<String> {
     use std::process::{Command, Stdio};
     let helper = v.get("apiKeyHelper")?.as_str()?.trim();
     if helper.is_empty() {
