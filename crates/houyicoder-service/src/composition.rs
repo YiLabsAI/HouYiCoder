@@ -216,7 +216,7 @@ pub fn assemble(
 ) -> AssembledRunner {
     let model_for_extractor = model.clone();
     let workspace = resolve_project_workspace(project.clone());
-    let provider: Arc<dyn ModelProvider> = provider_or_stub(workspace.as_deref());
+    let (provider, provider_cfg_warnings) = provider_or_stub(workspace.as_deref());
     // Clone before the provider is moved into the runner so the memory
     // extractor (wired in the workspace branch) shares the same provider
     // handle — shares the same prompt-cache prefix as the runner.
@@ -490,6 +490,7 @@ pub fn assemble(
         &network_warnings,
         &toggle_warnings,
         &effort_warnings,
+        &provider_cfg_warnings,
     );
     // The sandbox fence status is a one-time construction event the user
     // must know: an unfenced workspace is a security-relevant gap. Check
@@ -517,8 +518,15 @@ pub fn assemble(
 /// Resolve the provider via the config layer: a real OpenAiCompatibleProvider
 /// when a key env var is set, else a FakeProvider so the loop still drives
 /// with a canned reply. Named for what it returns, not how (env resolution
-/// lives in the config layer).
-fn provider_or_stub(workspace: Option<&std::path::Path>) -> Arc<dyn ModelProvider> {
+/// lives in the config layer). Also returns the config-load warnings so the
+/// caller can surface them - a project settings file whose apiKeyHelper was
+/// ignored must not disappear silently.
+fn provider_or_stub(
+    workspace: Option<&std::path::Path>,
+) -> (
+    Arc<dyn ModelProvider>,
+    Vec<houyicoder_config::ConfigWarning>,
+) {
     // Test affordance: a scripted response sequence lets PTY UI tests drive
     // tool calls (glob / edit / todo_write) through the real binary so the
     // interaction layer — permission cards, tool-result rendering, transcript
@@ -533,17 +541,26 @@ fn provider_or_stub(workspace: Option<&std::path::Path>) -> Arc<dyn ModelProvide
             serde_json::from_str::<Vec<Vec<houyicoder_protocol::llm::OutputItem>>>(&raw)
         && !per_call.is_empty()
     {
-        return Arc::new(houyicoder_provider::FakeProvider::from_outputs(per_call));
+        return (
+            Arc::new(houyicoder_provider::FakeProvider::from_outputs(per_call)),
+            Vec::new(),
+        );
     }
-    match houyicoder_config::settings_merge::load_provider_merged(workspace) {
-        Ok(cfg) => Arc::new(OpenAiCompatibleProvider::new(cfg.base_url, cfg.api_key)),
+    let (res, warnings) = houyicoder_config::settings_merge::load_provider_merged(workspace);
+    match res {
+        Ok(cfg) => (
+            Arc::new(OpenAiCompatibleProvider::new(cfg.base_url, cfg.api_key)),
+            warnings,
+        ),
         Err(_) => {
             let reply = format!(
                 "stub mode: no api key set, model {} not called. \
                  set DASHSCOPE_API_KEY in .env for real replies.",
                 houyicoder_config::DEFAULT_MODEL
             );
-            Arc::new(FakeProvider::text(&reply))
+            // The warnings ride along on the stub path too: a skipped
+            // project helper is most relevant exactly when no key resolved.
+            (Arc::new(FakeProvider::text(&reply)), warnings)
         }
     }
 }

@@ -10,10 +10,12 @@
 /// the exec fails (the caller falls through to env). Path-explicit so a test
 /// points at a temp settings file + a temp command.
 ///
-/// First-cut gaps pending the config env-unification design: no exec timeout
-/// (a hung helper blocks startup — acceptable while the helper is a
-/// user-settings path the developer chose; project-local helpers need
-/// workspace trust + a timeout before they ship).
+/// No exec timeout: a hung helper blocks startup. That gap is
+/// self-inflicted only - the merged-settings loader hands this reader the
+/// user settings value alone, so a repository-controlled file cannot supply
+/// a helper; a user who hangs their own helper can see the process and fix
+/// their file. A timeout is liveness polish for that residual, deferred
+/// until it earns its keep.
 pub fn api_key_from_helper(settings_path: &std::path::Path) -> Option<String> {
     let Ok(text) = std::fs::read_to_string(settings_path) else {
         return None;
@@ -24,10 +26,15 @@ pub fn api_key_from_helper(settings_path: &std::path::Path) -> Option<String> {
     api_key_from_value(&v)
 }
 
-/// Extract the apiKeyHelper from a parsed settings value + run it. Shared by
-/// the path-explicit reader + the merged-settings reader (project-local
-/// override can name a helper the user file does not).
-#[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")] // host-side key read, not an agent spawn
+/// Extract the apiKeyHelper from a parsed settings value + run it. Callers
+/// hand in the USER settings value only: the field names a shell command,
+/// and a repository-controlled settings file must not be able to supply
+/// one (opening a clone would execute it before the first keystroke). The
+/// merged-settings loader therefore never passes a merged value here.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "host-side key read, not an agent spawn"
+)]
 pub fn api_key_from_value(v: &serde_json::Value) -> Option<String> {
     use std::process::{Command, Stdio};
     let helper = v.get("apiKeyHelper")?.as_str()?.trim();

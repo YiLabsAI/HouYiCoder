@@ -38,17 +38,52 @@ pub fn merge_json(base: serde_json::Value, override_: serde_json::Value) -> serd
 
 /// Load the provider config from merged settings (user < project < local).
 /// When a workspace is given, project-local + local settings layer over the
-/// user settings so a team can pin a base_url or apiKeyHelper in the repo.
-/// Falls back to env for any field the merged settings do not supply.
+/// user settings so a team can pin a base_url or model in the repo. The
+/// apiKeyHelper is exempt from the merge: the field names a shell command,
+/// and a repository-controlled file must not be able to supply one - opening
+/// a cloned repository would run that command before the first keystroke.
+/// A project or local file carrying the field is ignored with a warning, so
+/// a team that pinned one sees why it never runs. Falls back to env for any
+/// field the merged settings do not supply.
 pub fn load_provider_merged(
     workspace: Option<&std::path::Path>,
-) -> Result<crate::ProviderConfig, crate::ConfigError> {
-    let mut settings = read_settings_value(&crate::settings_path());
+) -> (
+    Result<crate::ProviderConfig, crate::ConfigError>,
+    Vec<crate::ConfigWarning>,
+) {
+    load_provider_merged_from(&crate::settings_path(), workspace)
+}
+
+/// Path-explicit variant of load_provider_merged: the user settings are read
+/// from the given file instead of the settings path, so tests isolate
+/// without env mutation (same shape as load_retention_from).
+pub fn load_provider_merged_from(
+    user_settings: &std::path::Path,
+    workspace: Option<&std::path::Path>,
+) -> (
+    Result<crate::ProviderConfig, crate::ConfigError>,
+    Vec<crate::ConfigWarning>,
+) {
+    let mut warnings = Vec::new();
+    let user = read_settings_value(user_settings);
+    let mut settings = user.clone();
     if let Some(ws) = workspace {
         let project = ws.join(".houyicoder").join("settings.json");
         let local = ws.join(".houyicoder").join("settings.local.json");
-        settings = merge_json(settings, read_settings_value(&project));
-        settings = merge_json(settings, read_settings_value(&local));
+        let project_value = read_settings_value(&project);
+        let local_value = read_settings_value(&local);
+        if project_value.get("apiKeyHelper").is_some() || local_value.get("apiKeyHelper").is_some()
+        {
+            warnings.push(crate::ConfigWarning {
+                field: "apiKeyHelper".into(),
+                reason: "a project settings file asked to run a command for your \
+                         API key; ignored - put the key in user settings or an \
+                         environment variable"
+                    .into(),
+            });
+        }
+        settings = merge_json(settings, project_value);
+        settings = merge_json(settings, local_value);
     }
     let base_url = settings
         .get("provider")
@@ -63,7 +98,11 @@ pub fn load_provider_merged(
             ])
         })
         .unwrap_or_else(|| crate::DEFAULT_BASE_URL.to_string());
-    let api_key = crate::api_key::api_key_from_value(&settings).or_else(crate::resolve_api_key);
+    // The key helper runs only from the user's own value, never the merged
+    // one: the merged value lets a repository-controlled file name a shell
+    // command, and opening a clone would execute it before the first
+    // keystroke. Env still backs the user helper up.
+    let api_key = crate::api_key::api_key_from_value(&user).or_else(crate::resolve_api_key);
     let model = settings
         .get("model")
         .and_then(|m| m.get("id"))
@@ -72,7 +111,7 @@ pub fn load_provider_merged(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| crate::DEFAULT_MODEL.to_string());
-    crate::build_provider(api_key, base_url, model)
+    (crate::build_provider(api_key, base_url, model), warnings)
 }
 
 #[cfg(test)]
@@ -119,5 +158,56 @@ mod tests {
         let v = read_settings_value(std::path::Path::new("/nonexistent/merge-test.json"));
         assert!(v.is_object());
         assert!(v.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_project_helper_not_executed() {
+        // A repository-controlled settings file names a shell command as the
+        // apiKeyHelper. The command must not run: opening a cloned repository
+        // would otherwise execute it before the first keystroke, with no
+        // sandbox and no prompt. The skip must also warn - a team that pinned
+        // a helper would see it silently do nothing otherwise.
+        let dir = std::env::temp_dir().join(format!("houyi-proj-helper-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
+        let marker = dir.join("ran");
+        std::fs::write(
+            dir.join(".houyicoder").join("settings.json"),
+            format!(r#"{{"apiKeyHelper":"echo ran > '{}'"}}"#, marker.display()),
+        )
+        .unwrap();
+        std::fs::write(dir.join("user.json"), "{}").unwrap();
+        let (res, warnings) = load_provider_merged_from(&dir.join("user.json"), Some(&dir));
+        assert!(
+            !marker.exists(),
+            "a project settings file must not be able to run a command"
+        );
+        assert!(
+            warnings.iter().any(|w| w.field == "apiKeyHelper"),
+            "the ignored helper must warn, not vanish silently: {warnings:?}"
+        );
+        // Whether a key resolves at all depends on this machine's env, which
+        // is not what this test pins; only the execution and the warning are.
+        drop(res);
+        drop(std::fs::remove_dir_all(&dir));
+    }
+
+    #[test]
+    fn test_user_helper_still_runs() {
+        // The legitimate path survives: a helper in the user's own settings
+        // still supplies the key. Only the repository-controlled layers are
+        // cut off, and an untouched merge yields no warning.
+        let dir = std::env::temp_dir().join(format!("houyi-user-helper-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
+        std::fs::write(
+            dir.join("user.json"),
+            r#"{"apiKeyHelper":"echo user-key-ok"}"#,
+        )
+        .unwrap();
+        let (res, warnings) = load_provider_merged_from(&dir.join("user.json"), Some(&dir));
+        assert!(matches!(res, Ok(ref cfg) if cfg.api_key == "user-key-ok"));
+        assert!(warnings.is_empty(), "no project helper present, no warning");
+        drop(std::fs::remove_dir_all(&dir));
     }
 }
