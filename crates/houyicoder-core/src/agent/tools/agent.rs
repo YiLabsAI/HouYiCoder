@@ -197,14 +197,37 @@ fn spawn_failure_msg(f: houyicoder_api::spawn::SpawnFailure) -> String {
 
 /// Build the tool_result JSON from a sync spawn outcome: the child's summary
 /// text, its session id (the result ref for follow-up), terminal status, and
-/// usage.
+/// usage. An empty summary gets a placeholder so the parent does not read
+/// "nothing" as "done"; a summary past the 100k char cap is tail-truncated
+/// (the conclusion is what matters) with a note that the child log holds the
+/// full output.
 fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome) -> Value {
     let usage = outcome.usage.unwrap_or_default();
+    let status = outcome.status.unwrap_or_default();
+    let child = outcome.child_session_id.clone();
+    let result_ref = outcome.result_ref.unwrap_or_default();
+    let mut content = outcome.summary.unwrap_or_default();
+    if content.is_empty() {
+        content = "(Subagent returned no output.)".into();
+    }
+    const MAX_CHARS: usize = 100_000;
+    let truncated = content.chars().count() > MAX_CHARS;
+    if truncated {
+        let tail: String = content
+            .chars()
+            .rev()
+            .take(MAX_CHARS)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        content = format!("[truncated; the child log holds the full output]\n{tail}",);
+    }
     json!({
-        "status": outcome.status.unwrap_or_default(),
-        "content": outcome.summary.unwrap_or_default(),
-        "agentId": outcome.child_session_id,
-        "result_ref": outcome.result_ref.unwrap_or_default(),
+        "status": status,
+        "content": content,
+        "agentId": child,
+        "result_ref": result_ref,
         "usage": {
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
@@ -371,6 +394,34 @@ mod tests {
         assert_eq!(out["agentId"], "child-sid");
         assert_eq!(out["usage"]["input_tokens"], 100);
         assert_eq!(out["usage"]["output_tokens"], 20);
+    }
+
+    #[test]
+    fn test_tool_result_placeholder() {
+        use houyicoder_api::spawn::SpawnOutcome;
+        use houyicoder_protocol::llm::Usage;
+        let out = build_tool_result(SpawnOutcome::sync("c1", "completed", "", Usage::default()));
+        assert_eq!(out["content"], "(Subagent returned no output.)");
+    }
+
+    #[test]
+    fn test_tool_result_truncates_tail() {
+        use houyicoder_api::spawn::SpawnOutcome;
+        use houyicoder_protocol::llm::Usage;
+        // 100k + 5 chars: the tail keeps the last 100k; the marker notes the
+        // child log holds the full output.
+        let big: String = "a".repeat(100_005);
+        let out = build_tool_result(SpawnOutcome::sync(
+            "child-xyz",
+            "completed",
+            &big,
+            Usage::default(),
+        ));
+        let content = out["content"].as_str().unwrap();
+        assert!(content.starts_with("[truncated; the child log holds the full output]"));
+        // tail-preserving: the last chars of the original survive.
+        assert!(content.ends_with("aaaaa"));
+        assert!(content.chars().count() < big.chars().count() + 200);
     }
 
     #[test]
