@@ -273,6 +273,9 @@ pub struct Runner {
     /// agent tool can tell a denial from an unknown type. Set once at the
     /// composition root (where permission rules live); empty by default.
     denied_agents: std::sync::Arc<std::collections::HashSet<String>>,
+    /// Spawn port + identity the dispatch threads into the agent tool's ctx.
+    spawn_handle: Option<std::sync::Arc<dyn houyicoder_api::spawn::SpawnHandle>>,
+    agent_identity: houyicoder_api::spawn::AgentIdentity,
 }
 
 impl Runner {
@@ -334,6 +337,8 @@ impl Runner {
             consumed_input: std::sync::Mutex::new(Vec::new()),
             redundancy: std::sync::Mutex::new(redundancy::RedundancyTracker::new()),
             denied_agents: Arc::new(std::collections::HashSet::new()),
+            spawn_handle: None,
+            agent_identity: houyicoder_api::spawn::AgentIdentity::top_level(),
         };
         runner.wire_cache_liveness_policy();
         runner
@@ -395,6 +400,8 @@ impl Runner {
             consumed_input: std::sync::Mutex::new(Vec::new()),
             redundancy: std::sync::Mutex::new(redundancy::RedundancyTracker::new()),
             denied_agents: Arc::new(std::collections::HashSet::new()),
+            spawn_handle: None,
+            agent_identity: houyicoder_api::spawn::AgentIdentity::top_level(),
         };
         runner.wire_cache_liveness_policy();
         runner

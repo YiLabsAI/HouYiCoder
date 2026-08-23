@@ -61,6 +61,21 @@ impl ToolRegistry {
         self.tools.get(name)
     }
 
+    /// A new registry with the named tools removed, for building a child
+    /// agent's tool set from its definition's disallowed list. Match is
+    /// case insensitive so a disallowed entry catches casing variants
+    /// (the disallowed list is authored data, not a dispatch key).
+    pub fn narrow(&self, disallowed: &[String]) -> ToolRegistry {
+        let mut out = ToolRegistry::new();
+        for (name, tool) in &self.tools {
+            if disallowed.iter().any(|d| d.eq_ignore_ascii_case(name)) {
+                continue;
+            }
+            out.tools.insert(name.clone(), Arc::clone(tool));
+        }
+        out
+    }
+
     /// Number of registered tools.
     pub fn len(&self) -> usize {
         self.tools.len()
@@ -133,6 +148,22 @@ mod tests {
             block_on(tool.execute(ToolCtx::new("test"), serde_json::json!({"x": 1}))).unwrap();
         assert_eq!(out, serde_json::json!({"echo": {"x": 1}}));
         assert!(reg.get("missing").is_none());
+    }
+
+    #[test]
+    fn test_narrow_drops_disallowed() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(StubTool::new("read")));
+        reg.register(Arc::new(StubTool::new("write")));
+        reg.register(Arc::new(StubTool::new("agent")));
+        let child = reg.narrow(&["write".into(), "Agent".into()]);
+        assert!(child.get("read").is_some());
+        assert!(child.get("write").is_none(), "write must be dropped");
+        assert!(
+            child.get("agent").is_none(),
+            "agent must be dropped (case-insensitive)"
+        );
+        assert_eq!(child.len(), 1);
     }
 
     #[test]

@@ -229,19 +229,19 @@ impl Runner {
                             // the abort mid-walk and returns promptly. Attach the
                             // live progress sink so a long-running tool (bash) can
                             // tick elapsed back to the host's chip.
-                            let r = t
-                                .execute(
-                                    ToolCtx::new(id.as_str())
-                                        .with_cancel(token.clone())
-                                        .with_session(session)
-                                        .with_denied_agents(self.denied_agents.clone())
-                                        .with_progress(std::sync::Arc::new(LiveProgressSink::new(
-                                            id.clone(),
-                                            live,
-                                        ))),
-                                    input,
-                                )
-                                .await;
+                            let mut ctx = ToolCtx::new(id.as_str())
+                                .with_cancel(token.clone())
+                                .with_session(session)
+                                .with_denied_agents(self.denied_agents.clone())
+                                .with_progress(std::sync::Arc::new(LiveProgressSink::new(
+                                    id.clone(),
+                                    live,
+                                )))
+                                .with_agent_identity(self.agent_identity().clone());
+                            if let Some(h) = self.spawn_handle() {
+                                ctx = ctx.with_spawn_handle(h.clone());
+                            }
+                            let r = t.execute(ctx, input).await;
                             let duration_ms = start.elapsed().as_millis() as u64;
                             let o = match r {
                                 Ok(v) => v,
@@ -299,17 +299,19 @@ impl Runner {
                 let id = id.clone();
                 let name = t.name().to_string();
                 let input = input.clone();
-                let exec_fut = t.execute(
-                    ToolCtx::new(id.as_str())
-                        .with_cancel(token.clone())
-                        .with_session(session)
-                        .with_denied_agents(self.denied_agents.clone())
-                        .with_progress(std::sync::Arc::new(LiveProgressSink::new(
-                            id.clone(),
-                            self.live.clone(),
-                        ))),
-                    input.clone(),
-                );
+                let mut ctx = ToolCtx::new(id.as_str())
+                    .with_cancel(token.clone())
+                    .with_session(session)
+                    .with_denied_agents(self.denied_agents.clone())
+                    .with_progress(std::sync::Arc::new(LiveProgressSink::new(
+                        id.clone(),
+                        self.live.clone(),
+                    )))
+                    .with_agent_identity(self.agent_identity().clone());
+                if let Some(h) = self.spawn_handle() {
+                    ctx = ctx.with_spawn_handle(h.clone());
+                }
+                let exec_fut = t.execute(ctx, input.clone());
                 let start = std::time::Instant::now();
                 let (r, cancelled) = tokio::select! {
                     _ = token.cancelled() => (Ok(SyntheticToolOutcome::Interrupted.to_json()), true),

@@ -6,6 +6,7 @@
 //! into the types defined here.
 
 pub mod child_prompt;
+pub mod dispatch;
 pub mod loader;
 pub mod registry;
 pub mod spawn;

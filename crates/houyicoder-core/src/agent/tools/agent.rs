@@ -1,8 +1,6 @@
-//! The agent tool: the model-facing entry that delegates a sub-task to a
-//! spawned child agent. The tool resolves the requested agent type against
-//! the registry, hands a spawn request to the runtime's spawn port, and for
-//! a sync call blocks until the child reaches a terminal state, then turns
-//! the child's transcript into a tool result (summary + result ref + usage).
+//! The agent tool: the model-facing entry for sub-agent delegation. The
+//! tool resolves the requested type against the registry and surfaces a
+//! denial distinctly from an unknown type before any spawn.
 //!
 //! The available-agent directory is injected into the parent system prompt as
 //! a deterministic section, NOT into this description: a dynamic list embedded
@@ -19,8 +17,7 @@ use serde_json::{Value, json};
 use crate::agent::multi_agent::registry::{AgentError, AgentRegistry, ResolveCtx};
 
 /// The model-facing delegation tool. Resolves the requested type against
-/// the registry and spawns through the ToolCtx spawn port; never holds the
-/// runner.
+/// the registry; never holds the runner.
 pub struct AgentTool {
     registry: Arc<dyn AgentRegistry>,
 }
@@ -259,6 +256,7 @@ mod tests {
         impl houyicoder_api::spawn::SpawnHandle for NoSpawn {
             fn spawn(
                 &self,
+                _ctx: &houyicoder_api::tool::ToolCtx,
                 _args: SpawnArgs,
             ) -> PFut<
                 '_,

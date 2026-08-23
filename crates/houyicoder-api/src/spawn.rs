@@ -18,6 +18,17 @@ pub struct AgentIdentity {
     pub parent_session_id: Option<String>,
 }
 
+impl AgentIdentity {
+    /// The identity of a top-level runner: depth 0, no subagent type.
+    pub fn top_level() -> Self {
+        Self {
+            subagent_type: None,
+            depth: 0,
+            parent_session_id: None,
+        }
+    }
+}
+
 /// The agent-facing spawn request, handed to the spawn handle. The
 /// engine's full spawn request adds parent components a tool cannot see
 /// (store, provider, tool registry, config); the handle impl supplies
@@ -86,6 +97,11 @@ pub trait SpawnHandle: Send + Sync {
     /// Spawn a child agent; returns the child session id on success or a
     /// typed rejection the tool surfaces to the model.
     ///
+    /// The per-call ToolCtx supplies the parent session id (the child log's
+    /// parent), the parent's cancel token (a sync child links it so a parent
+    /// abort cancels the child), and the parent agent identity (the child's
+    /// depth is parent + 1 for the recursion guard).
+    ///
     /// Timing is part of the contract: with run_in_background false, spawn
     /// awaits the child's terminal state before returning -- the caller then
     /// reads the child log by session id for status, summary, result ref,
@@ -93,7 +109,11 @@ pub trait SpawnHandle: Send + Sync {
     /// completion reaches the parent later as a pending notification on the
     /// next parent turn. Either way the outcome carries only the child
     /// session id; the engine keeps the runner and cancel token.
-    fn spawn(&self, args: SpawnArgs) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>>;
+    fn spawn(
+        &self,
+        ctx: &crate::tool::ToolCtx,
+        args: SpawnArgs,
+    ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>>;
 }
 
 #[cfg(test)]
@@ -103,7 +123,11 @@ mod tests {
     struct NoSpawn;
 
     impl SpawnHandle for NoSpawn {
-        fn spawn(&self, _args: SpawnArgs) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
+        fn spawn(
+            &self,
+            _ctx: &crate::tool::ToolCtx,
+            _args: SpawnArgs,
+        ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
             Box::pin(async { Err(SpawnFailure::Recursive) })
         }
     }
@@ -114,7 +138,8 @@ mod tests {
         let args = SpawnArgs::new("explore", "find auth", "find auth");
         assert_eq!(args.isolation, "none");
         assert!(!args.run_in_background);
-        let outcome = handle.spawn(args).await;
+        let ctx = crate::tool::ToolCtx::new("c1");
+        let outcome = handle.spawn(&ctx, args).await;
         assert!(matches!(outcome, Err(SpawnFailure::Recursive)));
     }
 

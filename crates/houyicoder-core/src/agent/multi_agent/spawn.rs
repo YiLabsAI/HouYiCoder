@@ -142,12 +142,16 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     let subagent_type = req.subagent_type.clone();
     let prompt_summary = req.prompt_summary.clone();
 
-    let runner = Arc::new(Runner::with_shared_store(
-        req.parent_store,
-        req.provider,
-        req.tools,
-        req.config,
-    ));
+    let runner = Arc::new(
+        Runner::with_shared_store(req.parent_store, req.provider, req.tools, req.config)
+            .with_agent_identity(houyicoder_api::spawn::AgentIdentity {
+                subagent_type: Some(req.subagent_type.clone()),
+                // The child dispatches carry the child's own identity, so a
+                // nested agent call reports depth + 1 to the recursion guard.
+                depth: req.depth + 1,
+                parent_session_id: Some(req.parent_sid.to_string()),
+            }),
+    );
     // Children run at the lowest effort tier: a fan-out of sub-agents must
     // not multiply reasoning-token spend. Sticky on the runner so every
     // child request carries it; the active pick outranks any catalog level

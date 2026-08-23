@@ -51,6 +51,20 @@ async fn test_spawn_creates_boundary() {
     let handle = spawn_child(req).await.expect("spawn should succeed");
     assert_ne!(handle.session, parent_sid);
 
+    // The child runner carries depth + 1 and the resolved type, so a
+    // nested agent call reports its level to the recursion guard.
+    let identity = handle.runner.agent_identity();
+    assert_eq!(identity.depth, 1, "child depth must be parent + 1");
+    assert_eq!(
+        identity.subagent_type.as_deref(),
+        Some("explore"),
+        "child identity must carry the resolved type",
+    );
+    assert_eq!(
+        identity.parent_session_id.as_deref(),
+        Some(parent_sid.to_string().as_str()),
+    );
+
     // The parent log must carry a SubagentSpawn boundary whose
     // child_session_id matches the handle's session id. Resume and orphan
     // reconciliation pair spawn with return on this id; a mismatched or
