@@ -199,9 +199,17 @@ mod tests {
         drop(std::fs::remove_dir_all(&dir));
         std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
         let marker = dir.join("ran");
+        // Build the JSON with serde_json rather than format!: a Windows temp
+        // path carries backslashes, which format! drops into the JSON string
+        // raw, producing invalid escapes (\U, \A) that serde_json rejects.
+        // The file then parses as an empty object, the helper vanishes, and
+        // the warning the test asserts never fires.
+        let settings = serde_json::json!({
+            "apiKeyHelper": format!("echo ran > '{}'", marker.display())
+        });
         std::fs::write(
             dir.join(".houyicoder").join("settings.json"),
-            format!(r#"{{"apiKeyHelper":"echo ran > '{}'"}}"#, marker.display()),
+            settings.to_string(),
         )
         .unwrap();
         std::fs::write(dir.join("user.json"), "{}").unwrap();

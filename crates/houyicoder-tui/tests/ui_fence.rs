@@ -63,14 +63,17 @@ fn make_temp_repo(slug: u64) -> PathBuf {
 fn test_worktree_refuses_tree_write() {
     let repo = make_temp_repo(1);
     let main_file = repo.join("main_only.txt");
-    let script = format!(
-        r#"[
-  [{{"type":"ToolCall","id":"c1","name":"enter_worktree","input":{{"name":"h1w"}}}}],
-  [{{"type":"ToolCall","id":"c2","name":"bash","input":{{"command":"echo leaked >> {main_file}"}}}}],
-  [{{"type":"Text","text":"done"}}]
-]"#,
-        main_file = main_file.display(),
-    );
+    // Built with serde_json rather than format!: a path interpolated into a
+    // JSON string literal by format! keeps its separators raw, and on a host
+    // whose separator is a backslash that is an invalid escape, so the whole
+    // script parses as nothing. The serializer escapes it instead.
+    let script = serde_json::json!([
+        [{"type":"ToolCall","id":"c1","name":"enter_worktree","input":{"name":"h1w"}}],
+        [{"type":"ToolCall","id":"c2","name":"bash",
+          "input":{"command": format!("echo leaked >> {}", main_file.display())}}],
+        [{"type":"Text","text":"done"}]
+    ])
+    .to_string();
     let mut s = session_on_working_in_repo(repo.clone(), &script);
     s.send_str("go");
     s.send_key(&Key::Enter);
@@ -233,13 +236,15 @@ fn test_grep_outside_approves_resumes() {
     drop(std::fs::remove_dir_all(&outside));
     std::fs::create_dir_all(&outside).expect("mkdir outside");
     std::fs::write(outside.join("target.txt"), "matchme here\n").expect("write target");
-    let script = format!(
-        r#"[
-  [{{"type":"ToolCall","id":"c1","name":"grep","input":{{"pattern":"matchme","path":"{outside}"}}}}],
-  [{{"type":"Text","text":"done"}}]
-]"#,
-        outside = outside.display(),
-    );
+    // serde_json, not format!, for the same reason as the worktree test
+    // above: a raw path in a JSON string literal breaks the parse wherever
+    // the separator is a backslash.
+    let script = serde_json::json!([
+        [{"type":"ToolCall","id":"c1","name":"grep",
+          "input":{"pattern":"matchme","path": outside.display().to_string()}}],
+        [{"type":"Text","text":"done"}]
+    ])
+    .to_string();
     let mut s = session_on_working_in_repo(repo.clone(), &script);
     s.send_str("go");
     s.send_key(&Key::Enter);
