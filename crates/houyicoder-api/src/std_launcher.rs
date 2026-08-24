@@ -6,17 +6,19 @@
 //!
 //! Policy handling is best-effort for the first cut:
 //! - audit: emits a structured spawn log line to stderr.
-//! - fence: the wall timeout is applied on the async path via tokio timeout;
-//!   the kernel fence (setrlimit + cgroup) and the sandbox-exec integration are
+//! - fence: the wall timeout is enforced on both spawn paths; the kernel
+//!   resource limits (setrlimit + cgroup) and the sandbox-exec integration are
 //!   deferred to the sandbox layer. A spawn with a fence but no sandbox wired
-//!   logs a warning and runs unsandboxed so the caller is not blocked.
+//!   logs a warning naming what is and is not applied, and runs so the caller
+//!   is not blocked.
 //!
-//! Routing: when stdout or stderr is Piped, the sync output path runs
-//! (std Command output, captures both, returns a pre-resolved child). When
-//! neither is piped, the async path spawns a live tokio child with
-//! kill-on-drop so the caller can await or cancel it.
+//! Routing: when stdout or stderr is Piped, the capture path runs (spawn,
+//! drain both pipes, wait, return a pre-resolved child). When neither is
+//! piped, the async path spawns a live tokio child with kill-on-drop so the
+//! caller can await or cancel it.
 
 use std::process::Stdio;
+use std::time::Duration;
 
 use crate::launcher::{
     FenceConfig, LauncherChild, LauncherExit, ProcessLauncher, SpawnError, SpawnPolicy,
@@ -47,15 +49,20 @@ impl ProcessLauncher for StdProcessLauncher {
             audit_log(&req);
         }
         if policy.fence.is_some() {
+            // Naming what is applied matters: the wall timeout IS enforced
+            // here, so a caller that set a fence for liveness gets it. Only
+            // the kernel resource limits are missing, and calling that
+            // "unsandboxed" invited the reading that the timeout was dropped
+            // too.
             tracing::warn!(
-                "[spawn] fence requested but kernel fence not yet wired; \
-                 spawning unsandboxed"
+                "[spawn] fence: wall timeout enforced; kernel resource limits \
+                 not wired in this launcher"
             );
         }
         if req.interactive {
             spawn_interactive(req)
         } else if req.stdio.stdout == StdioMode::Piped || req.stdio.stderr == StdioMode::Piped {
-            spawn_sync_output(req)
+            spawn_capture(req, policy.fence)
         } else {
             spawn_async(req, policy.fence)
         }
@@ -84,12 +91,26 @@ fn stdio_for(mode: StdioMode) -> Stdio {
     }
 }
 
-/// Sync output path: spawn, wait, and capture stdout+stderr in one blocking
-/// call. The child handle holds a pre-resolved wait future so the caller gets
-/// the captured output without needing an async runtime. Used when the caller
-/// wants piped output (a verify gate parsing command output).
+/// Capture path: spawn, drain both pipes, wait, and hand back a pre-resolved
+/// child so the caller gets the captured output without needing an async
+/// runtime. Used when the caller wants piped output (a verify gate parsing
+/// command output, a helper printing a secret to stdout).
+///
+/// The fence wall timeout is enforced here, not only on the async path. A
+/// caller that must read a value off stdout has to use this path, so leaving
+/// it unbounded meant a child that never exits stalled that caller forever
+/// with the fence silently ignored. Past the deadline the child is killed and
+/// the wait reports the timeout.
+///
+/// Both pipes drain on their own threads rather than being read after the
+/// wait: a child writing more than the pipe buffer blocks until someone
+/// reads, so waiting first while holding an undrained pipe deadlocks on any
+/// output larger than the buffer.
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-fn spawn_sync_output(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
+fn spawn_capture(
+    req: SpawnRequest,
+    fence: Option<FenceConfig>,
+) -> Result<LauncherChild, SpawnError> {
     let mut cmd = std::process::Command::new(&req.program);
     cmd.args(&req.args);
     if let Some(ws) = &req.workspace {
@@ -98,18 +119,33 @@ fn spawn_sync_output(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
     cmd.stdin(stdio_for(req.stdio.stdin));
     cmd.stdout(stdio_for(req.stdio.stdout));
     cmd.stderr(stdio_for(req.stdio.stderr));
-    let output = cmd.output().map_err(|e| SpawnError::Io(e.to_string()))?;
-    let exit_code = output.status.code();
-    let stdout = if req.stdio.stdout == StdioMode::Piped {
-        Some(String::from_utf8_lossy(&output.stdout).into_owned())
-    } else {
-        None
+    let mut child = cmd.spawn().map_err(|e| SpawnError::Io(e.to_string()))?;
+    // A handle is present exactly when its stream was piped, so taking them
+    // here preserves the contract that stdout/stderr come back Some only for
+    // a piped stream.
+    let out_drain = child.stdout.take().map(drain_on_thread);
+    let err_drain = child.stderr.take().map(drain_on_thread);
+    let status = match fence.map(|f| Duration::from_millis(f.wall_timeout_ms)) {
+        Some(limit) => match wait_until(&mut child, limit) {
+            Some(status) => status,
+            None => {
+                // Kill and reap, then let the drain threads finish on the
+                // closed pipes so neither is left detached.
+                drop(child.kill());
+                drop(child.wait());
+                drop(out_drain.map(|h| h.join()));
+                drop(err_drain.map(|h| h.join()));
+                return Ok(LauncherChild::new(
+                    None,
+                    Box::pin(async move { Err(SpawnError::Io("wall timeout exceeded".into())) }),
+                ));
+            }
+        },
+        None => child.wait().map_err(|e| SpawnError::Io(e.to_string()))?,
     };
-    let stderr = if req.stdio.stderr == StdioMode::Piped {
-        Some(String::from_utf8_lossy(&output.stderr).into_owned())
-    } else {
-        None
-    };
+    let exit_code = status.code();
+    let stdout = out_drain.map(|h| joined_text(h.join()));
+    let stderr = err_drain.map(|h| joined_text(h.join()));
     Ok(LauncherChild::new(
         None,
         Box::pin(async move {
@@ -120,6 +156,51 @@ fn spawn_sync_output(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
             })
         }),
     ))
+}
+
+/// Read a child pipe to end on its own thread so the wait never holds an
+/// undrained pipe.
+fn drain_on_thread<R: std::io::Read + Send + 'static>(
+    mut reader: R,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        // A read failure yields whatever arrived before it; the exit status
+        // carries the real verdict, and losing the tail of a stream must not
+        // turn into a spawn failure.
+        drop(std::io::Read::read_to_end(&mut reader, &mut buf));
+        buf
+    })
+}
+
+/// Lossy-decode a drained pipe. A panicked drain thread yields empty output
+/// rather than propagating: the stream content is best-effort next to the
+/// exit status.
+fn joined_text(joined: std::thread::Result<Vec<u8>>) -> String {
+    String::from_utf8_lossy(&joined.unwrap_or_default()).into_owned()
+}
+
+/// Wait for the child up to the limit. Some(status) when it exited in time,
+/// None on the deadline or on a wait error (the caller kills and reports the
+/// timeout either way). Polls rather than blocking because a bounded wait on
+/// a std child has no blocking form; the poll interval only costs latency
+/// when a fence is set, and the no-fence path stays a plain blocking wait.
+fn wait_until(
+    child: &mut std::process::Child,
+    limit: Duration,
+) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 /// Async spawn path: spawn a live tokio child with kill-on-drop. The child
@@ -338,6 +419,66 @@ mod tests {
         // Dropping the child triggers the on-drop kill so the test process
         // does not leak a cat.
         drop(child.wait().await);
+    }
+
+    /// The capture path honors the fence wall timeout. Without it a child that
+    /// never exits blocks the caller forever: the capture path is the one a
+    /// caller reading a secret off stdout must use, so an unbounded wait there
+    /// means a hung helper stalls whatever asked for the secret.
+    #[tokio::test]
+    async fn test_capture_honors_wall_timeout() {
+        let launcher = StdProcessLauncher::new();
+        let req = SpawnRequest::new("sleep").with_args(["30"]).piped_output();
+        let policy = SpawnPolicy::default().with_fence(FenceConfig {
+            wall_timeout_ms: 300,
+            ..FenceConfig::default()
+        });
+        let start = std::time::Instant::now();
+        let child = launcher.spawn(req, policy).expect("spawn succeeds");
+        let outcome = child.wait().await;
+        let elapsed = start.elapsed();
+        assert!(
+            outcome.is_err(),
+            "a child outliving the wall timeout must not report success"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "the wait must be bounded by the timeout, not the child's lifetime; \
+             took {elapsed:?}"
+        );
+    }
+
+    /// A capture spawn with no fence still waits for the child, so the
+    /// bounded-wait path does not truncate a slow-but-finishing command.
+    #[tokio::test]
+    async fn test_capture_without_fence_waits() {
+        let launcher = StdProcessLauncher::new();
+        let req = SpawnRequest::new("sh")
+            .with_args(["-c", "sleep 0.3; echo late"])
+            .piped_output();
+        let child = launcher.spawn(req, SpawnPolicy::default()).unwrap();
+        let exit = child.wait().await.unwrap();
+        assert_eq!(exit.exit_code, Some(0));
+        assert_eq!(exit.stdout.as_deref(), Some("late\n"));
+    }
+
+    /// Output that exceeds the pipe buffer still comes back whole: the drain
+    /// runs concurrently with the wait, so a child writing more than the pipe
+    /// capacity cannot deadlock against a waiter holding an undrained pipe.
+    #[tokio::test]
+    async fn test_capture_survives_large_output() {
+        let launcher = StdProcessLauncher::new();
+        // 400 KiB, well past the typical 64 KiB pipe buffer.
+        let req = SpawnRequest::new("sh")
+            .with_args(["-c", "yes abcdefghij | head -c 409600"])
+            .piped_output();
+        let policy = SpawnPolicy::default().with_fence(FenceConfig {
+            wall_timeout_ms: 20_000,
+            ..FenceConfig::default()
+        });
+        let child = launcher.spawn(req, policy).unwrap();
+        let exit = child.wait().await.unwrap();
+        assert_eq!(exit.stdout.map(|s| s.len()), Some(409_600));
     }
 
     /// A non-interactive spawn leaves pipes None so the take_pipes contract is
