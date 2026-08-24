@@ -167,6 +167,7 @@ fn test_one_spawn_per_resolve() {
 
 /// The keychain lookup addresses the tool by absolute path. Resolving it
 /// through PATH would let anything earlier on the path answer for a keychain.
+#[cfg(target_os = "macos")]
 #[test]
 fn test_keychain_tool_absolute() {
     let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
@@ -182,6 +183,7 @@ fn test_keychain_tool_absolute() {
 /// The lookup names the item by service and account, and asks for the password
 /// alone. Dropping the account would return whichever one the keychain answers
 /// with; dropping the password flag would return a description instead.
+#[cfg(target_os = "macos")]
 #[test]
 fn test_keychain_argv_names_item() {
     let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
@@ -222,6 +224,7 @@ fn test_keychain_password_is_key() {
 /// This spawn IS audited, unlike the helper: argv carries the item's service
 /// and account, never the password, and reading a user's keychain is an event
 /// an operator should be able to see.
+#[cfg(target_os = "macos")]
 #[test]
 fn test_keychain_spawn_is_audited() {
     let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
@@ -243,6 +246,7 @@ fn test_keychain_spawn_is_audited() {
 
 /// The lookup is time bounded, and given longer than the helper because the
 /// keychain can put an authorization dialog in front of a human.
+#[cfg(target_os = "macos")]
 #[test]
 fn test_keychain_spawn_time_bounded() {
     let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
@@ -259,6 +263,7 @@ fn test_keychain_spawn_time_bounded() {
 /// A missing item or a denied authorization warns rather than falling back in
 /// silence: stub mode with no explanation leaves the user with no way to tell
 /// that their keychain entry is the reason.
+#[cfg(target_os = "macos")]
 #[test]
 fn test_keychain_failure_warns() {
     let launcher = RecordingLauncher::with_exit(Ok(LauncherExit {
