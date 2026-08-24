@@ -10,6 +10,7 @@
 
 mod effort_resolver;
 pub use effort_resolver::{effort_to_persist, persist_model_pick};
+mod built_in_tools;
 mod hooks;
 mod memory;
 mod multi_agent;
@@ -44,13 +45,11 @@ use houyicoder_core::agent::extractor::MemoryExtractor;
 use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
-    AgentTool, AskUserQuestionTool, BashTool, CommandHook, ConversationSearchTool, EditTool,
-    GitWorkspaceProbe, GlobTool, GrepTool, HookRegistry, HookSource, HotPathReducer, LlmSummarizer,
-    MultiEditTool, ReadTool, Runner, TodoWriteTool, ToolRegistry, WebFetchTool, WriteTool,
-    parse_event,
+    AgentTool, CommandHook, ConversationSearchTool, GitWorkspaceProbe, HookRegistry, HookSource,
+    HotPathReducer, LlmSummarizer, Runner, TodoWriteTool, ToolRegistry, parse_event,
 };
 use houyicoder_memory::{FileMetaStore, InMemoryBackend, InMemoryMetaStore, LocalFileBackend};
-use houyicoder_permission::{DefaultModeGate, GuardedTool, ModeGate, RuleStore};
+use houyicoder_permission::{DefaultModeGate, ModeGate, RuleStore};
 use houyicoder_provider::{FakeProvider, OpenAiCompatibleProvider};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
 use houyicoder_sandbox::PlatformSession;
@@ -357,7 +356,8 @@ pub fn assemble(
     // editing the registry call list. TodoWriteTool is registered above
     // (it carries its own state and needs no sandbox); the rest come from
     // providers.
-    let builtin = BuiltInToolProvider::new(sandbox_session.clone(), gate_dyn.clone());
+    let builtin =
+        built_in_tools::BuiltInToolProvider::new(sandbox_session.clone(), gate_dyn.clone());
     let undo_handles = builtin.undo_handles();
     let mut providers: Vec<Box<dyn houyicoder_api::tool::ToolProvider>> = vec![Box::new(builtin)];
     // External tool servers (block-on-init): spawn each subprocess via the
@@ -596,119 +596,6 @@ fn provider_or_stub(
             // project helper is most relevant exactly when no key resolved.
             (Arc::new(FakeProvider::text(&reply)), warnings)
         }
-    }
-}
-
-/// The built-in tool set: AskUserQuestion always, plus the sandboxed
-/// filesystem + search + network tools (wrapped through the permission
-/// gate) when a sandbox is present. One ToolProvider so the composition
-/// root assembles its tools the same way it assembles any external
-/// provider's. Adding a built-in tool is editing this provider; adding an
-/// external tool set is adding a different provider, not touching this one.
-struct BuiltInToolProvider {
-    session: Option<Arc<dyn SandboxSession>>,
-    gate: Arc<dyn ModeGate>,
-    undo_stack: Option<Arc<std::sync::Mutex<houyicoder_core::snapshot::UndoStack>>>,
-    snapshot_store: Option<Arc<houyicoder_core::snapshot::SnapshotStore>>,
-}
-
-impl BuiltInToolProvider {
-    fn new(session: Option<Arc<dyn SandboxSession>>, gate: Arc<dyn ModeGate>) -> Self {
-        let (undo_stack, snapshot_store) = match &session {
-            Some(s) => {
-                let store = degrade_with_notice(
-                    houyicoder_core::snapshot::SnapshotStore::new(s.workspace_root()),
-                    "snapshot store init failed",
-                    "undo unavailable; destructive bash commands will require explicit approval",
-                )
-                .map(Arc::new);
-                // Re-link the undo stack to surviving on-disk snapshots so a
-                // resumed session can /undo a destructive op from the prior
-                // process: the in-memory stack is lost on restart, but the
-                // snap-N dirs persist. An empty stack (store init failed, or
-                // no surviving snapshots) leaves /undo as no-op, same as before.
-                let stack = Arc::new(std::sync::Mutex::new(match &store {
-                    Some(st) => {
-                        houyicoder_core::snapshot::UndoStack::from_entries(st.relink_undo_entries())
-                    }
-                    None => houyicoder_core::snapshot::UndoStack::new(),
-                }));
-                (Some(stack), store)
-            }
-            None => (None, None),
-        };
-        Self {
-            session,
-            gate,
-            undo_stack,
-            snapshot_store,
-        }
-    }
-
-    /// The shared undo stack (cloned into the BashTool; also set on the Runner
-    /// for /undo). None when no session or the snapshot store failed.
-    fn undo_handles(
-        &self,
-    ) -> Option<(
-        Arc<std::sync::Mutex<houyicoder_core::snapshot::UndoStack>>,
-        Arc<houyicoder_core::snapshot::SnapshotStore>,
-    )> {
-        self.undo_stack
-            .as_ref()
-            .zip(self.snapshot_store.as_ref())
-            .map(|(s, st)| (s.clone(), st.clone()))
-    }
-}
-
-impl houyicoder_api::tool::ToolProvider for BuiltInToolProvider {
-    fn name(&self) -> &str {
-        "builtin"
-    }
-
-    fn tools(&self) -> Vec<Arc<dyn houyicoder_api::tool::Tool>> {
-        let mut v: Vec<Arc<dyn houyicoder_api::tool::Tool>> =
-            vec![Arc::new(AskUserQuestionTool::new())];
-        if let Some(session) = &self.session {
-            let bash = match (&self.undo_stack, &self.snapshot_store) {
-                (Some(stack), Some(store)) => {
-                    BashTool::with_undo(session.clone(), stack.clone(), store.clone())
-                }
-                _ => BashTool::new(session.clone()),
-            };
-            v.push(Arc::new(GuardedTool::new(
-                Arc::new(bash),
-                self.gate.clone(),
-            )));
-            v.push(Arc::new(GuardedTool::new(
-                Arc::new(ReadTool::new(session.clone())),
-                self.gate.clone(),
-            )));
-            v.push(Arc::new(GuardedTool::new(
-                Arc::new(WriteTool::new(session.clone())),
-                self.gate.clone(),
-            )));
-            v.push(Arc::new(GuardedTool::new(
-                Arc::new(EditTool::new(session.clone())),
-                self.gate.clone(),
-            )));
-            v.push(Arc::new(GuardedTool::new(
-                Arc::new(MultiEditTool::new(session.clone())),
-                self.gate.clone(),
-            )));
-            v.push(Arc::new(GuardedTool::new(
-                Arc::new(GlobTool::new(session.clone())),
-                self.gate.clone(),
-            )));
-            v.push(Arc::new(GuardedTool::new(
-                Arc::new(GrepTool::new(session.clone())),
-                self.gate.clone(),
-            )));
-            v.push(Arc::new(GuardedTool::new(
-                Arc::new(WebFetchTool::new()),
-                self.gate.clone(),
-            )));
-        }
-        v
     }
 }
 
