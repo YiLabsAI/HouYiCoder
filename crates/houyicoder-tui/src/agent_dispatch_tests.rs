@@ -697,3 +697,77 @@ fn test_agents_directory_empty_placeholder() {
         "empty directory shows placeholder, not blank: {out}"
     );
 }
+
+/// A Subagent delegation line renders inline in the parent flow (no context
+/// switch): collapsed shows the subagent type + summary + an expand hint.
+/// Pins the inline-fold render so a refactor that drops the Subagent arm (or
+/// reverts to a context-switch) fails here.
+#[test]
+fn test_subagent_renders_collapsed() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "child-1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth module".into(),
+        folded_transcript: Vec::new(),
+    });
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(out.contains("explore"), "subagent type renders: {out}");
+    assert!(out.contains("found auth module"), "summary renders: {out}");
+    assert!(
+        out.contains("ctrl+o to expand"),
+        "collapsed shows the expand hint: {out}"
+    );
+}
+
+/// When the child_sid is in expanded_subagents, the Subagent line renders the
+/// collapse hint + a placeholder for the unloaded child transcript. The
+/// fetch that fills folded_transcript lands next; this pins the expanded
+/// branch so a refactor that drops it fails here.
+#[test]
+fn test_subagent_renders_expanded() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "child-1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth module".into(),
+        folded_transcript: Vec::new(),
+    });
+    app.expanded_subagents.insert("child-1".into());
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        out.contains("ctrl+o to collapse"),
+        "expanded shows the collapse hint: {out}"
+    );
+    assert!(
+        out.contains("child transcript loads on fetch"),
+        "expanded shows the placeholder until the fetch lands: {out}"
+    );
+}
+
+/// When expanded and the child transcript is loaded, the Subagent line
+/// renders the child's rows inline (recursively through the same row
+/// builder). Pins the recursive render branch so a refactor that drops it
+/// fails here.
+#[test]
+fn test_subagent_expanded_renders_child() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "child-1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth module".into(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply: auth is here".into())],
+    });
+    app.expanded_subagents.insert("child-1".into());
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        out.contains("child reply: auth is here"),
+        "expanded with a loaded child renders the child row inline: {out}"
+    );
+}

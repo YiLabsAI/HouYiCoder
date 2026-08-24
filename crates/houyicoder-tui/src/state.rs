@@ -422,11 +422,12 @@ pub struct App {
     /// Keyed by the group's first tool call_id so the choice survives rebuilds.
     /// Active-turn groups are always expanded and never enter this set.
     pub expanded_fold_groups: HashSet<String>,
-    /// Per-ThoughtFor-line expansion state: a ThoughtFor line carrying
-    /// reasoning is keyed by its reasoning text (stable across transcript
-    /// rebuilds) so Ctrl+O expands that turn's reasoning inline below the
-    /// answer (a thinking-toggle). Empty = collapsed.
+    /// Per-ThoughtFor-line expansion state, keyed by reasoning text (stable
+    /// across rebuilds) so Ctrl+O expands that turn's reasoning inline. Empty
+    /// = collapsed.
     pub expanded_thinking: HashSet<String>,
+    /// Per-subagent expand state, keyed by child_sid; empty = all collapsed.
+    pub expanded_subagents: HashSet<String>,
     /// Verbose render mode: force every tool result, reasoning block, and
     /// fold group expanded, and render tool-call chips with the untruncated
     /// invocation. Set when entering the search view (a snapshot transcript

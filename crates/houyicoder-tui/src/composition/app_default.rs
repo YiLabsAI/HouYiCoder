@@ -135,6 +135,7 @@ pub fn app() -> App {
         expanded_results: HashSet::new(),
         expanded_fold_groups: HashSet::new(),
         expanded_thinking: HashSet::new(),
+        expanded_subagents: HashSet::new(),
         verbose: false,
         turn_seq: 0,
         last_row_fold_keys: RefCell::new(Vec::new()),

@@ -397,6 +397,30 @@ pub(crate) fn push_line_rows(
         }
         return true;
     }
+    if let TranscriptLine::Subagent {
+        child_sid,
+        subagent_type,
+        summary,
+        folded_transcript,
+    } = line
+    {
+        super::subagent_render::push_subagent_rows(
+            child_sid,
+            subagent_type,
+            summary,
+            folded_transcript,
+            grp,
+            width,
+            app,
+            rows,
+            row_callids,
+            fold_keys,
+            expanded_group,
+            turn_ids,
+            pre_rendered,
+        );
+        return true;
+    }
     if let TranscriptLine::Agent(text) = line {
         let (md_lines, md_plain) = app.render_cache.borrow_mut().agent_rows(text, width);
         let mut first = true;

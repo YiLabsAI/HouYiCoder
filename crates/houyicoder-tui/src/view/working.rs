@@ -24,6 +24,7 @@ use crate::view::{
 
 mod flat_transcript;
 mod live_rows;
+mod subagent_render;
 mod working_transcript;
 
 /// Render the working surface, dispatching on the viewport mode so the chrome
