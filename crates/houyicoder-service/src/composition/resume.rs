@@ -155,11 +155,11 @@ pub fn build_runner_for_resume_export(
 /// Build a runner resumed from a session already on disk (--resume <sid>).
 /// The session's log.jsonl + session.json exist under the sid-keyed sessions
 /// root; this re-opens them (the engine reads the history via backend replay
-/// on the next run, and last_hashes self-recovers via the replay fallback so
-/// new appends chain correctly). No seed -- the log is already there. The
-/// model is restored from the session.json sidecar (fallback to the current
-/// config when the sidecar is missing or its model is empty). Returns the
-/// 6-tuple the TUI wiring expects.
+/// on the next run, and last_hashes self-recovers via the cold reverse-read
+/// of the last disk line so new appends chain correctly). No seed -- the log
+/// is already there. The model is restored from the session.json sidecar
+/// (fallback to the current config when the sidecar is missing or its model
+/// is empty). Returns the 6-tuple the TUI wiring expects.
 pub fn build_runner_for_resume_sid(
     sid: SessionId,
     sessions_root: &Path,

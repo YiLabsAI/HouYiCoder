@@ -266,10 +266,14 @@ impl SessionStore {
     /// resumed session (read-only — no append, no chain rewrite). The mirror
     /// starts empty on resume; this loads the durable history so the
     /// serve-start replay ships the resumed conversation to the client (the
-    /// working screen shows the past turns, not just the status bar). Also
-    /// primes last_hashes so the next append chains from the real last event
-    /// instead of falling through to a backend replay. Returns the event
-    /// count loaded.
+    /// working screen shows the past turns, not just the status bar). Returns
+    /// the event count loaded.
+    ///
+    /// The last_hashes cache is not primed here. Priming from the replayed
+    /// last event would re-serialize it and link the next append to a hash
+    /// that drifts from the on-disk bytes under a schema change; the next
+    /// append's compute_prev_hash reverse-reads the last disk line's raw
+    /// bytes instead.
     pub async fn restore_trajectory(&self, session: SessionId) -> Result<usize, ContextError> {
         let events = self.backend.replay(session).await?;
         let count = events.len();
@@ -278,21 +282,23 @@ impl SessionStore {
         }
         {
             let mut traj = self.trajectory.lock().expect("trajectory mutex poisoned");
-            traj.insert(session, events.clone());
-        }
-        if let Some(last) = events.last() {
-            let h = Self::hash_event(last)?;
-            self.last_hashes
-                .lock()
-                .expect("last_hashes mutex poisoned")
-                .insert(session, h);
+            traj.insert(session, events);
         }
         Ok(count)
     }
 
     /// Compute the prev_hash for the next event: the cached hash of the last
-    /// event, or (cache miss) the hash of the backend's last event. None if
-    /// the session is empty.
+    /// event, or (cache miss) the hash of the backend's last on-disk line.
+    /// None if the session is empty.
+    ///
+    /// Cold path hashes the raw last line bytes via reverse-read rather than
+    /// replaying + re-serializing the last event: the on-disk bytes are stable
+    /// across a serde schema change (re-serialization normalizes field order
+    /// and drops unknown fields, breaking the chain on a log a prior binary
+    /// wrote), and the reverse-read avoids a full replay. Falls back to replay
+    /// and re-serialization when the reverse-read yields nothing (an in-memory
+    /// backend, or a last line past the read budget — within one binary the
+    /// re-serialization matches the disk bytes there).
     async fn compute_prev_hash(
         &self,
         session: SessionId,
@@ -304,6 +310,21 @@ impl SessionStore {
             .get(&session)
             .copied()
         {
+            return Ok(Some(h));
+        }
+        // Reverse-read budget: the last durable line is one serialized event.
+        // A TurnEvent larger than 1 MiB would be pathological (a tool result
+        // with a huge payload); the fallback covers the rare miss.
+        const COLD_REVERSE_BYTES: u64 = 1_048_576;
+        let rr = self
+            .backend
+            .read_lines_reverse(session, u64::MAX, COLD_REVERSE_BYTES);
+        if let Some((_offset, line)) = rr.lines.first() {
+            let h = Self::hash_line_bytes(line.as_bytes());
+            self.last_hashes
+                .lock()
+                .expect("last_hashes mutex poisoned")
+                .insert(session, h);
             return Ok(Some(h));
         }
         let events = self.backend.replay(session).await?;

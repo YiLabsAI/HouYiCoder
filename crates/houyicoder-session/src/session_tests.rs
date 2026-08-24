@@ -563,3 +563,90 @@ async fn test_read_child_result() {
     assert!(store.read_child_result(SessionId::new()).is_empty());
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// Cold prev_hash (cache miss) hashes the raw last disk line via reverse-read,
+/// not a re-serialization of the replayed last event. Uses a LocalFileBackend
+/// so the reverse-read path is real (InMemoryBackend returns empty, hitting
+/// the fallback).
+#[tokio::test]
+async fn test_prev_hash_reads_raw() {
+    let root = std::env::temp_dir().join(format!(
+        "cold-prev-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+    let sid = SessionId::new();
+    drop(appended_event(&store, sid, TurnEventKind::UserInput { text: "a".into() }).await);
+    let e2 = appended_event(
+        &store,
+        sid,
+        TurnEventKind::AssistantMessage {
+            text: "b".into(),
+            thinking: None,
+        },
+    )
+    .await;
+    store.last_hashes.lock().unwrap().clear();
+    let cold = store.compute_prev_hash(sid).await.unwrap();
+    let rr = store.backend().read_lines_reverse(sid, u64::MAX, 1_048_576);
+    let last_line = rr.lines.first().expect("last line").1.clone();
+    assert_eq!(
+        cold,
+        Some(SessionStore::hash_line_bytes(last_line.as_bytes())),
+        "cold path must hash the raw last disk line bytes",
+    );
+    assert_eq!(
+        cold,
+        Some(SessionStore::hash_event(&e2).unwrap()),
+        "within one binary, raw line bytes match re-serialization",
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The cold prev_hash stays byte-stable under a serde schema drift: a line
+/// carrying an unknown field (a prior binary wrote it) parses, but
+/// re-serialization omits the field and drifts. The cold path must hash the
+/// raw line bytes, not the re-serialized reparsed event.
+#[tokio::test]
+async fn test_prev_hash_survives_drift() {
+    let root = std::env::temp_dir().join(format!(
+        "cold-drift-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+    let sid = SessionId::new();
+    drop(appended_event(&store, sid, TurnEventKind::UserInput { text: "a".into() }).await);
+    let rr = store.backend().read_lines_reverse(sid, u64::MAX, 1_048_576);
+    let orig_line = rr.lines.first().expect("last line").1.clone();
+    // Insert an unknown field a prior binary's schema carried; the current
+    // schema ignores it on parse, re-serialization omits it.
+    let brace = orig_line.rfind('}').unwrap();
+    let drifted_line = format!("{},\"zz_future_drift\":0}}", &orig_line[..brace]);
+    let log_path = root.join(sid.to_string()).join("log.jsonl");
+    std::fs::write(&log_path, format!("{drifted_line}\n")).unwrap();
+    store.last_hashes.lock().unwrap().clear();
+    let cold = store.compute_prev_hash(sid).await.unwrap();
+    assert_eq!(
+        cold,
+        Some(SessionStore::hash_line_bytes(drifted_line.as_bytes())),
+        "cold path must hash the raw line bytes (stable across schema drift)",
+    );
+    let reparsed = store.replay(sid).await.unwrap();
+    let drifted_hash = SessionStore::hash_event(&reparsed[0]).unwrap();
+    assert_ne!(
+        cold,
+        Some(drifted_hash),
+        "cold path must not use re-serialization of the reparsed event",
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
