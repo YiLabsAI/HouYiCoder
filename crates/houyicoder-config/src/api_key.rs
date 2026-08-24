@@ -1,35 +1,27 @@
-//! The apiKeyHelper script: settings.json names a shell command that prints
-//! the API key to stdout, so the key never lands in the file — only the
-//! command does. This matters once a model switch rewrites settings.json
-//! frequently (the atomic temp file is a brief secret-exposure window; a
-//! helper keeps the secret out of that path entirely). The shape: exec under
-//! a shell, stdout = key, cache the result.
+//! Where the api key comes from, as data. The settings file names a source
+//! rather than holding the key, so a model switch rewriting settings.json
+//! never puts a secret through the atomic temp file.
+//!
+//! Naming the source is all this does. Obtaining it is a spawn, which needs
+//! the chokepoint policy from a layer this leaf cannot reach, so the
+//! composition root resolves it.
 
-/// Extract the apiKeyHelper from a parsed settings value + run it. Callers
-/// hand in the user settings value only: the field names a shell command, so
-/// a repository-controlled file supplying one would run on clone open.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "user-settings provenance only; a repository cannot supply this string"
-)]
-pub(crate) fn api_key_from_value(v: &serde_json::Value) -> Option<String> {
-    use std::process::{Command, Stdio};
+/// A configured source for the api key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiKeySource {
+    /// A shell command whose stdout is the key.
+    Helper(String),
+}
+
+/// Read the api key source out of a parsed settings value. Callers hand in the
+/// user settings value only: honoring a repository-supplied command would run
+/// it on clone open. A blank command reads as no source.
+pub(crate) fn key_source_from_value(v: &serde_json::Value) -> Option<ApiKeySource> {
     let helper = v.get("apiKeyHelper")?.as_str()?.trim();
     if helper.is_empty() {
         return None;
     }
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(helper)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if key.is_empty() { None } else { Some(key) }
+    Some(ApiKeySource::Helper(helper.to_string()))
 }
 
 #[cfg(test)]
@@ -37,29 +29,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_helper_reads_script() {
-        // The helper string runs under sh; its stdout is the key. The key
-        // never lands in the settings file — only the helper command does.
+    fn test_helper_command_is_named() {
         let v = serde_json::json!({"apiKeyHelper":"echo test-key-123"});
         assert_eq!(
-            api_key_from_value(&v).as_deref(),
-            Some("test-key-123"),
-            "helper stdout is the key"
+            key_source_from_value(&v),
+            Some(ApiKeySource::Helper("echo test-key-123".into())),
+            "the source carries the command, not its output"
         );
     }
 
     #[test]
-    fn test_helper_none_without_field() {
+    fn test_no_field_no_source() {
         let v = serde_json::json!({"model":{"id":"x"}});
-        assert!(api_key_from_value(&v).is_none(), "no helper => None");
+        assert!(
+            key_source_from_value(&v).is_none(),
+            "no helper => no source"
+        );
     }
 
     #[test]
-    fn test_helper_none_on_failure() {
-        let v = serde_json::json!({"apiKeyHelper":"exit 1"});
+    fn test_blank_command_no_source() {
+        let v = serde_json::json!({"apiKeyHelper":"   "});
         assert!(
-            api_key_from_value(&v).is_none(),
-            "a failing helper => None (fall through to env)"
+            key_source_from_value(&v).is_none(),
+            "a cleared field is the same as an absent one"
+        );
+    }
+
+    #[test]
+    fn test_non_string_no_source() {
+        let v = serde_json::json!({"apiKeyHelper": 42});
+        assert!(
+            key_source_from_value(&v).is_none(),
+            "a non-string field names no command"
         );
     }
 }

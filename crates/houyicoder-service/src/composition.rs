@@ -8,6 +8,7 @@
 
 #![allow(dead_code)] // composition root consumed by other crates; locally unused
 
+mod api_key;
 mod effort_resolver;
 pub use effort_resolver::{effort_to_persist, persist_model_pick};
 mod built_in_tools;
@@ -579,13 +580,15 @@ fn provider_or_stub(
             Vec::new(),
         );
     }
-    let (res, warnings) = houyicoder_config::settings_merge::load_provider_merged(workspace);
-    match res {
-        Ok(cfg) => (
-            Arc::new(OpenAiCompatibleProvider::new(cfg.base_url, cfg.api_key)),
+    let (settings, warnings) = houyicoder_config::settings_merge::load_provider_settings(workspace);
+    // The config layer names where the key comes from; obtaining it is a spawn,
+    // so it happens here through the chokepoint.
+    match api_key::resolve_api_key(settings.key_source.as_ref(), None) {
+        Some(key) => (
+            Arc::new(OpenAiCompatibleProvider::new(settings.base_url, key)),
             warnings,
         ),
-        Err(_) => {
+        None => {
             let reply = format!(
                 "stub mode: no api key resolved, model {} not called. \
                  set apiKeyHelper in settings.json (~/.houyicoder/) or \

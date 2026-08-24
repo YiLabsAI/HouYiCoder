@@ -7,14 +7,16 @@
 //! Resolution order honours 12-factor (env wins) with project-preferred env
 //! var names tried first: DASHSCOPE_ (project .env convention) then OPENAI_
 //! (broad convention) then HOUYICODER_ (brand). Defaults are const fallbacks.
-//! TOML file cascade lands in a follow-up sprint; the structure is already
-//! serde-derived so that step is additive.
+//!
+//! This crate names configuration; it performs no effects. Obtaining an api
+//! key can mean running a command, so the loaders return the key source and
+//! the composition root resolves it.
 //!
 //! Test strategy: the priority/default logic lives in pure helpers
-//! (first_non_empty, build_provider) that take Options directly, so they are
-//! unit-tested without mutating process env (which edition 2024 marks unsafe
-//! and this workspace denies). The resolve_* fns are thin env-reading wrappers
-//! over those helpers.
+//! (first_non_empty and the path-explicit loaders) that take values directly,
+//! so they are unit-tested without mutating process env (which edition 2024
+//! marks unsafe and this workspace denies). The resolve_* fns are thin
+//! env-reading wrappers over those helpers.
 
 pub mod retention;
 pub mod sandbox_network;
@@ -30,6 +32,7 @@ pub use model_section::{ModelEntry, ModelSection, load_model_section_from};
 pub mod served_models;
 pub use served_models::{ServedModels, cache_path, cached_ids, load_ids_at, served_model_exists};
 mod api_key;
+pub use api_key::ApiKeySource;
 pub mod settings_merge;
 pub use settings_merge::{merge_json, read_settings_value};
 
@@ -72,22 +75,21 @@ pub const ENV_HOUYICODER_HOOKS: &str = "HOUYICODER_HOOKS";
 
 // ---- types ----------------------------------------------------------------
 
-/// Resolved provider configuration: the three values a caller needs to
-/// construct a provider. serde-derived for the future TOML cascade.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ProviderConfig {
-    pub base_url: String,
-    pub api_key: String,
-    pub model: String,
-}
-
-/// Configuration resolution error. Kept narrow; providers map these to their
-/// own error enums (e.g. MissingApiKey -> ProviderError::Auth).
+/// Provider configuration as the settings files describe it: the endpoint,
+/// the model, and where the api key comes from. The key itself is absent by
+/// design -- obtaining it may require running a command, which is an effect
+/// this crate does not perform. The caller resolves key_source and assembles
+/// the final provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfigError {
-    /// None of the recognised api-key env vars were set. Fail-closed: callers
-    /// should not send anonymous requests.
-    MissingApiKey,
+pub struct ProviderSettings {
+    /// The endpoint to send completions to. Always populated (settings, then
+    /// env, then the built-in default).
+    pub base_url: String,
+    /// The model id to send. Always populated (settings, then the default).
+    pub model: String,
+    /// Where to get the api key, or None when settings named no source and
+    /// the caller should fall back to the environment.
+    pub key_source: Option<api_key::ApiKeySource>,
 }
 
 /// A non-fatal problem found while loading settings: one field was
@@ -179,23 +181,19 @@ fn first_non_empty(vals: &[Option<String>]) -> Option<String> {
         .find_map(|v| v.as_ref().filter(|s| !s.is_empty()).cloned())
 }
 
-/// Assemble a ProviderConfig from already-resolved pieces; MissingApiKey when
-/// no key is available. Separated from load_provider so the assembly logic is
-/// testable without touching process env.
-fn build_provider(
-    api_key: Option<String>,
-    base_url: String,
-    model: String,
-) -> Result<ProviderConfig, ConfigError> {
-    let api_key = api_key.ok_or(ConfigError::MissingApiKey)?;
-    Ok(ProviderConfig {
-        base_url,
-        api_key,
-        model,
-    })
-}
-
 // ---- resolution (thin env-reading wrappers) --------------------------------
+
+/// The api key from the environment, in project-preferred order, or None when
+/// none is set. The last fallback after a configured key source yields
+/// nothing. Kept here so the env var names have one home; reading env is not
+/// an effect that needs the spawn chokepoint, unlike running a helper command.
+pub fn api_key_from_env() -> Option<String> {
+    first_non_empty(&[
+        std::env::var(ENV_DASHSCOPE_API_KEY).ok(),
+        std::env::var(ENV_OPENAI_API_KEY).ok(),
+        std::env::var(ENV_HOUYICODER_API_KEY).ok(),
+    ])
+}
 
 /// The base URL to point a provider at. DASHSCOPE_BASE_URL wins, then
 /// OPENAI_BASE_URL, then DEFAULT_BASE_URL. Never fails (always has a default).
@@ -505,22 +503,6 @@ mod tests {
             first_non_empty(&[Some(String::new()), Some(String::new())]),
             None
         );
-    }
-
-    #[test]
-    fn test_build_provider_missing_key() {
-        assert_eq!(
-            build_provider(None, DEFAULT_BASE_URL.into(), DEFAULT_MODEL.into()).unwrap_err(),
-            ConfigError::MissingApiKey
-        );
-    }
-
-    #[test]
-    fn test_build_provider_full() {
-        let cfg = build_provider(Some("k".into()), "https://b/v1".into(), "m".into()).unwrap();
-        assert_eq!(cfg.api_key, "k");
-        assert_eq!(cfg.base_url, "https://b/v1");
-        assert_eq!(cfg.model, "m");
     }
 
     #[test]
