@@ -145,6 +145,52 @@ pub enum TranscriptLine {
     /// block). Carries the full view payload so the renderer lays it out
     /// without re-deriving data on each frame.
     ContextGrid(ContextView),
+    /// A sub-agent delegation rendered INLINE as a fold-group in the parent
+    /// flow. The parent message list is never swapped out: the child
+    /// transcript (folded_transcript) is fetched on expand, not substituted
+    /// for the parent's messages. The agent tool's structured result carries
+    /// child_sid + subagent_type + summary. Default collapsed (summary);
+    /// Ctrl+O/click expands. child_sid keys the per-child expand state across
+    /// transcript rebuilds (the ThoughtFor.turn_id pattern).
+    Subagent {
+        child_sid: String,
+        subagent_type: String,
+        summary: String,
+        /// The child's transcript projected through the same pipeline
+        /// (rendering isomorphic with the parent flow). Empty until the
+        /// user expands (on-demand fetch from the child session log).
+        folded_transcript: Vec<TranscriptLine>,
+    },
+}
+
+/// Build an inline Subagent fold-group line from an agent-tool result, or
+/// None when the output is not an agent delegation. The agent tool's
+/// structured result carries agentId (the child session id) and content (the
+/// summary); the call input carries subagent_type. The child transcript is
+/// fetched on expand, so folded_transcript starts empty. Detecting by
+/// agentId (not the tool title) is robust: only the agent tool emits this
+/// field, and the title can be a display name.
+pub(crate) fn subagent_line(
+    output: &serde_json::Value,
+    call_input: Option<&serde_json::Value>,
+) -> Option<TranscriptLine> {
+    let child_sid = output.get("agentId")?.as_str()?.to_string();
+    let summary = output
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let subagent_type = call_input
+        .and_then(|v| v.get("subagent_type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("general-purpose")
+        .to_string();
+    Some(TranscriptLine::Subagent {
+        child_sid,
+        subagent_type,
+        summary,
+        folded_transcript: Vec::new(),
+    })
 }
 
 /// A tool call's resolved outcome, for chip coloring. Running = no matching
@@ -303,6 +349,9 @@ impl TranscriptLine {
             // suggestions). render() returns a flat-text fallback so /search
             // and any non-grid path still surface the legend text.
             Self::ContextGrid(view) => context_grid_text(view),
+            // A delegation surfaces its summary as the searchable text; the
+            // child transcript is fetched on expand, not inlined here.
+            Self::Subagent { summary, .. } => summary.clone(),
         }
     }
 

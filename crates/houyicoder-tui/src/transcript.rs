@@ -256,9 +256,16 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
                 }
                 // The single result row, grouped under its call. Only when a
                 // real output landed — no output means the chip color is the
-                // whole story, not a phantom result row.
+                // whole story, not a phantom result row. An agent-tool result
+                // (carries agentId) renders as an inline Subagent fold-group
+                // instead of a generic result row.
                 if let Some((_, Some(output))) = upd {
-                    out.push(result_line(id, &tc.title, &output, tc.raw_input.as_ref()));
+                    if let Some(sub) = crate::records::subagent_line(&output, tc.raw_input.as_ref())
+                    {
+                        out.push(sub);
+                    } else {
+                        out.push(result_line(id, &tc.title, &output, tc.raw_input.as_ref()));
+                    }
                 }
             }
             TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(upd)) => {

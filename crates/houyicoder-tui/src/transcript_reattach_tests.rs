@@ -208,3 +208,78 @@ fn test_edit_diff_survives_batch() {
 // rots silently, and its ignore reason ("results append in call order") was
 // already wrong (they append in completion order). The pairing invariant now
 // lives at the mint; see take_update in transcript.rs for the pointer.
+
+/// An agent-tool result (carries agentId in its structured output) renders as
+/// an inline Subagent fold-group line, not a generic tool result row. The
+/// child session id + summary come from the result; the subagent_type comes
+/// from the call input. folded_transcript starts empty (fetched on expand).
+/// Pins the inline-fold wiring so a refactor that reverts to a plain result
+/// row for delegations fails here.
+#[test]
+fn test_agent_result_renders_subagent() {
+    let frames = vec![
+        user_msg("find the auth module"),
+        tool_call(
+            "c1",
+            "agent",
+            serde_json::json!({
+                "description": "find auth",
+                "prompt": "locate the auth module",
+                "subagent_type": "explore",
+            }),
+        ),
+        tool_result(
+            "c1",
+            serde_json::json!({
+                "status": "completed",
+                "content": "auth module is at crates/auth/src/lib.rs",
+                "agentId": "child-sess-42",
+                "result_ref": "child-sess-42",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "cache_read_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "reasoning_tokens": 0,
+                },
+            }),
+        ),
+    ];
+    let lines = transcript_from_frames(&frames);
+    let sub = lines
+        .iter()
+        .find(|l| matches!(l, TranscriptLine::Subagent { .. }))
+        .expect("agent delegation produces a Subagent line");
+    match sub {
+        TranscriptLine::Subagent {
+            child_sid,
+            subagent_type,
+            summary,
+            folded_transcript,
+        } => {
+            assert_eq!(child_sid, "child-sess-42");
+            assert_eq!(subagent_type, "explore");
+            assert_eq!(summary, "auth module is at crates/auth/src/lib.rs");
+            assert!(folded_transcript.is_empty(), "starts collapsed");
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// A non-agent tool result (no agentId field) does NOT render as a Subagent
+/// line — it stays a plain tool result row. Pins the agentId detection so a
+/// refactor that mis-detects other tools as delegations fails here.
+#[test]
+fn test_non_agent_skips_subagent() {
+    let frames = vec![
+        tool_call("c1", "bash", serde_json::json!({"command": "ls"})),
+        tool_result("c1", serde_json::json!({"stdout": "a.rs\nb.rs"})),
+    ];
+    let lines = transcript_from_frames(&frames);
+    assert!(
+        lines
+            .iter()
+            .all(|l| !matches!(l, TranscriptLine::Subagent { .. })),
+        "a bash result must not render as a Subagent line"
+    );
+}
