@@ -445,7 +445,7 @@ fn test_idle_drain_noop_approval() {
     );
 }
 
-/// P1: a session-scoped Command (/clear) typed in the old session is dropped
+/// A session-scoped Command (/clear) typed in the old session is dropped
 /// on swap, not carried to auto-execute in the new one. The user typed it for
 /// the old session; carrying it + auto-draining would apply the old session's
 /// intent to the new session (a /clear for A would clear B). /resume Commands

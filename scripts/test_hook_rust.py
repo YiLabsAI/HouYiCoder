@@ -48,21 +48,22 @@ def main() -> int:
             )
 
     # Single-digit sprint/task refs — the gap fix. These slipped before.
-    must_flag("S7 in parens", "beforeCompact (S7) will reuse the scan")
-    must_flag("bare S1", "guards the S1 wiring")
-    must_flag("bare T4", "pinned by T4")
-    must_flag("S99-T99 form", "see S99-T99 for the surfaced contract")
+    must_flag("S9 in parens", "beforeCompact (S9) will reuse the scan")
+    must_flag("bare T9", "guards the T9 wiring")
+    must_flag("S9-T9 form", "see S9-T9 for the surfaced contract")
+    must_flag("P99 bare", "guards the P99 wiring")
+    must_flag("P42 in prose", "see P42 for the wiring detail")
 
     # Multi-digit refs — already caught, stay caught.
-    must_flag("S26", "guards the S26 scaffold")
-    must_flag("D8", "the D8 stale doc batch")
-    must_flag("A3", "the A3 memory fix")
-    must_flag("F1", "the F1 timeout")
-    must_flag("SEC-3", "the SEC-3 gate")
-    must_flag("stage2", "landed in stage2")
-    must_flag("B1-04", "the B1-04 family")
-    must_flag("Bet A.1", "Bet A.1 form")
-    must_flag("section §5.8", "see §5.8 of the design")
+    must_flag("S42", "guards the S42 scaffold")
+    must_flag("D42", "the D42 stale doc batch")
+    must_flag("A42", "the A42 memory fix")
+    must_flag("F42", "the F42 timeout")
+    must_flag("SEC-42", "the SEC-42 gate")
+    must_flag("stage9", "landed in stage9")
+    must_flag("B1-99", "the B1-99 family")
+    must_flag("Bet Z.9", "Bet Z.9 form")
+    must_flag("section §9.9", "see §9.9 of the design")
 
     # Negatives — legitimate prose that must NOT trip.
     must_pass("step number", "step 1 of the flow")
@@ -121,10 +122,10 @@ def main() -> int:
     # were not). The author kept leaking them into commit prose, so the gate
     # was extended; pin the extension so a future widening cannot re-open it.
     acc_flag = [
-        ("phase gate G0", "reconcile G0 to G5"),
-        ("journey U7", "the U7 failure-reflection loop"),
-        ("hazard H11", "defer the H11 seatbelt fix"),
-        ("charter v2.4", "the v2.4 dimension"),
+        ("phase gate form", "reconcile G99 to G98"),
+        ("journey form", "the U99 failure-reflection loop"),
+        ("hazard form", "defer the H99 seatbelt fix"),
+        ("charter version", "the v9.9 dimension"),
     ]
     for label, text in acc_flag:
         if not _caught_acceptance(text):

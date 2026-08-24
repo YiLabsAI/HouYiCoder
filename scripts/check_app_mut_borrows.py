@@ -25,12 +25,11 @@ At the floor the ratchet still blocks NEW &mut App functions; adding a
 legitimate new dispatcher requires bumping MUT_APP_BASELINE with a
 reason, visible in the diff.
 
-The floor (the dispatchers/renderers that stay broad-access) is tracked
-in the P4 design notes as a review checklist, not subtracted here.
-Subtracting an exempt set would let "reclassify a fn as dispatcher"
-lower the count without any real narrowing -- the exact fake-narrowing
-this gate exists to catch. Keeping the floor in the count itself makes
-it visible.
+The floor (the dispatchers/renderers that stay broad-access) is kept in
+the count, not subtracted here. Subtracting an exempt set would let
+"reclassify a fn as dispatcher" lower the count without any real narrowing
+-- the exact fake-narrowing this gate exists to catch. Keeping the floor in
+the count itself makes it visible.
 """
 import re
 import sys

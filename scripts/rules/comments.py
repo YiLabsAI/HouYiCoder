@@ -13,8 +13,11 @@ import tokenize
 from pathlib import Path
 
 # Codename / stage / internal-ref patterns banned from .rs comments.
+# Case-sensitive on purpose: uppercase letter+digit is a task/sprint tag;
+# lowercase p99/p95 (a perf percentile metric) does not match, so perf
+# notes can keep their lowercase form.
 CODENAME = re.compile(
-    r"\b[DRAF]\d+\b|\b[ST]\d+\b|\bSEC-\d+\b|\bBLK-\d+\b|\bstage\d+\b|§\S*"
+    r"\b[DRAFP]\d+\b|\b[ST]\d+\b|\bSEC-\d+\b|\bBLK-\d+\b|\bstage\d+\b|§\S*"
     r"|\bBet\s+[A-Z](?:\.\d+|\+[A-Z])?"
     r"|\bB\d+-\d+\b|\bST-\d+\b|\b[A-Z]\d+-[A-Z]\d+\b"
     r"|\b(?:CTX|MEM|RSM|MDL|STS|RWD)-\d+\b"
