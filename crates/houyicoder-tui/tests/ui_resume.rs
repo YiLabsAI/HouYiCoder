@@ -750,3 +750,81 @@ fn test_reexport_resume_keeps_history() {
         "export must carry the continued turn:\n{exported}"
     );
 }
+
+/// A session switch reuses the provider resolved at startup, not re-resolving
+/// the key source. The helper appends one line to a marker file per spawn;
+/// startup resolve writes one line, and an in-TUI /resume must not write a
+/// second. The helper prints nothing to stdout on purpose so resolution falls
+/// through to env and then stub -- no network -- only the spawn is observed.
+/// Broken, a per-switch re-resolve, doubles the marker. The sync point is the
+/// resumed history rendering: count the marker only after the switch landed.
+#[test]
+#[ignore]
+fn test_resume_reuses_provider() {
+    let home = fresh_temp_dir("home-resolve-once");
+    let sessions_dir = fresh_temp_dir("sessions-resolve-once");
+    let marker = std::env::temp_dir().join(format!(
+        "houyi-resolve-marker-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    drop(std::fs::remove_file(&marker));
+    // Built with serde_json so a temp path's backslashes on Windows escape
+    // rather than break the JSON string.
+    let settings = serde_json::json!({
+        "apiKeyHelper": format!("echo >> {}", marker.display())
+    });
+    std::fs::create_dir_all(home.join(".houyicoder")).unwrap();
+    std::fs::write(
+        home.join(".houyicoder").join("settings.json"),
+        settings.to_string(),
+    )
+    .unwrap();
+    let sid_b = "44444444-4444-4444-4444-444444444444";
+    common::seed_session_on_disk(&sessions_dir, sid_b, "reuse-model", "seeded prompt");
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        Some(home.clone()),
+        None,
+        &[],
+        sessions_dir.clone(),
+    );
+    assert!(
+        s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
+        "login screen"
+    );
+    s.send_key(&Key::Char('3'));
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen"
+    );
+    // Startup resolve ran once.
+    let after_start = std::fs::read_to_string(&marker).unwrap_or_default();
+    assert_eq!(
+        after_start.lines().count(),
+        1,
+        "startup resolved the helper once:\n{after_start}"
+    );
+    // In-TUI /resume to the seeded session -- a switch, not a fresh launch.
+    run_slash_command(&mut s, &format!("resume {sid_b}"));
+    // Sync point: the resumed history renders, so the switch landed. A broken
+    // per-switch re-resolve would have run the helper again before this.
+    assert!(
+        s.wait_for("seeded prompt", RENDER_TIMEOUT),
+        "switch must land and show resumed history:\n{}",
+        s.output()
+    );
+    let after_switch = std::fs::read_to_string(&marker).unwrap_or_default();
+    assert_eq!(
+        after_switch.lines().count(),
+        1,
+        "session switch must reuse the startup-resolved provider:\n{after_switch}"
+    );
+    drop(std::fs::remove_file(&marker));
+    drop(std::fs::remove_dir_all(&home));
+    drop(std::fs::remove_dir_all(&sessions_dir));
+}
