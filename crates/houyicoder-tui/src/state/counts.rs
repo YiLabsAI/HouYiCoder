@@ -54,6 +54,24 @@ impl App {
             TranscriptLine::ContextGrid(view) => {
                 crate::view::context_view::render_as_rows(view).len()
             }
+            TranscriptLine::Subagent {
+                child_sid,
+                folded_transcript,
+                ..
+            } => {
+                let mut n = 1; // head row
+                if self.expanded_subagents.contains(child_sid) || self.verbose {
+                    if folded_transcript.is_empty() {
+                        n += 1; // placeholder row
+                    } else {
+                        n += folded_transcript
+                            .iter()
+                            .map(|c| self.line_display_rows(c))
+                            .sum::<usize>();
+                    }
+                }
+                n
+            }
             // count==render: a user prompt wraps + caps like the render path.
             TranscriptLine::User(text) => self.render_cache.borrow_mut().user_row_count(text, w),
             // count==render: the chip text is mode-dependent (verbose renders

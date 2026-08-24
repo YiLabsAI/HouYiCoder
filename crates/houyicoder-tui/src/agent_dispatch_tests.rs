@@ -744,7 +744,7 @@ fn test_subagent_renders_expanded() {
         "expanded shows the collapse hint: {out}"
     );
     assert!(
-        out.contains("child transcript loads on fetch"),
+        out.contains("child transcript not yet loaded"),
         "expanded shows the placeholder until the fetch lands: {out}"
     );
 }
@@ -832,4 +832,71 @@ fn test_ctrl_o_todo_expand() {
     assert!(!app.todo_expanded);
     crate::keys::handle_ctrl_o(&mut app);
     assert!(app.todo_expanded, "Ctrl+O expands the todo list");
+}
+
+/// Expanding/collapsing a Subagent fold does not shift the content row
+/// indices of sibling transcript lines. The child transcript renders as
+/// display rows inside the fold, not as new content rows in the parent
+/// index space, so the parent's line indices stay stable (the single
+/// source of truth). Pins the invariant so a refactor that reindexes on
+/// expand fails here.
+#[test]
+fn test_subagent_expand_stable_index() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::User("task".into()));
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "child-1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+    });
+    app.transcript
+        .push(TranscriptLine::Agent("parent result".into()));
+    // Content row indices: User=0, Subagent=1, Agent=2.
+    assert!(matches!(app.transcript[0], TranscriptLine::User(_)));
+    assert!(matches!(app.transcript[1], TranscriptLine::Subagent { .. }));
+    assert!(matches!(app.transcript[2], TranscriptLine::Agent(_)));
+    // Expand the Subagent — the transcript Vec does not change.
+    app.expanded_subagents.insert("child-1".into());
+    assert!(matches!(app.transcript[0], TranscriptLine::User(_)));
+    assert!(matches!(app.transcript[1], TranscriptLine::Subagent { .. }));
+    assert!(matches!(app.transcript[2], TranscriptLine::Agent(_)));
+    // Collapse — still stable.
+    app.expanded_subagents.remove("child-1");
+    assert!(matches!(app.transcript[0], TranscriptLine::User(_)));
+    assert!(matches!(app.transcript[1], TranscriptLine::Subagent { .. }));
+    assert!(matches!(app.transcript[2], TranscriptLine::Agent(_)));
+}
+
+/// line_display_rows must match the render row count for a Subagent:
+/// 1 when collapsed, 2 when expanded with empty folded_transcript
+/// (head + placeholder), and 1 + child rows when expanded with loaded
+/// children. Pins the count==render invariant the scroll math depends on.
+#[test]
+fn test_subagent_row_count() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    let sub = TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+    };
+    // Collapsed: 1 head row.
+    assert_eq!(app.line_display_rows(&sub), 1);
+    // Expanded with loaded children: 1 head + child rows.
+    app.expanded_subagents.insert("c1".into());
+    let child_rows = app.line_display_rows(&TranscriptLine::Agent("child reply".into()));
+    assert_eq!(app.line_display_rows(&sub), 1 + child_rows);
+    // Expanded with empty folded_transcript: 1 head + 1 placeholder.
+    let empty_sub = TranscriptLine::Subagent {
+        child_sid: "c2".into(),
+        subagent_type: "explore".into(),
+        summary: "no output".into(),
+        folded_transcript: Vec::new(),
+    };
+    app.expanded_subagents.insert("c2".into());
+    assert_eq!(app.line_display_rows(&empty_sub), 2);
 }

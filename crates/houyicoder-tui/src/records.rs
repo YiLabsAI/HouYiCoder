@@ -146,19 +146,18 @@ pub enum TranscriptLine {
     /// without re-deriving data on each frame.
     ContextGrid(ContextView),
     /// A sub-agent delegation rendered INLINE as a fold-group in the parent
-    /// flow. The parent message list is never swapped out: the child
-    /// transcript (folded_transcript) is fetched on expand, not substituted
-    /// for the parent's messages. The agent tool's structured result carries
-    /// child_sid + subagent_type + summary. Default collapsed (summary);
-    /// Ctrl+O/click expands. child_sid keys the per-child expand state across
-    /// transcript rebuilds (the ThoughtFor.turn_id pattern).
+    /// flow. The parent message list is never swapped out. The agent tool's
+    /// structured result carries child_sid + subagent_type + summary. Default
+    /// collapsed (summary); Ctrl+O/click expands. child_sid keys the
+    /// per-child expand state across transcript rebuilds (the
+    /// ThoughtFor.turn_id pattern).
     Subagent {
         child_sid: String,
         subagent_type: String,
         summary: String,
-        /// The child's transcript projected through the same pipeline
-        /// (rendering isomorphic with the parent flow). Empty until the
-        /// user expands (on-demand fetch from the child session log).
+        /// The child's transcript projected through the same pipeline.
+        /// Empty: the on-expand fetch from the child session log is not
+        /// yet wired.
         folded_transcript: Vec<TranscriptLine>,
     },
 }

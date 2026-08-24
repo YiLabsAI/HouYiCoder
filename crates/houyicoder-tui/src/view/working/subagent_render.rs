@@ -46,7 +46,7 @@ pub(crate) fn push_subagent_rows(
     pre_rendered.push(None);
     if expanded {
         if folded_transcript.is_empty() {
-            rows.push((SYSTEM, "  child transcript loads on fetch".into(), None));
+            rows.push((SYSTEM, "  child transcript not yet loaded".into(), None));
             row_callids.push(None);
             fold_keys.push(None);
             expanded_group.push(grp_key);
