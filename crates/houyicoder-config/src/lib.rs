@@ -197,22 +197,6 @@ fn build_provider(
 
 // ---- resolution (thin env-reading wrappers) --------------------------------
 
-/// The first available api key, or None. Resolution chain: the apiKeyHelper
-/// script in settings.json (the key stays out of the file), then the env
-/// vars in project-preferred order. The helper result is cached for the
-/// process (the script runs once at startup); env is read fresh each call.
-pub fn resolve_api_key() -> Option<String> {
-    static HELPER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let helper = HELPER.get_or_init(|| api_key::api_key_from_helper(&settings_path()));
-    helper.clone().or_else(|| {
-        first_non_empty(&[
-            std::env::var(ENV_DASHSCOPE_API_KEY).ok(),
-            std::env::var(ENV_OPENAI_API_KEY).ok(),
-            std::env::var(ENV_HOUYICODER_API_KEY).ok(),
-        ])
-    })
-}
-
 /// The base URL to point a provider at. DASHSCOPE_BASE_URL wins, then
 /// OPENAI_BASE_URL, then DEFAULT_BASE_URL. Never fails (always has a default).
 pub fn resolve_base_url() -> String {
@@ -248,12 +232,6 @@ pub fn resolve_model_from(path: &std::path::Path) -> String {
         Some(id) => id.to_string(),
         None => DEFAULT_MODEL.to_string(),
     }
-}
-
-/// Load a fully-resolved ProviderConfig, or MissingApiKey when no key env var
-/// is set (fail-closed). base_url and model always resolve via their defaults.
-pub fn load_provider() -> Result<ProviderConfig, ConfigError> {
-    build_provider(resolve_api_key(), resolve_base_url(), resolve_model())
 }
 
 /// The list of external tool servers configured via env. An empty or unset var

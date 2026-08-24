@@ -36,7 +36,8 @@ use serde_json::{Value, json};
 
 /// An OpenAI-compatible chat/completions provider. Configure with base_url
 /// (e.g. https://api.openai.com/v1) and api_key; the model is per-request.
-/// from_env delegates to the config layer for the unified env resolution.
+/// The composition root resolves the key + base_url via the config layer and
+/// hands them to new(); this type does no config resolution itself.
 pub struct OpenAiCompatibleProvider {
     base_url: String,
     api_key: String,
@@ -56,16 +57,6 @@ impl OpenAiCompatibleProvider {
             api_key,
             http,
         }
-    }
-
-    /// Construct from env via the config layer (the single resolution point):
-    /// DASHSCOPE_API_KEY > OPENAI_API_KEY > HOUYICODER_API_KEY for the key;
-    /// DASHSCOPE_BASE_URL > OPENAI_BASE_URL > DEFAULT_BASE_URL for the URL.
-    /// Returns Auth when no key env var is set (fail-closed).
-    pub fn from_env() -> Result<Self, ProviderError> {
-        let api_key = houyicoder_config::resolve_api_key().ok_or(ProviderError::Auth)?;
-        let base_url = houyicoder_config::resolve_base_url();
-        Ok(Self::new(base_url, api_key))
     }
 
     /// Fetch GET {base_url}/models once and write the served-models cache at

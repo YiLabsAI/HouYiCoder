@@ -121,9 +121,7 @@ pub fn load_provider_merged_from(
     // The key helper runs only from the user's own value, never the merged
     // one: the merged value lets a repository-controlled file name a shell
     // command, and opening a clone would execute it before the first
-    // keystroke. Env backs the user helper up -- env only, not
-    // resolve_api_key, which would re-read the user file and run the helper
-    // a second time on the failure path (two resolution paths for one key).
+    // keystroke. Env backs the user helper up.
     let api_key = crate::api_key::api_key_from_value(&user).or_else(|| {
         crate::first_non_empty(&[
             std::env::var(crate::ENV_DASHSCOPE_API_KEY).ok(),

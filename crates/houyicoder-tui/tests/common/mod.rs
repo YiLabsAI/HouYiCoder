@@ -221,7 +221,7 @@ impl PtySession {
         // temp dir so every test's log lands somewhere it owns + cleans up.
         cmd.env("HOUYICODER_SESSIONS_DIR", &sessions_dir);
         // Force stub mode: set the API keys to EMPTY (not just removed). The
-        // config layer treats an empty key as missing (resolve_api_key filters
+        // config layer treats an empty key as missing (the merge path filters
         // !is_empty, checking DASHSCOPE / OPENAI / HOUYICODER in order), so
         // build_provider falls to the stub path. The binary does not auto-load
         // .env (dotenvy was removed; settings.json + env are the only sources),
