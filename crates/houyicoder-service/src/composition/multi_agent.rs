@@ -28,7 +28,7 @@ use houyicoder_protocol::llm::Usage;
 /// The parent components a child runner is built from: one bundle shared by
 /// the composition root, the runtime constructor, and the spawn path, instead
 /// of seven loose arguments at each hop.
-pub(super) struct MultiAgentDeps {
+pub struct MultiAgentDeps {
     pub registry: Arc<dyn AgentRegistry>,
     pub store: Arc<dyn SessionLog>,
     pub provider: Arc<dyn ModelProvider>,

@@ -14,7 +14,7 @@ pub use effort_resolver::{effort_to_persist, persist_model_pick};
 mod built_in_tools;
 mod hooks;
 mod memory;
-mod multi_agent;
+pub mod multi_agent;
 mod resume;
 mod retention_notice;
 mod session_meta;
