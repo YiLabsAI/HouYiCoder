@@ -347,7 +347,8 @@ impl ModelProvider for OpenAiCompatibleProvider {
 /// Accumulator for one streamed tool call. OpenAI streams a tool call across
 /// many chunks keyed by index: the first chunk carries id + function.name, the
 /// following chunks concatenate function.arguments fragments. We reassemble at
-/// finish so the loop can dispatch the call (live tool-input display is Phase 1).
+/// finish so the loop can dispatch the call (the input is not shown live as it
+/// streams; only the reassembled call is).
 #[derive(Default)]
 struct ToolCallAccum {
     id: String,

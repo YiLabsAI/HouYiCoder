@@ -243,8 +243,9 @@ impl MemorySummary {
 /// restart (counters re-accumulate), never an invariant violation — there is
 /// no atomic write, no lock, no self-heal. recall_hits increments when a
 /// recall surfaces the key; last_access_ts is the last recall time. The
-/// gate_violations counter is fed by the PreToolUse gate (a later sprint)
-/// and stays zero until then — the field is reserved so the on-disk schema
+/// gate_violations counter is fed by the PreToolUse gate and stays zero
+/// today — the feed is not wired. The field is reserved so the on-disk
+/// schema carries it once that feed lands.
 /// does not change when that wiring lands.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MemoryRecallStats {

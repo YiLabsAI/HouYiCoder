@@ -559,9 +559,9 @@ impl Server {
     fn rule_set_wire(&self) -> Vec<houyicoder_protocol::frontend::permission::PermissionRule> {
         // The /permissions management view lists durable (writable-scope)
         // rules only — builtin rules ship with the binary and session rules
-        // are transient in-memory consent, neither is user-managed here. A
-        // later sprint adds a separate builtin section so the user can
-        // disable individual seeded rules.
+        // are transient in-memory consent, neither is user-managed here;
+        // individual seeded rules cannot be disabled yet (no separate
+        // builtin section).
         self.gate
             .rules()
             .iter()

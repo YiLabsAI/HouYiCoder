@@ -202,9 +202,9 @@ impl Validator for DestructiveCommandValidator {
 
 /// The git checkpoint: commit / rebase / reset / tag ask for a human confirm
 /// even though they are recoverable via reflog. Suppressed by an allow-rule,
-/// by the session consent, or by the toggle. Stays as one validator this
-/// sprint; a later sprint moves the checkpoint arms into builtin rules and
-/// keeps only the discard detection here.
+/// by the session consent, or by the toggle. Stays as one validator; the
+/// checkpoint arms live inline here, not in builtin rules, and only the
+/// discard detection is separate.
 pub struct GitCheckpointValidator;
 
 impl Validator for GitCheckpointValidator {

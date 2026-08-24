@@ -2,8 +2,8 @@
 //!
 //! Six record types form the cross-run experience substrate: experience,
 //! lesson, skill, reflection, failure, and cross-run link. These are defined
-//! as types here; storage (SQLite experience store) and wiring arrive in
-//! later phases.
+//! as types here; storage and wiring are not built yet — the types are
+//! defined so the rest of this module can reference them.
 //!
 //! The failure record carries a zero-copy TrajectoryRef pointer into the raw
 //! trajectory log rather than duplicating state — the full event state

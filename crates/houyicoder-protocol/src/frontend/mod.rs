@@ -653,7 +653,7 @@ pub enum FrontendRequest {
     /// the host can surface what was undone.
     Undo,
     // evidence-id coupling (evidence and audit prototype): click-jump and sign-off / replay verbs.
-    // All stub; the daemon wiring is a later phase.
+    // All stub.
     SpecClauseJump {
         clause_id: String,
     },

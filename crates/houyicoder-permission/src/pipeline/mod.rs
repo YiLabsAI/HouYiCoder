@@ -11,10 +11,9 @@
 //! contracts; adding a field here would silently undo them.
 
 // The describe() ladder view plus the immunity / consent_overridable methods
-// are exercised by the invariant tests and feed the permission view that
-// lands in a later sprint; they are dead in the non-test library build until
-// that view wires in, so the crate-level allow keeps them quiet without
-// weakening the rest of the module.
+// are exercised by the invariant tests and feed a permission view that is not
+// wired yet; they are dead in the non-test library build, so the crate-level
+// allow keeps them quiet without weakening the rest of the module.
 
 #![allow(dead_code)] // ladder view metadata pending permission view wiring; locally unused
 

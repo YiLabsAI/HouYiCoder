@@ -33,7 +33,7 @@ impl AgentIdentity {
 /// engine's full spawn request adds parent components a tool cannot see
 /// (store, provider, tool registry, config); the handle impl supplies
 /// those from its own state. Non-exhaustive because the agent tool's
-/// schema grows (name, cwd, model land in later sprints); construct via
+/// schema grows over time; construct via new so a field added later does
 /// new so a field added later does not break every call site.
 #[derive(Debug, Clone)]
 #[non_exhaustive]

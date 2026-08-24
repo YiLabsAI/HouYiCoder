@@ -63,7 +63,8 @@ mod pre_flight_threshold_tests;
 /// while appending each text delta to the session log and notifying the live
 /// sink. Retry wraps only stream establishment (a retryable error before the
 /// first real event retries the whole call); once an event lands the turn is
-/// committed — a mid-stream error is terminal (resilience lands in Phase 2).
+/// committed — a mid-stream error is terminal; there is no partial-recovery
+/// path here yet.
 ///
 /// Pre-flight (fail-closed): if the served view exceeds the absolute reserve
 /// (window minus the model response room and an estimation margin), compress
@@ -623,9 +624,9 @@ impl Runner {
 
     /// Fold one streamed LlmEvent into the turn state: append a text delta to
     /// the durable log + notify the live sink + accumulate; collect reasoning,
-    /// tool calls, and usage. A ProviderError event is terminal for Phase 0.
+    /// tool calls, and usage. A ProviderError event is terminal for the turn.
     /// Boundary events (TextStart/End, ToolInput*, Step*) are ignored —
-    /// tool-input streaming lands in Phase 1.
+    /// tool-input streaming is not surfaced here yet.
     async fn fold_event(
         &self,
         ev: LlmEvent,

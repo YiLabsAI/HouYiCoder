@@ -6,9 +6,8 @@
 //!
 //! FenceProof is the proof token for AllowReason::Containment. It is unused
 //! in the library build until the sandbox contract wires the Containment
-//! trait in a later sprint; the per-item allow keeps it quiet without
-//! weakening the verdict types the gate already produces. Coverage moved to
-//! the api sandbox port (the layer both the gate and the fence share).
+//! trait; the per-item allow keeps it quiet without weakening the verdict
+//! types the gate already produces. Coverage moved to the api sandbox port.
 
 use serde::{Deserialize, Serialize};
 

@@ -18,7 +18,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from commit_msg_lint import _ACCEPTANCE_CODES  # noqa: E402
-from rules.comments import CODENAME, COMPARISON, OWN_NAME  # noqa: E402
+from rules.comments import (  # noqa: E402
+    CODENAME,
+    COMPARISON,
+    OWN_NAME,
+    PHASE_REF_BASELINE,
+    evaluate_phase_refs,
+    phase_ref_count,
+)
 
 
 def _caught(text: str) -> bool:
@@ -143,6 +150,21 @@ def main() -> int:
             failures.append(
                 f"unexpected acceptance-code flag of {label!r} (matched {m.group(0)!r}) in {text!r}"
             )
+
+    # Phase-ref growth-only ratchet. Growth blocks; drift is green; exact
+    # baseline is green; the baseline must equal the real count over crates/.
+    if evaluate_phase_refs(PHASE_REF_BASELINE + 1) != 1:
+        failures.append("phase-ref ratchet: growth must block")
+    if evaluate_phase_refs(PHASE_REF_BASELINE - 1) != 0:
+        failures.append("phase-ref ratchet: drift must be green (growth-only)")
+    if evaluate_phase_refs(PHASE_REF_BASELINE) != 0:
+        failures.append("phase-ref ratchet: exact baseline must be green")
+    real = len(phase_ref_count(Path("crates")))
+    if real != PHASE_REF_BASELINE:
+        failures.append(
+            f"phase-ref baseline {PHASE_REF_BASELINE} != real count {real}; "
+            f"adjust PHASE_REF_BASELINE to match"
+        )
 
     if failures:
         for f in failures:

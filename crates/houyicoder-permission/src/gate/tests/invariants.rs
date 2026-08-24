@@ -25,8 +25,8 @@ fn test_ladder_order_is_total() {
 /// The registry matches the spec table row by row: stage, name, immunity, and
 /// consent-overridable. rule_ask lives at UserAsk (an authoritative user
 /// directive ahead of the safety and detection ladders, where the builtin
-/// git-checkpoint seed rules surface). A later sprint splits git_checkpoint
-/// into the kept git_discard detection validator; that sprint updates this
+/// git-checkpoint seed rules surface). git_checkpoint is not yet split into
+/// the kept git_discard detection validator; splitting it must update this
 /// table, which is the point — the change is forced to surface here rather
 /// than hide in construction order.
 #[test]

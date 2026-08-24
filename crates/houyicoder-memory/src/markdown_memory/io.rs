@@ -20,7 +20,7 @@ pub(super) struct Frontmatter {
 
 /// One row of the advisory recall-stats sidecar. Serialized into the
 /// per-scope .stats.json object keyed by memory key. gate_violations is
-/// reserved (fed by the PreToolUse gate in a later sprint; zero until then).
+/// reserved; zero today, nothing feeds it yet.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct StatRecord {
     #[serde(default)]

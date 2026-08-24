@@ -18,7 +18,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rules.comments import line_violations  # noqa: E402
+from rules.comments import (  # noqa: E402
+    evaluate_phase_refs,
+    line_violations,
+    phase_ref_count,
+    PHASE_REF_BASELINE,
+)
 
 
 def _rs_files(paths):
@@ -41,6 +46,20 @@ def main(paths):
                 # CJK is owned by check_no_cjk (cross-filetype); the other
                 # 5 arms are .rs-comment-specific.
                 errors.append(f"{p}:{lineno}: {message}")
+    # Growth-only ratchet on `Phase N` in .rs comments (whole-tree, not just
+    # changed files): the baseline is the dream-consolidation prompt's own
+    # four-phase structure; a new roadmap ref blocks until dropped or the
+    # baseline is bumped with a reason.
+    hits = phase_ref_count(Path("crates"))
+    if evaluate_phase_refs(len(hits)) != 0:
+        errors.append(
+            f"phase-ref ratchet breached: {len(hits)} > {PHASE_REF_BASELINE} "
+            f"(+{len(hits) - PHASE_REF_BASELINE}); a new Phase N in an .rs "
+            f"comment is a roadmap forward-reference -- drop it or bump "
+            f"PHASE_REF_BASELINE with a reason"
+        )
+        for rel, lineno, match in hits[:8]:
+            errors.append(f"  {rel}:{lineno}: {match}")
     for e in errors:
         print(f"error: {e}", file=sys.stderr)
     if errors:

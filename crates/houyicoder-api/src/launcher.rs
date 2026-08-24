@@ -331,6 +331,13 @@ impl LauncherChild {
     }
 
     /// Await the child's exit. Consumes the handle.
+    ///
+    /// Convention, not guarantee: on the capture path the launcher resolves
+    /// the exit before returning the handle, so this future is already settled
+    /// and a block_on is a single poll. A future launcher whose wait is not
+    /// pre-resolved must offer a non-blocking resolution path -- block_on on
+    /// an unresolved future parks the calling thread, which starves a runtime
+    /// if the caller is on a worker.
     pub fn wait(self) -> PFut<'static, Result<LauncherExit, SpawnError>> {
         self.waiter
     }

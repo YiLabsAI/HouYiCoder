@@ -1,9 +1,9 @@
 //! Transports — the carriers the wire frames flow over. One trait, three
-//! implementations across the milestones: an in-memory channel for mode A
-//! (here), pipes for mode B (later), and a domain socket for detached
-//! sessions (later). A transport moves newline-terminated NDJSON frames as
-//! owned strings; encode and decode sit one layer above in protocol, so the
-//! transport is carrier mechanics only and stays ignorant of message shape.
+//! implementations: an in-memory channel for mode A; pipes for mode B and a
+//! domain socket for detached sessions are not wired yet. A transport
+//! moves newline-terminated NDJSON frames as owned strings; encode and decode
+//! sit one layer above in protocol, so the transport is carrier mechanics only
+//! and stays ignorant of message shape.
 //! The contract test runs the same protocol behavior through each transport
 //! to assert wire equivalence: a frame the in-memory carrier moves is the
 //! same bytes a pipe would move, so a peer cannot tell which carrier

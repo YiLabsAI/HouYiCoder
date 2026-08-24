@@ -63,6 +63,39 @@ COMPARISON = re.compile(
 )
 
 
+# A growth-only ratchet on Phase N in .rs comment lines. The baseline
+# covers the dream-consolidation prompt's own four-phase structure described
+# in comments -- runtime prompt text, legitimate. A new Phase N is a roadmap
+# forward-reference the reader cannot resolve. Drift -- a legit ref deleted
+# -- is allowed; fewer is not a regression. Counted on comment lines only; the
+# prompt text in string literals is not a comment.
+PHASE_REFS = re.compile(r"\bPhase\s+\d+\b")
+PHASE_REF_BASELINE = 6
+
+
+def phase_ref_count(root):
+    """Every Phase N hit in an .rs comment line under root, as a list of
+    rel_path/lineno/match triples so a breach can list sites. Whole-tree: the
+    ratchet is a global count, not per-changed-file, so it lives in the
+    make-check gate rather than the per-line write-time hook."""
+    hits = []
+    for rs in Path(root).glob("**/*.rs"):
+        try:
+            text = rs.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if is_comment(line):
+                for m in PHASE_REFS.finditer(line):
+                    hits.append((str(rs.relative_to(root)), i, m.group(0)))
+    return hits
+
+
+def evaluate_phase_refs(count, baseline=PHASE_REF_BASELINE):
+    """Growth-only: 0 when count <= baseline, 1 when count > baseline."""
+    return 0 if count <= baseline else 1
+
+
 def has_cjk(line: str) -> bool:
     """CJK ranges: Han, Hangul, Kana, full-width punctuation."""
     return any(

@@ -489,9 +489,9 @@ impl MemoryProvider for MarkdownMemoryProvider {
     /// prune a key this increment is about to re-create (an orphan stats
     /// row for a removed topic). The lock is cheap off the hot path — recall
     /// fires at turn entry, not per model call. A crash mid-write still
-    /// leaves a corrupt sidecar the next load treats as empty (cold
-    /// restart). gate_violations is untouched here (fed by the PreToolUse
-    /// gate in a later sprint).
+    /// leaves a corrupt sidecar the next load treats as empty on a cold
+    /// restart. gate_violations is untouched here; zero today, the
+    /// PreToolUse feed is not wired.
     fn record_recall_hits(&self, keys: &[String]) {
         if keys.is_empty() {
             return;

@@ -16,7 +16,7 @@
 //!
 //! Self-evolution records (experience, lesson, skill, reflection, failure,
 //! cross-run link) are defined as types in the evolution submodule; storage
-//! and wiring arrive in later phases. The failure record carries a zero-copy
+//! and wiring are not built yet. The failure record carries a zero-copy
 //! pointer into the raw trajectory log rather than duplicating state, mirroring
 //! the context layer block-ref pattern: anchor plus reference, not copy.
 //! Multi-level caps on every bounded field prevent unbounded growth from
