@@ -38,6 +38,7 @@ pub mod fold;
 pub mod git_op;
 pub mod input;
 pub mod keys;
+mod list_pane_state;
 pub mod markdown;
 pub mod palette;
 pub mod paste;
