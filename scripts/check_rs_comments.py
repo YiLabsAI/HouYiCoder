@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Reject CJK, backtick-quoted identifiers, codename/stage references, and
-design-doc references in .rs comments. Code comments must be plain English
-prose: bare identifiers (no backtick markup), no Chinese, no internal
-codenames (D3 / R2 / F9 / SEC-14 / stage1 / section refs). See AGENTS.md
+"""Reject CJK, backtick-quoted identifiers, opaque labels, and document
+references in .rs comments. Code comments must be plain English prose: bare
+identifiers (no backtick markup), no Chinese, no short letter-and-digit
+labels or numbered stage names standing in for a concept. See AGENTS.md
 'Code comment style'.
 
-Design docs under docs/ are unaffected (they may be Chinese, use backticks,
-and reference numbers). This check only scans .rs comment lines.
+Only .rs comment lines are scanned; prose documents are unaffected (they may
+be Chinese, use backticks, and carry reference numbers).
 
 The comment-rule detector is shared with the PreToolUse write-time hook
 (hook_rust.py) via rules/comments.py — one word source, no parallel

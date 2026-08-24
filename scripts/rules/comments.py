@@ -27,8 +27,9 @@ CODENAME = re.compile(
 # not crates; the name may change).
 OWN_NAME = re.compile(r"\b(?:houyicoder|hicoder)(?:[-_][a-z0-9]+)*")
 
-# Design-doc references — docs are not committed, so citing them dangles for
-# a reader of the pushed tree. State the reasoning instead.
+# Document references — a comment must stand on its own. A pointer outside
+# the code is one the reader may be unable to follow, and it rots on its own
+# schedule. State the reasoning instead.
 DOC_REF = re.compile(
     r"\bdocs/"
     r"|\b[Ss]print\s+\d+"
@@ -100,9 +101,9 @@ def line_violations(line: str, *, check_cjk: bool = True):
     dm = DOC_REF.search(line)
     if dm:
         yield (
-            f"doc reference '{dm.group(0)}' in .rs comment; docs are not committed, "
-            f"so state the reasoning instead of citing where it is written "
-            f"(AGENTS.md)",
+            f"doc reference '{dm.group(0)}' in .rs comment; a comment must "
+            f"stand on its own, so state the reasoning instead of citing "
+            f"where it is written (AGENTS.md)",
             stripped,
         )
     om = OWN_NAME.search(line)

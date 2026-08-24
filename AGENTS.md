@@ -15,7 +15,7 @@ features touching multiple crates. Non-functional targets:
 | Metric | Target |
 |--------|--------|
 | Build (cargo check workspace) | < 30s incremental |
-| Test gate (make check) | < 60s |
+| Test gate (make check) | < 30s warm, < 120s cold (CHECK_BUDGET_WARM/COLD) |
 | Clippy | Zero warnings (-D warnings) |
 | rustfmt | Zero diffs |
 
@@ -29,12 +29,12 @@ All public boundaries must be explicitly typed.
 
 ### 3. Data-Driven & Self-Evolving
 Metrics drive decisions; new capabilities require measurable eval criteria;
-runtime metrics inform optimization. (Ties to the eval harness, docs/017.)
+runtime metrics inform optimization, measured by the eval harness.
 
 ### 4. Immutable State
 Prefer append-only event logs over in-place mutation. State transitions
 produce new versions. Critical for checkpoint/restore and replay
-(SessionStore, docs/005).
+(SessionStore).
 
 ### 5. Full-Stack Observability
 Every critical path traceable end-to-end. OpenTelemetry spans; structured
@@ -46,7 +46,7 @@ errors surface with context.
 - No panics in library code — return Result; expect/unwrap only in
   tests or behind a documented invariant.
 - Untrusted data (memory recall, file contents, tool/MCP results, graph
-  summaries) enters the prompt under the untrusted-data framing (docs/021).
+  summaries) enters the prompt under an explicit untrusted-data framing.
 - Capability-scoped, deny-by-default for all guests.
 
 ### 7. Documentation as Code
@@ -58,10 +58,9 @@ errors surface with context.
 - Crate-level //! docs explain the crate's role + links to design docs.
 
 ### 8. Architecture Artifacts
-Major features need design docs with Mermaid diagrams under
-docs/design/<feature>.md. Required: component diagram for new crates;
-sequence diagram for cross-crate flows; the master architecture diagram
-(docs/架构设计.md) MUST be updated when layering changes.
+Major features need a design doc with Mermaid diagrams. Required: component
+diagram for new crates; sequence diagram for cross-crate flows. The master
+architecture diagram MUST be updated when layering changes.
 
 ### 9. Dependency Governance
 - Minimal dependencies; prefer std over external crates.
@@ -84,16 +83,16 @@ the bug, then fix. Tests enable safe refactoring.
   the model plane executes one bounded step. Non-deterministic leaves (LLM
   responses, memory recall, graph queries) are snapshot-persisted for replay.
 - **Reproducibility = control-plane-flow reproducible + snapshot-replay**,
-  not literal re-run (see docs/架构设计.md §6.1).
+  not literal re-run.
 - **Token is a first-class budget** — explicit, measured, cache-aware.
 
 ## Repository Layout
 
-- crates/ — the workspace (houyicoder-{core, sandbox, graph, protocol,
-  wasm, memory, tui, service, cli}).
-- spikes/ — standalone verification spikes (separate Cargo workspace).
-- docs/ — design docs (kept local, not committed by policy).
-- scripts/ — check_code.sh, quick_check.sh.
+- crates/ — the workspace: houyicoder-{api, async, cli, client, config,
+  context, core, graph, loader, memory, permission, protocol, provider,
+  resilience, sandbox, service, session, tui, wasm}.
+- scripts/ — the gate: check_code.sh (full), quick_check.sh (fmt + clippy),
+  plus the per-rule checkers each gate step runs.
 - .github/ — CI.
 
 **Policy**: respect crate boundaries; cross-crate changes split into small,
@@ -121,14 +120,19 @@ make install   # stable + rustfmt + clippy
 make install       # one-time toolchain setup
 make quick-check   # fmt-check + clippy (fast, during dev)
 make check         # full pre-commit gate (fmt + clippy + typecheck + test)
+make check-full    # check + coverage gate (what the pre-push hook runs)
+make verify        # check-full + the ignored suite (sandbox, PTY UI) + doc-stale
 make format        # cargo fmt --all
 make lint          # clippy -D warnings
 make test          # cargo test --workspace
-make benchmark     # run the verification spikes
 make clean
 ```
 
-**Always run make check before commit.**
+**Always run make check before commit.** Two gate tiers: `make check` is the
+commit gate (fast unit suite + diff coverage); `make verify` is the done gate
+(adds the ignored cross-layer, PTY, and sandbox suites). A change that touches
+cross-layer or interactive behavior is not finished until verify is green —
+`make check` alone cannot see those paths.
 
 ## Coding Standards
 
@@ -138,6 +142,23 @@ make clean
   unsafe_code deny; too_many_lines / cognitive_complexity warn → deny
   in the gate). Pedantic is NOT enabled as a group — enable individual
   pedantic lints on demand.
+- **Process spawn is a chokepoint.** clippy.toml bans
+  `std::process::Command::new` and `tokio::process::Command::new` via
+  disallowed-methods. Every spawn routes through the ProcessLauncher port so
+  the resource fence, wrapper, and audit policy apply uniformly. Pre-existing
+  direct spawns are allow-flagged at their call sites as the migration list; a
+  NEW direct spawn fails the gate. Test scaffolding that is not an engine
+  spawn may allow-flag with a comment saying why.
+
+### Other gates you will hit
+Each is a separate step in make check with its own error message; these are
+the ones whose fix is not obvious from the message alone.
+
+| Gate | Rule |
+|------|------|
+| dep-graph | Crate runtime dependencies must match the layering whitelist. A new cross-crate `[dependencies]` edge fails unless the architecture allows that direction. dev-dependencies are exempt (test-only coupling is not a layering violation). |
+| comment-block-length | A consecutive in-function `//` block over 12 lines warns; the count is baselined and pinned. Long rationale belongs in a doc comment on the item, not a wall inside the body. |
+| dead-code-ratchet | The number of whole-file `#![allow(dead_code)]` suppressions is strict-pinned to a baseline. Both growth and drift fail: narrow the suppression to the specific item, or delete the dead code, rather than blanketing a file. |
 
 ### Public surface is declared, not inherited
 - No glob re-export (`pub use foo::*`) at a crate root. A glob makes any
@@ -172,24 +193,22 @@ make clean
 ### Code comment style
 .rs comments must be plain English prose. Forbidden in code comments:
 Chinese characters; backtick-quoted identifiers (write the bare identifier,
-no markup); codename or stage references such as D3, R2, F9, stage1
-(describe in plain English instead); names of other products or tools
-— comments describe this codebase's own design, not how it compares
-to others. Design docs under docs/ are unaffected. Enforced by
+no markup); short letter-and-digit labels standing in for a concept, and
+numbered stage or phase names — spell out what the thing does instead;
+names of other products or tools — comments describe this codebase's own
+design, not how it compares to others. Enforced by
 scripts/check_rs_comments.py in make check.
 
-**No design-doc references in code comments.** No path under docs/, no
-design-doc filename, no "see the design doc", and no planning-artifact id
-(Sprint 4, contract C3). Reason: docs/ is kept local and never pushed, so
-such a reference is a dangling pointer for every reader of the committed
-tree, and an index into something they cannot open. **A comment must stand
-on its own** — state the reasoning, do not cite where it is written down.
-If a decision matters to someone editing the code, the comment carries it;
-if it does not, it does not belong in a comment at all. Note this bans
-citing the doc, not the substance: writing out why a rule exists is
-exactly right. Runtime artifacts the product itself reads (agent.md,
-MEMORY.md, AGENTS.md) are domain objects, not doc citations, and stay
-allowed. Same enforcement.
+**A comment must stand on its own.** State the reasoning; do not cite where
+it is written down. A pointer to something outside the code is one the reader
+may be unable to follow, and it rots on its own schedule while the code moves
+on. So no document paths or filenames, no "see the design doc", and no
+milestone, iteration, or lettered requirement id. If a decision matters to
+someone editing the code, the comment carries the decision; if it does not,
+it does not belong in a comment at all. This bans the citation, not the
+substance — writing out why a rule exists is exactly right. Runtime
+artifacts the product itself reads (agent.md, MEMORY.md, AGENTS.md) are
+domain objects, not citations, and stay allowed. Same enforcement.
 
 ### Bulk edit protocol
 When editing many files via a script (sed or python regex across the tree):
@@ -203,10 +222,11 @@ indent, leftover residue, hit string literals).
 - **Function**: clippy::too_many_lines fires >100 lines → refactor/split.
 - **Cognitive complexity**: clippy::cognitive_complexity > 30
   (clippy.toml) → refactor.
-- **File**: scripts/check_file_size.py warns ≥500 lines, **errors ≥800**
-  lines per .rs file → split the file. 500–800 is the refactor band: a file in
-  that range is a prompt to refactor on SRP grounds at the right time, not a
-  hard chase to stay under 500.
+- **File**: scripts/check_file_size.py, per .rs file. Production warns ≥500,
+  **errors ≥800**; test files warn ≥800, **error ≥2000** (a table-driven test
+  file is legitimately longer than the code it covers). 500–800 is the
+  refactor band for production: a file in that range is a prompt to refactor
+  on SRP grounds at the right time, not a hard chase to stay under 500.
 - Hitting a threshold is a mandate to refactor, not a warning to ignore.
   World-class code, no garbage.
 
@@ -262,10 +282,10 @@ Choosing the sink is a design decision, not a matter of taste:
 |----------|-------------|------|
 | Unit | Fast, deterministic, single module; mock collaborators at boundaries. | cargo test (lib) |
 | Integration | Cross-crate real collaboration; local, deterministic. | cargo test (integration tests) |
-| Spike | Verification of a load-bearing tech bet (not a feature test). | spikes/ bins |
+| Spike | Verification of a load-bearing tech bet (not a feature test). | standalone bins |
 | Live | Real providers/network — opt-in, NEVER in default gates. | env-gated |
 
-### Layout policy (mirrors houyi)
+### Layout policy
 - Tests live under each crate's tests/ or inline #[cfg(test)] modules.
 - One source module → one peer test file (foo.rs → tests/foo.rs or
   inline mod foo_tests).
@@ -399,7 +419,8 @@ Choosing the sink is a design decision, not a matter of taste:
   describe the behavior.
 - Do not encode execution tier in names (no test_smoke_* / test_full_*);
   use #[ignore] / CI selection.
-- Length: ~40 chars soft warn, 55 hard (the gate's limits; a stricter 35/45 target once long names are trimmed).
+- Length: 40 chars soft warn, 50 hard error (the gate's limits); aim well
+  under the warn rather than at the cap.
 - Good: `test_write_file_creates_parents`, `test_tail_summarizes_older`,
   `drag_copies_agent_line`. Bad: `test_write_file_executor_creates_parents`,
   `test_vertex_gemini_build_generate_config_ignores_parallel_tool_calls`.
@@ -411,7 +432,9 @@ Choosing the sink is a design decision, not a matter of taste:
   modules snake_case -- enforced by rustc lints under -D warnings.
 
 ### Coverage
-- Target: core crates ≥ 80% once they have real logic (stubs exempt).
+- Gate: workspace unit line coverage ≥ 85% (check_coverage.sh, COV_THRESHOLD)
+  and ≥ 85% of the lines a branch adds or modifies (check_diff_coverage.py,
+  COV_DIFF_THRESHOLD). Both raise to 90 once comfortably green.
 - Risk-driven over a fixed count: cover happy path + boundary + error path +
   one dependency-interaction assertion per non-trivial module.
 - diff-cov (make check) reads the --lib lcov only; integration tests in
@@ -419,8 +442,8 @@ Choosing the sink is a design decision, not a matter of taste:
   moves its coverage of production lines OUT of the lib lcov. That is
   correct ratchet behavior: make check passes while no production line
   changed vs HEAD (no diff to gate); the next change to a line whose
-  coverage moved to integration is required to bring that line to 80% lib
-  coverage (the developer adds a lib test or accepts the gate). Do NOT
+  coverage moved to integration is required to bring that line to the diff
+  threshold in lib coverage (add a lib test or accept the gate). Do NOT
   revert a correct src/→tests/ move because a future change "would fail
   diff-cov" — that future failure is the gate doing its job (ratcheting
   coverage up on the next edit). Before moving, confirm the production
@@ -428,6 +451,37 @@ Choosing the sink is a design decision, not a matter of taste:
   otherwise the move is fine + the ratchet handles the rest.
 
 ## Collaboration
+
+### Windows verification
+
+CI gates Windows, but a round trip per defect is the wrong loop. Verify
+locally: `brew install llvm` (for clang-cl) + `cargo install cargo-xwin`,
+then `cargo xwin check --target x86_64-pc-windows-msvc --workspace
+--all-targets` (and `cargo xwin test` for runtime defects). xwin fetches the
+Microsoft CRT and Windows SDK, the sysroot the TLS stack needs to build from
+a non-Windows host. Use a separate `CARGO_TARGET_DIR` so it does not clobber
+the native build cache.
+
+Four patterns fail on Windows and cannot be seen on macOS, where
+`cfg(unix)` is always true and paths have no backslashes:
+
+- **`format!` building JSON around a path.** A backslash is an invalid JSON
+  escape, so the value parses as nothing and the field silently disappears.
+  Build with `serde_json::json!` and let the serializer escape.
+- **A read-only handle passed to `set_times`.** Windows needs
+  `FILE_WRITE_ATTRIBUTES`. Use `OpenOptions::new().write(true)` for files —
+  correct on both platforms. Directories need opposite opens (read on Unix,
+  since write gives EISDIR; write plus `FILE_FLAG_BACKUP_SEMANTICS` on
+  Windows), so a helper that stamps directories must split on `cfg`.
+- **`#[cfg(unix)]` on test functions but not their shared helpers**, which
+  leaves the helpers dead on Windows. Gate the module instead:
+  `#[cfg(all(test, unix))] mod tests`.
+- **An unconditional `use` of a type only referenced under `#[cfg(unix)]`**,
+  an unused import on Windows. Gate the import to match.
+
+Reference implementations are platform-correct, not portable: copying a
+crate's `cfg(windows)` body into a shared helper breaks Unix. Read the cfg
+boundary along with the code.
 
 ### PR checklist
 - [ ] Types updated; serde versions where protocol-facing
