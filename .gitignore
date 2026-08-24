@@ -67,7 +67,6 @@ scripts/check_journey_coverage.py
 scripts/hook_sdd_naming.py
 scripts/hook_doc_sync.py
 scripts/rules/sdd.py
-scripts/check_product_refs.py
 .commit-lint-words
 
 

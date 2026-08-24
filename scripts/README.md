@@ -130,8 +130,12 @@ public build. `.gitignore` also carries patterns for additional
 local-only gate scripts a contributor may add; anything matching those
 patterns stays local.
 
-The `.rs-comment-products` wordlist (gitignored) feeds the local-only
-product-name scan if present.
+The `.rs-comment-products` wordlist (gitignored) feeds the product-name
+arm in `rules/comments.py` (shared by hook_rust.py, check_rs_comments.py,
+and commit_msg_lint.py) when present. The arm resolves the wordlist through
+the git common dir inside worktrees, so it fires there too; a clean clone
+or CI run with no wordlist skips the arm (internal hygiene, not a
+public-gate guarantee).
 
 ## Adding a gate
 

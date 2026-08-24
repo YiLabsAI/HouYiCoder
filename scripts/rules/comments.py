@@ -1,14 +1,24 @@
 """Shared .rs comment-violation rules — single source for the write-time
 hook (hook_rust.py) and the check-time gate (check_rs_comments.py).
 
-The same 6-arm detector serves both so write-time and check-time cannot
+The same 7-arm detector serves both so write-time and check-time cannot
 drift: CJK, backtick, codename/stage ref, design-doc ref, own-crate name,
-comparison framing. The detector yields (message, line_text); each caller
-formats its own output envelope (file:line prefix vs. hook block).
+comparison framing, product name. The detector yields (message, line_text);
+each caller formats its own output envelope (file:line prefix vs. hook
+block).
+
+The product-name arm reads a gitignored wordlist (scripts/.rs-comment-products)
+when present and is skipped when absent, so the tracked files never name the
+products the list bans. The wordlist resolves through the git common dir
+when running inside a worktree (the worktree checkout does not carry
+gitignored files), so the arm fires for worktree-first development instead
+of silently no-op'ing there. External clones have no wordlist anywhere and
+skip the arm.
 """
 import ast
 import io
 import re
+import subprocess
 import tokenize
 from pathlib import Path
 
@@ -61,6 +71,82 @@ COMPARISON = re.compile(
     r"|\ba prior project\b",
     re.IGNORECASE,
 )
+
+# Product names: never reference other products by name in .rs comments.
+# The literal names live in the gitignored wordlist, so the tracked files
+# never carry them. Compiled once per process (the wordlist is static during
+# a run; line_violations runs per line and must not re-read the file).
+_PRODUCTS_TRIED = False
+_PRODUCTS_RE = None
+
+
+def _products_wordlist():
+    """Resolve the product-name wordlist: next to the scripts dir first,
+    then the main checkout (via the git common dir) when running inside a
+    worktree. None when no wordlist exists anywhere (external clone)."""
+    here = Path(__file__).resolve().parent.parent
+    local = here / ".rs-comment-products"
+    if local.is_file():
+        return local
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(here), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    common = Path(out.stdout.strip())
+    if not common.is_absolute():
+        common = (here / common).resolve()
+    # The common dir is <main-root>/.git (worktrees share it), so its parent
+    # is the main checkout root.
+    main_list = common.parent / "scripts" / ".rs-comment-products"
+    if main_list.is_file():
+        return main_list
+    return None
+
+
+def product_pattern():
+    """The compiled product-name regex, or None when no wordlist is present
+    (the arm is skipped). Shared by the .rs comment gate and the commit-msg
+    lint so both enforce the same names."""
+    global _PRODUCTS_TRIED, _PRODUCTS_RE
+    if _PRODUCTS_TRIED:
+        return _PRODUCTS_RE
+    _PRODUCTS_TRIED = True
+    path = _products_wordlist()
+    if path is None:
+        return None
+    names = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not names:
+        return None
+    # Short abbreviations (under 4 chars) stay case-sensitive so a 2-letter
+    # compiler flag like "cc" does not false-positive; longer names go
+    # case-insensitive because sentence-initial capitalization is the most
+    # likely form in prose.
+    short = [n for n in names if len(n) < 4]
+    long_ = [n for n in names if len(n) >= 4]
+    parts = []
+    if short:
+        parts.append("|".join(re.escape(n) for n in short))
+    if long_:
+        parts.append("(?i:" + "|".join(re.escape(n) for n in long_) + ")")
+    # Path exclusion: do not match a name inside a path (preceded by . / or a
+    # word char, or followed by . / then a word char) so legitimate references
+    # to the .claude dir or claude.md config alias do not false-positive.
+    # A bare name at sentence end (followed by . + space) still trips.
+    _PRODUCTS_RE = re.compile(
+        rf"(?<![./\w])(?:{'|'.join(parts)})\b(?![./]\w)"
+    )
+    return _PRODUCTS_RE
 
 
 # A growth-only ratchet on Phase N in .rs comment lines. The baseline
@@ -157,6 +243,15 @@ def line_violations(line: str, *, check_cjk: bool = True):
             f"implementation (AGENTS.md)",
             stripped,
         )
+    pre = product_pattern()
+    if pre:
+        pm = pre.search(line)
+        if pm:
+            yield (
+                f"product name '{pm.group(0)}' in .rs comment; describe this "
+                f"design, do not name other products (AGENTS.md)",
+                stripped,
+            )
 
 
 def py_doc_lines(text: str):

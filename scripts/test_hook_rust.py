@@ -166,6 +166,43 @@ def main() -> int:
             f"adjust PHASE_REF_BASELINE to match"
         )
 
+    # Product-name arm: fires when a wordlist resolves, skips when absent.
+    # Uses a temp wordlist (monkeypatched) so the test does not depend on the
+    # real gitignored list being present (a clean clone has none).
+    import tempfile
+
+    import rules.comments as rc
+
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".products", delete=False
+    ) as tf:
+        tf.write("# test wordlist\nTestRival\n")
+        tmp = tf.name
+    try:
+        rc._PRODUCTS_TRIED = False
+        rc._PRODUCTS_RE = None
+        orig = rc._products_wordlist
+        rc._products_wordlist = lambda: Path(tmp)
+        try:
+            hits = list(rc.line_violations("// the TestRival layout"))
+            if not any("product name 'TestRival'" in m for m, _ in hits):
+                failures.append(
+                    f"product arm should flag 'TestRival' when the wordlist "
+                    f"resolves, got {[m for m, _ in hits]}"
+                )
+            clean = list(rc.line_violations("// plain design note"))
+            if any("product name" in m for m, _ in clean):
+                failures.append(
+                    f"product arm false-positive on a clean comment: "
+                    f"{[m for m, _ in clean]}"
+                )
+        finally:
+            rc._products_wordlist = orig
+            rc._PRODUCTS_TRIED = False
+            rc._PRODUCTS_RE = None
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)

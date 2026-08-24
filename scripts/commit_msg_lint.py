@@ -35,7 +35,7 @@ from pathlib import Path
 # wordlist. write-time hook (hook_rust.py) + check-time gate + commit-time all
 # share one source.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rules.comments import CODENAME  # noqa: E402
+from rules.comments import CODENAME, COMPARISON, product_pattern  # noqa: E402
 
 # Acceptance/charter internal tracking codes the shared CODENAME misses:
 # letter+digit phase-gate / journey / hazard ids and dotted version stamps.
@@ -59,16 +59,42 @@ _PHASE_WORDS = re.compile(
 )
 
 
+# Scissors line: git commit -v appends a diff below a separator line.
+# The real line is "# ------------------------ >8 ------------------------"
+# (the commentChar prefix may differ if the user configured one), so match
+# by shape, not by literal. Without stripping, the lint scans the diff
+# itself - and a commit that erases a name from a .rs comment would trip
+# its own removed line.
+_SCISSORS = re.compile(r"^\s*\S?\s*-{4,}\s*>8\s*-{4,}", re.MULTILINE)
+
+
+def _lint_lines(msg: str) -> list[tuple[int, str]]:
+    """Return (original_line_number, text) for lines the lint should scan:
+    everything up to the scissors line, skipping git-template # lines
+    (which carry git's own instructions, not the author's prose). Line
+    numbers are the original file's so error messages point at the right
+    line the reader can find."""
+    m = _SCISSORS.search(msg)
+    if m:
+        msg = msg[: m.start()]
+    out = []
+    for i, line in enumerate(msg.splitlines(), start=1):
+        if line.lstrip().startswith("#"):
+            continue
+        out.append((i, line))
+    return out
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("commit_msg_lint: usage: commit_msg_lint.py <msg_file>", file=sys.stderr)
         return 1
     msg_path = Path(sys.argv[1])
     msg = msg_path.read_text(encoding="utf-8")
-    lines = msg.splitlines()
+    lines = _lint_lines(msg)
     if not lines:
         return 0
-    subject = lines[0]
+    subject = lines[0][1]
 
     # 1. ASCII-only subject (English imperative, per AGENTS.md).
     non_ascii = [c for c in subject if ord(c) > 0x7F]
@@ -82,18 +108,36 @@ def main() -> int:
         return 1
 
     # 2. Internal codenames: task/sprint tags + acceptance/charter codes.
-    for i, line in enumerate(lines):
+    for lineno, line in lines:
         m = (
             CODENAME.search(line)
             or _ACCEPTANCE_CODES.search(line)
             or _PHASE_WORDS.search(line)
         )
         if m:
-            where = "subject" if i == 0 else f"body line {i + 1}"
+            where = "subject" if lineno == 1 else f"body line {lineno}"
             print(
                 f"ERROR: commit message contains internal codename "
                 f"'{m.group(0)}' ({where}). Write the concrete change, not "
                 f"the task/sprint/gate/journey/version ID.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # 3. Comparison framing + product names - the same rules the .rs comment
+    # gate enforces, applied to the commit log: the message describes this
+    # design, not another implementation or product.
+    prod = product_pattern()
+    for lineno, line in lines:
+        m = COMPARISON.search(line)
+        if m is None and prod is not None:
+            m = prod.search(line)
+        if m:
+            where = "subject" if lineno == 1 else f"body line {lineno}"
+            print(
+                f"ERROR: commit message contains '{m.group(0)}' ({where}). "
+                f"Describe this design; do not measure it against another "
+                f"implementation or name other products.",
                 file=sys.stderr,
             )
             return 1
