@@ -771,3 +771,65 @@ fn test_subagent_expanded_renders_child() {
         "expanded with a loaded child renders the child row inline: {out}"
     );
 }
+
+/// Ctrl+O toggles the last Subagent delegation's expand state. The first
+/// call expands (expanded_subagents gains the child_sid); the second
+/// collapses (removed). Pins the toggle wiring so a refactor that drops it
+/// fails here.
+#[test]
+fn test_subagent_toggle_expand() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "child-1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        folded_transcript: Vec::new(),
+    });
+    assert!(app.expanded_subagents.is_empty(), "starts collapsed");
+    assert!(app.toggle_subagent_expand(), "toggle returns true");
+    assert!(
+        app.expanded_subagents.contains("child-1"),
+        "first toggle expands"
+    );
+    assert!(app.toggle_subagent_expand(), "toggle returns true again");
+    assert!(app.expanded_subagents.is_empty(), "second toggle collapses");
+}
+
+/// When no Subagent is present, Ctrl+O falls through to the ThoughtFor
+/// expand path. Pins the fallthrough so a refactor that drops it fails.
+#[test]
+fn test_ctrl_o_fallthrough() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::ThoughtFor {
+        secs: 3,
+        reasoning: Some("pondered the task".into()),
+        tool_summary: None,
+        turn_id: "t1".into(),
+    });
+    assert!(app.expanded_thinking.is_empty());
+    crate::keys::handle_ctrl_o(&mut app);
+    assert!(
+        app.expanded_thinking.contains("t1"),
+        "falls through to ThoughtFor when no Subagent is present"
+    );
+}
+
+/// With no Subagent and no ThoughtFor but an active todo list, Ctrl+O
+/// expands the collapsed checklist. Pins the todo fallthrough path.
+#[test]
+fn test_ctrl_o_todo_expand() {
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.todos_cache.push(crate::todo_view::TodoView {
+        content: "do the thing".into(),
+        status: crate::todo_view::TodoStatus::Pending,
+        active_form: None,
+    });
+    assert!(!app.todo_expanded);
+    crate::keys::handle_ctrl_o(&mut app);
+    assert!(app.todo_expanded, "Ctrl+O expands the todo list");
+}

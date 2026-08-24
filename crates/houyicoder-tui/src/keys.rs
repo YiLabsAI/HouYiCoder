@@ -48,30 +48,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         return;
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('o') {
-        // ThoughtFor expand takes priority: if the anchor row is a
-        // "Thought for Ns (ctrl+o to expand)" line, toggle the inline
-        // reasoning expansion. The cursor IS the target (TUI has no
-        // hover); follow_tail keeps the cursor on the latest, so Ctrl+O
-        // targets the most recent fold by default.
-        if app.toggle_thinking_expand() {
-            return;
-        }
-        // Fold toggle: if the anchor row is a fold summary or collapse hint,
-        // toggle that fold group. With an active checklist and no fold at the
-        // cursor, Ctrl+O expands the collapsed checklist inline; otherwise
-        // per-result body expand/collapse.
-        let has_fold_key = app
-            .anchor_visible_row()
-            .and_then(|ri| app.last_row_fold_keys.borrow().get(ri).cloned().flatten())
-            .is_some();
-        let has_active_todo = !app.todos_cache.is_empty();
-        if has_fold_key {
-            app.toggle_focused_fold_expand();
-        } else if has_active_todo {
-            app.todo_expanded = !app.todo_expanded;
-        } else {
-            app.toggle_focused_result_expand();
-        }
+        handle_ctrl_o(app);
         return;
     }
     // Ctrl+G toggles the queue overlay (per-item edit/del/recall), replacing
@@ -174,6 +151,27 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
 
 /// Focus mode keys: input is hidden, so only per-pane action keys (a/r/i),
 /// Up/Down, PgUp to scroll, and Esc to fold to Working are accepted.
+pub(crate) fn handle_ctrl_o(app: &mut App) {
+    if app.toggle_subagent_expand() {
+        return;
+    }
+    if app.toggle_thinking_expand() {
+        return;
+    }
+    let has_fold_key = app
+        .anchor_visible_row()
+        .and_then(|ri| app.last_row_fold_keys.borrow().get(ri).cloned().flatten())
+        .is_some();
+    let has_active_todo = !app.todos_cache.is_empty();
+    if has_fold_key {
+        app.toggle_focused_fold_expand();
+    } else if has_active_todo {
+        app.todo_expanded = !app.todo_expanded;
+    } else {
+        app.toggle_focused_result_expand();
+    }
+}
+
 fn handle_focus(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Esc => app.fold_to_working(),

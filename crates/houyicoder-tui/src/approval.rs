@@ -94,6 +94,25 @@ impl App {
         }
     }
 
+    /// Toggle the LAST Subagent delegation's inline expansion (Ctrl+O).
+    /// Targets the most recent delegation (near the tail — unique in Phase 1
+    /// where a sync spawn produces one Subagent line). Returns true when a
+    /// Subagent was toggled. Cursor-based targeting (for multiple
+    /// delegations) is a refinement.
+    pub(crate) fn toggle_subagent_expand(&mut self) -> bool {
+        use crate::records::TranscriptLine;
+        for line in self.transcript.iter().rev() {
+            if let TranscriptLine::Subagent { child_sid, .. } = line {
+                if !self.expanded_subagents.remove(child_sid) {
+                    self.expanded_subagents.insert(child_sid.clone());
+                }
+                self.transcript_scroll.follow_tail = false;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Toggle the LAST ThoughtFor line's inline reasoning expansion (Ctrl+O).
     /// Targets the most recent "Thought for Ns" line (near the tail) — no
     /// ambiguity for keyboard users (the latest is unique). For older
