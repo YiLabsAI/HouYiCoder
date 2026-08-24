@@ -95,11 +95,11 @@ impl App {
     }
 
     /// Toggle the LAST Subagent delegation's inline expansion (Ctrl+O).
-    /// Targets the most recent delegation, unique in Phase 1 where a sync
-    /// spawn produces one Subagent line. Returns true when a Subagent was
-    /// toggled. On first expand of a line whose child rows are not yet loaded,
-    /// fires a one-shot fetch; a re-expand reuses the cached rows. Cursor-based
-    /// targeting for multiple delegations is a refinement.
+    /// Targets the most recent delegation; a sync spawn produces one
+    /// Subagent line, so the latest is unique. Returns true when a Subagent
+    /// was toggled. On first expand of a line whose child rows are not yet
+    /// loaded, fires a one-shot fetch; a re-expand reuses the cached rows.
+    /// Cursor-based targeting for multiple delegations is a refinement.
     pub(crate) fn toggle_subagent_expand(&mut self) -> bool {
         use crate::records::TranscriptLine;
         // Capture the target + whether its child rows are loaded before
