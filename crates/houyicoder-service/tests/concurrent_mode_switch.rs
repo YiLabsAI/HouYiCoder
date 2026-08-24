@@ -357,14 +357,13 @@ async fn test_cycle_during_resume() {
     notify.notify_one();
 }
 
-/// Negative invariant: a NON-mode control request sent during a run is
-/// silently dropped (never replied). The serve select!'s control branch
-/// (handle_mode_cycle_during_run) handles ONLY PermissionCycleMode; any
-/// other request read during the run returns None + the frame is consumed
-/// (not re-queued), so the client never gets a reply for it. Pins the
-/// "no silent failure" contract so a future change to the select! branch
-/// that accidentally replies (or drops the request without consuming it)
-/// is caught. Replaces the dropped inline test_mid_run_ignores_other.
+/// A request that mutates state, sent during a run, is silently dropped.
+/// The mid-run handler serves only read-safe verbs — PermissionCycleMode
+/// and ChildTranscript — because they do not race the parent run. A
+/// mutating verb like PermissionRules hits the drop arm; the frame is
+/// consumed without a reply so the client must resend it after the run.
+/// Pins the drop arm so a future change that accidentally serves a
+/// mutating verb mid-run is caught.
 #[tokio::test]
 async fn test_non_mode_request_dropped() {
     let notify = Arc::new(tokio::sync::Notify::new());
@@ -417,7 +416,8 @@ async fn test_non_mode_request_dropped() {
     assert_eq!(
         rules_replies, 0,
         "the PermissionRules request sent during the run must be dropped \
-         (handle_mode_cycle_during_run handles only PermissionCycleMode mid-run)"
+         (handle_request_during_run serves only PermissionCycleMode + \
+         ChildTranscript mid-run, not PermissionRules)"
     );
 }
 

@@ -26,6 +26,32 @@ fn stub_runner() -> std::sync::Arc<houyicoder_core::agent::Runner> {
     ))
 }
 
+/// A runner whose provider delays before its first event, so a parent run
+/// stays in-flight long enough for the test to send a mid-run frame and the
+/// serve loop's mid-run select to handle it.
+fn delayed_runner(delay_ms: u64) -> std::sync::Arc<houyicoder_core::agent::Runner> {
+    let store = Arc::new(SessionStore::new(Box::new(
+        houyicoder_memory::InMemoryBackend::new(),
+    )));
+    let resp = houyicoder_protocol::llm::CompletionResponse {
+        output: vec![houyicoder_protocol::llm::OutputItem::Text { text: "ok".into() }],
+        usage: houyicoder_protocol::llm::Usage::default(),
+        model: "test".into(),
+    };
+    Arc::new(houyicoder_core::agent::Runner::with_shared_store(
+        store,
+        Arc::new(houyicoder_provider::FakeProvider::new_with_delay(
+            vec![resp],
+            delay_ms,
+        )),
+        houyicoder_core::agent::ToolRegistry::new(),
+        houyicoder_core::agent::runner_config::RunnerConfig {
+            model: "test".into(),
+            ..houyicoder_core::agent::runner_config::RunnerConfig::default()
+        },
+    ))
+}
+
 /// A Trajectory request drives the dispatch handler (project_trajectory +
 /// project_redundant + TrajectoryResponse build). No run, so entries +
 /// redundant are empty, but the handler path executes.
@@ -144,5 +170,224 @@ async fn test_child_transcript_projects_log() {
     assert!(
         resp.contains("auth is in src/auth"),
         "child assistant text projected into the response: {resp}"
+    );
+}
+
+/// A ChildTranscript request received MID-RUN must be handled, not dropped.
+/// The mid-run select arm routes requests to handle_request_during_run; the
+/// ChildTranscript payload is a read-only store query so it does not race the
+/// parent run. This pins the fix against the prior drop in the mid-run arm,
+/// which left the TUI stuck on the placeholder until the run ended.
+#[tokio::test]
+async fn test_child_transcript_during_run() {
+    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    let runner = stub_runner();
+    let child = SessionId::new();
+    for (ts, kind) in [
+        (
+            0,
+            TurnEventKind::UserInput {
+                text: "find auth".into(),
+            },
+        ),
+        (
+            1,
+            TurnEventKind::AssistantMessage {
+                text: "auth is in src/auth".into(),
+                thinking: None,
+            },
+        ),
+    ] {
+        runner
+            .store()
+            .append(TurnEvent {
+                id: EventId::new(),
+                session: child,
+                ts,
+                prev_hash: None,
+                kind,
+            })
+            .await
+            .unwrap();
+    }
+    let session = SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (_client_tx, server_rx) = mpsc::channel::<String>(256);
+    let mut io = ServerIo::new(server_tx, server_rx);
+    let server = Server::new(
+        runner,
+        session,
+        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+    );
+    // Call the mid-run handler directly (the serve loop routes mid-run
+    // requests here); no run is in flight, but the handler is the unit under
+    // test — it must replay the child log, project, and respond.
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(
+                RequestId(3),
+                FrontendRequest::ChildTranscript {
+                    child_sid: houyicoder_protocol::frontend::SessionId(child.to_string()),
+                },
+            ),
+        )
+        .await;
+    let resp = client_rx.next().await.unwrap();
+    assert!(
+        resp.contains("child_transcript"),
+        "mid-run handler responded: {resp}"
+    );
+    assert!(
+        resp.contains("find auth"),
+        "mid-run child transcript projects the child log: {resp}"
+    );
+}
+
+/// A PermissionCycleMode request received mid-run cycles the gate + ships a
+/// PermissionMode response. Pins the other arm of handle_request_during_run,
+/// the one the existing integration test exercises through the serve loop but
+/// the lib coverage gate does not see.
+#[tokio::test]
+async fn test_permission_cycle_during_run() {
+    let runner = stub_runner();
+    let session = houyicoder_context::SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (_client_tx, server_rx) = mpsc::channel::<String>(256);
+    let mut io = ServerIo::new(server_tx, server_rx);
+    let server = Server::new(
+        runner,
+        session,
+        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+    );
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(RequestId(4), FrontendRequest::PermissionCycleMode),
+        )
+        .await;
+    let resp = client_rx.next().await.unwrap();
+    assert!(
+        resp.contains("permission_mode"),
+        "mid-run mode cycle responds with the new mode: {resp}"
+    );
+}
+
+/// A ChildTranscript request sent WHILE a parent turn is running reaches the
+/// serve loop's mid-run select, which routes it to handle_request_during_run
+/// and responds — the fix for the prior drop that left the TUI stuck on the
+/// placeholder until the run ended. A delayed provider keeps the run
+/// in-flight so the mid-run arm fires; the child log is seeded so the
+/// response carries the projected transcript.
+#[tokio::test]
+async fn test_child_fetch_during_run() {
+    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_protocol::frontend::run::ContentBlock;
+    let runner = delayed_runner(800);
+    let child = SessionId::new();
+    runner
+        .store()
+        .append(TurnEvent {
+            id: EventId::new(),
+            session: child,
+            ts: 0,
+            prev_hash: None,
+            kind: TurnEventKind::UserInput {
+                text: "find auth".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let session = SessionId::new();
+    let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (client_tx, server_rx) = mpsc::channel::<String>(256);
+    let io = ServerIo::new(server_tx, server_rx);
+    let server = Server::new(
+        runner,
+        session,
+        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+    );
+    let handle = tokio::spawn(async move { server.serve(io).await });
+    let mut tx = client_tx.clone();
+    let mut f = encode(&Hello::local()).unwrap();
+    if !f.ends_with('\n') {
+        f.push('\n');
+    }
+    tx.try_send(f).unwrap();
+    drop(client_rx.next().await.unwrap()); // hello ack
+    // Start the run (provider delays 800ms, so the run is in-flight).
+    let run_req = encode(&ClientFrame::Request(RequestEnvelope::new(
+        RequestId(5),
+        FrontendRequest::MessageSend {
+            session_id: wire_session,
+            content: vec![ContentBlock::Text { text: "go".into() }],
+        },
+    )))
+    .unwrap();
+    let mut run_req = run_req;
+    if !run_req.ends_with('\n') {
+        run_req.push('\n');
+    }
+    tx.try_send(run_req).unwrap();
+    // While the run is in-flight, send the child-transcript fetch.
+    let fetch_req = encode(&ClientFrame::Request(RequestEnvelope::new(
+        RequestId(6),
+        FrontendRequest::ChildTranscript {
+            child_sid: houyicoder_protocol::frontend::SessionId(child.to_string()),
+        },
+    )))
+    .unwrap();
+    let mut fetch_req = fetch_req;
+    if !fetch_req.ends_with('\n') {
+        fetch_req.push('\n');
+    }
+    tx.try_send(fetch_req).unwrap();
+    // The mid-run select handles the fetch; the response arrives before the
+    // run completes (the 800ms delay is still ongoing). Drain frames until we
+    // see the child_transcript response (run frames may interleave).
+    let mut saw = false;
+    for _ in 0..200 {
+        let frame = match client_rx.next().await {
+            Some(f) => f,
+            None => break,
+        };
+        if frame.contains("child_transcript") && frame.contains("find auth") {
+            saw = true;
+            break;
+        }
+    }
+    handle.abort();
+    assert!(
+        saw,
+        "the mid-run fetch must be handled while the parent run is in-flight, \
+         not dropped"
+    );
+}
+
+/// A request payload the mid-run handler does not serve hits the drop arm
+/// and sends no reply. Pins the drop arm so a refactor that accidentally
+/// serves a mutating verb mid-run reds here.
+#[tokio::test]
+async fn test_unserved_request_dropped() {
+    let runner = stub_runner();
+    let session = houyicoder_context::SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (_client_tx, server_rx) = mpsc::channel::<String>(256);
+    let mut io = ServerIo::new(server_tx, server_rx);
+    let server = Server::new(
+        runner,
+        session,
+        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+    );
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(RequestId(7), FrontendRequest::Context),
+        )
+        .await;
+    assert!(
+        client_rx.try_recv().is_err(),
+        "dropped mid-run verb sends no reply"
     );
 }

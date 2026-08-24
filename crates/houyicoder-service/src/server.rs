@@ -498,8 +498,9 @@ impl Server {
                             // so the next tool call sees the new mode. The
                             // gate is Mutex-protected; the drive loop reads it
                             // at decide() time, so the switch is immediate.
+                            // Child transcript fetch is read-only, safe mid-run.
                             else if let Ok(ClientFrame::Request(req)) = serde_json::from_str::<ClientFrame>(&f) {
-                                Self::handle_mode_cycle_during_run(&self.gate, io, req).await;
+                                self.handle_request_during_run(io, req).await;
                             }
                         }
                         None => {
@@ -610,9 +611,10 @@ impl Server {
                                                 self.handle_session_notification(&notif);
                                             }
                                             // Permission mode change mid-resume:
-                                            // same semantics as mid-run.
+                                            // same semantics as mid-run; child
+                                            // transcript fetch also safe.
                                             else if let Ok(ClientFrame::Request(req)) = serde_json::from_str::<ClientFrame>(&f) {
-                                                Self::handle_mode_cycle_during_run(&self.gate, io, req).await;
+                                                self.handle_request_during_run(io, req).await;
                                             }
                                         }
                                         None => {

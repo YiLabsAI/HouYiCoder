@@ -1,10 +1,8 @@
 //! Mid-run + between-run session-notification helpers. Split from server.rs
 //! so that file stays under the file-size gate. Both are Server methods the
 //! serve loop + the resume select call on receiving a session/* JSON-RPC
-//! notification mid-run, plus the permission-mode cycle request that rides
-//! the same mid-run select arm.
-
-use std::sync::Arc;
+//! notification mid-run, plus the mid-run request handler that the same
+//! select arm routes through.
 
 use houyicoder_protocol::envelope::{
     RequestEnvelope, ResponseEnvelope, ResponsePayload, ServerFrame,
@@ -15,30 +13,44 @@ use houyicoder_protocol::frontend::FrontendRequest;
 use super::{Server, io::ServerIo};
 
 impl Server {
-    /// Handle a permission-mode-cycle request received mid-run (Shift+Tab).
-    /// The gate is Mutex-protected; the drive loop reads it at decide() time,
-    /// so the switch is immediate for the next tool call. Replies with the new
-    /// mode so the frontend's /mode view stays in sync without a separate
-    /// poll. Other request payloads are dropped (no other mid-run verb today).
-    pub(super) async fn handle_mode_cycle_during_run(
-        gate: &Arc<dyn houyicoder_permission::ModeGate>,
-        io: &mut ServerIo,
-        req: RequestEnvelope,
-    ) {
-        let payload = match req.payload {
-            FrontendRequest::PermissionCycleMode => match gate.tab_cycle() {
-                Ok(mode) => Some(ResponsePayload::PermissionMode(
-                    crate::projection::project_permission_mode(mode),
-                )),
-                Err(_) => None,
-            },
-            _ => None,
-        };
-        if let Some(payload) = payload {
-            let frame = ServerFrame::Response(ResponseEnvelope::new(req.req_id, payload));
-            if let Ok(encoded) = encode(&frame) {
-                drop(io.send_frame(encoded).await);
+    /// Handle a request received mid-run. Two payloads are safe to process
+    /// while a turn is in flight: the permission-mode cycle (Shift+Tab)
+    /// updates the Mutex-protected gate the drive loop reads at decide() time,
+    /// so the switch lands before the next tool call; the child transcript
+    /// fetch is a read-only store query (replay + project, no side effects)
+    /// so it does not race the parent run. Other payloads are dropped (no
+    /// other mid-run verb today); they ride this arm because a mid-run client
+    /// frame parses as a Request but most verbs mutate state and must wait.
+    pub(super) async fn handle_request_during_run(&self, io: &mut ServerIo, req: RequestEnvelope) {
+        let req_id = req.req_id;
+        match req.payload {
+            FrontendRequest::PermissionCycleMode => {
+                let Ok(mode) = self.gate.tab_cycle() else {
+                    return;
+                };
+                let frame = ServerFrame::Response(ResponseEnvelope::new(
+                    req_id,
+                    ResponsePayload::PermissionMode(crate::projection::project_permission_mode(
+                        mode,
+                    )),
+                ));
+                drop(
+                    io.send_frame(encode(&frame).expect("encode mode frame"))
+                        .await,
+                );
             }
+            FrontendRequest::ChildTranscript { child_sid } => {
+                let frames = self.child_transcript_frames(&child_sid).await;
+                let frame = ServerFrame::Response(ResponseEnvelope::new(
+                    req_id,
+                    ResponsePayload::ChildTranscript { child_sid, frames },
+                ));
+                drop(
+                    io.send_frame(encode(&frame).expect("encode child frame"))
+                        .await,
+                );
+            }
+            _ => {}
         }
     }
 
