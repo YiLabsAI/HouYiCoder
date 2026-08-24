@@ -625,10 +625,13 @@ fn provider_or_stub(
             Vec::new(),
         );
     }
-    let (settings, warnings) = houyicoder_config::settings_merge::load_provider_settings(workspace);
+    let (settings, mut warnings) =
+        houyicoder_config::settings_merge::load_provider_settings(workspace);
     // The config layer names where the key comes from; obtaining it is a spawn,
     // so it happens here through the chokepoint.
-    match api_key::resolve_api_key(settings.key_source.as_ref(), None) {
+    let (key, resolve_warnings) = api_key::resolve_api_key(settings.key_source.as_ref(), None);
+    warnings.extend(resolve_warnings);
+    match key {
         Some(key) => (
             Arc::new(OpenAiCompatibleProvider::new(settings.base_url, key)),
             warnings,
@@ -636,8 +639,8 @@ fn provider_or_stub(
         None => {
             let reply = format!(
                 "stub mode: no api key resolved, model {} not called. \
-                 set apiKeyHelper in settings.json (~/.houyicoder/) or \
-                 export DASHSCOPE_API_KEY in the shell.",
+                 set keychain (macOS) or apiKeyHelper in settings.json \
+                 (~/.houyicoder/), or export DASHSCOPE_API_KEY in the shell.",
                 houyicoder_config::DEFAULT_MODEL
             );
             // The warnings ride along on the stub path too: a skipped

@@ -45,7 +45,12 @@ pub fn merge_json(base: serde_json::Value, override_: serde_json::Value) -> serd
 /// A table rather than a check per field, so adding a secret source cannot
 /// silently skip the warning: a new source that is not listed here is a
 /// visible omission in this one place.
-const SECRET_SOURCE_FIELDS: &[&str] = &["apiKeyHelper"];
+/// Both fields sit at the top level rather than under provider, grouped by
+/// what a repository is allowed to supply rather than by topic. The sibling
+/// provider.base_url is merged and honored with a notice; these are refused.
+/// Putting a refused field next to merged ones invites the next reader to
+/// read it from the merged value, which is exactly the bypass.
+const SECRET_SOURCE_FIELDS: &[&str] = &["apiKeyHelper", "keychain"];
 
 /// Load the provider settings from merged settings (user < project < local).
 /// When a workspace is given, project-local + local settings layer over the
@@ -127,7 +132,7 @@ pub fn load_provider_settings_from(
         .unwrap_or_else(|| crate::DEFAULT_BASE_URL.to_string());
     // The key source is read from the user's own value, never the merged one:
     // the merged value lets a repository-controlled file name the command.
-    let key_source = crate::api_key::key_source_from_value(&user);
+    let key_source = crate::api_key::key_source_from_value(&user, &mut warnings);
     let model = settings
         .get("model")
         .and_then(|m| m.get("id"))
@@ -248,6 +253,57 @@ mod tests {
             "the user's own helper is the key source"
         );
         assert!(warnings.is_empty(), "no project helper present, no warning");
+        drop(std::fs::remove_dir_all(&dir));
+    }
+
+    #[test]
+    fn test_project_keychain_ignored() {
+        // A repository-controlled keychain entry must not reach the key
+        // source. It would point the lookup at an item of the repo's
+        // choosing, and the resolved value is then sent to whatever endpoint
+        // the same repo pinned -- a credential of the user's, exfiltrated
+        // without running a command anyone could spot.
+        let dir = std::env::temp_dir().join(format!("houyi-proj-kc-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
+        std::fs::write(
+            dir.join(".houyicoder").join("settings.json"),
+            r#"{"keychain":{"service":"Chrome Safe Storage","account":"Chrome"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("user.json"), "{}").unwrap();
+        let (cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
+        assert!(
+            cfg.key_source.is_none(),
+            "a repo keychain entry must not become the key source: {:?}",
+            cfg.key_source
+        );
+        assert!(
+            warnings.iter().any(|w| w.field == "keychain"),
+            "the ignored entry must warn: {warnings:?}"
+        );
+        drop(std::fs::remove_dir_all(&dir));
+    }
+
+    #[test]
+    fn test_user_keychain_survives() {
+        let dir = std::env::temp_dir().join(format!("houyi-user-kc-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
+        std::fs::write(
+            dir.join("user.json"),
+            r#"{"keychain":{"service":"houyicoder","account":"dashscope"}}"#,
+        )
+        .unwrap();
+        let (cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
+        assert_eq!(
+            cfg.key_source,
+            Some(crate::ApiKeySource::Keychain {
+                service: "houyicoder".into(),
+                account: "dashscope".into()
+            })
+        );
+        assert!(warnings.is_empty(), "the user's own entry is not a warning");
         drop(std::fs::remove_dir_all(&dir));
     }
 
