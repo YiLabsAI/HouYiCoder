@@ -900,3 +900,247 @@ fn test_subagent_row_count() {
     app.expanded_subagents.insert("c2".into());
     assert_eq!(app.line_display_rows(&empty_sub), 2);
 }
+
+/// A ChildTranscriptResult reply populates the matching Subagent line's
+/// folded_transcript through the same projection as the parent flow
+/// (isomorphism: the child renders as TranscriptLines, not an opaque blob).
+/// Pins the fill arm + the transcript_from_frames projection so a refactor
+/// that drops the in-place swap or the projection fails here.
+#[test]
+fn test_child_transcript_fills_folded() {
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::frontend::run::ContentBlock;
+    use houyicoder_protocol::frontend::session_update::ContentChunk;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        folded_transcript: Vec::new(),
+    });
+    let frames = vec![
+        TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
+            ContentBlock::Text {
+                text: "find auth".into(),
+            },
+        ))),
+        TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            ContentBlock::Text {
+                text: "auth is in src/auth".into(),
+            },
+        ))),
+    ];
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c1".into(),
+        frames,
+    });
+    match &app.transcript[0] {
+        TranscriptLine::Subagent {
+            folded_transcript, ..
+        } => {
+            assert_eq!(
+                folded_transcript.len(),
+                2,
+                "child frames projected to 2 lines"
+            );
+            assert!(matches!(folded_transcript[0], TranscriptLine::User(_)));
+            assert!(matches!(folded_transcript[1], TranscriptLine::Agent(_)));
+        }
+        other => panic!("subagent line preserved, got {other:?}"),
+    }
+}
+
+/// An empty frame list (child log missing/unreadable, or the child produced
+/// no durable events) surfaces an explicit unavailable line rather than
+/// re-showing the placeholder, so a re-expand does not refetch forever.
+/// Pins the empty-case guard.
+#[test]
+fn test_child_transcript_empty_unavailable() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        folded_transcript: Vec::new(),
+    });
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c1".into(),
+        frames: Vec::new(),
+    });
+    match &app.transcript[0] {
+        TranscriptLine::Subagent {
+            folded_transcript, ..
+        } => {
+            assert_eq!(folded_transcript.len(), 1, "empty -> one unavailable line");
+            assert!(
+                matches!(&folded_transcript[0], TranscriptLine::System(s) if s.contains("unavailable")),
+                "unavailable line surfaces, got {:?}",
+                folded_transcript[0]
+            );
+        }
+        other => panic!("subagent line preserved, got {other:?}"),
+    }
+}
+
+/// The in-place swap preserves the Subagent line's position when trailing
+/// lines exist (remove + insert at the same index, not push to tail). Pins
+/// position stability so an expanded fold does not yank trailing content.
+#[test]
+fn test_child_transcript_preserves_position() {
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::frontend::run::ContentBlock;
+    use houyicoder_protocol::frontend::session_update::ContentChunk;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Agent("before".into()));
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        folded_transcript: Vec::new(),
+    });
+    app.transcript.push(TranscriptLine::Agent("after".into()));
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c1".into(),
+        frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text {
+                text: "child reply".into(),
+            }),
+        ))],
+    });
+    assert!(
+        matches!(app.transcript[0], TranscriptLine::Agent(_)),
+        "before stays at 0"
+    );
+    assert!(
+        matches!(app.transcript[1], TranscriptLine::Subagent { .. }),
+        "subagent stays at 1"
+    );
+    assert!(
+        matches!(app.transcript[2], TranscriptLine::Agent(_)),
+        "after stays at 2"
+    );
+}
+
+/// Collapse does not clear an already-loaded folded_transcript, so a
+/// re-expand reuses the cached rows without refetching. Pins the retain
+/// semantics (the fetch is first-expand-only).
+#[test]
+fn test_subagent_collapse_keeps_folded() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+    });
+    // Expand, then collapse: the child rows survive the collapse.
+    app.toggle_subagent_expand();
+    assert!(app.expanded_subagents.contains("c1"));
+    app.toggle_subagent_expand();
+    assert!(!app.expanded_subagents.contains("c1"), "collapsed");
+    match &app.transcript[0] {
+        TranscriptLine::Subagent {
+            folded_transcript, ..
+        } => {
+            assert_eq!(folded_transcript.len(), 1, "collapse kept the child rows");
+            assert!(matches!(folded_transcript[0], TranscriptLine::Agent(_)));
+        }
+        other => panic!("subagent line preserved, got {other:?}"),
+    }
+}
+
+/// A fetched wire child frame converts to the live-frame shape the
+/// transcript projection consumes, so child rows render through the same
+/// pipeline as the parent flow. Pins the From impl at the driver boundary.
+#[test]
+fn test_child_frame_converts() {
+    use houyicoder_protocol::envelope::ChildTranscriptFrame;
+    use houyicoder_protocol::frontend::run::ContentBlock;
+    use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
+    let wire = ChildTranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+        ContentBlock::Text {
+            text: "child reply".into(),
+        },
+    )));
+    let frame: TranscriptFrame = wire.into();
+    assert!(
+        matches!(
+            frame,
+            TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(_))
+        ),
+        "session frame converts: {frame:?}"
+    );
+    let wire_acpx = ChildTranscriptFrame::Acpx(houyicoder_protocol::acpx::AcpxNotification::new(
+        houyicoder_protocol::acpx::AcpxMethod::ToolProgress,
+        serde_json::Value::Null,
+    ));
+    let acpx: TranscriptFrame = wire_acpx.into();
+    assert!(
+        matches!(acpx, TranscriptFrame::Acpx(_)),
+        "acpx frame converts: {acpx:?}"
+    );
+}
+
+/// A parent transcript rebuild must not wipe the fetched child rows from a
+/// Subagent line. The line is frame-derived, so a rebuild re-projects it
+/// empty; the merge carries the old folded_transcript over when the
+/// child_sid matches. Pins the retain semantics the rebuild otherwise
+/// violates.
+#[test]
+fn test_subagent_folded_survives_rebuild() {
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::frontend::run::ContentBlock;
+    use houyicoder_protocol::frontend::session_update::ContentChunk;
+    let call = TranscriptFrame::Session(SessionUpdate::ToolCall(
+        ToolCall::new("ag1", "agent")
+            .status(ToolCallStatus::Completed)
+            .raw_input(serde_json::json!({"subagent_type": "explore"})),
+    ));
+    let result = TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        "ag1",
+        ToolCallUpdateFields::new()
+            .raw_output(serde_json::json!({"agentId": "c1", "content": "found auth"})),
+    )));
+    let mut app = crate::composition::app();
+    app.handle_agent_message(AgentMessage::Frame(call));
+    app.handle_agent_message(AgentMessage::Frame(result));
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::Subagent { .. })),
+        "subagent line projected from the agent-tool result"
+    );
+    // Fill folded_transcript (the on-expand fetch landing).
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c1".into(),
+        frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text {
+                text: "child reply".into(),
+            }),
+        ))],
+    });
+    // A parent rebuild re-projects frames; the fetched child rows survive.
+    app.rebuild_transcript();
+    match app
+        .transcript
+        .iter()
+        .find(|l| matches!(l, TranscriptLine::Subagent { .. }))
+    {
+        Some(TranscriptLine::Subagent {
+            child_sid,
+            folded_transcript,
+            ..
+        }) => {
+            assert_eq!(child_sid, "c1");
+            assert_eq!(
+                folded_transcript.len(),
+                1,
+                "fetched child rows survived the rebuild"
+            );
+            assert!(matches!(folded_transcript[0], TranscriptLine::Agent(_)));
+        }
+        other => panic!("subagent line survived, got {other:?}"),
+    }
+}

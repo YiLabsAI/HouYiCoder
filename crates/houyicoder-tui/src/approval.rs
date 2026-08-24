@@ -95,22 +95,47 @@ impl App {
     }
 
     /// Toggle the LAST Subagent delegation's inline expansion (Ctrl+O).
-    /// Targets the most recent delegation (near the tail — unique in Phase 1
-    /// where a sync spawn produces one Subagent line). Returns true when a
-    /// Subagent was toggled. Cursor-based targeting (for multiple
-    /// delegations) is a refinement.
+    /// Targets the most recent delegation, unique in Phase 1 where a sync
+    /// spawn produces one Subagent line. Returns true when a Subagent was
+    /// toggled. On first expand of a line whose child rows are not yet loaded,
+    /// fires a one-shot fetch; a re-expand reuses the cached rows. Cursor-based
+    /// targeting for multiple delegations is a refinement.
     pub(crate) fn toggle_subagent_expand(&mut self) -> bool {
         use crate::records::TranscriptLine;
-        for line in self.transcript.iter().rev() {
-            if let TranscriptLine::Subagent { child_sid, .. } = line {
-                if !self.expanded_subagents.remove(child_sid) {
-                    self.expanded_subagents.insert(child_sid.clone());
-                }
-                self.transcript_scroll.follow_tail = false;
-                return true;
-            }
+        // Capture the target + whether its child rows are loaded before
+        // mutating, so the fetch decision reads the pre-toggle state.
+        let Some((child_sid, needs_fetch)) =
+            self.transcript.iter().rev().find_map(|line| match line {
+                TranscriptLine::Subagent {
+                    child_sid,
+                    folded_transcript,
+                    ..
+                } => Some((child_sid.clone(), folded_transcript.is_empty())),
+                _ => None,
+            })
+        else {
+            return false;
+        };
+        let expanding = !self.expanded_subagents.contains(&child_sid);
+        if expanding {
+            self.expanded_subagents.insert(child_sid.clone());
+        } else {
+            self.expanded_subagents.remove(&child_sid);
         }
-        false
+        self.transcript_scroll.follow_tail = false;
+        // First expand of an unloaded line fires the fetch. The placeholder
+        // renders until the snapshot returns; with no backend wired the
+        // placeholder stays, matching the other on-demand queries.
+        if expanding
+            && needs_fetch
+            && let Some(req_id) = self.mint_request_id()
+        {
+            self.send_cmd(crate::run_control::ClientCommand::ChildTranscriptQuery {
+                req_id,
+                child_sid: houyicoder_protocol::frontend::SessionId(child_sid),
+            });
+        }
+        true
     }
 
     /// Toggle the LAST ThoughtFor line's inline reasoning expansion (Ctrl+O).

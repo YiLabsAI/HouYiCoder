@@ -239,6 +239,12 @@ async fn drive_client(
                         payload: FrontendRequest::Agents,
                     });
                 }
+                Some(ClientCommand::ChildTranscriptQuery { req_id, child_sid }) => {
+                    outbound.push_back(Outbound::Request {
+                        req_id,
+                        payload: FrontendRequest::ChildTranscript { child_sid },
+                    });
+                }
                 Some(ClientCommand::HooksQuery { req_id }) => {
                     outbound.push_back(Outbound::Request {
                         req_id,
@@ -538,6 +544,17 @@ async fn drive_client(
                     }
                     ResponsePayload::Agents(directory) => {
                         let _send = agent_tx.send(AgentMessage::AgentsResult { directory });
+                    }
+                    ResponsePayload::ChildTranscript { child_sid, frames } => {
+                        // Convert the wire frames to the live-frame shape once,
+                        // at the driver boundary. The fill site then runs
+                        // transcript_from_frames unchanged.
+                        let frames: Vec<crate::transcript::TranscriptFrame> =
+                            frames.into_iter().map(Into::into).collect();
+                        let _send = agent_tx.send(AgentMessage::ChildTranscriptResult {
+                            child_sid: child_sid.0,
+                            frames,
+                        });
                     }
                     ResponsePayload::Hooks(hooks) => {
                         let _send = agent_tx.send(AgentMessage::HooksResult { hooks });

@@ -40,6 +40,34 @@ impl Server {
         Ok(())
     }
 
+    /// Project a fetched child session's turn events to the same session/update
+    /// and acpx frame stream the parent accumulates. The TUI projects the
+    /// result through the same pipeline as its own. Mirrors push_turn_event's
+    /// dual projection. A sync child is terminal at expand time, so this is a
+    /// one-shot snapshot; a missing or unreadable child log returns an empty
+    /// list the TUI surfaces as an unavailable line.
+    pub(super) async fn child_transcript_frames(
+        &self,
+        child_sid: &houyicoder_protocol::frontend::SessionId,
+    ) -> Vec<houyicoder_protocol::envelope::ChildTranscriptFrame> {
+        let Some(sid) = houyicoder_context::SessionId::from_display_string(&child_sid.0) else {
+            return Vec::new();
+        };
+        let events = self.runner.store().replay(sid).await.unwrap_or_default();
+        let mut frames = Vec::with_capacity(events.len());
+        for ev in &events {
+            if let Some(update) = project_session_update(&ev.kind) {
+                frames.push(houyicoder_protocol::envelope::ChildTranscriptFrame::Session(update));
+            }
+            if let Some(notification) = project_acpx_context(&ev.kind) {
+                frames.push(houyicoder_protocol::envelope::ChildTranscriptFrame::Acpx(
+                    notification,
+                ));
+            }
+        }
+        frames
+    }
+
     /// Drain durable events appended since the last push: snapshot the
     /// trajectory, skip the already-pushed prefix, push each new event,
     /// advance the cursor. Shared by the post-resolve outer loop, the

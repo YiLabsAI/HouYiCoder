@@ -131,6 +131,15 @@ pub enum AgentMessage {
     },
     /// The formatted agent directory string the /agents command requested.
     AgentsResult { directory: String },
+    /// The on-demand child transcript for an expanded Subagent fold-group.
+    /// Frames arrive already converted to TranscriptFrame, so the fill site
+    /// runs transcript_from_frames to populate the child rows through the same
+    /// projection as the parent flow. child_sid keys the Subagent line to
+    /// update in place.
+    ChildTranscriptResult {
+        child_sid: String,
+        frames: Vec<TranscriptFrame>,
+    },
     /// The registered hooks the /hooks command requested (read-only visibility).
     HooksResult {
         hooks: Vec<houyicoder_protocol::frontend::hooks::HookEntry>,
@@ -219,6 +228,15 @@ pub enum ClientCommand {
     /// Request the agent directory (registered sub-agent types) for /agents.
     AgentsQuery {
         req_id: RequestId,
+    },
+    /// Fetch a child agent's transcript on demand, fired on first expand of a
+    /// Subagent fold-group with no child rows yet. A re-expand reuses the
+    /// cached rows. The server replays the child session log, projects each
+    /// turn event through the same session/update + acpx projection the live
+    /// push path uses, and returns a one-shot snapshot as ChildTranscriptResult.
+    ChildTranscriptQuery {
+        req_id: RequestId,
+        child_sid: WireSessionId,
     },
     /// Request the registered hooks list over the wire (the /hooks command).
     /// Read-only visibility: which hook events are wired, their name + source.

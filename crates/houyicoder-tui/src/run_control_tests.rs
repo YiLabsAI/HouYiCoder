@@ -864,6 +864,10 @@ mod context_command_tests;
 mod approval_flow_tests;
 
 #[cfg(test)]
+#[path = "subagent_fetch_tests.rs"]
+mod subagent_fetch_tests;
+
+#[cfg(test)]
 #[path = "cursor_priority_tests.rs"]
 mod cursor_priority_tests;
 

@@ -166,6 +166,15 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::Agents(dir))
                     .await
             }
+            houyicoder_protocol::frontend::FrontendRequest::ChildTranscript { child_sid } => {
+                let frames = self.child_transcript_frames(&child_sid).await;
+                self.send_response(
+                    io,
+                    req_id,
+                    ResponsePayload::ChildTranscript { child_sid, frames },
+                )
+                .await
+            }
             houyicoder_protocol::frontend::FrontendRequest::Hooks => {
                 // The full hook event surface: the framework's declared events
                 // (with live-fire markers) plus the registered external hooks.
@@ -659,71 +668,8 @@ pub(crate) fn hook_events_to_wire() -> Vec<houyicoder_protocol::frontend::hooks:
 mod tests;
 
 #[cfg(test)]
-mod trajectory_handler_tests {
-    use super::*;
-    use futures::StreamExt;
-    use futures::channel::mpsc;
-    use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
-    use houyicoder_protocol::framing::encode;
-    use houyicoder_protocol::frontend::FrontendRequest;
-    use houyicoder_protocol::handshake::Hello;
-    use houyicoder_session::SessionStore;
-    use std::sync::Arc;
-
-    fn stub_runner() -> std::sync::Arc<houyicoder_core::agent::Runner> {
-        let store = Arc::new(SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        )));
-        Arc::new(houyicoder_core::agent::Runner::with_shared_store(
-            store,
-            Arc::new(houyicoder_provider::FakeProvider::text("x")),
-            houyicoder_core::agent::ToolRegistry::new(),
-            houyicoder_core::agent::runner_config::RunnerConfig {
-                model: "test".into(),
-                ..houyicoder_core::agent::runner_config::RunnerConfig::default()
-            },
-        ))
-    }
-
-    /// A Trajectory request drives the dispatch handler (project_trajectory +
-    /// project_redundant + TrajectoryResponse build) — covers the wiring the
-    /// pure-fn tests don't reach. No run, so entries + redundant are empty,
-    /// but the handler path executes.
-    #[tokio::test]
-    async fn test_trajectory_handler_builds_response() {
-        let runner = stub_runner();
-        let session = houyicoder_context::SessionId::new();
-        let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
-        let (client_tx, server_rx) = mpsc::channel::<String>(256);
-        let io = ServerIo::new(server_tx, server_rx);
-        let server = Server::new(
-            runner,
-            session,
-            Arc::new(houyicoder_permission::DefaultModeGate::new()),
-        );
-        let handle = tokio::spawn(async move { server.serve(io).await });
-        let mut tx = client_tx.clone();
-        let mut f = encode(&Hello::local()).unwrap();
-        if !f.ends_with('\n') {
-            f.push('\n');
-        }
-        tx.try_send(f).unwrap();
-        drop(client_rx.next().await.unwrap()); // hello ack
-        let req = encode(&ClientFrame::Request(RequestEnvelope::new(
-            RequestId(1),
-            FrontendRequest::Trajectory,
-        )))
-        .unwrap();
-        let mut req = req;
-        if !req.ends_with('\n') {
-            req.push('\n');
-        }
-        tx.try_send(req).unwrap();
-        let resp = client_rx.next().await.unwrap();
-        handle.abort();
-        assert!(resp.contains("trajectory"), "response: {resp}");
-    }
-}
+#[path = "trajectory_handler_tests.rs"]
+mod trajectory_handler_tests;
 
 /// Auto-derive a session name from the first user prompt in the log head, so
 /// an unnamed session (name_source=Auto) shows a slug instead of blank. Reads

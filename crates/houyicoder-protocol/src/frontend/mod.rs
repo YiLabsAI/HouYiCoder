@@ -531,6 +531,15 @@ pub enum FrontendRequest {
         path: String,
     },
     Agents,
+    /// Fetch a child agent's transcript on demand (expanding a Subagent
+    /// fold-group in the parent flow). The child session id is the agentId
+    /// the sync spawn path returned; the reply is a one-shot snapshot of the
+    /// child's turn events projected to the same session/update + acpx frame
+    /// stream the parent accumulates. A sync child is terminal by the time
+    /// the fold-group renders, so this is a full snapshot, not a live stream.
+    ChildTranscript {
+        child_sid: SessionId,
+    },
     MemoryRecall {
         query: String,
     },

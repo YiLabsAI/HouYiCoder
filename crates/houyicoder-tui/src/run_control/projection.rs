@@ -50,7 +50,7 @@ impl App {
                 if line.is_tui_only() {
                     merged.push(line.clone());
                 } else if event_idx < event_lines.len() {
-                    merged.push(event_lines[event_idx].clone());
+                    merged.push(merge_subagent(line, event_lines[event_idx].clone()));
                     event_idx += 1;
                 }
             }
@@ -101,7 +101,7 @@ impl App {
                 if line.is_tui_only() {
                     merged.push(line.clone());
                 } else if tail_idx < tail.len() {
-                    merged.push(tail[tail_idx].clone());
+                    merged.push(merge_subagent(line, tail[tail_idx].clone()));
                     tail_idx += 1;
                 }
             }
@@ -345,5 +345,40 @@ impl App {
         self.todo_completion_at
             .retain(|k, _| new_completed.contains(k));
         self.todos_cache = new_todos;
+    }
+}
+
+/// Carry an existing Subagent line's fetched child rows into its freshly
+/// projected replacement, so a parent rebuild does not wipe an on-expand
+/// fetch. The Subagent line is frame-derived (the agent-tool result creates
+/// it), but folded_transcript is side-channel state filled after the fact;
+/// the fresh projection rebuilds it empty. When the old and fresh lines are
+/// the same delegation (matching child_sid) and the fresh rows are empty,
+/// the old rows carry over. Sids differing means a different delegation, so
+/// the fresh line stands.
+fn merge_subagent(old: &TranscriptLine, fresh: TranscriptLine) -> TranscriptLine {
+    match (old, &fresh) {
+        (
+            TranscriptLine::Subagent {
+                child_sid: old_sid,
+                folded_transcript: old_rows,
+                ..
+            },
+            TranscriptLine::Subagent {
+                child_sid: new_sid,
+                folded_transcript: new_rows,
+                ..
+            },
+        ) if old_sid == new_sid && new_rows.is_empty() => {
+            let mut out = fresh;
+            if let TranscriptLine::Subagent {
+                folded_transcript, ..
+            } = &mut out
+            {
+                *folded_transcript = old_rows.clone();
+            }
+            out
+        }
+        _ => fresh,
     }
 }

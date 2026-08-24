@@ -79,6 +79,25 @@ pub struct ModelApplied {
     pub effort: Option<crate::llm::EffortLevel>,
 }
 
+/// One frame of a child agent's transcript, fetched on demand when the
+/// parent expands a Subagent fold-group. Mirrors the live session/update +
+/// acpx frame stream so the parent projects the child transcript through the
+/// same pipeline as its own (the child is not a simplified list). Batched in
+/// a ChildTranscript response for the sync case where the child is terminal
+/// at expand time; a streaming variant for live async children is a later
+/// addition and does not alter this one-shot snapshot shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "frame", content = "data", rename_all = "snake_case")]
+pub enum ChildTranscriptFrame {
+    /// A session/update chunk the child produced (user prompt echo, assistant
+    /// message, tool call, tool-call update). The base turn stream.
+    Session(crate::frontend::session_update::SessionUpdate),
+    /// An acpx/* extension notification the child produced (compaction
+    /// boundary, summary), carried so the child transcript is isomorphic to
+    /// the parent's, not a stripped subset.
+    Acpx(crate::acpx::AcpxNotification),
+}
+
 /// The payload of a response to a request. Responses sit on the req_id axis
 /// (paired to their request); events sit on the seq axis. A run request returns
 /// either RunOk (the turn finished) or RunErr (the run failed before an
@@ -170,6 +189,17 @@ pub enum ResponsePayload {
     /// the file path it writes to, so the host can surface both in a system
     /// line without guessing where to look.
     Debug(crate::frontend::debug::DebugState),
+    /// The on-demand child transcript (expanding a Subagent fold-group): the
+    /// child session's turn events projected to the same session/update +
+    /// acpx frame stream the parent accumulates, so the TUI projects the
+    /// child transcript through the same pipeline as its own. A sync child
+    /// is terminal at expand time, so this is a one-shot full snapshot. The
+    /// child_sid echoes the request so the stateless driver can route the
+    /// reply to the Subagent line without a req_id-to-sid map.
+    ChildTranscript {
+        child_sid: crate::frontend::SessionId,
+        frames: Vec<ChildTranscriptFrame>,
+    },
     /// The request itself was invalid for the current state or capability.
     Error(crate::wire::WireError),
 }

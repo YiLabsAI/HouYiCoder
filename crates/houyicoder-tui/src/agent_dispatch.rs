@@ -224,6 +224,35 @@ impl App {
             AgentMessage::AgentsResult { directory } => {
                 self.agent_directory = Some(directory);
             }
+            AgentMessage::ChildTranscriptResult { child_sid, frames } => {
+                // Project fetched child frames through the same pipeline as the
+                // parent flow. Empty frames mean the child log is missing or
+                // produced no durable events; surface an explicit line so the
+                // fold-group is non-empty and a re-expand does not refetch.
+                let folded = if frames.is_empty() {
+                    vec![TranscriptLine::System(
+                        "child transcript unavailable".into(),
+                    )]
+                } else {
+                    crate::transcript::transcript_from_frames(&frames)
+                };
+                // Swap the child rows into the matching Subagent line in place
+                // to preserve position. Mirrors the ContextGrid refresh.
+                let idx = self
+                    .transcript
+                    .iter()
+                    .rposition(|l| matches!(l, TranscriptLine::Subagent { child_sid: c, .. } if c == &child_sid));
+                if let Some(idx) = idx {
+                    let mut line = self.transcript.remove(idx);
+                    if let TranscriptLine::Subagent {
+                        folded_transcript, ..
+                    } = &mut line
+                    {
+                        *folded_transcript = folded;
+                    }
+                    self.transcript.insert(idx, line);
+                }
+            }
             AgentMessage::HooksResult { hooks } => {
                 self.hook_entries = hooks;
             }

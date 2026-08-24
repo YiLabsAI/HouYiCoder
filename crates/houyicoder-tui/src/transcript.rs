@@ -37,6 +37,18 @@ pub enum TranscriptFrame {
     Acpx(AcpxNotification),
 }
 
+/// Convert a fetched child frame to the live-frame shape the projection
+/// reads, so child rows render through the same pipeline as the parent flow.
+impl From<houyicoder_protocol::envelope::ChildTranscriptFrame> for TranscriptFrame {
+    fn from(frame: houyicoder_protocol::envelope::ChildTranscriptFrame) -> Self {
+        use houyicoder_protocol::envelope::ChildTranscriptFrame as C;
+        match frame {
+            C::Session(u) => TranscriptFrame::Session(u),
+            C::Acpx(n) => TranscriptFrame::Acpx(n),
+        }
+    }
+}
+
 /// The text carried by a content chunk, when the chunk wraps a text block.
 /// Non-text blocks (Image) have no flat text; an empty string degenerates the
 /// line away so a multimodal chunk does not surface as an empty row.
