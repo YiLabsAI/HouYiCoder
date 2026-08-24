@@ -158,6 +158,14 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::Tools(wire))
                     .await
             }
+            houyicoder_protocol::frontend::FrontendRequest::Agents => {
+                // The directory doubles as the model's prompt paragraph
+                // (byte-stable for the prompt cache); the panel renders it
+                // verbatim.
+                let dir = self.runner.agent_directory().unwrap_or_default();
+                self.send_response(io, req_id, ResponsePayload::Agents(dir))
+                    .await
+            }
             houyicoder_protocol::frontend::FrontendRequest::Hooks => {
                 // The full hook event surface: the framework's declared events
                 // (with live-fire markers) plus the registered external hooks.

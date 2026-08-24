@@ -129,6 +129,8 @@ pub enum AgentMessage {
     ToolListResult {
         tools: Vec<houyicoder_protocol::frontend::tools::ToolEntry>,
     },
+    /// The formatted agent directory string the /agents command requested.
+    AgentsResult { directory: String },
     /// The registered hooks the /hooks command requested (read-only visibility).
     HooksResult {
         hooks: Vec<houyicoder_protocol::frontend::hooks::HookEntry>,
@@ -212,6 +214,10 @@ pub enum ClientCommand {
     },
     /// Request the registered tool list over the wire (the /tools command).
     ToolListQuery {
+        req_id: RequestId,
+    },
+    /// Request the agent directory (registered sub-agent types) for /agents.
+    AgentsQuery {
         req_id: RequestId,
     },
     /// Request the registered hooks list over the wire (the /hooks command).

@@ -272,6 +272,10 @@ impl ContextBuilder {
         }
     }
 
+    pub(crate) fn agent_directory(&self) -> Option<String> {
+        self.agent_directory.lock().ok().and_then(|g| g.clone())
+    }
+
     /// Install the retention policy the serve path uses for block_ref
     /// ToolResults. The Runner calls this at construction with the cache-
     /// liveness policy sharing its cached-prefix state; the serve path then

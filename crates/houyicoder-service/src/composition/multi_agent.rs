@@ -25,6 +25,21 @@ use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_core::agent::{RunOutcome, RunResult, ToolRegistry};
 use houyicoder_protocol::llm::Usage;
 
+/// The parent components a child runner is built from: one bundle shared by
+/// the composition root, the runtime constructor, and the spawn path, instead
+/// of seven loose arguments at each hop.
+pub(super) struct MultiAgentDeps {
+    pub registry: Arc<dyn AgentRegistry>,
+    pub store: Arc<dyn SessionLog>,
+    pub provider: Arc<dyn ModelProvider>,
+    pub tools: ToolRegistry,
+    pub config: RunnerConfig,
+    pub worktree_controller: Option<Arc<WorktreeController>>,
+    /// The workspace the child's env-block cwd; None falls back to the
+    /// process cwd, resolved once at construction.
+    pub workspace: Option<PathBuf>,
+}
+
 pub struct MultiAgentRuntime {
     registry: Arc<dyn AgentRegistry>,
     store: Arc<dyn SessionLog>,
@@ -36,24 +51,17 @@ pub struct MultiAgentRuntime {
 }
 
 impl MultiAgentRuntime {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        registry: Arc<dyn AgentRegistry>,
-        store: Arc<dyn SessionLog>,
-        provider: Arc<dyn ModelProvider>,
-        tools: ToolRegistry,
-        config: RunnerConfig,
-        worktree_controller: Option<Arc<WorktreeController>>,
-        cwd: PathBuf,
-    ) -> Self {
+    pub fn new(deps: MultiAgentDeps) -> Self {
         Self {
-            registry,
-            store,
-            provider,
-            tools,
-            config,
-            worktree_controller,
-            cwd,
+            registry: deps.registry,
+            store: deps.store,
+            provider: deps.provider,
+            tools: deps.tools,
+            config: deps.config,
+            worktree_controller: deps.worktree_controller,
+            cwd: deps
+                .workspace
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
         }
     }
 }
@@ -88,26 +96,8 @@ pub(super) fn wire_agent_directory(
 /// workspace (or the process cwd when none resolved) is the child's env-block
 /// cwd. Splits the runtime construction out of the composition root so the
 /// root file stays under the size gate.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn build_runtime(
-    registry: Arc<dyn AgentRegistry>,
-    store: Arc<dyn SessionLog>,
-    provider: Arc<dyn ModelProvider>,
-    tools: ToolRegistry,
-    config: RunnerConfig,
-    worktree_controller: Option<Arc<WorktreeController>>,
-    workspace: Option<PathBuf>,
-) -> Arc<dyn SpawnHandle> {
-    let cwd = workspace.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    Arc::new(MultiAgentRuntime::new(
-        registry,
-        store,
-        provider,
-        tools,
-        config,
-        worktree_controller,
-        cwd,
-    ))
+pub(super) fn build_runtime(deps: MultiAgentDeps) -> Arc<dyn SpawnHandle> {
+    Arc::new(MultiAgentRuntime::new(deps))
 }
 
 impl SpawnHandle for MultiAgentRuntime {
@@ -140,7 +130,6 @@ impl SpawnHandle for MultiAgentRuntime {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 async fn run_sync_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
@@ -326,15 +315,15 @@ mod tests {
         let registry: Arc<dyn AgentRegistry> =
             Arc::new(BuiltInRegistry::from_agents(built_in_all()));
         let config = RunnerConfig::default();
-        let runtime = MultiAgentRuntime::new(
+        let runtime = MultiAgentRuntime::new(MultiAgentDeps {
             registry,
-            store.clone(),
+            store: store.clone(),
             provider,
-            ToolRegistry::new(),
+            tools: ToolRegistry::new(),
             config,
-            None,
-            std::path::PathBuf::from("/tmp"),
-        );
+            worktree_controller: None,
+            workspace: Some(std::path::PathBuf::from("/tmp")),
+        });
         let parent_sid = SessionId::new();
         (runtime, store, parent_sid)
     }
@@ -391,15 +380,15 @@ mod tests {
             max_turns: 1,
             ..RunnerConfig::default()
         };
-        let runtime = MultiAgentRuntime::new(
+        let runtime = MultiAgentRuntime::new(MultiAgentDeps {
             registry,
             store,
             provider,
-            ToolRegistry::new(),
+            tools: ToolRegistry::new(),
             config,
-            None,
-            std::path::PathBuf::from("/tmp"),
-        );
+            worktree_controller: None,
+            workspace: Some(std::path::PathBuf::from("/tmp")),
+        });
         let parent_sid = SessionId::new();
         let ctx = ToolCtx::new("c1").with_session(parent_sid);
         let args = SpawnArgs::new("explore", "task", "task");

@@ -233,6 +233,12 @@ async fn drive_client(
                         payload: FrontendRequest::ToolList,
                     });
                 }
+                Some(ClientCommand::AgentsQuery { req_id }) => {
+                    outbound.push_back(Outbound::Request {
+                        req_id,
+                        payload: FrontendRequest::Agents,
+                    });
+                }
                 Some(ClientCommand::HooksQuery { req_id }) => {
                     outbound.push_back(Outbound::Request {
                         req_id,
@@ -529,6 +535,9 @@ async fn drive_client(
                     }
                     ResponsePayload::Tools(tools) => {
                         let _send = agent_tx.send(AgentMessage::ToolListResult { tools });
+                    }
+                    ResponsePayload::Agents(directory) => {
+                        let _send = agent_tx.send(AgentMessage::AgentsResult { directory });
                     }
                     ResponsePayload::Hooks(hooks) => {
                         let _send = agent_tx.send(AgentMessage::HooksResult { hooks });

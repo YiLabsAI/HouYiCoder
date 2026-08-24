@@ -556,3 +556,144 @@ fn test_positions_cursor_on_open() {
         "cursor positioned on the active model's row, not left at 0"
     );
 }
+
+#[test]
+fn test_agents_result_stores_directory() {
+    let mut app = crate::composition::app();
+    app.handle_agent_message(AgentMessage::AgentsResult {
+        directory: "## Available agents\n\n- explore: fast".into(),
+    });
+    assert_eq!(
+        app.agent_directory.as_deref(),
+        Some("## Available agents\n\n- explore: fast"),
+    );
+}
+
+#[test]
+fn test_tool_list_result_stored() {
+    let mut app = crate::composition::app();
+    app.handle_agent_message(AgentMessage::ToolListResult {
+        tools: vec![houyicoder_protocol::frontend::tools::ToolEntry {
+            name: "bash".into(),
+            description: "run a command".into(),
+        }],
+    });
+    assert_eq!(app.tool_entries.len(), 1);
+    assert_eq!(app.tool_entries[0].name, "bash");
+}
+
+/// The /tools pane renders the registered tool list sorted by name with each
+/// row's first description line. A populated list never shows the empty
+/// placeholder. Pins the render so a refactor that drops sorting or the row
+/// format fails here.
+#[test]
+fn test_tools_pane_renders_entries() {
+    use houyicoder_protocol::frontend::tools::ToolEntry;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.pane = crate::state::Pane::Tools;
+    app.tool_entries = vec![
+        ToolEntry {
+            name: "zed".into(),
+            description: "edits files".into(),
+        },
+        ToolEntry {
+            name: "bash".into(),
+            description: "runs a command\nsecond line".into(),
+        },
+    ];
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(out.contains("bash"), "bash row renders: {out}");
+    assert!(out.contains("zed"), "zed row renders: {out}");
+    // Sorted: bash before zed.
+    assert!(
+        out.find("bash:").unwrap() < out.find("zed:").unwrap(),
+        "tools sorted by name"
+    );
+    // Only the first description line shows (the second line is not rendered).
+    assert!(
+        !out.contains("second line"),
+        "only the first description line renders: {out}"
+    );
+}
+
+/// An empty /tools list renders the placeholder, not a blank pane. Pins the
+/// empty-branch render so a refactor that drops the guard renders blank.
+#[test]
+fn test_tools_pane_renders_empty() {
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.pane = crate::state::Pane::Tools;
+    app.tool_entries = vec![];
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        out.contains("(no tools loaded)"),
+        "empty tools renders placeholder: {out}"
+    );
+}
+
+/// When the fleet is populated (child agents running), the /agents pane
+/// lists each agent with name, role, and state. v0 has no live fleet, so this
+/// pins the fleet-render contract child-tracking will drive. The directory
+/// branch is exercised separately by the stub /agents render.
+#[test]
+fn test_agents_pane_renders_fleet() {
+    use crate::evidence::AgentStatus;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.pane = crate::state::Pane::Agents;
+    app.agent_directory = None;
+    app.agents = vec![
+        AgentStatus {
+            name: "explore".into(),
+            role: "search".into(),
+            state: "idle".into(),
+        },
+        AgentStatus {
+            name: "build".into(),
+            role: "implement".into(),
+            state: "running".into(),
+        },
+    ];
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(out.contains("explore"), "fleet name renders: {out}");
+    assert!(out.contains("search"), "fleet role renders: {out}");
+    assert!(out.contains("running"), "fleet state renders: {out}");
+}
+
+/// The agent directory is a multi-line string (header + bullets). Each source
+/// line must render on its own terminal row; a single Line::from would
+/// flatten newlines into same-row spans. Pins the per-line split so a
+/// refactor that re-flattens fails here.
+#[test]
+fn test_agents_directory_renders_lines() {
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.pane = crate::state::Pane::Agents;
+    app.agent_directory =
+        Some("## Available agents\n\n- explore: fast search\n- plan: design".into());
+    let out = crate::test_support::render_text(&app, 80, 24);
+    let header_row = out.lines().position(|l| l.contains("Available agents"));
+    let explore_row = out.lines().position(|l| l.contains("explore"));
+    assert!(header_row.is_some(), "header renders: {out}");
+    assert!(explore_row.is_some(), "explore renders: {out}");
+    assert!(
+        header_row.unwrap() < explore_row.unwrap(),
+        "header must sit above the explore bullet (per-line render), not flatten to one row"
+    );
+}
+
+/// A Some("") reply (no agents registered) renders the placeholder, not a
+/// blank pane. Pins the empty-filter so the fallback fires on empty content.
+#[test]
+fn test_agents_directory_empty_placeholder() {
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.pane = crate::state::Pane::Agents;
+    app.agent_directory = Some(String::new());
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        out.contains("(no agent directory loaded)"),
+        "empty directory shows placeholder, not blank: {out}"
+    );
+}

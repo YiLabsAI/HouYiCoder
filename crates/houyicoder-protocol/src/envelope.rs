@@ -139,6 +139,9 @@ pub enum ResponsePayload {
     /// The registered tool list (/tools), so the TUI renders the capability
     /// inventory without importing the engine registry.
     Tools(Vec<crate::frontend::tools::ToolEntry>),
+    /// The /agents reply: the formatted agent directory string
+    /// (registered sub-agent types, minus denied, sorted).
+    Agents(String),
     /// The /hooks reply: the registered hooks (read-only visibility).
     Hooks(Vec<crate::frontend::hooks::HookEntry>),
     /// The /undo reply: a description of what was undone, or None when the

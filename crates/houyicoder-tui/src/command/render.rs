@@ -74,28 +74,6 @@ pub(crate) fn render_context(snap: &StatusSnapshot) -> String {
     s
 }
 
-/// /tools: the registered tool set, one row per tool — name + description.
-/// Capability discoverability: the user (and host) can see what the agent can
-/// do without reading source. Empty when no runner is wired.
-pub(crate) fn render_tools(tools: &[houyicoder_protocol::frontend::tools::ToolEntry]) -> String {
-    if tools.is_empty() {
-        return "tools: none registered (no runner wired)".to_string();
-    }
-    let mut s = format!("tools: {} registered\n", tools.len());
-    let mut sorted: Vec<&houyicoder_protocol::frontend::tools::ToolEntry> = tools.iter().collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
-    for entry in sorted {
-        let one = entry
-            .description
-            .lines()
-            .next()
-            .filter(|l| !l.is_empty())
-            .unwrap_or("(no description)");
-        s.push_str(&format!("  {:<16} {}\n", entry.name, one));
-    }
-    s
-}
-
 /// Render one memory's full body (the /memory <key> show reply): the
 /// frontmatter header (source, key, description) followed by the body content.
 pub(crate) fn render_memory_entry(

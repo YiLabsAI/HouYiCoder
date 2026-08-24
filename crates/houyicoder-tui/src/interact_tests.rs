@@ -16,6 +16,9 @@ use crate::test_support::render_text;
 fn working() -> crate::state::App {
     let mut app = composition::app();
     app.screen = Screen::Working;
+    // Seed a sample agent directory so the stub /agents pane renders real
+    // directory content (production fetches this via the /agents query).
+    app.agent_directory = Some("## Available agents\n\n- explore: fast read-only search".into());
     app
 }
 
@@ -538,7 +541,7 @@ fn test_utility_panes_switch() {
     let a = render(&app);
     println!("--- /agents ---\n{a}\n--- end ---");
     assert_eq!(app.pane, Pane::Agents);
-    assert!(a.contains("planner"), "agents content missing");
+    assert!(a.contains("explore"), "agents directory content missing");
 }
 
 /// The /memory pane renders the auto-memory + auto-dream toggle rows and

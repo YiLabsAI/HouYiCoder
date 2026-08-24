@@ -630,23 +630,10 @@ fn memory_entries() -> Vec<MemoryEntry> {
 }
 
 fn agents() -> Vec<AgentStatus> {
-    vec![
-        AgentStatus {
-            name: "planner".to_string(),
-            role: "plan".to_string(),
-            state: "idle".to_string(),
-        },
-        AgentStatus {
-            name: "implementer".to_string(),
-            role: "implement".to_string(),
-            state: "idle".to_string(),
-        },
-        AgentStatus {
-            name: "reviewer-correctness".to_string(),
-            role: "review".to_string(),
-            state: "idle".to_string(),
-        },
-    ]
+    // Empty in v0: no live child fleet exists until child-tracking lands.
+    // The /agents pane shows the fetched agent directory instead; the fleet
+    // list renders only when child events populate this field.
+    Vec::new()
 }
 
 fn console_todos() -> Vec<ConsoleTodo> {

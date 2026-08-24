@@ -251,6 +251,8 @@ pub enum Pane {
     /// Pro / Flash). Up / Down navigate, Enter sets the default, s uses this
     /// session only, Esc closes.
     Model,
+    /// The /tools pane: registered tool list.
+    Tools,
 }
 
 /// Storage-scope filter the /memory pane cycles through. All shows every
@@ -331,6 +333,7 @@ impl Pane {
             Self::Resume => "resume",
             Self::Hooks => "hooks",
             Self::Model => "model",
+            Self::Tools => "tools",
         }
     }
 

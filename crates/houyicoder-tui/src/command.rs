@@ -60,7 +60,9 @@ impl App {
             }
             C::Agents => {
                 self.pane = Pane::Agents;
-                self.system_line("agents: fleet status in the agents pane");
+                if let Some(req_id) = self.mint_request_id() {
+                    self.send_cmd(crate::run_control::ClientCommand::AgentsQuery { req_id });
+                }
             }
             C::Model => {
                 self.pane = Pane::Model;
@@ -124,11 +126,9 @@ impl App {
                 self.pane = Pane::Trajectory;
             }
             C::Tools => {
+                self.pane = Pane::Tools;
                 if let Some(req_id) = self.mint_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::ToolListQuery { req_id });
-                    self.system_line("tools: fetching from server...");
-                } else {
-                    self.system_line(render::render_tools(&[]));
                 }
             }
             C::Hooks => {

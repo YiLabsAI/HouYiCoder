@@ -665,3 +665,14 @@ fn test_boundary_set_without_project() {
     assert!(!suffix.is_empty(), "dynamic suffix carries env");
     std::fs::remove_dir_all(&scratch).ok();
 }
+
+#[test]
+fn test_agent_directory_round_trip() {
+    let cb = ContextBuilder::new();
+    assert!(cb.agent_directory().is_none(), "unset directory is None");
+    cb.set_agent_directory("## Available agents\n\n- explore: fast".into());
+    assert_eq!(
+        cb.agent_directory().as_deref(),
+        Some("## Available agents\n\n- explore: fast"),
+    );
+}

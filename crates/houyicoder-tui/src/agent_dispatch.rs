@@ -219,7 +219,10 @@ impl App {
                 ));
             }
             AgentMessage::ToolListResult { tools } => {
-                self.system_line(crate::command::render::render_tools(&tools));
+                self.tool_entries = tools;
+            }
+            AgentMessage::AgentsResult { directory } => {
+                self.agent_directory = Some(directory);
             }
             AgentMessage::HooksResult { hooks } => {
                 self.hook_entries = hooks;

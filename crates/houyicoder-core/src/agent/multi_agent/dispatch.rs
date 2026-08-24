@@ -37,4 +37,13 @@ impl Runner {
     pub fn set_agent_directory(&self, section: String) {
         self.context_builder.set_agent_directory(section);
     }
+
+    /// The agent directory section, if one was installed. Read by the server
+    /// when the TUI's /agents command queries the registered types. This is
+    /// the exact prompt paragraph the system prompt carries: its bytes are
+    /// load-bearing for the prompt cache, so the /agents panel renders it
+    /// verbatim - reformat in the TUI, never mutate what this returns.
+    pub fn agent_directory(&self) -> Option<String> {
+        self.context_builder.agent_directory()
+    }
 }

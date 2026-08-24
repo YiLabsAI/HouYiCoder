@@ -428,15 +428,15 @@ pub fn assemble(
     let agent_registry = multi_agent::built_in_registry();
     tools.register(Arc::new(AgentTool::new(agent_registry.clone())));
     // Spawn port + agent directory; construction is in the multi_agent module.
-    let spawn_handle: Arc<dyn houyicoder_api::spawn::SpawnHandle> = multi_agent::build_runtime(
-        agent_registry.clone(),
-        store.clone(),
-        Arc::clone(&provider),
-        tools.clone(),
-        config.clone(),
-        worktree_controller.clone(),
-        workspace.clone(),
-    );
+    let spawn_handle = multi_agent::build_runtime(multi_agent::MultiAgentDeps {
+        registry: agent_registry.clone(),
+        store: store.clone(),
+        provider: Arc::clone(&provider),
+        tools: tools.clone(),
+        config: config.clone(),
+        worktree_controller: worktree_controller.clone(),
+        workspace: workspace.clone(),
+    });
     // LlmSummarizer shares the main provider + model so compress produces
     // real summaries; the self-overflow guard + heuristic fallback are in
     // lifecycle.rs. Cloned before the runner takes the provider.

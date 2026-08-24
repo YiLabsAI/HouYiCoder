@@ -64,33 +64,6 @@ fn test_context_zero_stub() {
 }
 
 #[test]
-fn test_tools_sorted_desc() {
-    let tools = vec![
-        houyicoder_protocol::frontend::tools::ToolEntry {
-            name: "bash".into(),
-            description: "run a shell command".into(),
-        },
-        houyicoder_protocol::frontend::tools::ToolEntry {
-            name: "read".into(),
-            description: "read a file\nsecond line ignored".into(),
-        },
-    ];
-    let s = render_tools(&tools);
-    assert!(s.contains("2 registered"), "{s}");
-    let bi = s.find("bash").unwrap();
-    let ri = s.find("read").unwrap();
-    assert!(bi < ri, "sorted: bash before read");
-    assert!(s.contains("read a file"), "{s}");
-    assert!(!s.contains("second line ignored"), "{s}");
-}
-
-#[test]
-fn test_tools_empty() {
-    let s = render_tools(&[]);
-    assert!(s.contains("none registered"), "{s}");
-}
-
-#[test]
 fn test_sandbox_none_wired() {
     let s = render_sandbox(&snap_with_data(), "landlock");
     assert!(s.contains("landlock"), "{s}");

@@ -33,6 +33,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         Pane::Verify => draw_verify(f, area, app),
         Pane::Graph => draw_graph(f, area, app),
         Pane::Agents => draw_agents(f, area, app),
+        Pane::Tools => draw_tools(f, area, app),
         Pane::Artifact => crate::view::artifact::draw(f, area, app),
         // The interactive rule manager. draw_main intercepts Pane::Permission
         // and wraps this in the Pane frame (─ + cleared region); this arm
@@ -640,6 +641,24 @@ fn draw_graph(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "agents");
+    // When the fleet status is empty (no running child agents in v0),
+    // show the registered agent directory (the types the model may
+    // delegate to) fetched by the /agents query. The fleet list
+    // replaces this when child tracking lands.
+    if app.agents.is_empty() {
+        // The directory is a multi-line markdown string (header + bullets).
+        // Split per source line so each renders on its own terminal row;
+        // a single Line::from would flatten \n into same-row spans.
+        // Filter empty so a Some("") reply still shows the placeholder.
+        let dir = app
+            .agent_directory
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("(no agent directory loaded)");
+        let lines: Vec<Line> = dir.lines().map(|l| Line::from(l.to_string())).collect();
+        render_lines(f, area, block, lines);
+        return;
+    }
     let items: Vec<ListItem> = app
         .agents
         .iter()
@@ -650,6 +669,34 @@ fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
         block.inner(area),
     );
     f.render_widget(block, area);
+}
+
+fn draw_tools(f: &mut Frame, area: Rect, app: &App) {
+    let block = titled_block(app, "tools");
+    if app.tool_entries.is_empty() {
+        render_lines(
+            f,
+            area,
+            block,
+            vec![Line::from("(no tools loaded)").style(Style::new().fg(Color::DarkGray))],
+        );
+        return;
+    }
+    let mut sorted = app.tool_entries.iter().collect::<Vec<_>>();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let lines: Vec<Line> = sorted
+        .iter()
+        .map(|e| {
+            let desc = e
+                .description
+                .lines()
+                .next()
+                .filter(|l| !l.is_empty())
+                .unwrap_or("(no description)");
+            kv_line(&e.name, desc)
+        })
+        .collect();
+    render_lines(f, area, block, lines);
 }
 
 fn titled_block(app: &App, base: &str) -> Block<'static> {

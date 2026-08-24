@@ -248,11 +248,10 @@ pub struct App {
     /// the user picked (not always the first turn — drilling a later turn or
     /// a [bg] row showed the first turn's events before this field existed).
     pub trajectory_turn_idx: std::cell::Cell<usize>,
-    /// True when the L0-selected row is a [bg] event (dream/compact/save),
-    /// stashed by the L1 render so the L1 Enter handler skips L2 (bg has no
-    /// event list to drill into).
+    /// True when the L0 row is a bg event (skips L2 drill-in).
     pub trajectory_at_bg: std::cell::Cell<bool>,
     pub agents: Vec<AgentStatus>,
+    pub agent_directory: Option<String>,
     /// An opened artifact for inline review and annotation. Stub content; real
     /// wiring reads the file from disk.
     pub artifact: ArtifactSession,
@@ -513,6 +512,7 @@ pub struct App {
     /// The registered-hook rows for the /hooks pane. Refreshed from the wire
     /// (HooksResult) when the user opens /hooks. Empty until the first reply.
     pub hook_entries: Vec<houyicoder_protocol::frontend::hooks::HookEntry>,
+    pub tool_entries: Vec<houyicoder_protocol::frontend::tools::ToolEntry>,
     /// The /hooks pane drill-down level: 0 = event list, 1 = selected event
     /// detail (registered hooks + description). A
     /// select-event → view-hook browse pattern.

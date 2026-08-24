@@ -182,3 +182,11 @@ async fn test_dispatch_serial_spawn() {
         "spawn handle must reach the tool on the serial path",
     );
 }
+
+#[test]
+fn test_runner_agent_directory() {
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::text("ok"));
+    let runner = runner_with(provider, ToolRegistry::new());
+    assert!(runner.agent_directory().is_none());
+}

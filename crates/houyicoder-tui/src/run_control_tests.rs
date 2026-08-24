@@ -651,11 +651,84 @@ fn test_slash_queries_ship_wired() {
     assert_eq!(app.pane, Pane::Trajectory);
 
     app.run_command(SlashCommand::Tools);
-    assert!(app.transcript.iter().any(|l| matches!(
-        l,
-        TranscriptLine::System(s) if s.contains("tools: fetching")
-    )));
+    assert_eq!(app.pane, Pane::Tools, "Tools opens the Tools pane");
+    assert_eq!(Pane::Tools.label(), "tools");
+
+    app.run_command(SlashCommand::Agents);
+    assert_eq!(app.pane, Pane::Agents, "Agents opens the Agents pane");
     app.tab_cycle_mode();
+}
+
+/// A minimal tool so /tools has a positive-signal response (a non-empty
+/// snapshot) — an empty registry would reply with an empty list, which cannot
+/// be told apart from "no reply" by length alone.
+struct MarkerTool;
+impl Tool for MarkerTool {
+    fn name(&self) -> &str {
+        "marker"
+    }
+    fn description(&self) -> &str {
+        "a registered tool"
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn execute(
+        &self,
+        _ctx: ToolCtx,
+        input: serde_json::Value,
+    ) -> houyicoder_async::PFut<
+        '_,
+        Result<serde_json::Value, houyicoder_protocol::extension::ToolError>,
+    > {
+        Box::pin(async move { Ok(input) })
+    }
+}
+
+/// /agents and /tools ship a wire query and land the server's reply on the
+/// App fields (agent_directory / tool_entries), proving the in-proc
+/// server round-trip completes for these pane-query commands — not just the
+/// pane open. /agents goes None→Some; /tools (with a registered tool) goes
+/// empty→non-empty. A break in the driver→server→dispatch chain fails here.
+#[test]
+fn test_agents_tools_round_trip() {
+    use houyicoder_protocol::frontend::SlashCommand;
+    let provider = Arc::new(FakeProvider::new(vec![]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(MarkerTool));
+    let mut app = app_with_provider(provider, tools);
+
+    app.run_command(SlashCommand::Agents);
+    assert_eq!(app.pane, Pane::Agents);
+    let mut landed = false;
+    for _ in 0..300 {
+        app.poll_agent();
+        if app.agent_directory.is_some() {
+            landed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        landed,
+        "/agents query must round-trip: agent_directory should be set"
+    );
+
+    app.run_command(SlashCommand::Tools);
+    assert_eq!(app.pane, Pane::Tools);
+    let mut landed = false;
+    for _ in 0..300 {
+        app.poll_agent();
+        if app.tool_entries.iter().any(|t| t.name == "marker") {
+            landed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        landed,
+        "/tools query must round-trip: the registered tool should appear"
+    );
 }
 
 /// /memory pane d-action + /memory forget command both ship a MemoryForgetQuery
