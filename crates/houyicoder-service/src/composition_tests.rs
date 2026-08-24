@@ -255,3 +255,35 @@ fn test_meta_store_root_scoped() {
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&other).ok();
 }
+
+/// Cloning a resolved provider shares the one provider instance rather than
+/// standing up a second. Session swap depends on this: a clone per session
+/// that rebuilt the provider would re-run the key helper and throw away the
+/// warm connection pool.
+#[test]
+fn test_clone_shares_provider() {
+    let resolved = ResolvedProvider::stub();
+    let copy = resolved.clone();
+    assert!(
+        Arc::ptr_eq(&resolved.provider, &copy.provider),
+        "a clone must point at the same provider, not a rebuilt one"
+    );
+}
+
+/// The warnings ride along on the clone. They name where a repo is sending
+/// traffic, so a swapped session that kept the provider but dropped them would
+/// stop telling the user after the first session.
+#[test]
+fn test_clone_keeps_warnings() {
+    let mut resolved = ResolvedProvider::stub();
+    resolved.warnings.push(houyicoder_config::ConfigWarning {
+        field: "provider.base_url".into(),
+        reason: "this repo redirects model traffic".into(),
+    });
+    let copy = resolved.clone();
+    assert_eq!(
+        copy.warnings.len(),
+        1,
+        "the notice must survive the clone the swap path uses"
+    );
+}

@@ -111,6 +111,29 @@ pub struct ResumedRunner {
     pub model: String,
 }
 
+/// A provider resolved from settings, carrying the warnings that resolution
+/// produced. They travel together so a caller cannot reuse the provider and
+/// drop the notice naming where the repo sends traffic. Clone rather than
+/// re-resolve: a second resolution re-runs the key helper.
+#[derive(Clone)]
+pub struct ResolvedProvider {
+    pub provider: Arc<dyn ModelProvider>,
+    pub warnings: Vec<houyicoder_config::ConfigWarning>,
+}
+
+#[cfg(test)]
+impl ResolvedProvider {
+    /// A stub for a test that assembles a runner without driving a turn. Kept
+    /// test-only: a production caller must resolve from settings, so a missing
+    /// key surfaces as stub mode with its warning instead of a silent fake.
+    pub(crate) fn stub() -> Self {
+        Self {
+            provider: Arc::new(FakeProvider::text("stub")),
+            warnings: Vec::new(),
+        }
+    }
+}
+
 /// Options for build_runner: None on a store field selects the in-memory
 /// default; persistence is opt-in, named at every production entry.
 #[non_exhaustive]
@@ -120,6 +143,9 @@ pub struct BuildRunnerOptions {
     pub rule_store: Option<Arc<dyn RuleStore>>,
     pub backend: Option<Box<dyn ContextBackend>>,
     pub meta_store: Option<Arc<dyn SessionMetaStore>>,
+    /// None resolves one here; a caller reusing a provider across sessions
+    /// passes its own.
+    pub provider: Option<ResolvedProvider>,
 }
 
 impl BuildRunnerOptions {
@@ -142,6 +168,7 @@ impl BuildRunnerOptions {
             rule_store,
             backend: Some(Box::new(LocalFileBackend::new(root.clone()))),
             meta_store: Some(Arc::new(FileMetaStore::new(root))),
+            provider: None,
         }
     }
 }
@@ -192,6 +219,9 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
             initial_meta,
         ));
     let store = Arc::new(store);
+    let resolved = options
+        .provider
+        .unwrap_or_else(|| resolve_provider(project.as_deref()));
     assemble(
         store,
         session,
@@ -199,26 +229,32 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
         project,
         options.rule_store,
         append_notify,
+        resolved,
     )
 }
 
 #[expect(clippy::too_many_lines, reason = "composition root")]
 /// Assemble a runner over a pre-built store + session + model. Shared by the
-/// fresh-session path above and the resume path (the CLI mounts a
-/// LocalFileBackend at an existing session log and seeds the trajectory
-/// before assembling). Public so the CLI resume entry reuses the
-/// provider/tools/gate/sandbox wiring without re-implementing it.
-pub fn assemble(
+/// fresh-session path above and the resume paths (which mount a
+/// LocalFileBackend at an existing session log and seed the trajectory before
+/// assembling).
+///
+/// The provider arrives resolved: assemble runs once per session, including
+/// every swap, so resolving here would re-run the key helper each time.
+pub(crate) fn assemble(
     store: Arc<SessionStore>,
     session: SessionId,
     model: String,
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
     append_notify: Arc<Notify>,
+    resolved: ResolvedProvider,
 ) -> AssembledRunner {
     let model_for_extractor = model.clone();
-    let workspace = resolve_project_workspace(project.clone());
-    let (provider, provider_cfg_warnings) = provider_or_stub(workspace.as_deref());
+    let ResolvedProvider {
+        provider,
+        warnings: provider_cfg_warnings,
+    } = resolved;
     // Clone before the provider is moved into the runner so the memory
     // extractor (wired in the workspace branch) shares the same provider
     // handle — shares the same prompt-cache prefix as the runner.
@@ -549,12 +585,21 @@ pub fn assemble(
     }
 }
 
-/// Resolve the provider via the config layer: a real OpenAiCompatibleProvider
-/// when a key env var is set, else a FakeProvider so the loop still drives
-/// with a canned reply. Named for what it returns, not how (env resolution
-/// lives in the config layer). Also returns the config-load warnings so the
-/// caller can surface them - a project settings file whose apiKeyHelper was
-/// ignored must not disappear silently.
+/// Resolve the provider for a project once, at process start, and reuse the
+/// result for every session including a swap.
+///
+/// One resolution is correct for all of them only because the project is fixed
+/// for the life of a process. A build that lets sessions carry different
+/// projects must revisit this: the endpoint and the refused-helper warning both
+/// come from the project's own settings files.
+pub fn resolve_provider(project: Option<&str>) -> ResolvedProvider {
+    let workspace = resolve_project_workspace(project.map(str::to_string));
+    let (provider, warnings) = provider_or_stub(workspace.as_deref());
+    ResolvedProvider { provider, warnings }
+}
+
+/// A real provider when a key resolves, else a stub so the loop still drives
+/// with a canned reply rather than going silently offline.
 fn provider_or_stub(
     workspace: Option<&std::path::Path>,
 ) -> (

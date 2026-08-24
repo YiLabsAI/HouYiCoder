@@ -113,8 +113,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         CliCommand::Tui { project, model } => {
-            let bundle = build_bundle(project.clone(), model);
-            run_tui_loop(bundle, project)
+            let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
+            let bundle = build_bundle(project.clone(), model, provider.clone());
+            run_tui_loop(bundle, project, provider)
         }
         CliCommand::Resume {
             value,
@@ -146,19 +147,20 @@ fn run_resume(
     {
         let _ = detach::cleanup_stale();
     }
+    let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
     let path = std::path::PathBuf::from(&value);
     if path.exists() {
         // Resume-from-export already forks a fresh sid (unique); --fork-session
         // is redundant on this branch.
-        let bundle = build_bundle_for_resume(&path, project.clone())?;
-        run_tui_loop(bundle, project)
+        let bundle = build_bundle_for_resume(&path, project.clone(), provider.clone())?;
+        run_tui_loop(bundle, project, provider)
     } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(&value) {
         let bundle = if fork {
-            resume_bundle::build_bundle_for_fork(sid, project.clone())?
+            resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?
         } else {
-            resume_bundle::build_bundle_for_resume_sid(sid, project.clone())?
+            resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())?
         };
-        run_tui_loop(bundle, project)
+        run_tui_loop(bundle, project, provider)
     } else {
         eprintln!(
             "resume target is neither an existing file nor a session id: {value} \
@@ -184,12 +186,13 @@ fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn std::
         );
         std::process::exit(2);
     };
+    let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
     let bundle = if fork {
-        resume_bundle::build_bundle_for_fork(sid, project.clone())?
+        resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?
     } else {
-        resume_bundle::build_bundle_for_resume_sid(sid, project.clone())?
+        resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())?
     };
-    run_tui_loop(bundle, project)
+    run_tui_loop(bundle, project, provider)
 }
 
 /// Acquire the per-session exclusive lock, held for the caller's process
@@ -219,13 +222,16 @@ fn acquire_resume_lock(_sid_str: &str) -> Result<(), Box<dyn std::error::Error>>
 /// entry cannot drift onto a different store configuration by accident.
 fn production_runner(
     project: Option<String>,
+    provider: houyicoder_service::composition::ResolvedProvider,
 ) -> houyicoder_service::composition::BuildRunnerOptions {
-    houyicoder_service::composition::BuildRunnerOptions::disk(
+    let mut options = houyicoder_service::composition::BuildRunnerOptions::disk(
         project,
         Some(std::sync::Arc::new(
             houyicoder_permission::FileRuleStore::default_paths(),
         )),
-    )
+    );
+    options.provider = Some(provider);
+    options
 }
 
 /// The detached-session entry. Builds the runner through the composition
@@ -249,7 +255,8 @@ fn run_serve(
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
 
-    let bundle = build_runner(production_runner(project));
+    let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
+    let bundle = build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
@@ -339,7 +346,9 @@ fn run_acp_stdio(
     use houyicoder_service::lifecycle::SessionLeaseStore;
     use std::io::{BufRead, Write};
 
-    let bundle = houyicoder_service::composition::build_runner(production_runner(project));
+    let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
+    let bundle =
+        houyicoder_service::composition::build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
@@ -422,15 +431,17 @@ type ResumeFn = Box<
 fn run_tui_loop(
     mut bundle: houyicoder_tui::composition::RunnerBundle,
     project: Option<String>,
+    provider: houyicoder_service::composition::ResolvedProvider,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut resume_builder: Option<ResumeFn> = {
         let project = project.clone();
+        let provider = provider.clone();
         Some(Box::new(move |target: &str| {
             let path = std::path::PathBuf::from(target);
             if path.exists() {
-                build_bundle_for_resume(&path, project.clone())
+                build_bundle_for_resume(&path, project.clone(), provider.clone())
             } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(target) {
-                resume_bundle::build_bundle_for_resume_sid(sid, project.clone())
+                resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())
             } else {
                 Err(Box::<dyn std::error::Error>::from(format!(
                     "invalid resume target: {target}"
@@ -463,11 +474,15 @@ fn run_tui_loop(
                 // error. Mirrors the CLI --resume <value> dispatch.
                 let path = std::path::PathBuf::from(&new_target);
                 if path.exists() {
-                    bundle = build_bundle_for_resume(&path, project.clone())?;
+                    bundle = build_bundle_for_resume(&path, project.clone(), provider.clone())?;
                 } else if let Some(sid) =
                     houyicoder_context::SessionId::from_display_string(&new_target)
                 {
-                    bundle = resume_bundle::build_bundle_for_resume_sid(sid, project.clone())?;
+                    bundle = resume_bundle::build_bundle_for_resume_sid(
+                        sid,
+                        project.clone(),
+                        provider.clone(),
+                    )?;
                 } else {
                     return Err(Box::<dyn std::error::Error>::from(format!(
                         "invalid resume target from picker: {new_target}"
@@ -487,8 +502,10 @@ fn run_tui_loop(
 fn build_bundle(
     project: Option<String>,
     model_override: Option<String>,
+    provider: houyicoder_service::composition::ResolvedProvider,
 ) -> houyicoder_tui::composition::RunnerBundle {
-    let bundle = houyicoder_service::composition::build_runner(production_runner(project));
+    let bundle =
+        houyicoder_service::composition::build_runner(production_runner(project, provider));
     // --model overrides the settings-seeded active model for a fresh session
     // (resolution chain: --model flag > settings.json > DEFAULT). A resumed
     // session restores its own model from the sidecar (higher priority), so
@@ -517,6 +534,7 @@ fn build_bundle(
 fn build_bundle_for_resume(
     export_path: &std::path::Path,
     project: Option<String>,
+    provider: houyicoder_service::composition::ResolvedProvider,
 ) -> Result<houyicoder_tui::composition::RunnerBundle, Box<dyn std::error::Error>> {
     let resumed = houyicoder_service::composition::build_runner_for_resume_export(
         export_path,
@@ -525,6 +543,7 @@ fn build_bundle_for_resume(
         Some(Arc::new(
             houyicoder_permission::FileRuleStore::default_paths(),
         )),
+        provider,
     )
     .map_err(|e| {
         eprintln!("resume failed: {e}");

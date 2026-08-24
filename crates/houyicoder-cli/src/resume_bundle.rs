@@ -13,6 +13,7 @@ use std::sync::Arc;
 pub(super) fn build_bundle_for_resume_sid(
     sid: houyicoder_context::SessionId,
     project: Option<String>,
+    provider: houyicoder_service::composition::ResolvedProvider,
 ) -> Result<houyicoder_tui::composition::RunnerBundle, Box<dyn std::error::Error>> {
     let resumed = houyicoder_service::composition::build_runner_for_resume_sid(
         sid,
@@ -21,6 +22,7 @@ pub(super) fn build_bundle_for_resume_sid(
         Some(Arc::new(
             houyicoder_permission::FileRuleStore::default_paths(),
         )),
+        provider,
     )?;
     Ok(crate::assemble_bundle(
         resumed.assembled.runner,
@@ -41,6 +43,7 @@ pub(super) fn build_bundle_for_resume_sid(
 pub(super) fn build_bundle_for_fork(
     source_sid: houyicoder_context::SessionId,
     project: Option<String>,
+    provider: houyicoder_service::composition::ResolvedProvider,
 ) -> Result<houyicoder_tui::composition::RunnerBundle, Box<dyn std::error::Error>> {
     let resumed = houyicoder_service::composition::build_runner_for_fork(
         source_sid,
@@ -49,6 +52,7 @@ pub(super) fn build_bundle_for_fork(
         Some(Arc::new(
             houyicoder_permission::FileRuleStore::default_paths(),
         )),
+        provider,
     )?;
     Ok(crate::assemble_bundle(
         resumed.assembled.runner,

@@ -92,6 +92,7 @@ pub fn build_runner_for_resume_export(
     sessions_root: &Path,
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
+    resolved: ResolvedProvider,
 ) -> Result<ResumedRunner, ResumeError> {
     let body = std::fs::read_to_string(export_path)
         .map_err(|e| ResumeError::Read(format!("{}: {e}", export_path.display())))?;
@@ -145,7 +146,15 @@ pub fn build_runner_for_resume_export(
     );
     let model = payload.model;
     let model_for_return = model.clone();
-    let assembled = assemble(store, session, model, project, rule_store, append_notify);
+    let assembled = assemble(
+        store,
+        session,
+        model,
+        project,
+        rule_store,
+        append_notify,
+        resolved,
+    );
     Ok(ResumedRunner {
         assembled,
         model: model_for_return,
@@ -165,6 +174,7 @@ pub fn build_runner_for_resume_sid(
     sessions_root: &Path,
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
+    resolved: ResolvedProvider,
 ) -> Result<ResumedRunner, ResumeError> {
     let log_path = sessions_root.join(format!("{sid}")).join("log.jsonl");
     if !log_path.exists() {
@@ -225,7 +235,15 @@ pub fn build_runner_for_resume_sid(
         })
         .unwrap_or_else(houyicoder_config::resolve_model);
     let model_for_return = model.clone();
-    let assembled = assemble(store, sid, model, project, rule_store, append_notify);
+    let assembled = assemble(
+        store,
+        sid,
+        model,
+        project,
+        rule_store,
+        append_notify,
+        resolved,
+    );
     Ok(ResumedRunner {
         assembled,
         model: model_for_return,
@@ -244,6 +262,7 @@ pub fn build_runner_for_fork(
     sessions_root: &Path,
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
+    resolved: ResolvedProvider,
 ) -> Result<ResumedRunner, ResumeError> {
     let append_notify = Arc::new(Notify::new());
     let backend = LocalFileBackend::new(sessions_root.to_path_buf());
@@ -332,6 +351,7 @@ pub fn build_runner_for_fork(
         project,
         rule_store,
         append_notify,
+        resolved,
     );
     Ok(ResumedRunner {
         assembled,
