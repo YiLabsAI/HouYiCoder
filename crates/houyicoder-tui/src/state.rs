@@ -230,9 +230,9 @@ pub struct App {
     /// parse_worktrees on pane-open. Empty until the user opens the pane (no
     /// background poll — the list is cheap and the pane is one-shot).
     pub worktree_entries: Vec<crate::composition::WorktreeEntry>,
-    /// Cursor into the worktree list (Up/Down moves, Enter enters, d removes).
-    /// Clamped to the list length at render + action time.
-    pub worktree_cursor: usize,
+    /// Cursor + search query for the /worktrees pane. The first pane to
+    /// adopt ListPaneState; others migrate on touch-ratchet.
+    pub worktree_list: crate::list_pane_state::ListPaneState,
     /// /trajectory pane drill-down state: 0 = turn list, 1 = turn detail
     /// (events + ASCII bar), 2 = event detail (full data).
     pub trajectory_level: std::cell::Cell<u8>,

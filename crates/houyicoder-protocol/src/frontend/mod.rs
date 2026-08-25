@@ -279,8 +279,8 @@ const COMMANDS: &[CommandDescriptor] = &[
     },
     CommandDescriptor {
         variant: SlashCommand::Worktree,
-        name: "/worktree",
-        help: "worktree management",
+        name: "/worktrees",
+        help: "worktrees management",
     },
     CommandDescriptor {
         variant: SlashCommand::Compact,

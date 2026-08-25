@@ -269,6 +269,7 @@ use approval::{approval_next, approval_prev, option_count};
 /// AskUserQuestion card key handlers, split out to keep this module under
 /// the file-size gate.
 mod ask_question;
+mod worktree_pane;
 use ask_question::handle_ask_question;
 
 /// Tool-approval prompt keys: navigate three options, confirm, or dismiss.
@@ -542,21 +543,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Esc if app.pane == Pane::Memory => {
             app.pane = Pane::Transcript;
         }
-        // /worktrees pane: Up/Down move the cursor, Enter enters the selected
-        // worktree, d removes it (the remove action routes through the agent
-        // worktree tool so the approval gate still fires), Esc leaves. Gated
-        // on the pane so the keys keep their normal meaning elsewhere.
-        KeyCode::Up if app.pane == Pane::Worktree => app.move_worktree_cursor(-1),
-        KeyCode::Down if app.pane == Pane::Worktree => app.move_worktree_cursor(1),
-        KeyCode::Char('d') if app.pane == Pane::Worktree && app.input.is_empty() => {
-            app.remove_worktree_at_cursor()
-        }
-        KeyCode::Enter if app.pane == Pane::Worktree && app.input.is_empty() => {
-            app.enter_worktree_at_cursor()
-        }
-        KeyCode::Esc if app.pane == Pane::Worktree => {
-            app.pane = Pane::Transcript;
-        }
+        // /worktrees pane: delegated to keys/worktree_pane.rs.
+        _ if app.pane == Pane::Worktree && worktree_pane::handle(app, k) => {}
         // /status pane: Left/Right (or Tab) cycle the sub-tab (Status →
         // Config → Usage), Esc dismisses back to the transcript. A
         // Settings-modal-style tabbed status.

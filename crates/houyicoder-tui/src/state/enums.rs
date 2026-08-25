@@ -327,7 +327,7 @@ impl Pane {
             Self::Agents => "agents",
             Self::Artifact => "artifact",
             Self::Permission => "permission",
-            Self::Worktree => "worktree",
+            Self::Worktree => "worktrees",
             Self::Trajectory => "trajectory",
             Self::Status => "status",
             Self::Resume => "resume",

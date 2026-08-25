@@ -70,7 +70,7 @@ impl PendingItem {
 /// fights the in-flight run's writes and must be deferred to idle. The
 /// narrow set: resume, clear, rewind, undo. Everything else (status, model,
 /// search, tips, hooks, debug, trajectory, context, sandbox, cost, graph,
-/// diff, agents, memory, help, release-notes, worktree, export,
+/// diff, agents, memory, help, release-notes, worktrees, export,
 /// permissions, stage commands, exit) executes immediately even mid-run --
 /// it is UI-local or read-only on the session. exit must stay immediate (a
 /// user needs to escape a long run); stage commands are TUI-local (do not
@@ -202,7 +202,7 @@ mod tests {
             "memory",
             "help",
             "release-notes",
-            "worktree",
+            "worktrees",
             "export",
             "permissions",
             "init",

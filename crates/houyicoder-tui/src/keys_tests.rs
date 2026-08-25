@@ -619,3 +619,129 @@ fn test_worktree_esc_closes_busy() {
         "must not abort the run when dismissing the worktree pane"
     );
 }
+
+/// /worktrees pane key surface: Up/Down move the cursor, Enter/d route to
+/// the enter/remove actions (which report no-carrier in stub mode), Char
+/// types into the search query, Backspace edits it, Esc in search clears
+/// the query (a second Esc closes), and an unmapped key is a no-op. These
+/// cover the keys/worktree_pane::handle arms without a PTY.
+fn worktree_app_with_rows() -> App {
+    let mut app = working_app();
+    app.pane = Pane::Worktree;
+    app.worktree_entries = vec![
+        composition::WorktreeEntry {
+            path: "/a".into(),
+            head: "abcdef0".into(),
+            branch: "main".into(),
+            is_current: false,
+        },
+        composition::WorktreeEntry {
+            path: "/b".into(),
+            head: "1234567".into(),
+            branch: "dev".into(),
+            is_current: false,
+        },
+        composition::WorktreeEntry {
+            path: "/c".into(),
+            head: "fedcba0".into(),
+            branch: "feat".into(),
+            is_current: false,
+        },
+    ];
+    app.input.clear();
+    app
+}
+
+#[test]
+fn test_worktree_cursor_down_up() {
+    let mut app = worktree_app_with_rows();
+    handle_working(&mut app, key(KeyCode::Down));
+    assert_eq!(app.worktree_list.cursor, 1, "Down moves the cursor down");
+    handle_working(&mut app, key(KeyCode::Down));
+    assert_eq!(app.worktree_list.cursor, 2, "Down again");
+    handle_working(&mut app, key(KeyCode::Up));
+    assert_eq!(app.worktree_list.cursor, 1, "Up moves back up");
+}
+
+#[test]
+fn test_worktree_enter_no_carrier() {
+    let mut app = worktree_app_with_rows();
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("no carrier"))),
+        "Enter in stub mode reports no carrier"
+    );
+}
+
+#[test]
+fn test_worktree_remove_no_carrier() {
+    let mut app = worktree_app_with_rows();
+    handle_working(&mut app, key(KeyCode::Char('d')));
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("no carrier"))),
+        "d in stub mode reports no carrier"
+    );
+}
+
+#[test]
+fn test_worktree_char_into_query() {
+    let mut app = worktree_app_with_rows();
+    handle_working(&mut app, key(KeyCode::Char('b')));
+    handle_working(&mut app, key(KeyCode::Char('e')));
+    assert_eq!(
+        app.worktree_list.query, "be",
+        "char keys append to the query"
+    );
+    assert!(
+        app.worktree_list.searching(),
+        "a non-empty query is searching"
+    );
+}
+
+#[test]
+fn test_worktree_backspace_query() {
+    let mut app = worktree_app_with_rows();
+    handle_working(&mut app, key(KeyCode::Char('a')));
+    handle_working(&mut app, key(KeyCode::Char('b')));
+    handle_working(&mut app, key(KeyCode::Backspace));
+    assert_eq!(app.worktree_list.query, "a", "Backspace pops the last char");
+}
+
+#[test]
+fn test_worktree_esc_clears_search() {
+    let mut app = worktree_app_with_rows();
+    handle_working(&mut app, key(KeyCode::Char('a')));
+    assert!(app.worktree_list.searching());
+    // First Esc clears the search, not the pane.
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert!(!app.worktree_list.searching(), "Esc clears the query");
+    assert_eq!(app.pane, Pane::Worktree, "Esc in search stays in the pane");
+    // Second Esc (no search) closes the pane.
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(
+        app.pane,
+        Pane::Transcript,
+        "Esc with no search closes the pane"
+    );
+}
+
+#[test]
+fn test_worktree_unknown_key_noop() {
+    let mut app = worktree_app_with_rows();
+    let before = app.worktree_list.cursor;
+    // An unmapped function key: the handler does not consume it and leaves
+    // the cursor + query untouched.
+    handle_working(&mut app, key(KeyCode::F(1)));
+    assert_eq!(
+        app.worktree_list.cursor, before,
+        "unknown key does not move cursor"
+    );
+    assert!(
+        !app.worktree_list.searching(),
+        "unknown key does not open search"
+    );
+}

@@ -659,6 +659,14 @@ fn test_slash_queries_ship_wired() {
     app.tab_cycle_mode();
 }
 
+/// The /worktrees pane label is the plural form (the command is /worktrees,
+/// the pane lists multiple worktrees). Pinning it catches a regression to
+/// the singular "worktree" that would make the label mismatch the command.
+#[test]
+fn test_worktree_pane_label_plural() {
+    assert_eq!(Pane::Worktree.label(), "worktrees");
+}
+
 /// A minimal tool so /tools has a positive-signal response (a non-empty
 /// snapshot) — an empty registry would reply with an empty list, which cannot
 /// be told apart from "no reply" by length alone.
