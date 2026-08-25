@@ -86,13 +86,19 @@ fn total_configured(entries: &[houyicoder_protocol::frontend::hooks::HookEntry])
 }
 
 fn draw_event_list(f: &mut Frame, area: Rect, app: &App) {
-    let mut events = framework_events(app);
-    events.sort_by_key(|e| configured_count(&app.hook_entries, &e.name) > 0);
-    let sel = app.hooks_sel.get().min(events.len().saturating_sub(1));
-    let items: Vec<ListItem> = events
+    let events = framework_events(app);
+    let counts: Vec<usize> = events
         .iter()
-        .map(|e| {
-            let count = configured_count(&app.hook_entries, &e.name);
+        .map(|e| configured_count(&app.hook_entries, &e.name))
+        .collect();
+    let mut order: Vec<usize> = (0..events.len()).collect();
+    order.sort_by_key(|&i| counts[i] == 0);
+    let sel = app.hooks_sel.get().min(events.len().saturating_sub(1));
+    let items: Vec<ListItem> = order
+        .iter()
+        .map(|&i| {
+            let e = events[i];
+            let count = counts[i];
             let count_str = if count > 0 {
                 format!(" ({count})")
             } else {
@@ -126,7 +132,8 @@ fn draw_event_list(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_event_detail(f: &mut Frame, area: Rect, app: &App) {
-    let events = framework_events(app);
+    let mut events = framework_events(app);
+    events.sort_by_key(|e| configured_count(&app.hook_entries, &e.name) == 0);
     let sel = app.hooks_sel.get().min(events.len().saturating_sub(1));
     if events.is_empty() {
         return;
@@ -149,6 +156,12 @@ fn draw_event_detail(f: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(Span::styled(
             format!("  {}", event.description),
             Style::new().fg(Color::DarkGray),
+        )));
+    }
+    if event.fired {
+        lines.push(Line::from(Span::styled(
+            "  live: this event has a fire point in the agent loop",
+            Style::new().fg(Color::Green),
         )));
     }
     if registered.is_empty() {
