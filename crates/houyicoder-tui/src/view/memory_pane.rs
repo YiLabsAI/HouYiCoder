@@ -1,30 +1,100 @@
 //! The /memory pane body content. A peer of search.rs draw_content and
 //! capability draw_permission_content: the slash-command pane content
 //! closures reused by the working-surface draw_command_pane template.
+//! Mirrors the /hooks + /worktrees shape: a fixed header block, a scrollable
+//! stateful List for the memory rows (cursor stays visible when the list is
+//! longer than the pane), and fixed toggle + footer rows at the bottom.
 
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{List, ListItem, ListState, Paragraph},
 };
 
 use crate::state::App;
 use crate::state::MemoryEntry;
 use crate::state::enums::MemoryScopeTab;
 
-/// The /memory pane body: a header line with the stored count, one row per
-/// stored memory (key + one-line summary), the two toggle rows, and a footer
-/// hint naming the show + toggle sub-commands. Pure render off app state. One
-/// Paragraph of lines so the layout matches the /search pane (predictable for
-/// render-cache tests); a long list wraps inside the pane area.
+/// The /memory pane body: a fixed header (scope tabs + stored count +
+/// optional search hint + scope distribution), a scrollable list of memory
+/// rows (the cursor stays visible when the list is longer than the pane),
+/// and fixed toggle + footer rows. The list is a stateful List widget, not a
+/// Paragraph dump, so the cursor never scrolls out of view and the
+/// toggles/footer stay pinned.
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
-    let mut lines: Vec<Line> = Vec::new();
-    // Scope-tab header: the active tab is highlighted; the rest dim.
-    // Left/Right cycles. All shows every root merged; the others narrow to
-    // one physical scope (the "see this project's memories" filter).
     let tab = app.memory_scope_tab;
+    let filtered =
+        crate::command::render::filtered_memory(&app.memory_entries, tab, &app.memory_list.query);
+    let n = filtered.len();
+    let cursor = app.memory_list.cursor.min(n.saturating_sub(1));
+    let header_lines = memory_header(app, tab, n);
+    let header_h = header_lines.len() as u16;
+    // Header (fixed) + scrollable list + bottom (toggles + footer, fixed).
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_h),
+            Constraint::Min(0),
+            Constraint::Length(3),
+        ])
+        .split(area);
+    f.render_widget(Paragraph::new(header_lines), chunks[0]);
+    if filtered.is_empty() {
+        f.render_widget(
+            Paragraph::new("  (no memories yet)").style(Style::new().fg(Color::DarkGray)),
+            chunks[1],
+        );
+    } else {
+        let items = memory_items(&filtered, cursor);
+        let mut state = ListState::default();
+        state.select(Some(cursor));
+        f.render_stateful_widget(
+            List::new(items)
+                .highlight_style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("❯ "),
+            chunks[1],
+            &mut state,
+        );
+    }
+    let am = if app.memory_toggles.auto_memory {
+        "on"
+    } else {
+        "off"
+    };
+    let ad = if app.memory_toggles.auto_dream {
+        "on"
+    } else {
+        "off"
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("  Auto-memory: ", Style::new().fg(Color::DarkGray)),
+                Span::styled(am, Style::new().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("  Auto-dream: ", Style::new().fg(Color::DarkGray)),
+                Span::styled(ad, Style::new().fg(Color::White)),
+            ]),
+            Line::from(
+                "  /memory <key> show · /memory toggle auto|dream · Left/Right scope · Esc close",
+            )
+            .style(Style::new().fg(Color::DarkGray)),
+        ]),
+        chunks[2],
+    );
+}
+
+/// The fixed header block: scope tabs, optional search hint, stored count,
+/// optional scope distribution. Built separately so draw_content stays
+/// under the too-many-lines gate.
+fn memory_header(app: &App, tab: MemoryScopeTab, n: usize) -> Vec<Line<'static>> {
     let tabs = [
         (MemoryScopeTab::All, "All"),
         (MemoryScopeTab::User, "User"),
@@ -45,15 +115,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             tab_spans.push(Span::styled(*label, Style::new().fg(Color::DarkGray)));
         }
     }
-    lines.push(Line::from(tab_spans));
-    // Filter the list by the active scope + the text search (composed). Shared
-    // with the d/enter actions so the cursor the user sees is the one the
-    // action hits.
-    let filtered =
-        crate::command::render::filtered_memory(&app.memory_entries, tab, &app.memory_list.query);
-    // When a text filter is set, show it as a row so the user sees the active
-    // query (Esc clears it). The shared hint line keeps the shape identical
-    // across list panes.
+    let mut lines: Vec<Line> = vec![Line::from(tab_spans)];
     if app.memory_list.searching() {
         lines.push(
             Line::from(format!(
@@ -63,36 +125,34 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             .style(Style::new().fg(Color::DarkGray)),
         );
     }
-    let n = filtered.len();
-    let cursor = app.memory_list.cursor.min(n.saturating_sub(1));
     lines.push(
         Line::from(format!("memory — {n} stored"))
             .style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
     );
-    // Total scope distribution (across all entries, not the filtered view) so
-    // the user sees where the memories live at a glance, even when narrowed.
     if !app.memory_entries.is_empty() {
         lines.push(
             Line::from(scope_distribution(&app.memory_entries))
                 .style(Style::new().fg(Color::DarkGray)),
         );
     }
-    if filtered.is_empty() {
-        lines.push(Line::from("  (no memories yet)").style(Style::new().fg(Color::DarkGray)));
-    } else {
-        for (i, m) in filtered.iter().enumerate() {
-            // Tag is scope dot source (e.g. project dot user) — the physical
-            // storage root + the provenance category, the two orthogonal
-            // dimensions. Scope drives the pane filter; source is the tag.
+    lines
+}
+
+/// The scrollable memory rows as List items. The cursor row is selected via
+/// ListState (built by the caller) so ratatui scrolls it into view.
+fn memory_items(filtered: &[&MemoryEntry], cursor: usize) -> Vec<ListItem<'static>> {
+    filtered
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let is_cursor = i == cursor;
             let tag = format!("{}·{}", m.scope, m.source);
-            let prefix = if i == cursor { "❯ " } else { "  " };
-            let key_style = if i == cursor {
+            let key_style = if is_cursor {
                 Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
                 Style::new().fg(Color::White)
             };
             let mut spans: Vec<Span> = vec![
-                Span::styled(prefix, Style::new().fg(Color::Cyan)),
                 Span::styled(format!("[{tag}] "), Style::new().fg(Color::DarkGray)),
                 Span::styled(m.topic.clone(), key_style),
             ];
@@ -102,36 +162,9 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
                     Style::new().fg(Color::White),
                 ));
             }
-            lines.push(Line::from(spans));
-        }
-    }
-    let am = if app.memory_toggles.auto_memory {
-        "on"
-    } else {
-        "off"
-    };
-    let ad = if app.memory_toggles.auto_dream {
-        "on"
-    } else {
-        "off"
-    };
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("  Auto-memory: ", Style::new().fg(Color::DarkGray)),
-        Span::styled(am, Style::new().fg(Color::White)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  Auto-dream: ", Style::new().fg(Color::DarkGray)),
-        Span::styled(ad, Style::new().fg(Color::White)),
-    ]));
-    lines.push(Line::from(""));
-    lines.push(
-        Line::from(
-            "  /memory <key> show · /memory toggle auto|dream · Left/Right scope · Esc close",
-        )
-        .style(Style::new().fg(Color::DarkGray)),
-    );
-    f.render_widget(Paragraph::new(lines), area);
+            ListItem::new(Line::from(spans))
+        })
+        .collect()
 }
 
 /// One-line breakdown of how many memories live in each storage scope, across

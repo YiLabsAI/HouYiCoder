@@ -515,3 +515,27 @@ fn test_worktree_pane_scroll() {
         "cursor row HEAD scrolls into view: {out}"
     );
 }
+
+/// The /memory pane scrolls to keep the cursor visible when the list is
+/// longer than the pane, same as /worktrees. With 20 entries + the cursor on
+/// the last, the last topic must still render.
+#[test]
+fn test_memory_pane_scroll() {
+    let mut app = working();
+    app.pane = Pane::Memory;
+    let entries: Vec<crate::state::MemoryEntry> = (0..20)
+        .map(|i| crate::state::MemoryEntry {
+            topic: format!("topic-{i}"),
+            summary: String::new(),
+            scope: "project".into(),
+            source: "user".into(),
+        })
+        .collect();
+    app.memory_entries = entries;
+    app.memory_list.cursor = 19;
+    let out = render(&app);
+    assert!(
+        out.contains("topic-19"),
+        "the cursor row (last entry) must scroll into view: {out}"
+    );
+}
