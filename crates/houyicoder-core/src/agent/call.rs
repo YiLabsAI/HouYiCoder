@@ -437,6 +437,10 @@ impl Runner {
                 };
                 self.fold_event(ev, &mut state, session, &live).await?;
             }
+            // Provider-omits-usage fallback: some OpenAI-compat streams
+            // ignore stream_options.include_usage; substitute the served
+            // estimate so the status gauge + tally read the real footprint.
+            super::model_window::fill_omitted_usage(&mut state.usage, served_tokens);
             // Capture the raw provider finish_reason BEFORE dialect
             // normalization so the verdict carries the original dialect
             // (max_tokens / MAX_TOKENS / length / stop). Without this the

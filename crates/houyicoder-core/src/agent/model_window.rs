@@ -296,6 +296,25 @@ pub fn effective_served_tokens(estimate: u32, last_observed_input: Option<u64>) 
     }
 }
 
+/// Fill a usage the provider omitted with the locally-served token count.
+/// Some OpenAI-compat streams do not honor stream_options.include_usage, so
+/// the finish arrives with usage 0 while the reply is complete. A silent 0
+/// makes the status gauge read 0% forever and the cumulative tally
+/// under-count; the served estimate (tiktoken over the exact served view) is
+/// the same number record_turn receives, so every downstream reader sees the
+/// real footprint instead of an unknown that reads as zero.
+pub fn fill_omitted_usage(usage: &mut Usage, served_tokens: u32) {
+    if usage.input_tokens == 0 {
+        usage.input_tokens = served_tokens;
+        if usage.non_cached_input_tokens == 0 {
+            usage.non_cached_input_tokens = served_tokens;
+        }
+        if usage.total_tokens == 0 {
+            usage.total_tokens = served_tokens.saturating_add(usage.output_tokens);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

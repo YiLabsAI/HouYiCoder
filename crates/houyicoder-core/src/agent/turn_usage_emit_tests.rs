@@ -266,3 +266,50 @@ async fn test_cancelled_records_no_usage() {
         .count();
     assert_eq!(turn_usages, 0, "cancelled call must record no TurnUsage");
 }
+
+/// A provider that omits usage entirely (some OpenAI-compat streams do not
+/// honor stream_options.include_usage) must not leave the turn's cost at a
+/// silent zero: the locally-served token count substitutes, so the status
+/// gauge's window footprint and the durable TurnUsage event both read the
+/// real number. Before the fallback the status bar read 0% context forever
+/// while /context (tiktoken) showed real numbers.
+#[tokio::test]
+async fn test_omitted_usage_served_fallback() {
+    let p = std::sync::Arc::new(ScriptRawProvider::new(vec![vec![
+        LlmEvent::StepStart { index: 0 },
+        LlmEvent::TextStart { id: "t1".into() },
+        LlmEvent::TextDelta {
+            id: "t1".into(),
+            text: "done".into(),
+        },
+        LlmEvent::TextEnd { id: "t1".into() },
+        LlmEvent::Finish {
+            reason: "stop".into(),
+            usage: None,
+        },
+    ]]));
+    let runner = runner_with(p, ToolRegistry::new());
+    let session = SessionId::new();
+    runner.run(session, "hi".into()).await.unwrap();
+    let events = runner.store().replay(session).await.expect("replay");
+    let usage_ev = events
+        .iter()
+        .find(|e| matches!(e.kind, TurnEventKind::TurnUsage { .. }))
+        .expect("a TurnUsage event lands per turn");
+    match &usage_ev.kind {
+        TurnEventKind::TurnUsage { input_tokens, .. } => {
+            assert!(
+                *input_tokens > 0,
+                "omitted usage must fall back to the served token count, got {input_tokens}"
+            );
+        }
+        _ => panic!("not a TurnUsage event"),
+    }
+    // The status gauge's source reads the same fallback, not a stale 0.
+    let snap = runner.status_snapshot();
+    assert!(
+        snap.last_input_tokens > 0,
+        "status snapshot last_input_tokens must read the served fallback, got {}",
+        snap.last_input_tokens
+    );
+}

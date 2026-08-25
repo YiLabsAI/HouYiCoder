@@ -549,5 +549,12 @@ async fn test_run_max_turns_reached() {
         RunOutcome::MaxTurnsReached { turns } if turns == 5
     ));
     assert_eq!(result.turns, 5);
-    assert_eq!(result.usage, Usage::default());
+    // The provider omits usage (Usage::default()); the served-token
+    // fallback fills input_tokens so the status gauge + tally read the real
+    // footprint, not a silent 0.
+    assert!(
+        result.usage.input_tokens > 0,
+        "omitted usage falls back to the served count: {:#?}",
+        result.usage
+    );
 }
