@@ -167,8 +167,14 @@ fn test_model_opens_selector_pane() {
         out.contains("Default"),
         "/model selector should list the Default sentinel:\n{out}"
     );
+    // Assert on the no-internal-space tail of the empty-state guide rather
+    // than "no catalog configured": when the status bar is hidden the footer
+    // lands on the terminal's last row, and ratatui's cell-diff render skips
+    // a space cell that was already a space in the prior frame, so the
+    // accumulated stream can drop an inter-word space. settings.json is
+    // unique to this footer and has no internal space, so it survives.
     assert!(
-        out.contains("no catalog configured"),
+        out.contains("settings.json"),
         "empty-state guide should render when no catalog:\n{out}"
     );
 }
