@@ -225,6 +225,26 @@ fn test_pane_hides_status_bar() {
     );
 }
 
+/// /permissions is the one command pane that keeps its input box (the
+/// Add/Remove sub-mode types rule specs into it), so the status bar must
+/// hide while the input box stays — the two retractions are decoupled, not
+/// one set. The status chain (stage words) must be gone; the input
+/// placeholder must still render.
+#[test]
+fn test_permission_keeps_input() {
+    let mut app = working();
+    app.pane = Pane::Permission;
+    let out = render(&app);
+    assert!(
+        !out.contains("implement"),
+        "status bar should hide when /permissions is open: {out}"
+    );
+    assert!(
+        out.contains("for commands"),
+        "input box should stay for /permissions rule entry: {out}"
+    );
+}
+
 #[test]
 fn test_full_flow_viewport() {
     let mut app = working();

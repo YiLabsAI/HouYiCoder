@@ -39,6 +39,30 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
+/// Whether the open command pane retracts the input box. /permissions is
+/// excluded — its Add/Remove sub-mode types rule specs into the input box.
+fn pane_hides_input(app: &App) -> bool {
+    matches!(
+        app.pane,
+        Pane::Model
+            | Pane::Hooks
+            | Pane::Status
+            | Pane::Memory
+            | Pane::Worktree
+            | Pane::Trajectory
+            | Pane::Resume
+    )
+}
+
+/// Whether the open command pane retracts the status bar. Broader than
+/// pane_hides_input: /permissions keeps its input box but still hides the
+/// status row. Caveat: the mode pill + ask-before-git toggle live on the
+/// status bar, so hiding drops two permission-relevant reads (follow-up:
+/// move them into the pane).
+fn pane_hides_status(app: &App) -> bool {
+    pane_hides_input(app) || matches!(app.pane, Pane::Permission)
+}
+
 /// Working mode layout: content area, an inline palette/search cell when open,
 /// the 1-line status bar, and the input box pinned to the bottom. No progress
 /// header or pane-tab strip; the status bar carries the progress bar.
@@ -51,19 +75,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     // can move the cursor in wrapped space with the same column count.
     let content_cols = (f.area().width as usize).saturating_sub(4);
     app.last_cols.set(content_cols);
-    // When a browsing pane is open, the input box is hidden — its space goes
-    // to the pane (no gap). input_h = 0 means the constraint reserves nothing
-    // and the transcript/pane area expands.
-    let pane_hides_input = matches!(
-        app.pane,
-        Pane::Model
-            | Pane::Hooks
-            | Pane::Status
-            | Pane::Memory
-            | Pane::Worktree
-            | Pane::Trajectory
-            | Pane::Resume
-    );
+    let pane_hides_input = pane_hides_input(app);
     let input_h = if pane_hides_input {
         0
     } else {
@@ -119,11 +131,8 @@ fn draw_working(f: &mut Frame, app: &App) {
     } else {
         None
     };
-    // The status bar hides alongside the input bar when a command pane is
-    // open: the pane owns the bottom of the screen, and the status row's
-    // model/dir context is not actionable while a pane is focused. Hiding
-    // it reclaims the row for the pane content.
-    let status_h = if pane_hides_input { 0 } else { 1 };
+    let pane_hides_status = pane_hides_status(app);
+    let status_h = if pane_hides_status { 0 } else { 1 };
     constraints.push(Constraint::Length(status_h));
     let status_idx = constraints.len() - 1;
     let outer = Layout::default()
