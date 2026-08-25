@@ -38,9 +38,26 @@ pub mod worktree_pane;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
+    style::Color,
 };
 
 use crate::state::{App, Screen};
+
+/// Map an agent badge color name to a foreground color. Unknown names fall
+/// back to None so a misspelled color renders the default foreground rather
+/// than a wrong hue. Shared by the teammate banner + the inline fold-group
+/// summary so both read one source.
+pub(crate) fn badge_color(name: &str) -> Option<Color> {
+    Some(match name {
+        "red" => Color::Red,
+        "green" => Color::Green,
+        "blue" => Color::Blue,
+        "yellow" => Color::Yellow,
+        "cyan" => Color::Cyan,
+        "magenta" => Color::Magenta,
+        _ => return None,
+    })
+}
 
 /// Top-level draw: pick a screen. The slash palette is rendered inline as
 /// part of the working-surface layout (see working::draw), not as a floating
@@ -86,6 +103,25 @@ pub fn centered(width_pct: u16, height_pct: u16, area: Rect) -> Rect {
 mod tests {
     use crate::composition;
     use crate::test_support::render_text;
+
+    use super::badge_color;
+    use ratatui::style::Color;
+
+    #[test]
+    fn test_badge_color_known() {
+        assert_eq!(badge_color("red"), Some(Color::Red));
+        assert_eq!(badge_color("green"), Some(Color::Green));
+        assert_eq!(badge_color("blue"), Some(Color::Blue));
+        assert_eq!(badge_color("yellow"), Some(Color::Yellow));
+        assert_eq!(badge_color("cyan"), Some(Color::Cyan));
+        assert_eq!(badge_color("magenta"), Some(Color::Magenta));
+    }
+
+    #[test]
+    fn test_badge_color_unknown() {
+        assert_eq!(badge_color("chartreuse"), None);
+        assert_eq!(badge_color(""), None);
+    }
 
     #[test]
     fn test_dump_working_after_login() {

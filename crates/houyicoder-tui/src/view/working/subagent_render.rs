@@ -2,22 +2,27 @@
 //! flow. Split from working_transcript so the row builder stays under the
 //! size gate.
 
+use ratatui::style::Style;
 use ratatui::text::Line;
 
 use crate::records::TranscriptLine;
 use crate::state::App;
+use crate::view::badge_color;
 
 /// Render a Subagent delegation as an inline fold-group in the parent flow.
 /// Collapsed shows the subagent type + summary + an expand hint; expanded
 /// shows the collapse hint + the child transcript rows once loaded. The
 /// expand state is keyed by child_sid so it survives the per-batch
-/// transcript rebuild. The parent message list is never swapped out.
+/// transcript rebuild. The parent message list is never swapped out. The
+/// badge color, when set, tints the summary header so multiple delegations
+/// are distinguishable at a glance.
 #[expect(clippy::too_many_arguments, reason = "row builder params")]
 pub(crate) fn push_subagent_rows(
     child_sid: &str,
     subagent_type: &str,
     summary: &str,
     folded_transcript: &[TranscriptLine],
+    color: Option<&str>,
     grp: Option<&str>,
     width: u16,
     app: &App,
@@ -38,12 +43,18 @@ pub(crate) fn push_subagent_rows(
         "(ctrl+o to expand)"
     };
     let head = format!("\u{23bf} {subagent_type}: {summary}  {hint}");
-    rows.push((PLAIN, head, None));
+    rows.push((PLAIN, head.clone(), None));
     row_callids.push(None);
     fold_keys.push(None);
     expanded_group.push(grp_key.clone());
     turn_ids.push(None);
-    pre_rendered.push(None);
+    // When the agent has a badge color, publish a styled line so the
+    // summary header tints with it; else None lets the default render
+    // path draw the plain head.
+    let styled = color
+        .and_then(badge_color)
+        .map(|c| Line::from(head).style(Style::default().fg(c)));
+    pre_rendered.push(styled);
     if expanded {
         if folded_transcript.is_empty() {
             rows.push((SYSTEM, "  child transcript not yet loaded".into(), None));

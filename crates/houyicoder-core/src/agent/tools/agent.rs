@@ -104,9 +104,12 @@ impl Tool for AgentTool {
             let resolve_ctx = ResolveCtx::default().with_denied(ctx.denied_agents.iter().cloned());
             // Resolve here for the deny check + a fast, useful error; the
             // runtime re-resolves to materialize the child (same registry).
-            if let Err(e) = registry.resolve(&subagent_type, &resolve_ctx) {
-                return Err(ToolError::Failed(resolve_err_msg(e)));
-            }
+            // The resolved def also carries the badge color surfaced in the
+            // tool result so the TUI can color the teammate header + fold
+            // summary without a second lookup.
+            let def = registry
+                .resolve(&subagent_type, &resolve_ctx)
+                .map_err(|e| ToolError::Failed(resolve_err_msg(e)))?;
             let prompt = input
                 .get("prompt")
                 .and_then(|v| v.as_str())
@@ -136,7 +139,7 @@ impl Tool for AgentTool {
                 ));
             };
             match handle.spawn(&ctx, args).await {
-                Ok(outcome) => Ok(build_tool_result(outcome)),
+                Ok(outcome) => Ok(build_tool_result(outcome, def.color.as_deref())),
                 Err(failure) => Err(ToolError::Failed(spawn_failure_msg(failure))),
             }
         })
@@ -201,7 +204,7 @@ fn spawn_failure_msg(f: houyicoder_api::spawn::SpawnFailure) -> String {
 /// "nothing" as "done"; a summary past the 100k char cap is tail-truncated
 /// (the conclusion is what matters) with a note that the child log holds the
 /// full output.
-fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome) -> Value {
+fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome, color: Option<&str>) -> Value {
     let usage = outcome.usage.unwrap_or_default();
     let status = outcome.status.unwrap_or_default();
     let child = outcome.child_session_id.clone();
@@ -223,11 +226,20 @@ fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome) -> Value {
             .collect();
         content = format!("[truncated; the child log holds the full output]\n{tail}",);
     }
+    // The badge color is surfaced so the TUI can color the teammate header
+    // and the inline fold-group summary without a registry lookup. Null
+    // (not omitted) when the agent has no color, so the TUI distinguishes
+    // unset from a default.
+    let color = match color {
+        Some(c) => Value::String(c.to_string()),
+        None => Value::Null,
+    };
     json!({
         "status": status,
         "content": content,
         "agentId": child,
         "result_ref": result_ref,
+        "color": color,
         "usage": {
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
@@ -400,8 +412,24 @@ mod tests {
     fn test_tool_result_placeholder() {
         use houyicoder_api::spawn::SpawnOutcome;
         use houyicoder_protocol::llm::Usage;
-        let out = build_tool_result(SpawnOutcome::sync("c1", "completed", "", Usage::default()));
+        let out = build_tool_result(
+            SpawnOutcome::sync("c1", "completed", "", Usage::default()),
+            None,
+        );
         assert_eq!(out["content"], "(Subagent returned no output.)");
+        // No color surfaces as JSON null, not omitted.
+        assert!(out["color"].is_null());
+    }
+
+    #[test]
+    fn test_tool_result_carries_color() {
+        use houyicoder_api::spawn::SpawnOutcome;
+        use houyicoder_protocol::llm::Usage;
+        let out = build_tool_result(
+            SpawnOutcome::sync("c1", "completed", "done", Usage::default()),
+            Some("red"),
+        );
+        assert_eq!(out["color"], "red");
     }
 
     #[test]
@@ -411,12 +439,10 @@ mod tests {
         // 100k + 5 chars: the tail keeps the last 100k; the marker notes the
         // child log holds the full output.
         let big: String = "a".repeat(100_005);
-        let out = build_tool_result(SpawnOutcome::sync(
-            "child-xyz",
-            "completed",
-            &big,
-            Usage::default(),
-        ));
+        let out = build_tool_result(
+            SpawnOutcome::sync("child-xyz", "completed", &big, Usage::default()),
+            None,
+        );
         let content = out["content"].as_str().unwrap();
         assert!(content.starts_with("[truncated; the child log holds the full output]"));
         // tail-preserving: the last chars of the original survive.

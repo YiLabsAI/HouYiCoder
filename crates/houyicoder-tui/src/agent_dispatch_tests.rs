@@ -712,6 +712,7 @@ fn test_subagent_renders_collapsed() {
         subagent_type: "explore".into(),
         summary: "found auth module".into(),
         folded_transcript: Vec::new(),
+        color: None,
     });
     let out = crate::test_support::render_text(&app, 80, 24);
     assert!(out.contains("explore"), "subagent type renders: {out}");
@@ -736,6 +737,7 @@ fn test_subagent_renders_expanded() {
         subagent_type: "explore".into(),
         summary: "found auth module".into(),
         folded_transcript: Vec::new(),
+        color: None,
     });
     app.expanded_subagents.insert("child-1".into());
     let out = crate::test_support::render_text(&app, 80, 24);
@@ -763,6 +765,7 @@ fn test_subagent_expanded_renders_child() {
         subagent_type: "explore".into(),
         summary: "found auth module".into(),
         folded_transcript: vec![TranscriptLine::Agent("child reply: auth is here".into())],
+        color: None,
     });
     app.expanded_subagents.insert("child-1".into());
     let out = crate::test_support::render_text(&app, 80, 24);
@@ -786,6 +789,7 @@ fn test_subagent_toggle_expand() {
         subagent_type: "explore".into(),
         summary: "found auth".into(),
         folded_transcript: Vec::new(),
+        color: None,
     });
     assert!(app.expanded_subagents.is_empty(), "starts collapsed");
     assert!(app.toggle_subagent_expand(), "toggle returns true");
@@ -851,6 +855,7 @@ fn test_subagent_expand_stable_index() {
         subagent_type: "explore".into(),
         summary: "found auth".into(),
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+        color: None,
     });
     app.transcript
         .push(TranscriptLine::Agent("parent result".into()));
@@ -883,6 +888,7 @@ fn test_subagent_row_count() {
         subagent_type: "explore".into(),
         summary: "found auth".into(),
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+        color: None,
     };
     // Collapsed: 1 head row.
     assert_eq!(app.line_display_rows(&sub), 1);
@@ -896,6 +902,7 @@ fn test_subagent_row_count() {
         subagent_type: "explore".into(),
         summary: "no output".into(),
         folded_transcript: Vec::new(),
+        color: None,
     };
     app.expanded_subagents.insert("c2".into());
     assert_eq!(app.line_display_rows(&empty_sub), 2);
@@ -917,6 +924,7 @@ fn test_child_transcript_fills_folded() {
         subagent_type: "explore".into(),
         summary: "found auth".into(),
         folded_transcript: Vec::new(),
+        color: None,
     });
     let frames = vec![
         TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
@@ -963,6 +971,7 @@ fn test_child_transcript_empty_unavailable() {
         subagent_type: "explore".into(),
         summary: "found auth".into(),
         folded_transcript: Vec::new(),
+        color: None,
     });
     app.handle_agent_message(AgentMessage::ChildTranscriptResult {
         child_sid: "c1".into(),
@@ -998,6 +1007,7 @@ fn test_child_transcript_preserves_position() {
         subagent_type: "explore".into(),
         summary: "found auth".into(),
         folded_transcript: Vec::new(),
+        color: None,
     });
     app.transcript.push(TranscriptLine::Agent("after".into()));
     app.handle_agent_message(AgentMessage::ChildTranscriptResult {
@@ -1034,6 +1044,7 @@ fn test_subagent_collapse_keeps_folded() {
         subagent_type: "explore".into(),
         summary: "found auth".into(),
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+        color: None,
     });
     // Expand, then collapse: the child rows survive the collapse.
     app.toggle_subagent_expand();
@@ -1064,12 +1075,14 @@ fn test_subagent_cursor_targeting() {
         subagent_type: "explore".into(),
         summary: "first".into(),
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+        color: None,
     });
     app.transcript.push(TranscriptLine::Subagent {
         child_sid: "c2".into(),
         subagent_type: "plan".into(),
         summary: "second".into(),
         folded_transcript: vec![TranscriptLine::Agent("child reply 2".into())],
+        color: None,
     });
     app.selection.start(0, 0);
     app.toggle_subagent_expand();
@@ -1197,12 +1210,14 @@ fn test_enter_teammate_targets_cursor() {
         subagent_type: "explore".into(),
         summary: "first".into(),
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+        color: None,
     });
     app.transcript.push(TranscriptLine::Subagent {
         child_sid: "c2".into(),
         subagent_type: "plan".into(),
         summary: "second".into(),
         folded_transcript: vec![TranscriptLine::Agent("child reply 2".into())],
+        color: None,
     });
     app.selection.start(0, 0);
     assert!(
@@ -1235,6 +1250,7 @@ fn test_exit_teammate_clears_view() {
         subagent_type: "explore".into(),
         summary: "first".into(),
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+        color: None,
     });
     assert!(app.enter_teammate_view());
     assert!(app.teammate_view.is_some());
@@ -1264,6 +1280,7 @@ fn test_teammate_view_fill_isomorphic() {
         subagent_type: "explore".into(),
         summary: "found auth".into(),
         folded_transcript: Vec::new(),
+        color: None,
     });
     // Enter with an unloaded fold: the view opens empty and the fetch fires.
     assert!(app.enter_teammate_view());
@@ -1328,12 +1345,14 @@ fn test_other_child_keeps_view() {
         subagent_type: "explore".into(),
         summary: "first".into(),
         folded_transcript: vec![TranscriptLine::Agent("viewed child".into())],
+        color: None,
     });
     app.transcript.push(TranscriptLine::Subagent {
         child_sid: "c2".into(),
         subagent_type: "plan".into(),
         summary: "second".into(),
         folded_transcript: Vec::new(),
+        color: None,
     });
     app.selection.start(0, 0);
     assert!(app.enter_teammate_view());
@@ -1380,6 +1399,7 @@ fn test_cursor_past_tail_fallback() {
         subagent_type: "explore".into(),
         summary: "first".into(),
         folded_transcript: vec![TranscriptLine::Agent("reply".into())],
+        color: None,
     });
     // A content row well past the one line in the transcript.
     app.selection.start(999, 999);
@@ -1425,12 +1445,14 @@ fn test_cursor_after_fold_group() {
         subagent_type: "explore".into(),
         summary: "first".into(),
         folded_transcript: vec![TranscriptLine::Agent("reply1".into())],
+        color: None,
     });
     app.transcript.push(TranscriptLine::Subagent {
         child_sid: "c2".into(),
         subagent_type: "plan".into(),
         summary: "second".into(),
         folded_transcript: vec![TranscriptLine::Agent("reply2".into())],
+        color: None,
     });
     // c1 sits at transcript index 2. fold_aware_rows gives its start row in
     // the same space the mouse sets content_row. A flat walk would land it

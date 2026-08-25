@@ -402,6 +402,7 @@ pub(crate) fn push_line_rows(
         subagent_type,
         summary,
         folded_transcript,
+        color,
     } = line
     {
         super::subagent_render::push_subagent_rows(
@@ -409,6 +410,7 @@ pub(crate) fn push_line_rows(
             subagent_type,
             summary,
             folded_transcript,
+            color.as_deref(),
             grp,
             width,
             app,

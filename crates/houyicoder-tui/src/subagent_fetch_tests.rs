@@ -21,6 +21,7 @@ fn test_expand_fetches_child_wired() {
         subagent_type: "explore".into(),
         summary: "found auth".into(),
         folded_transcript: Vec::new(),
+        color: None,
     });
     // First expand: fires a one-shot fetch (the line has no child rows yet).
     assert!(app.toggle_subagent_expand(), "toggle targeted the subagent");

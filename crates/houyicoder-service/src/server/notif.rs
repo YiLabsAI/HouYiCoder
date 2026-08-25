@@ -34,10 +34,12 @@ impl Server {
                         mode,
                     )),
                 ));
-                drop(
-                    io.send_frame(encode(&frame).expect("encode mode frame"))
-                        .await,
-                );
+                // Encode failure is survivable: skip the frame and keep the
+                // serve loop alive rather than panicking the task, matching
+                // the between-run dispatch path's graceful error return.
+                if let Ok(encoded) = encode(&frame) {
+                    drop(io.send_frame(encoded).await);
+                }
             }
             FrontendRequest::ChildTranscript { child_sid } => {
                 let frames = self.child_transcript_frames(&child_sid).await;
@@ -45,10 +47,9 @@ impl Server {
                     req_id,
                     ResponsePayload::ChildTranscript { child_sid, frames },
                 ));
-                drop(
-                    io.send_frame(encode(&frame).expect("encode child frame"))
-                        .await,
-                );
+                if let Ok(encoded) = encode(&frame) {
+                    drop(io.send_frame(encoded).await);
+                }
             }
             _ => {}
         }

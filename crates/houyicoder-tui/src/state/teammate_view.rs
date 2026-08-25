@@ -39,11 +39,13 @@ impl App {
                 subagent_type,
                 summary,
                 folded_transcript,
+                color,
             } = line
                 && sid == &child_sid
             {
                 view.subagent_type = subagent_type.clone();
                 view.summary = summary.clone();
+                view.color = color.clone();
                 if !folded_transcript.is_empty() {
                     view.transcript = folded_transcript.clone();
                     fire_fetch = false;

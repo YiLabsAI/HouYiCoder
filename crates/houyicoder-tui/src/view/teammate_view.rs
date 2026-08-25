@@ -13,11 +13,12 @@ use ratatui::{
 };
 
 use crate::state::App;
+use crate::view::badge_color;
 
 /// Draw the teammate-view banner. No-op when no teammate is in view. The
 /// banner is a single line: "Viewing @type · esc return". The agent name
-/// renders bold; per-agent color wiring lands with the color-badge task,
-/// so the name is bold-only here until that lands.
+/// renders bold and, when the agent has a badge color, tinted with it so
+/// the viewed teammate is distinguishable from siblings.
 pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
     let Some(view) = app.teammate_view.as_ref() else {
         return;
@@ -27,12 +28,13 @@ pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
     } else {
         view.subagent_type.as_str()
     };
+    let mut name_style = Style::default().add_modifier(Modifier::BOLD);
+    if let Some(fg) = view.color.as_deref().and_then(badge_color) {
+        name_style = name_style.fg(fg);
+    }
     let line = Line::from(vec![
         Span::raw("Viewing "),
-        Span::styled(
-            format!("@{name}"),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(format!("@{name}"), name_style),
         Span::raw(" · esc return"),
     ]);
     f.render_widget(Paragraph::new(line), area);
@@ -49,6 +51,7 @@ mod tests {
             child_sid: "c1".into(),
             subagent_type: "explore".into(),
             summary: "find auth".into(),
+            color: None,
             transcript: vec![],
         });
         let view = app.teammate_view.as_ref().unwrap();
@@ -67,6 +70,7 @@ mod tests {
             child_sid: "c2".into(),
             subagent_type: String::new(),
             summary: String::new(),
+            color: None,
             transcript: vec![],
         });
         let view = app.teammate_view.as_ref().unwrap();
@@ -91,6 +95,7 @@ mod tests {
             child_sid: "c1".into(),
             subagent_type: "explore".into(),
             summary: "find auth".into(),
+            color: None,
             transcript: vec![TranscriptLine::Agent("child reply".into())],
         });
         let out = render_text(&app, 80, 24);
@@ -120,6 +125,33 @@ mod tests {
         assert!(
             !out.contains("Viewing @"),
             "no banner when teammate_view is None, got:\n{out}"
+        );
+    }
+
+    /// A badge color on the viewed teammate is carried into the banner so the
+    /// name is distinguishable from siblings. Pins the color wiring against a
+    /// regression that drops it.
+    #[test]
+    fn test_banner_carries_badge_color() {
+        use crate::test_support::{render_buffer, working_app};
+        let mut app = working_app();
+        app.teammate_view = Some(crate::records::TeammateView {
+            child_sid: "c1".into(),
+            subagent_type: "verify".into(),
+            summary: "ran deep review".into(),
+            color: Some("red".into()),
+            transcript: vec![],
+        });
+        let buf = render_buffer(&app, 80, 24);
+        // The banner is the only row carrying an "@"; assert the @ cell is
+        // red so the badge color carried through to the banner name.
+        let hit = buf
+            .content()
+            .iter()
+            .any(|c| c.fg == ratatui::style::Color::Red && c.symbol() == "@");
+        assert!(
+            hit,
+            "the @verify name carries the red badge color, got buffer with no red @ cell"
         );
     }
 }

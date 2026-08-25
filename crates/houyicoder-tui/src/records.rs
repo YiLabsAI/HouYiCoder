@@ -159,6 +159,10 @@ pub enum TranscriptLine {
         /// Empty: the on-expand fetch from the child session log is not
         /// yet wired.
         folded_transcript: Vec<TranscriptLine>,
+        /// The agent's badge color, surfaced from the resolved
+        /// AgentDefinition so the teammate header and the inline summary
+        /// row share one source. None when the agent has no color set.
+        color: Option<String>,
     },
 }
 
@@ -184,11 +188,16 @@ pub(crate) fn subagent_line(
         .and_then(|v| v.as_str())
         .unwrap_or("general-purpose")
         .to_string();
+    let color = output
+        .get("color")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     Some(TranscriptLine::Subagent {
         child_sid,
         subagent_type,
         summary,
         folded_transcript: Vec::new(),
+        color,
     })
 }
 
@@ -206,6 +215,9 @@ pub struct TeammateView {
     pub subagent_type: String,
     /// The one-line summary, shown dim under the banner title.
     pub summary: String,
+    /// The agent's badge color, applied to the banner name. None renders
+    /// the default foreground.
+    pub color: Option<String>,
     /// The child's projected transcript. Empty until the fetch returns.
     pub transcript: Vec<TranscriptLine>,
 }

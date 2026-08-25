@@ -256,6 +256,7 @@ fn test_agent_result_renders_subagent() {
             subagent_type,
             summary,
             folded_transcript,
+            color: _,
         } => {
             assert_eq!(child_sid, "child-sess-42");
             assert_eq!(subagent_type, "explore");

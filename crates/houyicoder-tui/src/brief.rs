@@ -45,7 +45,16 @@ pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
                 .get("subagent_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("general-purpose");
-            format!("→ {st}")
+            // Cap the type so a malformed or very long name keeps the chip
+            // one line, matching the budget every other arm enforces.
+            const MAX_TYPE: usize = 40;
+            let capped = if st.chars().count() > MAX_TYPE {
+                let cut: String = st.chars().take(MAX_TYPE - 1).collect();
+                format!("{cut}\u{2026}")
+            } else {
+                st.to_string()
+            };
+            format!("→ {capped}")
         }
         _ => value_brief(input),
     }
@@ -530,5 +539,25 @@ mod tests {
     fn test_agent_brief_defaults() {
         let input = serde_json::json!({"prompt": "do stuff"});
         assert_eq!(tool_call_brief("agent", &input), "→ general-purpose");
+    }
+
+    /// A long subagent_type is capped so the chip stays one line, matching
+    /// the budget every other arm enforces. Pins the cap against a regression
+    /// that drops it and overflows the row.
+    #[test]
+    fn test_agent_brief_caps_long() {
+        let long = "a".repeat(200);
+        let input = serde_json::json!({"subagent_type": long});
+        let brief = tool_call_brief("agent", &input);
+        assert!(
+            brief.chars().count() <= 44,
+            "long type capped to one chip line, got {} chars",
+            brief.chars().count()
+        );
+        assert!(
+            brief.ends_with('\u{2026}'),
+            "long type truncated with an ellipsis, got {brief}"
+        );
+        assert!(brief.starts_with("→ "), "prefix preserved, got {brief}");
     }
 }
