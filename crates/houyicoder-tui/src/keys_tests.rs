@@ -634,18 +634,21 @@ fn worktree_app_with_rows() -> App {
             head: "abcdef0".into(),
             branch: "main".into(),
             is_current: false,
+            ..Default::default()
         },
         composition::WorktreeEntry {
             path: "/b".into(),
             head: "1234567".into(),
             branch: "dev".into(),
             is_current: false,
+            ..Default::default()
         },
         composition::WorktreeEntry {
             path: "/c".into(),
             head: "fedcba0".into(),
             branch: "feat".into(),
             is_current: false,
+            ..Default::default()
         },
     ];
     app.input.clear();

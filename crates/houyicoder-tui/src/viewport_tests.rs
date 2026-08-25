@@ -465,12 +465,14 @@ fn test_worktree_pane_renders_columns() {
             head: "abcdef0".into(),
             branch: "main".into(),
             is_current: true,
+            ..Default::default()
         },
         crate::composition::WorktreeEntry {
             path: "/some/repo/beta".into(),
             head: "1234567".into(),
             branch: "dev".into(),
             is_current: false,
+            ..Default::default()
         },
     ];
     let out = render(&app);
@@ -501,6 +503,7 @@ fn test_worktree_pane_scroll() {
             head: format!("head{i}"),
             branch: format!("branch{i}"),
             is_current: i == 0,
+            ..Default::default()
         })
         .collect();
     app.worktree_entries = entries;
@@ -551,6 +554,7 @@ fn test_worktree_pane_detail() {
         head: "abcdef0".into(),
         branch: "main".into(),
         is_current: true,
+        ..Default::default()
     }];
     app.worktree_level.set(1);
     let out = render(&app);

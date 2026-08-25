@@ -9,13 +9,19 @@ use std::process::Command;
 
 /// One linked worktree row. path is the working tree, head is the short HEAD
 /// sha, branch is the ref (or a bare marker), is_current flags the worktree
-/// whose path matches the project working directory.
+/// whose path matches the project working directory. last_modified is the
+/// directory mtime in seconds since the epoch (0 if unknown). dirty_summary
+/// is empty when clean, or a breakdown like "3 modified, 1 untracked" when
+/// git status --porcelain reports uncommitted changes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorktreeEntry {
     pub path: String,
     pub head: String,
     pub branch: String,
     pub is_current: bool,
+    pub last_modified: u64,
+    /// Empty when clean; otherwise a breakdown like "3 modified, 1 untracked".
+    pub dirty_summary: String,
 }
 
 /// Run git worktree list --porcelain against the project root and parse the
@@ -89,7 +95,88 @@ pub fn parse_worktrees(repo_root: Option<&str>, working_dir: &str) -> Vec<Worktr
             e.is_current = true;
         }
     }
+    // Collect last-modified time (directory mtime) + dirty status per
+    // worktree. The mtime drives the recency sort + the time column; the
+    // dirty flag drives the ! marker. Both are cheap (one stat + one git
+    // status --porcelain per worktree). Git status on the main repo may
+    // be slow if the index is large, but it runs on pane-open only.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    for e in &mut entries {
+        e.last_modified = std::fs::metadata(&e.path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Parse git status --porcelain into a dirty summary (modified /
+        // staged / untracked counts). Empty output = clean.
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&e.path)
+            .arg("status")
+            .arg("--porcelain")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .output();
+        e.dirty_summary = status
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .map(|s| dirty_summary(&s))
+            .unwrap_or_default();
+    }
+    // Sort: current first, then by last-modified descending (most recently
+    // active at the top, stale worktrees sink to the bottom for cleanup).
+    entries.sort_by(|a, b| {
+        b.is_current
+            .cmp(&a.is_current)
+            .then_with(|| b.last_modified.cmp(&a.last_modified))
+    });
+    // Suppress unused-variable warning when now is not read elsewhere.
+    let _ = now;
     entries
+}
+
+/// Parse git status --porcelain output into a human-readable breakdown.
+/// Returns an empty string when clean, or "N modified, N untracked"
+/// (staged included in modified). Each porcelain line's first two chars
+/// encode the index status (staged) and the working-tree status.
+fn dirty_summary(status: &str) -> String {
+    let mut modified = 0u32;
+    let mut staged = 0u32;
+    let mut untracked = 0u32;
+    for line in status.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let index = bytes.first().copied().unwrap_or(b' ');
+        let wt = bytes.get(1).copied().unwrap_or(b' ');
+        if line.starts_with("??") {
+            untracked += 1;
+        } else {
+            if index != b' ' && index != b'?' {
+                staged += 1;
+            }
+            if wt != b' ' && wt != b'?' {
+                modified += 1;
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    if staged > 0 {
+        parts.push(format!("{staged} staged"));
+    }
+    if modified > 0 {
+        parts.push(format!("{modified} modified"));
+    }
+    if untracked > 0 {
+        parts.push(format!("{untracked} untracked"));
+    }
+    parts.join(", ")
 }
 
 #[cfg(test)]

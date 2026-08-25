@@ -121,6 +121,12 @@ fn draw_detail(f: &mut Frame, area: Rect, e: &WorktreeEntry) {
     if e.is_current {
         lines.push(Line::from("Status:   current worktree"));
     }
+    let changes = if e.dirty_summary.is_empty() {
+        "clean".to_string()
+    } else {
+        e.dirty_summary.clone()
+    };
+    lines.push(Line::from(format!("Changes:  {changes}")));
     lines.push(Line::from(""));
     lines.push(Line::from("  e=enter Esc=back to list").style(Style::new().fg(Color::DarkGray)));
     f.render_widget(Paragraph::new(lines), area);
@@ -135,7 +141,13 @@ fn worktree_items(app: &App, filtered_idx: &[usize], cur: usize) -> Vec<ListItem
         .map(|&idx| {
             let e = &app.worktree_entries[idx];
             let is_cursor = idx == cur;
-            let cur_marker = if e.is_current { " * " } else { "   " };
+            let cur_marker = if e.is_current {
+                " * "
+            } else if !e.dirty_summary.is_empty() {
+                " ! "
+            } else {
+                "   "
+            };
             let path_style = if is_cursor {
                 Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
@@ -156,10 +168,37 @@ fn worktree_items(app: &App, filtered_idx: &[usize], cur: usize) -> Vec<ListItem
                     Style::new().fg(Color::DarkGray),
                 ),
             ];
+            if e.last_modified > 0 {
+                spans.push(Span::styled(
+                    format!(" {}", relative_time(e.last_modified)),
+                    Style::new().fg(Color::DarkGray),
+                ));
+            }
             if e.is_current {
                 spans.push(Span::styled("  (current)", Style::new().fg(Color::Green)));
             }
             ListItem::new(Line::from(spans))
         })
         .collect()
+}
+
+/// Format a last-modified epoch timestamp as a short relative string ("just
+/// now", "5m ago", "3h ago", "2d ago", "1w ago").
+fn relative_time(epoch: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let elapsed = now.saturating_sub(epoch);
+    if elapsed < 60 {
+        "just now".to_string()
+    } else if elapsed < 3600 {
+        format!("{}m ago", elapsed / 60)
+    } else if elapsed < 86400 {
+        format!("{}h ago", elapsed / 3600)
+    } else if elapsed < 604800 {
+        format!("{}d ago", elapsed / 86400)
+    } else {
+        format!("{}w ago", elapsed / 604800)
+    }
 }

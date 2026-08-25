@@ -92,6 +92,7 @@ mod tests {
             head: "abcdef0".into(),
             branch: "main".into(),
             is_current: false,
+            ..Default::default()
         }
     }
 
