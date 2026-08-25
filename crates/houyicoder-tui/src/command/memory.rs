@@ -92,32 +92,28 @@ impl App {
     /// never points past the new list.
     pub fn cycle_memory_scope(&mut self) {
         self.memory_scope_tab = self.memory_scope_tab.next();
-        self.memory_cursor = 0;
+        self.memory_list.cursor = 0;
     }
 
     /// Cycle the /memory pane scope filter backward (Left arrow).
     /// See cycle_memory_scope.
     pub fn cycle_memory_scope_prev(&mut self) {
         self.memory_scope_tab = self.memory_scope_tab.prev();
-        self.memory_cursor = 0;
+        self.memory_list.cursor = 0;
     }
 
     /// Move the /memory pane cursor one row up/down, clamped to the
-    /// scope-filtered list. No-op when the filtered list is empty.
+    /// scope-filtered list. No-op when the filtered list is empty. Delegates
+    /// the clamp + move to ListPaneState so the logic is shared with the
+    /// worktree pane (and any future list pane).
     pub fn move_memory_cursor(&mut self, delta: i32) {
         let n = crate::command::render::filtered_memory(
             &self.memory_entries,
             self.memory_scope_tab,
-            &self.memory_search,
+            &self.memory_list.query,
         )
         .len();
-        if n == 0 {
-            self.memory_cursor = 0;
-            return;
-        }
-        let cur = self.memory_cursor.min(n - 1) as i32;
-        let next = (cur + delta).clamp(0, (n - 1) as i32) as usize;
-        self.memory_cursor = next;
+        self.memory_list.move_cursor(delta, n);
     }
 
     /// Forget the memory row under the cursor (the d action). Sends the
@@ -127,9 +123,9 @@ impl App {
         let (key, scope) = match crate::command::render::filtered_memory(
             &self.memory_entries,
             self.memory_scope_tab,
-            &self.memory_search,
+            &self.memory_list.query,
         )
-        .get(self.memory_cursor)
+        .get(self.memory_list.cursor)
         {
             Some(m) => (m.topic.clone(), m.scope.clone()),
             None => return,
@@ -156,9 +152,9 @@ impl App {
         let key = match crate::command::render::filtered_memory(
             &self.memory_entries,
             self.memory_scope_tab,
-            &self.memory_search,
+            &self.memory_list.query,
         )
-        .get(self.memory_cursor)
+        .get(self.memory_list.cursor)
         {
             Some(m) => m.topic.clone(),
             None => return,
@@ -176,7 +172,7 @@ impl App {
     /// cursor so it never points past the narrowed list.
     pub fn set_memory_search(&mut self, term: &str) {
         self.pane = crate::state::Pane::Memory;
-        self.memory_search = term.to_string();
-        self.memory_cursor = 0;
+        self.memory_list.query = term.to_string();
+        self.memory_list.cursor = 0;
     }
 }

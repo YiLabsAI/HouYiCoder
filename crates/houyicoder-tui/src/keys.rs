@@ -531,9 +531,9 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Enter if app.pane == Pane::Memory && app.input.is_empty() => {
             app.show_memory_at_cursor()
         }
-        KeyCode::Esc if app.pane == Pane::Memory && !app.memory_search.is_empty() => {
-            app.memory_search.clear();
-            app.memory_cursor = 0;
+        KeyCode::Esc if app.pane == Pane::Memory && app.memory_list.searching() => {
+            app.memory_list.clear_query();
+            app.memory_list.cursor = 0;
         }
         // Esc on the /memory pane with no text filter dismisses the pane back
         // to the transcript. The pane footer advertises "Esc close", so the

@@ -50,17 +50,21 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     // with the d/enter actions so the cursor the user sees is the one the
     // action hits.
     let filtered =
-        crate::command::render::filtered_memory(&app.memory_entries, tab, &app.memory_search);
+        crate::command::render::filtered_memory(&app.memory_entries, tab, &app.memory_list.query);
     // When a text filter is set, show it as a row so the user sees the active
-    // query (Esc clears it).
-    if !app.memory_search.is_empty() {
+    // query (Esc clears it). The shared hint line keeps the shape identical
+    // across list panes.
+    if app.memory_list.searching() {
         lines.push(
-            Line::from(format!("  search: [{}]  (Esc clears)", app.memory_search))
-                .style(Style::new().fg(Color::DarkGray)),
+            Line::from(format!(
+                "  {}",
+                crate::list_pane_state::search_hint_line(&app.memory_list.query)
+            ))
+            .style(Style::new().fg(Color::DarkGray)),
         );
     }
     let n = filtered.len();
-    let cursor = app.memory_cursor.min(n.saturating_sub(1));
+    let cursor = app.memory_list.cursor.min(n.saturating_sub(1));
     lines.push(
         Line::from(format!("memory — {n} stored"))
             .style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),

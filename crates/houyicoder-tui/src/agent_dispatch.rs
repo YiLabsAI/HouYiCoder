@@ -287,7 +287,7 @@ impl App {
                 self.memory_entries = crate::command::render::memory_entries_from_wire(&entries);
                 // Reset the cursor so it never points past the refreshed list
                 // (a forget / rescan shrank it).
-                self.memory_cursor = 0;
+                self.memory_list.cursor = 0;
                 // Reopen the pane ONLY when the user is still on it. A late
                 // list response arriving after the user dismissed the pane
                 // must not yank them back — the refresh is for an active

@@ -219,13 +219,11 @@ pub struct App {
     /// All → User → Project → Auto. All shows the merged set; the others
     /// narrow to one physical root.
     pub memory_scope_tab: crate::state::enums::MemoryScopeTab,
-    /// Cursor into the scope-filtered list (the row Up/Down moves, d forgets,
-    /// enter shows). Clamped to the filtered length at render + action time.
-    pub memory_cursor: usize,
-    /// Text filter narrowing the list by key + description substring
-    /// (case-insensitive). Empty = no text filter. Set by /memory search <term>
-    /// + cleared by Esc. Composes with the scope tab (both must match).
-    pub memory_search: String,
+    /// Cursor + search query for the /memory pane. The cursor indexes the
+    /// scope-and-text-filtered list; move_cursor/clamp take the filtered
+    /// length. The query composes with the scope tab (both must match).
+    /// Adopted from ListPaneState (the worktree pane was the first adopter).
+    pub memory_list: crate::list_pane_state::ListPaneState,
     /// The linked-worktree rows for the /worktrees pane. Refreshed from
     /// parse_worktrees on pane-open. Empty until the user opens the pane (no
     /// background poll — the list is cheap and the pane is one-shot).

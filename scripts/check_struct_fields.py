@@ -27,7 +27,7 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 466
+STRUCT_FIELD_BASELINE = 465
 # The counter regex only matches private and pub fields, so pub(crate)
 # fields drop from the count (known gap); re-raise when the regex is fixed.
 

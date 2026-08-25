@@ -367,7 +367,7 @@ fn test_esc_closes_memory_pane() {
     // With a non-empty text filter, Esc clears the filter (not the pane).
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory_search = "alpha".to_string();
+    app.memory_list.query = "alpha".to_string();
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
         app.pane,
@@ -375,7 +375,7 @@ fn test_esc_closes_memory_pane() {
         "Esc clears the filter, not the pane"
     );
     assert!(
-        app.memory_search.is_empty(),
+        !app.memory_list.searching(),
         "Esc should clear the text filter"
     );
 }

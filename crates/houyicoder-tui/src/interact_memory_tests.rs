@@ -39,16 +39,16 @@ fn test_memory_cursor_moves() {
     );
     // Up back to row 0.
     app.move_memory_cursor(-1);
-    assert_eq!(app.memory_cursor, 0, "cursor returns to 0");
+    assert_eq!(app.memory_list.cursor, 0, "cursor returns to 0");
     // Clamp: past the last row stays at the last.
     app.move_memory_cursor(100);
     assert_eq!(
-        app.memory_cursor, 2,
+        app.memory_list.cursor, 2,
         "cursor clamps to last row under All (3 entries)"
     );
     // Scope cycle resets the cursor to 0 (the filtered list changed).
     app.cycle_memory_scope();
-    assert_eq!(app.memory_cursor, 0, "scope cycle resets cursor");
+    assert_eq!(app.memory_list.cursor, 0, "scope cycle resets cursor");
 }
 
 /// The d action + the /memory forget command both report no carrier in stub
@@ -76,7 +76,7 @@ fn test_list_result_resets_cursor() {
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory_cursor = 5; // deliberately past the list end
+    app.memory_list.cursor = 5; // deliberately past the list end
     app.handle_agent_message(AgentMessage::MemoryListResult {
         entries: vec![MemorySummaryEntry {
             key: "fresh-gate".into(),
@@ -86,7 +86,7 @@ fn test_list_result_resets_cursor() {
             mtime_secs: 0,
         }],
     });
-    assert_eq!(app.memory_cursor, 0, "cursor reset on refresh");
+    assert_eq!(app.memory_list.cursor, 0, "cursor reset on refresh");
     assert!(app.memory_entries.iter().any(|m| m.topic == "fresh-gate"));
     assert_eq!(app.pane, crate::state::Pane::Memory);
 }
@@ -98,11 +98,11 @@ fn test_memory_pane_keys_route() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    assert_eq!(app.memory_cursor, 0);
+    assert_eq!(app.memory_list.cursor, 0);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.memory_cursor, 1, "Down moves cursor");
+    assert_eq!(app.memory_list.cursor, 1, "Down moves cursor");
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.memory_cursor, 0, "Up moves cursor back");
+    assert_eq!(app.memory_list.cursor, 0, "Up moves cursor back");
     // d fires the forget action (stub mode reports no carrier).
     crate::keys::handle_working(
         &mut app,
