@@ -40,6 +40,13 @@ pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
         "bash" | "read" | "write" | "edit" | "multiedit" | "grep" | "glob" => {
             truncate_call_arg(&houyicoder_protocol::tool::tool_invocation(tool, input))
         }
+        "agent" => {
+            let st = input
+                .get("subagent_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general-purpose");
+            format!("→ {st}")
+        }
         _ => value_brief(input),
     }
 }
@@ -511,5 +518,17 @@ mod tests {
         let brief = truncate_call_arg(&long);
         assert!(brief.ends_with('…'));
         assert!(brief.chars().count() <= 161); // 160 + ellipsis
+    }
+
+    #[test]
+    fn test_agent_brief_shows_type() {
+        let input = serde_json::json!({"subagent_type": "explore", "prompt": "find auth"});
+        assert_eq!(tool_call_brief("agent", &input), "→ explore");
+    }
+
+    #[test]
+    fn test_agent_brief_defaults() {
+        let input = serde_json::json!({"prompt": "do stuff"});
+        assert_eq!(tool_call_brief("agent", &input), "→ general-purpose");
     }
 }
