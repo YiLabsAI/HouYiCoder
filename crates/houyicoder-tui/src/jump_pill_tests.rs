@@ -140,6 +140,13 @@ fn test_rescroll_keeps_count() {
 #[test]
 fn test_click_pill_jumps() {
     let mut app = app_scrolled_back();
+    // The idle-state label names the click affordance so the pill reads as
+    // clickable, not just as a status hint.
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("Jump to bottom (click)"),
+        "idle pill label should carry the (click) hint:\n{out}"
+    );
     let pill = app.jump_pill_rect.get();
     assert!(
         pill.height > 0 && pill.width > 0,

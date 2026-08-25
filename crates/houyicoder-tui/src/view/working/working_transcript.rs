@@ -282,7 +282,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
                 if count == 1 { "" } else { "s" }
             )
         } else {
-            " Jump to bottom ↓".to_string()
+            " Jump to bottom (click) ↓".to_string()
         };
         let row = inner.y.saturating_add(inner.height.saturating_sub(1));
         let label_w = (label.chars().count() as u16).min(inner.width);
