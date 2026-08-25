@@ -65,11 +65,13 @@ pub fn truncate_path_with_home(path: &str, max: usize, home: &str) -> String {
         && (path.len() == home.len() || path.as_bytes()[home.len()] == b'/')
     {
         let rest = &path[home.len()..];
-        if rest.starts_with("/.claude/worktrees/") {
-            format!(
-                "~/wt/{}",
-                rest.strip_prefix("/.claude/worktrees/").unwrap_or(rest)
-            )
+        // Match .claude/worktrees/ anywhere after HOME, not just right after
+        // it: linked worktrees live under HOME/<workspace>/.claude/worktrees/,
+        // not HOME/.claude/worktrees/. Abbreviate the whole prefix up to + the
+        // worktrees segment to ~/wt/, keeping only the tail (the slug).
+        if let Some(idx) = rest.find("/.claude/worktrees/") {
+            let tail = &rest[idx + "/.claude/worktrees/".len()..];
+            format!("~/wt/{tail}")
         } else {
             format!("~{rest}")
         }

@@ -486,3 +486,32 @@ fn test_worktree_pane_renders_columns() {
         "path tail renders (truncated): {out}"
     );
 }
+
+/// The pane scrolls to keep the cursor visible when the list is longer than
+/// the pane height. With 20 entries + the cursor on the last, the last row's
+/// branch must render (a Paragraph dump cuts it off below the fold; the
+/// stateful List scrolls it into view). The case the 2-entry test misses.
+#[test]
+fn test_worktree_pane_scroll() {
+    let mut app = working();
+    app.pane = Pane::Worktree;
+    let entries: Vec<crate::composition::WorktreeEntry> = (0..20)
+        .map(|i| crate::composition::WorktreeEntry {
+            path: format!("/repo/wt-{i}"),
+            head: format!("head{i}"),
+            branch: format!("branch{i}"),
+            is_current: i == 0,
+        })
+        .collect();
+    app.worktree_entries = entries;
+    app.worktree_list.cursor = 19;
+    let out = render(&app);
+    assert!(
+        out.contains("branch19"),
+        "cursor row scrolls into view: {out}"
+    );
+    assert!(
+        out.contains("head19"),
+        "cursor row HEAD scrolls into view: {out}"
+    );
+}
