@@ -450,3 +450,39 @@ fn test_scroll_typing_exits() {
         "exit key should not approve a hunk"
     );
 }
+
+/// The /worktrees pane journey: the list renders the count header, a
+/// truncated path column, the HEAD sha + branch, and the current-worktree
+/// marker. Covers the path-column + branch render at unit level (the PTY
+/// layer in ui_worktree covers open + search + the real git repo path).
+#[test]
+fn test_worktree_pane_renders_columns() {
+    let mut app = working();
+    app.pane = Pane::Worktree;
+    app.worktree_entries = vec![
+        crate::composition::WorktreeEntry {
+            path: "/some/repo/alpha".into(),
+            head: "abcdef0".into(),
+            branch: "main".into(),
+            is_current: true,
+        },
+        crate::composition::WorktreeEntry {
+            path: "/some/repo/beta".into(),
+            head: "1234567".into(),
+            branch: "dev".into(),
+            is_current: false,
+        },
+    ];
+    let out = render(&app);
+    assert!(
+        out.contains("worktrees — 2 listed"),
+        "header with count: {out}"
+    );
+    assert!(out.contains("main"), "branch column renders: {out}");
+    assert!(out.contains("dev"), "branch column renders: {out}");
+    assert!(out.contains("abcdef0"), "HEAD sha renders: {out}");
+    assert!(
+        out.contains("alpha"),
+        "path tail renders (truncated): {out}"
+    );
+}
