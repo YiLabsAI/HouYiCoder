@@ -76,6 +76,7 @@ pub fn app() -> App {
         memory_list: crate::list_pane_state::ListPaneState::default(),
         worktree_entries: Vec::new(),
         worktree_list: crate::list_pane_state::ListPaneState::default(),
+        worktree_level: std::cell::Cell::new(0),
         trajectory_level: std::cell::Cell::new(0),
         trajectory_cursor: std::cell::Cell::new(0),
         trajectory_list_len: std::cell::Cell::new(0),

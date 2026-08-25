@@ -664,26 +664,18 @@ fn test_worktree_cursor_down_up() {
 }
 
 #[test]
-fn test_worktree_enter_no_carrier() {
+fn test_worktree_e_enter() {
     let mut app = worktree_app_with_rows();
+    // Enter opens the detail (level 1), then 'e' in the detail opens the
+    // worktree (the enter ability, kept beyond the display-only round).
     handle_working(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.worktree_level.get(), 1, "Enter opens the detail");
+    handle_working(&mut app, key(KeyCode::Char('e')));
     assert!(
         app.transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("no carrier"))),
-        "Enter in stub mode reports no carrier"
-    );
-}
-
-#[test]
-fn test_worktree_remove_no_carrier() {
-    let mut app = worktree_app_with_rows();
-    handle_working(&mut app, key(KeyCode::Char('d')));
-    assert!(
-        app.transcript
-            .iter()
-            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("no carrier"))),
-        "d in stub mode reports no carrier"
+        "e in detail enters the worktree (no carrier in stub mode)"
     );
 }
 

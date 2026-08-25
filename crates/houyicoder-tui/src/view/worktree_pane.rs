@@ -23,6 +23,14 @@ const PATH_WIDTH: usize = 32;
 
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     let n = app.worktree_entries.len();
+    // Level 1 detail (Enter on the list opens this).
+    if app.worktree_level.get() == 1 && n > 0 {
+        let cur = app.worktree_list.cursor.min(n.saturating_sub(1));
+        if let Some(e) = app.worktree_entries.get(cur) {
+            draw_detail(f, area, e);
+            return;
+        }
+    }
     let searching = app.worktree_list.searching();
     let search_h: u16 = if searching { 1 } else { 0 };
     // Header + optional search hint + scrollable list + fixed footer. The
@@ -69,44 +77,8 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             chunks[2],
         );
     } else {
-        // The cursor is an index into worktree_entries (not the filtered
-        // list). When search is active, the cursor's item may be filtered
-        // out; in that case no row is selected (no marker, no scroll-to).
-        // Actions always use the original cursor, so there is no disconnect
-        // between what the user sees and what Enter/d does.
         let cursor_pos = filtered_idx.iter().position(|&i| i == cur);
-        let items: Vec<ListItem> = filtered_idx
-            .iter()
-            .map(|&idx| {
-                let e = &app.worktree_entries[idx];
-                let is_cursor = idx == cur;
-                let cur_marker = if e.is_current { " * " } else { "   " };
-                let path_style = if is_cursor {
-                    Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::new().fg(Color::White)
-                };
-                let path = truncate_path(&e.path, PATH_WIDTH);
-                let branch = if e.branch.chars().count() > 16 {
-                    let b: String = e.branch.chars().take(15).collect();
-                    format!("{b}\u{2026}")
-                } else {
-                    e.branch.clone()
-                };
-                let mut spans: Vec<Span> = vec![
-                    Span::styled(cur_marker, Style::new().fg(Color::Green)),
-                    Span::styled(format!("{:<width$}", path, width = PATH_WIDTH), path_style),
-                    Span::styled(
-                        format!(" {} [{}]", e.head, branch),
-                        Style::new().fg(Color::DarkGray),
-                    ),
-                ];
-                if e.is_current {
-                    spans.push(Span::styled("  (current)", Style::new().fg(Color::Green)));
-                }
-                ListItem::new(Line::from(spans))
-            })
-            .collect();
+        let items = worktree_items(app, &filtered_idx, cur);
         let mut state = ListState::default();
         state.select(cursor_pos);
         f.render_stateful_widget(
@@ -122,8 +94,72 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         );
     }
     f.render_widget(
-        Paragraph::new("  Up/Down=move Enter=enter d=remove(asks) Esc=close")
+        Paragraph::new("  Up/Down=move Enter=detail e=enter Esc=close")
             .style(Style::new().fg(Color::DarkGray)),
         chunks[3],
     );
+}
+
+/// Level 1 detail view: full path (not truncated) + branch + HEAD + current
+/// marker. dirty/time/type are deferred (parse_worktrees does not provide
+/// them; the design's display-only round). 'e' in this view opens the
+/// worktree; Esc returns to the list.
+fn draw_detail(f: &mut Frame, area: Rect, e: &WorktreeEntry) {
+    let slug = std::path::Path::new(&e.path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| e.path.clone());
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            format!("Worktree: {slug}"),
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(format!("Path:     {}", e.path)),
+        Line::from(format!("Branch:   {}", e.branch)),
+        Line::from(format!("HEAD:     {}", e.head)),
+    ];
+    if e.is_current {
+        lines.push(Line::from("Status:   current worktree"));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from("  e=enter Esc=back to list").style(Style::new().fg(Color::DarkGray)));
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+/// Build the list rows (one per filtered worktree). The cursor is an index
+/// into worktree_entries (not the filtered list); when search is active the
+/// cursor's item may be filtered out, in which case no row is selected.
+fn worktree_items(app: &App, filtered_idx: &[usize], cur: usize) -> Vec<ListItem<'static>> {
+    filtered_idx
+        .iter()
+        .map(|&idx| {
+            let e = &app.worktree_entries[idx];
+            let is_cursor = idx == cur;
+            let cur_marker = if e.is_current { " * " } else { "   " };
+            let path_style = if is_cursor {
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(Color::White)
+            };
+            let path = truncate_path(&e.path, PATH_WIDTH);
+            let branch = if e.branch.chars().count() > 16 {
+                let b: String = e.branch.chars().take(15).collect();
+                format!("{b}\u{2026}")
+            } else {
+                e.branch.clone()
+            };
+            let mut spans: Vec<Span> = vec![
+                Span::styled(cur_marker, Style::new().fg(Color::Green)),
+                Span::styled(format!("{:<width$}", path, width = PATH_WIDTH), path_style),
+                Span::styled(
+                    format!(" {} [{}]", e.head, branch),
+                    Style::new().fg(Color::DarkGray),
+                ),
+            ];
+            if e.is_current {
+                spans.push(Span::styled("  (current)", Style::new().fg(Color::Green)));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect()
 }

@@ -80,39 +80,6 @@ impl App {
         self.system_line(format!("worktree: entering {slug}..."));
         self.spawn_run(msg);
     }
-
-    /// Remove the worktree under the cursor (the d action). Composes a user
-    /// instruction naming the worktree path, then starts a new user turn —
-    /// the model calls exit_worktree with action remove, which the approval
-    /// gate intercepts (the tool is registered to require approval for the
-    /// remove action) so the user confirms before any deletion. No-op when no
-    /// carrier or the list is empty.
-    pub fn remove_worktree_at_cursor(&mut self) {
-        let Some(entry) = self
-            .worktree_entries
-            .get(self.worktree_list.cursor)
-            .cloned()
-        else {
-            return;
-        };
-        if self.session.is_none() {
-            self.system_line("worktree: no carrier (stub mode)".to_string());
-            return;
-        }
-        let slug = std::path::Path::new(&entry.path)
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| entry.path.clone());
-        let msg = format!(
-            "Exit the worktree at {path} with action remove \
-             (call the exit_worktree tool with action remove).",
-            path = entry.path,
-        );
-        self.system_line(format!(
-            "worktree: requesting remove of {slug} (will confirm)..."
-        ));
-        self.spawn_run(msg);
-    }
 }
 
 #[cfg(test)]
@@ -220,27 +187,6 @@ mod tests {
                 .iter()
                 .any(|l| matches!(l, crate::records::TranscriptLine::System(s) if s.contains("no carrier"))),
             "stub mode should report no carrier"
-        );
-    }
-
-    #[test]
-    fn test_remove_noop_empty() {
-        let mut app = app();
-        app.worktree_entries = Vec::new();
-        app.remove_worktree_at_cursor();
-    }
-
-    #[test]
-    fn test_remove_no_carrier() {
-        let mut app = app();
-        app.worktree_entries = vec![row("/some/wt")];
-        app.worktree_list.cursor = 0;
-        app.remove_worktree_at_cursor();
-        assert!(
-            app.transcript
-                .iter()
-                .any(|l| matches!(l, crate::records::TranscriptLine::System(s) if s.contains("no carrier"))),
-            "stub mode should report no carrier for remove"
         );
     }
 }

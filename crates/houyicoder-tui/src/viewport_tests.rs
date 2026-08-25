@@ -539,3 +539,30 @@ fn test_memory_pane_scroll() {
         "the cursor row (last entry) must scroll into view: {out}"
     );
 }
+
+/// Level 1 detail view (Enter on the list): shows the full path (not
+/// truncated), branch, HEAD, and the "e=enter Esc=back" footer.
+#[test]
+fn test_worktree_pane_detail() {
+    let mut app = working();
+    app.pane = Pane::Worktree;
+    app.worktree_entries = vec![crate::composition::WorktreeEntry {
+        path: "/some/repo/alpha".into(),
+        head: "abcdef0".into(),
+        branch: "main".into(),
+        is_current: true,
+    }];
+    app.worktree_level.set(1);
+    let out = render(&app);
+    assert!(out.contains("Worktree:"), "detail title: {out}");
+    assert!(
+        out.contains("/some/repo/alpha"),
+        "full path in detail: {out}"
+    );
+    assert!(out.contains("Branch:"), "branch label: {out}");
+    assert!(out.contains("HEAD:"), "HEAD label: {out}");
+    assert!(
+        out.contains("e=enter"),
+        "enter hint in detail footer: {out}"
+    );
+}

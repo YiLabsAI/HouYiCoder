@@ -231,6 +231,8 @@ pub struct App {
     /// Cursor + search query for the /worktrees pane. The first pane to
     /// adopt ListPaneState; others migrate on touch-ratchet.
     pub worktree_list: crate::list_pane_state::ListPaneState,
+    /// /worktrees pane drill-down: 0 = list, 1 = detail.
+    pub worktree_level: std::cell::Cell<u8>,
     /// /trajectory pane drill-down state: 0 = turn list, 1 = turn detail
     /// (events + ASCII bar), 2 = event detail (full data).
     pub trajectory_level: std::cell::Cell<u8>,
