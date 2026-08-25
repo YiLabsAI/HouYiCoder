@@ -1,8 +1,7 @@
 //! /worktrees pane key handlers: cursor, detail, enter, search, Esc.
-//! Extracted from keys.rs on the file-size gate. The pane is display-only
-//! per the U5b design (list + Level 1 detail, no remove); 'e' in the
-//! detail view opens the worktree (the enter ability, kept beyond the
-//! design's display-only round).
+//! The pane is a read-only worktree browser — the list shows path, HEAD,
+//! branch, time, and a dirty marker; Enter opens a detail view; 'e' in
+//! the detail opens the worktree (model-invoked enter_worktree).
 
 use crate::state::App;
 use crate::state::enums::Pane;

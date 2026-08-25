@@ -39,8 +39,9 @@ pub(crate) fn mock_trajectory() -> TrajectoryView {
                     "The crash is in the permission pipeline. The user says session-scope\n\
                      consent does not persist across resume. Looking at the gate: the\n\
                      ConsentStore is keyed by exact tool input, but git commit messages\n\
-                     differ each time, so the consent never matches. CC solves this with\n\
-                     an in-memory session rule with prefix content. I should add a\n\
+                     differ each time, so the consent never matches. A session-scope\n\
+                     allow-rule (memory-only, not persisted) with prefix content\n\
+                     matching would solve this. I should add a\n\
                      Scope::Session variant — memory-only, not persisted — and seed a\n\
                      session allow-rule on consent. Need to check store.rs and gate.rs.",
                 ),
