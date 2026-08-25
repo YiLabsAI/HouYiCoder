@@ -51,6 +51,38 @@ fn test_pane_lists_worktrees() {
     drop(s);
 }
 
+/// Typing into the /worktrees pane filters the list (the search feature).
+/// A char pushes into the search query, the search hint line renders, and
+/// the first Esc clears the query (not the pane) so a typo does not dismiss
+/// the whole pane. This is the path-truncation + search surface.
+#[test]
+#[ignore]
+fn test_pane_search_esc_clears() {
+    let mut s = session_on_working();
+    run_slash_command(&mut s, "worktree");
+    // Wait for the pane to render before typing into its search.
+    assert!(
+        s.wait_for("worktrees —", RENDER_TIMEOUT),
+        "worktrees pane header should render:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Char('x'));
+    assert!(
+        s.wait_for("search:", RENDER_TIMEOUT),
+        "the search hint line should render after typing:\n{}",
+        s.output()
+    );
+    // First Esc clears the search query (the hint disappears), not the pane.
+    // The pane stays open (header still rendered).
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for("worktrees —", RENDER_TIMEOUT),
+        "Esc should clear the search, not close the pane:\n{}",
+        s.output()
+    );
+    drop(s);
+}
+
 /// Seed a throwaway git repo the binary can run in: a workspace manifest so
 /// resolve_project_workspace pins the dir, plus one empty commit so branching
 /// from HEAD succeeds. enter_worktree then creates a real linked worktree
