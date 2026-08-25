@@ -77,4 +77,49 @@ mod tests {
         };
         assert_eq!(name, "agent");
     }
+
+    /// The banner renders above the transcript when a teammate is in view,
+    /// naming the agent plus the esc-return hint. Pins draw_banner against a
+    /// refactor that drops the line or the hint.
+    #[test]
+    fn test_banner_renders_name_hint() {
+        use crate::records::TranscriptLine;
+        use crate::test_support::render_text;
+        let mut app = app();
+        app.screen = crate::state::Screen::Working;
+        app.teammate_view = Some(crate::records::TeammateView {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "find auth".into(),
+            transcript: vec![TranscriptLine::Agent("child reply".into())],
+        });
+        let out = render_text(&app, 80, 24);
+        assert!(
+            out.contains("Viewing @explore"),
+            "banner names the agent, got:\n{out}"
+        );
+        assert!(
+            out.contains("esc return"),
+            "banner carries the esc-return hint, got:\n{out}"
+        );
+        assert!(
+            out.contains("child reply"),
+            "swapped child transcript renders, got:\n{out}"
+        );
+    }
+
+    /// No banner renders when no teammate is in view, so the transcript takes
+    /// the whole top. Pins the no-banner path against a regression that
+    /// reserves a blank line.
+    #[test]
+    fn test_no_banner_without_teammate() {
+        use crate::test_support::render_text;
+        let mut app = app();
+        app.screen = crate::state::Screen::Working;
+        let out = render_text(&app, 80, 24);
+        assert!(
+            !out.contains("Viewing @"),
+            "no banner when teammate_view is None, got:\n{out}"
+        );
+    }
 }

@@ -130,30 +130,59 @@ impl App {
     /// session id and whether the child transcript still needs fetching.
     /// Shared by inline expand (Ctrl+O) and teammate-view entry (Enter) so
     /// the line targeted for one is the line drilled into by the other.
+    ///
+    /// The walk mirrors the render path (build_slots_rows), not the flat
+    /// per-line sum: a collapsed run of tool calls renders as one summary
+    /// slot, so the cursor's content-row lives in the fold-aware slot
+    /// space. A flat walk diverges whenever a folded group precedes the
+    /// target line and mis-resolves to the wrong Subagent.
     pub(crate) fn subagent_target_at_cursor(&self) -> Option<(String, bool)> {
+        use crate::fold::{DisplaySlot, display_slots};
         use crate::records::TranscriptLine;
+        let transcript = &self.transcript;
+        let slots = display_slots(
+            transcript,
+            self.agent_busy,
+            &self.expanded_fold_groups,
+            self.verbose,
+        );
         self.selection
             .anchor
             .and_then(|(_, content_row)| {
                 let mut row = 0usize;
                 let mut first = true;
-                for line in &self.transcript {
-                    if !first && !matches!(line, TranscriptLine::Interrupted) {
+                for slot in &slots {
+                    let (rows, line_idx, is_interrupted) = match slot {
+                        DisplaySlot::Line(i, _) => {
+                            let l = &transcript[*i];
+                            (
+                                self.line_display_rows(l),
+                                Some(*i),
+                                matches!(l, TranscriptLine::Interrupted),
+                            )
+                        }
+                        DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, None, false),
+                    };
+                    if !first && !is_interrupted {
                         row += 1;
                     }
-                    let n = self.line_display_rows(line);
-                    if row + n > content_row {
-                        if let TranscriptLine::Subagent {
-                            child_sid,
-                            folded_transcript,
-                            ..
-                        } = line
+                    if row + rows > content_row {
+                        // Cursor lands in this slot. A Summary slot or a
+                        // non-Subagent Line is not a delegation, so return
+                        // None and let the caller fall back to the most
+                        // recent Subagent.
+                        if let Some(i) = line_idx
+                            && let TranscriptLine::Subagent {
+                                child_sid,
+                                folded_transcript,
+                                ..
+                            } = &transcript[i]
                         {
                             return Some((child_sid.clone(), folded_transcript.is_empty()));
                         }
                         return None;
                     }
-                    row += n;
+                    row += rows;
                     first = false;
                 }
                 None

@@ -1366,3 +1366,86 @@ fn test_enter_teammate_no_target() {
     assert!(!app.enter_teammate_view(), "no Subagent line to target");
     assert!(app.teammate_view.is_none());
 }
+
+/// A cursor whose content row falls past the last transcript line misses
+/// every line in the walk and falls back to the most recent Subagent.
+/// Pins the walk's terminal None + the fallback so a cursor below the
+/// tail still drills into the latest delegation.
+#[test]
+fn test_cursor_past_tail_fallback() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "first".into(),
+        folded_transcript: vec![TranscriptLine::Agent("reply".into())],
+    });
+    // A content row well past the one line in the transcript.
+    app.selection.start(999, 999);
+    assert!(
+        app.enter_teammate_view(),
+        "cursor past tail falls back to the last Subagent"
+    );
+    assert_eq!(app.teammate_view.as_ref().unwrap().child_sid, "c1");
+}
+
+/// A collapsed fold-group before a Subagent shifts the Subagent's content
+/// row in the fold-aware space the mouse sets. The cursor walk mirrors the
+/// render path (display_slots), so a click on the first of two delegations
+/// after a folded tool group targets that delegation rather than the
+/// fallback last.
+#[test]
+fn test_cursor_after_fold_group() {
+    use crate::records::{ToolOutcome, TranscriptLine};
+    let mut app = crate::composition::app();
+    // Two tool calls form a collapsed Summary slot before the Subagents.
+    app.transcript.push(TranscriptLine::Tool {
+        name: "bash".into(),
+        tool: "bash".into(),
+        status: "ls".into(),
+        invocation: "ls".into(),
+        outcome: ToolOutcome::Success,
+        call_id: "t1".into(),
+        body: String::new(),
+        is_diff: false,
+    });
+    app.transcript.push(TranscriptLine::Tool {
+        name: "result".into(),
+        tool: "bash".into(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: ToolOutcome::Success,
+        call_id: "t1".into(),
+        body: "ok\nline2\nline3".into(),
+        is_diff: false,
+    });
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "first".into(),
+        folded_transcript: vec![TranscriptLine::Agent("reply1".into())],
+    });
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c2".into(),
+        subagent_type: "plan".into(),
+        summary: "second".into(),
+        folded_transcript: vec![TranscriptLine::Agent("reply2".into())],
+    });
+    // c1 sits at transcript index 2. fold_aware_rows gives its start row in
+    // the same space the mouse sets content_row. A flat walk would land it
+    // one slot earlier inside the Summary and miss, falling back to c2.
+    let c1_row = app.fold_aware_rows(Some(2));
+    app.selection.start(0, c1_row);
+    assert!(app.enter_teammate_view(), "cursor on c1 enters");
+    assert_eq!(
+        app.teammate_view.as_ref().unwrap().child_sid,
+        "c1",
+        "cursor after a folded group targets the clicked delegation, not the fallback"
+    );
+    // The flat walk would have resolved to c2 (last) — confirm it does not.
+    assert!(
+        !app.expanded_subagents.contains("c2"),
+        "the non-targeted delegation is untouched"
+    );
+}
