@@ -79,9 +79,9 @@ fn test_result_no_progress_honest() {
 
 /// /compact ships a CompactQuery over the wire when a session is wired, and
 /// the reply (a no-progress outcome on an empty session) lands as a system
-/// line. No "compacting…" spinner lands in the transcript — a compact is a
-/// meta-operation, not a conversation event, so its transient state stays
-/// out; only the outcome line lands.
+/// line. A "compacting..." system line lands when the query is sent so the
+/// user sees the operation is in flight; the outcome line lands when the
+/// reply arrives.
 #[test]
 fn test_compact_dispatch_round_trip() {
     use houyicoder_protocol::frontend::SlashCommand;
@@ -89,10 +89,10 @@ fn test_compact_dispatch_round_trip() {
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.run_command(SlashCommand::Compact);
     assert!(
-        !app.transcript
+        app.transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("compacting"))),
-        "no compacting spinner in transcript (transient state stays out)"
+        "compacting system line lands for progress feedback"
     );
     // The reply lands within a bounded poll window (the server's runner.compact
     // on an empty session returns a no-progress outcome quickly).
@@ -101,7 +101,7 @@ fn test_compact_dispatch_round_trip() {
         if app.transcript.iter().any(|l| {
             matches!(
                 l,
-                TranscriptLine::System(s) if s.contains("compact")
+                TranscriptLine::System(s) if s.contains("compact") && !s.contains("compacting")
             )
         }) {
             break;

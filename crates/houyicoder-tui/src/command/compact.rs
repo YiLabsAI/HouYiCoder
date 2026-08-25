@@ -11,10 +11,11 @@ impl App {
     /// compaction never races the live turn's served view (compacting mid-run
     /// would corrupt the window the run is reading), then send the CompactQuery.
     /// The served view picks up the manifest on the next turn, so /compact does
-    /// not reduce the in-flight context immediately. No "compacting…" spinner
-    /// is pushed to the transcript — a compact is a meta-operation, not a
-    /// conversation event, so its transient state stays out of the transcript;
-    /// only the outcome line lands when the reply arrives.
+    /// not reduce the in-flight context immediately — a second /compact before
+    /// the next turn sees the same content plus the first compact's output, so
+    /// the "before" count grows. Push a "compacting..." system line so the user
+    /// sees the operation is in flight (the outcome line lands when the reply
+    /// arrives).
     pub(crate) fn run_compact(&mut self) {
         if self.agent_busy {
             self.system_line(
@@ -26,6 +27,7 @@ impl App {
             self.system_line("compact: no server connected");
             return;
         };
+        self.system_line("compact: compacting...".to_string());
         self.send_cmd(crate::run_control::ClientCommand::CompactQuery { req_id });
     }
 }
