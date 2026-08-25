@@ -90,20 +90,24 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         handle_palette(app, k);
         return;
     }
+    // Esc while viewing a teammate transcript exits to the parent. Sync
+    // spawn children are always completed, so Esc always exits. A non-empty
+    // input clears first via the generic arm below.
+    if app.teammate_view.is_some() && k.code == KeyCode::Esc && app.input.is_empty() {
+        app.exit_teammate_view();
+        return;
+    }
     // Approval pending: handled inline at the top of handle_input so scroll,
     // palette, and search still work. a/r decide, Enter confirms, Esc dismisses.
     if app.viewport == ViewportMode::Focus {
         handle_focus(app, k);
         return;
     }
-    // Esc while a run is in flight aborts it — but only when the input box
-    // is empty AND no pane with its own Esc-close is open. A non-empty
-    // input during a run is a queued draft the user is editing; Esc clears
-    // it first (same as idle), so a second Esc aborts. A pane whose Esc
-    // arm lives in handle_generic_input (Memory, Artifact) would be stolen
-    // by this abort arm — gate them out so Esc closes the pane first, then
-    // a second Esc (pane now Transcript) aborts the run. Overlays that
-    // dispatch earlier (palette, search, permission) already escape this.
+    // Esc while a run is in flight aborts it, but only when the input box
+    // is empty and no pane with its own Esc-close is open. A non-empty
+    // input during a run is a queued draft; Esc clears it first, so a
+    // second Esc aborts. Panes with their own Esc (Memory, Artifact) are
+    // gated out so Esc closes the pane first.
     if app.agent_busy
         && k.code == KeyCode::Esc
         && app.input.is_empty()
@@ -688,6 +692,11 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
                     | Pane::Resume
             ) =>
         {
+            // Empty-input Enter on a Subagent line drills into the teammate
+            // view; empty-input Enter is otherwise a no-op submit.
+            if app.input.is_empty() && app.teammate_view.is_none() && app.enter_teammate_view() {
+                return;
+            }
             app.submit_input()
         }
         KeyCode::PageUp if !editing => {

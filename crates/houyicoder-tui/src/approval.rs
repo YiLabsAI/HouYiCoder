@@ -94,26 +94,13 @@ impl App {
         }
     }
 
-    /// Toggle the LAST Subagent delegation's inline expansion (Ctrl+O).
-    /// Targets the most recent delegation; a sync spawn produces one
-    /// Subagent line, so the latest is unique. Returns true when a Subagent
-    /// was toggled. On first expand of a line whose child rows are not yet
-    /// loaded, fires a one-shot fetch; a re-expand reuses the cached rows.
-    /// Cursor-based targeting for multiple delegations is a refinement.
+    /// Toggle a Subagent delegation's inline expansion (Ctrl+O). If the
+    /// cursor is on a Subagent line, toggle that one; otherwise fall back to
+    /// the most recent. On first expand of a line whose child rows are not
+    /// yet loaded, fires a one-shot fetch; a re-expand reuses the cached
+    /// rows.
     pub(crate) fn toggle_subagent_expand(&mut self) -> bool {
-        use crate::records::TranscriptLine;
-        // Capture the target + whether its child rows are loaded before
-        // mutating, so the fetch decision reads the pre-toggle state.
-        let Some((child_sid, needs_fetch)) =
-            self.transcript.iter().rev().find_map(|line| match line {
-                TranscriptLine::Subagent {
-                    child_sid,
-                    folded_transcript,
-                    ..
-                } => Some((child_sid.clone(), folded_transcript.is_empty())),
-                _ => None,
-            })
-        else {
+        let Some((child_sid, needs_fetch)) = self.subagent_target_at_cursor() else {
             return false;
         };
         let expanding = !self.expanded_subagents.contains(&child_sid);
@@ -136,6 +123,51 @@ impl App {
             });
         }
         true
+    }
+
+    /// Resolve the Subagent delegation under the selection cursor, or fall
+    /// back to the most recent when no cursor is set. Returns the child
+    /// session id and whether the child transcript still needs fetching.
+    /// Shared by inline expand (Ctrl+O) and teammate-view entry (Enter) so
+    /// the line targeted for one is the line drilled into by the other.
+    pub(crate) fn subagent_target_at_cursor(&self) -> Option<(String, bool)> {
+        use crate::records::TranscriptLine;
+        self.selection
+            .anchor
+            .and_then(|(_, content_row)| {
+                let mut row = 0usize;
+                let mut first = true;
+                for line in &self.transcript {
+                    if !first && !matches!(line, TranscriptLine::Interrupted) {
+                        row += 1;
+                    }
+                    let n = self.line_display_rows(line);
+                    if row + n > content_row {
+                        if let TranscriptLine::Subagent {
+                            child_sid,
+                            folded_transcript,
+                            ..
+                        } = line
+                        {
+                            return Some((child_sid.clone(), folded_transcript.is_empty()));
+                        }
+                        return None;
+                    }
+                    row += n;
+                    first = false;
+                }
+                None
+            })
+            .or_else(|| {
+                self.transcript.iter().rev().find_map(|line| match line {
+                    TranscriptLine::Subagent {
+                        child_sid,
+                        folded_transcript,
+                        ..
+                    } => Some((child_sid.clone(), folded_transcript.is_empty())),
+                    _ => None,
+                })
+            })
     }
 
     /// Toggle the LAST ThoughtFor line's inline reasoning expansion (Ctrl+O).

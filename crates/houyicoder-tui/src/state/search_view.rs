@@ -138,7 +138,9 @@ impl App {
     /// bitten (the first two were the verbose-count desync + the live/disk
     /// split), and the accessor is the structural fix.
     pub fn active_transcript(&self) -> &[crate::records::TranscriptLine] {
-        if self.search.active {
+        if let Some(tv) = &self.teammate_view {
+            &tv.transcript
+        } else if self.search.active {
             &self.search_transcript
         } else {
             &self.transcript

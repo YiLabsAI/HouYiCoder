@@ -192,6 +192,24 @@ pub(crate) fn subagent_line(
     })
 }
 
+/// A teammate transcript the user drilled into from a Subagent fold-group.
+/// While open, the working surface swaps to render the child's projected
+/// turns instead of the parent's, with a banner naming the agent. The child
+/// transcript is the same projection the inline fold-group fetch fills, so the
+/// drilled-in view is isomorphic with the expanded fold, not a simplified
+/// list. Opened by Enter on a Subagent line, closed by Esc.
+#[derive(Debug, Clone, Default)]
+pub struct TeammateView {
+    /// The child session id, keying the fetch.
+    pub child_sid: String,
+    /// The subagent type, shown in the banner.
+    pub subagent_type: String,
+    /// The one-line summary, shown dim under the banner title.
+    pub summary: String,
+    /// The child's projected transcript. Empty until the fetch returns.
+    pub transcript: Vec<TranscriptLine>,
+}
+
 /// A tool call's resolved outcome, for chip coloring. Running = no matching
 /// result yet (in flight); Success/Error = the matching ToolResult's verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

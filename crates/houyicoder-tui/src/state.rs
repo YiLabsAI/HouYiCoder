@@ -14,6 +14,7 @@ pub(crate) mod counts;
 pub(crate) mod enums;
 mod scroll;
 mod search_view;
+mod teammate_view;
 
 use crate::console_state::ConsoleState;
 use crate::input::InputField;
@@ -105,13 +106,9 @@ pub struct App {
     /// counts agent segments in frames since; eviction-safe. Reset on tail return.
     pub scrolled_from_frame: Option<usize>,
     pub search: SearchState,
-    /// Frozen snapshot the search view renders + counts against. Cloned from
-    /// the live transcript on enter (and, later, loaded from the durable log
-    /// via the snapshot seam), so the search view is stable while the agent
-    /// keeps appending to transcript (I6 snapshot consistency). Empty
-    /// outside the search view; the active_transcript accessor picks it
-    /// when search.active so count + render + highlight all read one
-    /// source (count==render structural, not a synced pair).
+    /// Frozen snapshot the search view renders + counts against. Empty
+    /// outside the search view; active_transcript picks it when search.active
+    /// so count + render + highlight read one source.
     pub search_transcript: Vec<TranscriptLine>,
     /// True when the snapshot seam declined to load the whole log (log over
     /// the threshold) and search_transcript is empty as an honest degrade.
@@ -426,8 +423,10 @@ pub struct App {
     /// across rebuilds) so Ctrl+O expands that turn's reasoning inline. Empty
     /// = collapsed.
     pub expanded_thinking: HashSet<String>,
-    /// Per-subagent expand state, keyed by child_sid; empty = all collapsed.
     pub expanded_subagents: HashSet<String>,
+    /// Drilled-in teammate transcript; when Some, active_transcript swaps to
+    /// the child's turns with a banner. Enter opens, Esc closes.
+    pub teammate_view: Option<crate::records::TeammateView>,
     /// Verbose render mode: force every tool result, reasoning block, and
     /// fold group expanded, and render tool-call chips with the untruncated
     /// invocation. Set when entering the search view (a snapshot transcript

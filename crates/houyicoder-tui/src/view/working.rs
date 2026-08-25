@@ -92,58 +92,19 @@ fn draw_working(f: &mut Frame, app: &App) {
     } else {
         queue_overlay::strip_height(app, total_h, input_h)
     };
-    let mut constraints: Vec<Constraint> = vec![Constraint::Min(1)];
-    // When an approval is pending, reserve a dedicated region for the card
-    // below the transcript so it never paints over (Clears) transcript
-    // content. The card stays pinned at the tail until decided (an approval
-    // stays visible while pending), and the transcript
-    // shrinks by card_h so its own tail rows are not erased.
-    let approval_h = if app.approval.is_some() { 13u16 } else { 0u16 };
-    // AskUserQuestion card height varies by view (question vs submit) and
-    // by whether the nav bar and multi-select Submit button are shown.
-    let ask_h = if let Some(aq) = app.ask_question.as_ref() {
-        aq.card_height()
-    } else {
-        0u16
-    };
-    let approval_idx = if approval_h > 0 {
-        constraints.push(Constraint::Length(approval_h));
-        Some(constraints.len() - 1)
-    } else {
-        None
-    };
-    let ask_idx = if ask_h > 0 {
-        constraints.push(Constraint::Length(ask_h));
-        Some(constraints.len() - 1)
-    } else {
-        None
-    };
-    let mut overlay_idx: Option<usize> = None;
-    if app.palette.open {
-        constraints.push(Constraint::Length(10));
-        overlay_idx = Some(constraints.len() - 1);
-    }
-    constraints.push(Constraint::Length(input_h));
-    let input_idx = constraints.len() - 1;
-    let queue_idx = if queue_h > 0 {
-        constraints.push(Constraint::Length(queue_h));
-        Some(constraints.len() - 1)
-    } else {
-        None
-    };
-    let pane_hides_status = pane_hides_status(app);
-    let status_h = if pane_hides_status { 0 } else { 1 };
-    constraints.push(Constraint::Length(status_h));
-    let status_idx = constraints.len() - 1;
+    let layout = build_working_layout(app, input_h, queue_h);
     let outer = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(constraints)
+        .constraints(layout.constraints)
         .split(f.area());
-    draw_main(f, outer[0], app);
-    if let Some(i) = approval_idx {
+    if let Some(i) = layout.slots.banner {
+        super::teammate_view::draw_banner(f, app, outer[i]);
+    }
+    draw_main(f, outer[layout.transcript_idx], app);
+    if let Some(i) = layout.slots.approval {
         super::approval::draw(f, app, outer[i]);
     }
-    if let Some(i) = ask_idx {
+    if let Some(i) = layout.slots.ask {
         super::ask_question::draw(f, app, outer[i]);
     }
     // The overlay covers the transcript while open; the footer strip is hidden
@@ -154,11 +115,12 @@ fn draw_working(f: &mut Frame, app: &App) {
     if app.queue_view_open && !app.pending.is_empty() {
         let n = app.pending.len() as u16;
         let overlay_h = n + 4; // header + blank + items + blank + footer
-        let y = outer[0].bottom().saturating_sub(overlay_h);
+        let t = outer[layout.transcript_idx];
+        let y = t.bottom().saturating_sub(overlay_h);
         let overlay_area = Rect {
-            x: outer[0].x,
+            x: t.x,
             y,
-            width: outer[0].width,
+            width: t.width,
             height: overlay_h,
         };
         queue_overlay::draw_queue_overlay(f, overlay_area, app);
@@ -166,7 +128,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     // The resume picker now renders as a Pane (draw_command_pane) routed in
     // draw_main when app.pane == Pane::Resume, not as a floating popover. The
     // shared template keeps the transcript tail visible above the list.
-    if let Some(i) = overlay_idx {
+    if let Some(i) = layout.slots.overlay {
         if app.palette.open {
             palette::draw(f, app, outer[i]);
         } else {
@@ -174,13 +136,105 @@ fn draw_working(f: &mut Frame, app: &App) {
         }
     }
     if !pane_hides_input {
-        input_bar::draw_input(f, outer[input_idx], app);
+        input_bar::draw_input(f, outer[layout.input_idx], app);
     }
-    if let Some(i) = queue_idx {
+    if let Some(i) = layout.slots.queue {
         queue_overlay::draw_strip(f, outer[i], app);
     }
-    if status_h > 0 {
-        status::draw_status_bar(f, outer[status_idx], app);
+    status::draw_status_bar(f, outer[layout.status_idx], app);
+}
+
+/// The Working-mode vertical layout: a stack of optional + fixed regions
+/// split into rects once so each draw path indexes the same slot. Extracted
+/// from draw_working so the draw function stays under the line-count gate.
+/// The banner leads only when a teammate is in view; otherwise the
+/// transcript takes the whole top.
+struct WorkingLayout {
+    constraints: Vec<Constraint>,
+    /// Optional slot indices, packed so the layout stays a small struct.
+    slots: LayoutSlots,
+    transcript_idx: usize,
+    input_idx: usize,
+    status_idx: usize,
+}
+
+/// The optional-region slot indices. Each is Some only when the region's
+/// height is non-zero; None means no slot was reserved. Kept as a named
+/// sub-struct so the optional slots read as a cohesive group.
+struct LayoutSlots {
+    banner: Option<usize>,
+    approval: Option<usize>,
+    ask: Option<usize>,
+    overlay: Option<usize>,
+    queue: Option<usize>,
+}
+
+/// Build the Working-mode constraint stack. Each optional region appends a
+/// Length cell only when its height is non-zero and records the slot index;
+/// the transcript is the fixed Min(1) remainder. Indices are positions in the
+/// returned constraints vec, so the caller splits once and indexes by them.
+#[allow(clippy::too_many_lines)]
+fn build_working_layout(app: &App, input_h: u16, queue_h: u16) -> WorkingLayout {
+    let mut constraints: Vec<Constraint> = vec![];
+    let banner_h = if app.teammate_view.is_some() {
+        1u16
+    } else {
+        0u16
+    };
+    let banner = if banner_h > 0 {
+        constraints.push(Constraint::Length(banner_h));
+        Some(constraints.len() - 1)
+    } else {
+        None
+    };
+    constraints.push(Constraint::Min(1));
+    let transcript_idx = constraints.len() - 1;
+    let approval_h = if app.approval.is_some() { 13u16 } else { 0u16 };
+    let ask_h = if let Some(aq) = app.ask_question.as_ref() {
+        aq.card_height()
+    } else {
+        0u16
+    };
+    let approval = if approval_h > 0 {
+        constraints.push(Constraint::Length(approval_h));
+        Some(constraints.len() - 1)
+    } else {
+        None
+    };
+    let ask = if ask_h > 0 {
+        constraints.push(Constraint::Length(ask_h));
+        Some(constraints.len() - 1)
+    } else {
+        None
+    };
+    let mut overlay: Option<usize> = None;
+    if app.palette.open {
+        constraints.push(Constraint::Length(10));
+        overlay = Some(constraints.len() - 1);
+    }
+    constraints.push(Constraint::Length(input_h));
+    let input_idx = constraints.len() - 1;
+    let queue = if queue_h > 0 {
+        constraints.push(Constraint::Length(queue_h));
+        Some(constraints.len() - 1)
+    } else {
+        None
+    };
+    let status_h = if pane_hides_status(app) { 0 } else { 1 };
+    constraints.push(Constraint::Length(status_h));
+    let status_idx = constraints.len() - 1;
+    WorkingLayout {
+        constraints,
+        slots: LayoutSlots {
+            banner,
+            approval,
+            ask,
+            overlay,
+            queue,
+        },
+        transcript_idx,
+        input_idx,
+        status_idx,
     }
 }
 

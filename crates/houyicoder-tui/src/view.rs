@@ -28,6 +28,7 @@ pub mod queue_overlay;
 pub mod resume_picker;
 pub mod spinner;
 pub mod status;
+pub mod teammate_view;
 pub mod todo_list;
 pub mod trajectory_pane;
 pub mod word_diff;

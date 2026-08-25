@@ -248,9 +248,20 @@ impl App {
                         folded_transcript, ..
                     } = &mut line
                     {
-                        *folded_transcript = folded;
+                        *folded_transcript = folded.clone();
                     }
                     self.transcript.insert(idx, line);
+                }
+                // When the fetched child is the one the user is viewing, swap
+                // the rows into the teammate view too so the drilled-in
+                // transcript fills the same frame the inline fold received.
+                // Isomorphic: the view reads the same projection the fold
+                // shows, not a parallel simplification.
+                if let Some(view) = self.teammate_view.as_mut()
+                    && view.child_sid == child_sid
+                {
+                    view.transcript = folded;
+                    self.transcript_scroll.follow_tail = true;
                 }
             }
             AgentMessage::HooksResult { hooks } => {

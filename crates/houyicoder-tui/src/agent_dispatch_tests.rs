@@ -1051,6 +1051,45 @@ fn test_subagent_collapse_keeps_folded() {
     }
 }
 
+/// Cursor targeting: when the cursor is on a specific Subagent line, Ctrl+O
+/// expands that line, not the last one. Without a cursor, falls back to the
+/// last Subagent. Pins the cursor walk's spacer logic against the flat
+/// content-row space the selection lives in.
+#[test]
+fn test_subagent_cursor_targeting() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "first".into(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+    });
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c2".into(),
+        subagent_type: "plan".into(),
+        summary: "second".into(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply 2".into())],
+    });
+    app.selection.start(0, 0);
+    app.toggle_subagent_expand();
+    assert!(
+        app.expanded_subagents.contains("c1"),
+        "cursor on first line expands it"
+    );
+    assert!(
+        !app.expanded_subagents.contains("c2"),
+        "the second line is not expanded when the cursor targets the first"
+    );
+    app.expanded_subagents.clear();
+    app.selection.anchor = None;
+    app.toggle_subagent_expand();
+    assert!(
+        app.expanded_subagents.contains("c2"),
+        "no cursor falls back to the last Subagent"
+    );
+}
+
 /// A fetched wire child frame converts to the live-frame shape the
 /// transcript projection consumes, so child rows render through the same
 /// pipeline as the parent flow. Pins the From impl at the driver boundary.
@@ -1143,4 +1182,187 @@ fn test_subagent_folded_survives_rebuild() {
         }
         other => panic!("subagent line survived, got {other:?}"),
     }
+}
+
+/// Enter on a Subagent line opens the teammate view targeting the line at
+/// the cursor, not the last one. The view carries the subagent_type +
+/// summary for the banner. Pins the cursor-targeting entry so a refactor
+/// that opens the wrong child fails here.
+#[test]
+fn test_enter_teammate_targets_cursor() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "first".into(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+    });
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c2".into(),
+        subagent_type: "plan".into(),
+        summary: "second".into(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply 2".into())],
+    });
+    app.selection.start(0, 0);
+    assert!(
+        app.enter_teammate_view(),
+        "cursor on a Subagent line enters"
+    );
+    let view = app.teammate_view.as_ref().expect("teammate view is open");
+    assert_eq!(view.child_sid, "c1", "cursor targets the first line");
+    assert_eq!(view.subagent_type, "explore");
+    assert_eq!(view.summary, "first");
+    // A pre-loaded fold copies into the view so it renders immediately.
+    assert_eq!(view.transcript.len(), 1);
+    assert!(matches!(view.transcript[0], TranscriptLine::Agent(_)));
+    // active_transcript swaps to the child's, not the parent's.
+    assert_eq!(
+        app.active_transcript().len(),
+        1,
+        "active transcript is the child's"
+    );
+}
+
+/// Esc clears the teammate view, returning active_transcript to the parent.
+#[test]
+fn test_exit_teammate_clears_view() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Agent("parent".into()));
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "first".into(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+    });
+    assert!(app.enter_teammate_view());
+    assert!(app.teammate_view.is_some());
+    assert_eq!(app.active_transcript().len(), 1, "viewing child");
+    app.exit_teammate_view();
+    assert!(app.teammate_view.is_none(), "view cleared on exit");
+    assert_eq!(
+        app.active_transcript().len(),
+        2,
+        "parent transcript restored"
+    );
+}
+
+/// A fetched child frame fills the teammate view's transcript through the
+/// same projection the inline fold receives, so the drilled-in view is
+/// isomorphic with the expanded fold, not a parallel simplification. Pins
+/// the T36e isomorphism contract: child view renders via the main pipeline.
+#[test]
+fn test_teammate_view_fill_isomorphic() {
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::frontend::run::ContentBlock;
+    use houyicoder_protocol::frontend::session_update::ContentChunk;
+    use houyicoder_protocol::frontend::session_update::SessionUpdate;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        folded_transcript: Vec::new(),
+    });
+    // Enter with an unloaded fold: the view opens empty and the fetch fires.
+    assert!(app.enter_teammate_view());
+    assert_eq!(
+        app.teammate_view.as_ref().unwrap().transcript.len(),
+        0,
+        "view empty until fetch lands"
+    );
+    let frames = vec![
+        TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
+            ContentBlock::Text {
+                text: "find auth".into(),
+            },
+        ))),
+        TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            ContentBlock::Text {
+                text: "auth is in src/auth".into(),
+            },
+        ))),
+    ];
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c1".into(),
+        frames,
+    });
+    let view = app.teammate_view.as_ref().unwrap();
+    assert_eq!(view.transcript.len(), 2, "view filled by the fetch");
+    assert!(matches!(view.transcript[0], TranscriptLine::User(_)));
+    assert!(matches!(view.transcript[1], TranscriptLine::Agent(_)));
+    // Isomorphism: the fold-group and the view carry the same projected rows.
+    let folded = match &app.transcript[0] {
+        TranscriptLine::Subagent {
+            folded_transcript, ..
+        } => folded_transcript.clone(),
+        other => panic!("subagent line preserved, got {other:?}"),
+    };
+    assert_eq!(
+        view.transcript.len(),
+        folded.len(),
+        "view and fold hold the same row count"
+    );
+    assert_eq!(
+        view.transcript
+            .iter()
+            .map(|l| l.render())
+            .collect::<Vec<_>>(),
+        folded.iter().map(|l| l.render()).collect::<Vec<_>>(),
+        "view and fold render identically"
+    );
+}
+
+/// A fetch landing for a child the user is NOT viewing must not clobber the
+/// view's transcript. Pins the child_sid match guard.
+#[test]
+fn test_other_child_keeps_view() {
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::frontend::run::ContentBlock;
+    use houyicoder_protocol::frontend::session_update::ContentChunk;
+    use houyicoder_protocol::frontend::session_update::SessionUpdate;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "first".into(),
+        folded_transcript: vec![TranscriptLine::Agent("viewed child".into())],
+    });
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c2".into(),
+        subagent_type: "plan".into(),
+        summary: "second".into(),
+        folded_transcript: Vec::new(),
+    });
+    app.selection.start(0, 0);
+    assert!(app.enter_teammate_view());
+    assert_eq!(app.teammate_view.as_ref().unwrap().child_sid, "c1");
+    // A fetch for c2 arrives while viewing c1.
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c2".into(),
+        frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text {
+                text: "other child".into(),
+            }),
+        ))],
+    });
+    let view = app.teammate_view.as_ref().unwrap();
+    assert_eq!(view.child_sid, "c1", "view unchanged");
+    assert_eq!(view.transcript.len(), 1, "view transcript not clobbered");
+    assert!(
+        matches!(view.transcript[0], TranscriptLine::Agent(ref s) if s == "viewed child"),
+        "the viewed child's rows are intact"
+    );
+}
+
+/// Enter on a transcript with no Subagent line returns false and opens no
+/// view, so the caller falls through to submit. Pins the no-target guard.
+#[test]
+fn test_enter_teammate_no_target() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.transcript.push(TranscriptLine::Agent("plain".into()));
+    assert!(!app.enter_teammate_view(), "no Subagent line to target");
+    assert!(app.teammate_view.is_none());
 }
