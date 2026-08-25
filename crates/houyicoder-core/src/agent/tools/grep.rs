@@ -537,9 +537,9 @@ fn search_content(
     let fmt = |ln: usize, text: &str| -> String {
         let t = truncate_line(text);
         if show_line_numbers {
-            format!("{rel}:{ln}:{t}")
+            format!("{rel}:{ln}: {t}")
         } else {
-            format!("{rel}:{t}")
+            format!("{rel}: {t}")
         }
     };
 

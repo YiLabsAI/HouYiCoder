@@ -55,8 +55,8 @@ fn test_content_mode_shows_lines() {
     o.output_mode = OutputMode::Content;
     let out = run_grep(&dir, &[], &o).unwrap();
     assert_eq!(out.num_lines, 2);
-    assert!(out.content.contains("a.rs:1:fn alpha() {}"));
-    assert!(out.content.contains("a.rs:3:fn alpha() {}"));
+    assert!(out.content.contains("a.rs:1: fn alpha() {}"));
+    assert!(out.content.contains("a.rs:3: fn alpha() {}"));
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -96,11 +96,11 @@ fn test_context_lines_surround_match() {
     o.context_before = 1;
     o.context_after = 1;
     let out = run_grep(&dir, &[], &o).unwrap();
-    assert!(out.content.contains("a.rs:2:line2"));
-    assert!(out.content.contains("a.rs:3:MATCH"));
-    assert!(out.content.contains("a.rs:4:line4"));
-    assert!(!out.content.contains("a.rs:1:line1"));
-    assert!(!out.content.contains("a.rs:5:line5"));
+    assert!(out.content.contains("a.rs:2: line2"));
+    assert!(out.content.contains("a.rs:3: MATCH"));
+    assert!(out.content.contains("a.rs:4: line4"));
+    assert!(!out.content.contains("a.rs:1: line1"));
+    assert!(!out.content.contains("a.rs:5: line5"));
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -336,7 +336,7 @@ fn test_line_numbers_toggle() {
     o.show_line_numbers = false;
     let out = run_grep(&dir, &[], &o).unwrap();
     // Without line numbers, the format is path:content, not path:line:content.
-    assert!(out.content.contains("a.rs:fn foo"));
+    assert!(out.content.contains("a.rs: fn foo"));
     assert!(!out.content.contains("a.rs:1:"));
     fs::remove_dir_all(&dir).ok();
 }
@@ -553,6 +553,57 @@ async fn test_execute_respects_gitignore() {
             .iter()
             .any(|f| f.as_str().unwrap().contains("ignore.log")),
         "gitignored ignore.log must be skipped: {files:?}"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// The subprocess content path (rg --json) formats a uniform rel:line:
+/// content row for match AND context lines, with a relativized path and a
+/// space after the line number — fixing rg's colon-for-match / dash-for-
+/// context inconsistency + absolute-path leakage. Requires rg on PATH;
+/// skips otherwise (the in-process fallback is covered by the run_grep
+/// tests above, which already assert the same format).
+#[tokio::test]
+async fn test_subprocess_content_uniform_format() {
+    if crate::agent::tools::subprocess_util::find_rg().is_none() {
+        eprintln!("subprocess_content_uniform_format: rg not on PATH; skipping");
+        return;
+    }
+    let dir = test_dir();
+    touch(&dir, "a.rs", "line1\nMATCH\nline3\n");
+    let session = std::sync::Arc::new(StubSession { root: dir.clone() })
+        as std::sync::Arc<dyn houyicoder_api::sandbox::SandboxSession>;
+    let tool = GrepTool::new(session);
+    let out = tool
+        .execute(
+            houyicoder_api::tool::ToolCtx::new("c1"),
+            serde_json::json!({
+                "pattern": "MATCH",
+                "output_mode": "content",
+                "-B": 1,
+                "-A": 1
+            }),
+        )
+        .await
+        .expect("execute ok");
+    let content = out.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        content.contains("a.rs:2: MATCH"),
+        "match row uniform: {content}"
+    );
+    assert!(
+        content.contains("a.rs:1: line1"),
+        "before-context row uniform: {content}"
+    );
+    assert!(
+        content.contains("a.rs:3: line3"),
+        "after-context row uniform: {content}"
+    );
+    assert!(!content.contains("-2-"), "no rg dash separator: {content}");
+    assert!(!content.contains("-1-"), "no rg dash on context: {content}");
+    assert!(
+        !content.contains("/Users/"),
+        "no absolute path leakage: {content}"
     );
     fs::remove_dir_all(&dir).ok();
 }

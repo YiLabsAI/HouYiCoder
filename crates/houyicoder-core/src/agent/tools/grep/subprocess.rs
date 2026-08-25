@@ -117,9 +117,12 @@ fn build_rg_args(opts: &GrepOptions) -> Vec<String> {
             args.push("-c".into());
         }
         OutputMode::Content => {
-            if opts.show_line_numbers {
-                args.push("-n".into());
-            }
+            // Structured JSON so the parser never has to disambiguate rg's
+            // text format (colon for matches, dash for context, no path in
+            // single-file mode, paths with colons). The JSON record carries
+            // type + path + line_number + lines verbatim; parse_content
+            // formats a consistent rel:line: content row from it.
+            args.push("--json".into());
             if opts.context_before > 0 {
                 args.push("-B".into());
                 args.push(opts.context_before.to_string());
@@ -200,18 +203,59 @@ fn parse_files_with_matches(
     ))
 }
 
-/// content mode: each stdout line is path:line_no:content (with -n) or
-/// path:content (without). Relativize the path prefix to the workspace root
-/// so the chip matches the in-process format, then apply offset + head_limit.
+/// content mode: each stdout line is a rg --json record. Parse the match +
+/// context records, relativize the path, and emit one rel:line: content row
+/// per source line (a multiline match or context block splits across rows
+/// with incrementing line numbers). begin/end/summary records are skipped.
+/// The JSON avoids rg's text-format ambiguity (colon for matches, dash for
+/// context, no path in single-file mode, paths that themselves contain
+/// colons), so the output is uniform regardless of how rg was invoked or
+/// whether context was requested.
 fn parse_content(
     lines: &[&str],
     opts: &GrepOptions,
     croot: &Path,
 ) -> Result<GrepOutput, ToolError> {
-    let content_lines: Vec<String> = lines
-        .iter()
-        .map(|line| relativize_rg_content_line(line, croot))
-        .collect();
+    let mut content_lines: Vec<String> = Vec::new();
+    for line in lines {
+        let Ok(obj) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if !matches!(typ, "match" | "context") {
+            continue;
+        }
+        let Some(data) = obj.get("data") else {
+            continue;
+        };
+        let path = data
+            .pointer("/path/text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let line_no = data
+            .get("line_number")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        let text = data
+            .pointer("/lines/text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let rel = relativize(croot, Path::new(path));
+        // lines.text may hold several source lines (a multiline match or a
+        // multi-line context block); emit one row per source line, incrementing
+        // the line number. trim_end drops the trailing newline rg appends so it
+        // does not become a spurious empty final row.
+        for (i, content) in text.trim_end_matches('\n').split('\n').enumerate() {
+            let content = super::truncate_line(content);
+            let ln = line_no + i;
+            let row = if opts.show_line_numbers {
+                format!("{rel}:{ln}: {content}")
+            } else {
+                format!("{rel}: {content}")
+            };
+            content_lines.push(row);
+        }
+    }
     Ok(build_output(
         opts,
         content_lines,
@@ -243,20 +287,4 @@ fn parse_count(lines: &[&str], opts: &GrepOptions, croot: &Path) -> Result<GrepO
         count_lines,
         false,
     ))
-}
-
-/// Relativize the path prefix of an rg content line to the workspace root.
-/// Splits on the first colon (the path cannot contain a colon on the
-/// platforms this subprocess path targets); the remainder, including the
-/// colon, is appended unchanged so line numbers and content stay intact.
-fn relativize_rg_content_line(line: &str, croot: &Path) -> String {
-    match line.find(':') {
-        Some(i) => {
-            let path = &line[..i];
-            let rest = &line[i..];
-            let relativized = relativize(croot, Path::new(path));
-            format!("{relativized}{rest}")
-        }
-        None => line.to_string(),
-    }
 }
