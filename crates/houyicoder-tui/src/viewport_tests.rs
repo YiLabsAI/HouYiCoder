@@ -203,6 +203,28 @@ fn test_status_bar_fits_80() {
     }
 }
 
+/// A command pane owns the bottom of the screen: the input bar and the
+/// status bar both retract so the pane reclaims the rows. The pane's own
+/// footer hint replaces the status row as the last line. Without this, the
+/// status bar (stage chain) stayed pinned under the pane, wasting a row the
+/// pane could use and showing model/dir context that is not actionable while
+/// a pane is focused.
+#[test]
+fn test_pane_hides_status_bar() {
+    let mut app = working();
+    app.pane = Pane::Hooks;
+    let out = render(&app);
+    assert!(
+        !out.contains("implement"),
+        "status bar stage chain should be hidden when a pane is open: {out}"
+    );
+    let last = out.lines().last().unwrap_or("");
+    assert!(
+        last.contains("Esc=close"),
+        "the hooks pane footer should be the last row: [{last}]"
+    );
+}
+
 #[test]
 fn test_full_flow_viewport() {
     let mut app = working();

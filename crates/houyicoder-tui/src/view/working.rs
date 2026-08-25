@@ -119,7 +119,12 @@ fn draw_working(f: &mut Frame, app: &App) {
     } else {
         None
     };
-    constraints.push(Constraint::Length(1));
+    // The status bar hides alongside the input bar when a command pane is
+    // open: the pane owns the bottom of the screen, and the status row's
+    // model/dir context is not actionable while a pane is focused. Hiding
+    // it reclaims the row for the pane content.
+    let status_h = if pane_hides_input { 0 } else { 1 };
+    constraints.push(Constraint::Length(status_h));
     let status_idx = constraints.len() - 1;
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -165,7 +170,9 @@ fn draw_working(f: &mut Frame, app: &App) {
     if let Some(i) = queue_idx {
         queue_overlay::draw_strip(f, outer[i], app);
     }
-    status::draw_status_bar(f, outer[status_idx], app);
+    if status_h > 0 {
+        status::draw_status_bar(f, outer[status_idx], app);
+    }
 }
 
 /// Focus mode layout: the active pane renders full-width with a 1-line status
