@@ -23,6 +23,7 @@
 #![allow(dead_code)] // stub hook types and reserved traits pending owner-crate wiring; locally unused
 
 pub(crate) mod command;
+pub(crate) mod metadata;
 pub(crate) mod pipeline;
 
 use std::collections::HashMap;

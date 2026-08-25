@@ -641,6 +641,7 @@ pub(crate) fn hooks_to_wire(
             source: format!("{:?}", h.source),
             fired: h.events.iter().any(|e| e.is_fired()),
             summary: String::new(),
+            description: String::new(),
         })
         .collect()
 }
@@ -659,6 +660,7 @@ pub(crate) fn hook_events_to_wire() -> Vec<houyicoder_protocol::frontend::hooks:
             source: "framework".to_string(),
             fired: e.is_fired(),
             summary: e.summary().to_string(),
+            description: e.description().to_string(),
         })
         .collect()
 }

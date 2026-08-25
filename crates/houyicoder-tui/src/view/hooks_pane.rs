@@ -145,6 +145,12 @@ fn draw_event_detail(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("  "),
         Span::styled(event.summary.clone(), Style::new().fg(Color::DarkGray)),
     ])];
+    if !event.description.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", event.description),
+            Style::new().fg(Color::DarkGray),
+        )));
+    }
     if registered.is_empty() {
         lines.push(Line::from(Span::styled(
             "  no hooks configured for this event",
@@ -161,6 +167,10 @@ fn draw_event_detail(f: &mut Frame, area: Rect, app: &App) {
             ]));
         }
     }
+    lines.push(Line::from(Span::styled(
+        "  edit settings.json to configure",
+        Style::new().fg(Color::DarkGray),
+    )));
     f.render_widget(Paragraph::new(lines), area);
 }
 
@@ -176,6 +186,7 @@ mod tests {
             source: "framework".into(),
             fired: false,
             summary: "event def".into(),
+            description: String::new(),
         }
     }
 
@@ -186,6 +197,7 @@ mod tests {
             source: source.into(),
             fired: false,
             summary: String::new(),
+            description: String::new(),
         }
     }
 

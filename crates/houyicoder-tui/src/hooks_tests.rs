@@ -35,6 +35,7 @@ fn test_hooks_result_stores_entries() {
                 source: "Project".into(),
                 fired: true,
                 summary: String::new(),
+                description: String::new(),
             },
             HookEntry {
                 name: "PreToolUse".into(),
@@ -42,6 +43,7 @@ fn test_hooks_result_stores_entries() {
                 source: "framework".into(),
                 fired: true,
                 summary: "Before tool execution".into(),
+                description: String::new(),
             },
         ],
     });

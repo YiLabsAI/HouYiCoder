@@ -18,4 +18,9 @@ pub struct HookEntry {
     pub fired: bool,
     #[serde(default)]
     pub summary: String,
+    /// Full description with input format and verdict semantics. Shown in the
+    /// detail view when the user drills into an event. Empty for entries that
+    /// predate the field (serde default).
+    #[serde(default)]
+    pub description: String,
 }
