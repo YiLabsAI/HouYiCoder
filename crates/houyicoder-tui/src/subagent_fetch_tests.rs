@@ -20,6 +20,7 @@ fn test_expand_fetches_child_wired() {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
+        prompt: String::new(),
         folded_transcript: Vec::new(),
         color: None,
     });

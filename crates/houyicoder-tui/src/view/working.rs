@@ -177,7 +177,7 @@ struct LayoutSlots {
 fn build_working_layout(app: &App, input_h: u16, queue_h: u16) -> WorkingLayout {
     let mut constraints: Vec<Constraint> = vec![];
     let banner_h = if app.teammate_view.is_some() {
-        1u16
+        3u16
     } else {
         0u16
     };

@@ -16,9 +16,10 @@ use crate::state::App;
 use crate::view::badge_color;
 
 /// Draw the teammate-view banner. No-op when no teammate is in view. The
-/// banner is a single line: "Viewing @type · esc return". The agent name
-/// renders bold and, when the agent has a badge color, tinted with it so
-/// the viewed teammate is distinguishable from siblings.
+/// banner is two lines: the title "Viewing @type · esc return" with the
+/// agent name bold and tinted by its badge color, then a dim line
+/// carrying the delegation summary. A blank margin follows, reserved by
+/// the layout so the title sits clear of the transcript.
 pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
     let Some(view) = app.teammate_view.as_ref() else {
         return;
@@ -32,12 +33,17 @@ pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
     if let Some(fg) = view.color.as_deref().and_then(badge_color) {
         name_style = name_style.fg(fg);
     }
-    let line = Line::from(vec![
+    let title = Line::from(vec![
         Span::raw("Viewing "),
         Span::styled(format!("@{name}"), name_style),
-        Span::raw(" · esc return"),
+        Span::styled(
+            " · esc return",
+            Style::default().add_modifier(Modifier::DIM),
+        ),
     ]);
-    f.render_widget(Paragraph::new(line), area);
+    let prompt =
+        Line::from(view.prompt.clone()).style(Style::default().add_modifier(Modifier::DIM));
+    f.render_widget(Paragraph::new(vec![title, prompt]), area);
 }
 
 #[cfg(test)]
@@ -50,7 +56,7 @@ mod tests {
         app.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c1".into(),
             subagent_type: "explore".into(),
-            summary: "find auth".into(),
+            prompt: "find auth".into(),
             color: None,
             transcript: vec![],
         });
@@ -69,7 +75,7 @@ mod tests {
         app.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c2".into(),
             subagent_type: String::new(),
-            summary: String::new(),
+            prompt: String::new(),
             color: None,
             transcript: vec![],
         });
@@ -94,7 +100,7 @@ mod tests {
         app.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c1".into(),
             subagent_type: "explore".into(),
-            summary: "find auth".into(),
+            prompt: "find auth".into(),
             color: None,
             transcript: vec![TranscriptLine::Agent("child reply".into())],
         });
@@ -106,6 +112,10 @@ mod tests {
         assert!(
             out.contains("esc return"),
             "banner carries the esc-return hint, got:\n{out}"
+        );
+        assert!(
+            out.contains("find auth"),
+            "banner carries the dim summary line, got:\n{out}"
         );
         assert!(
             out.contains("child reply"),
@@ -138,7 +148,7 @@ mod tests {
         app.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c1".into(),
             subagent_type: "verify".into(),
-            summary: "ran deep review".into(),
+            prompt: "ran deep review".into(),
             color: Some("red".into()),
             transcript: vec![],
         });

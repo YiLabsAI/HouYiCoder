@@ -401,6 +401,7 @@ pub(crate) fn push_line_rows(
         child_sid,
         subagent_type,
         summary,
+        prompt: _,
         folded_transcript,
         color,
     } = line

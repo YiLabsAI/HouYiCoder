@@ -155,6 +155,11 @@ pub enum TranscriptLine {
         child_sid: String,
         subagent_type: String,
         summary: String,
+        /// The task prompt the parent handed the child, surfaced so the
+        /// teammate banner can name the task this view is for (the result
+        /// lives in the transcript body). Empty when the call input lacks
+        /// a prompt.
+        prompt: String,
         /// The child's transcript projected through the same pipeline.
         /// Empty: the on-expand fetch from the child session log is not
         /// yet wired.
@@ -169,10 +174,10 @@ pub enum TranscriptLine {
 /// Build an inline Subagent fold-group line from an agent-tool result, or
 /// None when the output is not an agent delegation. The agent tool's
 /// structured result carries agentId (the child session id) and content (the
-/// summary); the call input carries subagent_type. The child transcript is
-/// fetched on expand, so folded_transcript starts empty. Detecting by
-/// agentId (not the tool title) is robust: only the agent tool emits this
-/// field, and the title can be a display name.
+/// summary); the call input carries subagent_type + the task prompt. The
+/// child transcript is fetched on expand, so folded_transcript starts
+/// empty. Detecting by agentId (not the tool title) is robust: only the
+/// agent tool emits this field, and the title can be a display name.
 pub(crate) fn subagent_line(
     output: &serde_json::Value,
     call_input: Option<&serde_json::Value>,
@@ -188,6 +193,11 @@ pub(crate) fn subagent_line(
         .and_then(|v| v.as_str())
         .unwrap_or("general-purpose")
         .to_string();
+    let prompt = call_input
+        .and_then(|v| v.get("prompt"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let color = output
         .get("color")
         .and_then(|v| v.as_str())
@@ -196,6 +206,7 @@ pub(crate) fn subagent_line(
         child_sid,
         subagent_type,
         summary,
+        prompt,
         folded_transcript: Vec::new(),
         color,
     })
@@ -213,8 +224,9 @@ pub struct TeammateView {
     pub child_sid: String,
     /// The subagent type, shown in the banner.
     pub subagent_type: String,
-    /// The one-line summary, shown dim under the banner title.
-    pub summary: String,
+    /// The task prompt the parent handed the child, shown dim under the
+    /// banner title so the banner names the task this view is for.
+    pub prompt: String,
     /// The agent's badge color, applied to the banner name. None renders
     /// the default foreground.
     pub color: Option<String>,

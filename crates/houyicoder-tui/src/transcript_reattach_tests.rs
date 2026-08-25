@@ -255,6 +255,7 @@ fn test_agent_result_renders_subagent() {
             child_sid,
             subagent_type,
             summary,
+            prompt: _,
             folded_transcript,
             color: _,
         } => {

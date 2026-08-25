@@ -37,14 +37,15 @@ impl App {
             if let TranscriptLine::Subagent {
                 child_sid: sid,
                 subagent_type,
-                summary,
+                summary: _,
+                prompt,
                 folded_transcript,
                 color,
             } = line
                 && sid == &child_sid
             {
                 view.subagent_type = subagent_type.clone();
-                view.summary = summary.clone();
+                view.prompt = prompt.clone();
                 view.color = color.clone();
                 if !folded_transcript.is_empty() {
                     view.transcript = folded_transcript.clone();
