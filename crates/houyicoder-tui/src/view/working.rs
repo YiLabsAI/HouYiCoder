@@ -142,6 +142,35 @@ fn draw_working(f: &mut Frame, app: &App) {
         queue_overlay::draw_strip(f, outer[i], app);
     }
     status::draw_status_bar(f, outer[layout.status_idx], app);
+    stash_status_rows(f, outer[layout.status_idx], app);
+}
+
+/// Stash the rendered status bar rows + rect so the in-app selection path can
+/// reach the text the status bar drew. Mirrors stash_pane_rows: the status
+/// bar renders through Paragraph widgets, so the rendered cells are the single
+/// source of truth for the model/mode/context text the user sees. Trailing
+/// blanks are trimmed per row so a drag to the right edge past text does not
+/// pad the clipboard. The status bar is one row; multi-row layouts keep the
+/// same per-row readback.
+fn stash_status_rows(f: &mut Frame, area: Rect, app: &App) {
+    app.status_rect.set(area);
+    let mut rows = app.last_status_rows.borrow_mut();
+    rows.clear();
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let buf = f.buffer_mut();
+    for ry in 0..area.height {
+        let y = area.y + ry;
+        let mut row = String::with_capacity(area.width as usize);
+        for rx in 0..area.width {
+            let x = area.x + rx;
+            if let Some(cell) = buf.cell((x, y)) {
+                row.push_str(cell.symbol());
+            }
+        }
+        rows.push((crate::selection::TAG_PLAIN, row.trim_end().to_string()));
+    }
 }
 
 /// The Working-mode vertical layout: a stack of optional + fixed regions

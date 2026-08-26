@@ -312,6 +312,17 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     .handle_down(m.column, m.row);
                 return;
             }
+            // The status bar is its own chrome row at the bottom of the
+            // working surface; a drag here selects the model/mode/context
+            // text so it can be copied for bug reports. Routed before the
+            // transcript branch so a click in the bar never starts a
+            // transcript selection under it.
+            let srect = app.status_rect.get();
+            if srect.width > 0 && srect.height > 0 && in_rect(srect, m.column, m.row) {
+                crate::selection::surface::StatusSurface { app: &mut *app }
+                    .handle_down(m.column, m.row);
+                return;
+            }
             let rect = app.transcript_rect.get();
             if in_rect(rect, m.column, m.row) {
                 // Byte-window mode is a read/browse surface: drag-select would
@@ -326,11 +337,15 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             } else {
                 app.selection.clear();
                 app.pane_selection.clear();
+                app.status_selection.clear();
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             if app.pane_selection.is_dragging {
                 crate::selection::surface::PaneSurface { app: &mut *app }
+                    .handle_drag(m.column, m.row);
+            } else if app.status_selection.is_dragging {
+                crate::selection::surface::StatusSurface { app: &mut *app }
                     .handle_drag(m.column, m.row);
             } else if app.selection.is_dragging {
                 crate::selection::surface::TranscriptSurface { app: &mut *app }
@@ -349,6 +364,9 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             if app.pane_selection.is_dragging {
                 crate::selection::surface::PaneSurface { app: &mut *app }.handle_moved();
             }
+            if app.status_selection.is_dragging {
+                crate::selection::surface::StatusSurface { app: &mut *app }.handle_moved();
+            }
             if app.selection.is_dragging {
                 crate::selection::surface::TranscriptSurface { app: &mut *app }.handle_moved();
             }
@@ -356,6 +374,10 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::Up(MouseButton::Left) => {
             if app.pane_selection.is_dragging {
                 crate::selection::surface::PaneSurface { app: &mut *app }.handle_up();
+                return;
+            }
+            if app.status_selection.is_dragging {
+                crate::selection::surface::StatusSurface { app: &mut *app }.handle_up();
                 return;
             }
             if app.selection.is_dragging {
@@ -421,6 +443,16 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             0,
         );
     }
+    {
+        let rows = app.last_status_rows.borrow();
+        crate::selection::surface::paint_overlay(
+            buf,
+            app.status_rect.get(),
+            &rows,
+            &app.status_selection,
+            0,
+        );
+    }
 }
 
 /// Dispatch a key to the right handler based on screen and overlays.
@@ -458,6 +490,44 @@ mod tests {
         let mut app = crate::composition::app();
         app.screen = Screen::Working;
         app
+    }
+
+    /// A status-bar drag-select starts a status selection so the chrome text
+    /// (model/mode/context) can be copied for bug reports. Renders first so
+    /// the status rect + rows are published by the draw pass, then fires a
+    /// mouse-down in the status bar and asserts the status surface picked it
+    /// up (not the transcript or pane surface).
+    #[test]
+    fn test_status_bar_click_drags() {
+        let mut app = working_app();
+        drop(crate::test_support::render_text(&app, 80, 24));
+        let srect = app.status_rect.get();
+        assert!(srect.height > 0, "status rect published by the draw pass");
+        let rows = app.last_status_rows.borrow();
+        assert!(
+            !rows.is_empty(),
+            "status rows captured from the frame buffer"
+        );
+        drop(rows);
+        // A left-down inside the status bar routes to StatusSurface, not the
+        // transcript surface.
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: srect.x,
+                row: srect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(
+            app.status_selection.is_dragging,
+            "click in status bar starts a status drag"
+        );
+        assert!(
+            !app.selection.is_dragging,
+            "transcript surface does not grab a status-bar click"
+        );
     }
 
     fn wheel(kind: MouseEventKind) -> MouseEvent {

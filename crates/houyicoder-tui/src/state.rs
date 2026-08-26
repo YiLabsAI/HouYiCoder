@@ -398,11 +398,12 @@ pub struct App {
     /// are the single source of truth for the text the user sees — reading
     /// them avoids duplicating each widget's row construction.
     pub last_pane_rows: RefCell<Vec<(u8, String)>>,
-    /// In-app selection for the slash-command pane surface (separate from the
-    /// transcript selection so the two coordinate spaces never collide). A
-    /// drag in the pane starts here; mouse-up copies the pane text and clears
-    /// the range, since pane content rebuilds each frame and a persistent
-    /// highlight would not track the rows.
+    /// Status bar rect + rows + selection (mirrors the pane surface) so the chrome row is drag-selectable + copyable.
+    pub status_rect: Cell<Rect>,
+    pub last_status_rows: RefCell<Vec<(u8, String)>>,
+    pub status_selection: Selection,
+    /// Pane selection surface (separate coordinate space from the transcript
+    /// so the two never collide). Mouse-up copies + clears.
     pub pane_selection: Selection,
     /// Per-line render cache (content hash + width + expand key; indices are
     /// unstable — transcript rebuilds each batch). Count + render share it.

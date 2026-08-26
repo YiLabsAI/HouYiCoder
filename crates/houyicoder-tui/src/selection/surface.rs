@@ -368,6 +368,35 @@ impl Surface for PaneSurface<'_> {
     }
 }
 
+/// The status bar selection surface: a single chrome row (model + mode +
+/// context gauge) that the user can drag-select + copy so bug reports can
+/// quote the status text verbatim. Pure selection — no fold or click
+/// intercepts — so the trait defaults drive every gesture. The rows are
+/// read back from the frame buffer (see stash_status_rows) so the copyable
+/// text is exactly what the bar drew. The highlight clears on release
+/// (persist = false) because the bar rebuilds each frame.
+pub struct StatusSurface<'a> {
+    pub app: &'a mut App,
+}
+
+impl Surface for StatusSurface<'_> {
+    fn parts(&mut self) -> SurfaceParts<'_> {
+        let rows = self.app.last_status_rows.borrow();
+        SurfaceParts {
+            sel: &mut self.app.status_selection,
+            rows,
+            rect: self.app.status_rect.get(),
+            clipboard: self.app.clipboard.as_ref(),
+        }
+    }
+    fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
+        pane_mouse_to_content(self.app.status_rect.get(), x, y)
+    }
+    fn is_dragging(&self) -> bool {
+        self.app.status_selection.is_dragging
+    }
+}
+
 // ---- overlay (draw path) -------------------------------------------------
 
 /// Paint a solid selection background over the surface's cells. The range is
