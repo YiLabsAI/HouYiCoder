@@ -58,6 +58,19 @@ pub enum LiveEvent {
     /// the user at the catalog override. Best-effort: a host that does not
     /// model this variant ignores it.
     SystemLine { text: String },
+    /// One turn-boundary progress snapshot, emitted between turns when the
+    /// loop continues. Coarser than the deltas above: not a token stream but
+    /// a per-turn summary (cumulative tokens, the turn's tool count, the last
+    /// tool name) for a watcher that does not consume the token stream — a
+    /// spawned child's bus bridge forwarding to a parent pill. A host that
+    /// does not model this variant ignores it (the parent's own delta sink
+    /// skips it).
+    TurnBoundary {
+        turn: u32,
+        cumulative_tokens: u64,
+        tool_uses: u32,
+        last_activity: Option<String>,
+    },
 }
 
 /// The host-installed sink the runner notifies per LiveEvent. A plain

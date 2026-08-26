@@ -665,7 +665,7 @@ fn pair_inproc_server(
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
     let next_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    houyicoder_service::server::install_delta_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
+    houyicoder_service::server::install_live_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
     // Share the runner's live sink with the worktree controller so the
     // main-branch-moved alert surfaces as a system line the user sees, not
     // just a diagnostic log entry. The controller was built before the

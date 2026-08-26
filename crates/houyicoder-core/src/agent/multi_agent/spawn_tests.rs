@@ -35,6 +35,7 @@ fn req_at_depth(
         worktree_controller: None,
         run_in_background: false,
         parent_cancel: None,
+        bus: None,
     }
 }
 
@@ -165,5 +166,117 @@ async fn test_spawn_child_effort_gate() {
         handle.runner.active_effort(),
         Some(houyicoder_protocol::llm::EffortLevel::Low),
         "child must pin the lowest effort tier at spawn"
+    );
+}
+
+/// A child armed with a bus publishes one Progress snapshot at each
+/// turn boundary; a parent subscribed to the child's progress topic receives
+/// it. The causal path the acceptance pins: publish → receive (not a timer).
+/// The child runs two turns — a tool call (RunAgain) then final text — so
+/// the turn-1 boundary fires exactly one Progress before the terminal turn.
+#[tokio::test]
+async fn test_spawn_publishes_progress() {
+    use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage, progress_topic};
+    use houyicoder_async::bus::MessageBus;
+    use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
+
+    let bus = Arc::new(AgentBus::new());
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    // Turn 1: a tool call → resolve_turn returns RunAgain → progress emitted.
+    // Turn 2: final text → FinalOutput → terminal, no progress.
+    let resp1 = CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "c1".into(),
+            name: "grep".into(),
+            input: serde_json::json!({}),
+        }],
+        usage: Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            ..Usage::default()
+        },
+        model: "test".into(),
+    };
+    let resp2 = CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+        usage: Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            ..Usage::default()
+        },
+        model: "test".into(),
+    };
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::new(vec![resp1, resp2]));
+    let mut req = req_at_depth(parent_sid, store, provider, 0);
+    req.bus = Some(bus.clone());
+    let handle = spawn_child(req).await.expect("spawn");
+
+    // Subscribe before the run: broadcast drops messages a late subscriber
+    // never saw. The parent subscribes at spawn time (before the run starts).
+    let child_id = handle.session.to_string();
+    let mut rx = bus.subscribe(&progress_topic(&child_id));
+
+    // Drive the child to terminal. The publish fires mid-run, but the
+    // broadcast buffer holds it for the receiver to drain after.
+    let _result = handle
+        .runner
+        .run(handle.session, "do the task".to_string())
+        .await;
+
+    // The turn-1 boundary published one Progress the parent received.
+    match rx.try_recv().expect("parent received progress") {
+        BusMessage::Progress {
+            agent_id,
+            turn,
+            tokens,
+            tool_uses,
+            last_activity,
+        } => {
+            assert_eq!(agent_id, child_id);
+            assert_eq!(turn, 1);
+            assert_eq!(tokens, 150); // 100 input + 50 output, cumulative after turn 1
+            assert_eq!(tool_uses, 1);
+            assert_eq!(last_activity.as_deref(), Some("grep"));
+        }
+        other => panic!("expected Progress, got {other:?}"),
+    }
+    // Only one turn boundary was crossed; no second Progress.
+    assert!(
+        rx.try_recv().is_err(),
+        "no second progress for a 2-turn run"
+    );
+}
+
+/// Adversarial: a child that completes in a single turn (text only, no
+/// tool calls) crosses no turn boundary, so it publishes no Progress — a
+/// parent that saw a message here would mean the guard fires on terminal turns
+/// too, flooding the bus with useless completion-coupled progress.
+#[tokio::test]
+async fn test_spawn_terminal_skips_progress() {
+    use crate::agent::multi_agent::bus_types::{AgentBus, progress_topic};
+    use houyicoder_async::bus::MessageBus;
+
+    let bus = Arc::new(AgentBus::new());
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::text("immediate answer"));
+    let mut req = req_at_depth(parent_sid, store, provider, 0);
+    req.bus = Some(bus.clone());
+    let handle = spawn_child(req).await.expect("spawn");
+    let child_id = handle.session.to_string();
+    let mut rx = bus.subscribe(&progress_topic(&child_id));
+    let _result = handle
+        .runner
+        .run(handle.session, "do the task".to_string())
+        .await;
+    // No turn boundary crossed (single turn → FinalOutput), so no Progress.
+    assert!(
+        rx.try_recv().is_err(),
+        "single-turn child must not publish progress"
     );
 }

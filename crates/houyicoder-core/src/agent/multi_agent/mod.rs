@@ -7,6 +7,7 @@
 
 pub mod acl;
 pub mod budget;
+pub mod bus_sink;
 pub mod bus_types;
 pub mod capability;
 pub mod child_prompt;

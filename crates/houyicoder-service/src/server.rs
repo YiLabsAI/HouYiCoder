@@ -31,10 +31,10 @@ use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::handshake::{Hello, Negotiated, negotiate};
 use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
-/// The live-delta sink installer lives in a child module so this file stays
+/// The live sink installer lives in a child module so this file stays
 /// under the size gate.
-mod delta;
-pub use delta::install_delta_sink;
+mod live_sink;
+pub use live_sink::install_live_sink;
 
 /// The raw frame I/O lives in a child module so this file stays under the
 /// size gate.

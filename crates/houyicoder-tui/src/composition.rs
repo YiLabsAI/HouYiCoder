@@ -373,7 +373,7 @@ pub fn pair_inproc_server_tracked(
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
     let next_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    houyicoder_service::server::install_delta_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
+    houyicoder_service::server::install_live_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
     // Drain startup warnings synchronously before the runner is shared so the
     // host can push them as initial transcript system lines — no async-sink
     // race with later command output or test assertions.

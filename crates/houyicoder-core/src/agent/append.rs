@@ -4,7 +4,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use houyicoder_api::live::LiveEvent;
+use houyicoder_api::live::{LiveEvent, LiveSink};
 use houyicoder_context::{
     ContextBackend, EventId, HookVerdictKind, SessionId, TurnEvent, TurnEventKind,
 };
@@ -20,6 +20,37 @@ use super::hook::{
 };
 use super::{CompletionResponse, RunError, Runner};
 
+/// Forward a turn-boundary snapshot to the live sink. Called after a turn
+/// resolves and the loop will run again; the snapshot carries the turn's own
+/// tool count, the last tool name, and cumulative tokens so a watcher that
+/// does not consume the token stream (a spawned child's bus bridge) can
+/// report per-turn progress. No-op when no sink is installed.
+pub(crate) fn emit_turn_progress(
+    live: Option<&LiveSink>,
+    response: &CompletionResponse,
+    turn: u32,
+    usage: &Usage,
+) {
+    let Some(sink) = live else {
+        return;
+    };
+    let tool_uses = response
+        .output
+        .iter()
+        .filter(|item| matches!(item, OutputItem::ToolCall { .. }))
+        .count() as u32;
+    let last_activity = response.output.iter().rev().find_map(|item| match item {
+        OutputItem::ToolCall { name, .. } => Some(name.clone()),
+        _ => None,
+    });
+    sink(&LiveEvent::TurnBoundary {
+        turn,
+        cumulative_tokens: usage.input_tokens as u64 + usage.output_tokens as u64,
+        tool_uses,
+        last_activity,
+    });
+}
+
 impl Runner {
     /// Surface a notice to the user through the live sink: a transcript
     /// system line the host renders verbatim. For things the user must know
@@ -32,7 +63,6 @@ impl Runner {
             sink(&LiveEvent::SystemLine { text });
         }
     }
-
     /// Surface the one overflow case the catalog cannot self-heal: the
     /// provider rejected an over-long request but its error body carried no
     /// parseable limit, so record_learned_context_window learned nothing. The

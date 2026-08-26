@@ -1,7 +1,8 @@
-//! The live-delta sink: streams token-level deltas onto the wire as
-//! acpx/llm/* notifications. A self-contained concern split out of server.rs
-//! so server.rs stays under the file-size gate. The sink-builder is extracted
-//! from the installer so it can be unit-tested without a Runner.
+//! The live sink: adapts each engine LiveEvent onto the wire as a
+//! ServerFrame::Event (acpx/llm/* notifications for streaming deltas, typed
+//! FrontendEventKind for notices). A self-contained concern split out of
+//! server.rs so server.rs stays under the file-size gate. The sink-builder is
+//! extracted from the installer so it can be unit-tested without a Runner.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -15,8 +16,8 @@ use houyicoder_protocol::envelope::{EventEnvelope, EventSeq, ServerFrame};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendEventKind;
 
-/// Build the live-delta sink: a closure that encodes each engine delta as a
-/// ServerFrame::Event and try_sends it to the outbound channel, minting the
+/// Build the live sink: a closure that encodes each engine LiveEvent as
+/// a ServerFrame::Event and try_sends it to the outbound channel, minting the
 /// event seq from the shared counter the server also uses for durable events
 /// (one monotonic seq stream; the driver resume cursor relies on it). try_send
 /// is non-blocking: a full channel drops the delta (ephemeral preview — the
@@ -29,7 +30,7 @@ use houyicoder_protocol::frontend::FrontendEventKind;
 /// never blocks the engine run thread. The sink captures its own sender + seq
 /// counter clone, so it touches neither Server nor ServerIo at fire time (no
 /// borrow entanglement with the run future).
-pub fn build_delta_sink(
+pub fn build_live_sink(
     out_tx: mpsc::Sender<String>,
     next_seq: Arc<std::sync::atomic::AtomicU64>,
 ) -> houyicoder_api::live::LiveSink {
@@ -41,36 +42,46 @@ pub fn build_delta_sink(
         // The drop is best-effort like deltas, but a notice is not
         // replaceable by a later authoritative frame, so log on a full
         // channel instead of failing silently.
-        let frame = match ev {
+        // TurnBoundary carries no frontend frame: turn-level progress rides
+        // the multi-agent bus to a parent pill, not the delta stream. None
+        // here skips the encode + send so the parent's own turn boundaries do
+        // not pay a wire round-trip the frontend discards.
+        let frame: Option<FrontendEventKind> = match ev {
             LiveEvent::AssistantDelta { text } => {
                 let notification = AcpxNotification::new(
                     AcpxMethod::LlmTextDelta,
                     serde_json::json!({ "text": text }),
                 );
-                FrontendEventKind::Acpx { notification }
+                Some(FrontendEventKind::Acpx { notification })
             }
             LiveEvent::ReasoningDelta { text } => {
                 let notification = AcpxNotification::new(
                     AcpxMethod::LlmReasoningDelta,
                     serde_json::json!({ "text": text }),
                 );
-                FrontendEventKind::Acpx { notification }
+                Some(FrontendEventKind::Acpx { notification })
             }
-            LiveEvent::MemorySaved { count, kind } => FrontendEventKind::MemorySaved {
+            LiveEvent::MemorySaved { count, kind } => Some(FrontendEventKind::MemorySaved {
                 count: *count,
                 kind: *kind,
-            },
+            }),
             LiveEvent::ToolProgress {
                 call_id,
                 elapsed_secs,
                 lines,
-            } => FrontendEventKind::Acpx {
+            } => Some(FrontendEventKind::Acpx {
                 notification: AcpxNotification::new(
                     AcpxMethod::ToolProgress,
                     serde_json::json!({ "call_id": call_id, "elapsed_secs": elapsed_secs, "lines": lines }),
                 ),
-            },
-            LiveEvent::SystemLine { text } => FrontendEventKind::SystemLine { text: text.clone() },
+            }),
+            LiveEvent::SystemLine { text } => {
+                Some(FrontendEventKind::SystemLine { text: text.clone() })
+            }
+            LiveEvent::TurnBoundary { .. } => None,
+        };
+        let Some(frame) = frame else {
+            return;
         };
         let seq = next_seq.fetch_add(1, Ordering::Relaxed);
         let frame = ServerFrame::Event(EventEnvelope::new(EventSeq(seq), frame));
@@ -88,14 +99,15 @@ pub fn build_delta_sink(
     })
 }
 
-/// Install the live-delta sink on a runner. Thin wrapper over build_delta_sink
-/// so the composition root can arm the runner in one call.
-pub fn install_delta_sink(
+/// Install the live sink on a runner. Thin wrapper over
+/// build_live_sink so the composition root can arm the runner in one
+/// call.
+pub fn install_live_sink(
     runner: &mut Runner,
     out_tx: mpsc::Sender<String>,
     next_seq: Arc<std::sync::atomic::AtomicU64>,
 ) {
-    runner.set_live_sink(build_delta_sink(out_tx, next_seq));
+    runner.set_live_sink(build_live_sink(out_tx, next_seq));
 }
 
 #[cfg(test)]
@@ -110,7 +122,7 @@ mod tests {
     fn test_sink_encodes_as_event() {
         let (tx, mut rx) = mpsc::channel(8);
         let seq = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let sink = build_delta_sink(tx, seq.clone());
+        let sink = build_live_sink(tx, seq.clone());
 
         sink(&LiveEvent::AssistantDelta {
             text: "hello".into(),
@@ -157,7 +169,7 @@ mod tests {
     fn test_sink_encodes_tool_progress() {
         let (tx, mut rx) = mpsc::channel(8);
         let seq = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let sink = build_delta_sink(tx, seq);
+        let sink = build_live_sink(tx, seq);
         sink(&LiveEvent::ToolProgress {
             call_id: "c1".into(),
             elapsed_secs: 12,
@@ -185,7 +197,7 @@ mod tests {
     fn test_sink_encodes_system_line() {
         let (tx, mut rx) = mpsc::channel(8);
         let seq = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let sink = build_delta_sink(tx, seq);
+        let sink = build_live_sink(tx, seq);
         sink(&LiveEvent::SystemLine {
             text: "set catalog context_window".into(),
         });
@@ -200,5 +212,22 @@ mod tests {
             }
             _ => panic!("expected a system_line event"),
         }
+    }
+
+    /// TurnBoundary produces no frame: turn progress rides the multi-agent
+    /// bus to a parent pill, not the delta stream. A frame emitted here would
+    /// couple turn progress to the wire the frontend discards.
+    #[test]
+    fn test_sink_skips_turn_boundary() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let seq = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let sink = build_live_sink(tx, seq);
+        sink(&LiveEvent::TurnBoundary {
+            turn: 3,
+            cumulative_tokens: 1200,
+            tool_uses: 1,
+            last_activity: Some("grep".into()),
+        });
+        assert!(rx.try_recv().is_err(), "TurnBoundary must not emit a frame");
     }
 }

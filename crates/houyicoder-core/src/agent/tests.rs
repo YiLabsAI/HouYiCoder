@@ -316,7 +316,8 @@ async fn test_stream_persists_deltas() {
             // runtime notice (no overflow here). None is a delta.
             LiveEvent::MemorySaved { .. }
             | LiveEvent::ToolProgress { .. }
-            | LiveEvent::SystemLine { .. } => None,
+            | LiveEvent::SystemLine { .. }
+            | LiveEvent::TurnBoundary { .. } => None,
         })
         .collect();
     assert_eq!(deltas.concat(), "hello world");

@@ -58,6 +58,10 @@ pub struct SpawnRequest {
     /// cancels the child too. Ignored for an async child, which gets a fresh
     /// unlinked token so the parent's ESC does not propagate.
     pub parent_cancel: Option<CancellationToken>,
+    /// The shared in-process bus. When present, the child's live sink is armed
+    /// with the bus bridge that publishes a Progress message per completed
+    /// turn onto the child's progress topic. None when no bus is wired.
+    pub bus: Option<Arc<super::bus_types::AgentBus>>,
 }
 
 /// A handle to a spawned child. Carries the child session id + a cancel
@@ -141,8 +145,12 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     let parent_sid = req.parent_sid;
     let subagent_type = req.subagent_type.clone();
     let prompt_summary = req.prompt_summary.clone();
+    // Clone the bus out before the runner build moves the other req fields, so
+    // the child can be armed with the bus bridge without a partial-borrow on a
+    // moved struct.
+    let bus = req.bus.clone();
 
-    let runner = Arc::new(
+    let mut runner =
         Runner::with_shared_store(req.parent_store, req.provider, req.tools, req.config)
             .with_agent_identity(houyicoder_api::spawn::AgentIdentity {
                 subagent_type: Some(req.subagent_type.clone()),
@@ -150,8 +158,14 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
                 // nested agent call reports depth + 1 to the recursion guard.
                 depth: req.depth + 1,
                 parent_session_id: Some(req.parent_sid.to_string()),
-            }),
-    );
+            });
+    // Arm the bus bridge as the child's live sink: forwards each
+    // TurnBoundary onto the child's progress topic. agent_id is the child
+    // session id spawn minted above.
+    if let Some(bus) = bus {
+        runner.set_live_sink(super::bus_sink::bus_live_sink(bus, child_sid.to_string()));
+    }
+    let runner = Arc::new(runner);
     // Children run at the lowest effort tier: a fan-out of sub-agents must
     // not multiply reasoning-token spend. Sticky on the runner so every
     // child request carries it; the active pick outranks any catalog level

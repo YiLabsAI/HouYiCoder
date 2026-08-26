@@ -185,6 +185,7 @@ async fn run_sync_spawn(
         worktree_controller: this.worktree_controller.clone(),
         run_in_background: false,
         parent_cancel: cancel,
+        bus: this.bus.clone(),
     };
     let handle = spawn_child(req).await.map_err(map_spawn_err)?;
     let child_sid = handle.session;
