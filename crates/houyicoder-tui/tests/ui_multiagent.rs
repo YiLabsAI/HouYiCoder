@@ -106,3 +106,40 @@ fn test_multi_expand_teammate() {
     s.send_key(&Key::Esc);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
 }
+
+/// Large child summary (>8KB, newline + quote dense) — the shape that
+/// broke the first B2 fix. Field-level externalization keeps agentId at
+/// the top level so the Subagent fold-group still renders; the summary
+/// shows the inline preview, not raw {"block_ref":"..."} JSON. Ctrl+O
+/// expands without leaking the raw marker key. Mutation: disabling
+/// field-level in isolate turns this red (the fold-group never appears).
+#[test]
+#[ignore]
+fn test_multi_large_child_summary() {
+    let dense = "line \"q\" \\ backslash\nnext line\n".repeat(300);
+    let script = serde_json::json!([
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text": dense}],
+        [{"type":"Text","text":"done"}]
+    ])
+    .to_string();
+    let mut s = session_on_working_with_script(&script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    // The fold-group summary line ("⎿ explore:") appears after the child
+    // completes — distinct from the running chip ("Agent(→ explore)").
+    // agentId survived field-level externalization.
+    assert!(
+        s.wait_for_plain("explore:", RENDER_TIMEOUT * 5),
+        "Subagent fold-group renders with large child summary:\n{}",
+        s.output()
+    );
+    // Ctrl+O expands: the raw block_ref marker key must not leak.
+    s.send_key(&Key::Ctrl('o'));
+    assert!(
+        !s.output_plain().contains("block_ref"),
+        "no raw block_ref key in the expanded view:\n{}",
+        s.output()
+    );
+}
