@@ -555,11 +555,8 @@ fn now_ts() -> u64 {
 
 /// Tool outputs larger than this (serialized bytes) are externalized to
 /// the CAS at the PostToolUse point. The 8KB threshold balances a single
-/// large result against per-turn retrieval cost. Exposed pub(crate) so a
-/// structured tool result that must keep envelope fields at the top level
-/// (the agent tool's agentId/color) can cap its large payload field below
-/// this threshold and avoid whole-envelope replacement.
-pub(crate) const ISOLATE_LARGE_OUTPUT_BYTES: usize = 8192;
+/// large result against per-turn retrieval cost.
+const ISOLATE_LARGE_OUTPUT_BYTES: usize = 8192;
 
 /// Inline preview length, in chars, stored alongside a block_ref marker so
 /// the Summarize tier can serve a preview without a retrieval. Matches the
