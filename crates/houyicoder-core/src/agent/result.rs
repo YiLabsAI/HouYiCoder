@@ -38,6 +38,23 @@ pub enum RunOutcome {
     MaxTurnsReached { turns: u32 },
 }
 
+impl RunOutcome {
+    /// Coarse terminal status + a summary string for a watcher that does
+    /// not read the session log. The status names match the spawn runtime's
+    /// terminal_summary; the summary is the FinalOutput text (or empty for
+    /// non-text terminals — the precise partial lives in the log).
+    pub fn terminal_status(&self) -> (&'static str, String) {
+        match self {
+            Self::FinalOutput(t) => ("completed", t.clone()),
+            Self::MaxTurnsReached { .. } => ("max_turns", String::new()),
+            Self::Interrupted(s) => ("interrupted", s.clone()),
+            Self::Interruption(_) => ("interrupted", String::new()),
+            Self::VerifyFailed(_) => ("verify_failed", String::new()),
+            Self::Handoff(a) => ("handoff", a.0.clone()),
+        }
+    }
+}
+
 /// The result of a run.
 #[derive(Debug)]
 pub struct RunResult {

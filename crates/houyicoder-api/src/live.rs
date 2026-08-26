@@ -71,6 +71,13 @@ pub enum LiveEvent {
         tool_uses: u32,
         last_activity: Option<String>,
     },
+    /// Terminal state: the run finished (or failed, or was killed). Emitted
+    /// once at the end of run(). A spawned child's bus bridge forwards this
+    /// onto the child's completed topic so a watcher learns the child is
+    /// done + its coarse status; the durable result stays in the session
+    /// log. Skipped by a parent's own delta adapter (completion is for the
+    /// bus, not the delta stream).
+    RunCompleted { status: String, summary: String },
 }
 
 /// The host-installed sink the runner notifies per LiveEvent. A plain

@@ -280,3 +280,40 @@ async fn test_spawn_terminal_skips_progress() {
         "single-turn child must not publish progress"
     );
 }
+
+/// A child that completes publishes a Completed message on its completed
+/// topic, so a parent subscribed before the run learns the child is done.
+#[tokio::test]
+async fn test_spawn_publishes_completion() {
+    use crate::agent::multi_agent::bus_types::{
+        AgentBus, BusMessage, ChildStatus, completed_topic,
+    };
+    use houyicoder_async::bus::MessageBus;
+
+    let bus = Arc::new(AgentBus::new());
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::text("found auth module"));
+    let mut req = req_at_depth(parent_sid, store, provider, 0);
+    req.bus = Some(bus.clone());
+    let handle = spawn_child(req).await.expect("spawn");
+    let child_id = handle.session.to_string();
+    let mut rx = bus.subscribe(&completed_topic(&child_id));
+    let _result = handle
+        .runner
+        .run(handle.session, "do the task".to_string())
+        .await;
+    match rx.try_recv().expect("parent received completion") {
+        BusMessage::Completed {
+            agent_id,
+            status,
+            summary,
+        } => {
+            assert_eq!(agent_id, child_id);
+            assert_eq!(status, ChildStatus::Completed);
+            assert_eq!(summary, "found auth module");
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}

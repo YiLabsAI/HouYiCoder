@@ -317,7 +317,8 @@ async fn test_stream_persists_deltas() {
             LiveEvent::MemorySaved { .. }
             | LiveEvent::ToolProgress { .. }
             | LiveEvent::SystemLine { .. }
-            | LiveEvent::TurnBoundary { .. } => None,
+            | LiveEvent::TurnBoundary { .. }
+            | LiveEvent::RunCompleted { .. } => None,
         })
         .collect();
     assert_eq!(deltas.concat(), "hello world");

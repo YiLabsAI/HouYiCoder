@@ -79,6 +79,7 @@ pub fn build_live_sink(
                 Some(FrontendEventKind::SystemLine { text: text.clone() })
             }
             LiveEvent::TurnBoundary { .. } => None,
+            LiveEvent::RunCompleted { .. } => None,
         };
         let Some(frame) = frame else {
             return;

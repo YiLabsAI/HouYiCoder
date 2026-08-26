@@ -63,6 +63,18 @@ impl Runner {
             sink(&LiveEvent::SystemLine { text });
         }
     }
+
+    /// Notify a watcher the run reached a terminal state. Emitted once at
+    /// the end of run(); a spawned child's bus bridge forwards it onto the
+    /// child's completed topic. No-op when no sink is installed.
+    pub(crate) fn emit_run_completed(&self, status: &str, summary: &str) {
+        if let Some(sink) = self.live.as_ref() {
+            sink(&LiveEvent::RunCompleted {
+                status: status.to_string(),
+                summary: summary.to_string(),
+            });
+        }
+    }
     /// Surface the one overflow case the catalog cannot self-heal: the
     /// provider rejected an over-long request but its error body carried no
     /// parseable limit, so record_learned_context_window learned nothing. The

@@ -146,20 +146,34 @@ impl Runner {
         // view (first-turn announce, then no-op until compaction folds it
         // and the scan naturally resets). No-op when no registry is wired.
         self.inject_skill_listing(session).await?;
-        let result = self
-            .drive_loop(session, 0, Usage::default(), &token)
-            .await?;
+        let result = self.drive_loop(session, 0, Usage::default(), &token).await;
+        // Notify any watcher the run reached a terminal state. On Ok the
+        // status comes from the outcome; on Err the run failed. A spawned
+        // child's bus bridge forwards this onto its completed topic.
+        let result = match result {
+            Ok(r) => {
+                let (status, summary) = r.outcome.terminal_status();
+                self.emit_run_completed(status, &summary);
+                Ok(r)
+            }
+            Err(e) => {
+                self.emit_run_completed("failed", &e.to_string());
+                Err(e)
+            }
+        };
         // Persist extracted facts after the run. Failures are logged but
         // never fail the run — memory persistence is best-effort, not a
         // hard gate on the agent loop.
-        if let Some(memory) = &self.memory {
+        if let Ok(_) = result
+            && let Some(memory) = &self.memory
+        {
             for entry in pending_facts {
                 if let Err(e) = memory.add(entry) {
                     tracing::warn!("memory write failed: {e}");
                 }
             }
         }
-        Ok(result)
+        result
     }
 
     /// Run on a session pre-seeded with a cloned event prefix (re-stamped
