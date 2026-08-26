@@ -69,6 +69,13 @@ pub fn draw(f: &mut Frame, app: &App) {
     // never go stale across screens that don't render a transcript (Login,
     // Console) — draw_transcript re-publishes it when the pill is visible.
     app.jump_pill_rect.set(Rect::new(0, 0, 0, 0));
+    // Same protection for the status bar selection surface: a viewport that
+    // draws a status bar re-publishes its rect + rows; one that does not
+    // leaves this zeroed so a drag cannot target a stale bar from the last
+    // frame (Working→Scroll left the Working rect live, and a Scroll-mode
+    // drag copied Working's text + painted a highlight on a row the status
+    // surface no longer owned).
+    app.status_rect.set(Rect::new(0, 0, 0, 0));
     match app.screen {
         Screen::Login => login::draw(f, app),
         Screen::Console => console::draw(f, app),

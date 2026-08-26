@@ -369,28 +369,23 @@ pub struct App {
     pub queue_focus: usize,
     /// In-app text selection (drag-select in the transcript, copy on release).
     pub selection: Selection,
-    /// Last-rendered transcript rect (screen coords), stashed by the draw pass
-    /// so the mouse handler can map a click cell to a transcript row.
+    /// Last-rendered transcript rect (screen coords), for the mouse handler to map a click cell to a row.
     pub transcript_rect: Cell<Rect>,
-    /// Last-rendered queued-input footer strip rect (screen coords), stashed
-    /// by the draw pass so the mouse handler can map a click to a queued item
-    /// (click to recall into the input box for editing).
+    /// Last-rendered queued-input footer strip rect, for the mouse handler to
+    /// map a click to a queued item (click recalls it into the input box).
     pub queue_rect: Cell<Rect>,
     /// Last-rendered "jump to bottom" pill rect; hit-tested before the
     /// transcript surface. Zero rect when hidden.
     pub jump_pill_rect: Cell<Rect>,
-    /// Last-rendered transcript rows with their style tag (post-wrap, with
-    /// spacer blanks), stashed by the draw pass so copy can extract the
-    /// selected text and skip non-content rows (spinner).
+    /// Last-rendered transcript rows with style tag (post-wrap, with spacer
+    /// blanks), for copy to extract selected text and skip non-content rows.
     pub last_transcript_rows: RefCell<Vec<(u8, String)>>,
-    /// Full transcript rows (pre-slice) stashed by the draw pass so copy can
-    /// access content beyond the visible viewport (selection past the bottom
-    /// edge, or viewport scrolled between draw and copy).
+    /// Full transcript rows (pre-slice), for copy to access content beyond the
+    /// visible viewport (selection past the bottom edge, or viewport scrolled
+    /// between draw and copy).
     pub last_all_rows: RefCell<Vec<(u8, String)>>,
-    /// Last-rendered slash-command pane rect (the /permissions /search
-    /// /memory inner content region), stashed by the draw pass so the mouse
-    /// handler can route a drag in the pane to a pane-local selection. Zero
-    /// when no command pane is open.
+    /// Last-rendered slash-command pane rect (the /permissions /search /memory
+    /// inner region), for routing a pane drag. Zero when no command pane is open.
     pub pane_rect: Cell<Rect>,
     /// Last-rendered pane content rows, stashed by reading the frame buffer
     /// after the pane content closure draws. The panes render through
@@ -398,12 +393,17 @@ pub struct App {
     /// are the single source of truth for the text the user sees — reading
     /// them avoids duplicating each widget's row construction.
     pub last_pane_rows: RefCell<Vec<(u8, String)>>,
-    /// Status bar rect + rows + selection (mirrors the pane surface) so the chrome row is drag-selectable + copyable.
+    /// Last-rendered status bar rect, published per viewport by the draw pass; zeroed at view::draw top so it cannot go stale across viewports or screens.
     pub status_rect: Cell<Rect>,
+    /// Status bar rows read back from the frame buffer (like last_pane_rows) so copy extracts the model/mode/context text the user sees.
     pub last_status_rows: RefCell<Vec<(u8, String)>>,
+    /// Selection for the status bar surface; own coordinate space so it never collides with the transcript or a pane.
     pub status_selection: Selection,
-    /// Pane selection surface (separate coordinate space from the transcript
-    /// so the two never collide). Mouse-up copies + clears.
+    /// In-app selection for the slash-command pane surface (separate from the
+    /// transcript selection so the two coordinate spaces never collide). A
+    /// drag in the pane starts here; mouse-up copies the pane text and clears
+    /// the range, since pane content rebuilds each frame and a persistent
+    /// highlight would not track the rows.
     pub pane_selection: Selection,
     /// Per-line render cache (content hash + width + expand key; indices are
     /// unstable — transcript rebuilds each batch). Count + render share it.

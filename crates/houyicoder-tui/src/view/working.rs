@@ -295,6 +295,7 @@ fn draw_focus(f: &mut Frame, app: &App) {
         queue_overlay::draw_strip(f, outer[i], app);
     }
     status::draw_focus_status(f, outer[status_idx], app);
+    stash_status_rows(f, outer[status_idx], app);
 }
 
 /// Scroll mode layout: the transcript fills the screen for full-history
@@ -332,6 +333,7 @@ fn draw_scroll(f: &mut Frame, app: &App) {
         queue_overlay::draw_strip(f, outer[i], app);
     }
     status::draw_scroll_status(f, outer[status_idx], app);
+    stash_status_rows(f, outer[status_idx], app);
 }
 
 /// Render the active pane full-width in Focus mode (a full-width code area).
