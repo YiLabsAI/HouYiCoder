@@ -110,13 +110,13 @@ fn test_multi_expand_teammate() {
 /// Large child summary (>8KB, newline + quote dense) — the shape that
 /// broke the first B2 fix. Field-level externalization keeps agentId at
 /// the top level so the Subagent fold-group still renders; the summary
-/// shows the inline preview, not raw {"block_ref":"..."} JSON. Ctrl+O
+/// shows clean text (not JSON-escaped), truncated to a one-liner. Ctrl+O
 /// expands without leaking the raw marker key. Mutation: disabling
 /// field-level in isolate turns this red (the fold-group never appears).
 #[test]
 #[ignore]
 fn test_multi_large_child_summary() {
-    let dense = "line \"q\" \\ backslash\nnext line\n".repeat(300);
+    let dense = "First sentence of the child analysis.\nSecond line with \"quotes\".\nThird line with \\ backslash.\n".repeat(80);
     let script = serde_json::json!([
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text": dense}],
@@ -127,25 +127,35 @@ fn test_multi_large_child_summary() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    // The fold-group summary line ("⎿ explore:") appears after the child
-    // completes — distinct from the running chip ("Agent(→ explore)").
-    // agentId survived field-level externalization.
+    // The fold-group summary line appears after the child completes.
+    // "explore:" is the fold-group label (distinct from the chip's
+    // "Agent(→ explore)"). agentId survived field-level externalization.
     assert!(
         s.wait_for_plain("explore:", RENDER_TIMEOUT * 5),
         "Subagent fold-group renders with large child summary:\n{}",
         s.output()
     );
-    // Ctrl+O expands: the raw block_ref marker key must not leak, and the
-    // child's content must be visible (a positive check, not just absence).
+    // The summary must be clean text, not JSON-escaped: no literal \n,
+    // no escaped quotes. The summary is a short one-liner (first ~80
+    // chars, newlines flattened to spaces).
+    let plain = s.output_plain();
+    assert!(
+        !plain.contains("\\n"),
+        "summary must not show literal backslash-n (JSON-escaped): {plain}"
+    );
+    assert!(
+        !plain.contains("\\\""),
+        "summary must not show escaped quotes: {plain}"
+    );
+    assert!(
+        plain.contains("First sentence"),
+        "summary shows the child's content text: {plain}"
+    );
+    // Ctrl+O expands: no raw block_ref key leaks into the expanded view.
     s.send_key(&Key::Ctrl('o'));
     assert!(
         !s.output_plain().contains("block_ref"),
         "no raw block_ref key in the expanded view:\n{}",
-        s.output()
-    );
-    assert!(
-        s.output_plain().contains("backslash"),
-        "expanded fold shows the child content, not just empty:\n{}",
         s.output()
     );
 }

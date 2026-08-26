@@ -159,6 +159,21 @@ fn grep_summary(output: &Value) -> Option<String> {
 
 /// Edit-result summary line in the canonical shape: "Added N line[s]"
 /// joined with ", " to "[R|r]emoved M line[s]" — capital R only when there
+/// Flatten a child-summary preview into a single-line fold-group label:
+/// newlines become spaces, and the text truncates to fit a terminal row
+/// (~80 chars) with an ellipsis. The full multiline content shows on
+/// Ctrl+O expand; this is just the collapsed one-liner.
+pub(crate) fn fold_summary(s: &str) -> String {
+    let flat: String = s.replace(['\n', '\r'], " ");
+    let chars: Vec<char> = flat.chars().collect();
+    if chars.len() <= 80 {
+        flat.trim().to_string()
+    } else {
+        let t: String = chars.iter().take(79).collect();
+        format!("{}…", t.trim_end())
+    }
+}
+
 /// are no additions, singular for 1. The path lives in the call chip, so it
 /// is not repeated here.
 pub(crate) fn edit_diff_summary(added: u32, removed: u32) -> String {

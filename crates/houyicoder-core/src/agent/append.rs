@@ -360,8 +360,15 @@ impl Runner {
             Ok(h) => h,
             Err(_) => return output,
         };
+        // Preview from the raw string content, not the JSON-serialized form,
+        // so the fold-group summary shows clean text (real newlines, no
+        // escape sequences) instead of "{\"...\\n...\"}".
+        let preview_src = field_value
+            .as_str()
+            .map(|s| s.as_bytes())
+            .unwrap_or(&field_bytes);
         let mut out = output;
-        out[key] = self.marker_for(tool, &hash.0, &field_bytes);
+        out[key] = self.marker_for(tool, &hash.0, preview_src);
         out
     }
 

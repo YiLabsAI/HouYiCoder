@@ -188,13 +188,14 @@ pub(crate) fn subagent_line(
     // {block_ref, preview, hint} marker object — fall back to the inline
     // preview so the fold-group still shows what the child returned. The
     // agentId stays at the top level either way, so the fold-group renders.
+    // The summary is a one-line preview: newlines flatten to spaces, and
+    // the text truncates to fit a terminal row (~80 chars) with an ellipsis.
+    // The full multiline content shows on Ctrl+O expand.
     let summary = match output.get("content") {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(c) if c.get("preview").is_some() => c
-            .get("preview")
-            .and_then(|p| p.as_str())
-            .unwrap_or("")
-            .to_string(),
+        Some(serde_json::Value::String(s)) => crate::brief::fold_summary(s),
+        Some(c) if c.get("preview").is_some() => {
+            crate::brief::fold_summary(c.get("preview").and_then(|p| p.as_str()).unwrap_or(""))
+        }
         _ => String::new(),
     };
     let subagent_type = call_input
