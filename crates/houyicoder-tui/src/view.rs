@@ -214,8 +214,11 @@ mod tests {
             .expect("status bar row with tiny mark")
             .to_string();
         // The status bar carries a contextual stage hint, not a static
-        // model/tokens/sandbox banner.
-        for dropped in ["model:", "tokens:", "sandbox:", "session:", "cap:"] {
+        // model/tokens/sandbox banner. The glyph token display (arrows +
+        // cache pct) is also banned: noise the /context view already carries.
+        for dropped in [
+            "model:", "tokens:", "sandbox:", "session:", "cap:", "↑", "↓", "cache ",
+        ] {
             assert!(
                 !status.contains(dropped),
                 "dropped field {dropped} still in status bar: [{status}]"

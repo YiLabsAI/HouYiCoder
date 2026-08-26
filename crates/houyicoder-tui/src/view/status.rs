@@ -122,15 +122,10 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
             left.push(Span::styled(" · ", dim));
             left.push(Span::styled("breaker Open", Style::new().fg(Color::Red)));
         }
-        // Cumulative token cost proxy + cache ratio (the design's status-bar
-        // token + cache dimensions). USD is deferred until pricing reaches
-        // the snapshot; tokens are the durable truth + the cost layer's
-        // input. Suppressed before the first run (cumulative is 0) so the
-        // pre-run bar stays clean.
-        if let Some(cost) = token_cost_str(&snap.cumulative_usage) {
-            left.push(Span::styled(" · ", dim));
-            left.push(Span::styled(cost, dim));
-        }
+        // Token in/out + cache ratio lived here once; dropped as noise. The
+        // status bar carries model + mode + context gauge only. Token
+        // totals + cache hit rate stay in the /context view and the
+        // /trajectory pane, where they carry detail, not the bar.
         // Right-aligned context gauge (persistent — a right-side
         // footprint read). Before the first run last_input is 0 so
         // 0% — honest, not a stale per-run tally. Colored by load. Above 90%
@@ -160,39 +155,6 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         }
         None => f.render_widget(Paragraph::new(Line::from(left)), area),
     }
-}
-
-/// Compact token count with a k suffix (1.2k / 45k) so the status bar's cost
-/// proxy fits one line. Matches the trajectory pane's formatter so the two
-/// read identically.
-fn fmt_tokens(n: u32) -> String {
-    if n >= 1000 {
-        format!("{:.1}k", n as f64 / 1000.0)
-    } else {
-        n.to_string()
-    }
-}
-
-/// The cumulative token cost + cache-ratio string for the status bar, or None
-/// before the first run (cumulative in+out is 0) so the pre-run bar stays
-/// clean. Cache ratio is cache_read / input (the inclusive-input contract) so
-/// it never exceeds 100%; suppressed when the model reported no input (the
-/// ratio is undefined, not 0). Pure so it tests without rendering.
-fn token_cost_str(u: &houyicoder_protocol::llm::Usage) -> Option<String> {
-    let total = u.input_tokens as u64 + u.output_tokens as u64;
-    if total == 0 {
-        return None;
-    }
-    let mut s = format!(
-        "↑{} ↓{}",
-        fmt_tokens(u.input_tokens),
-        fmt_tokens(u.output_tokens)
-    );
-    if u.input_tokens > 0 {
-        let hit = 100.0 * u.cache_read_input_tokens as f64 / u.input_tokens as f64;
-        s.push_str(&format!(" cache {:.0}%", hit));
-    }
-    Some(s)
 }
 
 /// Color the context gauge by load so a filling window reads at a glance:
@@ -457,46 +419,6 @@ mod tests {
     }
 
     #[test]
-    fn test_token_cost_formats_ratio() {
-        use houyicoder_protocol::llm::Usage;
-        // None before the first run (no tokens yet) — the bar stays clean.
-        assert_eq!(token_cost_str(&Usage::default()), None);
-        // 16.1k in / 4.2k out, cache 12000/16100 ≈ 75%.
-        let u = Usage {
-            input_tokens: 16100,
-            output_tokens: 4200,
-            cache_read_input_tokens: 12000,
-            ..Default::default()
-        };
-        let s = token_cost_str(&u).expect("non-zero total renders");
-        assert!(s.contains("↑16.1k"), "got {s}");
-        assert!(s.contains("↓4.2k"), "got {s}");
-        assert!(s.contains("cache 75%"), "got {s}");
-    }
-
-    #[test]
-    fn test_token_cost_skips_ratio() {
-        use houyicoder_protocol::llm::Usage;
-        // Output only (a streaming proxy that reported no input) — ratio is
-        // undefined, not 0, so it is omitted (the unknown-must-be-None rule).
-        let u = Usage {
-            output_tokens: 500,
-            ..Default::default()
-        };
-        let s = token_cost_str(&u).expect("non-zero total renders");
-        assert!(s.contains("↓500"));
-        assert!(!s.contains("cache"), "no ratio when input is 0: {s}");
-    }
-
-    #[test]
-    fn test_fmt_tokens_k_suffix() {
-        assert_eq!(fmt_tokens(0), "0");
-        assert_eq!(fmt_tokens(999), "999");
-        assert_eq!(fmt_tokens(1000), "1.0k");
-        assert_eq!(fmt_tokens(16100), "16.1k");
-    }
-
-    #[test]
     fn test_progress_str_contains_all() {
         let app = crate::composition::app();
         let s = progress_str(&app);
@@ -540,5 +462,55 @@ mod tests {
             .collect();
         assert!(!text.contains("high"), "no effort badge: {text}");
         assert!(text.contains("qwen3.7-max"), "model id shown: {text}");
+    }
+
+    #[test]
+    fn test_bar_drops_token_noise() {
+        // A run reported usage (in + out + cache read). The bar must not
+        // surface token arrows or a cache pct: that is noise /context and
+        // /trajectory already carry. This exercises the post-run snapshot
+        // the pre-run render test never reaches, so the noise path stays
+        // guarded against re-introduction.
+        use houyicoder_protocol::frontend::status::StatusSnapshot;
+        use houyicoder_protocol::llm::Usage;
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut app = crate::composition::app();
+        app.status.model = "test-model".into();
+        app.status_cache = Some(StatusSnapshot {
+            model: "test-model".into(),
+            breaker_state: None,
+            cumulative_usage: Usage {
+                input_tokens: 16100,
+                output_tokens: 4200,
+                cache_read_input_tokens: 12000,
+                ..Default::default()
+            },
+            last_input_tokens: 16100,
+            context_window: 200_000,
+            ..Default::default()
+        });
+        let backend = TestBackend::new(80, 3);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_agent_status_bar(f, f.area(), &app))
+            .unwrap();
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        for noise in ["↑", "↓", "cache ", "16.1k", "4.2k"] {
+            assert!(
+                !text.contains(noise),
+                "token noise {noise:?} leaked into bar: {text}"
+            );
+        }
+        // The model + context gauge (the kept reads) still appear.
+        assert!(text.contains("test-model"), "model id shown: {text}");
+        assert!(
+            text.contains("context") || text.contains("%"),
+            "context gauge missing: {text}"
+        );
     }
 }
