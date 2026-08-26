@@ -238,6 +238,10 @@ fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome, color: Option
         "status": status,
         "content": content,
         "agentId": child,
+        // A future retrieval seam: a pointer the model could use to fetch the
+        // child transcript without re-running the child. No reader exists
+        // today, so it is not a live path — kept on the envelope so a later
+        // retrieval tool can wire it without a wire change.
         "result_ref": result_ref,
         "color": color,
         "usage": {

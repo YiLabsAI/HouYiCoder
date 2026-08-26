@@ -183,11 +183,20 @@ pub(crate) fn subagent_line(
     call_input: Option<&serde_json::Value>,
 ) -> Option<TranscriptLine> {
     let child_sid = output.get("agentId")?.as_str()?.to_string();
-    let summary = output
-        .get("content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    // The summary is the content string when inline. When the content was
+    // field-level externalized (a large child summary), content is the
+    // {block_ref, preview, hint} marker object — fall back to the inline
+    // preview so the fold-group still shows what the child returned. The
+    // agentId stays at the top level either way, so the fold-group renders.
+    let summary = match output.get("content") {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(c) if c.get("preview").is_some() => c
+            .get("preview")
+            .and_then(|p| p.as_str())
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
+    };
     let subagent_type = call_input
         .and_then(|v| v.get("subagent_type"))
         .and_then(|v| v.as_str())

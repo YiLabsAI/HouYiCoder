@@ -5,8 +5,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use houyicoder_api::live::LiveEvent;
-use houyicoder_context::{EventId, HookVerdictKind, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{
+    ContextBackend, EventId, HookVerdictKind, SessionId, TurnEvent, TurnEventKind,
+};
 use houyicoder_protocol::llm::{OutputItem, Usage};
+use serde_json::Value;
 
 use super::hook::{
     HookEvent, HookVerdict,
@@ -281,11 +284,14 @@ impl Runner {
     }
 
     /// Externalize a large tool output to the CAS at the PostToolUse point.
-    /// When the serialized output exceeds the threshold, store it via
-    /// block_put and return a block_ref marker with an inline preview; the
-    /// served view then carries the pointer and the 3-tier retention policy
-    /// decides whether to materialize, summarize, or evict. Smaller outputs
-    /// and any block_put failure pass through unchanged (fail-closed).
+    /// A structured result (a JSON object) externalizes only its largest
+    /// top-level string field, so the envelope's other keys (agentId, color,
+    /// status, usage) survive inline — the whole-output replacement would
+    /// destroy them, and the TUI reads those keys to render the Subagent
+    /// fold-group. Blob outputs (no top-level string field, e.g. a grep
+    /// matches array) and objects whose largest string field cannot buy
+    /// enough headroom fall back to whole-output externalize. Smaller
+    /// outputs and any block_put failure pass through unchanged (fail-closed).
     async fn isolate_large_output(
         &self,
         tool: &str,
@@ -299,36 +305,126 @@ impl Runner {
             return output;
         }
         let backend = self.store.backend();
-        match backend.block_put(bytes.clone()).await {
-            Ok(hash) => {
-                // Run the reducer on the preview when one is wired: a large
-                // bash output is stripped + truncated so the served preview is
-                // compact, the raw stays in the CAS for on-demand retrieval.
-                let raw_preview = preview_string(&bytes);
-                let (preview, data_tag) = match &self.reducer {
-                    Some(r) => {
-                        let reduced = r.reduce(
-                            &raw_preview,
-                            tool,
-                            &super::reducer::ReduceCtx {
-                                raw: false,
-                                trust: super::reducer::TrustLevel::Untrusted,
-                            },
-                        );
-                        (reduced.text, reduced.data_tag)
-                    }
-                    None => (raw_preview, false),
-                };
-                serde_json::json!({
-                    "block_ref": hash.0,
-                    "preview": preview,
-                    "data_tag": data_tag,
-                    "hint": "large output compacted; re-invoke the tool to retrieve it",
-                })
+        // Field-level path: externalize only the largest top-level string
+        // field so the envelope's other keys stay inline. The candidate is
+        // sized with an upper-bound marker (see marker_upper_bound for the
+        // assumption on the reducer).
+        if let Some(obj) = output.as_object()
+            && let Some((key, field_len)) = largest_string_field(obj)
+        {
+            let marker_bound = serde_json::to_vec(&marker_upper_bound())
+                .map(|b| b.len())
+                .unwrap_or(0);
+            // The field is no bigger than the marker that would replace
+            // it: externalizing buys nothing. Blob outputs (large array,
+            // small string fields) land here and keep the whole-output
+            // path that grep relies on.
+            if field_len > marker_bound {
+                let mut candidate = output.clone();
+                candidate[key.clone()] = marker_upper_bound();
+                let fits = serde_json::to_vec(&candidate)
+                    .map(|b| b.len() <= ISOLATE_LARGE_OUTPUT_BYTES)
+                    .unwrap_or(false);
+                if fits {
+                    return self
+                        .externalize_field(tool, output, key, Some(backend))
+                        .await;
+                }
             }
-            // Fail-closed: keep the raw output so no content is lost.
-            Err(_) => output,
         }
+        self.externalize_whole(tool, output, bytes, Some(backend))
+            .await
+    }
+
+    /// Externalize a single string field of a structured result: block_put
+    /// the field's value, replace the field with a marker carrying an inline
+    /// preview, keep every other top-level key. Fail-closed: any block_put
+    /// or serialization failure returns the original output so no content
+    /// is lost.
+    async fn externalize_field(
+        &self,
+        tool: &str,
+        output: serde_json::Value,
+        key: String,
+        backend: Option<&dyn ContextBackend>,
+    ) -> serde_json::Value {
+        let Some(backend) = backend else {
+            return output;
+        };
+        let field_value = output.get(&key).cloned().unwrap_or(Value::Null);
+        let field_bytes = match serde_json::to_vec(&field_value) {
+            Ok(b) => b,
+            Err(_) => return output,
+        };
+        let hash = match backend.block_put(field_bytes.clone()).await {
+            Ok(h) => h,
+            Err(_) => return output,
+        };
+        let raw_preview = preview_string(&field_bytes);
+        let (preview, data_tag) = match &self.reducer {
+            Some(r) => {
+                let reduced = r.reduce(
+                    &raw_preview,
+                    tool,
+                    &super::reducer::ReduceCtx {
+                        raw: false,
+                        trust: super::reducer::TrustLevel::Untrusted,
+                    },
+                );
+                (reduced.text, reduced.data_tag)
+            }
+            None => (raw_preview, false),
+        };
+        let mut out = output;
+        out[key] = serde_json::json!({
+            "block_ref": hash.0,
+            "preview": preview,
+            "data_tag": data_tag,
+            "hint": "large output compacted; re-invoke the tool to retrieve it",
+        });
+        out
+    }
+
+    /// Whole-output externalize (the original path): block_put the entire
+    /// serialized output, return a marker carrying an inline preview. Used
+    /// for blob outputs (no top-level string field to externalize singly)
+    /// and structured results whose largest string field cannot buy enough
+    /// headroom. Fail-closed: any block_put failure returns the original.
+    async fn externalize_whole(
+        &self,
+        tool: &str,
+        output: serde_json::Value,
+        bytes: Vec<u8>,
+        backend: Option<&dyn ContextBackend>,
+    ) -> serde_json::Value {
+        let Some(backend) = backend else {
+            return output;
+        };
+        let hash = match backend.block_put(bytes.clone()).await {
+            Ok(h) => h,
+            Err(_) => return output,
+        };
+        let raw_preview = preview_string(&bytes);
+        let (preview, data_tag) = match &self.reducer {
+            Some(r) => {
+                let reduced = r.reduce(
+                    &raw_preview,
+                    tool,
+                    &super::reducer::ReduceCtx {
+                        raw: false,
+                        trust: super::reducer::TrustLevel::Untrusted,
+                    },
+                );
+                (reduced.text, reduced.data_tag)
+            }
+            None => (raw_preview, false),
+        };
+        serde_json::json!({
+            "block_ref": hash.0,
+            "preview": preview,
+            "data_tag": data_tag,
+            "hint": "large output compacted; re-invoke the tool to retrieve it",
+        })
     }
 
     /// Drive a manual compaction of the session: replay the event log, fire
@@ -573,4 +669,49 @@ fn preview_string(bytes: &[u8]) -> String {
     } else {
         s.into_owned()
     }
+}
+
+/// The largest top-level string field of a JSON object, by escaped byte
+/// length. Returns None when the object has no string field (e.g. a grep
+/// result whose payload is a matches array). Used to pick which field to
+/// externalize so the envelope's other keys stay inline.
+fn largest_string_field(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<(String, usize)> {
+    obj.iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), json_string_byte_len(s))))
+        .max_by_key(|(_, n)| *n)
+}
+
+/// Escaped byte length a JSON encoder writes for this string, including the
+/// surrounding quotes. Matches serde_json's escaping: " and \ cost 2 bytes,
+/// control chars (< 0x20) cost 6 (\uXXXX), everything else its UTF-8 byte
+/// count. Used so the field-level decision accounts for escaping, which the
+/// whole-output gate measures in the same serialized bytes.
+fn json_string_byte_len(s: &str) -> usize {
+    2 + s
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' => 2,
+            c if (c as u32) < 0x20 => 6,
+            _ => c.len_utf8(),
+        })
+        .sum::<usize>()
+}
+
+/// A strict upper bound on the marker object that replaces an externalized
+/// field: hash + preview (capped at PREVIEW_CHARS, multi-byte safe via the
+/// x4 factor) + hint + data_tag. Used to size-check a candidate envelope
+/// before committing to field-level. Assumes the reducer does not expand
+/// the preview past this bound; a reducer that annotates or prefixes the
+/// preview can exceed it, leaving the inline output over the threshold. The
+/// envelope still holds either way (only the inline size is off, and the
+/// result is not lost — the raw is in the CAS).
+fn marker_upper_bound() -> serde_json::Value {
+    serde_json::json!({
+        "block_ref": "x".repeat(128),
+        "preview": "x".repeat(PREVIEW_CHARS * 4 + 4),
+        "data_tag": false,
+        "hint": "x".repeat(120),
+    })
 }

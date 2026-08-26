@@ -263,50 +263,147 @@ fn test_summarize_without_preview_marker() {
     assert_eq!(backend.gets(), 0, "no block_get without a preview");
 }
 
-/// externalize_output stores the output and returns a marker carrying an
-/// inline preview, so the Summarize tier has something to serve without
-/// a retrieval.
+/// A field-level marker (isolate_large_output externalized the largest
+/// string field) round-trips through the Materialize tier with the envelope
+/// intact: agentId/color/status stay inline, the content field is restored
+/// byte-exact. Content is newline + quote dense — the shape that broke the
+/// first B2 fix, where escaping grew the serialized bytes past the raw-byte
+/// budget. This asserts the round-trip is byte-exact through serde_json.
 #[test]
-fn test_externalize_output_carries_preview() {
+fn test_materialize_field_restores() {
     let backend = CountingBackend::new();
-    let big = serde_json::json!({"out": "z".repeat(300)});
-    let marker = externalize_output(&big, Some(&backend as &dyn ContextBackend)).unwrap();
-    assert!(marker.get("block_ref").is_some(), "marker has block_ref");
-    assert!(marker.get("preview").is_some(), "marker has inline preview");
-    // The Materialize tier round-trips through the stored block.
-    let policy = AgeRetentionPolicy::default();
-    let ctx = RetentionContext {
-        age_in_turns: 0,
-        is_superseded: false,
-        block_ref: None,
-        now_ms: 0,
-        cache_cold: false,
-    };
+    // Newline + quote dense: every char that serde_json escapes, so a
+    // raw-byte budget would under-count and the round-trip would diverge.
+    let content = "line with \"quotes\" and \\ backslash\nnext line\n".repeat(400);
+    let (marker, _hash) = nested_marker(&content, &backend);
+    let ctx = age_ctx(0);
     let out = materialize_block(
         &marker,
         Some(&backend as &dyn ContextBackend),
-        &policy,
+        &AgeRetentionPolicy::default(),
         &ctx,
     );
-    assert_eq!(out, big, "materialize round-trips the stored output");
+    // Envelope keys preserved across the Materialize tier — the whole point
+    // of field-level: agentId survives so the TUI renders the fold-group.
+    assert_eq!(out["agentId"].as_str(), Some("child-xyz"));
+    assert_eq!(out["color"].as_str(), Some("red"));
+    assert_eq!(out["status"].as_str(), Some("completed"));
+    // Content field restored byte-exact (Materialize retrieved the block).
+    assert_eq!(
+        out["content"].as_str(),
+        Some(content.as_str()),
+        "materialize restores the field content byte-exact through serde_json"
+    );
+    assert_eq!(
+        backend.gets(),
+        1,
+        "Materialize fires exactly one block_get for the field"
+    );
 }
 
-/// A small output (under the preview length) externalizes without the
-/// ellipsis — the preview is the full serialized content. Also pins the
-/// CountingBackend no-op stub contract: every required method returns
-/// Unsupported or empty, the premise for the fail-closed paths above.
+/// The Summarize tier (age in the summarize band) keeps the envelope's
+/// agentId and replaces only the content field with a summarized marker
+/// (preview + block_ref + hint). No block_get fires.
 #[test]
-fn test_externalize_output_no_ellipsis() {
+fn test_materialize_field_summarize() {
     let backend = CountingBackend::new();
-    let small = serde_json::json!({"ok": true});
-    let marker = externalize_output(&small, Some(&backend as &dyn ContextBackend)).unwrap();
-    let preview = marker.get("preview").and_then(|v| v.as_str()).unwrap();
-    assert!(
-        !preview.ends_with('\u{2026}'),
-        "small output preview has no ellipsis, got: {preview}"
+    let content = "summary content with \"quotes\"\n".repeat(400);
+    let (marker, _hash) = nested_marker(&content, &backend);
+    let ctx = age_ctx(3); // 2 <= age < 6 → Summarize
+    let out = materialize_block(
+        &marker,
+        Some(&backend as &dyn ContextBackend),
+        &AgeRetentionPolicy::default(),
+        &ctx,
     );
-    // Pin the no-op stub contract: the six required methods (the ones
-    // the CAS tests do not exercise) return Unsupported or empty.
+    assert_eq!(
+        out["agentId"].as_str(),
+        Some("child-xyz"),
+        "envelope survives Summarize"
+    );
+    assert_eq!(
+        out["content"]["summarized"].as_bool(),
+        Some(true),
+        "content field becomes the summarized marker"
+    );
+    assert!(
+        out["content"]["preview"].is_string(),
+        "preview carried into the summarized field"
+    );
+    assert!(
+        out["content"]["block_ref"].is_string(),
+        "block_ref kept so a later re-invoke can retrieve"
+    );
+    assert_eq!(backend.gets(), 0, "Summarize skips the block_get");
+}
+
+/// The Evict tier (age >= summarize_turns) keeps the envelope's agentId
+/// and replaces only the content field with the evicted pointer. No
+/// block_get fires. This is the tier the first B2 fix would have silently
+/// broken — agentId lost N turns after the delegation, not immediately.
+#[test]
+fn test_materialize_field_evict() {
+    let backend = CountingBackend::new();
+    let content = "evicted content with \"quotes\"\n".repeat(400);
+    let (marker, _hash) = nested_marker(&content, &backend);
+    let ctx = age_ctx(6); // age >= 6 → Evict
+    let out = materialize_block(
+        &marker,
+        Some(&backend as &dyn ContextBackend),
+        &AgeRetentionPolicy::default(),
+        &ctx,
+    );
+    assert_eq!(
+        out["agentId"].as_str(),
+        Some("child-xyz"),
+        "envelope survives Evict"
+    );
+    assert_eq!(
+        out["content"]["evicted"].as_bool(),
+        Some(true),
+        "content field becomes the evicted pointer"
+    );
+    assert!(
+        out["content"]["block_ref"].is_string(),
+        "block_ref kept on evict"
+    );
+    assert_eq!(backend.gets(), 0, "Evict skips the block_get");
+}
+
+/// A top-level marker (whole-output externalize — blob tools, or old-session
+/// logs written before field-level isolation) still whole-replaces: the
+/// Materialize tier restores the entire output. Backward compat for resumed
+/// sessions whose logs carry the old shape.
+#[test]
+fn test_materialize_top_level_compat() {
+    let backend = CountingBackend::new();
+    let original = serde_json::json!({"stdout": "x".repeat(300)});
+    let bytes = serde_json::to_vec(&original).unwrap();
+    let hash = pollster::block_on(backend.block_put(bytes)).unwrap();
+    let marker = serde_json::json!({
+        "block_ref": hash.0,
+        "preview": "...",
+        "hint": "large output compacted; re-invoke the tool to retrieve it",
+    });
+    let ctx = age_ctx(0);
+    let out = materialize_block(
+        &marker,
+        Some(&backend as &dyn ContextBackend),
+        &AgeRetentionPolicy::default(),
+        &ctx,
+    );
+    assert_eq!(
+        out, original,
+        "top-level marker whole-replaces with the stored output"
+    );
+}
+
+/// Pin the CountingBackend no-op stub contract: the six required methods the
+/// CAS tests do not exercise return Unsupported or empty. Salvaged from the
+/// deleted externalize_output test twin so the contract stays pinned.
+#[test]
+fn test_counting_backend_noop() {
+    let backend = CountingBackend::new();
     use houyicoder_context::{CheckpointId, EventId, SessionId, TurnEvent};
     let ev = TurnEvent {
         id: EventId::new(),
@@ -345,6 +442,42 @@ fn test_externalize_output_no_ellipsis() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// Build a field-level marker: block_put the content string, nest the
+/// marker under the content key, keep the envelope (agentId/color/status/
+/// usage) inline. Mirrors what isolate_large_output produces for a
+/// structured result with a large content field.
+fn nested_marker(content: &str, backend: &CountingBackend) -> (serde_json::Value, String) {
+    let content_val = serde_json::json!(content);
+    let bytes = serde_json::to_vec(&content_val).unwrap();
+    let hash = pollster::block_on(
+        <CountingBackend as houyicoder_context::ContextBackend>::block_put(backend, bytes),
+    )
+    .unwrap();
+    let marker = serde_json::json!({
+        "status": "completed",
+        "content": {
+            "block_ref": hash.0,
+            "preview": "preview...",
+            "data_tag": false,
+            "hint": "large output compacted; re-invoke the tool to retrieve it",
+        },
+        "agentId": "child-xyz",
+        "color": "red",
+        "usage": {"input_tokens": 100, "output_tokens": 20},
+    });
+    (marker, hash.0)
+}
+
+fn age_ctx(age: u32) -> RetentionContext<'static> {
+    RetentionContext {
+        age_in_turns: age,
+        is_superseded: false,
+        block_ref: None,
+        now_ms: 0,
+        cache_cold: false,
+    }
 }
 
 #[test]

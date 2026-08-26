@@ -32,12 +32,15 @@ async fn test_externalizes_large_tool_result() {
             .await
             .unwrap();
     }
-    let big = serde_json::json!({"data": "x".repeat(9000)});
+    let big_payload = "line with \"quotes\" and \\ backslash\nnext line\n".repeat(400);
+    let big = serde_json::json!({"data": big_payload});
     runner
         .append_tool_result(session, "c1".into(), "bash", big.clone(), 0)
         .await
         .unwrap();
-    // The appended ToolResult event carries a block_ref marker, not the raw.
+    // The appended ToolResult event carries a field-level marker: the data
+    // field is externalized (it is the largest top-level string field), the
+    // envelope's other keys stay inline. The raw string is in the CAS.
     let events = runner.store().replay(session).await.unwrap();
     let tr = events
         .iter()
@@ -47,12 +50,18 @@ async fn test_externalizes_large_tool_result() {
         TurnEventKind::ToolResult { output, .. } => output,
         _ => unreachable!(),
     };
-    let hash = output
+    let hash = output["data"]
         .get("block_ref")
         .and_then(|v| v.as_str())
-        .expect("large output externalized to block_ref");
-    assert!(output.get("data").is_none(), "raw content not in the event");
-    assert!(output.get("preview").is_some(), "marker carries a preview");
+        .expect("large field externalized to block_ref");
+    assert!(
+        output["data"].as_str().is_none(),
+        "raw field content not in the event"
+    );
+    assert!(
+        output["data"].get("preview").is_some(),
+        "field marker carries a preview"
+    );
     // The raw content is in the CAS, addressable by hash.
     let stored = runner
         .store()
@@ -61,7 +70,11 @@ async fn test_externalizes_large_tool_result() {
         .await
         .unwrap();
     let restored: serde_json::Value = serde_json::from_slice(&stored).unwrap();
-    assert_eq!(restored, big, "CAS stores the original output");
+    assert_eq!(
+        restored,
+        serde_json::json!(big_payload),
+        "CAS stores the field's string value byte-exact"
+    );
     // A small output (< threshold) stays raw — no externalization.
     runner
         .append_tool_result(session, "c2".into(), "", serde_json::json!({"ok": true}), 0)
@@ -126,19 +139,73 @@ async fn test_isolate_reduces_large_output() {
     let TurnEventKind::ToolResult { output, .. } = &tr.kind else {
         unreachable!()
     };
-    // The marker carries a reduced (ansi-stripped) preview + a data_tag.
-    assert!(output.get("block_ref").is_some(), "block_ref present");
+    // The field marker carries a reduced (ansi-stripped) preview + a
+    // data_tag. The stdout field (the largest string field) was externalized
+    // with the envelope's other keys - none here - intact.
+    assert!(
+        output["stdout"].get("block_ref").is_some(),
+        "block_ref present"
+    );
     assert_eq!(
-        output.get("data_tag").and_then(|v| v.as_bool()),
+        output["stdout"].get("data_tag").and_then(|v| v.as_bool()),
         Some(true),
         "reduced output tagged as data"
     );
-    let preview = output
+    let preview = output["stdout"]
         .get("preview")
         .and_then(|v| v.as_str())
         .expect("preview present");
     assert!(
         !preview.contains("\u{1b}"),
         "ansi stripped from the preview"
+    );
+}
+
+/// A blob result (no top-level string field - a grep-style filenames array)
+/// keeps the whole-output externalize: the top-level block_ref marker, the
+/// envelope replaced. Field-level only fires when a string field can buy
+/// enough headroom; an array payload cannot, and grep's existing behavior
+/// (whole-marker in the event, full restore on materialize) must not drift.
+#[tokio::test]
+async fn test_blob_result_whole_externalize() {
+    use houyicoder_context::TurnEventKind;
+    let p = Arc::new(FakeProvider::text("done"));
+    let runner = runner_with(p, ToolRegistry::new());
+    let session = SessionId::new();
+    runner
+        .store()
+        .append(super::append::new_event(
+            session,
+            TurnEventKind::ToolCall {
+                call_id: "cg".into(),
+                tool: "grep".into(),
+                input: serde_json::json!({}),
+            },
+        ))
+        .await
+        .unwrap();
+    let files: Vec<String> = (0..600)
+        .map(|i| format!("src/deeply/nested/path/to/file_{i:04}.rs"))
+        .collect();
+    let big = serde_json::json!({"filenames": files});
+    runner
+        .append_tool_result(session, "cg".into(), "grep", big.clone(), 0)
+        .await
+        .unwrap();
+    let events = runner.store().replay(session).await.unwrap();
+    let tr = events
+        .iter()
+        .find(|e| matches!(&e.kind, TurnEventKind::ToolResult { call_id, .. } if call_id == "cg"))
+        .expect("tool result appended");
+    let TurnEventKind::ToolResult { output, .. } = &tr.kind else {
+        unreachable!()
+    };
+    assert!(
+        output.get("block_ref").is_some(),
+        "blob result whole-externalizes: top-level block_ref"
+    );
+    assert!(
+        output.get("filenames").is_none(),
+        "raw array not in the event"
     );
 }

@@ -7,10 +7,12 @@
 //!   retrieval), or evict (serve the pointer alone, no retrieval). The
 //!   default AgeRetentionPolicy keys the decision to how many turns ago the
 //!   result was produced and whether a later result superseded it.
-//! - externalize_output: serialize an output, store it via block_put, and
-//!   return a block_ref marker (with an inline preview) so the raw large
-//!   content is not in the served view. Fail-closed: no backend or block_put
-//!   failure keeps the original output (no content loss, no dangling marker).
+//! - isolate_large_output (in append.rs): serialize a tool output, store it
+//!   via block_put, and return a block_ref marker (with an inline preview)
+//!   so the raw large content is not in the served view. A structured result
+//!   externalizes only its largest string field, keeping the envelope's
+//!   other keys inline. Fail-closed: no backend or block_put failure keeps
+//!   the original output (no content loss, no dangling marker).
 //!
 //! This is the lossless layer (layer 3) of the compress design: the served
 //! view carries a small pointer or preview; the full content is addressable
@@ -199,17 +201,50 @@ pub(super) fn materialize_block(
     policy: &dyn RetentionPolicy,
     ctx: &RetentionContext<'_>,
 ) -> serde_json::Value {
-    let Some(hash_str) = output.get("block_ref").and_then(|v| v.as_str()) else {
-        return output.clone();
-    };
-    // No backend: cannot retrieve, so the marker stays regardless of policy.
-    // The hint tells the model to re-invoke; no content is lost (the raw is
-    // in the CAS, just unreachable until a backend is wired).
+    // Top-level marker: the whole output was externalized (blob tools like
+    // bash/grep, or old-session logs written before field-level isolation).
+    // The tier replaces the whole output — these have no envelope to keep.
+    if let Some(hash_str) = output.get("block_ref").and_then(|v| v.as_str()) {
+        return apply_tier(hash_str, output, backend, policy, ctx);
+    }
+    // Field-level marker: a single top-level field's value is the marker
+    // object (isolate_large_output externalized the largest string field so
+    // the envelope's other keys — agentId, color, status, usage — stay
+    // inline). Apply the tier to that field, preserve every other key, so
+    // the model can still reference the child session and the TUI still
+    // renders the Subagent fold-group across all three retention tiers.
+    if let Some(obj) = output.as_object()
+        && let Some((field_key, marker)) = obj.iter().find_map(|(k, v)| {
+            let hash = v.get("block_ref").and_then(|b| b.as_str())?;
+            Some((k.clone(), (hash, v.clone())))
+        })
+    {
+        let new_field = apply_tier(marker.0, &marker.1, backend, policy, ctx);
+        let mut out = output.clone();
+        out[field_key] = new_field;
+        return out;
+    }
+    output.clone()
+}
+
+/// Apply a retention tier to a block_ref marker, returning the value that
+/// replaces the marker in its scope (the whole output for a top-level
+/// marker, the field for a field-level marker). Materialize restores the
+/// original content via block_get; Summarize serves the inline preview;
+/// Evict keeps only the pointer. No backend: the marker stays (content is
+/// in the CAS, unreachable until a backend is wired — not lost).
+fn apply_tier(
+    hash_str: &str,
+    marker: &serde_json::Value,
+    backend: Option<&dyn ContextBackend>,
+    policy: &dyn RetentionPolicy,
+    ctx: &RetentionContext<'_>,
+) -> serde_json::Value {
     let Some(backend) = backend else {
-        return output.clone();
+        return marker.clone();
     };
-    // Stamp the block_ref onto the context so a cache-liveness policy can key
-    // a per-block decision on it. The hash is borrowed from the output.
+    // Stamp the block_ref onto the context so a cache-liveness policy can
+    // key a per-block decision on it.
     let ctx = RetentionContext {
         block_ref: Some(hash_str),
         ..*ctx
@@ -232,15 +267,15 @@ pub(super) fn materialize_block(
             // A marker without a preview (an old-style marker) falls back to
             // the pointer form rather than paying a retrieval — the model is
             // told to re-invoke.
-            if output.get("preview").is_some() {
+            if marker.get("preview").is_some() {
                 serde_json::json!({
                     "summarized": true,
-                    "preview": output.get("preview").cloned().unwrap_or_default(),
+                    "preview": marker.get("preview").cloned().unwrap_or_default(),
                     "block_ref": hash_str,
                     "hint": "large output summarized; re-invoke the tool for full content",
                 })
             } else {
-                output.clone()
+                marker.clone()
             }
         }
         RetentionDecision::Evict => {
@@ -270,39 +305,6 @@ fn unavailable_marker(hash_str: &str, reason: &str) -> serde_json::Value {
         "hint": "large output unavailable; re-invoke the tool to retrieve it",
     })
 }
-
-/// Serialize the output to bytes, store via block_put, and return a
-/// block_ref marker carrying an inline preview (the first PREVIEW_CHARS of
-/// the serialized output) so the Summarize tier can serve a preview without
-/// a retrieval. When no backend or block_put fails, returns Err so the
-/// caller keeps the original output (fail-closed: no content loss).
-#[cfg(test)]
-pub(super) fn externalize_output(
-    output: &serde_json::Value,
-    backend: Option<&dyn ContextBackend>,
-) -> Result<serde_json::Value, ()> {
-    let Some(backend) = backend else {
-        return Err(());
-    };
-    let bytes = serde_json::to_vec(output).map_err(|_| ())?;
-    let hash = pollster::block_on(backend.block_put(bytes.clone())).map_err(|_| ())?;
-    let preview = String::from_utf8_lossy(&bytes);
-    let preview = if preview.chars().count() > PREVIEW_CHARS {
-        let truncated: String = preview.chars().take(PREVIEW_CHARS).collect();
-        format!("{truncated}\u{2026}")
-    } else {
-        preview.into_owned()
-    };
-    Ok(serde_json::json!({
-        "block_ref": hash.0,
-        "preview": preview,
-        "hint": "large output compacted; re-invoke the tool to retrieve it",
-    }))
-}
-
-/// Inline preview length, in chars, stored alongside a block_ref marker.
-#[cfg(test)]
-const PREVIEW_CHARS: usize = 200;
 
 #[cfg(test)]
 #[path = "retention_tests.rs"]

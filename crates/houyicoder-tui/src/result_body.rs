@@ -120,14 +120,20 @@ pub fn extract_body(output: &str) -> String {
         let bytes = v.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
         return format!("wrote {path} ({bytes} bytes)");
     }
-    // A CAS-isolated result: the append stage replaced a too-large tool
+    // A field-level marker: isolate_large_output externalized one top-level
+    // string field (the largest — content for an agent result, stdout for a
+    // large bash result) so the envelope's other keys stay inline. That
+    // field is now a {block_ref, preview, hint} object. Surface the field's
+    // preview + hint, not the raw marker JSON. The top-level arm below
+    // handles whole-output markers (blob tools, old-session logs).
+    if let Some(body) = field_level_marker_body(&v) {
+        return body;
+    }
+    // A whole-output CAS marker: the append stage replaced a too-large tool
     // output with a block_ref pointer plus a truncated inline preview.
     // Surface the preview (the actual content) and the retrieval hint,
-    // not the raw marker JSON. Without this arm the value_brief fallback
-    // below dumps {"block_ref":"..."} as noise, which is what the user
-    // sees when a grep or a child summary crosses the isolation
-    // threshold. Resumed old sessions benefit too: their logged results
-    // carry block_ref markers that now render as previews.
+    // not the raw marker JSON. Resumed old sessions benefit too: their
+    // logged results carry top-level block_ref markers.
     if v.get("block_ref").is_some() {
         let preview = v.get("preview").and_then(|p| p.as_str()).unwrap_or("");
         let hint = v
@@ -140,6 +146,31 @@ pub fn extract_body(output: &str) -> String {
         return format!("{preview}\n[{hint}]");
     }
     value_brief(&v)
+}
+
+/// The preview + hint body for a field-level marker nested under one of the
+/// output's top-level fields. Walks the object for the single field whose
+/// value is a {block_ref, preview, hint} object (isolate externalizes only
+/// the largest string field, so there is at most one). None when no field
+/// carries a nested marker.
+fn field_level_marker_body(v: &Value) -> Option<String> {
+    let obj = v.as_object()?;
+    for (_, field) in obj.iter() {
+        if field.get("block_ref").is_none() {
+            continue;
+        }
+        let preview = field.get("preview").and_then(|p| p.as_str()).unwrap_or("");
+        let hint = field
+            .get("hint")
+            .and_then(|h| h.as_str())
+            .unwrap_or("output compacted; re-invoke the tool to retrieve it");
+        return if preview.is_empty() {
+            Some(hint.to_string())
+        } else {
+            Some(format!("{preview}\n[{hint}]"))
+        };
+    }
+    None
 }
 
 /// True when the output JSON carries a unified diff (Edit/MultiEdit result),
@@ -264,6 +295,41 @@ mod tests {
     fn test_extract_body_empty() {
         let out = serde_json::json!({"filenames": [], "num_files": 0}).to_string();
         assert!(extract_body(&out).is_empty());
+    }
+
+    /// A field-level marker: the largest top-level string field (content for
+    /// an agent result, stdout for a large bash result) was externalized, so
+    /// that field is now a {block_ref, preview, hint} object while the
+    /// envelope's other keys stay inline. The body surfaces the field's
+    /// preview + hint, never the raw marker JSON or the envelope keys.
+    #[test]
+    fn test_extract_body_nested_marker() {
+        let out = serde_json::json!({
+            "status": "completed",
+            "content": {
+                "block_ref": "a3a1dde5b075cee6",
+                "preview": "the child explored src/auth and found the module",
+                "data_tag": false,
+                "hint": "large output compacted; re-invoke the tool to retrieve it",
+            },
+            "agentId": "child-xyz",
+            "color": "red",
+        })
+        .to_string();
+        let body = extract_body(&out);
+        assert!(
+            body.contains("the child explored src/auth"),
+            "field preview surfaces: {body}"
+        );
+        assert!(
+            body.contains("re-invoke the tool"),
+            "retrieval hint surfaces: {body}"
+        );
+        assert!(!body.contains("block_ref"), "no raw marker key: {body}");
+        assert!(
+            !body.contains("child-xyz"),
+            "envelope keys do not leak into the body: {body}"
+        );
     }
 
     /// A CAS-isolated tool result carries a block_ref pointer + a truncated

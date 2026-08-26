@@ -135,3 +135,42 @@ fn test_compound_not_semantic_success() {
         "compound command exit 1 is not auto-success"
     );
 }
+
+/// A field-level externalized child summary: content field is the marker
+/// object, agentId stays top-level. The fold-group renders (agentId found)
+/// and the summary falls back to the inline preview. Regression for the
+/// CAS-whole-envelope bug: before field-level, the whole object was
+/// replaced and agentId was destroyed.
+#[test]
+fn test_subagent_line_field_marker() {
+    use crate::records::{TranscriptLine, subagent_line};
+    let output = serde_json::json!({
+        "status": "completed",
+        "content": {
+            "block_ref": "a3a1dde5b075cee6",
+            "preview": "found auth module in src/auth",
+            "data_tag": false,
+            "hint": "large output compacted; re-invoke the tool to retrieve it",
+        },
+        "agentId": "child-xyz",
+        "color": "red",
+    });
+    let call_input = serde_json::json!({"subagent_type": "explore", "prompt": "find auth"});
+    let line = subagent_line(&output, Some(&call_input))
+        .expect("fold-group renders: agentId stays at the top level");
+    match line {
+        TranscriptLine::Subagent {
+            child_sid,
+            subagent_type,
+            summary,
+            color,
+            ..
+        } => {
+            assert_eq!(child_sid, "child-xyz");
+            assert_eq!(subagent_type, "explore");
+            assert_eq!(summary, "found auth module in src/auth");
+            assert_eq!(color.as_deref(), Some("red"));
+        }
+        other => panic!("expected Subagent line, got {other:?}"),
+    }
+}
