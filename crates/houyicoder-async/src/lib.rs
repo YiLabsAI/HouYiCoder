@@ -31,6 +31,8 @@ pub type PStream<'a, T> = Pin<Box<dyn futures::Stream<Item = T> + Send + 'a>>;
 /// foundation leaf.
 pub use tokio_util::sync::CancellationToken;
 
+pub mod bus;
+
 #[cfg(test)]
 mod tests {
     use super::*;
