@@ -266,6 +266,7 @@ fn build_harness(
             config,
             worktree_controller: None,
             workspace: Some(std::path::PathBuf::from("/tmp")),
+            bus: None,
         });
         builder = builder.with_spawn_handle(Arc::new(runtime));
         return Harness {

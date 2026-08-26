@@ -13,6 +13,7 @@ use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::PFut;
 use houyicoder_context::SessionId;
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::multi_agent::child_prompt::{child_system_prompt, child_user_context};
 use houyicoder_core::agent::multi_agent::registry::{
     AgentError, AgentRegistry, IsolationMode, PromptSource, ResolveCtx,
@@ -38,6 +39,11 @@ pub struct MultiAgentDeps {
     /// The workspace the child's env-block cwd; None falls back to the
     /// process cwd, resolved once at construction.
     pub workspace: Option<PathBuf>,
+    /// The in-process message bus shared by parent + all children.
+    /// The parent subscribes to child progress/completed topics; the
+    /// bus routes parent→child inbox messages. None when async is
+    /// not yet wired (sync-only mode).
+    pub bus: Option<Arc<AgentBus>>,
 }
 
 pub struct MultiAgentRuntime {
@@ -48,6 +54,7 @@ pub struct MultiAgentRuntime {
     config: RunnerConfig,
     worktree_controller: Option<Arc<WorktreeController>>,
     cwd: PathBuf,
+    bus: Option<Arc<AgentBus>>,
 }
 
 impl MultiAgentRuntime {
@@ -62,6 +69,7 @@ impl MultiAgentRuntime {
             cwd: deps
                 .workspace
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
+            bus: deps.bus,
         }
     }
 }
@@ -125,6 +133,7 @@ impl SpawnHandle for MultiAgentRuntime {
             config: self.config.clone(),
             worktree_controller: self.worktree_controller.clone(),
             cwd: self.cwd.clone(),
+            bus: self.bus.clone(),
         };
         Box::pin(run_sync_spawn(this, parent_sid, depth, cancel, args))
     }
@@ -323,6 +332,7 @@ mod tests {
             config,
             worktree_controller: None,
             workspace: Some(std::path::PathBuf::from("/tmp")),
+            bus: None,
         });
         let parent_sid = SessionId::new();
         (runtime, store, parent_sid)
@@ -388,6 +398,7 @@ mod tests {
             config,
             worktree_controller: None,
             workspace: Some(std::path::PathBuf::from("/tmp")),
+            bus: None,
         });
         let parent_sid = SessionId::new();
         let ctx = ToolCtx::new("c1").with_session(parent_sid);

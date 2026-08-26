@@ -485,6 +485,9 @@ pub(crate) fn assemble(
         config: config.clone(),
         worktree_controller: worktree_controller.clone(),
         workspace: workspace.clone(),
+        bus: Some(Arc::new(
+            houyicoder_core::agent::multi_agent::bus_types::AgentBus::new(),
+        )),
     });
     // LlmSummarizer shares the main provider + model so compress produces
     // real summaries; the self-overflow guard + heuristic fallback are in
