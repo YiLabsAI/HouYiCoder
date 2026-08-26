@@ -10,6 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, mpsc};
 
+pub(crate) mod app_methods;
 pub(crate) mod counts;
 pub(crate) mod enums;
 mod scroll;
@@ -23,9 +24,9 @@ use crate::paste::PasteStore;
 use crate::review_queue::ReviewQueue;
 use crate::scroll::{SearchState, TranscriptScroll};
 use crate::selection::Selection;
+use houyicoder_protocol::frontend::LoginMode;
 use houyicoder_protocol::frontend::SessionId;
 use houyicoder_protocol::frontend::run::ApprovalRequest;
-use houyicoder_protocol::frontend::{LoginMode, SlashCommand};
 use ratatui::layout::Rect;
 
 /// Live progress for one long-running tool call (bash): elapsed seconds +
@@ -369,23 +370,28 @@ pub struct App {
     pub queue_focus: usize,
     /// In-app text selection (drag-select in the transcript, copy on release).
     pub selection: Selection,
-    /// Last-rendered transcript rect (screen coords), for the mouse handler to map a click cell to a row.
+    /// Last-rendered transcript rect (screen coords), stashed by the draw
+    /// pass so the mouse handler can map a click cell to a transcript row.
     pub transcript_rect: Cell<Rect>,
-    /// Last-rendered queued-input footer strip rect, for the mouse handler to
-    /// map a click to a queued item (click recalls it into the input box).
+    /// Last-rendered queued-input footer strip rect (screen coords), stashed
+    /// by the draw pass so the mouse handler can map a click to a queued item
+    /// (click to recall into the input box for editing).
     pub queue_rect: Cell<Rect>,
     /// Last-rendered "jump to bottom" pill rect; hit-tested before the
     /// transcript surface. Zero rect when hidden.
     pub jump_pill_rect: Cell<Rect>,
-    /// Last-rendered transcript rows with style tag (post-wrap, with spacer
-    /// blanks), for copy to extract selected text and skip non-content rows.
+    /// Last-rendered transcript rows with their style tag (post-wrap, with
+    /// spacer blanks), stashed by the draw pass so copy can extract the
+    /// selected text and skip non-content rows (spinner).
     pub last_transcript_rows: RefCell<Vec<(u8, String)>>,
-    /// Full transcript rows (pre-slice), for copy to access content beyond the
-    /// visible viewport (selection past the bottom edge, or viewport scrolled
-    /// between draw and copy).
+    /// Full transcript rows (pre-slice) stashed by the draw pass so copy can
+    /// access content beyond the visible viewport (selection past the bottom
+    /// edge, or viewport scrolled between draw and copy).
     pub last_all_rows: RefCell<Vec<(u8, String)>>,
-    /// Last-rendered slash-command pane rect (the /permissions /search /memory
-    /// inner region), for routing a pane drag. Zero when no command pane is open.
+    /// Last-rendered slash-command pane rect (the /permissions /search
+    /// /memory inner content region), stashed by the draw pass so the mouse
+    /// handler can route a drag in the pane to a pane-local selection. Zero
+    /// when no command pane is open.
     pub pane_rect: Cell<Rect>,
     /// Last-rendered pane content rows, stashed by reading the frame buffer
     /// after the pane content closure draws. The panes render through
@@ -393,11 +399,15 @@ pub struct App {
     /// are the single source of truth for the text the user sees — reading
     /// them avoids duplicating each widget's row construction.
     pub last_pane_rows: RefCell<Vec<(u8, String)>>,
-    /// Last-rendered status bar rect, published per viewport by the draw pass; zeroed at view::draw top so it cannot go stale across viewports or screens.
+    /// Last-rendered status bar rect, published per viewport by the draw pass;
+    /// zeroed at view::draw top so it cannot go stale across viewports or
+    /// screens.
     pub status_rect: Cell<Rect>,
-    /// Status bar rows read back from the frame buffer (like last_pane_rows) so copy extracts the model/mode/context text the user sees.
+    /// Status bar rows read back from the frame buffer (like last_pane_rows)
+    /// so copy extracts the model/mode/context text the user sees.
     pub last_status_rows: RefCell<Vec<(u8, String)>>,
-    /// Selection for the status bar surface; own coordinate space so it never collides with the transcript or a pane.
+    /// Selection for the status bar surface; own coordinate space so it never
+    /// collides with the transcript or a pane.
     pub status_selection: Selection,
     /// In-app selection for the slash-command pane surface (separate from the
     /// transcript selection so the two coordinate spaces never collide). A
@@ -579,210 +589,32 @@ impl std::fmt::Debug for App {
     }
 }
 
-impl App {
-    /// The filtered slash-command list, narrowed by the inline query.
-    pub fn palette_filtered(&self) -> Vec<SlashCommand> {
-        self.palette.filtered()
-    }
-
-    /// Number of palette entries after filtering.
-    pub fn palette_len(&self) -> usize {
-        self.palette.len()
-    }
-
-    /// The currently selected slash command, if the palette is open and the
-    /// filtered list is non-empty.
-    pub fn selected_command(&self) -> Option<SlashCommand> {
-        self.palette.selected()
-    }
-
-    /// Move the palette selection up, wrapping around the filtered list.
-    pub fn palette_up(&mut self) {
-        self.palette.prev();
-    }
-
-    /// Move the palette selection down, wrapping around the filtered list.
-    pub fn palette_down(&mut self) {
-        self.palette.next();
-    }
-
-    /// Push a character onto the inline filter query and reset the selection.
-    pub fn palette_push(&mut self, c: char) {
-        self.palette.push(c);
-    }
-
-    /// Remove the trailing character of the inline filter query.
-    pub fn palette_pop(&mut self) {
-        self.palette.pop();
-    }
-
-    /// Open the palette with an empty filter at the first command.
-    pub fn open_palette(&mut self) {
-        self.palette.open();
-    }
-
-    /// Close the palette without running a command.
-    pub fn close_palette(&mut self) {
-        self.palette.close();
-    }
-
-    /// Toggle plan mode on or off.
-    pub fn toggle_plan(&mut self) {
-        self.status.plan_mode = !self.status.plan_mode;
-    }
-
-    /// Push a system line onto the transcript. The scroll state is left
-    /// untouched (see push_transcript_line); a user following the tail stays
-    /// on the tail via top_offset, a user scrolled back stays scrolled back.
-    pub fn system_line(&mut self, msg: impl Into<String>) {
-        self.push_transcript_line(TranscriptLine::System(msg.into()));
-    }
-
-    /// Push a transcript line without touching the scroll state. A user
-    /// following the tail stays on the tail via top_offset on the next draw;
-    /// a user scrolled back stays in place — agent output never yanks a
-    /// reader of history. User-initiated re-follow (input, End, Ctrl+End,
-    /// PageDown to bottom) happens at the action site, not here.
-    pub fn push_transcript_line(&mut self, line: TranscriptLine) {
-        self.transcript.push(line);
-        crate::scroll::bound_scrollback(&mut self.transcript);
-        let v = self.transcript_version.get().wrapping_add(1);
-        self.transcript_version.set(v);
-    }
-
-    // The page/line scroll methods (scroll_transcript_up / down /
-    // follow_tail / line_up / line_down + the debug_scroll helper) live in
-    // state_scroll.rs so this file stays under the file-size gate. The impl
-    // block there adds them to App; callers reach them as self.scroll_*.
-
-    /// Transition to a new stage, pushing the previous one onto the history
-    /// stack so /rewind can return to it. Also updates the spec strip step and
-    /// syncs the viewport to the new stage (implement/verify fold into Focus).
-    pub fn set_stage(&mut self, stage: Stage) {
-        self.stage_history.push(self.stage);
-        self.stage = stage;
-        self.spec_ctx.step = stage.label().to_string();
-        self.sync_viewport_to_stage();
-    }
-
-    /// Auto-set the viewport from the current stage. Implement and verify fold
-    /// into Focus; idle, design, and done unfold to Working. Also closes any
-    /// open palette/search when leaving Working so the inline-only layout
-    /// cells do not linger.
-    pub fn sync_viewport_to_stage(&mut self) {
-        let next = ViewportMode::for_stage(self.stage);
-        if next != ViewportMode::Working {
-            self.palette.close();
-            self.search.close();
-        }
-        self.viewport = next;
-    }
-
-    /// Leave Scroll mode and restore the prior viewport. Only switches
-    /// viewport — does NOT return to the tail, so typing or opening a search
-    /// from scroll mode keeps the view (spec: typing keeps the pill). Esc
-    /// and End add follow_tail at their call sites for "Esc=tail".
-    pub fn exit_scroll(&mut self) {
-        self.viewport = self.prev_viewport;
-    }
-
-    /// Fold Focus into Working (user pressed Esc in Focus). Stage unchanged.
-    pub fn fold_to_working(&mut self) {
-        self.viewport = ViewportMode::Working;
-    }
-
-    /// Pop the most recent stage off the history stack and restore it. Returns
-    /// the restored stage when there was something to rewind to. Also syncs the
-    /// viewport so rewinding from Focus back to design unfolds to Working.
-    pub fn rewind_stage(&mut self) -> Option<Stage> {
-        if self.stage_history.is_empty() {
-            return None;
-        }
-        let prev = self.stage_history.pop().expect("non-empty");
-        self.stage = prev;
-        self.spec_ctx.step = prev.label().to_string();
-        self.sync_viewport_to_stage();
-        Some(prev)
-    }
-
-    /// Reset the guided-chain working state to a fresh draft: hunks back to
-    /// Pending, findings back to Pending, audit trail cleared, clause statuses
-    /// reset, artifact approvals cleared, history cleared, replaying off.
-    pub fn reset_chain_state(&mut self) {
-        for h in &mut self.diff.hunks {
-            h.approved = Verdict::Pending;
-        }
-        self.diff.focus = 0;
-        for f in &mut self.review.findings {
-            f.signoff = Verdict::Pending;
-        }
-        self.review.focus = 0;
-        self.review.audit_trail.clear();
-        for c in &mut self.spec_clauses {
-            c.status = Divergence::Unimplemented;
-        }
-        self.spec_artifact.approved = false;
-        self.plan_artifact.approved = false;
-        self.stage_history.clear();
-        self.replaying = false;
-    }
-
-    /// Move a spec clause to a new divergence status by clause id. No-op when
-    /// the clause id is not found.
-    pub fn set_clause_status(&mut self, clause_id: &str, status: Divergence) {
-        if let Some(c) = self.spec_clauses.iter_mut().find(|c| c.id == clause_id) {
-            c.status = status;
-        }
-    }
-
-    /// True when every diff hunk has been approved (none still pending or
-    /// rejected). Used to auto-advance from Implementing to Verify (review pane).
-    pub fn all_hunks_approved(&self) -> bool {
-        !self.diff.hunks.is_empty()
-            && self
-                .diff
-                .hunks
-                .iter()
-                .all(|h| h.approved == Verdict::Approved)
-    }
-
-    /// True when every review finding has been signed off or rejected.
-    pub fn all_findings_resolved(&self) -> bool {
-        !self.review.findings.is_empty() && self.review.findings.iter().all(|f| f.resolved())
-    }
-
-    /// Number of review findings in the console queue.
-    pub fn console_len(&self) -> usize {
-        self.review.len()
-    }
-
-    /// Move the console review-queue focus up, wrapping around.
-    pub fn console_focus_up(&mut self) {
-        self.review.focus_up();
-    }
-
-    /// Move the console review-queue focus down, wrapping around.
-    pub fn console_focus_down(&mut self) {
-        self.review.focus_down();
-    }
-
-    /// Sign off on the focused finding: mark signed off and append an audit
-    /// trail entry. No-op if the queue is empty or already signed off.
-    pub fn signoff_focused(&mut self, who: &str, when: &str) {
-        self.review.signoff_focused(who, when);
-    }
-
-    /// Reject the focused finding: mark rejected, write back to org eval
-    /// (stub), and append an audit trail entry. Returns the org-eval feedback
-    /// note when a rejection happened.
-    pub fn reject_focused(&mut self, who: &str, when: &str) -> Option<String> {
-        self.review.reject_focused(who, when)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_palette_nav_no_panic() {
+        let mut app = crate::composition::app();
+        app.open_palette();
+        app.palette_up();
+        app.palette_down();
+        app.palette_push('a');
+        app.palette_pop();
+    }
+
+    #[test]
+    fn test_console_focus_nav() {
+        let mut app = crate::composition::app();
+        app.console_focus_up();
+        app.console_focus_down();
+    }
+
+    #[test]
+    fn test_app_debug_format() {
+        let app = crate::composition::app();
+        drop(format!("{app:?}"));
+    }
 
     #[test]
     fn test_stage_label_nonempty() {
