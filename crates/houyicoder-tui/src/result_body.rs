@@ -120,6 +120,25 @@ pub fn extract_body(output: &str) -> String {
         let bytes = v.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
         return format!("wrote {path} ({bytes} bytes)");
     }
+    // A CAS-isolated result: the append stage replaced a too-large tool
+    // output with a block_ref pointer plus a truncated inline preview.
+    // Surface the preview (the actual content) and the retrieval hint,
+    // not the raw marker JSON. Without this arm the value_brief fallback
+    // below dumps {"block_ref":"..."} as noise, which is what the user
+    // sees when a grep or a child summary crosses the isolation
+    // threshold. Resumed old sessions benefit too: their logged results
+    // carry block_ref markers that now render as previews.
+    if v.get("block_ref").is_some() {
+        let preview = v.get("preview").and_then(|p| p.as_str()).unwrap_or("");
+        let hint = v
+            .get("hint")
+            .and_then(|h| h.as_str())
+            .unwrap_or("output compacted; re-invoke the tool to retrieve it");
+        if preview.is_empty() {
+            return hint.to_string();
+        }
+        return format!("{preview}\n[{hint}]");
+    }
     value_brief(&v)
 }
 
@@ -245,6 +264,58 @@ mod tests {
     fn test_extract_body_empty() {
         let out = serde_json::json!({"filenames": [], "num_files": 0}).to_string();
         assert!(extract_body(&out).is_empty());
+    }
+
+    /// A CAS-isolated tool result carries a block_ref pointer + a truncated
+    /// preview, not the raw content. The body must surface the preview + the
+    /// retrieval hint, never the raw marker JSON. Regression for the
+    /// {"block_ref":"..."} noise that leaked into grep + child-summary result
+    /// rows when their serialized output crossed the 8 KB isolation threshold.
+    #[test]
+    fn test_extract_body_block_ref() {
+        let out = serde_json::json!({
+            "block_ref": "a3a1dde5b075cee6",
+            "preview": "src/auth/login.rs:42: fn login()",
+            "data_tag": false,
+            "hint": "large output compacted; re-invoke the tool to retrieve it",
+        })
+        .to_string();
+        let body = extract_body(&out);
+        assert!(
+            body.contains("src/auth/login.rs:42: fn login()"),
+            "preview content must surface, got: {body}"
+        );
+        assert!(
+            body.contains("re-invoke the tool"),
+            "retrieval hint must surface, got: {body}"
+        );
+        assert!(
+            !body.contains("block_ref"),
+            "raw marker key must not leak, got: {body}"
+        );
+        assert!(
+            !body.contains("a3a1dde5"),
+            "raw hash must not leak, got: {body}"
+        );
+    }
+
+    /// A block_ref with an empty preview (the reducer stripped it to nothing)
+    /// falls back to the hint alone, not the raw JSON.
+    #[test]
+    fn test_extract_body_empty_block() {
+        let out = serde_json::json!({
+            "block_ref": "deadbeef",
+            "preview": "",
+            "data_tag": true,
+            "hint": "large output compacted; re-invoke the tool to retrieve it",
+        })
+        .to_string();
+        let body = extract_body(&out);
+        assert!(
+            body.contains("re-invoke the tool"),
+            "hint surfaces when preview is empty, got: {body}"
+        );
+        assert!(!body.contains("block_ref"), "no raw key: {body}");
     }
 
     /// The Write body is the chip + the FULL content; folding is the render
