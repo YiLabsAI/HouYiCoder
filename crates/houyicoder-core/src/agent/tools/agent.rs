@@ -201,9 +201,12 @@ fn spawn_failure_msg(f: houyicoder_api::spawn::SpawnFailure) -> String {
 /// Build the tool_result JSON from a sync spawn outcome: the child's summary
 /// text, its session id (the result ref for follow-up), terminal status, and
 /// usage. An empty summary gets a placeholder so the parent does not read
-/// "nothing" as "done"; a summary past the 100k char cap is tail-truncated
-/// (the conclusion is what matters) with a note that the child log holds the
-/// full output.
+/// "nothing" as "done". A summary large enough to push the serialized
+/// envelope past the CAS isolation threshold is tail-truncated so the
+/// envelope stays inline: the CAS replaces whole tool results above the
+/// threshold with a block_ref pointer, which would destroy the agentId/color
+/// fields the TUI reads to render the Subagent fold-group. The child log
+/// holds the full output for on-demand retrieval via the child session id.
 fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome, color: Option<&str>) -> Value {
     let usage = outcome.usage.unwrap_or_default();
     let status = outcome.status.unwrap_or_default();
@@ -213,18 +216,20 @@ fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome, color: Option
     if content.is_empty() {
         content = "(Subagent returned no output.)".into();
     }
-    const MAX_CHARS: usize = 100_000;
-    let truncated = content.chars().count() > MAX_CHARS;
-    if truncated {
-        let tail: String = content
-            .chars()
-            .rev()
-            .take(MAX_CHARS)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        content = format!("[truncated; the child log holds the full output]\n{tail}",);
+    // Cap content so the serialized envelope stays below the CAS isolation
+    // threshold. Measure the envelope with the current content; when it
+    // crosses the threshold, shrink content from the tail (the conclusion
+    // is what the parent acts on) and prepend a truncation note. The full
+    // child transcript lives in the child session log. Byte-budgeted so
+    // pathological escaping cannot push the envelope over the threshold.
+    let threshold = super::super::append::ISOLATE_LARGE_OUTPUT_BYTES;
+    let envelope_with_empty = envelope_bytes(&status, "", &child, &result_ref, color, &usage);
+    let note = "[truncated; the child log holds the full output]\n";
+    let budget = threshold
+        .saturating_sub(envelope_with_empty)
+        .saturating_sub(note.len() + 8);
+    if envelope_bytes(&status, &content, &child, &result_ref, color, &usage) >= threshold {
+        content = format!("{note}{}", tail_truncate(&content, budget));
     }
     // The badge color is surfaced so the TUI can color the teammate header
     // and the inline fold-group summary without a registry lookup. Null
@@ -248,6 +253,57 @@ fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome, color: Option
             "reasoning_tokens": usage.reasoning_tokens,
         },
     })
+}
+
+/// Serialized byte length of the tool-result envelope for a given content.
+/// Mirrors build_tool_result's json! shape so the budget reflects the real
+/// serialized form. Pure helper so the cap decision tests without building.
+fn envelope_bytes(
+    status: &str,
+    content: &str,
+    child: &str,
+    result_ref: &str,
+    color: Option<&str>,
+    usage: &houyicoder_protocol::llm::Usage,
+) -> usize {
+    let value = json!({
+        "status": status,
+        "content": content,
+        "agentId": child,
+        "result_ref": result_ref,
+        "color": match color {
+            Some(c) => Value::String(c.to_string()),
+            None => Value::Null,
+        },
+        "usage": {
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cache_read_input_tokens": usage.cache_read_input_tokens,
+            "cache_write_input_tokens": usage.cache_write_input_tokens,
+            "reasoning_tokens": usage.reasoning_tokens,
+        },
+    });
+    serde_json::to_vec(&value).map(|v| v.len()).unwrap_or(0)
+}
+
+/// Tail-truncate a string to fit a byte budget, char-boundary safe. Takes the
+/// tail (the conclusion matters most) and trims backwards until the UTF-8
+/// encoding fits the budget.
+fn tail_truncate(s: &str, budget: usize) -> String {
+    if budget == 0 || s.is_empty() {
+        return String::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    for ch in chars.iter().rev() {
+        let mut candidate = ch.to_string();
+        candidate.push_str(&out);
+        if candidate.len() > budget {
+            break;
+        }
+        out = candidate;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -448,6 +504,47 @@ mod tests {
         // tail-preserving: the last chars of the original survive.
         assert!(content.ends_with("aaaaa"));
         assert!(content.chars().count() < big.chars().count() + 200);
+    }
+
+    #[test]
+    fn test_envelope_survives_cas_threshold() {
+        // Regression for the whole-envelope CAS replacement bug: a large
+        // child summary used to push the serialized tool result past the
+        // CAS isolation threshold, and isolate_large_output replaced the
+        // entire object with a block_ref pointer, destroying agentId and
+        // color so the TUI could no longer render the Subagent fold-group.
+        // The cap keeps the serialized envelope below the threshold so the
+        // structural fields stay at the top level.
+        use houyicoder_api::spawn::SpawnOutcome;
+        use houyicoder_protocol::llm::Usage;
+        let threshold = crate::agent::append::ISOLATE_LARGE_OUTPUT_BYTES;
+        // A summary well past the threshold in raw chars.
+        let big: String = "x".repeat(threshold * 4);
+        let out = build_tool_result(
+            SpawnOutcome::sync("child-big", "completed", &big, Usage::default()),
+            Some("red"),
+        );
+        // Envelope stays inline: the structural fields the TUI reads are
+        // present at the top level, not replaced by a block_ref marker.
+        assert_eq!(out["agentId"].as_str(), Some("child-big"));
+        assert_eq!(out["color"].as_str(), Some("red"));
+        assert!(
+            out.get("block_ref").is_none(),
+            "envelope replaced by block_ref"
+        );
+        // Serialized size stays under the CAS threshold so the PostToolUse
+        // isolate step cannot trigger whole-envelope replacement.
+        let bytes = serde_json::to_vec(&out).expect("serializes");
+        assert!(
+            bytes.len() < threshold,
+            "envelope {} bytes >= CAS threshold {}; isolate would replace it",
+            bytes.len(),
+            threshold
+        );
+        // Content is tail-truncated with the truncation note.
+        let content = out["content"].as_str().unwrap();
+        assert!(content.starts_with("[truncated; the child log holds the full output]"));
+        assert!(content.ends_with('x'));
     }
 
     #[test]
