@@ -135,11 +135,17 @@ fn test_multi_large_child_summary() {
         "Subagent fold-group renders with large child summary:\n{}",
         s.output()
     );
-    // Ctrl+O expands: the raw block_ref marker key must not leak.
+    // Ctrl+O expands: the raw block_ref marker key must not leak, and the
+    // child's content must be visible (a positive check, not just absence).
     s.send_key(&Key::Ctrl('o'));
     assert!(
         !s.output_plain().contains("block_ref"),
         "no raw block_ref key in the expanded view:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_plain().contains("backslash"),
+        "expanded fold shows the child content, not just empty:\n{}",
         s.output()
     );
 }

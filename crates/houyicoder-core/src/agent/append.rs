@@ -360,36 +360,11 @@ impl Runner {
             Ok(h) => h,
             Err(_) => return output,
         };
-        let raw_preview = preview_string(&field_bytes);
-        let (preview, data_tag) = match &self.reducer {
-            Some(r) => {
-                let reduced = r.reduce(
-                    &raw_preview,
-                    tool,
-                    &super::reducer::ReduceCtx {
-                        raw: false,
-                        trust: super::reducer::TrustLevel::Untrusted,
-                    },
-                );
-                (reduced.text, reduced.data_tag)
-            }
-            None => (raw_preview, false),
-        };
         let mut out = output;
-        out[key] = serde_json::json!({
-            "block_ref": hash.0,
-            "preview": preview,
-            "data_tag": data_tag,
-            "hint": "large output compacted; re-invoke the tool to retrieve it",
-        });
+        out[key] = self.marker_for(tool, &hash.0, &field_bytes);
         out
     }
 
-    /// Whole-output externalize (the original path): block_put the entire
-    /// serialized output, return a marker carrying an inline preview. Used
-    /// for blob outputs (no top-level string field to externalize singly)
-    /// and structured results whose largest string field cannot buy enough
-    /// headroom. Fail-closed: any block_put failure returns the original.
     async fn externalize_whole(
         &self,
         tool: &str,
@@ -404,7 +379,14 @@ impl Runner {
             Ok(h) => h,
             Err(_) => return output,
         };
-        let raw_preview = preview_string(&bytes);
+        self.marker_for(tool, &hash.0, &bytes)
+    }
+
+    /// Build the block_ref marker (preview + hint + data_tag) from the
+    /// serialized bytes that were stored. Shared by field-level and
+    /// whole-output externalize so the marker vocabulary has one producer.
+    fn marker_for(&self, tool: &str, hash: &str, bytes: &[u8]) -> Value {
+        let raw_preview = preview_string(bytes);
         let (preview, data_tag) = match &self.reducer {
             Some(r) => {
                 let reduced = r.reduce(
@@ -420,7 +402,7 @@ impl Runner {
             None => (raw_preview, false),
         };
         serde_json::json!({
-            "block_ref": hash.0,
+            "block_ref": hash,
             "preview": preview,
             "data_tag": data_tag,
             "hint": "large output compacted; re-invoke the tool to retrieve it",
