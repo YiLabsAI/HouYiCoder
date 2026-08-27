@@ -7,12 +7,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use houyicoder_api::hook_fire::HookFire;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::PFut;
-use houyicoder_context::SessionId;
+use houyicoder_context::{HookEventKind, HookFirePayload, SessionId};
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::multi_agent::child_prompt::{child_system_prompt, child_user_context};
 use houyicoder_core::agent::multi_agent::registry::{
@@ -125,6 +126,7 @@ impl SpawnHandle for MultiAgentRuntime {
         };
         let depth = ctx.agent_identity.as_ref().map(|i| i.depth).unwrap_or(0);
         let cancel = ctx.cancel.clone();
+        let hook_fire = ctx.hook_fire.clone();
         let this = MultiAgentRuntime {
             registry: Arc::clone(&self.registry),
             store: Arc::clone(&self.store),
@@ -135,7 +137,9 @@ impl SpawnHandle for MultiAgentRuntime {
             cwd: self.cwd.clone(),
             bus: self.bus.clone(),
         };
-        Box::pin(run_sync_spawn(this, parent_sid, depth, cancel, args))
+        Box::pin(run_sync_spawn(
+            this, parent_sid, depth, cancel, hook_fire, args,
+        ))
     }
 
     /// Route a steering text into a running child's inbox via the shared bus.
@@ -177,11 +181,64 @@ fn close_child_inbox(bus: Option<&Arc<AgentBus>>, child_id: &str) {
     }
 }
 
+/// Fire SubagentStart at the durable spawn boundary. No-op when no hook-fire
+/// seam is wired (no registry). The signal lands in the parent log so replay
+/// pairs it with the SubagentSpawn / SubagentReturn boundaries.
+async fn fire_subagent_start(
+    hook_fire: Option<&Arc<dyn HookFire>>,
+    parent_sid: SessionId,
+    child_str: &str,
+    subagent_type: &str,
+) {
+    if let Some(hf) = hook_fire {
+        hf.fire(
+            HookEventKind::SubagentStart,
+            HookFirePayload::subagent_start(
+                parent_sid,
+                child_str.to_string(),
+                subagent_type.to_string(),
+            ),
+        )
+        .await;
+    }
+}
+
+/// Fire SubagentStop at the durable return boundary. No-op when no hook-fire
+/// seam is wired. status + summary let a hook branch on the terminal kind
+/// and inspect the child's last text without reading the transcript.
+async fn fire_subagent_stop(
+    hook_fire: Option<&Arc<dyn HookFire>>,
+    parent_sid: SessionId,
+    child_str: &str,
+    subagent_type: &str,
+    status: &str,
+    last_text: Option<String>,
+) {
+    if let Some(hf) = hook_fire {
+        hf.fire(
+            HookEventKind::SubagentStop,
+            HookFirePayload::subagent_stop(
+                parent_sid,
+                child_str.to_string(),
+                subagent_type.to_string(),
+                status.to_string(),
+                last_text,
+            ),
+        )
+        .await;
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "spawn boundary orchestration, kept whole"
+)]
 async fn run_sync_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
     depth: u32,
     cancel: Option<houyicoder_async::CancellationToken>,
+    hook_fire: Option<Arc<dyn HookFire>>,
     args: SpawnArgs,
 ) -> Result<SpawnOutcome, SpawnFailure> {
     // The bus + pending-notification path is what makes a background spawn
@@ -229,6 +286,16 @@ async fn run_sync_spawn(
     let child_sid = handle.session;
     let child_str = child_sid.to_string();
     announce_spawn(this.bus.as_ref(), &child_str, &args.subagent_type);
+    // SubagentStart fires at the durable spawn boundary (child session exists,
+    // SubagentSpawn recorded, run not started); pairs with the later
+    // SubagentStop across the SubagentSpawn-to-Return span.
+    fire_subagent_start(
+        hook_fire.as_ref(),
+        parent_sid,
+        &child_str,
+        &args.subagent_type,
+    )
+    .await;
     let task = format!(
         "{}\n\n{}",
         child_user_context(&this.cwd, def.omit_project_context),
@@ -251,7 +318,7 @@ async fn run_sync_spawn(
         }
     };
     if let (Some(cw), Some(ctrl)) = (handle.worktree, this.worktree_controller.as_ref()) {
-        drop(ctrl.cleanup_child(cw));
+        drop(ctrl.cleanup_child(cw).await);
     }
     // Close the child's inbox so the parent gets a send_inbox error rather
     // than queueing into a dead receiver.
@@ -278,6 +345,17 @@ async fn run_sync_spawn(
             Usage::default(),
         ),
     };
+    // SubagentStop fires at the durable return boundary (terminal state
+    // known); pairs with the earlier SubagentStart across the span.
+    fire_subagent_stop(
+        hook_fire.as_ref(),
+        parent_sid,
+        &child_str,
+        &args.subagent_type,
+        &status,
+        extract_last_assistant(&child_log),
+    )
+    .await;
     // The boundary is for durability/replay; if the append fails the in-memory
     // result is still valid for this turn, so warn and return the result
     // rather than discarding the child's work.
@@ -539,5 +617,55 @@ mod tests {
             BusMessage::Inbox { text } => assert_eq!(text, "focus on auth"),
             other => panic!("expected Inbox, got {other:?}"),
         }
+    }
+
+    /// A recording HookFire for asserting run_sync_spawn fires SubagentStart
+    /// and SubagentStop at the durable spawn and return boundaries.
+    struct RecordingHookFire {
+        events: Arc<std::sync::Mutex<Vec<HookEventKind>>>,
+    }
+    impl HookFire for RecordingHookFire {
+        fn fire(&self, event: HookEventKind, _payload: HookFirePayload) -> PFut<'_, ()> {
+            self.events.lock().expect("recorder lock").push(event);
+            Box::pin(async {})
+        }
+    }
+
+    /// run_sync_spawn fires SubagentStart at the spawn boundary (after
+    /// spawn_child, before the run) and SubagentStop at the return boundary
+    /// (before record_subagent_return), threaded through ToolCtx.hook_fire.
+    #[tokio::test]
+    async fn test_spawn_fires_start_stop() {
+        let (runtime, _store, parent_sid) = runtime_with_text_child("child answer");
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let ctx = ToolCtx::new("c1")
+            .with_session(parent_sid)
+            .with_hook_fire(Arc::new(RecordingHookFire {
+                events: events.clone(),
+            }) as Arc<dyn HookFire>);
+        let args = SpawnArgs::new("explore", "find auth", "find auth");
+        let outcome = runtime.spawn(&ctx, args).await.expect("spawn");
+        assert_eq!(outcome.status.as_deref(), Some("completed"));
+        let fired = events.lock().expect("events lock").clone();
+        assert!(
+            fired.contains(&HookEventKind::SubagentStart),
+            "spawn fires SubagentStart: {fired:?}"
+        );
+        assert!(
+            fired.contains(&HookEventKind::SubagentStop),
+            "return fires SubagentStop: {fired:?}"
+        );
+        let start_idx = fired
+            .iter()
+            .position(|e| *e == HookEventKind::SubagentStart)
+            .expect("start fired");
+        let stop_idx = fired
+            .iter()
+            .position(|e| *e == HookEventKind::SubagentStop)
+            .expect("stop fired");
+        assert!(
+            start_idx < stop_idx,
+            "SubagentStart fires before SubagentStop: {fired:?}"
+        );
     }
 }

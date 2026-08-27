@@ -24,7 +24,7 @@
 mod hook_types;
 mod memory_types;
 mod sandbox_types;
-pub use hook_types::{HookErrorKind, HookEventKind, HookVerdictKind};
+pub use hook_types::{HookErrorKind, HookEventKind, HookFirePayload, HookVerdictKind};
 pub use memory_types::{
     MemoryEntry, MemoryError, MemoryOrigin, MemoryRecallStats, MemoryScope, MemorySource,
     MemorySummary, memory_age_days, memory_age_label, memory_freshness_text, tokens_for,

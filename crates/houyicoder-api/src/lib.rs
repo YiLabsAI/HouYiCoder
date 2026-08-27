@@ -10,6 +10,7 @@
 
 pub mod cache_policy;
 pub mod cost_model;
+pub mod hook_fire;
 pub mod launcher;
 pub mod live;
 pub mod mcp;

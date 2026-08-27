@@ -5,6 +5,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use houyicoder_api::live::{LiveEvent, LiveSink};
+use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
     ContextBackend, EventId, HookVerdictKind, SessionId, TurnEvent, TurnEventKind,
 };
@@ -18,6 +19,7 @@ use super::hook::{
         wire_verdict_kind,
     },
 };
+use super::obs_wire::SharedObservability;
 use super::{CompletionResponse, RunError, Runner};
 
 /// Forward a turn-boundary snapshot to the live sink. Called after a turn
@@ -59,9 +61,7 @@ impl Runner {
     /// on them and would see noise). No-op when no host installed a sink
     /// (tests, the stub path).
     pub(crate) fn emit_system_line(&self, text: String) {
-        if let Some(sink) = self.live.as_ref() {
-            sink(&LiveEvent::SystemLine { text });
-        }
+        emit_live_line(self.live.as_ref(), text);
     }
 
     /// Notify a watcher the run reached a terminal state. Emitted once at
@@ -613,68 +613,91 @@ impl Runner {
         tool_name: Option<&str>,
         outcomes: &[HookOutcome],
     ) {
-        let wire_event = wire_event_kind(event);
-        let (turn, call_in_turn) = match self.observability.lock() {
-            Ok(ol) => ol.turn_coords(),
-            Err(_) => (0, 0),
-        };
-        for o in outcomes {
-            let (verdict_kind, reason, triggered, error_kind) = match &o.result {
-                Ok(HookVerdict::Allow) => continue,
-                Ok(HookVerdict::Trigger(ev)) => (
-                    HookVerdictKind::Trigger,
-                    String::new(),
-                    Some(wire_event_kind(*ev)),
+        record_hook_signals(
+            self.store.as_ref(),
+            &self.observability,
+            self.live.as_ref(),
+            session,
+            event,
+            tool_name,
+            outcomes,
+        )
+        .await;
+    }
+}
+
+/// Emit a system line through the live sink when one is attached; no-op
+/// otherwise. Extracted from the Runner method so a service-layer fire point
+/// shares one live-emit path with the in-loop hook recorder.
+pub(crate) fn emit_live_line(live: Option<&LiveSink>, text: String) {
+    if let Some(sink) = live {
+        sink(&LiveEvent::SystemLine { text });
+    }
+}
+
+/// Record one HookSignal per hook outcome to the session log, reading the
+/// current turn/call coords from the shared observability log and emitting
+/// user-visible lines (Observe notes, hook failures) through the live sink.
+/// Extracted from Runner::append_hook_signals so a service-layer fire point
+/// records with the same shape the Runner does — one recorder, two callers,
+/// no divergence. Best-effort: a store error is dropped, not fatal (hook
+/// audit must not crash the run).
+pub(crate) async fn record_hook_signals(
+    store: &dyn SessionLog,
+    obs: &SharedObservability,
+    live: Option<&LiveSink>,
+    session: SessionId,
+    event: HookEvent,
+    tool_name: Option<&str>,
+    outcomes: &[HookOutcome],
+) {
+    let wire_event = wire_event_kind(event);
+    let (turn, call_in_turn) = match obs.lock() {
+        Ok(ol) => ol.turn_coords(),
+        Err(_) => (0, 0),
+    };
+    for o in outcomes {
+        let (verdict_kind, reason, triggered, error_kind) = match &o.result {
+            Ok(HookVerdict::Allow) => continue,
+            Ok(HookVerdict::Trigger(ev)) => (
+                HookVerdictKind::Trigger,
+                String::new(),
+                Some(wire_event_kind(*ev)),
+                None,
+            ),
+            Ok(HookVerdict::Deny(r)) => (HookVerdictKind::Deny, r.clone(), None, None),
+            Ok(HookVerdict::Feedback(r)) => (HookVerdictKind::Feedback, r.clone(), None, None),
+            Ok(HookVerdict::Observe(r)) => {
+                emit_live_line(live, format!("hook {}: {r}", o.hook_name));
+                (HookVerdictKind::Observe, r.clone(), None, None)
+            }
+            Ok(HookVerdict::Inject(r)) => (HookVerdictKind::Inject, r.clone(), None, None),
+            Ok(HookVerdict::Ask(r)) => (HookVerdictKind::Ask, r.clone(), None, None),
+            Err(e) => {
+                emit_live_line(
+                    live,
+                    format!("hook {} failed: {}", o.hook_name, wire_error_reason(e)),
+                );
+                (
+                    wire_verdict_kind(&verdict_on_hook_error()),
+                    wire_error_reason(e),
                     None,
-                ),
-                Ok(HookVerdict::Deny(r)) => (HookVerdictKind::Deny, r.clone(), None, None),
-                Ok(HookVerdict::Feedback(r)) => (HookVerdictKind::Feedback, r.clone(), None, None),
-                Ok(HookVerdict::Observe(r)) => {
-                    // An Observe note exists to be seen: a hook (the user's
-                    // own tooling) reported something without blocking. The
-                    // durable record alone is not enough — the user is not
-                    // watching the trajectory pane while a misconfigured hook
-                    // keeps not doing what they wired it to do.
-                    self.emit_system_line(format!("hook {}: {r}", o.hook_name));
-                    (HookVerdictKind::Observe, r.clone(), None, None)
-                }
-                Ok(HookVerdict::Inject(r)) => (HookVerdictKind::Inject, r.clone(), None, None),
-                Ok(HookVerdict::Ask(r)) => (HookVerdictKind::Ask, r.clone(), None, None),
-                // Single source: the effective verdict for a fault is
-                // verdict_on_hook_error, NOT a hardcoded Deny here. The
-                // error_kind carries the cause separately. The error itself
-                // is user-visible: their hook did not run.
-                Err(e) => {
-                    self.emit_system_line(format!(
-                        "hook {} failed: {}",
-                        o.hook_name,
-                        wire_error_reason(e)
-                    ));
-                    (
-                        wire_verdict_kind(&verdict_on_hook_error()),
-                        wire_error_reason(e),
-                        None,
-                        Some(wire_error_kind(e)),
-                    )
-                }
-            };
-            let signal = TurnEventKind::HookSignal {
-                event: wire_event,
-                verdict: verdict_kind,
-                error: error_kind,
-                reason,
-                hook_name: o.hook_name.clone(),
-                tool_name: tool_name.map(str::to_string),
-                triggered_event: triggered,
-                turn: Some(turn),
-                call_in_turn: Some(call_in_turn),
-            };
-            // Best-effort: a hook signal append failure must not crash the
-            // run (hooks are non-blocking audit). Dropped here — a follow-up
-            // routes it through the OL error stream, NOT eprintln (which
-            // corrupts the alt-screen surface while the TUI owns it).
-            let _res = self.store.append(new_event(session, signal)).await;
-        }
+                    Some(wire_error_kind(e)),
+                )
+            }
+        };
+        let signal = TurnEventKind::HookSignal {
+            event: wire_event,
+            verdict: verdict_kind,
+            error: error_kind,
+            reason,
+            hook_name: o.hook_name.clone(),
+            tool_name: tool_name.map(str::to_string),
+            triggered_event: triggered,
+            turn: Some(turn),
+            call_in_turn: Some(call_in_turn),
+        };
+        let _res = store.append(new_event(session, signal)).await;
     }
 }
 

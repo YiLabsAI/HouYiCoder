@@ -21,13 +21,14 @@ fn test_hooks_to_wire_empty() {
 }
 
 /// The framework event surface lists all 28 declared events, marking the
-/// three live tool-lifecycle ones as fired.
+/// seven live ones as fired (three tool-lifecycle plus four reserved
+/// subagent and worktree events).
 #[test]
 fn test_events_surface_lists_all() {
     let wire = hook_events_to_wire();
     assert_eq!(wire.len(), 28, "all declared events listed");
     let live: Vec<_> = wire.iter().filter(|e| e.fired).collect();
-    assert_eq!(live.len(), 3, "three live events");
+    assert_eq!(live.len(), 7, "seven live events");
     assert!(
         wire.iter()
             .any(|e| e.name == "PreToolUse" && e.source == "framework")

@@ -241,6 +241,9 @@ impl Runner {
                             if let Some(h) = self.spawn_handle() {
                                 ctx = ctx.with_spawn_handle(h.clone());
                             }
+                            if let Some(hf) = super::fire::build_hook_fire(self) {
+                                ctx = ctx.with_hook_fire(hf);
+                            }
                             let r = t.execute(ctx, input).await;
                             let duration_ms = start.elapsed().as_millis() as u64;
                             let o = match r {
@@ -310,6 +313,9 @@ impl Runner {
                     .with_agent_identity(self.agent_identity().clone());
                 if let Some(h) = self.spawn_handle() {
                     ctx = ctx.with_spawn_handle(h.clone());
+                }
+                if let Some(hf) = super::fire::build_hook_fire(self) {
+                    ctx = ctx.with_hook_fire(hf);
                 }
                 let exec_fut = t.execute(ctx, input.clone());
                 let start = std::time::Instant::now();
@@ -424,6 +430,10 @@ fn hook_feedback_json(reason: &str) -> Value {
 #[cfg(test)]
 #[path = "fire_tests.rs"]
 mod fire_tests;
+
+#[cfg(test)]
+#[path = "fire_seam_tests.rs"]
+mod fire_seam_tests;
 
 #[cfg(test)]
 #[path = "hook_signal_tests.rs"]

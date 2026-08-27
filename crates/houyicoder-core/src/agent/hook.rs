@@ -23,6 +23,7 @@
 #![allow(dead_code)] // stub hook types and reserved traits pending owner-crate wiring; locally unused
 
 pub(crate) mod command;
+pub(crate) mod fire;
 pub(crate) mod metadata;
 pub(crate) mod pipeline;
 
@@ -223,14 +224,22 @@ impl HookEvent {
         HookEvent::WorktreeRemove,
     ];
 
-    /// Whether this event has a live fire point wired in the agent loop. Only
-    /// the three tool-lifecycle events fire today; the rest are declared-only
-    /// (the fire point lands as the feature does). The /hooks command marks
-    /// fired events so the user sees which are live vs reserved.
+    /// Whether this event has a live fire point wired. The three
+    /// tool-lifecycle events fire in the agent loop; the four reserved
+    /// subagent and worktree events fire at the service-layer boundaries
+    /// (a sync spawn in run_sync_spawn, the worktree controller enter and
+    /// exit). The rest are declared-only. The /hooks command marks fired
+    /// events so the user sees which are live vs reserved.
     pub fn is_fired(self) -> bool {
         matches!(
             self,
-            HookEvent::PreToolUse | HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+            HookEvent::PreToolUse
+                | HookEvent::PostToolUse
+                | HookEvent::PostToolUseFailure
+                | HookEvent::SubagentStart
+                | HookEvent::SubagentStop
+                | HookEvent::WorktreeCreate
+                | HookEvent::WorktreeRemove
         )
     }
 
@@ -376,8 +385,14 @@ pub enum HookPayload {
         agent_id: AgentId,
         agent_type: String,
     },
+    /// Carries the terminal status plus the child last assistant text so a
+    /// hook inspects the result without reading the transcript, and can
+    /// branch on the terminal kind (completed / max_turns / killed / failed).
     SubagentStop {
         agent_id: AgentId,
+        agent_type: String,
+        status: String,
+        last_text: Option<String>,
     },
     PermissionRequest {
         tool_name: String,

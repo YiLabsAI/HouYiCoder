@@ -330,6 +330,9 @@ fn test_payload_exhaustive_construct() {
 
     let p = HookPayload::SubagentStop {
         agent_id: aid.clone(),
+        agent_type: "coder".into(),
+        status: "completed".into(),
+        last_text: Some(s.clone()),
     };
     assert!(matches!(p, HookPayload::SubagentStop { .. }));
 

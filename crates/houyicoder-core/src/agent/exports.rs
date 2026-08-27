@@ -14,6 +14,7 @@ pub use super::diff::unified_diff;
 pub use super::hook::HookError;
 pub use super::hook::command::CommandHook;
 pub use super::hook::command::parse_event;
+pub use super::hook::fire::build_hook_fire;
 pub use super::hook::registry::{HookEntry, HookRegistry};
 pub use super::hook::{
     ArbitratedVerdict, Hook, HookContext, HookEvent, HookPayload, HookPolicy, HookSource,

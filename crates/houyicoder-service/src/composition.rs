@@ -543,6 +543,10 @@ pub(crate) fn assemble(
         Some(registry) => runner.with_hooks(registry),
         None => runner,
     };
+    let hook_fire = houyicoder_core::agent::build_hook_fire(&runner);
+    if let Some(controller) = &worktree_controller {
+        controller.set_hook_fire(hook_fire);
+    }
     let (runner, toggle_warnings) = match workspace {
         Some(ws) => {
             let memory_provider: Arc<dyn MemoryProvider> =

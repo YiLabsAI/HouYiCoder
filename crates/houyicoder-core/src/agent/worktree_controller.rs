@@ -23,10 +23,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+use houyicoder_api::hook_fire::HookFire;
 use houyicoder_api::live::{LiveEvent, LiveSink};
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{
+    EventId, HookEventKind, HookFirePayload, SessionId, TurnEvent, TurnEventKind,
+};
 
 use super::worktree_session::{self, WorktreeError, WorktreeSession};
 
@@ -117,6 +120,12 @@ pub struct WorktreeController {
     /// as set_cwd_handle: the controller is built before the runner, then
     /// the composition root attaches the runner's sink once it exists.
     live: Mutex<Option<LiveSink>>,
+    /// The hook-fire seam for WorktreeCreate / WorktreeRemove events.
+    /// Attached after construction (staged delegation, like set_live_sink):
+    /// the controller is built before the runner, so the composition root
+    /// attaches the runner's hook-fire handle once it exists. None when no
+    /// hooks are wired; fire is a no-op then.
+    hook_fire: Mutex<Option<Arc<dyn HookFire>>>,
 }
 
 impl WorktreeController {
@@ -141,6 +150,7 @@ impl WorktreeController {
             session_id,
             original_main_ref: Mutex::new(None),
             live: Mutex::new(None),
+            hook_fire: Mutex::new(None),
         }
     }
 
@@ -156,6 +166,28 @@ impl WorktreeController {
     /// set_cwd_handle: the controller is built before the runner.
     pub fn set_live_sink(&self, sink: LiveSink) {
         *self.live.lock().expect("live sink lock") = Some(sink);
+    }
+
+    /// Attach the hook-fire seam for WorktreeCreate / WorktreeRemove events.
+    /// Staged delegation, like set_live_sink: the controller is built before
+    /// the runner, so the composition root attaches the runner's hook-fire
+    /// handle once it exists. Pass None to clear.
+    pub fn set_hook_fire(&self, fire: Option<Arc<dyn HookFire>>) {
+        *self.hook_fire.lock().expect("hook_fire lock") = fire;
+    }
+
+    /// Fire a WorktreeCreate or WorktreeRemove hook with the worktree path,
+    /// when a hook-fire seam is attached. No-op otherwise. The signal lands
+    /// in this controller's session log (the parent session at a subagent
+    /// spawn, the running session at a tool-driven enter/exit). The Arc is
+    /// cloned out of the lock before the await so a std Mutex guard is not
+    /// held across the fire future (which writes to the session store).
+    async fn fire_worktree_event(&self, event: HookEventKind, path: PathBuf) {
+        let hf = self.hook_fire.lock().expect("hook_fire lock").clone();
+        if let Some(hf) = hf {
+            let payload = HookFirePayload::worktree(self.session_id, path);
+            hf.fire(event, payload).await;
+        }
     }
 
     /// True when a worktree session is active (an EnterWorktree ran + no
@@ -243,6 +275,8 @@ impl WorktreeController {
             session_id: self.session_id,
         };
         *self.session.lock().expect("session lock") = Some(session);
+        self.fire_worktree_event(HookEventKind::WorktreeCreate, created.worktree_path.clone())
+            .await;
         let message = format!(
             "Created worktree at {} on branch {}. The session is now working in the worktree. Use exit_worktree to leave.",
             created.worktree_path.to_string_lossy(),
@@ -262,7 +296,7 @@ impl WorktreeController {
     /// in-flight exec keeps its spawn-time profile and could escape the
     /// narrow). Fail-closed: a fence failure returns an error, never a
     /// degraded no-isolation spawn.
-    pub fn enter_for_child(&self, slug: String) -> Result<ChildWorktree, WorktreeError> {
+    pub async fn enter_for_child(&self, slug: String) -> Result<ChildWorktree, WorktreeError> {
         if self.sandbox.active_exec_count() > 0 {
             return Err(WorktreeError::Git {
                 stderr: "per-child worktree refused: a sandbox exec is in flight".into(),
@@ -275,6 +309,8 @@ impl WorktreeController {
             .map_err(|e| WorktreeError::Git {
                 stderr: format!("narrow_to_worktree: {e}"),
             })?;
+        self.fire_worktree_event(HookEventKind::WorktreeCreate, created.worktree_path.clone())
+            .await;
         Ok(ChildWorktree {
             worktree_path: created.worktree_path,
             worktree_branch: created.worktree_branch,
@@ -290,7 +326,7 @@ impl WorktreeController {
     /// so the caller can continue on the branch; a clean one is deleted. The
     /// diff check is fail-closed: a git failure preserves the worktree rather
     /// than risking destroying real work.
-    pub fn cleanup_child(&self, cw: ChildWorktree) -> Result<ChildCleanup, WorktreeError> {
+    pub async fn cleanup_child(&self, cw: ChildWorktree) -> Result<ChildCleanup, WorktreeError> {
         let path = cw.worktree_path.clone();
         let branch = cw.worktree_branch.clone();
         let slug = cw.slug.clone();
@@ -305,6 +341,8 @@ impl WorktreeController {
             });
         }
         worktree_session::remove_worktree(&self.repo_root, &slug)?;
+        self.fire_worktree_event(HookEventKind::WorktreeRemove, path.clone())
+            .await;
         Ok(ChildCleanup::Removed {
             worktree_path: path,
         })
@@ -399,6 +437,8 @@ impl WorktreeController {
             // remove: git worktree remove --force + git branch -D (the
             // discard gate already confirmed the user accepts the loss).
             worktree_session::remove_worktree(&self.repo_root, &session.worktree_name)?;
+            self.fire_worktree_event(HookEventKind::WorktreeRemove, session.worktree_path.clone())
+                .await;
         }
         // H5: warn (not block) if the main branch ref moved while isolated.
         if let (Some(orig), Some(branch)) = (

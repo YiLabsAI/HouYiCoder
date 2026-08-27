@@ -128,6 +128,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
             let slug = format!("agent-{}", &child_sid.to_string()[..8]);
             let cw = controller
                 .enter_for_child(slug)
+                .await
                 .map_err(|_| SpawnError::WorktreeFenceNarrowFail)?;
             (Some(cw), "worktree")
         }

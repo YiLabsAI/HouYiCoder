@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::hook_fire::HookFire;
 use crate::progress::ProgressSink;
 use crate::spawn::{AgentIdentity, SpawnHandle};
 
@@ -58,6 +59,13 @@ pub struct ToolCtx {
     /// engine never depends on the permission layer. Defaults to empty; a
     /// tool that ignores it pays nothing.
     pub denied_agents: Arc<HashSet<String>>,
+    /// The hook-fire seam a service-layer boundary (the agent tool driving a
+    /// sync spawn) calls to fire subagent lifecycle hooks. None when no hooks
+    /// are wired (a test, a non-interactive run, or the depth-1-only v0 child
+    /// that carries no registry); the caller treats fire as a no-op then.
+    /// Threaded per call the way the spawn handle is, so a future child with
+    /// its own registry fires correctly without re-wiring.
+    pub hook_fire: Option<Arc<dyn HookFire>>,
 }
 
 impl ToolCtx {
@@ -75,6 +83,7 @@ impl ToolCtx {
             agent_identity: None,
             spawn_handle: None,
             denied_agents: Arc::new(HashSet::new()),
+            hook_fire: None,
         }
     }
 
@@ -115,6 +124,14 @@ impl ToolCtx {
     /// lookup to surface a deny rule distinctly from an unknown type.
     pub fn with_denied_agents(mut self, denied: Arc<HashSet<String>>) -> Self {
         self.denied_agents = denied;
+        self
+    }
+
+    /// Attach the hook-fire seam the agent tool calls at a sync spawn
+    /// boundary (SubagentStart before the child run, SubagentStop before the
+    /// return). None on dispatches that cannot fire (no registry wired).
+    pub fn with_hook_fire(mut self, fire: Arc<dyn HookFire>) -> Self {
+        self.hook_fire = Some(fire);
         self
     }
 }
