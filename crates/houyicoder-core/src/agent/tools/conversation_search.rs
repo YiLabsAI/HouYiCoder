@@ -211,6 +211,7 @@ fn event_search_text(event: &TurnEvent) -> Option<String> {
         TurnEventKind::MidTurnInput { text } => text.clone(),
         TurnEventKind::MetaUser { text } => text.clone(),
         TurnEventKind::MemoryRecall { text, .. } => text.clone(),
+        TurnEventKind::SkillListing { text, .. } => text.clone(),
         TurnEventKind::RewardObservation { .. } => return None,
         TurnEventKind::Unknown => return None,
         TurnEventKind::AssistantMessage { text, thinking } => {

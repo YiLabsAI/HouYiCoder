@@ -214,6 +214,19 @@ impl Runner {
         self
     }
 
+    /// Wire the skill registry the turn-entry step reads to build the
+    /// skill-discovery listing attachment. The registry is discovered at
+    /// startup; the same Arc is shared with the Skill tool (registered
+    /// separately at the composition root) so invocation + listing see one
+    /// set. None in tests and the pure-stub path (no listing attached).
+    pub fn with_skill_registry(
+        mut self,
+        registry: Arc<dyn houyicoder_api::skill::SkillRegistry>,
+    ) -> Self {
+        self.skill_registry = Some(registry);
+        self
+    }
+
     /// Wire the memory extractor that fires at query-loop end to
     /// background-extract memories from the conversation. Fire-and-forget:
     /// the spawned fork runs on a tokio task so the main loop is never

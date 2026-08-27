@@ -78,11 +78,13 @@ pub fn project_input_items_with(
         match &events[i].kind {
             // Merge consecutive user messages: providers reject multiple
             // user-in-a-row. MetaUser (runner nudge) + MemoryRecall
-            // (system-reminder memories) are served to the model identically;
-            // the transcript-skip happens in the host records projection.
+            // (system-reminder memories) + SkillListing (system-reminder
+            // skill catalog) are served to the model identically; the
+            // transcript-skip happens in the host records projection.
             TurnEventKind::UserInput { text }
             | TurnEventKind::MetaUser { text }
-            | TurnEventKind::MemoryRecall { text, .. } => {
+            | TurnEventKind::MemoryRecall { text, .. }
+            | TurnEventKind::SkillListing { text, .. } => {
                 append_user_text(&mut items, text);
                 i += 1;
             }

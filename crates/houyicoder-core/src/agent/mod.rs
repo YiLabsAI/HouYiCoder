@@ -42,6 +42,7 @@ mod reducer;
 mod redundancy;
 mod retention;
 pub(crate) mod reward_snapshot;
+mod skill_listing;
 mod status;
 mod step;
 mod synthetic;
@@ -80,7 +81,7 @@ use call::accumulate_usage;
 use synthetic::SyntheticToolOutcome;
 
 pub mod runner_config;
-use runner_config::{DEFAULT_SNAPSHOT_SIZE_CAP_BYTES, DEFAULT_SNAPSHOT_TTL_SECS, RunnerConfig};
+use runner_config::RunnerConfig;
 
 mod result;
 pub use result::{RunError, RunOutcome, RunResult};
@@ -172,6 +173,11 @@ pub struct Runner {
     /// reset point. None in tests and the pure-stub path (no cross-session
     /// memory).
     memory: Option<Arc<dyn houyicoder_api::memory::MemoryProvider>>,
+    /// Optional skill registry. When wired, the turn-entry step appends a
+    /// skill-discovery listing attachment (descriptions only — the Skill
+    /// tool loads bodies on demand). None in tests and the pure-stub path
+    /// (no skill discovery).
+    skill_registry: Option<Arc<dyn houyicoder_api::skill::SkillRegistry>>,
     /// Optional hook registry. When wired, the runner fires PreToolUse
     /// before each tool execution and PostToolUse / PostToolUseFailure
     /// after, arbitrating verdicts (Deny blocks, Feedback surfaces a
@@ -284,127 +290,16 @@ impl Runner {
     /// handle back for side-channel replay reads. No breaker is attached;
     /// /sandbox + /status report None for breaker state. Use with_breaker at
     /// the composition root to share the sandbox's breaker for status.
+    /// Construct a runner owning its store. Tests use this; the composition
+    /// root uses with_shared_store (same body) so a host can replay while the
+    /// runner appends. Delegates so the two entry points share one body.
     pub fn new(
         store: Arc<dyn houyicoder_api::session::SessionLog>,
         provider: Arc<dyn ModelProvider>,
         tools: ToolRegistry,
         config: RunnerConfig,
     ) -> Self {
-        let observability = obs_wire::new_log(provider.capabilities().context_window);
-        let active_model = Arc::new(std::sync::RwLock::new(config.model.clone()));
-        let active_effort = Arc::new(std::sync::RwLock::new(None));
-        let runner = Self {
-            store,
-            provider,
-            tools,
-            config,
-            active_model,
-            active_effort,
-            effort_resolver: None,
-            context_builder: ContextBuilder::new(),
-            live: None,
-            startup_warnings: std::sync::Mutex::new(Vec::new()),
-            breaker: None,
-            usage: Arc::new(std::sync::Mutex::new(UsageAccumulator::default())),
-            observability,
-            cancel: std::sync::Mutex::new(None),
-            aborted: std::sync::atomic::AtomicBool::new(false),
-            paused: std::sync::atomic::AtomicBool::new(false),
-            verify_gate: None,
-            undo_stack: None,
-            snapshot_store: None,
-            snapshot_ttl_secs: DEFAULT_SNAPSHOT_TTL_SECS,
-            snapshot_size_cap_bytes: DEFAULT_SNAPSHOT_SIZE_CAP_BYTES,
-            summarizer: Box::new(manifest::HeuristicSummarizer),
-            memory: None,
-            hooks: None,
-            cache_policy: Arc::new(houyicoder_api::cache_policy::AutoCachePolicy),
-            cost_model: Arc::new(houyicoder_api::cost_model::AnthropicCostModel),
-            recall_meter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            workspace_probe: None,
-            compact_suppress: std::sync::atomic::AtomicU8::new(0),
-            compact_consecutive_failures: std::sync::atomic::AtomicU32::new(0),
-            cache_prev_read: std::sync::Mutex::new(None),
-            cache_compact_flag: std::sync::atomic::AtomicBool::new(false),
-            cache_model_switch_flag: std::sync::atomic::AtomicBool::new(false),
-            cached_prefix: std::sync::Arc::new(cache_liveness::CachedPrefixState::new()),
-            reducer: None,
-            extractor: None,
-            dream: None,
-            auto_memory: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            auto_dream: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            queued_input: std::sync::Mutex::new(std::collections::VecDeque::new()),
-            consumed_input: std::sync::Mutex::new(Vec::new()),
-            redundancy: std::sync::Mutex::new(redundancy::RedundancyTracker::new()),
-            denied_agents: Arc::new(std::collections::HashSet::new()),
-            spawn_handle: None,
-            agent_identity: houyicoder_api::spawn::AgentIdentity::top_level(),
-        };
-        runner.wire_cache_liveness_policy();
-        runner
-    }
-
-    /// Construct a runner that shares an already-Arced store. The caller keeps
-    /// its own clone so it can replay events (e.g. a TUI rendering the live
-    /// transcript) while the runner appends to the same log.
-    pub fn with_shared_store(
-        store: Arc<dyn houyicoder_api::session::SessionLog>,
-        provider: Arc<dyn ModelProvider>,
-        tools: ToolRegistry,
-        config: RunnerConfig,
-    ) -> Self {
-        let observability = obs_wire::new_log(provider.capabilities().context_window);
-        let active_model = Arc::new(std::sync::RwLock::new(config.model.clone()));
-        let active_effort = Arc::new(std::sync::RwLock::new(None));
-        let runner = Self {
-            store,
-            provider,
-            tools,
-            config,
-            active_model,
-            active_effort,
-            effort_resolver: None,
-            context_builder: ContextBuilder::new(),
-            live: None,
-            startup_warnings: std::sync::Mutex::new(Vec::new()),
-            breaker: None,
-            usage: Arc::new(std::sync::Mutex::new(UsageAccumulator::default())),
-            observability,
-            cancel: std::sync::Mutex::new(None),
-            aborted: std::sync::atomic::AtomicBool::new(false),
-            paused: std::sync::atomic::AtomicBool::new(false),
-            verify_gate: None,
-            undo_stack: None,
-            snapshot_store: None,
-            snapshot_ttl_secs: DEFAULT_SNAPSHOT_TTL_SECS,
-            snapshot_size_cap_bytes: DEFAULT_SNAPSHOT_SIZE_CAP_BYTES,
-            summarizer: Box::new(manifest::HeuristicSummarizer),
-            memory: None,
-            hooks: None,
-            cache_policy: Arc::new(houyicoder_api::cache_policy::AutoCachePolicy),
-            cost_model: Arc::new(houyicoder_api::cost_model::AnthropicCostModel),
-            recall_meter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            workspace_probe: None,
-            compact_suppress: std::sync::atomic::AtomicU8::new(0),
-            compact_consecutive_failures: std::sync::atomic::AtomicU32::new(0),
-            cache_prev_read: std::sync::Mutex::new(None),
-            cache_compact_flag: std::sync::atomic::AtomicBool::new(false),
-            cache_model_switch_flag: std::sync::atomic::AtomicBool::new(false),
-            cached_prefix: std::sync::Arc::new(cache_liveness::CachedPrefixState::new()),
-            reducer: None,
-            extractor: None,
-            dream: None,
-            auto_memory: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            auto_dream: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            queued_input: std::sync::Mutex::new(std::collections::VecDeque::new()),
-            consumed_input: std::sync::Mutex::new(Vec::new()),
-            redundancy: std::sync::Mutex::new(redundancy::RedundancyTracker::new()),
-            denied_agents: Arc::new(std::collections::HashSet::new()),
-            spawn_handle: None,
-            agent_identity: houyicoder_api::spawn::AgentIdentity::top_level(),
-        };
-        runner.wire_cache_liveness_policy();
-        runner
+        Self::with_shared_store(store, provider, tools, config)
     }
 
     /// A shared handle to the session store. Clone it to replay events from a
@@ -598,6 +493,10 @@ impl Runner {
                     // user message. No-op when no memory provider is wired.
                     if had_pending {
                         self.inject_memory_recall(session).await?;
+                        // A drained mid-turn input may follow a compaction
+                        // that folded the listing out; re-announce so the
+                        // model keeps skill discovery for the rest of the run.
+                        self.inject_skill_listing(session).await?;
                     }
                     let response = self
                         .model_call_stream(session, turn, self.config.max_turns, token)

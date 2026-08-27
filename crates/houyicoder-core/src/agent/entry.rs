@@ -9,9 +9,77 @@ use tokio_util::sync::CancellationToken;
 
 use super::append::new_event;
 use super::fact;
-use super::{ApprovalDecision, RunError, RunOutcome, RunResult, Runner};
+use super::runner_config::{
+    DEFAULT_SNAPSHOT_SIZE_CAP_BYTES, DEFAULT_SNAPSHOT_TTL_SECS, RunnerConfig,
+};
+use super::*;
+use houyicoder_api::provider::ModelProvider;
 
 impl Runner {
+    /// Construct a runner that shares an already-Arced store. The caller keeps
+    /// its own clone so it can replay events (e.g. a TUI rendering the live
+    /// transcript) while the runner appends to the same log.
+    pub fn with_shared_store(
+        store: Arc<dyn houyicoder_api::session::SessionLog>,
+        provider: Arc<dyn ModelProvider>,
+        tools: ToolRegistry,
+        config: RunnerConfig,
+    ) -> Self {
+        let observability = obs_wire::new_log(provider.capabilities().context_window);
+        let active_model = Arc::new(std::sync::RwLock::new(config.model.clone()));
+        let active_effort = Arc::new(std::sync::RwLock::new(None));
+        let runner = Self {
+            store,
+            provider,
+            tools,
+            config,
+            active_model,
+            active_effort,
+            effort_resolver: None,
+            context_builder: ContextBuilder::new(),
+            live: None,
+            startup_warnings: std::sync::Mutex::new(Vec::new()),
+            breaker: None,
+            usage: Arc::new(std::sync::Mutex::new(UsageAccumulator::default())),
+            observability,
+            cancel: std::sync::Mutex::new(None),
+            aborted: std::sync::atomic::AtomicBool::new(false),
+            paused: std::sync::atomic::AtomicBool::new(false),
+            verify_gate: None,
+            undo_stack: None,
+            snapshot_store: None,
+            snapshot_ttl_secs: DEFAULT_SNAPSHOT_TTL_SECS,
+            snapshot_size_cap_bytes: DEFAULT_SNAPSHOT_SIZE_CAP_BYTES,
+            summarizer: Box::new(manifest::HeuristicSummarizer),
+            memory: None,
+            skill_registry: None,
+            hooks: None,
+            cache_policy: Arc::new(houyicoder_api::cache_policy::AutoCachePolicy),
+            cost_model: Arc::new(houyicoder_api::cost_model::AnthropicCostModel),
+            recall_meter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            workspace_probe: None,
+            compact_suppress: std::sync::atomic::AtomicU8::new(0),
+            compact_consecutive_failures: std::sync::atomic::AtomicU32::new(0),
+            cache_prev_read: std::sync::Mutex::new(None),
+            cache_compact_flag: std::sync::atomic::AtomicBool::new(false),
+            cache_model_switch_flag: std::sync::atomic::AtomicBool::new(false),
+            cached_prefix: std::sync::Arc::new(cache_liveness::CachedPrefixState::new()),
+            reducer: None,
+            extractor: None,
+            dream: None,
+            auto_memory: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            auto_dream: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            queued_input: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            consumed_input: std::sync::Mutex::new(Vec::new()),
+            redundancy: std::sync::Mutex::new(redundancy::RedundancyTracker::new()),
+            denied_agents: Arc::new(std::collections::HashSet::new()),
+            spawn_handle: None,
+            agent_identity: houyicoder_api::spawn::AgentIdentity::top_level(),
+        };
+        runner.wire_cache_liveness_policy();
+        runner
+    }
+
     /// Run the agent on a user input. Appends the user event, then drives the
     /// loop: RunAgain → prepare + complete + append + resolve; FinalOutput →
     /// return; Handoff → return; Interruption → return (caller resumes).
@@ -44,6 +112,12 @@ impl Runner {
         // (memory is in the message stream, not the prompt) so prompt-cache
         // survives across turns. No-op when no memory provider is wired.
         self.inject_memory_recall(session).await?;
+        // Turn-entry skill listing: announce model-invocable skills as a
+        // system-reminder attachment the model reads to decide which skill
+        // to invoke. Skips when a listing already survives in the served
+        // view (first-turn announce, then no-op until compaction folds it
+        // and the scan naturally resets). No-op when no registry is wired.
+        self.inject_skill_listing(session).await?;
         let result = self
             .drive_loop(session, 0, Usage::default(), &token)
             .await?;

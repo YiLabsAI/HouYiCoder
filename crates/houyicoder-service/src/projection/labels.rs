@@ -9,6 +9,7 @@ pub fn trajectory_kind_label(kind: &TurnEventKind) -> &'static str {
         TurnEventKind::MidTurnInput { .. } => "user",
         TurnEventKind::MetaUser { .. } => "meta",
         TurnEventKind::MemoryRecall { .. } => "memory",
+        TurnEventKind::SkillListing { .. } => "skill_listing",
         TurnEventKind::AssistantMessage { .. } => "assistant",
         TurnEventKind::AssistantTextDelta { .. } => "delta",
         TurnEventKind::ToolCall { .. } => "tool_call",

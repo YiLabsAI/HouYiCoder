@@ -374,21 +374,30 @@ impl ContextBuilder {
         // so /context reflects what the model sees without a second recall.
         let mut mem_tokens = 0u32;
         let mut mem_items = Vec::new();
+        let mut skill_tokens = 0u32;
         for ev in &filtered {
-            if let TurnEventKind::MemoryRecall { text, keys, .. } = &ev.kind {
-                mem_tokens += self.tokenizer.count(text);
-                mem_items.extend(keys.iter().cloned());
+            match &ev.kind {
+                TurnEventKind::MemoryRecall { text, keys, .. } => {
+                    mem_tokens += self.tokenizer.count(text);
+                    mem_items.extend(keys.iter().cloned());
+                }
+                TurnEventKind::SkillListing { text, .. } => {
+                    skill_tokens += self.tokenizer.count(text);
+                }
+                _ => {}
             }
         }
 
-        // The memory text is merged into the user message by the projection,
-        // so it is already counted in msg_tokens. Attribute it to the Memory
-        // section and subtract from Messages so the section total does not
-        // double-count memory — otherwise the pre-flight compress threshold
-        // trips about a memory-budget's worth of tokens early.
+        // The memory + skill-listing text is merged into the user message by
+        // the projection, so it is already counted in msg_tokens. Attribute
+        // each to its own section and subtract from Messages so the section
+        // totals do not double-count — otherwise the pre-flight compress
+        // threshold trips about an attachment's worth of tokens early.
         let messages_section = Section {
             kind: SectionKind::Messages,
-            tokens: msg_tokens.saturating_sub(mem_tokens),
+            tokens: msg_tokens
+                .saturating_sub(mem_tokens)
+                .saturating_sub(skill_tokens),
             items: message_previews(&messages),
         };
 
@@ -429,6 +438,16 @@ impl ContextBuilder {
                     kind: SectionKind::Memory,
                     tokens: mem_tokens,
                     items: mem_items,
+                },
+            );
+        }
+        if skill_tokens > 0 {
+            sections.insert(
+                1,
+                Section {
+                    kind: SectionKind::Skills,
+                    tokens: skill_tokens,
+                    items: vec!["skill listing".to_string()],
                 },
             );
         }

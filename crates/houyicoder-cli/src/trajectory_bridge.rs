@@ -173,6 +173,7 @@ fn project_event(ev: &TurnEvent, start_ms: u64, calls: &CallIndex) -> Option<Tra
         | TurnEventKind::CacheBreak { .. }
         | TurnEventKind::MetaUser { .. }
         | TurnEventKind::MemoryRecall { .. }
+        | TurnEventKind::SkillListing { .. }
         | TurnEventKind::AssistantTextDelta { .. }
         | TurnEventKind::WorktreeEnter { .. }
         | TurnEventKind::WorktreeExit { .. }

@@ -315,6 +315,7 @@ fn collect_checkpoints_and_errors(events: &[TurnEvent]) -> (Vec<CheckpointEntry>
             | TurnEventKind::MetaUser { .. }
             | TurnEventKind::MidTurnInput { .. }
             | TurnEventKind::MemoryRecall { .. }
+            | TurnEventKind::SkillListing { .. }
             | TurnEventKind::AssistantMessage { .. }
             | TurnEventKind::AssistantTextDelta { .. }
             | TurnEventKind::ToolCall { .. }

@@ -460,7 +460,9 @@ pub(crate) fn assemble(
     // walk; managed and user levels are scanned regardless.
     let skill_registry: Arc<dyn houyicoder_api::skill::SkillRegistry> =
         Arc::new(skill::SkillRegistryImpl::discover(workspace.as_deref()));
-    tools.register(Arc::new(SkillTool::new(skill_registry)));
+    tools.register(Arc::new(SkillTool::new(std::sync::Arc::clone(
+        &skill_registry,
+    ))));
     // The agent tool delegates a sub-task to a spawned child. Like the recall
     // tool it is not sandbox-backed; it resolves the requested type against
     // the agent registry (built-ins) and goes through the ToolCtx spawn port
@@ -503,7 +505,8 @@ pub(crate) fn assemble(
         .with_summarizer(summarizer)
         .with_effort_resolver(std::sync::Arc::new(effort_resolver))
         .with_denied_agents(std::sync::Arc::clone(&denied_agents))
-        .with_spawn_handle(spawn_handle);
+        .with_spawn_handle(spawn_handle)
+        .with_skill_registry(std::sync::Arc::clone(&skill_registry));
     // Wire a workspace probe for the re-derivable compaction backbone's
     // derivation watermark. Shares the runner's cwd handle so a worktree
     // switch propagates to the next probe. Set after the builder chain (the

@@ -362,6 +362,60 @@ fn test_memory_section_recomputed_projection() {
 }
 
 #[test]
+fn test_skill_section_recomputed_projection() {
+    // A SkillListing event in the log: the projection merges its text into
+    // the user message, and the Skills section attributes the attachment
+    // tokens so /context shows the discovery cost without double-counting.
+    let mut scratch = std::env::temp_dir();
+    scratch.push(format!("ctx-test-skillsec-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let listing_text = "- commit: commit changes - after edits\n- review: review a PR";
+    let events = vec![
+        TurnEvent {
+            id: EventId::new(),
+            session: SessionId::new(),
+            ts: 0,
+            prev_hash: None,
+            kind: TurnEventKind::UserInput {
+                text: "help me commit".into(),
+            },
+        },
+        TurnEvent {
+            id: EventId::new(),
+            session: SessionId::new(),
+            ts: 0,
+            prev_hash: None,
+            kind: TurnEventKind::SkillListing {
+                text: listing_text.to_string(),
+                bytes: listing_text.len() as u32,
+            },
+        },
+    ];
+    let b = ContextBuilder::new().with_cwd(scratch.clone());
+    let v = b.build(&events);
+    let skill = v
+        .section(SectionKind::Skills)
+        .expect("Skills section present when a listing event is in the log");
+    assert!(
+        skill.tokens > 0,
+        "Skills section must count the listing tokens"
+    );
+    // No double-count: the projection merges the listing text into the user
+    // message, so Messages (non-listing input) + Skills (attachment) must
+    // equal the full merged input.
+    let tok = Tokenizer::new();
+    let merged = format!("help me commit\n{listing_text}");
+    let full_input = tok.count(&merged);
+    let messages_tokens = v.section(SectionKind::Messages).unwrap().tokens;
+    assert_eq!(
+        messages_tokens + skill.tokens,
+        full_input,
+        "listing must not be double-counted (Messages + Skills == full input)"
+    );
+    std::fs::remove_dir_all(&scratch).ok();
+}
+
+#[test]
 fn test_build_grid_200k_100() {
     let cats = vec![
         CategoryBreakdown {

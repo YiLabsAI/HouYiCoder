@@ -129,6 +129,26 @@ pub enum TurnEventKind {
         #[serde(default)]
         bytes: u32,
     },
+    /// A per-turn listing of model-invocable skills, injected as a user-role
+    /// system-reminder attachment at the conversation tail (the same seam as
+    /// memory-recall). Carries only descriptions — the full body loads on
+    /// demand when the model calls the Skill tool, so the listing stays
+    /// terse (progressive disclosure). The checkpoint planner disposes this
+    /// as Summarized so compaction folds it out of the live projection;
+    /// the turn-entry step scans the served view for a surviving listing
+    /// and skips when one exists, so the listing re-surfaces after a
+    /// compaction with no provider-side clear — the same natural-reset
+    /// pattern memory-recall uses.
+    #[serde(rename = "SkillListing")]
+    SkillListing {
+        text: String,
+        /// The listing payload size in bytes (text.len()), recorded inline
+        /// so the cost dimension (how much skill-discovery context the
+        /// runner attaches) is queryable from the log without re-reading
+        /// the text. Old logs deserialize to 0.
+        #[serde(default)]
+        bytes: u32,
+    },
     AssistantMessage {
         text: String,
         /// Reasoning text that preceded this assistant message, if any. The

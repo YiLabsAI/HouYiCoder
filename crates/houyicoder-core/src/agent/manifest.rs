@@ -437,7 +437,8 @@ fn estimate_event_tokens(event: &TurnEvent, tokenizer: &super::context::Tokenize
         TurnEventKind::UserInput { text }
         | TurnEventKind::MetaUser { text }
         | TurnEventKind::MidTurnInput { text }
-        | TurnEventKind::MemoryRecall { text, .. } => count(text),
+        | TurnEventKind::MemoryRecall { text, .. }
+        | TurnEventKind::SkillListing { text, .. } => count(text),
         TurnEventKind::RewardObservation { .. } => 0,
         TurnEventKind::Unknown => 0,
         TurnEventKind::AssistantMessage { text, thinking } => {
