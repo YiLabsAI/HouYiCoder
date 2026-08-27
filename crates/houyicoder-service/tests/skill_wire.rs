@@ -232,3 +232,83 @@ async fn test_run_large_body_compacts() {
     );
     drop(std::fs::remove_dir_all(&tmp));
 }
+
+/// A compaction that folds the listing out of the served view triggers a
+/// re-announce on the next turn: inject_skill_listing scans the
+/// manifest-applied view, finds no surviving listing, and appends a new
+/// one. The model is never skill-blind after a compact. Proves the
+/// compact-re-announce wiring (inject at compact re-drive sites) end-to-end
+/// with a real manifest, not just the dedup unit test.
+#[tokio::test]
+async fn test_compact_reinjects_listing() {
+    use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, TurnGroup};
+
+    let tmp = std::env::temp_dir().join(format!("skill-wire-compact-{}", std::process::id()));
+    write_skill(&tmp, "commit", "run git status");
+    let reg: Arc<dyn SkillRegistry> = Arc::new(SkillRegistryImpl::discover(Some(&tmp)));
+    let store: Arc<dyn houyicoder_api::session::SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::with_shared_store(
+        store.clone(),
+        Arc::new(FakeProvider::text("ok")),
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "test".into(),
+            instructions: String::new(),
+            max_turns: 5,
+            max_output_tokens: 8_000,
+            ..RunnerConfig::default()
+        },
+    )
+    .with_skill_registry(reg);
+    let session = SessionId::new();
+
+    // Turn 1: listing injected.
+    runner
+        .run(session, "first message".into())
+        .await
+        .expect("run completes");
+    let view1 = store.current_view(session).await.unwrap();
+    let listing_id = view1
+        .events
+        .iter()
+        .find_map(|e| matches!(e.kind, TurnEventKind::SkillListing { .. }).then(|| e.id))
+        .expect("listing injected on turn 1");
+    let last_event = view1.events.last().unwrap().id;
+
+    // Simulate a compact: write a manifest that Summarizes the listing's
+    // turn group so apply_manifest folds it out of the served view.
+    let manifest = CheckpointManifest {
+        id: CheckpointId::new(),
+        session,
+        last_event,
+        summary: Some("compacted".into()),
+        plan: vec![TurnGroup {
+            turn_id: listing_id,
+            disposition: Disposition::Summarized,
+            event_ids: vec![listing_id],
+        }],
+        ts: 0,
+    };
+    store
+        .write_checkpoint(manifest)
+        .await
+        .expect("checkpoint written");
+
+    // Turn 2: inject_skill_listing sees the listing folded -> re-injects.
+    runner
+        .run(session, "second message".into())
+        .await
+        .expect("run completes");
+    let view2 = store.current_view(session).await.unwrap();
+    let listing_count = view2
+        .events
+        .iter()
+        .filter(|e| matches!(e.kind, TurnEventKind::SkillListing { .. }))
+        .count();
+    assert!(
+        listing_count >= 2,
+        "listing re-injected after compact folded the first: found {listing_count}"
+    );
+    drop(std::fs::remove_dir_all(&tmp));
+}
