@@ -438,6 +438,8 @@ pub struct App {
     /// Drilled-in teammate transcript; when Some, active_transcript swaps to
     /// the child's turns with a banner. Enter opens, Esc closes.
     pub teammate_view: Option<crate::records::TeammateView>,
+    /// Running-agent fleet for the status footer; one entry per spawned child.
+    pub fleet: Vec<crate::agent_message::FleetEntry>,
     /// Verbose render mode: force every tool result, reasoning block, and
     /// fold group expanded, and render tool-call chips with the untruncated
     /// invocation. Set when entering the search view (a snapshot transcript
@@ -592,7 +594,6 @@ impl std::fmt::Debug for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_palette_nav_no_panic() {
         let mut app = crate::composition::app();

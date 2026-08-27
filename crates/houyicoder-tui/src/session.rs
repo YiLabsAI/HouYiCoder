@@ -471,6 +471,25 @@ async fn drive_client(
                     FrontendEventKind::SystemLine { text } => {
                         let _send = agent_tx.send(AgentMessage::SystemLine { text });
                     }
+                    FrontendEventKind::AgentStatus {
+                        agent_id,
+                        subagent_type,
+                        turn,
+                        tokens,
+                        tool_uses,
+                        last_activity,
+                        completed,
+                    } => {
+                        let _send = agent_tx.send(AgentMessage::AgentStatus {
+                            agent_id,
+                            subagent_type,
+                            turn,
+                            tokens,
+                            tool_uses,
+                            last_activity,
+                            completed,
+                        });
+                    }
                     // A future event kind the driver does not model; ignore it
                     // rather than killing the driver.
                     _ => {}
@@ -633,112 +652,6 @@ fn queue_remove_notification(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sid() -> houyicoder_protocol::frontend::SessionId {
-        houyicoder_protocol::frontend::SessionId::new("s1")
-    }
-
-    /// The inject notification's method + params must match exactly what the
-    /// server's handle_session_notification reads, else mid-turn injection
-    /// silently no-ops.
-    #[test]
-    fn test_inject_notif_shape_matches() {
-        let n = inject_notification(&sid(), "also check the logs");
-        assert_eq!(n.method, "session/inject");
-        let p = n.params.expect("params present");
-        assert_eq!(
-            p.get("text").and_then(|v| v.as_str()),
-            Some("also check the logs")
-        );
-        assert_eq!(p.get("sessionId").and_then(|v| v.as_str()), Some("s1"));
-    }
-
-    /// The queue_remove notification's method + params must match what the
-    /// server reads to drop a queued message by text.
-    #[test]
-    fn test_queue_remove_notif_shape() {
-        let n = queue_remove_notification(&sid(), "stale item");
-        assert_eq!(n.method, "session/queue_remove");
-        let p = n.params.expect("params present");
-        assert_eq!(p.get("text").and_then(|v| v.as_str()), Some("stale item"));
-    }
-
-    /// A read failure (the server closed or a wire error mid-stream) must
-    /// surface as Done{Err} so the App clears agent_busy. The prior silent
-    /// return wedged the TUI on any server-side fatal. Pins the fix at the
-    /// effect level: the driver sends a Done{Err} carrying the read error.
-    #[tokio::test]
-    async fn test_drive_client_read_done() {
-        use houyicoder_async::PFut;
-        use houyicoder_client::Transport;
-        use houyicoder_protocol::handshake::Hello;
-        use houyicoder_protocol::wire::{WireError, WireErrorKind};
-
-        /// A transport that serves one Hello (so connect succeeds) then fails
-        /// every subsequent recv — the peer-gone condition drive_client must
-        /// translate to Done{Err}.
-        struct FailAfterHello {
-            served: bool,
-        }
-        impl Transport for FailAfterHello {
-            fn send_frame(&mut self, _frame: &str) -> PFut<'_, Result<(), WireError>> {
-                Box::pin(async { Ok(()) })
-            }
-            fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
-                if !self.served {
-                    self.served = true;
-                    let mut h =
-                        houyicoder_protocol::framing::encode(&Hello::local()).expect("encode");
-                    if !h.ends_with('\n') {
-                        h.push('\n');
-                    }
-                    return Box::pin(async move { Ok(Some(h)) });
-                }
-                Box::pin(async {
-                    Err(WireError::new(
-                        WireErrorKind::Unavailable,
-                        "peer gone",
-                        false,
-                    ))
-                })
-            }
-        }
-
-        let client = houyicoder_client::Client::new(Box::new(FailAfterHello { served: false }));
-        let (_cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
-        let (agent_tx, agent_rx) = std::sync::mpsc::channel::<AgentMessage>();
-        drive_client(client, cmd_rx, agent_tx).await;
-        let msg = agent_rx.recv().expect("a Done message on read error");
-        let result = match msg {
-            AgentMessage::Done { result } => result,
-            _ => panic!("expected a Done message on read error"),
-        };
-        let e = result.expect_err("expected Err on the read-error Done");
-        assert!(
-            e.message.contains("connection lost"),
-            "expected a connection-lost message, got: {}",
-            e.message
-        );
-    }
-
-    /// request_rename ships a RenameSessionQuery the driver forwards as a
-    /// RenameSession wire request. Covers the TUI-side request path (mint id
-    /// + send) + the driver dispatch mapping the server-contract tests cannot
-    /// reach (they drive the server directly, not through the TUI Session).
-    #[tokio::test]
-    async fn test_request_rename_forwards_driver() {
-        let mut app = crate::composition::build_app_for_test(None);
-        let sid = app.session_id.clone();
-        app.session
-            .as_ref()
-            .expect("session wired")
-            .request_rename(sid, "x".into());
-        // Let the driver forward the command + the server reply arrive so the
-        // dispatch mapping executes. The reply (a Status or an error) lands on
-        // the agent channel; drain it so the channel drops clean.
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        while app.session.as_mut().and_then(|s| s.poll()).is_some() {}
-    }
-}
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;

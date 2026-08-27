@@ -358,6 +358,33 @@ impl App {
                     self.system_line("debug: logging off");
                 }
             }
+            AgentMessage::AgentStatus {
+                agent_id,
+                subagent_type,
+                turn,
+                tokens,
+                tool_uses,
+                last_activity,
+                completed,
+            } => {
+                if let Some(entry) = self.fleet.iter_mut().find(|e| e.agent_id == agent_id) {
+                    entry.turn = turn;
+                    entry.tokens = tokens;
+                    entry.tool_uses = tool_uses;
+                    entry.last_activity = last_activity;
+                    entry.completed = completed;
+                } else {
+                    self.fleet.push(crate::agent_message::FleetEntry {
+                        agent_id,
+                        subagent_type,
+                        turn,
+                        tokens,
+                        tool_uses,
+                        last_activity,
+                        completed,
+                    });
+                }
+            }
         }
     }
 

@@ -140,6 +140,7 @@ pub fn app() -> App {
         expanded_thinking: HashSet::new(),
         expanded_subagents: HashSet::new(),
         teammate_view: None,
+        fleet: Vec::new(),
         verbose: false,
         turn_seq: 0,
         last_row_fold_keys: RefCell::new(Vec::new()),

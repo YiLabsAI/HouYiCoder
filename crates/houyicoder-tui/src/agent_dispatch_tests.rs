@@ -1493,3 +1493,36 @@ fn test_cursor_after_fold_group() {
         "the non-targeted delegation is untouched"
     );
 }
+
+/// An AgentStatus message inserts a fleet entry; a second message for the
+/// same agent updates it in place rather than appending.
+#[test]
+fn test_agent_status_updates_fleet() {
+    let mut app = crate::composition::app();
+    app.handle_agent_message(crate::run_control::AgentMessage::AgentStatus {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 1,
+        tokens: 100,
+        tool_uses: 2,
+        last_activity: Some("grep".into()),
+        completed: None,
+    });
+    assert_eq!(app.fleet.len(), 1);
+    assert_eq!(app.fleet[0].agent_id, "c1");
+    assert_eq!(app.fleet[0].turn, 1);
+    assert!(app.fleet[0].completed.is_none());
+
+    app.handle_agent_message(crate::run_control::AgentMessage::AgentStatus {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 3,
+        tokens: 300,
+        tool_uses: 5,
+        last_activity: Some("edit".into()),
+        completed: Some("completed".into()),
+    });
+    assert_eq!(app.fleet.len(), 1, "same agent updates in place");
+    assert_eq!(app.fleet[0].turn, 3);
+    assert_eq!(app.fleet[0].completed.as_deref(), Some("completed"));
+}

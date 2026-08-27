@@ -13,6 +13,17 @@ use houyicoder_protocol::llm::EffortLevel;
 
 use crate::transcript::TranscriptFrame;
 
+/// One row in the agent status footer: a spawned child's latest snapshot.
+pub struct FleetEntry {
+    pub agent_id: String,
+    pub subagent_type: String,
+    pub turn: u32,
+    pub tokens: u64,
+    pub tool_uses: u32,
+    pub last_activity: Option<String>,
+    pub completed: Option<String>,
+}
+
 /// One message shipped from the client-driver task back to the TUI event
 /// loop. The driver is a stateless translator: each durable frame the server
 /// ships becomes a Frame message the event loop pushes into its own history
@@ -21,6 +32,7 @@ use crate::transcript::TranscriptFrame;
 /// carries streamed text chunks for the live preview. PermissionAsk raises
 /// the approval card; Done carries the final outcome. Neither carries a
 /// frame snapshot — the event loop's own frame log is the source of truth.
+#[derive(Debug)]
 pub enum AgentMessage {
     /// One durable wire frame the driver observed. The event loop pushes it
     /// into its own frame log; the transcript projection reads from there.
@@ -171,6 +183,17 @@ pub enum AgentMessage {
     /// told where to look.
     DebugResult {
         state: houyicoder_protocol::frontend::debug::DebugState,
+    },
+    /// A spawned child's live status snapshot, from the fleet projector.
+    /// Drives the agent status footer. completed is None while running.
+    AgentStatus {
+        agent_id: String,
+        subagent_type: String,
+        turn: u32,
+        tokens: u64,
+        tool_uses: u32,
+        last_activity: Option<String>,
+        completed: Option<String>,
     },
 }
 
