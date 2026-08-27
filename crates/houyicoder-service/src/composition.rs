@@ -19,6 +19,7 @@ mod resume;
 mod retention_notice;
 mod session_meta;
 mod skill;
+pub use skill::SkillRegistryImpl;
 mod startup_warnings;
 mod worktree;
 

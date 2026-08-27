@@ -359,4 +359,45 @@ mod tests {
 
         drop(fs::remove_dir_all(&tmp));
     }
+
+    /// The three config-dir families are all scanned: a skill under
+    /// .claude/skills (ecosystem-compat, zero-migration reuse) and one
+    /// under .agents/skills (spec interop convention) are both discovered,
+    /// not just the native config dir.
+    #[test]
+    fn test_discover_scans_all_families() {
+        let tmp = std::env::temp_dir().join(format!("skill-families-{}", std::process::id()));
+        create_skill_md(
+            &tmp.join(".houyicoder").join("skills").join("native-skill"),
+            "native-skill",
+            "native",
+        );
+        create_skill_md(
+            &tmp.join(".claude").join("skills").join("claude-skill"),
+            "claude-skill",
+            "claude eco",
+        );
+        create_skill_md(
+            &tmp.join(".agents").join("skills").join("agents-skill"),
+            "agents-skill",
+            "spec",
+        );
+
+        let found = discover_skills(Some(&tmp));
+        let names: Vec<&str> = found.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"native-skill"),
+            "native family scanned: {names:?}"
+        );
+        assert!(
+            names.contains(&"claude-skill"),
+            ".claude family scanned: {names:?}"
+        );
+        assert!(
+            names.contains(&"agents-skill"),
+            ".agents family scanned: {names:?}"
+        );
+
+        drop(fs::remove_dir_all(&tmp));
+    }
 }

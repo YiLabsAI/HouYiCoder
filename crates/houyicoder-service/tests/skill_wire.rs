@@ -1,0 +1,234 @@
+//! Skill integration tests: drive the real Runner + the real skill
+//! registry (real SKILL.md files on disk) + a stub provider through the
+//! two invocation paths (slash + model Skill tool). These are the
+//! end-to-end verifications the inline unit tests (stub registry) cannot
+//! reach — they prove discover then resolve then prepare_body then inject
+//! with real files, and the dual-path convergence at the shared ungated
+//! prepare_body.
+//!
+//! Runs in make test integration / make check-full (pre-push), NOT in
+//! make check --lib (the commit gate stays unit-only + fast). No live
+//! binary, no network — a stub provider + temp SKILL.md files. Not ignored.
+
+#![allow(clippy::unwrap_in_result)]
+
+use std::path::Path;
+use std::sync::Arc;
+
+use houyicoder_api::skill::SkillRegistry;
+use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_core::agent::{Runner, SkillTool, ToolRegistry};
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::llm::OutputItem;
+use houyicoder_provider::FakeProvider;
+use houyicoder_service::composition::SkillRegistryImpl;
+use houyicoder_session::SessionStore;
+
+/// Write a SKILL.md fixture the discoverer picks up, with the given body.
+fn write_skill(dir: &Path, name: &str, body: &str) {
+    let skill_dir = dir.join(".houyicoder").join("skills").join(name);
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: {name} skill\n---\n{body}\n"),
+    )
+    .unwrap();
+}
+
+/// The real end-to-end slash path. A real SKILL.md on disk is discovered,
+/// then Runner.run("/commit fix typo") resolves the slash, keeps the raw
+/// /-text as UserInput, and appends the real body (file content + the
+/// base-dir header) as a MetaUser. Proves discover then resolve then
+/// prepare_body then inject with real files, not stubs.
+#[tokio::test]
+async fn test_run_slash_real_body() {
+    let tmp = std::env::temp_dir().join(format!("skill-wire-slash-{}", std::process::id()));
+    write_skill(&tmp, "commit", "run git status\nstage changes\n");
+    let reg: Arc<dyn SkillRegistry> = Arc::new(SkillRegistryImpl::discover(Some(&tmp)));
+    let store: Arc<dyn houyicoder_api::session::SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::with_shared_store(
+        store.clone(),
+        Arc::new(FakeProvider::text("done")),
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "test".into(),
+            instructions: String::new(),
+            max_turns: 5,
+            max_output_tokens: 8_000,
+            ..RunnerConfig::default()
+        },
+    )
+    .with_skill_registry(Arc::clone(&reg));
+    let session = SessionId::new();
+    runner
+        .run(session, "/commit fix typo".into())
+        .await
+        .expect("run completes");
+    let view = store.current_view(session).await.unwrap();
+    // The raw /-text is the UserInput (transcript fidelity).
+    let user = view.events.iter().find_map(|e| match &e.kind {
+        TurnEventKind::UserInput { text } => Some(text.clone()),
+        _ => None,
+    });
+    assert_eq!(user.as_deref(), Some("/commit fix typo"), "raw /-text kept");
+    // The real body read from disk lands as a MetaUser with the base-dir
+    // header, not a stub string.
+    let meta = view.events.iter().find_map(|e| match &e.kind {
+        TurnEventKind::MetaUser { text } => Some(text.clone()),
+        _ => None,
+    });
+    let meta = meta.expect("a MetaUser with the real body was appended");
+    assert!(
+        meta.contains("run git status"),
+        "real body content from disk: {meta}"
+    );
+    assert!(
+        meta.contains("Base directory for this skill"),
+        "base-dir header prepended: {meta}"
+    );
+    drop(std::fs::remove_dir_all(&tmp));
+}
+
+/// The model-invoke path. A provider emits a Skill tool call, the agent
+/// loop dispatches the SkillTool, and the real body read from disk lands
+/// as a ToolResult. Proves the SkillTool is reachable by the model and
+/// the find-then-gate-then-prepare_body chain runs end-to-end. Together
+/// with test_run_slash_real_body this is the dual-path convergence: both
+/// invocation paths reach the shared ungated prepare_body and produce the
+/// same real body.
+#[tokio::test]
+async fn test_run_model_skill_tool() {
+    let tmp = std::env::temp_dir().join(format!("skill-wire-model-{}", std::process::id()));
+    write_skill(&tmp, "commit", "run git status\nstage changes\n");
+    let reg: Arc<dyn SkillRegistry> = Arc::new(SkillRegistryImpl::discover(Some(&tmp)));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(SkillTool::new(Arc::clone(&reg))));
+    // First call: the model asks for the commit skill. Second: done.
+    let provider = FakeProvider::from_outputs(vec![
+        vec![OutputItem::ToolCall {
+            id: "c1".into(),
+            name: "skill".into(),
+            input: serde_json::json!({"skill":"commit","args":"fix"}),
+        }],
+        vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+    ]);
+    let store: Arc<dyn houyicoder_api::session::SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::with_shared_store(
+        store.clone(),
+        Arc::new(provider),
+        tools,
+        RunnerConfig {
+            model: "test".into(),
+            instructions: String::new(),
+            max_turns: 5,
+            max_output_tokens: 8_000,
+            ..RunnerConfig::default()
+        },
+    )
+    .with_skill_registry(reg);
+    let session = SessionId::new();
+    runner
+        .run(session, "use the commit skill".into())
+        .await
+        .expect("run completes");
+    let view = store.current_view(session).await.unwrap();
+    // The SkillTool ran; its ToolResult carries the real body read from disk
+    // (not a stub), with the base-dir header.
+    let tool_result = view.events.iter().find_map(|e| match &e.kind {
+        TurnEventKind::ToolResult { output, .. } => Some(output.clone()),
+        _ => None,
+    });
+    let tr = tool_result.expect("a ToolResult from the Skill tool");
+    assert!(
+        tr.to_string().contains("run git status"),
+        "real body in ToolResult: {tr}"
+    );
+    assert!(
+        tr.to_string().contains("Base directory for this skill"),
+        "base-dir header in ToolResult: {tr}"
+    );
+    drop(std::fs::remove_dir_all(&tmp));
+}
+
+/// A skill body past the large-output isolate threshold lands as a
+/// block_ref marker (preview + hint) in the ToolResult, not the raw bytes
+/// — the agent loop externalizes the largest string field to the CAS so
+/// the served view stays small and the raw stays retrievable. Proves the
+/// isolation applies to skill bodies (not just bash/grep output).
+#[tokio::test]
+async fn test_run_large_body_compacts() {
+    let tmp = std::env::temp_dir().join(format!("skill-wire-large-{}", std::process::id()));
+    // Body past ISOLATE_LARGE_OUTPUT_BYTES (8192) once the base-dir header
+    // + JSON envelope are added.
+    let large_body = "x".repeat(9_000);
+    write_skill(&tmp, "big", &large_body);
+    let reg: Arc<dyn SkillRegistry> = Arc::new(SkillRegistryImpl::discover(Some(&tmp)));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(SkillTool::new(Arc::clone(&reg))));
+    let provider = FakeProvider::from_outputs(vec![
+        vec![OutputItem::ToolCall {
+            id: "c1".into(),
+            name: "skill".into(),
+            input: serde_json::json!({"skill":"big"}),
+        }],
+        vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+    ]);
+    let store: Arc<dyn houyicoder_api::session::SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::with_shared_store(
+        store.clone(),
+        Arc::new(provider),
+        tools,
+        RunnerConfig {
+            model: "test".into(),
+            instructions: String::new(),
+            max_turns: 5,
+            max_output_tokens: 8_000,
+            ..RunnerConfig::default()
+        },
+    )
+    .with_skill_registry(reg);
+    let session = SessionId::new();
+    runner
+        .run(session, "use the big skill".into())
+        .await
+        .expect("run completes");
+    let view = store.current_view(session).await.unwrap();
+    let tr = view
+        .events
+        .iter()
+        .find_map(|e| match &e.kind {
+            TurnEventKind::ToolResult { output, .. } => Some(output.clone()),
+            _ => None,
+        })
+        .expect("a ToolResult from the Skill tool");
+    // The "result" field is a block_ref marker object, not the raw string.
+    let result = tr.get("result").expect("result field present");
+    assert!(
+        result.is_object(),
+        "large result externalized to a block_ref marker, not raw: {result}"
+    );
+    assert!(
+        result.get("block_ref").is_some(),
+        "block_ref hash in the marker: {result}"
+    );
+    assert!(
+        result.get("preview").is_some(),
+        "inline preview in the marker: {result}"
+    );
+    // The full raw body is NOT in the served ToolResult — it is in the
+    // CAS; the marker carries only a short preview. A run longer than the
+    // preview cap confirms the bulk stayed out.
+    assert!(
+        !tr.to_string().contains(&"x".repeat(1_000)),
+        "raw large body (9000 chars) not in the ToolResult, only the preview: {tr}"
+    );
+    drop(std::fs::remove_dir_all(&tmp));
+}
