@@ -317,3 +317,60 @@ async fn test_spawn_publishes_completion() {
         other => panic!("expected Completed, got {other:?}"),
     }
 }
+
+/// A child drains its bus inbox at each turn boundary: a text the parent
+/// sent to the child's inbox lands as a MidTurnInput event before the next
+/// model call. The mpsc inbox is point-to-point, so the message queued
+/// after spawn + before run is drained at turn 2 — no race.
+#[tokio::test]
+async fn test_inbox_drained_at_boundary() {
+    use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage};
+    use houyicoder_async::bus::MessageBus;
+    use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
+
+    let bus = Arc::new(AgentBus::new());
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let turn1 = CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "c1".into(),
+            name: "grep".into(),
+            input: serde_json::json!({}),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let turn2 = CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::new(vec![turn1, turn2]));
+    let mut req = req_at_depth(parent_sid, store.clone(), provider, 0);
+    req.bus = Some(bus.clone());
+    let handle = spawn_child(req).await.expect("spawn");
+    let child_id = handle.session.to_string();
+    // Parent steers the child before its second turn; the inbox is
+    // registered at spawn so this succeeds, and the drive loop drains it
+    // at the turn-2 boundary.
+    bus.send_inbox(
+        &child_id,
+        BusMessage::Inbox {
+            text: "steer here".into(),
+        },
+    )
+    .expect("inbox registered at spawn");
+    let _result = handle
+        .runner
+        .run(handle.session, "do the task".to_string())
+        .await;
+    let events = store.trajectory_snapshot(handle.session);
+    assert!(
+        events.iter().any(|e| matches!(&e.kind,
+                TurnEventKind::MidTurnInput { text } if text == "steer here")),
+        "inbox text drained at the turn boundary as a MidTurnInput event"
+    );
+}

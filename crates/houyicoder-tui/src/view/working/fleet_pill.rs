@@ -24,7 +24,11 @@ const MAX_VISIBLE: usize = 3;
 /// fleet is empty so the pill vanishes and the input box sits right under
 /// the transcript.
 pub fn height(app: &App) -> u16 {
-    app.fleet.len().min(MAX_VISIBLE).min(u16::MAX as usize) as u16
+    app.fleet
+        .entries
+        .len()
+        .min(MAX_VISIBLE)
+        .min(u16::MAX as usize) as u16
 }
 
 /// Draw the pill into the reserved area. The caller reserves height only
@@ -37,18 +41,19 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 /// Build the visible window of pill rows. When the fleet is longer than
 /// MAX_VISIBLE the window slides so the selected row stays on screen.
 fn build_lines(app: &App) -> Vec<Line<'_>> {
-    let len = app.fleet.len();
+    let len = app.fleet.entries.len();
     let start = app
-        .fleet_selected
+        .fleet
+        .selected
         .map(|s| s.min(len.saturating_sub(MAX_VISIBLE)))
         .unwrap_or(0);
     let end = (start + MAX_VISIBLE).min(len);
-    app.fleet[start..end]
+    app.fleet.entries[start..end]
         .iter()
         .enumerate()
         .map(|(i, entry)| {
             let abs_idx = start + i;
-            build_row(entry, abs_idx == app.fleet_selected.unwrap_or(usize::MAX))
+            build_row(entry, abs_idx == app.fleet.selected.unwrap_or(usize::MAX))
         })
         .collect()
 }
@@ -145,10 +150,11 @@ mod tests {
     fn test_height_caps_at_three() {
         let mut app = composition::app();
         assert_eq!(height(&app), 0);
-        app.fleet.push(entry("a", "explore", 1, 10, "grep"));
+        app.fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
         assert_eq!(height(&app), 1);
         for i in 0..5 {
             app.fleet
+                .entries
                 .push(entry(&format!("b{i}"), "plan", 1, 10, "read"));
         }
         assert_eq!(height(&app), 3);

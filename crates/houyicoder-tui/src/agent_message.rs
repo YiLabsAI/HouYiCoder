@@ -24,6 +24,15 @@ pub struct FleetEntry {
     pub completed: Option<String>,
 }
 
+/// The footer fleet state: the child snapshots plus the Shift-arrow
+/// selection index. Grouped so the pill reads one field and the
+/// struct-fields ratchet counts the pair as one App field, not two.
+#[derive(Default)]
+pub struct FleetState {
+    pub entries: Vec<FleetEntry>,
+    pub selected: Option<usize>,
+}
+
 /// One message shipped from the client-driver task back to the TUI event
 /// loop. The driver is a stateless translator: each durable frame the server
 /// ships becomes a Frame message the event loop pushes into its own history

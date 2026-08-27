@@ -750,7 +750,7 @@ fn fleet_app(n: usize) -> App {
     app.screen = Screen::Working;
     app.viewport = ViewportMode::Working;
     for i in 0..n {
-        app.fleet.push(crate::agent_message::FleetEntry {
+        app.fleet.entries.push(crate::agent_message::FleetEntry {
             agent_id: format!("child-{i}"),
             subagent_type: "explore".into(),
             turn: 1,
@@ -768,16 +768,16 @@ fn fleet_app(n: usize) -> App {
 #[test]
 fn test_shift_arrow_moves_fleet() {
     let mut app = fleet_app(3);
-    assert!(app.fleet_selected.is_none());
+    assert!(app.fleet.selected.is_none());
     handle_working(&mut app, shift_key(KeyCode::Down));
-    assert_eq!(app.fleet_selected, Some(1));
+    assert_eq!(app.fleet.selected, Some(1));
     handle_working(&mut app, shift_key(KeyCode::Up));
-    assert_eq!(app.fleet_selected, Some(0));
+    assert_eq!(app.fleet.selected, Some(0));
     handle_working(&mut app, shift_key(KeyCode::Up));
-    assert_eq!(app.fleet_selected, Some(0), "clamps at top, no wrap");
+    assert_eq!(app.fleet.selected, Some(0), "clamps at top, no wrap");
     // A Shift+non-arrow key is not consumed: selection stays put.
     handle_working(&mut app, shift_key(KeyCode::Char('x')));
-    assert_eq!(app.fleet_selected, Some(0));
+    assert_eq!(app.fleet.selected, Some(0));
 }
 
 /// Rendering a populated fleet paints one pill row per child, each carrying
@@ -809,7 +809,7 @@ fn test_enter_fleet_drills_teammate() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    app.fleet.push(crate::agent_message::FleetEntry {
+    app.fleet.entries.push(crate::agent_message::FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         turn: 1,
@@ -818,7 +818,7 @@ fn test_enter_fleet_drills_teammate() {
         last_activity: None,
         completed: None,
     });
-    app.fleet_selected = Some(0);
+    app.fleet.selected = Some(0);
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(
         app.teammate_view.is_some(),

@@ -72,7 +72,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     }
     // Shift+Up/Down move the footer-pill fleet selection before input
     // handling so it works even while the input box has focus.
-    if fleet::fleet_shift_selected(app.viewport, app.fleet.len(), &mut app.fleet_selected, k) {
+    if fleet::fleet_shift_selected(&mut app.fleet, app.viewport, k) {
         return;
     }
     if app.viewport == ViewportMode::Working && app.queue_view_open && handle_queue_overlay(app, k)

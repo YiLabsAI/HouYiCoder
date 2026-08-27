@@ -438,10 +438,8 @@ pub struct App {
     /// Drilled-in teammate transcript; when Some, active_transcript swaps to
     /// the child's turns with a banner. Enter opens, Esc closes.
     pub teammate_view: Option<crate::records::TeammateView>,
-    /// Running-agent fleet for the status footer; one entry per spawned child.
-    pub fleet: Vec<crate::agent_message::FleetEntry>,
-    /// Index into fleet highlighted by Shift-arrow; Enter drills into it.
-    pub fleet_selected: Option<usize>,
+    /// Footer fleet state: the child snapshots + the Shift-arrow selection.
+    pub fleet: crate::agent_message::FleetState,
     /// Verbose render: force results, reasoning, and fold groups expanded
     /// with untruncated chips. Set in the search view, cleared on exit.
     pub verbose: bool,

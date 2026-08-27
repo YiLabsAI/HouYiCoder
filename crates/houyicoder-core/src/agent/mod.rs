@@ -121,6 +121,15 @@ pub struct Runner {
     /// path; the runner knows nothing about the host's types. None in tests and
     /// the pure-stub path ⇒ streaming still works, just with no live preview.
     live: Option<LiveSink>,
+    /// Bus inbox receiver for a spawned child: the parent publishes
+    /// BusMessage::Inbox texts and the drive loop drains them at each turn
+    /// boundary, appending each as a user message before the next model
+    /// call. None for the top-level runner (no bus steering).
+    inbox: std::sync::Mutex<
+        Option<
+            tokio::sync::mpsc::UnboundedReceiver<crate::agent::multi_agent::bus_types::BusMessage>,
+        >,
+    >,
     /// Startup warnings (bad settings fields, network policy typos) queued
     /// for the host to surface as initial transcript system lines. The
     /// composition root collects these during build; the host drains them at
@@ -475,14 +484,22 @@ impl Runner {
                         let mut q = self.queued_input.lock().expect("queued_input lock");
                         q.drain(..).collect()
                     };
-                    let had_pending = !pending_user.is_empty();
-                    if had_pending {
+                    // Bus inbox: drain texts the parent steered into this
+                    // child since the last turn. These skip consumed_input
+                    // (no host frontend copy to reconcile) but append through
+                    // the same path and share the memory recall below.
+                    let inbox_pending = self.drain_inbox();
+                    let had_pending = !pending_user.is_empty() || !inbox_pending.is_empty();
+                    if !pending_user.is_empty() {
                         self.consumed_input
                             .lock()
                             .expect("consumed_input lock")
                             .extend(pending_user.iter().cloned());
                     }
                     for msg in pending_user {
+                        self.append_mid_turn_input(session, msg).await?;
+                    }
+                    for msg in inbox_pending {
                         self.append_mid_turn_input(session, msg).await?;
                     }
                     // Recall memory for the queued interjection's query too

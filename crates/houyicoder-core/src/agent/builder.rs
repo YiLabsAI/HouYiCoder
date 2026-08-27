@@ -78,6 +78,17 @@ impl Runner {
         self.live = Some(sink);
     }
 
+    /// Install the bus inbox receiver for a spawned child. Call before the
+    /// runner is shared (Arc-ed), alongside set_live_sink. The drive loop
+    /// drains this at each turn boundary, appending Inbox texts as user
+    /// messages so a parent can steer a running child mid-task.
+    pub fn set_inbox(
+        &mut self,
+        rx: tokio::sync::mpsc::UnboundedReceiver<crate::agent::multi_agent::bus_types::BusMessage>,
+    ) {
+        *self.inbox.lock().expect("inbox lock") = Some(rx);
+    }
+
     /// Clone the installed live sink, if any. Lets the composition root share
     /// the runner's sink with collaborators built before the runner (the
     /// worktree controller) without a second channel.

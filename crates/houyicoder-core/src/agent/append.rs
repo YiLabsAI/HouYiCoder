@@ -98,6 +98,23 @@ impl Runner {
         Ok(())
     }
 
+    /// Drain the bus inbox receiver (a spawned child's steering channel)
+    /// into the texts the drive loop appends as user messages this turn.
+    /// Empty for the top-level runner, which has no inbox. Non-blocking.
+    pub(crate) fn drain_inbox(&self) -> Vec<String> {
+        let mut guard = self.inbox.lock().expect("inbox lock");
+        let Some(rx) = guard.as_mut() else {
+            return Vec::new();
+        };
+        let mut acc = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let crate::agent::multi_agent::bus_types::BusMessage::Inbox { text } = msg {
+                acc.push(text);
+            }
+        }
+        acc
+    }
+
     /// Append a queued interjection: a user message the human queued while a
     /// run was in flight, drained + appended at the next turn boundary. The
     /// model-input projection wraps it with a framing note so the model reads

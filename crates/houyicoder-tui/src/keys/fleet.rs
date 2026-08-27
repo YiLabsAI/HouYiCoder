@@ -1,30 +1,31 @@
 //! Footer-pill fleet selection keys: Shift+Up/Down move the highlighted
-//! row. The dispatcher takes disjoint field refs rather than &mut App so it
-//! does not add a God-struct broad-access point. Plain arrows fall through
-//! to input cursor-edit.
+//! row. The dispatcher takes &mut FleetState (not &mut App) so it does not
+//! add a God-struct broad-access point. Plain arrows fall through to input
+//! cursor-edit.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::agent_message::FleetState;
 use crate::state::{App, ViewportMode};
 
 /// The selected child's session id, if a fleet row is highlighted. Resolves
 /// Enter-on-fleet: the pill selection takes priority over the cursor's
 /// Subagent line when both could drill in.
 pub(super) fn selected_fleet_sid(app: &App) -> Option<String> {
-    app.fleet_selected
-        .and_then(|i| app.fleet.get(i).map(|e| e.agent_id.clone()))
+    app.fleet
+        .selected
+        .and_then(|i| app.fleet.entries.get(i).map(|e| e.agent_id.clone()))
 }
 
 /// Shift+Up/Down move the fleet selection. Returns true when the key was
 /// consumed so handle_working returns early.
 pub(super) fn fleet_shift_selected(
+    fleet: &mut FleetState,
     viewport: ViewportMode,
-    fleet_len: usize,
-    selected: &mut Option<usize>,
     k: KeyEvent,
 ) -> bool {
     if viewport != ViewportMode::Working
-        || fleet_len == 0
+        || fleet.entries.is_empty()
         || !k.modifiers.contains(KeyModifiers::SHIFT)
     {
         return false;
@@ -34,7 +35,7 @@ pub(super) fn fleet_shift_selected(
         KeyCode::Down => 1,
         _ => return false,
     };
-    *selected = Some(next_selection(*selected, fleet_len, delta));
+    fleet.selected = Some(next_selection(fleet.selected, fleet.entries.len(), delta));
     true
 }
 

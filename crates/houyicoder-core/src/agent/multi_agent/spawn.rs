@@ -163,7 +163,18 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     // TurnBoundary onto the child's progress topic. agent_id is the child
     // session id spawn minted above.
     if let Some(bus) = bus {
-        runner.set_live_sink(super::bus_sink::bus_live_sink(bus, child_sid.to_string()));
+        use houyicoder_async::bus::MessageBus;
+        runner.set_live_sink(super::bus_sink::bus_live_sink(
+            bus.clone(),
+            child_sid.to_string(),
+        ));
+        // Register a point-to-point inbox so the parent can steer this
+        // child mid-task: the drive loop drains the receiver at each turn
+        // boundary, appending each Inbox text as a user message. The bus
+        // routes send_inbox calls to the registered sender.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<super::bus_types::BusMessage>();
+        bus.register_inbox(&child_sid.to_string(), tx);
+        runner.set_inbox(rx);
     }
     let runner = Arc::new(runner);
     // Children run at the lowest effort tier: a fan-out of sub-agents must

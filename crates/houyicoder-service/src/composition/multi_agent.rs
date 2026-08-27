@@ -156,6 +156,15 @@ fn announce_spawn(bus: Option<&Arc<AgentBus>>, child_id: &str, subagent_type: &s
     }
 }
 
+/// Close a child's inbox after its run so a parent's send_inbox errors
+/// rather than queueing into a dead receiver. Mirrors announce_spawn.
+fn close_child_inbox(bus: Option<&Arc<AgentBus>>, child_id: &str) {
+    use houyicoder_async::bus::MessageBus;
+    if let Some(bus) = bus {
+        bus.unregister_inbox(child_id);
+    }
+}
+
 async fn run_sync_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
@@ -232,6 +241,9 @@ async fn run_sync_spawn(
     if let (Some(cw), Some(ctrl)) = (handle.worktree, this.worktree_controller.as_ref()) {
         drop(ctrl.cleanup_child(cw));
     }
+    // Close the child's inbox so the parent gets a send_inbox error rather
+    // than queueing into a dead receiver.
+    close_child_inbox(this.bus.as_ref(), &child_str);
     // The child log holds the partial assistant text a non-final terminal
     // (max_turns, interrupted) or a failed run leaves behind; surface that
     // instead of an empty summary so the parent sees what the child did.
