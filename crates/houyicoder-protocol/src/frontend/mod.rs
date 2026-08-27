@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub mod compact;
 pub mod context;
 pub mod debug;
+pub mod event_kind;
 pub mod evidence;
 pub mod hooks;
 pub mod memory;
@@ -22,6 +23,7 @@ pub mod trajectory;
 pub mod verdict;
 pub use compact::*;
 pub use context::*;
+pub use event_kind::{FrontendEvent, FrontendEventKind};
 pub use evidence::*;
 pub use memory::*;
 pub use permission::*;
@@ -695,104 +697,4 @@ pub enum LoginMode {
     Sso,
     ApiKey,
     Local,
-}
-
-/// daemon -> frontend events (streaming notifications). Dedup by event id so
-/// multi-agent output never duplicates on screen: several agents streaming at
-/// once can deliver the same event twice, and the id is what makes the second
-/// one droppable.
-#[derive(Debug, Clone)]
-pub struct FrontendEvent {
-    /// Unique event id; the frontend dedups on this.
-    pub id: String,
-    pub kind: FrontendEventKind,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum FrontendEventKind {
-    Message {
-        delta: String,
-    },
-    Diff {
-        path: String,
-        patch: String,
-    },
-    ToolProgress {
-        name: String,
-        status: String,
-    },
-    PermissionAsk {
-        reason: String,
-    },
-    /// A multi-agent fleet event (finding / verdict / progress). Routed via
-    /// the A2A bus; deduped by id so no duplicate output.
-    AgentEvent {
-        topic: String,
-        summary: String,
-    },
-    Metrics {
-        tokens: u64,
-        cache_hit_ratio: f32,
-    },
-    /// Spec/plan artifact produced by the guided flow.
-    Artifact {
-        kind: String,
-        id: String,
-    },
-    /// Live spec-vs-impl divergence for one clause (interactive spec strip). status is one of
-    /// unimplemented / partial / satisfied (stub string until typed).
-    SpecImplDivergence {
-        clause_id: String,
-        status: String,
-    },
-    /// A review finding arrived from the multi-agent adversarial review and is
-    /// awaiting human sign-off (review-node console).
-    FindingArrived {
-        finding_id: String,
-    },
-    /// One ACP session/update notification, the typed form of a turn event
-    /// the base protocol has a standard variant for (agent / user / thought
-    /// message chunks, tool calls, tool-call updates). The service projects
-    /// the engine turn event to this wire type at the boundary; the frontend
-    /// renders the turn stream without importing engine types. Replaces the
-    /// prior opaque-JSON TurnEvent variant: the wire now carries a typed
-    /// shape the cross-decode fixture gates against that crate.
-    SessionUpdate {
-        update: session_update::SessionUpdate,
-    },
-    /// An acpx/* extension notification: a turn-event kind the base protocol
-    /// has no standard variant for (compaction boundary, summary, permission
-    /// decision, meta user nudge), or a token-level LlmEvent the provider
-    /// streams. The method string travels on the wire (the base ext_*
-    /// mechanism is string-keyed); the typed AcpxMethod lives in
-    /// crate::acpx so the string never leaks past the adapter boundary.
-    Acpx {
-        notification: crate::acpx::AcpxNotification,
-    },
-    /// The texts the runner drained from its mid-turn injection queue this
-    /// run (Path A consumption). Sent at run end so the frontend can remove
-    /// them from its queue mirror — a consumed message is no longer pending.
-    /// Reliable (durable, sent once per run before the run outcome response)
-    /// so the mirror never strands a consumed item + never double-spawns it.
-    QueueConsumed {
-        texts: Vec<String>,
-    },
-    /// A background memory task (extract or dream) wrote the given count of
-    /// entries this pass. Fired once per pass on completion, after the run
-    /// ended, so the user sees a saved/improved notice without opening the
-    /// memory pane. Best-effort (try_send on the bounded channel; a full
-    /// channel drops the notice — the data is on disk either way).
-    MemorySaved {
-        count: u32,
-        kind: memory::MemorySavedKind,
-    },
-    /// A runtime notice the agent loop wants surfaced to the user as a system
-    /// line (not a delta, not a tool frame). Carries pre-rendered text so the
-    /// host renders it verbatim. The agent loop fires it when it detects a
-    /// condition the user can act on but the loop cannot self-heal (e.g. a
-    /// provider rejecting an over-long request without naming its limit).
-    SystemLine {
-        text: String,
-    },
 }
