@@ -33,6 +33,7 @@ pub(super) fn build_bundle_for_resume_sid(
         resumed.assembled.append_notify,
         true,
         resumed.assembled.worktree_controller,
+        resumed.assembled.bus,
     ))
 }
 
@@ -63,5 +64,6 @@ pub(super) fn build_bundle_for_fork(
         resumed.assembled.append_notify,
         true,
         resumed.assembled.worktree_controller,
+        resumed.assembled.bus,
     ))
 }

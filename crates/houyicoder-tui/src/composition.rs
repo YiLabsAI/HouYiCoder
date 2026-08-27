@@ -315,6 +315,7 @@ pub fn build_app_for_test(project: Option<String>) -> App {
         bundle.session,
         bundle.gate,
         bundle.append_notify,
+        bundle.bus,
     );
     drop(runner); // server owns the runner; the TUI holds no engine handle.
     build_app(RunnerBundle {
@@ -347,9 +348,10 @@ pub fn pair_inproc_server(
     session: SessionId,
     gate: Arc<DefaultModeGate>,
     append_notify: Arc<tokio::sync::Notify>,
+    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 ) -> (Arc<Runner>, Client, Vec<String>) {
     let (runner, client, _serve, warnings) =
-        pair_inproc_server_tracked(runner, session, gate, append_notify);
+        pair_inproc_server_tracked(runner, session, gate, append_notify, bus);
     (runner, client, warnings)
 }
 
@@ -364,6 +366,7 @@ pub fn pair_inproc_server_tracked(
     session: SessionId,
     gate: Arc<DefaultModeGate>,
     append_notify: Arc<tokio::sync::Notify>,
+    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 ) -> (
     Arc<Runner>,
     Client,
@@ -374,6 +377,14 @@ pub fn pair_inproc_server_tracked(
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
     let next_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     houyicoder_service::server::install_live_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
+    // Fleet projector: translate bus child status into AgentStatus wire
+    // frames so the TUI footer renders without touching the engine bus.
+    houyicoder_service::composition::fleet_projector::spawn(
+        bus,
+        s2c_tx.clone(),
+        next_seq.clone(),
+        shared_runtime().handle().clone(),
+    );
     // Drain startup warnings synchronously before the runner is shared so the
     // host can push them as initial transcript system lines — no async-sink
     // race with later command output or test assertions.

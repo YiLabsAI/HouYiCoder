@@ -58,7 +58,7 @@ pub(super) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolReg
     let gate = Arc::new(houyicoder_permission::DefaultModeGate::new());
     let notify = std::sync::Arc::new(tokio::sync::Notify::new());
     let (runner, client, startup_warnings) =
-        composition::pair_inproc_server(runner, session, gate, notify);
+        composition::pair_inproc_server(runner, session, gate, notify, None);
     drop(runner); // server owns the runner; the TUI holds no engine handle.
     composition::build_app(composition::RunnerBundle {
         client,

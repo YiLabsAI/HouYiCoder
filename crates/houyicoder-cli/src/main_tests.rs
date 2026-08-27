@@ -274,6 +274,7 @@ fn test_pair_completes_handshake() {
         bundle.append_notify,
         None,
         None,
+        bundle.bus,
     );
     // The runner Arc is shared: the server task and the caller hold the
     // same allocation.

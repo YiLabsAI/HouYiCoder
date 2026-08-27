@@ -523,6 +523,7 @@ fn build_bundle(
         bundle.append_notify,
         false,
         bundle.worktree_controller,
+        bundle.bus,
     )
 }
 
@@ -558,6 +559,7 @@ fn build_bundle_for_resume(
         resumed.assembled.append_notify,
         true,
         resumed.assembled.worktree_controller,
+        resumed.assembled.bus,
     ))
 }
 
@@ -577,6 +579,7 @@ pub(crate) fn assemble_bundle(
     append_notify: Arc<tokio::sync::Notify>,
     skip_login: bool,
     worktree_controller: Option<Arc<houyicoder_core::agent::WorktreeController>>,
+    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 ) -> houyicoder_tui::composition::RunnerBundle {
     // Grab the SessionLog BEFORE the runner moves into the server task — the
     // trajectory bridge projects it for the /trajectory pane, and the session
@@ -620,6 +623,7 @@ pub(crate) fn assemble_bundle(
         append_notify,
         Some(meta_store.clone()),
         worktree_controller,
+        bus,
     );
     // The server task owns the runner + the permission gate; the TUI holds
     // only the protocol client.
@@ -653,6 +657,7 @@ pub(crate) fn assemble_bundle(
 /// share one futures mpsc channel pair. The server is spawned on the shared
 /// runtime the TUI owns; the client is returned un-connected (the TUI driver
 /// task performs the Hello handshake on spawn).
+#[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
 fn pair_inproc_server(
     mut runner: Runner,
     session: SessionId,
@@ -661,11 +666,20 @@ fn pair_inproc_server(
     append_notify: Arc<tokio::sync::Notify>,
     meta_store: Option<Arc<dyn houyicoder_context::SessionMetaStore>>,
     worktree_controller: Option<Arc<houyicoder_core::agent::WorktreeController>>,
+    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 ) -> (Arc<Runner>, Client, Vec<String>) {
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
     let next_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     houyicoder_service::server::install_live_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
+    // Fleet projector: bridge bus child status to AgentStatus wire frames so
+    // the TUI footer renders without a direct engine-bus dependency.
+    houyicoder_service::composition::fleet_projector::spawn(
+        bus,
+        s2c_tx.clone(),
+        next_seq.clone(),
+        tokio::runtime::Handle::current(),
+    );
     // Share the runner's live sink with the worktree controller so the
     // main-branch-moved alert surfaces as a system line the user sees, not
     // just a diagnostic log entry. The controller was built before the
