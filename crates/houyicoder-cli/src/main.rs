@@ -678,7 +678,9 @@ fn pair_inproc_server(
         bus,
         s2c_tx.clone(),
         next_seq.clone(),
-        tokio::runtime::Handle::current(),
+        houyicoder_tui::composition::shared_runtime()
+            .handle()
+            .clone(),
     );
     // Share the runner's live sink with the worktree controller so the
     // main-branch-moved alert surfaces as a system line the user sees, not
