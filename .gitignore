@@ -66,6 +66,7 @@ scripts/check_acceptance_anchors.py
 scripts/check_journey_coverage.py
 scripts/hook_sdd_naming.py
 scripts/hook_doc_sync.py
+scripts/hook_commit_gate.py
 scripts/rules/sdd.py
 .commit-lint-words
 
