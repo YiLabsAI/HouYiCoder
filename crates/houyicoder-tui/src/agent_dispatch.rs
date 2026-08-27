@@ -367,6 +367,20 @@ impl App {
                 last_activity,
                 completed,
             } => {
+                // Auto-exit the teammate view only when the viewed child is
+                // gone or broken (killed/failed). A turn-limit, budget, or
+                // normal completion leaves partial output worth reading, so
+                // the view stays — the user exits with Esc.
+                if self
+                    .teammate_view
+                    .as_ref()
+                    .is_some_and(|v| v.child_sid == agent_id)
+                    && completed
+                        .as_deref()
+                        .is_some_and(|s| matches!(s, "killed" | "failed"))
+                {
+                    self.exit_teammate_view();
+                }
                 if let Some(entry) = self
                     .fleet
                     .entries

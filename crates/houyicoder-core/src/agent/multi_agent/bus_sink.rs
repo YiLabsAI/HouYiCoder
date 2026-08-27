@@ -17,7 +17,7 @@ fn child_status_of(status: &str) -> ChildStatus {
         "completed" | "handoff" => ChildStatus::Completed,
         "failed" | "verify_failed" => ChildStatus::Failed,
         "interrupted" => ChildStatus::Killed,
-        "max_turns" => ChildStatus::DeadlineExceeded,
+        "max_turns" => ChildStatus::TurnLimit,
         _ => ChildStatus::Failed,
     }
 }
@@ -176,6 +176,26 @@ mod tests {
         match rx.try_recv().expect("completion received") {
             BusMessage::Completed { status, .. } => {
                 assert_eq!(status, ChildStatus::Failed);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// A max-turns run maps to ChildStatus::TurnLimit (partial work, not a
+    /// timeout). Distinct from Killed (external cancel) so a parent can
+    /// decide retry-vs-review on the right signal.
+    #[test]
+    fn test_sink_completion_turn_limit() {
+        let bus = AgentBus::new();
+        let mut rx = bus.subscribe(&completed_topic("child-6"));
+        let sink = bus_live_sink(Arc::new(bus), "child-6".into());
+        sink(&LiveEvent::RunCompleted {
+            status: "max_turns".into(),
+            summary: "partial findings".into(),
+        });
+        match rx.try_recv().expect("completion received") {
+            BusMessage::Completed { status, .. } => {
+                assert_eq!(status, ChildStatus::TurnLimit);
             }
             other => panic!("expected Completed, got {other:?}"),
         }

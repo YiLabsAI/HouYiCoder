@@ -110,7 +110,7 @@ fn status_str(status: &ChildStatus) -> String {
         ChildStatus::Completed => "completed",
         ChildStatus::Killed => "killed",
         ChildStatus::Failed => "failed",
-        ChildStatus::DeadlineExceeded => "deadline",
+        ChildStatus::TurnLimit => "turn_limit",
         ChildStatus::BudgetExhausted => "budget",
     }
     .to_string()

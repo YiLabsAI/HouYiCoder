@@ -40,7 +40,10 @@ pub enum ChildStatus {
     Completed,
     Killed,
     Failed,
-    DeadlineExceeded,
+    /// The child hit its max-turns cap (TurnLimit): it did partial work then
+    /// stopped at the turn limit. Distinct from Deadline (a wall-clock
+    /// timeout, a future terminal) and from Killed (an external cancel).
+    TurnLimit,
     BudgetExhausted,
 }
 

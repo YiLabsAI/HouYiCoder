@@ -1526,3 +1526,75 @@ fn test_agent_status_updates_fleet() {
     assert_eq!(app.fleet.entries[0].turn, 3);
     assert_eq!(app.fleet.entries[0].completed.as_deref(), Some("completed"));
 }
+
+/// A status for the child in the teammate view auto-exits the view on an
+/// abnormal terminal (killed/failed/deadline); a normal completion leaves
+/// the view open so the user can read the full transcript. A status for a
+/// different child never touches the view.
+#[test]
+fn test_teammate_view_auto_exit() {
+    use crate::records::TeammateView;
+    use crate::run_control::AgentMessage;
+    let mut app = crate::composition::app();
+    app.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    // A normal completion: the view stays.
+    app.handle_agent_message(AgentMessage::AgentStatus {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 2,
+        tokens: 200,
+        tool_uses: 1,
+        last_activity: None,
+        completed: Some("completed".into()),
+    });
+    assert!(app.teammate_view.is_some(), "completed stays for review");
+    // A failure: the view auto-exits back to the parent.
+    app.handle_agent_message(AgentMessage::AgentStatus {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 2,
+        tokens: 200,
+        tool_uses: 1,
+        last_activity: None,
+        completed: Some("failed".into()),
+    });
+    assert!(
+        app.teammate_view.is_none(),
+        "abnormal terminal auto-exits the teammate view"
+    );
+    // A status for a different child does not touch the view.
+    app.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    app.handle_agent_message(AgentMessage::AgentStatus {
+        agent_id: "c2".into(),
+        subagent_type: "plan".into(),
+        turn: 1,
+        tokens: 10,
+        tool_uses: 0,
+        last_activity: None,
+        completed: Some("failed".into()),
+    });
+    assert!(
+        app.teammate_view.is_some(),
+        "a different child status does not exit the view"
+    );
+    // A turn-limit (max_turns hit): partial output, the view stays for review.
+    app.handle_agent_message(AgentMessage::AgentStatus {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 9,
+        tokens: 900,
+        tool_uses: 4,
+        last_activity: None,
+        completed: Some("turn_limit".into()),
+    });
+    assert!(
+        app.teammate_view.is_some(),
+        "turn-limit leaves the view for partial-output review"
+    );
+}
