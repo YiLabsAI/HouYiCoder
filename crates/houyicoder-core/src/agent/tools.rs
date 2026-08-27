@@ -23,6 +23,7 @@ pub mod memory_delete;
 pub mod memory_promote_demote;
 pub mod memory_show;
 pub mod path_util;
+pub mod skill;
 pub mod subprocess_util;
 pub mod todo;
 pub mod webfetch;

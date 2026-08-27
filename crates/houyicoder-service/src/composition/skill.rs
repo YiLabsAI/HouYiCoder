@@ -1,0 +1,194 @@
+//! The concrete SkillRegistry: discovers SKILL.md files at startup via
+//! the skill data crate and serves the engine-facing port. Built at the
+//! composition root (the single site that constructs concrete impls) and
+//! injected into the Skill tool as an Arc<dyn SkillRegistry>. Body
+//! preparation delegates to the skill crate's pure functions; this impl
+//! only resolves the name, checks the model-invocation gate, and threads
+//! the session id into the substitution context.
+
+use std::path::Path;
+
+use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry};
+use houyicoder_skill::definition::SkillDefinition;
+use houyicoder_skill::{discover, invoke};
+
+/// A registry backed by filesystem discovery. Scans the configured paths
+/// once at construction; the set is fixed for the session (a skill added
+/// mid-session surfaces on the next run, mirroring the external tool
+/// server contract). Skills are sorted by precedence at discovery time,
+/// so a name lookup returns the highest-precedence match.
+pub struct SkillRegistryImpl {
+    skills: Vec<SkillDefinition>,
+}
+
+impl SkillRegistryImpl {
+    /// Discover skills from the filesystem, anchored at the given cwd
+    /// for the project-level walk. The managed and user levels are
+    /// scanned regardless of cwd.
+    pub fn discover(cwd: Option<&Path>) -> Self {
+        Self {
+            skills: discover::discover_skills(cwd),
+        }
+    }
+}
+
+impl SkillRegistry for SkillRegistryImpl {
+    fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+        self.skills
+            .iter()
+            .filter(|s| !s.disable_model_invocation)
+            .map(|s| SkillDescriptor {
+                name: s.name.clone(),
+                description: s.description.clone(),
+                when_to_use: s.when_to_use.clone(),
+                argument_hint: s.argument_hint.clone(),
+                disable_model_invocation: false,
+                user_invocable: s.user_invocable,
+                body_token_estimate: s.body_token_estimate(),
+            })
+            .collect()
+    }
+
+    fn prepare_body(
+        &self,
+        name: &str,
+        args: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<String, SkillError> {
+        let def = self
+            .skills
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| SkillError::NotFound(name.to_string()))?;
+        if def.disable_model_invocation {
+            return Err(SkillError::NotModelInvocable(name.to_string()));
+        }
+        let ctx = invoke::SubstitutionContext {
+            skill_dir: Some(def.skill_dir.as_path()),
+            session_id,
+            plugin_root: None,
+        };
+        invoke::prepare_body(def, args, &ctx).map_err(|e| SkillError::BodyLoad(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_skill(dir: &Path, name: &str, body: &str) {
+        let skill_dir = dir.join(".houyicoder").join("skills").join(name);
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {name} skill\n---\n{body}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_list_filters_disabled() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-list-{}", std::process::id()));
+        write_skill(&tmp, "on", "on body");
+        let off_dir = tmp.join(".houyicoder").join("skills").join("off");
+        fs::create_dir_all(&off_dir).unwrap();
+        fs::write(
+            off_dir.join("SKILL.md"),
+            "---\nname: off\ndescription: off skill\ndisable-model-invocation: true\n---\noff body\n",
+        )
+        .unwrap();
+        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let listing = reg.list_model_invocable();
+        let names: Vec<&str> = listing.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"on"), "model-invocable skill listed");
+        assert!(
+            !names.contains(&"off"),
+            "disable-model-invocation skill filtered out"
+        );
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    #[test]
+    fn test_prepare_body_returns_body() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-body-{}", std::process::id()));
+        write_skill(&tmp, "commit", "run git status");
+        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let body = reg.prepare_body("commit", None, None).unwrap();
+        assert!(body.contains("run git status"), "body present: {body}");
+        assert!(
+            body.contains("Base directory for this skill"),
+            "base-dir header prepended: {body}"
+        );
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    #[test]
+    fn test_prepare_body_substitutes_args() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-args-{}", std::process::id()));
+        let skill_dir = tmp.join(".houyicoder").join("skills").join("echo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: echo\ndescription: echo args\n---\nargs: $ARGUMENTS\n",
+        )
+        .unwrap();
+        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let body = reg.prepare_body("echo", Some("hello world"), None).unwrap();
+        assert!(
+            body.contains("args: hello world"),
+            "args substituted: {body}"
+        );
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    #[test]
+    fn test_unknown_skill_not_found() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-nf-{}", std::process::id()));
+        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let err = reg.prepare_body("nope", None, None).unwrap_err();
+        match err {
+            SkillError::NotFound(n) => assert_eq!(n, "nope"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    #[test]
+    fn test_disabled_skill_rejected() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-dis-{}", std::process::id()));
+        let off_dir = tmp.join(".houyicoder").join("skills").join("off");
+        fs::create_dir_all(&off_dir).unwrap();
+        fs::write(
+            off_dir.join("SKILL.md"),
+            "---\nname: off\ndescription: off\ndisable-model-invocation: true\n---\nbody\n",
+        )
+        .unwrap();
+        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let err = reg.prepare_body("off", None, None).unwrap_err();
+        match err {
+            SkillError::NotModelInvocable(n) => assert_eq!(n, "off"),
+            other => panic!("expected NotModelInvocable, got {other:?}"),
+        }
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    #[test]
+    fn test_session_id_substituted() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-sid-{}", std::process::id()));
+        let skill_dir = tmp.join(".houyicoder").join("skills").join("sid");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: sid\ndescription: sid skill\n---\nsid: ${HOUYI_SESSION_ID}\n",
+        )
+        .unwrap();
+        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let body = reg.prepare_body("sid", None, Some("abc-123")).unwrap();
+        assert!(
+            body.contains("sid: abc-123"),
+            "session id substituted: {body}"
+        );
+        drop(fs::remove_dir_all(&tmp));
+    }
+}

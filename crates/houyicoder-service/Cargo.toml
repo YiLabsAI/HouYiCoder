@@ -28,6 +28,7 @@ houyicoder-permission = { path = "../houyicoder-permission" }
 houyicoder-provider = { path = "../houyicoder-provider" }
 houyicoder-sandbox = { path = "../houyicoder-sandbox" }
 houyicoder-resilience = { path = "../houyicoder-resilience" }
+houyicoder-skill = { path = "../houyicoder-skill" }
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt", "sync", "net", "io-util"] }
 serde = { version = "1", features = ["derive"] }

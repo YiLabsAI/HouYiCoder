@@ -1,11 +1,12 @@
-//! Skill system: discovery, parsing, progressive disclosure, invocation,
-//! and lifecycle for SKILL.md directory skills. Compatible with the
-//! community skill ecosystem and the AgentSkill open specification.
+//! Skill system: discovery, parsing, and body preparation for SKILL.md
+//! directory skills. Compatible with the community skill ecosystem and the
+//! AgentSkill open specification.
 //!
-//! Depends on api (ports: Tool, ToolCtx, SkillSourceProvider trait),
-//! context (TurnEventKind: SkillInvoked / SkillBody / SkillReturn),
-//! protocol (wire types: SkillListing via FrontendEventKind),
-//! async (PFut), session (SessionStore for SkillBody durable).
+//! This crate is a pure data-processing layer: it reads SKILL.md files from
+//! disk, parses the YAML frontmatter, discovers skills across the configured
+//! scan paths, and prepares the body text (argument + variable substitution)
+//! for invocation. It has no engine or runtime dependencies — the Tool
+//! implementation that calls into these functions lives in the engine layer.
 
 pub mod definition;
 pub mod discover;

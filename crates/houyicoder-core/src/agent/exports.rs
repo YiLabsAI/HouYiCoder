@@ -39,6 +39,7 @@ pub use super::tools::conversation_search::ConversationSearchTool;
 pub use super::tools::glob::GlobTool;
 pub use super::tools::grep::GrepTool;
 pub use super::tools::memory_add::MemoryAddTool;
+pub use super::tools::skill::SkillTool;
 pub use super::tools::todo::{TodoItem, TodoStatus, TodoWriteTool};
 pub use super::tools::webfetch::WebFetchTool;
 pub use super::tools::worktree_enter::EnterWorktreeTool;

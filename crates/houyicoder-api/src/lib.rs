@@ -18,5 +18,6 @@ pub mod progress;
 pub mod provider;
 pub mod sandbox;
 pub mod session;
+pub mod skill;
 pub mod spawn;
 pub mod tool;

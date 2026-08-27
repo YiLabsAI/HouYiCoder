@@ -18,6 +18,7 @@ pub mod multi_agent;
 mod resume;
 mod retention_notice;
 mod session_meta;
+mod skill;
 mod startup_warnings;
 mod worktree;
 
@@ -47,7 +48,7 @@ use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
     AgentTool, CommandHook, ConversationSearchTool, GitWorkspaceProbe, HookRegistry, HookSource,
-    HotPathReducer, LlmSummarizer, Runner, TodoWriteTool, ToolRegistry, parse_event,
+    HotPathReducer, LlmSummarizer, Runner, SkillTool, TodoWriteTool, ToolRegistry, parse_event,
 };
 use houyicoder_memory::{FileMetaStore, InMemoryBackend, InMemoryMetaStore, LocalFileBackend};
 use houyicoder_permission::{DefaultModeGate, ModeGate, RuleStore};
@@ -452,6 +453,14 @@ pub(crate) fn assemble(
     // reads.
     let conversation_search = ConversationSearchTool::new(store.clone(), recall_meter.clone());
     tools.register(Arc::new(conversation_search));
+    // The skill tool resolves skill names through the skill registry, which
+    // discovers SKILL.md files across the scan paths at startup. Not
+    // sandbox-backed (it reads skill files directly), so registered directly
+    // like the recall tool. The workspace anchors the project-level skill
+    // walk; managed and user levels are scanned regardless.
+    let skill_registry: Arc<dyn houyicoder_api::skill::SkillRegistry> =
+        Arc::new(skill::SkillRegistryImpl::discover(workspace.as_deref()));
+    tools.register(Arc::new(SkillTool::new(skill_registry)));
     // The agent tool delegates a sub-task to a spawned child. Like the recall
     // tool it is not sandbox-backed; it resolves the requested type against
     // the agent registry (built-ins) and goes through the ToolCtx spawn port

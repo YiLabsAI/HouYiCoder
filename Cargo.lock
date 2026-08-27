@@ -1415,6 +1415,7 @@ dependencies = [
  "houyicoder-resilience",
  "houyicoder-sandbox",
  "houyicoder-session",
+ "houyicoder-skill",
  "serde",
  "serde_json",
  "tokio",

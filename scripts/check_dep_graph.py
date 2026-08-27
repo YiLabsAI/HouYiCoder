@@ -97,6 +97,7 @@ WHITELIST: dict[str, set[str]] = {
         "houyicoder-permission",
         "houyicoder-sandbox",
         "houyicoder-provider",
+        "houyicoder-skill",
     },
     "houyicoder-client": {"houyicoder-protocol", "houyicoder-async"},
     "houyicoder-tui": {"houyicoder-client", "houyicoder-protocol"},
