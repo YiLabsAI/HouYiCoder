@@ -2,6 +2,7 @@
 //! response to a key. All actions are placeholders. The working surface
 //! dispatches to palette / approval / input handlers; the input handler also
 
+mod fleet;
 mod login;
 pub use login::{handle_console, handle_login};
 
@@ -67,6 +68,11 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
             app.queue_focus = 0;
             app.queue_view_open = true;
         }
+        return;
+    }
+    // Shift+Up/Down move the footer-pill fleet selection before input
+    // handling so it works even while the input box has focus.
+    if fleet::fleet_shift_selected(app.viewport, app.fleet.len(), &mut app.fleet_selected, k) {
         return;
     }
     if app.viewport == ViewportMode::Working && app.queue_view_open && handle_queue_overlay(app, k)
@@ -692,10 +698,16 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
                     | Pane::Resume
             ) =>
         {
-            // Empty-input Enter on a Subagent line drills into the teammate
-            // view; empty-input Enter is otherwise a no-op submit.
-            if app.input.is_empty() && app.teammate_view.is_none() && app.enter_teammate_view() {
-                return;
+            // Empty-input Enter drills into a teammate view: the pill
+            // selection takes priority, then the Subagent line at cursor.
+            if app.input.is_empty() && app.teammate_view.is_none() {
+                if let Some(sid) = fleet::selected_fleet_sid(app) {
+                    app.enter_teammate_view_for_sid(&sid, true);
+                    return;
+                }
+                if app.enter_teammate_view() {
+                    return;
+                }
             }
             app.submit_input()
         }

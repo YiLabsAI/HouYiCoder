@@ -25,11 +25,21 @@ impl App {
         let Some((child_sid, needs_fetch)) = self.subagent_target_at_cursor() else {
             return false;
         };
-        // Copy the child's subagent_type + summary + any already-loaded
-        // folded rows so the view renders immediately when the fold was
-        // expanded, and a banner + placeholder when not.
+        self.enter_teammate_view_for_sid(&child_sid, needs_fetch)
+    }
+
+    /// Enter the teammate view for an explicit child session id. Used by the
+    /// footer pill (Enter on a selected fleet row) where the target comes
+    /// from the agent id, not the transcript cursor. Mirrors the cursor
+    /// path: copy any already-loaded fold rows for an immediate render, and
+    /// fire the on-demand fetch when the child transcript is not local.
+    pub(crate) fn enter_teammate_view_for_sid(
+        &mut self,
+        child_sid: &str,
+        needs_fetch: bool,
+    ) -> bool {
         let mut view = TeammateView {
-            child_sid: child_sid.clone(),
+            child_sid: child_sid.to_string(),
             ..Default::default()
         };
         let mut fire_fetch = needs_fetch;
@@ -42,7 +52,7 @@ impl App {
                 folded_transcript,
                 color,
             } = line
-                && sid == &child_sid
+                && sid == child_sid
             {
                 view.subagent_type = subagent_type.clone();
                 view.prompt = prompt.clone();
@@ -60,7 +70,7 @@ impl App {
         if fire_fetch && let Some(req_id) = self.mint_request_id() {
             self.send_cmd(crate::run_control::ClientCommand::ChildTranscriptQuery {
                 req_id,
-                child_sid: houyicoder_protocol::frontend::SessionId(child_sid),
+                child_sid: houyicoder_protocol::frontend::SessionId(child_sid.to_string()),
             });
         }
         true

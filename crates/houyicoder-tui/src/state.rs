@@ -440,10 +440,10 @@ pub struct App {
     pub teammate_view: Option<crate::records::TeammateView>,
     /// Running-agent fleet for the status footer; one entry per spawned child.
     pub fleet: Vec<crate::agent_message::FleetEntry>,
-    /// Verbose render mode: force every tool result, reasoning block, and
-    /// fold group expanded, and render tool-call chips with the untruncated
-    /// invocation. Set when entering the search view (a snapshot transcript
-    /// browse), cleared on exit. The work-area transcript stays folded.
+    /// Index into fleet highlighted by Shift-arrow; Enter drills into it.
+    pub fleet_selected: Option<usize>,
+    /// Verbose render: force results, reasoning, and fold groups expanded
+    /// with untruncated chips. Set in the search view, cleared on exit.
     pub verbose: bool,
     /// Session counter minting a stable unique turn_id for each completed
     /// turn's ThoughtFor line (incremented at FinalOutput Done). Drives

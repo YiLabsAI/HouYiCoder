@@ -740,3 +740,93 @@ fn test_worktree_unknown_key_noop() {
         "unknown key does not open search"
     );
 }
+
+fn shift_key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::SHIFT)
+}
+
+fn fleet_app(n: usize) -> App {
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.viewport = ViewportMode::Working;
+    for i in 0..n {
+        app.fleet.push(crate::agent_message::FleetEntry {
+            agent_id: format!("child-{i}"),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+        });
+    }
+    app
+}
+
+/// Shift+Down on a populated fleet moves the selection off the implicit 0
+/// to row 1; Shift+Up clamps at the top.
+#[test]
+fn test_shift_arrow_moves_fleet() {
+    let mut app = fleet_app(3);
+    assert!(app.fleet_selected.is_none());
+    handle_working(&mut app, shift_key(KeyCode::Down));
+    assert_eq!(app.fleet_selected, Some(1));
+    handle_working(&mut app, shift_key(KeyCode::Up));
+    assert_eq!(app.fleet_selected, Some(0));
+    handle_working(&mut app, shift_key(KeyCode::Up));
+    assert_eq!(app.fleet_selected, Some(0), "clamps at top, no wrap");
+    // A Shift+non-arrow key is not consumed: selection stays put.
+    handle_working(&mut app, shift_key(KeyCode::Char('x')));
+    assert_eq!(app.fleet_selected, Some(0));
+}
+
+/// Rendering a populated fleet paints one pill row per child, each carrying
+/// the type + the verb inferred from its last tool.
+#[test]
+fn test_fleet_pill_renders_rows() {
+    let app = fleet_app(2);
+    let text = crate::test_support::render_text(&app, 80, 24);
+    assert!(text.contains("explore"), "pill shows the child type");
+    assert!(
+        text.contains("searching") || text.contains("thinking"),
+        "verb rendered"
+    );
+}
+
+/// Empty-input Enter on a selected fleet row drills into the child's
+/// teammate view via the agent id, not the transcript cursor.
+#[test]
+fn test_enter_fleet_drills_teammate() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = Screen::Working;
+    app.viewport = ViewportMode::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    app.fleet.push(crate::agent_message::FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 1,
+        tokens: 10,
+        tool_uses: 0,
+        last_activity: None,
+        completed: None,
+    });
+    app.fleet_selected = Some(0);
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(
+        app.teammate_view.is_some(),
+        "Enter on the selected fleet row opens the teammate view"
+    );
+    assert_eq!(
+        app.teammate_view.as_ref().unwrap().child_sid,
+        "c1",
+        "view targets the fleet agent id"
+    );
+}

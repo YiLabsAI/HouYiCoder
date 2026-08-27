@@ -23,6 +23,7 @@ use crate::view::{
 };
 
 mod flat_transcript;
+mod fleet_pill;
 mod live_rows;
 mod subagent_render;
 mod working_transcript;
@@ -135,6 +136,9 @@ fn draw_working(f: &mut Frame, app: &App) {
             input_bar::draw_inline_search(f, outer[i], app);
         }
     }
+    if let Some(i) = layout.slots.fleet {
+        fleet_pill::draw(f, outer[i], app);
+    }
     if !pane_hides_input {
         input_bar::draw_input(f, outer[layout.input_idx], app);
     }
@@ -195,6 +199,7 @@ struct LayoutSlots {
     approval: Option<usize>,
     ask: Option<usize>,
     overlay: Option<usize>,
+    fleet: Option<usize>,
     queue: Option<usize>,
 }
 
@@ -241,6 +246,13 @@ fn build_working_layout(app: &App, input_h: u16, queue_h: u16) -> WorkingLayout 
         constraints.push(Constraint::Length(10));
         overlay = Some(constraints.len() - 1);
     }
+    let fleet_h = fleet_pill::height(app);
+    let fleet = if fleet_h > 0 {
+        constraints.push(Constraint::Length(fleet_h));
+        Some(constraints.len() - 1)
+    } else {
+        None
+    };
     constraints.push(Constraint::Length(input_h));
     let input_idx = constraints.len() - 1;
     let queue = if queue_h > 0 {
@@ -259,6 +271,7 @@ fn build_working_layout(app: &App, input_h: u16, queue_h: u16) -> WorkingLayout 
             approval,
             ask,
             overlay,
+            fleet,
             queue,
         },
         transcript_idx,
