@@ -32,6 +32,16 @@ impl Runner {
         self.spawn_handle.as_ref()
     }
 
+    /// Route a steering text into a running child's inbox (the teammate-view
+    /// input path). Delegates to the spawn handle's bus; Err when no
+    /// multi-agent runtime is attached or the child has no inbox.
+    pub fn steer_child(&self, child_id: &str, text: String) -> Result<(), String> {
+        match self.spawn_handle.as_ref() {
+            Some(h) => h.send_to_child_inbox(child_id, text),
+            None => Err("no spawn handle wired".into()),
+        }
+    }
+
     /// Install the agent directory section the system prompt carries so the
     /// model can discover sub-agent types. Set once at the composition root.
     pub fn set_agent_directory(&self, section: String) {

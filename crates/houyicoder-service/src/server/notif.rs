@@ -91,7 +91,82 @@ impl Server {
                     self.runner.remove_input(text);
                 }
             }
+            "session/inject_child" => {
+                // Steering: route a user's text into a running child's inbox
+                // (the teammate-view input path). The child's drive loop drains
+                // it at the next turn boundary. Fire-and-forget; a missing
+                // multi-agent runtime or unregistered child logs + drops.
+                let Some(child_sid) = notif
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("childSid"))
+                    .and_then(|v| v.as_str())
+                else {
+                    return;
+                };
+                let text = notif
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("text"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if text.is_empty() {
+                    return;
+                }
+                if let Err(e) = self.runner.steer_child(child_sid, text) {
+                    tracing::warn!("inject_child: {e}");
+                }
+            }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use houyicoder_protocol::acp_wire::AcpNotification;
+    use std::sync::Arc;
+
+    fn server_no_runtime() -> Server {
+        let store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
+            houyicoder_memory::InMemoryBackend::new(),
+        )));
+        let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+            Arc::new(houyicoder_provider::FakeProvider::text("x"));
+        let runner = houyicoder_core::agent::Runner::with_shared_store(
+            store,
+            provider,
+            houyicoder_core::agent::ToolRegistry::new(),
+            houyicoder_core::agent::runner_config::RunnerConfig::default(),
+        );
+        Server::new(
+            Arc::new(runner),
+            houyicoder_context::SessionId::new(),
+            Arc::new(houyicoder_permission::DefaultModeGate::new()),
+        )
+    }
+
+    /// Without a multi-agent runtime the handler logs the Err + drops (no
+    /// panic, no reply). The runner has no spawn handle, so steer_child
+    /// returns Err — the no-bus path on a single-agent server.
+    #[tokio::test]
+    async fn test_inject_child_no_runtime() {
+        let server = server_no_runtime();
+        server.handle_session_notification(&AcpNotification::new(
+            "session/inject_child",
+            serde_json::json!({ "childSid": "c1", "text": "x" }),
+        ));
+    }
+
+    /// A missing childSid param is a silent no-op (no panic on unwrap).
+    #[tokio::test]
+    async fn test_inject_child_missing_sid() {
+        let server = server_no_runtime();
+        server.handle_session_notification(&AcpNotification::new(
+            "session/inject_child",
+            serde_json::json!({ "text": "x" }),
+        ));
     }
 }

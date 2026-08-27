@@ -376,6 +376,15 @@ async fn drive_client(
                         &text,
                     )));
                 }
+                Some(ClientCommand::InjectToChild { child_sid, text }) => {
+                    // Steering: route the text into a running child's inbox.
+                    // The server's bus delivers it; the child drains at its
+                    // next turn boundary. No reply; no parent turn starts.
+                    outbound.push_back(Outbound::Notification(inject_child_notification(
+                        &child_sid,
+                        &text,
+                    )));
+                }
                 Some(ClientCommand::QueueRemove { session_id, text }) => {
                     // A session/queue_remove notification: the server drops
                     // the first queued message whose text matches. No reply.
@@ -636,6 +645,19 @@ fn inject_notification(
     houyicoder_protocol::acp_wire::AcpNotification::new(
         "session/inject",
         serde_json::json!({ "sessionId": session_id.0, "text": text }),
+    )
+}
+
+/// Build a session/inject_child notification. Pure so the wire shape (the
+/// childSid + text the server's handle_session_notification reads) is
+/// unit-testable: a typo would make steering silently no-op.
+fn inject_child_notification(
+    child_sid: &str,
+    text: &str,
+) -> houyicoder_protocol::acp_wire::AcpNotification {
+    houyicoder_protocol::acp_wire::AcpNotification::new(
+        "session/inject_child",
+        serde_json::json!({ "childSid": child_sid, "text": text }),
     )
 }
 

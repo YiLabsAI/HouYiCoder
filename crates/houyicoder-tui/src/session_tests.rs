@@ -29,6 +29,21 @@ fn test_queue_remove_notif_shape() {
     assert_eq!(p.get("text").and_then(|v| v.as_str()), Some("stale item"));
 }
 
+/// The inject_child notification's method + params must match what the
+/// server reads to route a steering text into a child's inbox, else
+/// steering silently no-ops.
+#[test]
+fn test_inject_child_notif_shape() {
+    let n = inject_child_notification("c1", "focus on the auth module");
+    assert_eq!(n.method, "session/inject_child");
+    let p = n.params.expect("params present");
+    assert_eq!(p.get("childSid").and_then(|v| v.as_str()), Some("c1"));
+    assert_eq!(
+        p.get("text").and_then(|v| v.as_str()),
+        Some("focus on the auth module")
+    );
+}
+
 /// A read failure (the server closed or a wire error mid-stream) must
 /// surface as Done{Err} so the App clears agent_busy. The prior silent
 /// return wedged the TUI on any server-side fatal. Pins the fix at the

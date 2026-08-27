@@ -53,6 +53,19 @@ impl App {
     /// user echo lands immediately and is replaced consistently when the
     /// durable transcript is rebuilt on Done.
     pub fn spawn_run(&mut self, input: String) {
+        // Steering: when the user is viewing a child (teammate view), the
+        // typed input routes to that child's inbox, not the parent. Works
+        // mid-parent-run (the child is the running task); the child drains
+        // it at its next turn boundary. No parent echo — the text is a
+        // steering message, not a parent turn; the viewed child transcript
+        // shows it when drained.
+        if let Some(view) = self.teammate_view.as_ref().filter(|_| !input.is_empty()) {
+            self.send_cmd(ClientCommand::InjectToChild {
+                child_sid: view.child_sid.clone(),
+                text: input,
+            });
+            return;
+        }
         // Queue path: when a run is in flight, the new input is mirrored to
         // pending (the queue view) + shipped as a session/inject
         // notification so the server enqueues it for mid-turn injection at

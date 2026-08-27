@@ -700,6 +700,30 @@ fn test_busy_submit_mirrors_queue() {
     assert_eq!(app.pending.len(), 2, "FIFO queue order");
 }
 
+/// While a teammate view is open, a submit steers to the viewed child rather
+/// than starting a parent turn: no parent run starts (agent_busy stays false)
+/// and no parent transcript echo lands.
+#[test]
+fn test_teammate_submit_steers() {
+    let mut app = working();
+    app.teammate_view = Some(crate::records::TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    app.spawn_run("focus on auth".into());
+    assert!(!app.agent_busy, "steering does not start a parent run");
+    assert!(
+        !app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(_))),
+        "no parent echo for a steering submit"
+    );
+    assert!(
+        app.pending.is_empty(),
+        "steering does not queue on the parent"
+    );
+}
+
 /// A QueueConsumed event (the host reports which queued texts the drive loop
 /// injected this run) removes the matching entry from the pending copy — a consumed
 /// message is no longer pending, so the queue view + run-end drain stay

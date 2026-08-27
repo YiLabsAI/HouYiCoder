@@ -395,6 +395,13 @@ pub enum ClientCommand {
         session_id: WireSessionId,
         text: String,
     },
+    /// Steer a running child the user is viewing (teammate view): route the
+    /// text into the child's bus inbox rather than starting a parent turn. The
+    /// child's drive loop drains it at the next turn boundary. Fire-and-forget.
+    InjectToChild {
+        child_sid: String,
+        text: String,
+    },
     /// Remove a queued message by text (the overlay-delete path, or popping
     /// the head to start a follow-up run so the new run does not re-inject
     /// it). The server drops the first queue entry whose text matches;

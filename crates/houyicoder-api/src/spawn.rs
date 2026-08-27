@@ -161,6 +161,15 @@ pub trait SpawnHandle: Send + Sync {
         ctx: &crate::tool::ToolCtx,
         args: SpawnArgs,
     ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>>;
+
+    /// Route a steering text into a running child's inbox. The child's drive
+    /// loop drains it at the next turn boundary. The default returns Err (no
+    /// multi-agent bus wired); a multi-agent runtime overrides it. Fire-and-
+    /// forget from the caller's view — Err means the child has no inbox (not
+    /// spawned with a bus, or already completed + unregistered).
+    fn send_to_child_inbox(&self, _child_id: &str, _text: String) -> Result<(), String> {
+        Err("no multi-agent bus wired".into())
+    }
 }
 
 #[cfg(test)]

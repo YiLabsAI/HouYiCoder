@@ -137,6 +137,18 @@ impl SpawnHandle for MultiAgentRuntime {
         };
         Box::pin(run_sync_spawn(this, parent_sid, depth, cancel, args))
     }
+
+    /// Route a steering text into a running child's inbox via the shared bus.
+    /// The child registered its inbox at spawn; send_inbox errors when the
+    /// child is gone (completed + unregistered) or no bus is wired.
+    fn send_to_child_inbox(&self, child_id: &str, text: String) -> Result<(), String> {
+        use houyicoder_async::bus::MessageBus;
+        use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
+        match self.bus.as_ref() {
+            Some(bus) => bus.send_inbox(child_id, BusMessage::Inbox { text }),
+            None => Err("no bus wired".into()),
+        }
+    }
 }
 
 /// Announce a child spawn on the global topic so a watcher (the fleet
@@ -494,6 +506,38 @@ mod tests {
                 assert_eq!(subagent_type, "explore");
             }
             other => panic!("expected Spawned, got {other:?}"),
+        }
+    }
+
+    /// send_to_child_inbox routes a steering text into a child's registered
+    /// inbox on the bus; the child's drive loop drains it at its next turn.
+    #[tokio::test]
+    async fn test_send_to_child_inbox() {
+        use houyicoder_api::spawn::SpawnHandle;
+        use houyicoder_async::bus::MessageBus;
+        use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage};
+
+        let bus = Arc::new(AgentBus::new());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<BusMessage>();
+        bus.register_inbox("c1", tx);
+        let registry: Arc<dyn AgentRegistry> =
+            Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+        let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+            registry,
+            store: Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+            provider: Arc::new(FakeProvider::text("x")),
+            tools: ToolRegistry::new(),
+            config: RunnerConfig::default(),
+            worktree_controller: None,
+            workspace: Some(std::path::PathBuf::from("/tmp")),
+            bus: Some(bus),
+        });
+        runtime
+            .send_to_child_inbox("c1", "focus on auth".into())
+            .expect("inbox registered");
+        match rx.try_recv().expect("steering text delivered") {
+            BusMessage::Inbox { text } => assert_eq!(text, "focus on auth"),
+            other => panic!("expected Inbox, got {other:?}"),
         }
     }
 }
