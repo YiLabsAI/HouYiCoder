@@ -1440,6 +1440,7 @@ dependencies = [
 name = "houyicoder-skill"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "serde",
  "serde_yaml",
  "thiserror 2.0.20",
