@@ -3,7 +3,7 @@
 //! memory recall) at the boundaries a caller hits. Extracted from the main
 //! impl so the entry surface and the loop body live apart.
 
-use houyicoder_context::{SessionId, TurnEvent};
+use houyicoder_context::{SessionId, TurnEvent, TurnEventKind};
 use houyicoder_protocol::llm::Usage;
 use tokio_util::sync::CancellationToken;
 
@@ -104,7 +104,35 @@ impl Runner {
         // Appending user input first would interpose role:"user" and still 400.
         // resume() does not reconcile — pending approvals are re-raised, not voided.
         self.reconcile_tool_results(session).await?;
+        // Slash skill dispatch: resolve /skill-name args BEFORE appending
+        // so the raw text stays as the UserInput (transcript shows what the
+        // user typed) and the prepared body lands as a MetaUser after it
+        // (the model reads it as a directive; transcript-skipped in brief
+        // mode). Not-a-skill yields None and the run proceeds with the raw
+        // UserInput only. Gated on user-invocable, not model-invocation.
+        let skill_meta = self.resolve_skill_slash(session, &user_input).await;
         self.append_user_input(session, user_input).await?;
+        match skill_meta {
+            crate::agent::skill_slash::SkillSlashOutcome::NotASkill => {}
+            crate::agent::skill_slash::SkillSlashOutcome::Prepared(body) => {
+                self.store
+                    .append(new_event(session, TurnEventKind::MetaUser { text: body }))
+                    .await?;
+            }
+            crate::agent::skill_slash::SkillSlashOutcome::Refused(notice) => {
+                // Surface the refusal to the user + end the turn without a
+                // model call (the model has nothing to do for a refused
+                // skill). The raw /-text stays as the UserInput so the
+                // transcript shows what the user typed; the system line
+                // explains the refusal.
+                self.emit_system_line(notice);
+                return Ok(RunResult {
+                    outcome: RunOutcome::FinalOutput(String::new()),
+                    turns: 0,
+                    usage: Usage::default(),
+                });
+            }
+        }
         // Turn-entry memory recall: scan the projected transcript for the
         // surfaced de-dup set, recall entries relevant to this turn's query,
         // and append a durable memory-recall attachment the projection merges

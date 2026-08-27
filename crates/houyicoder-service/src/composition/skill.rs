@@ -49,20 +49,35 @@ impl SkillRegistry for SkillRegistryImpl {
             .collect()
     }
 
+    fn find(&self, name: &str) -> Option<SkillDescriptor> {
+        self.skills
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| SkillDescriptor {
+                name: s.name.clone(),
+                description: s.description.clone(),
+                when_to_use: s.when_to_use.clone(),
+                argument_hint: s.argument_hint.clone(),
+                disable_model_invocation: s.disable_model_invocation,
+                user_invocable: s.user_invocable,
+                body_token_estimate: s.body_token_estimate(),
+            })
+    }
+
     fn prepare_body(
         &self,
         name: &str,
         args: Option<&str>,
         session_id: Option<&str>,
     ) -> Result<String, SkillError> {
+        // Ungated: the caller gates on the invocation flag via find before
+        // calling. A model-disabled but user-invocable skill is reachable
+        // here from the slash path.
         let def = self
             .skills
             .iter()
             .find(|s| s.name == name)
             .ok_or_else(|| SkillError::NotFound(name.to_string()))?;
-        if def.disable_model_invocation {
-            return Err(SkillError::NotModelInvocable(name.to_string()));
-        }
         let ctx = invoke::SubstitutionContext {
             skill_dir: Some(def.skill_dir.as_path()),
             session_id,
@@ -155,7 +170,11 @@ mod tests {
     }
 
     #[test]
-    fn test_disabled_skill_rejected() {
+    fn test_find_exposes_disable_flag() {
+        // Gating moved to callers: find returns the descriptor with its
+        // disable-model-invocation flag, and the caller (Skill tool) checks
+        // it. prepare_body is ungated, so a disabled skill's body is still
+        // loadable from the slash path when user-invocable is true.
         let tmp = std::env::temp_dir().join(format!("skill-reg-dis-{}", std::process::id()));
         let off_dir = tmp.join(".houyicoder").join("skills").join("off");
         fs::create_dir_all(&off_dir).unwrap();
@@ -165,11 +184,16 @@ mod tests {
         )
         .unwrap();
         let reg = SkillRegistryImpl::discover(Some(&tmp));
-        let err = reg.prepare_body("off", None, None).unwrap_err();
-        match err {
-            SkillError::NotModelInvocable(n) => assert_eq!(n, "off"),
-            other => panic!("expected NotModelInvocable, got {other:?}"),
-        }
+        let desc = reg.find("off").expect("find returns the disabled skill");
+        assert!(
+            desc.disable_model_invocation,
+            "the flag the Skill tool gates on is exposed"
+        );
+        // prepare_body is ungated — the body loads regardless of the flag.
+        assert!(
+            reg.prepare_body("off", None, None).is_ok(),
+            "ungated body loads"
+        );
         drop(fs::remove_dir_all(&tmp));
     }
 

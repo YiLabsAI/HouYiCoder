@@ -83,6 +83,19 @@ impl Tool for SkillTool {
             // (skill-dir and session-id tokens). None when the dispatch is
             // not session-bound (a non-interactive run, a test).
             let sid = ctx.session_id.map(|s| s.to_string());
+            // Gate on disable-model-invocation (the model cannot call a
+            // skill hidden from it). The registry's find returns the flag;
+            // the shared prepare_body is ungated so the slash path reaches
+            // model-disabled skills when user-invocable.
+            let desc = registry
+                .find(&params.skill)
+                .ok_or_else(|| ToolError::Failed(format!("skill not found: {}", params.skill)))?;
+            if desc.disable_model_invocation {
+                return Err(ToolError::Failed(format!(
+                    "skill {} is disabled for model invocation",
+                    params.skill
+                )));
+            }
             let body = registry
                 .prepare_body(&params.skill, params.args.as_deref(), sid.as_deref())
                 .map_err(skill_error_to_tool_error)?;
@@ -103,14 +116,11 @@ impl Tool for SkillTool {
 
 /// Map a registry error to the wire tool-error variant the model sees.
 /// Reuses the SkillError Display text so the error rendering stays
-/// single-sourced. A missing or gated skill is a generic failure (the
-/// model picked a name that is not callable); a body-read failure is an
-/// I/O error so the cause surfaces distinctly from a wrong name.
+/// single-sourced. A body-read failure is an I/O error so the cause
+/// surfaces distinctly from a wrong name (Failed).
 fn skill_error_to_tool_error(e: SkillError) -> ToolError {
     match e {
-        SkillError::NotFound(_) | SkillError::NotModelInvocable(_) => {
-            ToolError::Failed(e.to_string())
-        }
+        SkillError::NotFound(_) => ToolError::Failed(e.to_string()),
         SkillError::BodyLoad(_) => ToolError::Io(e.to_string()),
     }
 }
@@ -160,15 +170,25 @@ mod tests {
                 .collect()
         }
 
+        fn find(&self, name: &str) -> Option<SkillDescriptor> {
+            self.bodies.get(name).map(|_| SkillDescriptor {
+                name: name.to_string(),
+                description: format!("desc for {name}"),
+                when_to_use: None,
+                argument_hint: None,
+                disable_model_invocation: !*self.model_invocable.get(name).unwrap_or(&true),
+                user_invocable: true,
+                body_token_estimate: 0,
+            })
+        }
+
         fn prepare_body(
             &self,
             name: &str,
             _args: Option<&str>,
             _session_id: Option<&str>,
         ) -> Result<String, SkillError> {
-            if !*self.model_invocable.get(name).unwrap_or(&true) {
-                return Err(SkillError::NotModelInvocable(name.to_string()));
-            }
+            // Ungated: the Skill tool gates via find; this returns the body.
             self.bodies
                 .get(name)
                 .cloned()

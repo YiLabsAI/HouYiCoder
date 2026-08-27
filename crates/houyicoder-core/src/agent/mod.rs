@@ -43,6 +43,7 @@ mod redundancy;
 mod retention;
 pub(crate) mod reward_snapshot;
 mod skill_listing;
+mod skill_slash;
 mod status;
 mod step;
 mod synthetic;

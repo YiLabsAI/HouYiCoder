@@ -42,9 +42,6 @@ pub struct SkillDescriptor {
 pub enum SkillError {
     /// No skill with the given name was found in the discovered set.
     NotFound(String),
-    /// The skill exists but frontmatter disable-model-invocation blocks
-    /// Skill-tool invocation. Returned only from the Skill-tool path.
-    NotModelInvocable(String),
     /// The body file could not be read (missing, permission, io).
     BodyLoad(String),
 }
@@ -53,9 +50,6 @@ impl fmt::Display for SkillError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SkillError::NotFound(name) => write!(f, "skill not found: {name}"),
-            SkillError::NotModelInvocable(name) => {
-                write!(f, "skill {name} is disabled for model invocation")
-            }
             SkillError::BodyLoad(msg) => write!(f, "skill body load failed: {msg}"),
         }
     }
@@ -63,23 +57,31 @@ impl fmt::Display for SkillError {
 
 impl std::error::Error for SkillError {}
 
-/// The engine-facing skill registry. The Skill tool holds an
-/// Arc<dyn SkillRegistry> and calls prepare_body at invocation time; the
-/// turn-entry listing step calls list_model_invocable to build the
-/// listing attachment. The concrete implementation wraps the skill data
-/// crate (discovery + body preparation) and is constructed at the
-/// composition root.
+/// The engine-facing skill registry. The Skill tool + the slash dispatch
+/// both call find (to gate on their own invocation flag) then prepare_body
+/// (the shared body-prep, ungated — the two paths converge there). The
+/// turn-entry listing step calls list_model_invocable. The concrete
+/// implementation wraps the skill data crate (discovery + body
+/// preparation) and is constructed at the composition root.
 pub trait SkillRegistry: Send + Sync {
     /// Skills visible to the model (disable-model-invocation filtered out),
     /// in precedence order. Used to build the per-turn listing attachment.
     fn list_model_invocable(&self) -> Vec<SkillDescriptor>;
 
+    /// Look up a skill by name. The caller checks the invocation flag
+    /// (disable-model-invocation for the Skill tool, user-invocable for
+    /// slash) before preparing the body — gating is the caller's job,
+    /// the registry only resolves + describes. None when no skill
+    /// matches.
+    fn find(&self, name: &str) -> Option<SkillDescriptor>;
+
     /// Load + prepare the body for a named skill: read the body file,
     /// strip frontmatter, prepend the base-dir header, substitute
-    /// arguments and variables. Returns NotModelInvocable when the
-    /// skill is gated for model invocation, NotFound when no skill
-    /// matches. The session id feeds variable substitution; None when
-    /// the dispatch is not session-bound.
+    /// arguments and variables. Ungated — the caller gates on the
+    /// invocation flag via find. Returns NotFound when no skill matches,
+    /// BodyLoad when the body file could not be read. The session id
+    /// feeds variable substitution; None when the dispatch is not
+    /// session-bound.
     fn prepare_body(
         &self,
         name: &str,

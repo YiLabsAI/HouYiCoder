@@ -331,6 +331,13 @@ mod tests {
         fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
             vec![descriptor("commit", "commit changes", None)]
         }
+        fn find(&self, name: &str) -> Option<SkillDescriptor> {
+            if name == "commit" {
+                Some(descriptor("commit", "commit changes", None))
+            } else {
+                None
+            }
+        }
         fn prepare_body(
             &self,
             _name: &str,
