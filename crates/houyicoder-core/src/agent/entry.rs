@@ -38,6 +38,7 @@ impl Runner {
             effort_resolver: None,
             context_builder: ContextBuilder::new(),
             live: None,
+            inbox: std::sync::Mutex::new(None),
             startup_warnings: std::sync::Mutex::new(Vec::new()),
             breaker: None,
             usage: Arc::new(std::sync::Mutex::new(UsageAccumulator::default())),
