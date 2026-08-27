@@ -59,6 +59,7 @@ WHITELIST: dict[str, set[str]] = {
     "houyicoder-graph": {"houyicoder-api", "houyicoder-protocol", "houyicoder-async"},
     "houyicoder-wasm": {"houyicoder-api", "houyicoder-protocol", "houyicoder-async"},
     "houyicoder-permission": {"houyicoder-api", "houyicoder-protocol", "houyicoder-async"},
+    "houyicoder-skill": set(),
     "houyicoder-sandbox": {
         "houyicoder-api",
         "houyicoder-protocol",
