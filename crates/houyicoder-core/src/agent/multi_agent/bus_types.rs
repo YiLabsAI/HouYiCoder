@@ -26,6 +26,12 @@ pub enum BusMessage {
     },
     /// A message delivered to a child's inbox (parent -> child).
     Inbox { text: String },
+    /// Announced when a child spawns so a watcher can subscribe to that
+    /// child's progress and completed topics before the first turn lands.
+    Spawned {
+        agent_id: String,
+        subagent_type: String,
+    },
 }
 
 /// The terminal status of a child agent.
@@ -50,6 +56,14 @@ pub fn progress_topic(agent_id: &str) -> String {
 /// Build a topic string for a child's completion channel.
 pub fn completed_topic(agent_id: &str) -> String {
     format!("task.{agent_id}.completed")
+}
+
+/// The global topic a watcher subscribes to before any child spawns: the
+/// runtime publishes Spawned here so the watcher learns each new child's id
+/// and type and can subscribe to that child's progress and completed topics
+/// before the first turn lands.
+pub fn spawned_topic() -> &'static str {
+    "agents.spawned"
 }
 
 #[cfg(test)]

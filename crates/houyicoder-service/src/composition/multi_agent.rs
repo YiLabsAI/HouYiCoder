@@ -139,6 +139,23 @@ impl SpawnHandle for MultiAgentRuntime {
     }
 }
 
+/// Announce a child spawn on the global topic so a watcher (the fleet
+/// projector) can subscribe to that child's progress and completed topics
+/// before the first turn lands. Fire-and-forget: no watcher, no effect.
+fn announce_spawn(bus: Option<&Arc<AgentBus>>, child_id: &str, subagent_type: &str) {
+    use houyicoder_async::bus::MessageBus;
+    use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, spawned_topic};
+    if let Some(bus) = bus {
+        bus.publish(
+            spawned_topic(),
+            BusMessage::Spawned {
+                agent_id: child_id.to_string(),
+                subagent_type: subagent_type.to_string(),
+            },
+        );
+    }
+}
+
 async fn run_sync_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
@@ -190,6 +207,7 @@ async fn run_sync_spawn(
     let handle = spawn_child(req).await.map_err(map_spawn_err)?;
     let child_sid = handle.session;
     let child_str = child_sid.to_string();
+    announce_spawn(this.bus.as_ref(), &child_str, &args.subagent_type);
     let task = format!(
         "{}\n\n{}",
         child_user_context(&this.cwd, def.omit_project_context),
@@ -426,5 +444,44 @@ mod tests {
         args.run_in_background = true;
         let err = runtime.spawn(&ctx, args).await.unwrap_err();
         assert!(matches!(err, SpawnFailure::CapabilityDenied));
+    }
+
+    /// A sync spawn announces on the spawned topic so a fleet watcher can
+    /// subscribe to the child's progress before the first turn lands.
+    #[tokio::test]
+    async fn test_spawn_announces_on_bus() {
+        use houyicoder_async::bus::MessageBus;
+        use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage, spawned_topic};
+
+        let bus = Arc::new(AgentBus::new());
+        let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        let parent_sid = SessionId::new();
+        let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+        let registry: Arc<dyn AgentRegistry> =
+            Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+        let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+            registry,
+            store: store.clone(),
+            provider,
+            tools: ToolRegistry::new(),
+            config: RunnerConfig::default(),
+            worktree_controller: None,
+            workspace: Some(std::path::PathBuf::from("/tmp")),
+            bus: Some(bus.clone()),
+        });
+        let mut rx = bus.subscribe(spawned_topic());
+        let ctx = ToolCtx::new("c1").with_session(parent_sid);
+        let args = SpawnArgs::new("explore", "find auth", "find auth");
+        let _outcome = runtime.spawn(&ctx, args).await.expect("spawn");
+        match rx.try_recv().expect("spawn announced") {
+            BusMessage::Spawned {
+                agent_id,
+                subagent_type,
+            } => {
+                assert!(!agent_id.is_empty());
+                assert_eq!(subagent_type, "explore");
+            }
+            other => panic!("expected Spawned, got {other:?}"),
+        }
     }
 }
