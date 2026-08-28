@@ -298,4 +298,90 @@ mod tests {
         assert!(snap[0].contains("failed"), "carries the failed status");
         assert!(snap[0].contains("provider fatal"), "carries the summary");
     }
+
+    /// Multiple async children completing near-simultaneously each enqueue a
+    /// distinct notification (no cross-child dedup): the check-and-set is
+    /// keyed by child id, so three children produce three notifications.
+    #[tokio::test]
+    async fn test_multi_child_concurrent_enqueues() {
+        let bus = Arc::new(AgentBus::new());
+        let runner = bare_runner();
+        spawn(
+            Some(bus.clone()),
+            Arc::clone(&runner),
+            tokio::runtime::Handle::current(),
+        );
+        for id in ["c5", "c6", "c7"] {
+            bus.publish(
+                spawned_topic(),
+                BusMessage::Spawned {
+                    agent_id: id.into(),
+                    subagent_type: "explore".into(),
+                    run_in_background: true,
+                },
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        for (id, summary) in [("c5", "found a"), ("c6", "found b"), ("c7", "found c")] {
+            bus.publish(
+                &completed_topic(id),
+                BusMessage::Completed {
+                    agent_id: id.into(),
+                    status: ChildStatus::Completed,
+                    summary: summary.into(),
+                },
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let snap = runner.queued_notifications_snapshot();
+        assert_eq!(snap.len(), 3, "three children produce three notifications");
+        // Each notification carries its own child's summary (no cross-child
+        // bleed). Distinct summaries land in the queue.
+        let joined = snap.join(";");
+        assert!(joined.contains("found a"), "c5 summary lands");
+        assert!(joined.contains("found b"), "c6 summary lands");
+        assert!(joined.contains("found c"), "c7 summary lands");
+    }
+
+    /// An empty summary does not crash or drop the notification — the
+    /// parent still learns the child finished (type + status), just
+    /// without a result line. Edge boundary for the summary field.
+    #[tokio::test]
+    async fn test_empty_summary_still_enqueues() {
+        let bus = Arc::new(AgentBus::new());
+        let runner = bare_runner();
+        spawn(
+            Some(bus.clone()),
+            Arc::clone(&runner),
+            tokio::runtime::Handle::current(),
+        );
+        bus.publish(
+            spawned_topic(),
+            BusMessage::Spawned {
+                agent_id: "c8".into(),
+                subagent_type: "explore".into(),
+                run_in_background: true,
+            },
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        bus.publish(
+            &completed_topic("c8"),
+            BusMessage::Completed {
+                agent_id: "c8".into(),
+                status: ChildStatus::Completed,
+                summary: String::new(),
+            },
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let snap = runner.queued_notifications_snapshot();
+        assert_eq!(
+            snap.len(),
+            1,
+            "an empty summary still enqueues a notification"
+        );
+        assert!(
+            snap[0].contains("explore"),
+            "carries the subagent type even with no summary"
+        );
+    }
 }

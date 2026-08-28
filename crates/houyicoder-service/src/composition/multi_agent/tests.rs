@@ -396,3 +396,65 @@ async fn test_spawn_fires_start_stop() {
         "SubagentStart fires before SubagentStop: {fired:?}"
     );
 }
+
+/// End-to-end async spawn → detached driver → bus Completed → notification
+/// injector → parent queue. The detached child + its notification land
+/// independent of the parent's run lifecycle (async cancel unlinked;
+/// notification arrives even though the parent is not running a turn).
+#[tokio::test]
+async fn test_async_spawn_notifies_parent() {
+    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+    use houyicoder_core::agent::{Runner, ToolRegistry};
+
+    let bus = Arc::new(AgentBus::new());
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("done"));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    let parent_runner = Arc::new(Runner::new(
+        store.clone(),
+        Arc::clone(&provider),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    ));
+    super::super::notification_drain::spawn(
+        Some(bus.clone()),
+        Arc::clone(&parent_runner),
+        tokio::runtime::Handle::current(),
+    );
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store: store.clone(),
+        provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(std::path::PathBuf::from("/tmp")),
+        bus: Some(bus.clone()),
+    });
+    let parent_sid = SessionId::new();
+    let mut args = SpawnArgs::new("explore", "review the diff", "review the diff");
+    args.run_in_background = true;
+    let outcome = runtime
+        .spawn_system(parent_sid, "review_gate", args)
+        .await
+        .expect("async spawn");
+    assert!(
+        outcome.status.is_none(),
+        "async spawn returns no terminal status"
+    );
+    let mut found = false;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+        if !parent_runner.queued_notifications_snapshot().is_empty() {
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "async child completion reached the parent notification queue"
+    );
+    let notif = &parent_runner.queued_notifications_snapshot()[0];
+    assert!(notif.contains("explore"), "carries the subagent type");
+    assert!(notif.contains("done"), "carries the child summary");
+}

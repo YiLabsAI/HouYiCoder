@@ -158,6 +158,27 @@ async fn test_spawn_rejects_depth_cap() {
     );
 }
 
+/// Boundary opposite of the depth cap: a spawn at depth MAX-1 (3) is the
+/// last allowed level — the child carries depth 4 (MAX), one short of the
+/// reject. Pins both sides of the boundary so an off-by-one in the guard
+/// flips this red before the reject test does.
+#[tokio::test]
+async fn test_spawn_depth_under_cap() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::text("ok"));
+    let req = req_at_depth(parent_sid, store.clone(), provider, 3);
+    let handle = spawn_child(req)
+        .await
+        .expect("depth MAX-1 must allow spawn");
+    assert_eq!(
+        handle.runner.agent_identity().depth,
+        4,
+        "child of a depth-3 parent is depth 4 (MAX) — the last allowed level"
+    );
+}
+
 /// A sync child shares the parent's cancel token (a linked clone), so
 /// cancelling the parent cancels the child -- an ESC on the parent must
 /// propagate to a blocking sync child.

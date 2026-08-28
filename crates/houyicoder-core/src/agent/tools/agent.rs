@@ -201,19 +201,30 @@ fn spawn_failure_msg(f: houyicoder_api::spawn::SpawnFailure) -> String {
     }
 }
 
-/// Build the tool_result JSON from a sync spawn outcome: the child's summary
-/// text, its session id (the result ref for follow-up), terminal status, and
-/// usage. An empty summary gets a placeholder so the parent does not read
-/// "nothing" as "done"; a summary past the 100k char cap is tail-truncated
-/// (the conclusion is what matters) with a note that the child log holds the
-/// full output.
+/// Build the tool_result JSON from a spawn outcome. A sync outcome carries
+/// the child's summary text, session id (the result ref for follow-up),
+/// terminal status, and usage; an empty summary gets a placeholder so the
+/// parent does not read "nothing" as "done", and a summary past the 100k
+/// char cap is tail-truncated with a note that the child log holds the full
+/// output. An async launch (no terminal status) surfaces a "launched in the
+/// background" message instead — the result arrives later as a
+/// turn-boundary notification, not as this tool_result.
 fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome, color: Option<&str>) -> Value {
     let usage = outcome.usage.unwrap_or_default();
-    let status = outcome.status.unwrap_or_default();
+    // An async launch carries no terminal status or summary — the parent
+    // does not block on the child. Surface that distinctly so the model
+    // does not read "returned no output" (a sync empty-result symptom) and
+    // instead knows the result arrives later as a turn-boundary notification.
+    let async_launched = outcome.status.is_none();
+    let status = outcome.status.clone().unwrap_or_default();
     let child = outcome.child_session_id.clone();
     let result_ref = outcome.result_ref.unwrap_or_default();
     let mut content = outcome.summary.unwrap_or_default();
-    if content.is_empty() {
+    if async_launched {
+        content = "Launched in the background; the result arrives as a \
+                   notification on your next turn."
+            .into();
+    } else if content.is_empty() {
         content = "(Subagent returned no output.)".into();
     }
     const MAX_CHARS: usize = 100_000;
@@ -426,6 +437,26 @@ mod tests {
         assert_eq!(out["content"], "(Subagent returned no output.)");
         // No color surfaces as JSON null, not omitted.
         assert!(out["color"].is_null());
+    }
+
+    /// An async launch (no terminal status + no summary) surfaces a distinct
+    /// "launched in the background" message, not the sync empty-result
+    /// placeholder. The model must not mistake an async launch for a child
+    /// that returned no output.
+    #[test]
+    fn test_tool_result_async_launch() {
+        use houyicoder_api::spawn::SpawnOutcome;
+        let out = build_tool_result(SpawnOutcome::async_launched("c1"), None);
+        assert_eq!(out["status"], "", "async launch carries no terminal status");
+        let content = out["content"].as_str().unwrap_or("");
+        assert!(
+            content.contains("Launched in the background"),
+            "async launch surfaces a launched message, not 'returned no output': {content}"
+        );
+        assert!(
+            !content.contains("returned no output"),
+            "async must not use the sync empty-result placeholder: {content}"
+        );
     }
 
     #[test]

@@ -159,3 +159,74 @@ fn test_multi_large_child_summary() {
         s.output()
     );
 }
+
+/// Real-binary async delegation: the parent delegates a background child
+/// (run_in_background), the tool returns async_launched immediately, the
+/// parent continues, the detached driver runs the child to completion, the
+/// notification injector enqueues, and the parent's next run drains the
+/// notification at its first turn boundary. The script is all "ok" past
+/// turn 1 so the shared provider race (parent vs child consuming turns)
+/// cannot break either side. Slow, ignored by default.
+#[test]
+#[ignore]
+fn test_multi_async_delegation() {
+    // Turn 1: the agent tool call with run_in_background, then the parent
+    // continues with a text. Every later turn is "ok" so the child + the
+    // parent's later turns all resolve to a final text regardless of who
+    // consumes which scripted turn (the shared provider race).
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"delegated async, continuing"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(
+        s.wait_for("let's build", RENDER_TIMEOUT),
+        "working screen renders"
+    );
+    s.send_str("find the auth module");
+    s.send_str("\r");
+    // Turn 1: the async spawn fires + the parent continues. "delegated async"
+    // confirms the parent did not block on the child (async_launched).
+    assert!(
+        s.wait_for_plain("delegated async", RENDER_TIMEOUT * 2),
+        "parent should continue past an async delegation:\n{}",
+        s.output()
+    );
+    // Give the detached driver time to run the child to completion + the
+    // injector time to enqueue the notification. Each user message starts a
+    // run whose first turn boundary drains the notification queue, so send a
+    // few + poll each — the notification lands whenever the detached driver
+    // finishes (timing-sensitive under parallel PTY load, hence the loop).
+    let mut drained = false;
+    for _ in 0..5 {
+        s.send_str("any update");
+        s.send_str("\r");
+        if s.wait_for_plain("Subagent", RENDER_TIMEOUT * 2) {
+            drained = true;
+            break;
+        }
+    }
+    assert!(
+        drained,
+        "async child completion notification should drain into the parent \
+         transcript across several turn boundaries:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_plain().contains("completed"),
+        "notification carries the terminal status:\n{}",
+        s.output()
+    );
+}
