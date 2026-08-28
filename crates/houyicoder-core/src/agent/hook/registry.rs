@@ -6,11 +6,33 @@ use super::*;
 use houyicoder_api::trust::TrustState;
 use std::sync::RwLock;
 
-/// Mutable inner state: the hook list + the event-to-index map. Both
-/// are mutated together on register, so a single RwLock covers both.
+/// A stable handle for a registered hook. Stable across removals (unlike a
+/// Vec index), so a caller can hold the id and unregister later — the
+/// once:true skill-hook pattern drops itself after its first success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HookId(u64);
+
+/// Mutable inner state. The hook map is keyed by HookId so removal is O(1)
+/// and a stale id never dereferences a moved-aside slot; order preserves
+/// registration order for dispatch + list; by_event indexes events to
+/// HookIds (not indices) so a removal just filters the lists. All three
+/// are mutated together on register/unregister under one lock.
 struct HookInner {
-    hooks: Vec<Arc<dyn Hook>>,
-    by_event: HashMap<HookEvent, Vec<usize>>,
+    hooks: HashMap<HookId, Arc<dyn Hook>>,
+    order: Vec<HookId>,
+    by_event: HashMap<HookEvent, Vec<HookId>>,
+    next_id: u64,
+}
+
+impl HookInner {
+    fn new() -> Self {
+        Self {
+            hooks: HashMap::new(),
+            order: Vec::new(),
+            by_event: HashMap::new(),
+            next_id: 0,
+        }
+    }
 }
 
 pub struct HookRegistry {
@@ -26,10 +48,7 @@ impl HookRegistry {
     /// trusted state.
     pub fn new() -> Self {
         Self {
-            inner: RwLock::new(HookInner {
-                hooks: Vec::new(),
-                by_event: HashMap::new(),
-            }),
+            inner: RwLock::new(HookInner::new()),
             policy: HookPolicy::default(),
             trust: TrustState::Trusted,
             timeout_ms: 5000,
@@ -39,10 +58,7 @@ impl HookRegistry {
 
     pub fn with_policy(policy: HookPolicy) -> Self {
         Self {
-            inner: RwLock::new(HookInner {
-                hooks: Vec::new(),
-                by_event: HashMap::new(),
-            }),
+            inner: RwLock::new(HookInner::new()),
             policy,
             trust: TrustState::Trusted,
             timeout_ms: 5000,
@@ -52,10 +68,7 @@ impl HookRegistry {
 
     pub fn with_policy_and_trust(policy: HookPolicy, trust: TrustState) -> Self {
         Self {
-            inner: RwLock::new(HookInner {
-                hooks: Vec::new(),
-                by_event: HashMap::new(),
-            }),
+            inner: RwLock::new(HookInner::new()),
             policy,
             trust,
             timeout_ms: 5000,
@@ -83,14 +96,35 @@ impl HookRegistry {
     /// Register a hook. Takes &self (interior mutability via RwLock)
     /// so hooks can be registered on a shared Arc<HookRegistry>
     /// after the runner is constructed. This enables future
-    /// skill-hook registration at invocation time.
-    pub fn register(&self, hook: Arc<dyn Hook>) {
+    /// skill-hook registration at invocation time. Returns a stable
+    /// HookId the caller can hold to unregister later.
+    pub fn register(&self, hook: Arc<dyn Hook>) -> HookId {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        let idx = inner.hooks.len();
+        let id = HookId(inner.next_id);
+        inner.next_id += 1;
         for ev in hook.events() {
-            inner.by_event.entry(*ev).or_default().push(idx);
+            inner.by_event.entry(*ev).or_default().push(id);
         }
-        inner.hooks.push(hook);
+        inner.order.push(id);
+        inner.hooks.insert(id, hook);
+        id
+    }
+
+    /// Remove a hook by its stable handle. Returns false if the id is
+    /// not registered (already removed, or never minted). Filters the
+    /// id out of the order list and every event index so dispatch and
+    /// list never see a stale id. The once:true skill-hook pattern
+    /// unregisters itself after its first successful fire.
+    pub fn unregister(&self, id: HookId) -> bool {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        if inner.hooks.remove(&id).is_none() {
+            return false;
+        }
+        inner.order.retain(|x| *x != id);
+        for ids in inner.by_event.values_mut() {
+            ids.retain(|x| *x != id);
+        }
+        true
     }
 
     /// Dispatch an event to all subscribed hooks, collecting HookOutcomes
@@ -105,13 +139,16 @@ impl HookRegistry {
             return Vec::new();
         }
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        let Some(indices) = inner.by_event.get(&ctx.event) else {
+        let Some(ids) = inner.by_event.get(&ctx.event) else {
             return Vec::new();
         };
-        let mut filtered: Vec<&Arc<dyn Hook>> = Vec::new();
+        let mut filtered: Vec<Arc<dyn Hook>> = Vec::new();
         let mut skipped_untrusted: Vec<String> = Vec::new();
-        for &i in indices {
-            let Some(h) = inner.hooks.get(i) else {
+        for &id in ids {
+            let Some(h) = inner.hooks.get(&id) else {
+                // A stale id (removed between register and dispatch) is
+                // skipped, not an error — unregister cleans by_event, but a
+                // concurrent dispatch may have cloned the list first.
                 continue;
             };
             if !policy_allows(&h.source(), &self.policy) {
@@ -121,7 +158,7 @@ impl HookRegistry {
                 skipped_untrusted.push(h.name().to_string());
                 continue;
             }
-            filtered.push(h);
+            filtered.push(Arc::clone(h));
         }
         if !skipped_untrusted.is_empty() {
             // Queue the one-time notice for the caller to surface as a
@@ -139,13 +176,12 @@ impl HookRegistry {
             return Vec::new();
         }
 
-        // Clone the Arcs out of the lock before evaluating, so the read
-        // lock is released before any hook runs. This prevents a latent
-        // deadlock if a future built-in hook calls register() during
-        // evaluate (std RwLock is non-reentrant). The parallel path
-        // already clones into threads, so this makes sequential
-        // symmetric.
-        let cloned: Vec<Arc<dyn Hook>> = filtered.iter().map(|h| Arc::clone(*h)).collect();
+        // filtered owns the Arcs, so the read lock is already released
+        // implicitly at the end of this scope; drop it now before any hook
+        // runs so a built-in hook calling register/unregister during
+        // evaluate cannot deadlock the non-reentrant RwLock. The parallel
+        // path clones into threads, so sequential stays symmetric.
+        let cloned = filtered;
         drop(inner);
 
         // No timeout: sequential dispatch (fast path for in-process hooks).
@@ -230,14 +266,15 @@ impl HookRegistry {
         self.len() == 0
     }
 
-    /// List all registered hooks for visibility. Each entry carries
-    /// the hook name, subscribed events, and config source.
+    /// List all registered hooks in registration order for visibility.
+    /// Each entry carries the hook name, subscribed events, and config
+    /// source.
     pub fn list(&self) -> Vec<HookEntry> {
-        self.inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .hooks
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        inner
+            .order
             .iter()
+            .filter_map(|id| inner.hooks.get(id))
             .map(|h| HookEntry {
                 name: h.name().to_string(),
                 events: h.events().to_vec(),
@@ -340,5 +377,86 @@ mod tests {
         let outcomes = reg.dispatch(&ctx);
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].hook_name, "late-hook");
+    }
+
+    /// unregister removes a hook by its stable HookId: dispatch no longer
+    /// fires it, list drops it, and a sibling hook on the same event still
+    /// fires (the by_event cleanup filters one id, not the whole event).
+    /// An unknown id returns false without touching the registry. The
+    /// once:true skill-hook pattern relies on this to drop itself.
+    #[test]
+    fn test_unregister_removes_hook() {
+        use houyicoder_context::SessionId;
+
+        let reg = HookRegistry::new();
+        let keep_id = reg.register(Arc::new(StubHook {
+            name: "keep".into(),
+            events: vec![HookEvent::PostToolUse],
+            source: HookSource::User,
+        }));
+        let drop_id = reg.register(Arc::new(StubHook {
+            name: "drop".into(),
+            events: vec![HookEvent::PostToolUse],
+            source: HookSource::User,
+        }));
+        // Both fire before unregister.
+        let ctx = HookContext {
+            event: HookEvent::PostToolUse,
+            payload: HookPayload::PostToolUse {
+                tool_name: "bash".into(),
+                input: serde_json::json!({}),
+                result: ToolResult {
+                    output: "{}".into(),
+                },
+            },
+            session: SessionId::new(),
+        };
+        assert_eq!(reg.dispatch(&ctx).len(), 2);
+        // Unregister "drop"; "keep" stays. Unknown id returns false.
+        assert!(reg.unregister(drop_id), "unregister a live id returns true");
+        assert!(
+            !reg.unregister(HookId(u64::MAX)),
+            "unregister an unknown id returns false"
+        );
+        let outcomes = reg.dispatch(&ctx);
+        assert_eq!(outcomes.len(), 1, "only the kept hook fires");
+        assert_eq!(outcomes[0].hook_name, "keep");
+        let names: Vec<String> = reg.list().iter().map(|e| e.name.clone()).collect();
+        assert_eq!(
+            names,
+            vec!["keep".to_string()],
+            "list drops the unregistered hook"
+        );
+        // The kept id is still valid (unregister did not over-remove).
+        assert!(reg.unregister(keep_id), "the kept id is still live");
+        assert_eq!(
+            reg.dispatch(&ctx).len(),
+            0,
+            "no hooks fire after both removed"
+        );
+    }
+
+    /// HookId is not reused: after unregister, a fresh register mints a
+    /// new id, so a stale handle held by a caller cannot accidentally
+    /// target a later-registered hook.
+    #[test]
+    fn test_hook_id_not_reused() {
+        let reg = HookRegistry::new();
+        let first = reg.register(Arc::new(StubHook {
+            name: "first".into(),
+            events: vec![HookEvent::PreToolUse],
+            source: HookSource::User,
+        }));
+        assert!(reg.unregister(first));
+        let second = reg.register(Arc::new(StubHook {
+            name: "second".into(),
+            events: vec![HookEvent::PreToolUse],
+            source: HookSource::User,
+        }));
+        assert_ne!(first, second, "a new registration mints a fresh id");
+        assert!(
+            !reg.unregister(first),
+            "the stale handle does not target the new hook"
+        );
     }
 }
