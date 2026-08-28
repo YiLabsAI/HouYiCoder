@@ -6,6 +6,7 @@
 mod done;
 
 use houyicoder_protocol::frontend::run::RunError;
+use std::time::Instant;
 
 use crate::agent_message::AgentMessage;
 use crate::pending_queue::PendingItem;
@@ -402,6 +403,12 @@ impl App {
                     entry.tokens = tokens;
                     entry.tool_uses = tool_uses;
                     entry.last_activity = last_activity;
+                    // Stamp the terminal moment the first time a completion
+                    // lands so the footer grace window starts then; a later
+                    // status echoing the same completion does not reset it.
+                    if completed.is_some() && entry.completed.is_none() {
+                        entry.completed_at = Some(Instant::now());
+                    }
                     entry.completed = completed;
                 } else {
                     self.fleet.entries.push(crate::agent_message::FleetEntry {
@@ -411,6 +418,7 @@ impl App {
                         tokens,
                         tool_uses,
                         last_activity,
+                        completed_at: completed.as_ref().map(|_| Instant::now()),
                         completed,
                     });
                 }

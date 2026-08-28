@@ -10,6 +10,7 @@ use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunError, RunResult,
 };
 use houyicoder_protocol::llm::EffortLevel;
+use std::time::{Duration, Instant};
 
 use crate::transcript::TranscriptFrame;
 
@@ -22,6 +23,12 @@ pub struct FleetEntry {
     pub tool_uses: u32,
     pub last_activity: Option<String>,
     pub completed: Option<String>,
+    /// When the child reached a terminal state (the completed string landed).
+    /// Drives the footer auto-background: a completed row stays terse for a
+    /// short grace window so the user sees the result landed, then retires
+    /// from the footer so the input box rises back under the transcript. The
+    /// result stays in the transcript fold-group; only the footer pill leaves.
+    pub completed_at: Option<Instant>,
 }
 
 /// The footer fleet state: the child snapshots plus the Shift-arrow
@@ -31,6 +38,33 @@ pub struct FleetEntry {
 pub struct FleetState {
     pub entries: Vec<FleetEntry>,
     pub selected: Option<usize>,
+}
+
+/// How long a completed child stays in the footer before retiring. The
+/// grace window lets the user see the result landed (a terse done row),
+/// then the pill leaves so the input box rises back under the transcript.
+/// The result itself stays in the transcript fold-group; only the footer
+/// pill retires.
+pub const FLEET_GRACE: Duration = Duration::from_secs(5);
+
+impl FleetState {
+    /// Retire completed entries whose grace window has elapsed. Running
+    /// children (no completed_at) always stay. Returns true when at least
+    /// one entry retired so the caller marks the view dirty. The selection
+    /// index is clamped back into the new bounds (a retired selected row
+    /// clears selection rather than pointing past the end).
+    pub fn retire_completed(&mut self) -> bool {
+        let before = self.entries.len();
+        self.entries
+            .retain(|e| e.completed_at.is_none_or(|t| t.elapsed() < FLEET_GRACE));
+        let retired = self.entries.len() != before;
+        let len = self.entries.len();
+        match self.selected {
+            Some(s) if s >= len => self.selected = (len > 0).then(|| len - 1),
+            _ => {}
+        }
+        retired
+    }
 }
 
 /// One message shipped from the client-driver task back to the TUI event

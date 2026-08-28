@@ -85,6 +85,13 @@ pub fn run_with_runner(
         // An interrupt/error parks it for the user to pop + edit (Esc),
         // not auto-fire on a redirect.
         app.idle_drain(resume_builder.as_deref(), &mut dirty);
+        // Retire completed footer rows whose grace window elapsed. Runs
+        // every poll regardless of agent-busy: a child completes on its own
+        // timeline, and the footer should drop its terse done row five
+        // seconds later whether the parent is still running or idle.
+        if app.fleet.retire_completed() {
+            dirty = true;
+        }
         if dirty || app.agent_busy {
             // Progressive prepend: project older frames if the user scrolled
             // to the top of the projected region. Must run before draw (it

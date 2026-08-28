@@ -767,6 +767,7 @@ fn fleet_app(n: usize) -> App {
             tool_uses: 0,
             last_activity: None,
             completed: None,
+            completed_at: None,
         });
     }
     app
@@ -826,6 +827,7 @@ fn test_enter_fleet_drills_teammate() {
         tool_uses: 0,
         last_activity: None,
         completed: None,
+        completed_at: None,
     });
     app.fleet.selected = Some(0);
     handle_working(&mut app, key(KeyCode::Enter));

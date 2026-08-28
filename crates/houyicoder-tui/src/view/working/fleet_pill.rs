@@ -58,8 +58,11 @@ fn build_lines(app: &App) -> Vec<Line<'_>> {
         .collect()
 }
 
-/// One pill row. Completed children dim; the running child carries the
-/// verb and token count so the user sees live progress at a glance.
+/// One pill row. Completed children dim and go terse — the live verb drops,
+/// leaving the type + a done marker + the token total — so a finished
+/// delegation reads "explore · done · 1.2k tok" instead of echoing the stale
+/// last verb. The running child keeps the verb and turn counter so the user
+/// sees live progress at a glance.
 fn build_row(entry: &FleetEntry, selected: bool) -> Line<'_> {
     let prefix = if selected { "> " } else { "  " };
     let (glyph, style) = if entry.completed.is_some() {
@@ -67,19 +70,22 @@ fn build_row(entry: &FleetEntry, selected: bool) -> Line<'_> {
     } else {
         ("◯ ", Style::default().fg(Color::Cyan))
     };
-    let verb = verb_for(entry.last_activity.as_deref());
     let tokens = format_tokens(entry.tokens);
-    let tail = if entry.completed.is_some() {
-        format!(" · {} · done", tokens)
+    let body = if entry.completed.is_some() {
+        format!("{} · done · {}", entry.subagent_type, tokens)
     } else {
-        format!(" · {} · turn {}", tokens, entry.turn)
+        format!(
+            "{}: {} · {} · turn {}",
+            entry.subagent_type,
+            verb_for(entry.last_activity.as_deref()),
+            tokens,
+            entry.turn
+        )
     };
     Line::from(vec![
         Span::styled(prefix.to_string(), style),
         Span::styled(glyph.to_string(), style),
-        Span::styled(format!("{}: ", entry.subagent_type), style),
-        Span::styled(verb.to_string(), style),
-        Span::styled(tail, style),
+        Span::styled(body, style),
     ])
 }
 
@@ -124,6 +130,7 @@ mod tests {
             tool_uses: 0,
             last_activity: Some(tool.into()),
             completed: None,
+            completed_at: None,
         }
     }
 
@@ -158,5 +165,98 @@ mod tests {
                 .push(entry(&format!("b{i}"), "plan", 1, 10, "read"));
         }
         assert_eq!(height(&app), 3);
+    }
+
+    /// A completed row goes terse: it shows the type, a done marker, and the
+    /// token total — never the stale live verb. Pins the auto-background
+    /// render so a refactor that re-adds the verb to a finished row fails.
+    #[test]
+    fn test_completed_row_terse() {
+        let e = FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 3,
+            tokens: 1200,
+            tool_uses: 2,
+            last_activity: Some("grep".into()),
+            completed: Some("completed".into()),
+            completed_at: None,
+        };
+        let line = build_row(&e, false);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("done"), "completed shows done: {text}");
+        assert!(text.contains("1.2k tok"), "completed shows tokens: {text}");
+        assert!(
+            !text.contains("searching"),
+            "completed drops the live verb: {text}"
+        );
+    }
+
+    /// retire_completed drops a finished entry once its grace window elapsed.
+    /// A completed_at six seconds ago is past the five-second grace, so the
+    /// entry leaves the footer (the result stays in the transcript fold).
+    #[test]
+    fn test_retire_drops_expired() {
+        use crate::agent_message::FleetState;
+        use std::time::{Duration, Instant};
+        let mut fleet = FleetState::default();
+        fleet.entries.push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 3,
+            tokens: 100,
+            tool_uses: 1,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
+        });
+        assert!(fleet.retire_completed(), "expired entry retired");
+        assert!(fleet.entries.is_empty(), "footer emptied after retire");
+    }
+
+    /// retire_completed keeps a running child (no completed_at) and a
+    /// recently completed one (inside the grace window). The pill only
+    /// leaves once the grace window elapses.
+    #[test]
+    fn test_retire_keeps_recent() {
+        use crate::agent_message::FleetState;
+        use std::time::Instant;
+        let mut fleet = FleetState::default();
+        fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
+        fleet.entries.push(FleetEntry {
+            agent_id: "b".into(),
+            subagent_type: "plan".into(),
+            turn: 2,
+            tokens: 50,
+            tool_uses: 0,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: Some(Instant::now()),
+        });
+        assert!(!fleet.retire_completed(), "nothing retired inside grace");
+        assert_eq!(fleet.entries.len(), 2, "running + recent both kept");
+    }
+
+    /// A selection pointing at a retired row clamps back into bounds rather
+    /// than indexing past the end of the surviving entries.
+    #[test]
+    fn test_retire_clamps_selected() {
+        use crate::agent_message::FleetState;
+        use std::time::{Duration, Instant};
+        let mut fleet = FleetState::default();
+        fleet.entries.push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
+        });
+        fleet.entries.push(entry("c2", "plan", 1, 10, "read"));
+        fleet.selected = Some(0);
+        assert!(fleet.retire_completed(), "first entry retired");
+        assert_eq!(fleet.selected, Some(0), "selection clamped to the survivor");
     }
 }
