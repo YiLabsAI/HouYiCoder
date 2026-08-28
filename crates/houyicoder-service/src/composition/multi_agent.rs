@@ -20,7 +20,7 @@ use houyicoder_core::agent::multi_agent::concurrency_gate::{AcquireResult, Concu
 use houyicoder_core::agent::multi_agent::registry::{
     AgentError, AgentRegistry, IsolationMode, PromptSource, ResolveCtx,
 };
-use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
+use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, TriggerSource};
 use houyicoder_core::agent::multi_agent::{
     SpawnError, SpawnRequest, record_subagent_return, spawn_child,
 };
@@ -30,6 +30,7 @@ use houyicoder_core::agent::{RunOutcome, RunResult, ToolRegistry};
 use houyicoder_protocol::llm::Usage;
 
 mod drive;
+mod spawn_exec;
 
 /// The parent components a child runner is built from: one bundle shared by
 /// the composition root, the runtime constructor, and the spawn path, instead
@@ -159,17 +160,18 @@ impl SpawnHandle for MultiAgentRuntime {
             bus: self.bus.clone(),
             gate: Arc::clone(&self.gate),
         };
-        Box::pin(run_sync_spawn(
-            this,
-            parent_sid,
-            depth,
-            cancel,
-            hook_fire,
-            TriggerSource::ModelTool {
-                tool_call_id: ctx.call_id.clone(),
-            },
-            args,
-        ))
+        let trigger = TriggerSource::ModelTool {
+            tool_call_id: ctx.call_id.clone(),
+        };
+        if args.run_in_background {
+            Box::pin(spawn_exec::run_async_spawn(
+                this, parent_sid, depth, cancel, hook_fire, trigger, args,
+            ))
+        } else {
+            Box::pin(run_sync_spawn(
+                this, parent_sid, depth, cancel, hook_fire, trigger, args,
+            ))
+        }
     }
 
     /// Route a steering text into a running child's inbox via the shared bus.
@@ -259,10 +261,6 @@ async fn fire_subagent_stop(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "spawn boundary orchestration, kept whole"
-)]
 async fn run_sync_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
@@ -272,12 +270,6 @@ async fn run_sync_spawn(
     trigger: TriggerSource,
     args: SpawnArgs,
 ) -> Result<SpawnOutcome, SpawnFailure> {
-    // The bus + pending-notification path is what makes a background spawn
-    // useful; until it lands, refuse so a half-wired async child does not
-    // orphan a session the parent is never told about.
-    if args.run_in_background {
-        return Err(SpawnFailure::CapabilityDenied);
-    }
     let def = this
         .registry
         .resolve(&args.subagent_type, &ResolveCtx::default())
@@ -342,78 +334,19 @@ async fn run_sync_spawn(
         child_user_context(&this.cwd, def.omit_project_context),
         args.prompt,
     );
-    // Drive the child to a terminal state. A mid-run permission ask
-    // (RunOutcome::Interruption) routes through the bus to the parent's
-    // approval flow, then resume() continues; a child with no bus falls back
-    // to the headless path where Interruption surfaces as interrupted
-    // (terminal_summary maps it). None means canceled mid-run or mid-ask.
-    let cancel_token = handle.cancel.clone();
-    let result: Option<Result<RunResult, _>> = drive::drive_child_to_terminal(
-        Arc::clone(&handle.runner),
-        child_sid,
-        task,
-        cancel_token,
+    let (status, summary, usage) = spawn_exec::finalize_child(
+        handle,
+        this.store.clone(),
         this.bus.clone(),
-        &child_str,
-        &args.subagent_type,
+        this.worktree_controller.clone(),
+        parent_sid,
+        child_sid,
+        child_str.clone(),
+        args.subagent_type.clone(),
+        hook_fire,
+        task,
     )
     .await;
-    if let (Some(cw), Some(ctrl)) = (handle.worktree, this.worktree_controller.as_ref()) {
-        drop(ctrl.cleanup_child(cw).await);
-    }
-    // Close the child's inbox so the parent gets a send_inbox error rather
-    // than queueing into a dead receiver.
-    close_child_inbox(this.bus.as_ref(), &child_str);
-    // The child log holds the partial assistant text a non-final terminal
-    // (max_turns, interrupted) or a failed run leaves behind; surface that
-    // instead of an empty summary so the parent sees what the child did.
-    let child_log = this.store.trajectory_snapshot(child_sid);
-    let (status, summary, usage) = match result {
-        Some(Ok(r)) => terminal_summary(r, &child_log),
-        Some(Err(e)) => {
-            // Keep the failure cause even when partial text exists: the
-            // parent needs to know the run failed, not just what was said.
-            let partial = extract_last_assistant(&child_log);
-            let summary = match partial {
-                Some(p) => format!("run failed: {e}\n\nPartial output:\n{p}"),
-                None => e.to_string(),
-            };
-            ("failed".to_string(), summary, Usage::default())
-        }
-        None => (
-            "interrupted".to_string(),
-            extract_last_assistant(&child_log).unwrap_or_default(),
-            Usage::default(),
-        ),
-    };
-    // SubagentStop fires at the durable return boundary (terminal state
-    // known); pairs with the earlier SubagentStart across the span.
-    fire_subagent_stop(
-        hook_fire.as_ref(),
-        parent_sid,
-        &child_str,
-        &args.subagent_type,
-        &status,
-        extract_last_assistant(&child_log),
-    )
-    .await;
-    // The boundary is for durability/replay; if the append fails the in-memory
-    // result is still valid for this turn, so warn and return the result
-    // rather than discarding the child's work.
-    if record_subagent_return(
-        this.store.as_ref(),
-        parent_sid,
-        &child_str,
-        &status,
-        &summary,
-        &child_str,
-        &usage,
-    )
-    .await
-    .is_err()
-    {
-        tracing::warn!("subagent return boundary write failed for child {child_str}");
-    }
     Ok(SpawnOutcome::sync(child_str, status, summary, usage))
 }
 
@@ -580,13 +513,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_async_spawn_refused() {
-        let (runtime, _store, parent_sid) = runtime_with_text_child("x");
+    async fn test_async_spawn_launches() {
+        let (runtime, store, parent_sid) = runtime_with_text_child("x");
         let ctx = ToolCtx::new("c1").with_session(parent_sid);
         let mut args = SpawnArgs::new("explore", "task", "task");
         args.run_in_background = true;
+        let outcome = runtime
+            .spawn(&ctx, args)
+            .await
+            .expect("async spawn launches, not refused");
+        assert!(
+            outcome.status.is_none(),
+            "async spawn returns no terminal status (it lands later via the bus)"
+        );
+        assert!(
+            !outcome.child_session_id.is_empty(),
+            "async spawn returns a child session id"
+        );
+        // The detached driver runs the child to completion and records the
+        // SubagentReturn boundary in the parent log. Yield to let the
+        // background task run, then poll until the boundary lands.
+        let mut found = false;
+        for _ in 0..200 {
+            tokio::task::yield_now().await;
+            let has_return = store
+                .trajectory_snapshot(parent_sid)
+                .iter()
+                .any(|e| matches!(e.kind, TurnEventKind::SubagentReturn { .. }));
+            if has_return {
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "detached driver recorded SubagentReturn in the parent log"
+        );
+    }
+
+    /// An async spawn of an unknown agent type rejects with UnknownAgent
+    /// before any detached task starts — the resolve gates both paths.
+    #[tokio::test]
+    async fn test_async_spawn_unknown_type() {
+        let (runtime, _store, parent_sid) = runtime_with_text_child("x");
+        let ctx = ToolCtx::new("c1").with_session(parent_sid);
+        let mut args = SpawnArgs::new("nonexistent", "task", "task");
+        args.run_in_background = true;
         let err = runtime.spawn(&ctx, args).await.unwrap_err();
-        assert!(matches!(err, SpawnFailure::CapabilityDenied));
+        assert!(matches!(err, SpawnFailure::UnknownAgent));
     }
 
     /// A sync spawn announces on the spawned topic so a fleet watcher can
