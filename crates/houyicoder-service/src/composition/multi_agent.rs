@@ -188,9 +188,16 @@ impl SpawnHandle for MultiAgentRuntime {
 }
 
 /// Announce a child spawn on the global topic so a watcher (the fleet
-/// projector) can subscribe to that child's progress and completed topics
-/// before the first turn lands. Fire-and-forget: no watcher, no effect.
-fn announce_spawn(bus: Option<&Arc<AgentBus>>, child_id: &str, subagent_type: &str) {
+/// projector, the completion notification injector) can subscribe to that
+/// child's progress and completed topics before the first turn lands. The
+/// run_in_background flag lets the notification injector filter detached
+/// (async) spawns from sync ones. Fire-and-forget: no watcher, no effect.
+fn announce_spawn(
+    bus: Option<&Arc<AgentBus>>,
+    child_id: &str,
+    subagent_type: &str,
+    run_in_background: bool,
+) {
     use houyicoder_async::bus::MessageBus;
     use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, spawned_topic};
     if let Some(bus) = bus {
@@ -199,6 +206,7 @@ fn announce_spawn(bus: Option<&Arc<AgentBus>>, child_id: &str, subagent_type: &s
             BusMessage::Spawned {
                 agent_id: child_id.to_string(),
                 subagent_type: subagent_type.to_string(),
+                run_in_background,
             },
         );
     }
@@ -318,7 +326,7 @@ async fn run_sync_spawn(
     let handle = spawn_child(req).await.map_err(map_spawn_err)?;
     let child_sid = handle.session;
     let child_str = child_sid.to_string();
-    announce_spawn(this.bus.as_ref(), &child_str, &args.subagent_type);
+    announce_spawn(this.bus.as_ref(), &child_str, &args.subagent_type, false);
     // SubagentStart fires at the durable spawn boundary (child session exists,
     // SubagentSpawn recorded, run not started); pairs with the later
     // SubagentStop across the SubagentSpawn-to-Return span.
@@ -594,9 +602,14 @@ mod tests {
             BusMessage::Spawned {
                 agent_id,
                 subagent_type,
+                run_in_background,
             } => {
                 assert!(!agent_id.is_empty());
                 assert_eq!(subagent_type, "explore");
+                assert!(
+                    !run_in_background,
+                    "sync spawn must announce run_in_background=false"
+                );
             }
             other => panic!("expected Spawned, got {other:?}"),
         }

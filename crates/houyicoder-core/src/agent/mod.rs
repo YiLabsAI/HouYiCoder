@@ -274,6 +274,12 @@ pub struct Runner {
     /// no ack channel). std Mutex: drain is non-blocking, no await under the
     /// lock.
     queued_input: std::sync::Mutex<std::collections::VecDeque<String>>,
+    /// Lower-priority notifications (an async child completed). Drained at a
+    /// turn boundary only after queued_input is empty, so a user interjection
+    /// always lands before a notification that queued at the same instant —
+    /// notifications never starve user input. std Mutex: drain is non-blocking,
+    /// no await under the lock.
+    queued_notifications: std::sync::Mutex<std::collections::VecDeque<String>>,
     /// Texts the drive loop drained from queued_input this run. The host
     /// reads + clears it at run end so it can tell the frontend which queued
     /// messages were injected (the frontend removes them from its copy).
@@ -480,50 +486,11 @@ impl Runner {
                             usage,
                         });
                     }
-                    // Mid-turn interjection: drain the host-submitted queue
-                    // + append each as a user message before the next model
-                    // call. The model then sees the interjection on its next
-                    // call + responds + resumes the in-flight task — the
-                    // turn-boundary injection point (finer than the
-                    // run-boundary queue). Drain into a Vec first so the
-                    // &self borrow for append_user_input does not overlap the
-                    // queue field's Mutex guard.
-                    let pending_user: Vec<String> = {
-                        let mut q = self.queued_input.lock().expect("queued_input lock");
-                        q.drain(..).collect()
-                    };
-                    // Bus inbox: drain texts the parent steered into this
-                    // child since the last turn. These skip consumed_input
-                    // (no host frontend copy to reconcile) but append through
-                    // the same path and share the memory recall below.
-                    let inbox_pending = self.drain_inbox();
-                    let had_pending = !pending_user.is_empty() || !inbox_pending.is_empty();
-                    if !pending_user.is_empty() {
-                        self.consumed_input
-                            .lock()
-                            .expect("consumed_input lock")
-                            .extend(pending_user.iter().cloned());
-                    }
-                    for msg in pending_user {
-                        self.append_mid_turn_input(session, msg).await?;
-                    }
-                    for msg in inbox_pending {
-                        self.append_mid_turn_input(session, msg).await?;
-                    }
-                    // Recall memory for the queued interjection's query too
-                    // (the latest user input), so a mid-turn "now help with
-                    // X" gets X's memories rather than riding the original
-                    // turn's recall. Same turn-entry path as run(); the
-                    // projection merges the new MemoryRecall into the queued
-                    // user message. No-op when no memory provider is wired.
-                    if had_pending {
-                        self.inject_memory_recall(session).await?;
-                        // A drained mid-turn input may follow a compaction
-                        // that folded the listing + invoked bodies out;
-                        // re-announce both so the model keeps skill
-                        // discovery + the directives for the rest of the run.
-                        self.inject_skill_listing_and_body(session).await?;
-                    }
+                    // Mid-turn interjection: drain the host-submitted queue,
+                    // the bus inbox, + lower-priority completion notifications,
+                    // appending each as a user message before the next model
+                    // call. Extracted so the drive loop body stays readable.
+                    self.drain_turn_boundary(session).await?;
                     let response = self
                         .model_call_stream(session, turn, self.config.max_turns, token)
                         .await?;
@@ -597,6 +564,63 @@ impl Runner {
                 }
             }
         }
+    }
+
+    /// Drain the turn-boundary injection buffer: host-submitted user
+    /// interjections, bus-inbox steering texts, and lower-priority completion
+    /// notifications. Appends each as a user message the next model call sees,
+    /// then re-runs memory recall + skill listing for the injected query.
+    /// Notifications defer to user input — drained only when the user queue is
+    /// empty — so a notification never jumps ahead of a pending user message.
+    async fn drain_turn_boundary(&self, session: SessionId) -> Result<(), RunError> {
+        let pending_user: Vec<String> = {
+            let mut q = self.queued_input.lock().expect("queued_input lock");
+            q.drain(..).collect()
+        };
+        let inbox_pending = self.drain_inbox();
+        // Notifications are lower priority than a user interjection: drain
+        // them only when no user input is pending, so a notification that
+        // queued the same instant as a user message never lands first. A
+        // pending notification waits for the next idle boundary.
+        let pending_notifications: Vec<String> = if pending_user.is_empty() {
+            let mut q = self
+                .queued_notifications
+                .lock()
+                .expect("queued_notifications lock");
+            q.drain(..).collect()
+        } else {
+            Vec::new()
+        };
+        let had_pending = !pending_user.is_empty()
+            || !inbox_pending.is_empty()
+            || !pending_notifications.is_empty();
+        if !pending_user.is_empty() {
+            self.consumed_input
+                .lock()
+                .expect("consumed_input lock")
+                .extend(pending_user.iter().cloned());
+        }
+        for msg in pending_user {
+            self.append_mid_turn_input(session, msg).await?;
+        }
+        for msg in inbox_pending {
+            self.append_mid_turn_input(session, msg).await?;
+        }
+        for msg in pending_notifications {
+            self.append_mid_turn_input(session, msg).await?;
+        }
+        // Recall memory for the injected query (the latest user input), so a
+        // mid-turn "now help with X" gets X's memories rather than riding the
+        // original turn's recall. No-op when no memory provider is wired.
+        if had_pending {
+            self.inject_memory_recall(session).await?;
+            // A drained mid-turn input may follow a compaction that folded
+            // the listing + invoked bodies out; re-announce both so the
+            // model keeps skill discovery + the directives for the rest of
+            // the run.
+            self.inject_skill_listing_and_body(session).await?;
+        }
+        Ok(())
     }
 }
 

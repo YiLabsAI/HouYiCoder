@@ -47,13 +47,37 @@ impl Tool for QueuingTool {
 struct CaptureProvider {
     calls: std::sync::Mutex<usize>,
     seen: std::sync::Mutex<Vec<String>>,
+    tool_name: String,
 }
 impl CaptureProvider {
     fn new() -> Self {
         Self {
             calls: std::sync::Mutex::new(0),
             seen: std::sync::Mutex::new(Vec::new()),
+            tool_name: "queue_user".into(),
         }
+    }
+    fn with_tool(name: &str) -> Self {
+        Self {
+            calls: std::sync::Mutex::new(0),
+            seen: std::sync::Mutex::new(Vec::new()),
+            tool_name: name.into(),
+        }
+    }
+    fn capture_input(&self, req: &CompletionRequest) {
+        let input = serde_json::to_string(&req.input).unwrap_or_default();
+        self.seen
+            .lock()
+            .expect("seen")
+            .push(format!("{}\n{input}", req.instructions));
+    }
+    fn next_script(&self) -> CompletionResponse {
+        let mut c = self.calls.lock().expect("calls");
+        *c += 1;
+        let n = *c;
+        let tool_name = self.tool_name.clone();
+        drop(c);
+        scripted_capture(n, &tool_name)
     }
 }
 impl houyicoder_api::provider::ModelProvider for CaptureProvider {
@@ -61,38 +85,24 @@ impl houyicoder_api::provider::ModelProvider for CaptureProvider {
         &self,
         req: CompletionRequest,
     ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
-        let input = serde_json::to_string(&req.input).unwrap_or_default();
-        self.seen
-            .lock()
-            .expect("seen")
-            .push(format!("{}\n{input}", req.instructions));
-        let mut c = self.calls.lock().expect("calls");
-        *c += 1;
-        let n = *c;
-        drop(c);
-        Box::pin(async move { Ok(scripted_capture(n)) })
+        self.capture_input(&req);
+        let resp = self.next_script();
+        Box::pin(async move { Ok(resp) })
     }
     fn stream(
         &self,
         req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>>
     {
-        let input = serde_json::to_string(&req.input).unwrap_or_default();
-        self.seen
-            .lock()
-            .expect("seen")
-            .push(format!("{}\n{input}", req.instructions));
-        let mut c = self.calls.lock().expect("calls");
-        *c += 1;
-        let n = *c;
-        drop(c);
-        houyicoder_api::provider::stream_from_response(scripted_capture(n))
+        self.capture_input(&req);
+        let resp = self.next_script();
+        houyicoder_api::provider::stream_from_response(resp)
     }
     fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
         houyicoder_protocol::llm::ModelCapabilities::default()
     }
 }
-fn scripted_capture(n: usize) -> CompletionResponse {
+fn scripted_capture(n: usize, tool_name: &str) -> CompletionResponse {
     if n == 1 {
         CompletionResponse {
             output: vec![
@@ -101,7 +111,7 @@ fn scripted_capture(n: usize) -> CompletionResponse {
                 },
                 OutputItem::ToolCall {
                     id: "q1".into(),
-                    name: "queue_user".into(),
+                    name: tool_name.into(),
                     input: serde_json::json!({}),
                 },
             ],
@@ -315,6 +325,160 @@ async fn test_run_repairs_orphan_call() {
         checked, 1,
         "exactly one assistant turn with tool_calls (the orphan) was checked"
     );
+}
+
+/// A notification (an async child completed) enqueued at the same instant as
+/// a user interjection must defer: the user message lands in the turn-2 input,
+/// the notification stays queued. A notification never jumps ahead of pending
+/// user input.
+#[tokio::test]
+async fn test_notification_defers_to_user() {
+    let slot = std::sync::Arc::new(std::sync::OnceLock::<Arc<Runner>>::new());
+    let provider = Arc::new(CaptureProvider::with_tool("enqueue_both"));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(EnqueueBothTool::new(
+        std::sync::Arc::clone(&slot),
+        "user interjection",
+        "child finished working",
+    )));
+    let runner = Arc::new(runner_with(
+        Arc::clone(&provider) as Arc<dyn houyicoder_api::provider::ModelProvider>,
+        tools,
+    ));
+    slot.set(Arc::clone(&runner)).ok();
+    let session = houyicoder_context::SessionId::new();
+    let result = runner
+        .run(session, "do the task".into())
+        .await
+        .expect("run");
+    assert!(matches!(result.outcome, RunOutcome::FinalOutput(t) if t == "done"));
+    let seen = provider.seen.lock().expect("seen");
+    assert!(
+        seen[1].contains("user interjection"),
+        "turn-2 input carries the queued user message: {}",
+        seen[1]
+    );
+    assert!(
+        !seen[1].contains("child finished working"),
+        "turn-2 input must NOT carry the deferred notification: {}",
+        seen[1]
+    );
+    // The notification is still pending — it waits for an idle boundary.
+    assert_eq!(
+        runner.queued_notifications_snapshot(),
+        vec!["child finished working".to_string()],
+        "notification stays queued while user input was pending"
+    );
+}
+
+/// A notification enqueued with no pending user input drains at the next turn
+/// boundary, so the model learns the child finished. Notifications are not
+/// starved indefinitely, only deferred behind user input.
+#[tokio::test]
+async fn test_notification_drains_when_idle() {
+    let slot = std::sync::Arc::new(std::sync::OnceLock::<Arc<Runner>>::new());
+    let provider = Arc::new(CaptureProvider::with_tool("enqueue_notification"));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(EnqueueNotificationTool::new(
+        std::sync::Arc::clone(&slot),
+        "child finished working",
+    )));
+    let runner = Arc::new(runner_with(
+        Arc::clone(&provider) as Arc<dyn houyicoder_api::provider::ModelProvider>,
+        tools,
+    ));
+    slot.set(Arc::clone(&runner)).ok();
+    let session = houyicoder_context::SessionId::new();
+    let result = runner
+        .run(session, "do the task".into())
+        .await
+        .expect("run");
+    assert!(matches!(result.outcome, RunOutcome::FinalOutput(t) if t == "done"));
+    let seen = provider.seen.lock().expect("seen");
+    assert!(
+        seen[1].contains("child finished working"),
+        "turn-2 input carries the drained notification: {}",
+        seen[1]
+    );
+    assert!(
+        runner.queued_notifications_snapshot().is_empty(),
+        "notification drained, queue is empty"
+    );
+}
+
+struct EnqueueBothTool {
+    slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>,
+    user_msg: String,
+    notification: String,
+}
+impl EnqueueBothTool {
+    fn new(
+        slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>,
+        user_msg: &str,
+        notification: &str,
+    ) -> Self {
+        Self {
+            slot,
+            user_msg: user_msg.into(),
+            notification: notification.into(),
+        }
+    }
+}
+impl Tool for EnqueueBothTool {
+    fn name(&self) -> &str {
+        "enqueue_both"
+    }
+    fn description(&self) -> &str {
+        "test tool: enqueues a user message + a notification"
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn execute(
+        &self,
+        _ctx: ToolCtx,
+        _input: serde_json::Value,
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
+        if let Some(r) = self.slot.get() {
+            r.enqueue_input(self.user_msg.clone());
+            r.enqueue_notification(self.notification.clone());
+        }
+        Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
+    }
+}
+
+struct EnqueueNotificationTool {
+    slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>,
+    notification: String,
+}
+impl EnqueueNotificationTool {
+    fn new(slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>, notification: &str) -> Self {
+        Self {
+            slot,
+            notification: notification.into(),
+        }
+    }
+}
+impl Tool for EnqueueNotificationTool {
+    fn name(&self) -> &str {
+        "enqueue_notification"
+    }
+    fn description(&self) -> &str {
+        "test tool: enqueues a notification"
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn execute(
+        &self,
+        _ctx: ToolCtx,
+        _input: serde_json::Value,
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
+        if let Some(r) = self.slot.get() {
+            r.enqueue_notification(self.notification.clone());
+        }
+        Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
+    }
 }
 
 /// A clean log (every ToolCall has a matching ToolResult) must not gain any

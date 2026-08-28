@@ -71,6 +71,7 @@ impl Runner {
             auto_memory: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             auto_dream: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             queued_input: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            queued_notifications: std::sync::Mutex::new(std::collections::VecDeque::new()),
             consumed_input: std::sync::Mutex::new(Vec::new()),
             redundancy: std::sync::Mutex::new(redundancy::RedundancyTracker::new()),
             denied_agents: Arc::new(std::collections::HashSet::new()),

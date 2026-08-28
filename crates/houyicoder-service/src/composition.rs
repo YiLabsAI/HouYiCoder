@@ -11,6 +11,7 @@
 mod api_key;
 mod effort_resolver;
 pub mod fleet_projector;
+pub mod notification_drain;
 pub use effort_resolver::{effort_to_persist, persist_model_pick};
 mod built_in_tools;
 mod hooks;

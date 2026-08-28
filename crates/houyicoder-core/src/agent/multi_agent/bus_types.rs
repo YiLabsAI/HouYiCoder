@@ -27,10 +27,15 @@ pub enum BusMessage {
     /// A message delivered to a child's inbox (parent -> child).
     Inbox { text: String },
     /// Announced when a child spawns so a watcher can subscribe to that
-    /// child's progress and completed topics before the first turn lands.
+    /// child's progress and completed topics before the first turn lands. The
+    /// run_in_background flag marks detached (async) spawns: a completion
+    /// notification injector subscribes only to those, so a sync child — whose
+    /// result the parent already receives as the tool result — does not get a
+    /// redundant "child completed" notification re-injected into its own turn.
     Spawned {
         agent_id: String,
         subagent_type: String,
+        run_in_background: bool,
     },
     /// A child asks the parent to approve a guarded tool call. Published on
     /// the global permission-request topic; the parent server subscribes,

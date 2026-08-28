@@ -201,6 +201,7 @@ mod tests {
             BusMessage::Spawned {
                 agent_id: "x".into(),
                 subagent_type: "explore".into(),
+                run_in_background: false,
             },
         )
         .await

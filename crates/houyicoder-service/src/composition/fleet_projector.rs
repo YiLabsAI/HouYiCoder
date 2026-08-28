@@ -41,6 +41,7 @@ pub fn spawn(
             if let Ok(BusMessage::Spawned {
                 agent_id,
                 subagent_type,
+                run_in_background: _,
             }) = spawned_rx.recv().await
             {
                 let progress_rx = bus.subscribe(&progress_topic(&agent_id));
@@ -164,6 +165,7 @@ mod tests {
             BusMessage::Spawned {
                 agent_id: "c1".into(),
                 subagent_type: "explore".into(),
+                run_in_background: false,
             },
         );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

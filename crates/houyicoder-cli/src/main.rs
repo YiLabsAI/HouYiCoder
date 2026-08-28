@@ -698,6 +698,18 @@ fn pair_inproc_server(
     // host pushes them as initial transcript system lines — no async-sink race.
     let startup_warnings = runner.drain_startup_warnings();
     let runner = Arc::new(runner);
+    // Completion notification injector: when a detached (async) child
+    // finishes, enqueue a lower-priority notification into the parent's
+    // mid-turn queue so the parent model learns the child finished on its
+    // next turn boundary. Shares the same bus as the fleet projector;
+    // no-op without one.
+    houyicoder_service::composition::notification_drain::spawn(
+        server_bus.clone(),
+        Arc::clone(&runner),
+        houyicoder_tui::composition::shared_runtime()
+            .handle()
+            .clone(),
+    );
     let server_io = ServerIo::new(s2c_tx, c2s_rx);
     // The server takes the composition's gate — the same Arc the GuardedTool
     // wrappers hold — so wire /mode and /rules writes reach the gate that

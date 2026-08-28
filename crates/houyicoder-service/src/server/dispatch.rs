@@ -542,6 +542,7 @@ impl Server {
                 // survive into the cleared one. The host is the single truth
                 // source; the server queue is the current run's buffer only.
                 self.runner.clear_input_queue();
+                self.runner.clear_notifications();
                 // The trajectory cursor tracks how many events this client has
                 // seen; a reset clears the log, so the cursor rewinds to zero
                 // (the next run replays from a fresh log).

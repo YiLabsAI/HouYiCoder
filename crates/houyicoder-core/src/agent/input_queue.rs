@@ -20,6 +20,18 @@ impl Runner {
             .push_back(text);
     }
 
+    /// Enqueue a lower-priority notification (an async child completed) for
+    /// mid-turn injection. The drive loop drains this queue at the next turn
+    /// boundary only after the user-input queue is empty, so a notification
+    /// never jumps ahead of a pending user message. Callable from any
+    /// Arc<Runner> the host holds, like enqueue_input.
+    pub fn enqueue_notification(&self, text: String) {
+        self.queued_notifications
+            .lock()
+            .expect("queued_notifications lock")
+            .push_back(text);
+    }
+
     /// Remove the first queued message whose text matches. The frontend calls
     /// this (via the wire) when it deletes a queue entry from its overlay, or
     /// when it pops the head to start a follow-up run so the new run does not
@@ -52,6 +64,19 @@ impl Runner {
         self.queued_input.lock().expect("queued_input lock").clear();
     }
 
+    /// Drop every queued notification without draining it. A state-changing
+    /// command (session reset/clear) invalidates the notification buffer for
+    /// the pre-clear context — a child that completed during that context is
+    /// not relevant to the cleared one. Notifications are NOT cleared on a
+    /// normal terminal run (finalize_input_buffer): a pending notification
+    /// survives to the next run so the parent still learns the child finished.
+    pub fn clear_notifications(&self) {
+        self.queued_notifications
+            .lock()
+            .expect("queued_notifications lock")
+            .clear();
+    }
+
     /// Drop the server injection buffer on a terminal run end (any outcome
     /// but Interruption, or an Err); keep it on Interruption (a permission
     /// pause -- the run resumes). Called from the drive_loop wrapper so
@@ -76,6 +101,18 @@ impl Runner {
         self.queued_input
             .lock()
             .expect("queued_input lock")
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Test-only snapshot of the queued notifications, in FIFO order. Lets a
+    /// test prove the injector enqueued (and the priority drain deferred)
+    /// without driving a full run.
+    pub fn queued_notifications_snapshot(&self) -> Vec<String> {
+        self.queued_notifications
+            .lock()
+            .expect("queued_notifications lock")
             .iter()
             .cloned()
             .collect()
