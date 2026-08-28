@@ -43,6 +43,7 @@ mod redundancy;
 mod resolve;
 mod retention;
 pub(crate) mod reward_snapshot;
+mod skill_body;
 mod skill_listing;
 mod skill_slash;
 mod status;
@@ -511,9 +512,10 @@ impl Runner {
                     if had_pending {
                         self.inject_memory_recall(session).await?;
                         // A drained mid-turn input may follow a compaction
-                        // that folded the listing out; re-announce so the
-                        // model keeps skill discovery for the rest of the run.
-                        self.inject_skill_listing(session).await?;
+                        // that folded the listing + invoked bodies out;
+                        // re-announce both so the model keeps skill
+                        // discovery + the directives for the rest of the run.
+                        self.inject_skill_listing_and_body(session).await?;
                     }
                     let response = self
                         .model_call_stream(session, turn, self.config.max_turns, token)

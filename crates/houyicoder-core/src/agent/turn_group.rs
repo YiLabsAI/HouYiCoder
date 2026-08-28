@@ -88,6 +88,10 @@ pub fn project_input_items_with(
                 append_user_text(&mut items, text);
                 i += 1;
             }
+            TurnEventKind::SkillBody { content, .. } => {
+                append_user_text(&mut items, content);
+                i += 1;
+            }
             // Mid-work interjection: wrap with a framing note so the model
             // reads "continue the task + address", not a fresh instruction
             // that drops the in-flight task. The bare text stays in the

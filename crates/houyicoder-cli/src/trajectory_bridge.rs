@@ -174,6 +174,7 @@ fn project_event(ev: &TurnEvent, start_ms: u64, calls: &CallIndex) -> Option<Tra
         | TurnEventKind::MetaUser { .. }
         | TurnEventKind::MemoryRecall { .. }
         | TurnEventKind::SkillListing { .. }
+        | TurnEventKind::SkillBody { .. }
         | TurnEventKind::AssistantTextDelta { .. }
         | TurnEventKind::WorktreeEnter { .. }
         | TurnEventKind::WorktreeExit { .. }

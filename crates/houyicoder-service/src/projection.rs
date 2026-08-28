@@ -470,6 +470,7 @@ pub fn project_session_update(kind: &TurnEventKind) -> Option<SessionUpdate> {
         | TurnEventKind::MetaUser { .. }
         | TurnEventKind::MemoryRecall { .. }
         | TurnEventKind::SkillListing { .. }
+        | TurnEventKind::SkillBody { .. }
         | TurnEventKind::CompactionBoundary { .. }
         | TurnEventKind::Summary { .. }
         | TurnEventKind::PermissionDecision { .. }
@@ -544,6 +545,7 @@ pub(crate) fn project_acpx_context(kind: &TurnEventKind) -> Option<AcpxNotificat
         | TurnEventKind::MidTurnInput { .. }
         | TurnEventKind::MemoryRecall { .. }
         | TurnEventKind::SkillListing { .. }
+        | TurnEventKind::SkillBody { .. }
         | TurnEventKind::AssistantMessage { .. }
         | TurnEventKind::AssistantTextDelta { .. }
         | TurnEventKind::ToolCall { .. }

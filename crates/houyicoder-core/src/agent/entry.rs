@@ -106,18 +106,24 @@ impl Runner {
         // resume() does not reconcile — pending approvals are re-raised, not voided.
         self.reconcile_tool_results(session).await?;
         // Slash skill dispatch: resolve /skill-name args BEFORE appending
-        // so the raw text stays as the UserInput (transcript shows what the
-        // user typed) and the prepared body lands as a MetaUser after it
-        // (the model reads it as a directive; transcript-skipped in brief
-        // mode). Not-a-skill yields None and the run proceeds with the raw
-        // UserInput only. Gated on user-invocable, not model-invocation.
+        // so the raw text stays as the UserInput and the prepared body lands
+        // as a durable SkillBody. SkillBody (not MetaUser) so the directive
+        // survives a compaction boundary — compaction folds a MetaUser.
         let skill_meta = self.resolve_skill_slash(session, &user_input).await;
         self.append_user_input(session, user_input).await?;
         match skill_meta {
             crate::agent::skill_slash::SkillSlashOutcome::NotASkill => {}
-            crate::agent::skill_slash::SkillSlashOutcome::Prepared(body) => {
+            crate::agent::skill_slash::SkillSlashOutcome::Prepared { name, body } => {
                 self.store
-                    .append(new_event(session, TurnEventKind::MetaUser { text: body }))
+                    .append(new_event(
+                        session,
+                        TurnEventKind::SkillBody {
+                            skill_name: name,
+                            content: body,
+                            agent_id: None,
+                            untrusted: false,
+                        },
+                    ))
                     .await?;
             }
             crate::agent::skill_slash::SkillSlashOutcome::Refused(notice) => {
@@ -146,7 +152,7 @@ impl Runner {
         // to invoke. Skips when a listing already survives in the served
         // view (first-turn announce, then no-op until compaction folds it
         // and the scan naturally resets). No-op when no registry is wired.
-        self.inject_skill_listing(session).await?;
+        self.inject_skill_listing_and_body(session).await?;
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
         // Notify any watcher the run reached a terminal state. On Ok the
         // status comes from the outcome; on Err the run failed. A spawned

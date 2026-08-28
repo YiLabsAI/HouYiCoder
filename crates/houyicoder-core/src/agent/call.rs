@@ -222,7 +222,7 @@ impl Runner {
                             // served view; re-announce so the model is not
                             // skill-blind for the rest of this run. No-op
                             // when a listing still survives (dedup scan).
-                            self.inject_skill_listing(session).await?;
+                            self.inject_skill_listing_and_body(session).await?;
                             continue 'outer;
                         }
                     }
@@ -263,7 +263,7 @@ impl Runner {
                     self.inject_memory_recall(session).await?;
                     // Re-announce skills too: the compact folded the
                     // listing out, so the scan resets and it re-surfaces.
-                    self.inject_skill_listing(session).await?;
+                    self.inject_skill_listing_and_body(session).await?;
                     continue 'outer;
                 }
             }
@@ -407,7 +407,7 @@ impl Runner {
                             self.inject_memory_recall(session).await?;
                             // Re-announce skills: the compact folded the
                             // listing out; the scan resets and re-surfaces it.
-                            self.inject_skill_listing(session).await?;
+                            self.inject_skill_listing_and_body(session).await?;
                             continue 'outer;
                         }
                         Some(Err(e)) => return Err(RunError::ProviderFatal(e)),

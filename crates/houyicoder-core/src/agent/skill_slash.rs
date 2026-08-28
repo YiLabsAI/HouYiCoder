@@ -58,9 +58,10 @@ pub(crate) enum SkillSlashOutcome {
     /// Not a /-skill (a path, an unknown /-token, or no registry wired).
     /// The run proceeds with the raw UserInput only.
     NotASkill,
-    /// A user-invocable skill: append the prepared body as a MetaUser the
-    /// model reads as a directive.
-    Prepared(String),
+    /// A user-invocable skill: append the prepared body as a durable
+    /// SkillBody the model reads as a directive (and that survives a
+    /// compaction boundary, unlike a MetaUser which compaction folds).
+    Prepared { name: String, body: String },
     /// A skill that is not user-invocable. Surface the notice to the user
     /// as a system line and end the turn without a model call — the model
     /// has nothing to do for a refused skill.
@@ -104,7 +105,7 @@ impl Runner {
             ));
         }
         match registry.prepare_body(&name, args, Some(&sid)) {
-            Ok(body) => SkillSlashOutcome::Prepared(body),
+            Ok(body) => SkillSlashOutcome::Prepared { name, body },
             Err(SkillError::NotFound(_)) => SkillSlashOutcome::NotASkill,
             Err(other) => SkillSlashOutcome::Refused(format!("skill invocation failed: {other}")),
         }
@@ -239,7 +240,8 @@ mod tests {
             .resolve_skill_slash(SessionId::new(), "/commit fix typo")
             .await;
         match outcome {
-            SkillSlashOutcome::Prepared(body) => {
+            SkillSlashOutcome::Prepared { name, body } => {
+                assert_eq!(name, "commit", "name carried: {name}");
                 assert!(body.contains("commit body: fix typo"), "{body}")
             }
             other => panic!("expected Prepared, got {other:?}"),
@@ -308,7 +310,7 @@ mod tests {
     /// A full run() with /skill-name lands the raw text as UserInput AND
     /// the prepared body as a MetaUser — the transcript shows what the
     /// user typed, the model reads the body as a directive. Covers the
-    /// run() entry integration (resolve + append MetaUser).
+    /// run() entry integration (resolve + append SkillBody).
     #[tokio::test]
     async fn test_run_lands_skill_body() {
         use houyicoder_context::TurnEventKind;
@@ -329,15 +331,21 @@ mod tests {
             Some("/commit fix typo"),
             "raw /-text kept"
         );
-        // The prepared body lands as a MetaUser the model reads as a directive.
-        let meta = view.events.iter().find_map(|e| match &e.kind {
-            TurnEventKind::MetaUser { text } => Some(text.clone()),
+        // The prepared body lands as a durable SkillBody (not a MetaUser, so
+        // it survives a compaction boundary).
+        let body = view.events.iter().find_map(|e| match &e.kind {
+            TurnEventKind::SkillBody {
+                skill_name,
+                content,
+                ..
+            } => Some((skill_name.clone(), content.clone())),
             _ => None,
         });
-        let meta = meta.expect("a MetaUser with the prepared body was appended");
+        let (name, content) = body.expect("a SkillBody with the prepared body was appended");
+        assert_eq!(name, "commit", "skill_name carried: {name}");
         assert!(
-            meta.contains("commit body: fix typo"),
-            "body in MetaUser: {meta}"
+            content.contains("commit body: fix typo"),
+            "body in SkillBody: {content}"
         );
     }
 
@@ -365,13 +373,13 @@ mod tests {
             e.kind,
             TurnEventKind::UserInput { ref text } if text == "/secret"
         )));
-        // No MetaUser body + no assistant message: the model never ran.
+        // No SkillBody + no assistant message: the model never ran.
         assert!(
             !view.events.iter().any(|e| matches!(
                 e.kind,
-                TurnEventKind::MetaUser { .. } | TurnEventKind::AssistantMessage { .. }
+                TurnEventKind::SkillBody { .. } | TurnEventKind::AssistantMessage { .. }
             )),
-            "refusal skips the model (no MetaUser body, no assistant message)"
+            "refusal skips the model (no SkillBody, no assistant message)"
         );
     }
 }

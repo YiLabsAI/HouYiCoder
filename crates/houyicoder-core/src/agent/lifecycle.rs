@@ -202,6 +202,7 @@ fn event_byte_len(event: &TurnEvent) -> usize {
         | TurnEventKind::MidTurnInput { text }
         | TurnEventKind::MemoryRecall { text, .. }
         | TurnEventKind::SkillListing { text, .. } => text.len(),
+        TurnEventKind::SkillBody { content, .. } => content.len(),
         TurnEventKind::RewardObservation { .. } => 0,
         TurnEventKind::Unknown => 0,
         TurnEventKind::AssistantMessage { text, thinking } => {

@@ -225,11 +225,18 @@ pub async fn build_manifest(
     let plan = group_into_turn_groups(events, &dispositions);
 
     // 4. Summary of the folded (Summarized) span (deltas excluded so the
-    //    LLM summarizer does not see duplicated text).
+    //    LLM summarizer does not see duplicated text). SkillBody is also
+    //    excluded: an invoked skill's body is revived post-compact, not
+    //    summarized, so it never enters the summary channel (no untrusted-
+    //    text leak, no double-billing when the revive re-serves it).
     let folded: Vec<&TurnEvent> = events
         .iter()
         .zip(dispositions.iter())
-        .filter(|(e, d)| !is_delta(&e.kind) && **d == Disposition::Summarized)
+        .filter(|(e, d)| {
+            !is_delta(&e.kind)
+                && **d == Disposition::Summarized
+                && !matches!(e.kind, TurnEventKind::SkillBody { .. })
+        })
         .map(|(e, _)| e)
         .collect();
     let summary = if folded.is_empty() {
@@ -439,6 +446,7 @@ fn estimate_event_tokens(event: &TurnEvent, tokenizer: &super::context::Tokenize
         | TurnEventKind::MidTurnInput { text }
         | TurnEventKind::MemoryRecall { text, .. }
         | TurnEventKind::SkillListing { text, .. } => count(text),
+        TurnEventKind::SkillBody { content, .. } => count(content),
         TurnEventKind::RewardObservation { .. } => 0,
         TurnEventKind::Unknown => 0,
         TurnEventKind::AssistantMessage { text, thinking } => {

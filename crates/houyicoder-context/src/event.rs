@@ -149,6 +149,23 @@ pub enum TurnEventKind {
         #[serde(default)]
         bytes: u32,
     },
+    /// A durable record of an invoked skill's body, appended alongside the
+    /// MetaUser the model reads as a directive. Unlike the MetaUser (which
+    /// compaction folds into a summary, dropping the directive), SkillBody
+    /// is excluded from the folded span and revived post-compact, so an
+    /// invoked skill's guidance survives a compaction boundary. The
+    /// untrusted flag marks bodies from non-managed/user sources so the
+    /// projection can frame them; agent_id is None on the host and set when
+    /// a forked child invoked the skill. The append ts is the invoke time.
+    #[serde(rename = "SkillBody")]
+    SkillBody {
+        skill_name: String,
+        content: String,
+        #[serde(default)]
+        agent_id: Option<crate::ids::AgentId>,
+        #[serde(default)]
+        untrusted: bool,
+    },
     AssistantMessage {
         text: String,
         /// Reasoning text that preceded this assistant message, if any. The
