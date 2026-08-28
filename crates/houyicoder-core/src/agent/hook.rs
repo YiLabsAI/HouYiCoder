@@ -95,18 +95,10 @@ impl CapabilityToken {
     }
 }
 
-/// Trust state of a configuration source. Untrusted project hooks are marked
-/// skipped (not silently dropped) so the user can see what was elided.
-/// Type-enforced: a pre-trust token cannot access trusted actions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TrustState {
-    /// User-level or local: trusted by virtue of being on the user's machine.
-    Trusted,
-    /// Project-level, not yet acknowledged by the user via a trust prompt.
-    Untrusted,
-    /// User explicitly trusted this project (slash command or flag).
-    Acknowledged,
-}
+/// Trust state of a configuration source. Consumed from the port crate so
+/// the harness, hooks, and the skill trust-gate share one type; this private
+/// import is for the trust_allows gate below.
+use houyicoder_api::trust::TrustState;
 
 /// Why a session ended. Surfaces in the SessionEnd payload.
 #[derive(Debug, Clone, PartialEq, Eq)]

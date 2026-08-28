@@ -22,3 +22,4 @@ pub mod session;
 pub mod skill;
 pub mod spawn;
 pub mod tool;
+pub mod trust;

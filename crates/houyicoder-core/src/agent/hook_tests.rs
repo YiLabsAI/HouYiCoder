@@ -3,6 +3,7 @@
 
 use super::registry::HookRegistry;
 use super::*;
+use houyicoder_api::trust::TrustState;
 use houyicoder_context::{CheckpointId, SessionId};
 use std::path::PathBuf;
 

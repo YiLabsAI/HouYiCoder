@@ -3,6 +3,7 @@
 //! registry + list visibility method live here.
 
 use super::*;
+use houyicoder_api::trust::TrustState;
 use std::sync::RwLock;
 
 /// Mutable inner state: the hook list + the event-to-index map. Both
