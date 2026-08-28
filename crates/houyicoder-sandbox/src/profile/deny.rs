@@ -97,6 +97,9 @@ const MANDATORY_DENY_DIRS: &[&str] = &[
     ".ssh",
     ".claude/commands",
     ".claude/agents",
+    ".claude/skills",
+    ".houyicoder/skills",
+    ".agents/skills",
     ".aws",
     ".gnupg",
     ".kube",
@@ -208,6 +211,26 @@ mod tests {
         assert!(p.contains("(subpath \"/Users/alice/.profile\")"));
         assert!(p.contains("(subpath \"/Users/alice/.claude/commands\")"));
         assert!(p.contains("(subpath \"/Users/alice/.claude/agents\")"));
+    }
+
+    /// Skill definition directories are read+write denied so an agent
+    /// cannot plant or modify a SKILL.md to inject a prompt the model
+    /// later invokes, and cannot exfil a hardcoded secret stashed in a
+    /// skill body. Skill invocation reads the body in the host process
+    /// (outside the sandbox), so the deny does not block invocation.
+    /// Covers all three discovery families; same posture as
+    /// .claude/commands and .claude/agents.
+    #[test]
+    fn test_skill_dirs_denied() {
+        let p = mandatory_deny("/Users/alice", "tag-x");
+        for dir in [".claude/skills", ".houyicoder/skills", ".agents/skills"] {
+            assert!(
+                p.contains(&format!(
+                    "(deny file-read* file-write* (subpath \"/Users/alice/{dir}\")"
+                )),
+                "{dir} must be read+write denied: {p}"
+            );
+        }
     }
 
     #[test]
