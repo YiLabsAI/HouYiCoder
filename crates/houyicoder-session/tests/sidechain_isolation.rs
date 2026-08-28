@@ -59,6 +59,7 @@ async fn test_sidechain_isolates_sessions() {
                 prompt_summary: "find the auth module".into(),
                 isolation: "worktree".into(),
                 policy: "delegate".into(),
+                trigger_source: "model:call-1".into(),
             },
         ))
         .await

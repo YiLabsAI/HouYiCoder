@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::agent::ToolRegistry;
 use crate::agent::multi_agent::registry::IsolationMode;
-use crate::agent::multi_agent::spawn::{SpawnError, SpawnRequest, spawn_child};
+use crate::agent::multi_agent::spawn::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
 use crate::agent::runner_config::RunnerConfig;
 use crate::provider::test_support::FakeProvider;
 
@@ -79,6 +79,9 @@ async fn test_spawn_child_worktree_isolation() {
         subagent_type: "explore".to_string(),
         prompt: "find auth".to_string(),
         prompt_summary: "find auth".to_string(),
+        trigger: TriggerSource::ModelTool {
+            tool_call_id: "wt-call".to_string(),
+        },
         depth: 0,
         isolation: IsolationMode::Worktree,
         worktree_controller: Some(controller.clone()),
@@ -124,6 +127,9 @@ async fn test_spawn_child_fence_fail() {
         subagent_type: "explore".to_string(),
         prompt: "find auth".to_string(),
         prompt_summary: "find auth".to_string(),
+        trigger: TriggerSource::ModelTool {
+            tool_call_id: "wt-call".to_string(),
+        },
         depth: 0,
         isolation: IsolationMode::Worktree,
         worktree_controller: Some(controller),

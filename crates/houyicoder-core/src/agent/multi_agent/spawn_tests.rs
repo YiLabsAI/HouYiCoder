@@ -1,6 +1,6 @@
 //! TDD anchor for spawn_child: the minimal contract before implementation.
 
-use super::{SpawnError, SpawnRequest, spawn_child};
+use super::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
 use houyicoder_async::CancellationToken;
 use houyicoder_context::{SessionId, TurnEventKind};
 use houyicoder_memory::InMemoryBackend;
@@ -30,6 +30,9 @@ fn req_at_depth(
         subagent_type: "explore".to_string(),
         prompt: "find the auth module".to_string(),
         prompt_summary: "find the auth module".to_string(),
+        trigger: TriggerSource::ModelTool {
+            tool_call_id: "test-call".to_string(),
+        },
         depth,
         isolation: IsolationMode::None,
         worktree_controller: None,
@@ -75,16 +78,60 @@ async fn test_spawn_creates_boundary() {
         .iter()
         .find(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. }))
         .expect("parent log must carry the spawn boundary");
-    let recorded_child = match &spawn.kind {
+    let (recorded_child, recorded_trigger) = match &spawn.kind {
         TurnEventKind::SubagentSpawn {
-            child_session_id, ..
-        } => child_session_id.clone(),
+            child_session_id,
+            trigger_source,
+            ..
+        } => (child_session_id.clone(), trigger_source.clone()),
         _ => unreachable!("matched above"),
     };
     assert_eq!(
         recorded_child,
         handle.session.to_string(),
         "spawn boundary must record the child session id"
+    );
+    assert_eq!(
+        recorded_trigger, "model:test-call",
+        "spawn boundary must record the trigger source (a model delegation)"
+    );
+}
+
+/// A system-triggered spawn (a hook/gate, not the model) records its origin
+/// on the SubagentSpawn boundary so a replay distinguishes a gate-driven
+/// spawn from a model delegation. Pins the trigger_source durable trail for
+/// the first-party spawn entry.
+#[tokio::test]
+async fn test_spawn_records_system_trigger() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(FakeProvider::text("ok"));
+    let mut req = req_at_depth(parent_sid, store.clone(), provider, 0);
+    req.trigger = TriggerSource::System {
+        hook: "review_gate".into(),
+    };
+    let handle = spawn_child(req).await.expect("spawn should succeed");
+    let events = store.trajectory_snapshot(parent_sid);
+    let spawn = events
+        .iter()
+        .find(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. }))
+        .expect("parent log must carry the spawn boundary");
+    let recorded_trigger = match &spawn.kind {
+        TurnEventKind::SubagentSpawn { trigger_source, .. } => trigger_source.clone(),
+        _ => unreachable!("matched above"),
+    };
+    assert_eq!(
+        recorded_trigger, "system:review_gate",
+        "system-triggered spawn records its hook origin, not a model delegation"
+    );
+    // The child is spawned regardless of the trigger origin; the capability
+    // baseline is the parent's, so a system trigger does not bypass the
+    // capability intersection rule. The child identity still carries depth+1.
+    assert_eq!(
+        handle.runner.agent_identity().depth,
+        1,
+        "system spawn still produces a depth-tracked child"
     );
 }
 

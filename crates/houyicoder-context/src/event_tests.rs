@@ -41,12 +41,17 @@ fn test_subagent_spawn_round_trip() {
             prompt_summary: "find the auth module".into(),
             isolation: "worktree".into(),
             policy: "delegate".into(),
+            trigger_source: "model:call-1".into(),
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
     let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, e);
     assert!(json.contains("\"type\":\"SubagentSpawn\""));
+    assert!(
+        json.contains("\"trigger_source\":\"model:call-1\""),
+        "trigger_source round-trips so a replay distinguishes the origin: {json}"
+    );
 }
 
 #[test]

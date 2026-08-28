@@ -20,6 +20,7 @@ use houyicoder_core::agent::multi_agent::concurrency_gate::{AcquireResult, Concu
 use houyicoder_core::agent::multi_agent::registry::{
     AgentError, AgentRegistry, IsolationMode, PromptSource, ResolveCtx,
 };
+use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
 use houyicoder_core::agent::multi_agent::{
     SpawnError, SpawnRequest, record_subagent_return, spawn_child,
 };
@@ -159,7 +160,15 @@ impl SpawnHandle for MultiAgentRuntime {
             gate: Arc::clone(&self.gate),
         };
         Box::pin(run_sync_spawn(
-            this, parent_sid, depth, cancel, hook_fire, args,
+            this,
+            parent_sid,
+            depth,
+            cancel,
+            hook_fire,
+            TriggerSource::ModelTool {
+                tool_call_id: ctx.call_id.clone(),
+            },
+            args,
         ))
     }
 
@@ -260,6 +269,7 @@ async fn run_sync_spawn(
     depth: u32,
     cancel: Option<houyicoder_async::CancellationToken>,
     hook_fire: Option<Arc<dyn HookFire>>,
+    trigger: TriggerSource,
     args: SpawnArgs,
 ) -> Result<SpawnOutcome, SpawnFailure> {
     // The bus + pending-notification path is what makes a background spawn
@@ -305,6 +315,7 @@ async fn run_sync_spawn(
         subagent_type: args.subagent_type.clone(),
         prompt: args.prompt.clone(),
         prompt_summary: args.prompt_summary.clone(),
+        trigger,
         depth,
         isolation,
         worktree_controller: this.worktree_controller.clone(),

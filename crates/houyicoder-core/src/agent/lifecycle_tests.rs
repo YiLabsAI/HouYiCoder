@@ -331,6 +331,7 @@ fn test_byte_len_spawn_zero() {
             prompt_summary: "find auth".into(),
             isolation: "worktree".into(),
             policy: "delegate".into(),
+            trigger_source: "model:call-1".into(),
         },
     };
     assert_eq!(event_byte_len(&ev), 0);

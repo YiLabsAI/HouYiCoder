@@ -72,6 +72,7 @@ mod tests {
                 prompt_summary: String::new(),
                 isolation: String::new(),
                 policy: String::new(),
+                trigger_source: String::new(),
             }),
             "spawn"
         );

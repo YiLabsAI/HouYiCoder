@@ -404,6 +404,12 @@ pub enum TurnEventKind {
         isolation: String,
         #[serde(default)]
         policy: String,
+        /// What initiated the spawn — "model:<call_id>" for a model
+        /// delegation via the agent tool, "system:<hook>" for a
+        /// service/hook/gate-driven spawn. Empty on events written
+        /// before the field existed; a replay treats empty as model.
+        #[serde(default)]
+        trigger_source: String,
     },
     /// A spawned sub-agent returned. The status string drives retry policy
     /// (timeout retries, killed does not); summary is the inline result the

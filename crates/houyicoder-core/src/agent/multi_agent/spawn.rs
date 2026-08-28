@@ -28,6 +28,32 @@ use super::registry::IsolationMode;
 /// until the config wire reaches this module.
 const MAX_SPAWN_DEPTH: u32 = 4;
 
+/// What initiated a spawn: the model via the agent tool, or the system
+/// (a hook/gate/automated flow). A system trigger lets a service-layer
+/// gate drive the runtime without going through the model. The
+/// capability baseline is the parent's session capability at the trigger
+/// moment either way, so a system trigger cannot bypass the capability∩
+/// rule.
+#[derive(Debug, Clone)]
+pub enum TriggerSource {
+    /// The model delegated via the agent tool (the existing path).
+    ModelTool { tool_call_id: String },
+    /// A service/hook/gate initiated the spawn (e.g. a review trigger
+    /// gate), not the model. The hook string records which flow fired.
+    System { hook: String },
+}
+
+impl TriggerSource {
+    /// The durable form recorded on the SubagentSpawn event so a replay
+    /// can tell a model-driven delegation from a system-driven gate.
+    pub fn as_durable(&self) -> String {
+        match self {
+            Self::ModelTool { tool_call_id } => format!("model:{tool_call_id}"),
+            Self::System { hook } => format!("system:{hook}"),
+        }
+    }
+}
+
 /// What the caller extracts from a parent Runner to spawn a child.
 pub struct SpawnRequest {
     pub parent_sid: SessionId,
@@ -38,6 +64,10 @@ pub struct SpawnRequest {
     pub subagent_type: String,
     pub prompt: String,
     pub prompt_summary: String,
+    /// What initiated the spawn — the model via the agent tool, or a
+    /// system hook/gate. Recorded on the SubagentSpawn boundary so a
+    /// replay distinguishes a model delegation from a gate-driven spawn.
+    pub trigger: TriggerSource,
     /// Spawn depth of the parent (0 = top-level). The runtime derives this
     /// from the session's spawn ancestry before calling spawn; the child is
     /// depth + 1. Used by the recursion guard to cap nesting.
@@ -192,6 +222,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
             prompt_summary,
             isolation: isolation_str.to_string(),
             policy: "delegate".to_string(),
+            trigger_source: req.trigger.as_durable(),
         },
     );
     store_for_boundary
