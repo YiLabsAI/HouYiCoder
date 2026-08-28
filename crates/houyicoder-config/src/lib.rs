@@ -35,6 +35,8 @@ mod api_key;
 pub use api_key::ApiKeySource;
 pub mod settings_merge;
 pub use settings_merge::{merge_json, read_settings_value};
+pub mod trust;
+pub use trust::{is_path_trusted, persist_project_trust};
 
 // ---- defaults (const, no inline literals at call sites) -------------------
 

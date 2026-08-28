@@ -707,6 +707,13 @@ fn pair_inproc_server(
     if let Some(s) = sandbox_session {
         server = server.with_session(s);
     }
+    // Gate the run loop on the startup workspace-trust prompt: an
+    // unacknowledged project path asks the TUI client once (the trust card),
+    // persists the answer, then enters the frame loop. None when the cwd
+    // cannot be read — no prompt fires.
+    if let Ok(cwd) = std::env::current_dir() {
+        server = server.with_project_path(cwd);
+    }
     // Attach the sidecar so /status renders the identity fields (version /
     // name / cwd / provenance). None on paths without a store (tests).
     if let Some(store) = meta_store {

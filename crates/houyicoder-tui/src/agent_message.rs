@@ -79,6 +79,16 @@ pub enum AgentMessage {
         req_id: RequestId,
         ask: ApprovalRequest,
     },
+    /// A startup workspace-trust ask the server surfaced as a reverse
+    /// request before the run loop. The TUI raises the trust card; the
+    /// verdict returns via a ClientCommand the driver forwards as the
+    /// matching reverse response. Fires once per project path (the answer
+    /// persists in user-level settings), so the card is simpler than
+    /// PermissionAsk: no tool call to resume, no run to pause.
+    TrustAsk {
+        req_id: RequestId,
+        prompt: houyicoder_protocol::frontend::trust::TrustPrompt,
+    },
     /// The run finished (or failed). The driver has already shipped every
     /// Frame for the run, so the event loop rebuilds the transcript from its
     /// own log; no snapshot ships here.
@@ -224,6 +234,13 @@ pub enum ClientCommand {
     Verdict {
         req_id: RequestId,
         decision: ApprovalDecision,
+    },
+    /// Answer a startup workspace-trust ask. accept true persists the
+    /// project path as trusted (the server does the persist); accept false
+    /// ends the session. Mirrors Verdict but for the one-time trust gate.
+    TrustVerdict {
+        req_id: RequestId,
+        accept: bool,
     },
     /// Request a runner status snapshot over the wire (the /status command).
     /// The driver sends the request + ships the reply back as

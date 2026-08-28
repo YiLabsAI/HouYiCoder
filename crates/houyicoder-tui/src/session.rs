@@ -191,6 +191,14 @@ async fn drive_client(
                         payload: ClientResponsePayload::Permission(decision),
                     });
                 }
+                Some(ClientCommand::TrustVerdict { req_id, accept }) => {
+                    outbound.push_back(Outbound::Reverse {
+                        req_id,
+                        payload: ClientResponsePayload::TrustAccept(
+                            houyicoder_protocol::frontend::trust::TrustAccept { accepted: accept },
+                        ),
+                    });
+                }
                 Some(ClientCommand::StatusQuery { req_id }) => {
                     outbound.push_back(Outbound::Request {
                         req_id,
@@ -518,6 +526,11 @@ async fn drive_client(
                         let _send = agent_tx.send(AgentMessage::PermissionAsk {
                             req_id,
                             ask: p,
+                        });
+                    } else if let ServerRequestPayload::TrustPrompt(t) = ask.payload {
+                        let _send = agent_tx.send(AgentMessage::TrustAsk {
+                            req_id,
+                            prompt: t,
                         });
                     }
                 }

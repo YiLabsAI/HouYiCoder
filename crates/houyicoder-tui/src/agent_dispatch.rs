@@ -126,6 +126,14 @@ impl App {
                 self.pending_permission_req_id.set(Some(req_id));
                 self.raise_agent_approval(ask);
             }
+            AgentMessage::TrustAsk { req_id, prompt } => {
+                // Startup workspace-trust gate: the server blocks before the
+                // run loop until the user answers. Raise the trust card (no
+                // run to pause — busy is already false at startup, but the
+                // card's presence gates new message sends until resolved).
+                self.pending_trust = Some(prompt);
+                self.pending_trust_req_id = Some(req_id);
+            }
             // Done / RequestError are intercepted by handle_agent_message
             // (which returns was_final); they never reach the inner match.
             AgentMessage::Done { .. } | AgentMessage::RequestError { .. } => {

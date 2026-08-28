@@ -238,6 +238,13 @@ pub enum ServerRequestPayload {
     /// A tool needs a human verdict before the run proceeds. The turn stays
     /// live; the client answers with a permission decision on the same req_id.
     Permission(crate::frontend::run::ApprovalRequest),
+    /// A one-time workspace-trust ask fired at startup before the run loop
+    /// when the project source is not yet acknowledged. Distinct from
+    /// Permission: trust is a property of the folder, not of an individual
+    /// tool call, so it asks once and persists the answer. The client
+    /// replies with a TrustAccept on the same req_id; a decline ends the
+    /// session.
+    TrustPrompt(crate::frontend::trust::TrustPrompt),
 }
 
 /// A reverse request the server sends to the client. The req_id is server-
@@ -268,6 +275,10 @@ pub enum ClientResponsePayload {
     /// The human verdict on a permission ask, plus an optional edited input
     /// the engine re-feeds to the tool on resume.
     Permission(crate::frontend::run::ApprovalDecision),
+    /// The client answer to a startup TrustPrompt: accepted persists the
+    /// project path as trusted in user-level settings; declined ends the
+    /// session.
+    TrustAccept(crate::frontend::trust::TrustAccept),
 }
 
 /// A reverse-response envelope the client sends to answer a server reverse
@@ -383,15 +394,44 @@ mod tests {
     }
 
     #[test]
-    fn test_client_response_round_trips() {
+    fn test_trust_prompt_envelope() {
+        // A startup workspace-trust ask tags as trust_prompt (distinct from
+        // the per-action permission tag), so a client dispatches it to a
+        // trust card, not a permission card.
+        let ask = ServerRequestEnvelope::new(
+            RequestId(42),
+            ServerRequestPayload::TrustPrompt(crate::frontend::trust::TrustPrompt {
+                project_path: "/proj".into(),
+                risks: vec![crate::frontend::trust::TrustRisk {
+                    kind: "skill_bash".into(),
+                    name: "commit".into(),
+                }],
+            }),
+        );
+        let json = serde_json::to_string(&ask).expect("serialize");
+        let back: ServerRequestEnvelope = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.req_id, RequestId(42));
+        assert!(
+            json.contains("\"trust_prompt\""),
+            "wire tag must be trust_prompt: {json}"
+        );
+    }
+
+    #[test]
+    fn test_trust_accept_envelope() {
         let reply = ClientResponseEnvelope::new(
-            RequestId(11),
-            ClientResponsePayload::Permission(sample_decision()),
+            RequestId(42),
+            ClientResponsePayload::TrustAccept(crate::frontend::trust::TrustAccept {
+                accepted: true,
+            }),
         );
         let json = serde_json::to_string(&reply).expect("serialize");
         let back: ClientResponseEnvelope = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.req_id, RequestId(11));
-        assert!(json.contains("\"permission\""));
+        assert_eq!(back.req_id, RequestId(42));
+        assert!(
+            json.contains("\"trust_accept\""),
+            "wire tag must be trust_accept: {json}"
+        );
     }
 
     #[test]

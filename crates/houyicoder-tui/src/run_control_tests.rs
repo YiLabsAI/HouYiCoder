@@ -882,3 +882,7 @@ mod cursor_priority_tests;
 #[cfg(test)]
 #[path = "approval_render_tests.rs"]
 mod approval_render_tests;
+
+#[cfg(test)]
+#[path = "trust_flow_tests.rs"]
+mod trust_flow_tests;

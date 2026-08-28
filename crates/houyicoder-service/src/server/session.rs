@@ -47,6 +47,7 @@ impl Server {
             sandbox_session: None,
             host: Some(host),
             settings_path: houyicoder_config::settings_path(),
+            project_path: None,
             append_notify: None,
             meta_store: None,
             diagnostics: crate::diagnostics::handle(),

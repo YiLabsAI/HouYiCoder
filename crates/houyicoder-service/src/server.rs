@@ -62,6 +62,7 @@ mod notif;
 /// audit, apply consent) lives in a child module so this file stays under the
 /// size gate.
 mod approval;
+mod trust;
 
 /// Frame emission (push durable events, send typed responses/events on the
 /// seq stream) lives in a child module so this file stays under the size gate.
@@ -110,6 +111,10 @@ pub struct Server {
     /// The settings file path the /memory toggle handler persists to. Tests
     /// override it with a temp path so a flip never touches the real file.
     settings_path: std::path::PathBuf,
+    /// The project workspace path the startup trust prompt gates on. None
+    /// for a non-project session (a test harness, a home-dir run) so no
+    /// prompt fires. Set at the composition root from the resolved cwd.
+    project_path: Option<std::path::PathBuf>,
     /// Optional Append Notify shared with the runner's store: the store fires
     /// notify_one per append, this select's notified() branch wakes to drain
     /// mid-run so a tool-call frame ships while the run is still in flight
@@ -161,6 +166,7 @@ impl Server {
             sandbox_session: None,
             host: None,
             settings_path: houyicoder_config::settings_path(),
+            project_path: None,
             append_notify: None,
             meta_store: None,
             diagnostics: crate::diagnostics::handle(),
@@ -171,6 +177,15 @@ impl Server {
     /// Tests pass a temp path so a flip never writes the real settings file.
     pub fn with_settings_path(mut self, path: std::path::PathBuf) -> Self {
         self.settings_path = path;
+        self
+    }
+
+    /// Set the project workspace path the startup trust prompt gates on.
+    /// The composition root passes the resolved cwd so a project session
+    /// prompts once before the run loop; a non-project session leaves it
+    /// None and skips the prompt.
+    pub fn with_project_path(mut self, path: std::path::PathBuf) -> Self {
+        self.project_path = Some(path);
         self
     }
 
@@ -301,6 +316,12 @@ impl Server {
     /// loop onto a runtime.
     pub async fn serve(mut self, mut io: ServerIo) -> Result<(), WireError> {
         let _negotiated = self.handshake(&mut io).await?;
+        // Ask the client to trust the project workspace before any run
+        // proceeds. One-time, workspace-level (not per-call): a project not
+        // yet acknowledged in user-level settings prompts once, persists the
+        // answer on accept, and ends the session on decline. No-op for a
+        // non-project session (project_path None) or an already-trusted path.
+        let _trust = self.ensure_trust(&mut io).await?;
         // A reattaching connection may find a parked PendingTurn in the host
         // store (the prior connection disconnected mid-permission). Re-emit
         // the remaining asks + resume before entering the frame loop. No-op

@@ -377,6 +377,19 @@ fn handle_approval(app: &mut App, k: KeyEvent) {
     }
 }
 
+/// Keys for the startup workspace-trust card. Enter or y trusts the project
+/// (persists the path so the prompt does not repeat); Esc or n declines,
+/// which ends the session on the server side. Simpler than handle_approval:
+/// no tool input, no focus, no options — a two-button ack.
+fn handle_trust(app: &mut App, k: KeyEvent) {
+    use crossterm::event::KeyCode;
+    match k.code {
+        KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => app.resolve_trust(true),
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => app.resolve_trust(false),
+        _ => {}
+    }
+}
+
 /// Input box keys: type, send, open palette, switch pane, toggle plan mode,
 /// and per-pane hunk/finding keys.
 fn handle_input(app: &mut App, k: KeyEvent) {
@@ -472,6 +485,13 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
     // all input. When Add is active, permission_input.is_active() returns
     // true, and the chars must reach app.input (the user types the rule spec).
     if app.pane == Pane::Permission && !app.permission_input.is_active() {
+        return;
+    }
+    // Trust prompt pending (startup gate): Enter/y trusts, Esc/n declines.
+    // Checked before the approval gate because trust fires once at startup,
+    // before any run; a trust card takes priority over a mid-run approval.
+    if app.pending_trust.is_some() {
+        handle_trust(app, k);
         return;
     }
     // Approval pending: a/r decide, Enter confirms the focus, Esc dismisses.

@@ -21,6 +21,7 @@ pub mod skills;
 pub mod status;
 pub mod tools;
 pub mod trajectory;
+pub mod trust;
 pub mod verdict;
 pub use compact::*;
 pub use context::*;
@@ -30,6 +31,7 @@ pub use memory::*;
 pub use permission::*;
 pub use run::*;
 pub use trajectory::TrajectoryEntry;
+pub use trust::*;
 pub use verdict::Verdict;
 
 /// A wire session id, carried by run verbs (MessageSend, RunCancel) so a

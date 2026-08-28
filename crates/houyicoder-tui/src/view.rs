@@ -32,6 +32,7 @@ pub mod status;
 pub mod teammate_view;
 pub mod todo_list;
 pub mod trajectory_pane;
+pub mod trust;
 pub mod word_diff;
 pub mod working;
 pub mod worktree_pane;
@@ -82,6 +83,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Console => console::draw(f, app),
         Screen::Working => working::draw(f, app),
     }
+    // The startup workspace-trust card overlays last so it sits above the
+    // screen content. Only present while a trust ask is pending (one-time
+    // startup gate, not a per-run concern).
+    trust::draw(f, app);
     // The /search slash-command result renders inline as a pane inside the
     // working surface (see working::draw_search_pane), not as a centered
     // popup overlay, so opening it does not cover the transcript.

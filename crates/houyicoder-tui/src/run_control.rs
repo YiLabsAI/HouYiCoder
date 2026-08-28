@@ -222,6 +222,20 @@ impl App {
         self.send_cmd(ClientCommand::Verdict { req_id, decision });
     }
 
+    /// Answer the pending startup workspace-trust ask. accept true lets the
+    /// server proceed (it persists the path so the prompt does not repeat);
+    /// accept false ends the session. Mirrors resolve_current_approval but
+    /// there is no run to resume, so the card just clears + ships the
+    /// reverse response. No-op when no trust ask is pending (the user
+    /// pressed the key with no card up).
+    pub fn resolve_trust(&mut self, accept: bool) {
+        let Some(req_id) = self.pending_trust_req_id.take() else {
+            return;
+        };
+        self.pending_trust = None;
+        self.send_cmd(ClientCommand::TrustVerdict { req_id, accept });
+    }
+
     /// Populate the approval card from a wire permission ask and stash the
     /// reverse-request req_id so resolve_current_approval can pair the verdict.
     /// When the tool is AskUserQuestion, the input is parsed into an

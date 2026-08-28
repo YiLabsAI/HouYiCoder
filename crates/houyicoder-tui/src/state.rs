@@ -359,6 +359,14 @@ pub struct App {
     /// Pending approval requests from the last Interruption. The popup shows
     /// the first; the verdict applies to all (batch decide). Cleared on resume.
     pub pending_approvals: Vec<ApprovalRequest>,
+    /// A startup workspace-trust ask the server surfaced before the run
+    /// loop. The trust card shows while it is set; a verdict (accept /
+    /// decline) ships the reverse response. None once resolved or when the
+    /// project is already trusted (no prompt fired).
+    pub pending_trust: Option<houyicoder_protocol::frontend::trust::TrustPrompt>,
+    /// The reverse-request req_id pairing the pending trust ask, so
+    /// resolve_trust can ship the matching TrustAccept response.
+    pub pending_trust_req_id: Option<houyicoder_protocol::envelope::RequestId>,
     /// Queued user inputs submitted while a run was in flight (FIFO). A
     /// Typed queue (messages + slash commands); drained FIFO at idle.
     pub pending: Vec<crate::pending_queue::PendingItem>,
@@ -588,6 +596,7 @@ impl std::fmt::Debug for App {
             .field("transcript_len", &self.transcript.len())
             .field("agent_busy", &self.agent_busy)
             .field("pending_approvals", &self.pending_approvals.len())
+            .field("pending_trust", &self.pending_trust.is_some())
             .field("quit", &self.quit)
             .finish()
     }

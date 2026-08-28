@@ -117,6 +117,8 @@ pub fn app() -> App {
         running_tools: std::collections::HashSet::new(),
         bash_progress: std::collections::HashMap::new(),
         pending_approvals: Vec::new(),
+        pending_trust: None,
+        pending_trust_req_id: None,
         last_run_input: None,
         pending: Vec::new(),
         queue_view_open: false,
