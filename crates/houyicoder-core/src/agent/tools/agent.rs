@@ -195,6 +195,9 @@ fn spawn_failure_msg(f: houyicoder_api::spawn::SpawnFailure) -> String {
         houyicoder_api::spawn::SpawnFailure::UnknownAgent => {
             "agent: spawn rejected: type no longer registered".into()
         }
+        houyicoder_api::spawn::SpawnFailure::ConcurrencySaturated => {
+            "agent: spawn rejected: concurrent-spawn cap saturated, retry next turn".into()
+        }
     }
 }
 

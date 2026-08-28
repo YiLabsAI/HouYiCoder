@@ -27,7 +27,9 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 500
+STRUCT_FIELD_BASELINE = 505
+# MultiAgentRuntime gained a concurrency-gate field (8 -> 9), crossing the
+# count threshold so all 9 of its fields enter the total (+9).
 # The counter regex only matches private and pub fields, so pub(crate)
 # fields drop from the count (known gap); re-raise when the regex is fixed.
 

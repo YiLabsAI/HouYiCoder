@@ -135,6 +135,11 @@ pub enum SpawnFailure {
     /// The type is not registered when the runtime materializes the child.
     /// The tool surfaces it the same way as its own NotFound path.
     UnknownAgent,
+    /// The concurrent-spawn cap and its bounded queue are saturated; the spawn
+    /// is refused with backpressure so the model can re-queue it next turn.
+    /// Distinct from BudgetExceeded (an economic refusal): this is a
+    /// scheduling refusal, not a token-budget refusal.
+    ConcurrencySaturated,
 }
 
 /// The spawn port a tool calls through its ToolCtx. The engine (the runner

@@ -16,6 +16,7 @@ use houyicoder_async::PFut;
 use houyicoder_context::{HookEventKind, HookFirePayload, SessionId};
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::multi_agent::child_prompt::{child_system_prompt, child_user_context};
+use houyicoder_core::agent::multi_agent::concurrency_gate::{AcquireResult, ConcurrencyGate};
 use houyicoder_core::agent::multi_agent::registry::{
     AgentError, AgentRegistry, IsolationMode, PromptSource, ResolveCtx,
 };
@@ -56,6 +57,11 @@ pub struct MultiAgentRuntime {
     worktree_controller: Option<Arc<WorktreeController>>,
     cwd: PathBuf,
     bus: Option<Arc<AgentBus>>,
+    /// The per-parent concurrency gate shared across every spawn call from
+    /// this runtime. One gate per runtime instance (one parent); the
+    /// per-call clone in spawn shares the Arc so all concurrent spawns of
+    /// one parent cap against the same slots.
+    gate: Arc<ConcurrencyGate>,
 }
 
 impl MultiAgentRuntime {
@@ -71,7 +77,19 @@ impl MultiAgentRuntime {
                 .workspace
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
             bus: deps.bus,
+            gate: Arc::new(ConcurrencyGate::new(
+                ConcurrencyGate::DEFAULT_CAP,
+                ConcurrencyGate::DEFAULT_QUEUE_CAP,
+            )),
         }
+    }
+
+    /// Replace the concurrency gate. Production uses the default gate from
+    /// new(); tests inject a small-cap gate to exercise saturation without
+    /// spinning up many real children.
+    pub(super) fn with_gate(mut self, gate: Arc<ConcurrencyGate>) -> Self {
+        self.gate = gate;
+        self
     }
 }
 
@@ -136,6 +154,7 @@ impl SpawnHandle for MultiAgentRuntime {
             worktree_controller: self.worktree_controller.clone(),
             cwd: self.cwd.clone(),
             bus: self.bus.clone(),
+            gate: Arc::clone(&self.gate),
         };
         Box::pin(run_sync_spawn(
             this, parent_sid, depth, cancel, hook_fire, args,
@@ -257,6 +276,15 @@ async fn run_sync_spawn(
     let isolation = match args.isolation.as_str() {
         "worktree" => IsolationMode::Worktree,
         _ => IsolationMode::None,
+    };
+    // Concurrency cap: a resolved (valid type, known isolation) spawn
+    // acquires a running slot before any side effect. Saturation rejects with
+    // backpressure so the model re-queues next turn; a queued spawn blocks
+    // here until a slot frees and is never dropped. The slot is held for the
+    // child run and releases on any return path in this scope.
+    let _slot = match this.gate.acquire().await {
+        AcquireResult::Acquired(p) => p,
+        AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
     };
     let base_prompt = match &def.system_prompt {
         PromptSource::Owned(p) => p.clone(),
@@ -629,6 +657,23 @@ mod tests {
             self.events.lock().expect("recorder lock").push(event);
             Box::pin(async {})
         }
+    }
+
+    /// A zero-cap, zero-queue gate proves the gate sits on the spawn path:
+    /// every spawn rejects with ConcurrencySaturated, not BudgetExceeded and
+    /// not a successful spawn. If the gate were unwired, the spawn would
+    /// succeed like the drives-terminal test.
+    #[tokio::test]
+    async fn test_spawn_rejected_when_saturated() {
+        let (runtime, _store, parent_sid) = runtime_with_text_child("x");
+        let runtime = runtime.with_gate(std::sync::Arc::new(ConcurrencyGate::new(0, 0)));
+        let ctx = ToolCtx::new("c1").with_session(parent_sid);
+        let args = SpawnArgs::new("explore", "task", "task");
+        let err = runtime.spawn(&ctx, args).await.unwrap_err();
+        assert!(
+            matches!(err, SpawnFailure::ConcurrencySaturated),
+            "zero-cap gate must reject via the concurrency path, got {err:?}"
+        );
     }
 
     /// run_sync_spawn fires SubagentStart at the spawn boundary (after

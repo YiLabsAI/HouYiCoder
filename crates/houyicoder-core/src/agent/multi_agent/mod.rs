@@ -11,6 +11,7 @@ pub mod bus_sink;
 pub mod bus_types;
 pub mod capability;
 pub mod child_prompt;
+pub mod concurrency_gate;
 pub mod dispatch;
 pub mod loader;
 pub mod registry;
