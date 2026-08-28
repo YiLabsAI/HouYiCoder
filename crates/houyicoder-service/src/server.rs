@@ -18,6 +18,9 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use houyicoder_async::bus::MessageBus;
+use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, permission_request_topic};
+
 use tokio::sync::Notify;
 
 use crate::composition::SessionHost;
@@ -130,8 +133,12 @@ pub struct Server {
     /// against a server with no sink returns an error rather than silently
     /// succeeding — the user should know the sink is not there.
     diagnostics: Option<crate::diagnostics::DiagnosticsHandle>,
+    /// Shared multi-agent bus; routes a child permission ask to the
+    /// wire-approval flow. None on the single-agent path.
+    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 }
 
+pub(crate) mod child_permission;
 /// Reconnect-replay entry points (serve_session, resume_pending) live in a
 /// child module to keep this file under the size gate.
 pub(crate) mod session;
@@ -170,6 +177,7 @@ impl Server {
             append_notify: None,
             meta_store: None,
             diagnostics: crate::diagnostics::handle(),
+            bus: None,
         }
     }
 
@@ -466,6 +474,10 @@ impl Server {
     /// turn state machine lives here (the composition root + protocol server),
     /// not in the runner and not in the wire.
     #[expect(clippy::too_many_lines, reason = "message dispatch")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "serve loop branches over run, wire, notify, + child permission"
+    )]
     async fn handle_message_send(
         &mut self,
         io: &mut ServerIo,
@@ -493,6 +505,11 @@ impl Server {
             let runner = Arc::clone(&self.runner);
             let run_fut = runner.run(self.session, text);
             tokio::pin!(run_fut);
+            // Child permission asks arrive while the parent run is parked on the child.
+            let mut perm_rx = self
+                .bus
+                .as_ref()
+                .map(|b| b.subscribe(permission_request_topic()));
             loop {
                 // Either the shared store Notify (route B mid-run drain) or a
                 // never-resolving pending future when no Notify is wired (None
@@ -500,6 +517,14 @@ impl Server {
                 let notify_fut = match &self.append_notify {
                     Some(n) => futures::future::Either::Left(n.notified()),
                     None => futures::future::Either::Right(futures::future::pending::<()>()),
+                };
+                // Child permission ask published on the bus while this run is
+                // parked on a child. None => the branch never resolves.
+                let perm_fut = match &mut perm_rx {
+                    Some(rx) => futures::future::Either::Left(rx.recv()),
+                    None => futures::future::Either::Right(futures::future::pending::<
+                        Result<BusMessage, tokio::sync::broadcast::error::RecvError>,
+                    >()),
                 };
                 tokio::select! {
                     biased;
@@ -544,6 +569,13 @@ impl Server {
                         // "new events must exist" here.
                         self.push_new_events(io).await?;
                         tokio::task::yield_now().await;
+                    },
+                    req = perm_fut => {
+                        if let Ok(msg) = req
+                            && let Err(e) = child_permission::handle(self, io, msg).await
+                        {
+                            tracing::warn!("child permission ask failed: {e}");
+                        }
                     },
                 }
             }

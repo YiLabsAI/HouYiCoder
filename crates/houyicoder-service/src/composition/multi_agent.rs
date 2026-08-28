@@ -28,6 +28,8 @@ use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_core::agent::{RunOutcome, RunResult, ToolRegistry};
 use houyicoder_protocol::llm::Usage;
 
+mod drive;
+
 /// The parent components a child runner is built from: one bundle shared by
 /// the composition root, the runtime constructor, and the spawn path, instead
 /// of seven loose arguments at each hop.
@@ -329,22 +331,22 @@ async fn run_sync_spawn(
         child_user_context(&this.cwd, def.omit_project_context),
         args.prompt,
     );
-    // A sync child's cancel token is linked to the parent's (spawn_child
-    // clones it); on a parent abort, cooperatively cancel the child runner so
-    // its tools see the cancel rather than just dropping the future.
-    let run_fut = handle.runner.run(child_sid, task);
+    // Drive the child to a terminal state. A mid-run permission ask
+    // (RunOutcome::Interruption) routes through the bus to the parent's
+    // approval flow, then resume() continues; a child with no bus falls back
+    // to the headless path where Interruption surfaces as interrupted
+    // (terminal_summary maps it). None means canceled mid-run or mid-ask.
     let cancel_token = handle.cancel.clone();
-    let result: Option<Result<RunResult, _>> = {
-        let runner = Arc::clone(&handle.runner);
-        tokio::select! {
-            biased;
-            _ = cancel_token.cancelled() => {
-                runner.abort();
-                None
-            }
-            r = run_fut => Some(r),
-        }
-    };
+    let result: Option<Result<RunResult, _>> = drive::drive_child_to_terminal(
+        Arc::clone(&handle.runner),
+        child_sid,
+        task,
+        cancel_token,
+        this.bus.clone(),
+        &child_str,
+        &args.subagent_type,
+    )
+    .await;
     if let (Some(cw), Some(ctrl)) = (handle.worktree, this.worktree_controller.as_ref()) {
         drop(ctrl.cleanup_child(cw).await);
     }

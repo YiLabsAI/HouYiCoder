@@ -672,6 +672,9 @@ fn pair_inproc_server(
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
     let next_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     houyicoder_service::server::install_live_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
+    // The server shares the bus so a child's permission ask (published while
+    // the parent run is parked on the child) reaches the wire-approval flow.
+    let server_bus = bus.clone();
     // Fleet projector: bridge bus child status to AgentStatus wire frames so
     // the TUI footer renders without a direct engine-bus dependency.
     houyicoder_service::composition::fleet_projector::spawn(
@@ -703,7 +706,8 @@ fn pair_inproc_server(
     // extend the fence at runtime (the same Arc the tools' exec path holds).
     let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
     let mut server = Server::new_with_shared_seq(runner.clone(), session, gate_dyn, next_seq)
-        .with_append_notify(append_notify);
+        .with_append_notify(append_notify)
+        .with_bus(server_bus);
     if let Some(s) = sandbox_session {
         server = server.with_session(s);
     }

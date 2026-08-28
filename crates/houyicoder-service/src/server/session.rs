@@ -51,6 +51,10 @@ impl Server {
             append_notify: None,
             meta_store: None,
             diagnostics: crate::diagnostics::handle(),
+            // Resume path does not wire the bus yet; a reconnecting session
+            // mid-child-approval is a follow-up (the parent serve path covers
+            // the common case).
+            bus: None,
         }
     }
 

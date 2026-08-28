@@ -32,6 +32,26 @@ pub enum BusMessage {
         agent_id: String,
         subagent_type: String,
     },
+    /// A child asks the parent to approve a guarded tool call. Published on
+    /// the global permission-request topic; the parent server subscribes,
+    /// surfaces the ask through its existing wire-approval flow, and
+    /// publishes a PermissionResponse on the per-request response topic.
+    PermissionRequest {
+        child_id: String,
+        agent_type: String,
+        call_id: String,
+        tool: String,
+        input: serde_json::Value,
+    },
+    /// The parent's decision for a child's permission ask. Published on the
+    /// per-request response topic the child subscribed to before it
+    /// published the request, so no broadcast lag is possible.
+    PermissionResponse {
+        call_id: String,
+        approved: bool,
+        updated_input: Option<serde_json::Value>,
+        scope: String,
+    },
 }
 
 /// The terminal status of a child agent.
@@ -69,6 +89,22 @@ pub fn spawned_topic() -> &'static str {
     "agents.spawned"
 }
 
+/// The global topic the parent server subscribes to for child permission
+/// asks. A child publishes a PermissionRequest here; the parent routes it
+/// through its wire-approval flow and publishes the PermissionResponse on
+/// the per-request response topic.
+pub fn permission_request_topic() -> &'static str {
+    "agents.permission_request"
+}
+
+/// The per-request topic a child subscribes to BEFORE publishing its
+/// PermissionRequest. Subscribe-before-publish guarantees the child's
+/// receiver exists when the parent later publishes the PermissionResponse,
+/// so no broadcast lag can drop the decision.
+pub fn permission_response_topic(child_id: &str, call_id: &str) -> String {
+    format!("task.{child_id}.permission_response.{call_id}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +137,61 @@ mod tests {
     fn test_topic_helpers() {
         assert_eq!(progress_topic("abc"), "task.abc.progress");
         assert_eq!(completed_topic("abc"), "task.abc.completed");
+        assert_eq!(permission_request_topic(), "agents.permission_request");
+        assert_eq!(
+            permission_response_topic("c1", "call-9"),
+            "task.c1.permission_response.call-9"
+        );
+    }
+
+    /// The permission round-trip: a child subscribes to its per-request
+    /// response topic BEFORE publishing the request, so the parent's later
+    /// response cannot be lost to broadcast lag. Pins the ordering contract
+    /// the run-loop relies on.
+    #[tokio::test]
+    async fn test_permission_request_response_roundtrip() {
+        let bus = AgentBus::new();
+        let mut parent_rx = bus.subscribe(permission_request_topic());
+        let child_id = "child-1";
+        let call_id = "call-1";
+        // Child subscribes to its response topic BEFORE publishing.
+        let mut resp_rx = bus.subscribe(&permission_response_topic(child_id, call_id));
+        bus.publish(
+            permission_request_topic(),
+            BusMessage::PermissionRequest {
+                child_id: child_id.into(),
+                agent_type: "explore".into(),
+                call_id: call_id.into(),
+                tool: "bash".into(),
+                input: serde_json::json!({"command": "rm -rf x"}),
+            },
+        );
+        // Parent receives the ask.
+        match parent_rx.try_recv().expect("parent got the request") {
+            BusMessage::PermissionRequest {
+                child_id: cid,
+                tool,
+                ..
+            } => {
+                assert_eq!(cid, child_id);
+                assert_eq!(tool, "bash");
+            }
+            other => panic!("expected PermissionRequest, got {other:?}"),
+        }
+        // Parent publishes the decision on the per-request response topic.
+        bus.publish(
+            &permission_response_topic(child_id, call_id),
+            BusMessage::PermissionResponse {
+                call_id: call_id.into(),
+                approved: false,
+                updated_input: None,
+                scope: "once".into(),
+            },
+        );
+        // Child receives its decision (no lag: subscribed before publish).
+        match resp_rx.recv().await.expect("child got the decision") {
+            BusMessage::PermissionResponse { approved, .. } => assert!(!approved),
+            other => panic!("expected PermissionResponse, got {other:?}"),
+        }
     }
 }
