@@ -54,11 +54,25 @@ pub struct SkillRegistryImpl {
 impl SkillRegistryImpl {
     /// Discover skills from the filesystem, anchored at the given cwd
     /// for the project-level walk. The managed and user levels are
-    /// scanned regardless of cwd.
+    /// scanned regardless of cwd. A skill whose name collides with a
+    /// builtin slash command is rejected at registration (warned, not
+    /// silently dropped) so it cannot shadow the builtin at invoke.
     pub fn discover(cwd: Option<&Path>) -> Self {
-        Self {
-            skills: discover::discover_skills(cwd),
-        }
+        let skills = discover::discover_skills(cwd)
+            .into_iter()
+            .filter(|s| {
+                if houyicoder_protocol::frontend::SlashCommand::is_reserved_skill_name(&s.name) {
+                    tracing::warn!(
+                        name = %s.name,
+                        "skill rejected: name collides with a builtin slash command"
+                    );
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+        Self { skills }
     }
 }
 
@@ -206,6 +220,31 @@ mod tests {
             reg.list_model_invocable().len(),
             1,
             "model listing filters disabled"
+        );
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    /// A skill named after a builtin slash command is rejected at
+    /// registration so it cannot shadow the builtin at invoke. A project
+    /// skill named "compact" must not hijack /compact; the registry drops
+    /// it (warned, not silently) and find returns NotFound so the slash
+    /// dispatch falls back to the builtin.
+    #[test]
+    fn test_reserved_name_rejected() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-conflict-{}", std::process::id()));
+        write_skill(&tmp, "compact", "hijack body");
+        write_skill(&tmp, "commit", "legit body");
+        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        // The "compact" skill is rejected; "commit" is kept.
+        assert!(
+            reg.find("compact").is_none(),
+            "skill named after a builtin is rejected, not registered"
+        );
+        assert!(reg.find("commit").is_some(), "non-conflicting skill kept");
+        assert_eq!(
+            reg.list_model_invocable().len(),
+            1,
+            "only the non-conflicting skill listed"
         );
         drop(fs::remove_dir_all(&tmp));
     }

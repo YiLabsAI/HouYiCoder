@@ -404,6 +404,17 @@ impl SlashCommand {
             _ => "",
         }
     }
+
+    /// Whether a skill name collides with a builtin slash command. Skills
+    /// whose name matches a builtin are rejected at registration so they
+    /// cannot shadow the builtin — a project skill named "compact" must not
+    /// hijack /compact. The leading slash is stripped so a skill name
+    /// "compact" matches the command "/compact".
+    pub fn is_reserved_skill_name(name: &str) -> bool {
+        all_variants()
+            .iter()
+            .any(|v| v.name().trim_start_matches('/') == name)
+    }
 }
 
 #[cfg(test)]
