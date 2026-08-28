@@ -524,6 +524,10 @@ pub struct App {
     /// (HooksResult) when the user opens /hooks. Empty until the first reply.
     pub hook_entries: Vec<houyicoder_protocol::frontend::hooks::HookEntry>,
     pub tool_entries: Vec<houyicoder_protocol::frontend::tools::ToolEntry>,
+    /// The discovered-skill rows for the /skills pane. Refreshed from
+    /// the wire when the user opens /skills. Empty until the first
+    /// reply.
+    pub skill_entries: Vec<houyicoder_protocol::frontend::skills::SkillEntry>,
     /// The /hooks pane drill-down level: 0 = event list, 1 = selected event
     /// detail (registered hooks + description). A
     /// select-event → view-hook browse pattern.

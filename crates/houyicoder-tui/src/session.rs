@@ -251,6 +251,12 @@ async fn drive_client(
                         payload: FrontendRequest::Hooks,
                     });
                 }
+                Some(ClientCommand::SkillsQuery { req_id }) => {
+                    outbound.push_back(Outbound::Request {
+                        req_id,
+                        payload: FrontendRequest::Skills,
+                    });
+                }
                 Some(ClientCommand::MemoryListQuery { req_id }) => {
                     outbound.push_back(Outbound::Request {
                         req_id,
@@ -586,6 +592,9 @@ async fn drive_client(
                     }
                     ResponsePayload::Hooks(hooks) => {
                         let _send = agent_tx.send(AgentMessage::HooksResult { hooks });
+                    }
+                    ResponsePayload::Skills(skills) => {
+                        let _send = agent_tx.send(AgentMessage::SkillsResult { skills });
                     }
                     ResponsePayload::MemoryList(entries) => {
                         let _send = agent_tx.send(AgentMessage::MemoryListResult { entries });

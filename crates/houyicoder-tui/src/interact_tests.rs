@@ -737,6 +737,13 @@ fn test_misc_commands_visible() {
     let v = render(&app);
     println!("--- /voice ---\n{v}\n--- end ---");
     assert!(v.contains("whisper"), "voice placeholder missing");
+    app.run_command(SlashCommand::Skills);
+    let s = render(&app);
+    println!("--- /skills ---\n{s}\n--- end ---");
+    assert!(
+        s.contains("skills discovered"),
+        "skills pane content missing"
+    );
     app.run_command(SlashCommand::Replay);
     let rp = render(&app);
     println!("--- /replay ---\n{rp}\n--- end ---");

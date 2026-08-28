@@ -163,6 +163,9 @@ pub enum ResponsePayload {
     Agents(String),
     /// The /hooks reply: the registered hooks (read-only visibility).
     Hooks(Vec<crate::frontend::hooks::HookEntry>),
+    /// The /skills reply: the discovered skills (name, description,
+    /// source, body token estimate).
+    Skills(Vec<crate::frontend::skills::SkillEntry>),
     /// The /undo reply: a description of what was undone, or None when the
     /// undo stack was empty.
     UndoResult(Option<String>),

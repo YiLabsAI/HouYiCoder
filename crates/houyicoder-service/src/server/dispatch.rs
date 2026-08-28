@@ -176,14 +176,15 @@ impl Server {
                 .await
             }
             houyicoder_protocol::frontend::FrontendRequest::Hooks => {
-                // The full hook event surface: the framework's declared events
-                // (with live-fire markers) plus the registered external hooks.
-                // The user sees what the hook system CAN do, not just what a
-                // config happened to register.
                 let mut wire = hooks_to_wire(self.runner.hooks_list());
                 wire.extend(hook_events_to_wire());
                 wire.sort_by(|a, b| a.name.cmp(&b.name));
                 self.send_response(io, req_id, ResponsePayload::Hooks(wire))
+                    .await
+            }
+            houyicoder_protocol::frontend::FrontendRequest::Skills => {
+                let wire = skills_to_wire(self.runner.skills_snapshot());
+                self.send_response(io, req_id, ResponsePayload::Skills(wire))
                     .await
             }
             houyicoder_protocol::frontend::FrontendRequest::Undo => {
@@ -642,6 +643,26 @@ pub(crate) fn hooks_to_wire(
             fired: h.events.iter().any(|e| e.is_fired()),
             summary: String::new(),
             description: String::new(),
+        })
+        .collect()
+}
+
+/// Convert the api SkillSnapshot list to the wire SkillEntry list for the
+/// /skills pane. The origin field carries the discovery source so the pane
+/// groups entries by where the skill was loaded from; invocable carries the
+/// model-invocation gate (false when disable-model-invocation hides the
+/// skill from the model).
+pub(crate) fn skills_to_wire(
+    entries: Vec<houyicoder_api::skill::SkillSnapshot>,
+) -> Vec<houyicoder_protocol::frontend::skills::SkillEntry> {
+    entries
+        .into_iter()
+        .map(|snap| houyicoder_protocol::frontend::skills::SkillEntry {
+            name: snap.descriptor.name,
+            description: snap.descriptor.description,
+            origin: snap.origin,
+            invocable: !snap.descriptor.disable_model_invocation,
+            body_token_estimate: snap.descriptor.body_token_estimate,
         })
         .collect()
 }

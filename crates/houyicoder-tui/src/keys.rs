@@ -125,6 +125,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
                 | Pane::Status
                 | Pane::Resume
                 | Pane::Hooks
+                | Pane::Skills
                 | Pane::Model
         )
     {
@@ -279,6 +280,7 @@ use approval::{approval_next, approval_prev, option_count};
 /// AskUserQuestion card key handlers, split out to keep this module under
 /// the file-size gate.
 mod ask_question;
+mod trajectory;
 mod worktree_pane;
 use ask_question::handle_ask_question;
 
@@ -555,6 +557,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         // /worktrees pane: delegated to keys/worktree_pane.rs.
         _ if app.pane == Pane::Worktree && worktree_pane::handle(app, k) => {}
+        // /trajectory pane: delegated to keys/trajectory.rs.
+        _ if app.pane == Pane::Trajectory && trajectory::handle(app, k) => {}
         // /status pane: Left/Right (or Tab) cycle the sub-tab (Status →
         // Config → Usage), Esc dismisses back to the transcript. A
         // Settings-modal-style tabbed status.
@@ -591,6 +595,9 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
                 app.pane = Pane::Transcript;
             }
         }
+        KeyCode::Esc if app.pane == Pane::Skills => {
+            app.pane = Pane::Transcript;
+        }
         KeyCode::Up if app.pane == Pane::Hooks && app.hooks_level.get() == 0 => {
             let cur = app.hooks_sel.get();
             app.hooks_sel.set(cur.saturating_sub(1));
@@ -606,63 +613,6 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Enter if app.pane == Pane::Hooks && app.hooks_level.get() == 0 => {
             app.hooks_level.set(1);
-        }
-        // /trajectory pane: 3-level drill-down.
-        // Level 0: turn list — Up/Down select, Enter expands, Esc closes.
-        // Level 1: turn detail — Up/Down select events, Enter shows detail, Esc back.
-        // Level 2: event detail — Esc back to level 1.
-        KeyCode::Up if app.pane == Pane::Trajectory => {
-            // Level 2 is a stable detail view (the event selected at L1),
-            // not a switcher — Up/Down is a no-op there; switch events at L1.
-            if app.trajectory_level.get() < 2 {
-                let c = app.trajectory_cursor.get();
-                app.trajectory_cursor.set(c.saturating_sub(1));
-            }
-        }
-        KeyCode::Down if app.pane == Pane::Trajectory => {
-            if app.trajectory_level.get() < 2 {
-                // Clamp to [0, len-1] so the selection glyph stays on the last
-                // row instead of vanishing past the end. len is stashed by the
-                // render path (draw_content); 0 before first render = unbounded.
-                let c = app.trajectory_cursor.get();
-                let len = app.trajectory_list_len.get();
-                let next = c + 1;
-                let max = if len == 0 {
-                    next
-                } else {
-                    len.saturating_sub(1)
-                };
-                app.trajectory_cursor.set(next.min(max));
-            }
-        }
-        KeyCode::Enter if app.pane == Pane::Trajectory && app.input.is_empty() => {
-            let level = app.trajectory_level.get();
-            if level == 0 && app.trajectory_list_len.get() > 0 {
-                // Freeze the turn-list selection so the turn-detail and
-                // event-detail levels render THAT row, not the first turn.
-                // Works for both Turn and [bg] rows. Skip the drill when the
-                // row list is empty (a fresh session with no turns yet) —
-                // drilling into no rows rendered "no row data" at the
-                // turn-detail level, which read as a crash.
-                app.trajectory_turn_idx.set(app.trajectory_cursor.get());
-                app.trajectory_level.set(1);
-                app.trajectory_cursor.set(0);
-            } else if level == 1 {
-                // [bg] rows have no event list to drill into — stay at L1.
-                if !app.trajectory_at_bg.get() {
-                    app.trajectory_level.set(2);
-                    // Keep the cursor so L2 shows the event selected at L1.
-                }
-            }
-        }
-        KeyCode::Esc if app.pane == Pane::Trajectory => {
-            let level = app.trajectory_level.get();
-            if level == 0 {
-                app.pane = Pane::Transcript;
-            } else {
-                app.trajectory_level.set(level - 1);
-                app.trajectory_cursor.set(0);
-            }
         }
         // '/' opens the slash palette only when no typed permission sub-mode
         // (add rule / add directory) is active — an AddDir path typically

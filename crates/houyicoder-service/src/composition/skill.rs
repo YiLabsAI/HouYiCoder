@@ -8,9 +8,39 @@
 
 use std::path::Path;
 
-use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry};
-use houyicoder_skill::definition::SkillDefinition;
+use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry, SkillSnapshot};
+use houyicoder_skill::definition::{SkillDefinition, SkillSource};
 use houyicoder_skill::{discover, invoke};
+
+/// The snake_case wire label for a discovery source, used for grouping in
+/// the /skills pane. Mirrors SkillSource's serde rename_all so the wire
+/// label stays stable if the enum is ever serialized elsewhere.
+fn source_label(source: &SkillSource) -> &'static str {
+    match source {
+        SkillSource::Managed => "managed",
+        SkillSource::User => "user",
+        SkillSource::Project => "project",
+        SkillSource::ClaudeEco => "claude_eco",
+        SkillSource::Agents => "agents",
+        SkillSource::Mcp => "mcp",
+        SkillSource::Local => "local",
+    }
+}
+
+/// Map a SkillDefinition to a SkillDescriptor for the engine-facing port,
+/// dropping the discovery source (the listing path does not group).
+fn to_descriptor(s: &SkillDefinition) -> SkillDescriptor {
+    SkillDescriptor {
+        name: s.name.clone(),
+        description: s.description.clone(),
+        when_to_use: s.when_to_use.clone(),
+        argument_hint: s.argument_hint.clone(),
+        disable_model_invocation: s.disable_model_invocation,
+        user_invocable: s.user_invocable,
+        body_token_estimate: s.body_token_estimate(),
+        allowed_tools: s.allowed_tools.clone(),
+    }
+}
 
 /// A registry backed by filesystem discovery. Scans the configured paths
 /// once at construction; the set is fixed for the session (a skill added
@@ -37,16 +67,7 @@ impl SkillRegistry for SkillRegistryImpl {
         self.skills
             .iter()
             .filter(|s| !s.disable_model_invocation)
-            .map(|s| SkillDescriptor {
-                name: s.name.clone(),
-                description: s.description.clone(),
-                when_to_use: s.when_to_use.clone(),
-                argument_hint: s.argument_hint.clone(),
-                disable_model_invocation: false,
-                user_invocable: s.user_invocable,
-                body_token_estimate: s.body_token_estimate(),
-                allowed_tools: s.allowed_tools.clone(),
-            })
+            .map(to_descriptor)
             .collect()
     }
 
@@ -54,16 +75,23 @@ impl SkillRegistry for SkillRegistryImpl {
         self.skills
             .iter()
             .find(|s| s.name == name)
-            .map(|s| SkillDescriptor {
-                name: s.name.clone(),
-                description: s.description.clone(),
-                when_to_use: s.when_to_use.clone(),
-                argument_hint: s.argument_hint.clone(),
-                disable_model_invocation: s.disable_model_invocation,
-                user_invocable: s.user_invocable,
-                body_token_estimate: s.body_token_estimate(),
-                allowed_tools: s.allowed_tools.clone(),
+            .map(to_descriptor)
+    }
+
+    fn list_with_origin(&self) -> Vec<SkillSnapshot> {
+        // All discovered skills, NOT filtered by disable-model-invocation:
+        // this feeds the /skills user-facing visibility surface, where a
+        // disabled skill must appear (marked not invocable) so the user can
+        // see it is blocked from the model. The model's own per-turn listing
+        // uses list_model_invocable, which DOES filter disabled skills so the
+        // model never sees or calls them.
+        self.skills
+            .iter()
+            .map(|s| SkillSnapshot {
+                descriptor: to_descriptor(s),
+                origin: source_label(&s.source).into(),
             })
+            .collect()
     }
 
     fn prepare_body(
@@ -122,6 +150,62 @@ mod tests {
         assert!(
             !names.contains(&"off"),
             "disable-model-invocation skill filtered out"
+        );
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    /// list_with_origin pairs each model-invocable skill with its discovery
+    /// source so the skills pane can group by origin. A project-path skill
+    /// under the cwd reports origin "project" — the snake_case label the
+    /// pane groups on.
+    #[test]
+    fn test_list_origin_tags_project() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-origin-{}", std::process::id()));
+        write_skill(&tmp, "on", "on body");
+        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let snap = reg.list_with_origin();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].descriptor.name, "on");
+        assert_eq!(
+            snap[0].origin, "project",
+            "project-path skill tagged project"
+        );
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    /// A disable-model-invocation skill must still appear in list_with_origin
+    /// (the /skills visibility surface shows it, marked not invocable by the
+    /// wire conversion), unlike list_model_invocable which filters it so the
+    /// model never sees it. Pins the regression where list_with_origin
+    /// filtered disabled skills, making the wire invocable flag always true.
+    #[test]
+    fn test_list_origin_keeps_disabled() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-dis-origin-{}", std::process::id()));
+        write_skill(&tmp, "on", "on body");
+        let off_dir = tmp.join(".houyicoder").join("skills").join("off");
+        fs::create_dir_all(&off_dir).unwrap();
+        fs::write(
+            off_dir.join("SKILL.md"),
+            "---\nname: off\ndescription: off skill\ndisable-model-invocation: true\n---\noff body\n",
+        )
+        .unwrap();
+        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let snap = reg.list_with_origin();
+        // Both skills present — the disabled one is NOT filtered out here
+        // (list_model_invocable would return only "on").
+        assert_eq!(snap.len(), 2, "disabled skill kept for visibility");
+        let off = snap
+            .iter()
+            .find(|s| s.descriptor.name == "off")
+            .expect("off present");
+        assert!(
+            off.descriptor.disable_model_invocation,
+            "disable flag preserved so the wire marks it not invocable"
+        );
+        assert_eq!(
+            reg.list_model_invocable().len(),
+            1,
+            "model listing filters disabled"
         );
         drop(fs::remove_dir_all(&tmp));
     }

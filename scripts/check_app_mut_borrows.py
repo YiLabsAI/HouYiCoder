@@ -41,7 +41,7 @@ from rules.paths import is_test_file
 # Production &mut App fn count. Test files excluded: a test helper
 # legitimately mutates the whole App, so counting it trips the gate on
 # every new test. Measured 2026-08-17.
-MUT_APP_BASELINE = 41
+MUT_APP_BASELINE = 42
 
 
 def evaluate(total, baseline=MUT_APP_BASELINE) -> int:

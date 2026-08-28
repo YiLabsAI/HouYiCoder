@@ -92,4 +92,28 @@ pub trait SkillRegistry: Send + Sync {
         args: Option<&str>,
         session_id: Option<&str>,
     ) -> Result<String, SkillError>;
+
+    /// All discovered skills paired with their discovery origin (managed /
+    /// user / project / claude_eco / agents / mcp / local), for surfaces that
+    /// group skills by source — the /skills pane. Unlike
+    /// list_model_invocable, this does NOT filter disable-model-invocation
+    /// skills: the visibility surface shows them (marked not invocable) so
+    /// the user can see they are blocked from the model. The origin is
+    /// carried alongside the descriptor (rather than on the descriptor) so
+    /// SkillDescriptor stays under the field-count warn line. The default
+    /// returns empty: a registry that does not track origin reports no
+    /// grouped skills, so production registries override this.
+    fn list_with_origin(&self) -> Vec<SkillSnapshot> {
+        Vec::new()
+    }
+}
+
+/// A model-invocable descriptor paired with where it was discovered, for
+/// source-grouped surfaces. See list_with_origin.
+#[derive(Debug, Clone)]
+pub struct SkillSnapshot {
+    pub descriptor: SkillDescriptor,
+    /// snake_case discovery source (managed/user/project/claude_eco/agents/
+    /// mcp/local). Empty when the registry does not track origin.
+    pub origin: String,
 }

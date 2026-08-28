@@ -53,6 +53,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         | Pane::Status
         | Pane::Resume
         | Pane::Hooks
+        | Pane::Skills
         | Pane::Model => {}
     }
 }

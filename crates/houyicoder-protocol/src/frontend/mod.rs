@@ -17,6 +17,7 @@ pub mod model;
 pub mod permission;
 pub mod run;
 pub mod session_update;
+pub mod skills;
 pub mod status;
 pub mod tools;
 pub mod trajectory;
@@ -94,6 +95,10 @@ pub enum SlashCommand {
     Status,
     Trajectory,
     Tools,
+    /// /skills: show loaded skills (name, description, source, body
+    /// token estimate). Renders from the context cache's Skills
+    /// section; sends a ContextQuery if no cache yet.
+    Skills,
     /// /export [path]: write the session's durable trajectory + tool stats +
     /// usage + checkpoints + errors to a JSON file (the self-evolution ExPeL
     /// data source). TUI-local — no server round-trip. Argless writes to a
@@ -265,6 +270,11 @@ const COMMANDS: &[CommandDescriptor] = &[
         help: "list registered tools (capability discoverability)",
     },
     CommandDescriptor {
+        variant: SlashCommand::Skills,
+        name: "/skills",
+        help: "show loaded skills (name, description, source, token cost)",
+    },
+    CommandDescriptor {
         variant: SlashCommand::Export,
         name: "/export",
         help: "write the session trajectory to a JSON file (ExPeL data source)",
@@ -323,10 +333,10 @@ const COMMANDS: &[CommandDescriptor] = &[
 
 /// Build the ALL array from the command table at compile time so ALL and
 /// COMMANDS cannot drift apart. Const-eval reads the table by index.
-const fn all_variants() -> [SlashCommand; 35] {
-    let mut out = [SlashCommand::Login; 35];
+const fn all_variants() -> [SlashCommand; 36] {
+    let mut out = [SlashCommand::Login; 36];
     let mut i = 0;
-    while i < 35 {
+    while i < 36 {
         out[i] = COMMANDS[i].variant;
         i += 1;
     }
@@ -336,7 +346,7 @@ const fn all_variants() -> [SlashCommand; 35] {
 impl SlashCommand {
     /// All commands in palette order. Derived from the COMMANDS table at
     /// compile time, so the array and the table stay in sync.
-    pub const ALL: [SlashCommand; 35] = all_variants();
+    pub const ALL: [SlashCommand; 36] = all_variants();
 
     /// Parse a /foo input line. None if not a recognized command. Linear
     /// search over the COMMANDS table by name.
@@ -585,6 +595,7 @@ pub enum FrontendRequest {
     },
     ToolList,
     Hooks,
+    Skills,
     ToolCall {
         tool: String,
         args: String,

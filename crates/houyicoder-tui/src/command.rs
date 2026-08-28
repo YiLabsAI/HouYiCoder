@@ -131,6 +131,12 @@ impl App {
                     self.send_cmd(crate::run_control::ClientCommand::ToolListQuery { req_id });
                 }
             }
+            C::Skills => {
+                self.pane = Pane::Skills;
+                if let Some(req_id) = self.mint_request_id() {
+                    self.send_cmd(crate::run_control::ClientCommand::SkillsQuery { req_id });
+                }
+            }
             C::Hooks => {
                 self.pane = Pane::Hooks;
                 if let Some(req_id) = self.mint_request_id() {

@@ -19,7 +19,7 @@ use ratatui::{
 use crate::state::{App, Pane, ViewportMode};
 use crate::view::{
     artifact, capability, hooks_pane, input_bar, memory_pane, model_pane, palette, queue_overlay,
-    resume_picker, status, trajectory_pane, worktree_pane,
+    resume_picker, skills_pane, status, trajectory_pane, worktree_pane,
 };
 
 mod flat_transcript;
@@ -360,6 +360,7 @@ fn draw_focus_main(f: &mut Frame, area: Rect, app: &App) {
         Pane::Status => draw_status_pane(f, area, app),
         Pane::Resume => draw_resume_pane(f, area, app),
         Pane::Hooks => draw_hooks_pane(f, area, app),
+        Pane::Skills => draw_skills_pane(f, area, app),
         Pane::Model => draw_model_pane(f, area, app),
         _ => capability::draw(f, area, app),
     }
@@ -427,6 +428,12 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // above, the hook list below.
     if matches!(app.pane, Pane::Hooks) {
         draw_hooks_pane(f, area, app);
+        return;
+    }
+    // The /skills pane renders inline (the Pane primitive): transcript tail
+    // above, the discovered-skill list below.
+    if matches!(app.pane, Pane::Skills) {
+        draw_skills_pane(f, area, app);
         return;
     }
     // The /model pane renders inline (the Pane primitive): transcript tail
@@ -634,6 +641,16 @@ fn draw_hooks_pane(f: &mut Frame, area: Rect, app: &App) {
         app,
         hooks_pane::HOOKS_PANE_HEIGHT,
         hooks_pane::draw_content,
+    );
+}
+
+fn draw_skills_pane(f: &mut Frame, area: Rect, app: &App) {
+    draw_command_pane(
+        f,
+        area,
+        app,
+        skills_pane::SKILLS_PANE_HEIGHT,
+        skills_pane::draw_content,
     );
 }
 

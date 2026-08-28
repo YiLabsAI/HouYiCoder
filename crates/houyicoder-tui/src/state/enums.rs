@@ -247,6 +247,10 @@ pub enum Pane {
     /// The /hooks pane: the registered-hook list. Renders through the shared
     /// Pane template.
     Hooks,
+    /// The /skills pane: the discovered-skill list (name, description,
+    /// source, body token estimate). Renders through the shared Pane
+    /// template. Esc closes.
+    Skills,
     /// The /model pane: the selectable model list (Default / Max / Fable /
     /// Pro / Flash). Up / Down navigate, Enter sets the default, s uses this
     /// session only, Esc closes.
@@ -332,6 +336,7 @@ impl Pane {
             Self::Status => "status",
             Self::Resume => "resume",
             Self::Hooks => "hooks",
+            Self::Skills => "skills",
             Self::Model => "model",
             Self::Tools => "tools",
         }

@@ -1,4 +1,5 @@
 use super::*;
+use houyicoder_api::skill::{SkillDescriptor, SkillSnapshot};
 use houyicoder_core::agent::{HookEntry, HookEvent, HookSource};
 
 #[test]
@@ -18,6 +19,59 @@ fn test_hooks_wire_converts_entries() {
 #[test]
 fn test_hooks_to_wire_empty() {
     assert!(hooks_to_wire(Vec::new()).is_empty());
+}
+
+/// The /skills wire conversion carries the discovery source (origin) for
+/// grouping and the model-invocation gate (invocable) so the pane can flag
+/// a skill the model cannot call. Token estimate passes through unchanged.
+#[test]
+fn test_skills_wire_invocation_tag() {
+    let entries = vec![
+        SkillSnapshot {
+            descriptor: SkillDescriptor {
+                name: "pdf-export".into(),
+                description: "export chat to pdf".into(),
+                when_to_use: None,
+                argument_hint: None,
+                disable_model_invocation: false,
+                user_invocable: true,
+                body_token_estimate: 320,
+                allowed_tools: Vec::new(),
+            },
+            origin: "user".into(),
+        },
+        SkillSnapshot {
+            descriptor: SkillDescriptor {
+                name: "internal-only".into(),
+                description: "host-restricted".into(),
+                when_to_use: None,
+                argument_hint: None,
+                disable_model_invocation: true,
+                user_invocable: false,
+                body_token_estimate: 80,
+                allowed_tools: Vec::new(),
+            },
+            origin: "project".into(),
+        },
+    ];
+    let wire = skills_to_wire(entries);
+    assert_eq!(wire.len(), 2);
+    assert_eq!(wire[0].name, "pdf-export");
+    assert_eq!(wire[0].origin, "user");
+    assert!(wire[0].invocable, "model-invocable skill flagged invocable");
+    assert_eq!(wire[0].body_token_estimate, 320);
+    assert_eq!(wire[1].name, "internal-only");
+    assert_eq!(wire[1].origin, "project");
+    assert!(
+        !wire[1].invocable,
+        "disable-model-invocation skill flagged not invocable"
+    );
+    assert_eq!(wire[1].body_token_estimate, 80);
+}
+
+#[test]
+fn test_skills_to_wire_empty() {
+    assert!(skills_to_wire(Vec::new()).is_empty());
 }
 
 /// The framework event surface lists all 28 declared events, marking the

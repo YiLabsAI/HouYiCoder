@@ -165,6 +165,10 @@ pub enum AgentMessage {
     HooksResult {
         hooks: Vec<houyicoder_protocol::frontend::hooks::HookEntry>,
     },
+    /// The discovered skills the /skills command requested.
+    SkillsResult {
+        skills: Vec<houyicoder_protocol::frontend::skills::SkillEntry>,
+    },
     /// The /undo reply: a description of what was undone, or None when the
     /// undo stack was empty.
     UndoResult { description: Option<String> },
@@ -273,6 +277,12 @@ pub enum ClientCommand {
     /// Request the registered hooks list over the wire (the /hooks command).
     /// Read-only visibility: which hook events are wired, their name + source.
     HooksQuery {
+        req_id: RequestId,
+    },
+    /// Request the discovered skills list over the wire (the /skills
+    /// command). Read-only: name, description, source, body token
+    /// estimate.
+    SkillsQuery {
         req_id: RequestId,
     },
     /// Request the stored-memory list over the wire (the /memory command). The

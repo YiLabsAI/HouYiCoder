@@ -135,6 +135,15 @@ fn test_model_pane_esc_closes() {
     assert_eq!(app.pane, Pane::Transcript);
 }
 
+/// The /skills pane Esc key closes back to the transcript.
+#[test]
+fn test_skills_pane_esc_closes() {
+    let mut app = working_app();
+    app.pane = Pane::Skills;
+    handle_input(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.pane, Pane::Transcript);
+}
+
 /// Pasting routes to the palette query when the palette is open (the
 /// hint-after-space arg surface), else to the input box. Guards the bug where a
 /// pasted file path / sid went to the input bar and the popup never saw it.

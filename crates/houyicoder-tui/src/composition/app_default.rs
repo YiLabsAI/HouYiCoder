@@ -167,6 +167,7 @@ pub fn app() -> App {
         pending_status_command: false,
         hook_entries: Vec::new(),
         tool_entries: Vec::new(),
+        skill_entries: Vec::new(),
         hooks_level: std::cell::Cell::new(0),
         hooks_sel: std::cell::Cell::new(0),
         projected_from_frame: std::cell::Cell::new(usize::MAX),

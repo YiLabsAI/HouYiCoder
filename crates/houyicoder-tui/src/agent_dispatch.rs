@@ -267,6 +267,9 @@ impl App {
             AgentMessage::HooksResult { hooks } => {
                 self.hook_entries = hooks;
             }
+            AgentMessage::SkillsResult { skills } => {
+                self.skill_entries = skills;
+            }
             AgentMessage::ModelResult { model, effort } => {
                 self.status.model = model.clone();
                 self.model_catalog.active_id = Some(model);
