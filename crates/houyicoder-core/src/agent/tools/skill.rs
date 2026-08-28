@@ -109,6 +109,24 @@ impl Tool for SkillTool {
     fn is_destructive(&self) -> bool {
         false
     }
+    /// Safe-property allowlist gate: a skill with non-empty allowed_tools
+    /// requests permission-bearing properties (tools the skill grants to
+    /// the session), so the loop asks before executing. A skill with only
+    /// safe properties (name, description, when-to-use, etc.) is
+    /// auto-allowed — no Ask. Input-aware: parses the skill name from the
+    /// call input, resolves it via the registry, and checks its
+    /// allowed_tools. An unknown skill or missing name does not Ask (the
+    /// execute will fail with NotFound, a clearer signal than an approval
+    /// gate).
+    fn requires_approval_for(&self, input: &Value) -> bool {
+        let Some(name) = input.get("skill").and_then(|v| v.as_str()) else {
+            return false;
+        };
+        match self.registry.find(name) {
+            Some(desc) => !desc.allowed_tools.is_empty(),
+            None => false,
+        }
+    }
     fn requires_approval(&self) -> bool {
         false
     }
@@ -132,16 +150,18 @@ mod tests {
     use std::collections::HashMap;
 
     /// An in-memory registry for tests: stores prepared bodies by name.
-    struct StubRegistry {
+    struct InMemoryRegistry {
         bodies: HashMap<String, String>,
         model_invocable: HashMap<String, bool>,
+        allowed_tools: HashMap<String, Vec<String>>,
     }
 
-    impl StubRegistry {
+    impl InMemoryRegistry {
         fn new() -> Self {
             Self {
                 bodies: HashMap::new(),
                 model_invocable: HashMap::new(),
+                allowed_tools: HashMap::new(),
             }
         }
 
@@ -151,9 +171,23 @@ mod tests {
                 .insert(name.to_string(), model_invocable);
             self
         }
+
+        fn insert_with_tools(
+            mut self,
+            name: &str,
+            body: &str,
+            model_invocable: bool,
+            tools: Vec<String>,
+        ) -> Self {
+            self.bodies.insert(name.to_string(), body.to_string());
+            self.model_invocable
+                .insert(name.to_string(), model_invocable);
+            self.allowed_tools.insert(name.to_string(), tools);
+            self
+        }
     }
 
-    impl SkillRegistry for StubRegistry {
+    impl SkillRegistry for InMemoryRegistry {
         fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
             self.bodies
                 .keys()
@@ -166,6 +200,7 @@ mod tests {
                     disable_model_invocation: !*self.model_invocable.get(n).unwrap_or(&true),
                     user_invocable: true,
                     body_token_estimate: 0,
+                    allowed_tools: self.allowed_tools.get(n).cloned().unwrap_or_default(),
                 })
                 .collect()
         }
@@ -179,6 +214,7 @@ mod tests {
                 disable_model_invocation: !*self.model_invocable.get(name).unwrap_or(&true),
                 user_invocable: true,
                 body_token_estimate: 0,
+                allowed_tools: self.allowed_tools.get(name).cloned().unwrap_or_default(),
             })
         }
 
@@ -202,7 +238,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_known_skill_returns_body() {
-        let reg = Arc::new(StubRegistry::new().insert("commit", "run git status", true));
+        let reg = Arc::new(InMemoryRegistry::new().insert("commit", "run git status", true));
         let tool = SkillTool::new(reg);
         let out = tool
             .execute(ctx(), json!({"skill": "commit"}))
@@ -217,7 +253,7 @@ mod tests {
         // The stub body does not echo args, but the call succeeding
         // proves the args field parsed and reached prepare_body without
         // a schema rejection.
-        let reg = Arc::new(StubRegistry::new().insert("commit", "body", true));
+        let reg = Arc::new(InMemoryRegistry::new().insert("commit", "body", true));
         let tool = SkillTool::new(reg);
         let out = tool
             .execute(ctx(), json!({"skill": "commit", "args": "fix typo"}))
@@ -228,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_skill_errors() {
-        let reg = Arc::new(StubRegistry::new());
+        let reg = Arc::new(InMemoryRegistry::new());
         let tool = SkillTool::new(reg);
         let err = tool
             .execute(ctx(), json!({"skill": "nope"}))
@@ -242,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_skill_errors() {
-        let reg = Arc::new(StubRegistry::new().insert("secret", "body", false));
+        let reg = Arc::new(InMemoryRegistry::new().insert("secret", "body", false));
         let tool = SkillTool::new(reg);
         let err = tool
             .execute(ctx(), json!({"skill": "secret"}))
@@ -256,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_missing_skill_arg_errors() {
-        let reg = Arc::new(StubRegistry::new());
+        let reg = Arc::new(InMemoryRegistry::new());
         let tool = SkillTool::new(reg);
         let err = tool.execute(ctx(), json!({})).await.unwrap_err();
         match err {
@@ -293,10 +329,34 @@ mod tests {
     /// and mutates no external state, so the loop never gates it.
     #[test]
     fn test_flags_are_read_only() {
-        let reg = Arc::new(StubRegistry::new());
+        let reg = Arc::new(InMemoryRegistry::new());
         let tool = SkillTool::new(reg);
         assert!(tool.is_read_only());
         assert!(!tool.is_destructive());
         assert!(!tool.requires_approval());
+    }
+
+    /// Safe-property allowlist: a skill with non-empty allowed_tools asks
+    /// (it grants permission-bearing tools to the session); a skill with
+    /// only safe properties is auto-allowed; an unknown skill does not ask
+    /// (execute fails with NotFound, a clearer signal).
+    #[test]
+    fn test_safe_property_allowlist() {
+        let reg = InMemoryRegistry::new()
+            .insert_with_tools("dangerous", "body", true, vec!["Bash".to_string()])
+            .insert("safe", "body", true);
+        let tool = SkillTool::new(Arc::new(reg));
+        assert!(
+            tool.requires_approval_for(&json!({"skill":"dangerous"})),
+            "skill with allowed_tools asks"
+        );
+        assert!(
+            !tool.requires_approval_for(&json!({"skill":"safe"})),
+            "skill without allowed_tools is auto-allowed"
+        );
+        assert!(
+            !tool.requires_approval_for(&json!({"skill":"unknown"})),
+            "unknown skill does not ask (NotFound is clearer)"
+        );
     }
 }

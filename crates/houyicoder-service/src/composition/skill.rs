@@ -45,6 +45,7 @@ impl SkillRegistry for SkillRegistryImpl {
                 disable_model_invocation: false,
                 user_invocable: s.user_invocable,
                 body_token_estimate: s.body_token_estimate(),
+                allowed_tools: s.allowed_tools.clone(),
             })
             .collect()
     }
@@ -61,6 +62,7 @@ impl SkillRegistry for SkillRegistryImpl {
                 disable_model_invocation: s.disable_model_invocation,
                 user_invocable: s.user_invocable,
                 body_token_estimate: s.body_token_estimate(),
+                allowed_tools: s.allowed_tools.clone(),
             })
     }
 

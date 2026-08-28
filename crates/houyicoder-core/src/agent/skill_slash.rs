@@ -195,6 +195,7 @@ mod tests {
                 disable_model_invocation: false,
                 user_invocable,
                 body_token_estimate: 0,
+                allowed_tools: Vec::new(),
             })
         }
         fn prepare_body(

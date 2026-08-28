@@ -188,6 +188,7 @@ mod tests {
             disable_model_invocation: false,
             user_invocable: true,
             body_token_estimate: 0,
+            allowed_tools: Vec::new(),
         }
     }
 

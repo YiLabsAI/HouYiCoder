@@ -35,6 +35,10 @@ pub struct SkillDescriptor {
     /// Rough body token estimate (bytes / 4) so the model and the host
     /// see the invocation cost before committing.
     pub body_token_estimate: u32,
+    /// Additive tool grants from frontmatter allowed-tools. Non-empty means
+    /// the skill requests permission-bearing properties, so the Skill tool
+    /// asks before executing (the safe-property allowlist gate).
+    pub allowed_tools: Vec<String>,
 }
 
 /// Errors a skill registry can return when preparing a body.
