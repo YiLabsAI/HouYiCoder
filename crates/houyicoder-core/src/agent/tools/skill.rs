@@ -99,7 +99,9 @@ impl Tool for SkillTool {
             let body = registry
                 .prepare_body(&params.skill, params.args.as_deref(), sid.as_deref())
                 .map_err(skill_error_to_tool_error)?;
-            Ok(json!({ "skill": params.skill, "result": body }))
+            Ok(
+                json!({ "skill": params.skill, "result": body, "allowed_tools": desc.allowed_tools }),
+            )
         })
     }
 

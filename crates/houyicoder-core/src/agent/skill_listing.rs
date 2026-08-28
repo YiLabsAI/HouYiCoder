@@ -81,11 +81,13 @@ pub fn format_skill_listing(descriptors: &[SkillDescriptor], context_window_toke
     let full: Vec<String> = descriptors
         .iter()
         .map(|d| {
-            format!(
-                "- {}: {}",
-                d.name,
-                entry_description(&d.description, d.when_to_use.as_deref())
-            )
+            let desc = entry_description(&d.description, d.when_to_use.as_deref());
+            let cost = if d.body_token_estimate > 0 {
+                format!(" (~{} tok)", d.body_token_estimate)
+            } else {
+                String::new()
+            };
+            format!("- {}: {}{}", d.name, desc, cost)
         })
         .collect();
     let full_total: usize =
@@ -210,6 +212,28 @@ mod tests {
         );
         assert!(out.contains("- review: review a PR"), "{out}");
         assert_eq!(out.matches('\n').count(), 1, "two entries, one newline");
+    }
+
+    /// The listing shows each skill body token estimate so the model sees
+    /// the invocation cost before committing. A skill with zero estimate
+    /// (unknown body) shows no cost suffix.
+    #[test]
+    fn test_listing_shows_token_cost() {
+        let d = SkillDescriptor {
+            name: "big".to_string(),
+            description: "a big skill".to_string(),
+            when_to_use: None,
+            argument_hint: None,
+            disable_model_invocation: false,
+            user_invocable: true,
+            body_token_estimate: 4200,
+            allowed_tools: Vec::new(),
+        };
+        let out = format_skill_listing(&[d], 200_000);
+        assert!(
+            out.contains("(~4200 tok)"),
+            "body token estimate in the listing: {out}"
+        );
     }
 
     #[test]
