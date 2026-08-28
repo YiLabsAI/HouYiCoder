@@ -238,7 +238,7 @@ async fn test_precompress_fires_return_channel() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_events(&store, &events).await;
     let capturing = Arc::new(CapturingSummarizer::new());
-    let mut reg = HookRegistry::new();
+    let reg = HookRegistry::new();
     reg.register(Arc::new(FixedHook {
         name: "pre-inject".into(),
         events: vec![HookEvent::PreCompact],
@@ -277,7 +277,7 @@ async fn test_precompact_no_deny_path() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_events(&store, &events).await;
     let capturing = Arc::new(CapturingSummarizer::new());
-    let mut reg = HookRegistry::new();
+    let reg = HookRegistry::new();
     reg.register(Arc::new(FixedHook {
         name: "pre-deny".into(),
         events: vec![HookEvent::PreCompact],
@@ -310,7 +310,7 @@ async fn test_postcompact_fires_with_summary() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_events(&store, &events).await;
     let capturing = Arc::new(CapturingSummarizer::new());
-    let mut reg = HookRegistry::new();
+    let reg = HookRegistry::new();
     reg.register(Arc::new(FixedHook {
         name: "post-observe".into(),
         events: vec![HookEvent::PostCompact],
@@ -367,7 +367,7 @@ async fn test_auto_path_fires_precompact() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_events(&store, &events).await;
     let capturing = Arc::new(CapturingSummarizer::new());
-    let mut reg = HookRegistry::new();
+    let reg = HookRegistry::new();
     reg.register(Arc::new(FixedHook {
         name: "pre-auto".into(),
         events: vec![HookEvent::PreCompact],

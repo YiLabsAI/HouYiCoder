@@ -45,7 +45,7 @@ impl Hook for ReservedRecorder {
 
 fn runner_with_reserved_hook() -> (Runner, Arc<Mutex<Vec<HookEvent>>>) {
     let seen = Arc::new(Mutex::new(Vec::<HookEvent>::new()));
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(Arc::new(ReservedRecorder { seen: seen.clone() }));
     let runner = runner_with(
         Arc::new(FakeProvider::new(vec![CompletionResponse {

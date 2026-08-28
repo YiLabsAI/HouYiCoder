@@ -34,7 +34,7 @@ pub(super) fn build_hook_registry(
     if specs.is_empty() {
         return None;
     }
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     for spec in specs {
         let mut events = Vec::with_capacity(spec.events.len());
         let mut bad = None;

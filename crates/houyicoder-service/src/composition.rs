@@ -544,12 +544,12 @@ pub(crate) fn assemble(
     // rules. Always registered (not user-configured).
     let skill_grant = hooks::SkillGrantHook::new(gate_dyn.clone());
     let runner = match hooks {
-        Some(mut reg) => {
+        Some(reg) => {
             reg.register(Arc::new(skill_grant));
             runner.with_hooks(Arc::new(reg))
         }
         None => {
-            let mut reg = HookRegistry::new();
+            let reg = HookRegistry::new();
             reg.register(Arc::new(skill_grant));
             runner.with_hooks(Arc::new(reg))
         }

@@ -402,7 +402,7 @@ fn test_registry_dispatch_returns_verdict() {
         vec![HookEvent::PreToolUse],
         HookVerdict::Deny("blocked".into()),
     );
-    let mut reg = HookRegistry::new();
+    let reg = HookRegistry::new();
     reg.register(hook);
     assert_eq!(reg.len(), 1);
 
@@ -426,7 +426,7 @@ fn test_registry_dispatch_no_subscribers() {
 #[test]
 fn test_registry_disabled_policy_skips() {
     let hook = make_hook(vec![HookEvent::PreToolUse], HookVerdict::Deny("x".into()));
-    let mut reg = HookRegistry::with_policy(HookPolicy::Disabled);
+    let reg = HookRegistry::with_policy(HookPolicy::Disabled);
     reg.register(hook);
     let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
     assert!(reg.dispatch(&ctx).is_empty());
@@ -435,7 +435,7 @@ fn test_registry_disabled_policy_skips() {
 #[test]
 fn test_registry_skips_unsubscribed() {
     let hook = make_hook(vec![HookEvent::SessionStart], HookVerdict::Allow);
-    let mut reg = HookRegistry::new();
+    let reg = HookRegistry::new();
     reg.register(hook);
     // PreToolUse has no subscribers; SessionStart does.
     let ctx_pre = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
@@ -465,7 +465,7 @@ fn test_policy_managed_only_filters() {
         HookVerdict::Deny("project".into()),
         HookSource::Project,
     );
-    let mut reg = HookRegistry::with_policy(HookPolicy::ManagedOnly);
+    let reg = HookRegistry::with_policy(HookPolicy::ManagedOnly);
     reg.register(user_hook);
     reg.register(managed_hook);
     reg.register(project_hook);
@@ -493,7 +493,7 @@ fn test_policy_plugin_only_filters() {
         HookVerdict::Deny("project".into()),
         HookSource::Project,
     );
-    let mut reg = HookRegistry::with_policy(HookPolicy::PluginOnly);
+    let reg = HookRegistry::with_policy(HookPolicy::PluginOnly);
     reg.register(user_hook);
     reg.register(project_hook);
     assert_eq!(reg.len(), 2);
@@ -530,7 +530,7 @@ fn test_policy_all_enabled_runs() {
         HookVerdict::Allow,
         HookSource::Local,
     );
-    let mut reg = HookRegistry::with_policy(HookPolicy::AllEnabled);
+    let reg = HookRegistry::with_policy(HookPolicy::AllEnabled);
     reg.register(user_hook);
     reg.register(managed_hook);
     reg.register(project_hook);
@@ -565,8 +565,7 @@ fn test_trust_untrusted_skips_project() {
         HookVerdict::Allow,
         HookSource::Local,
     );
-    let mut reg =
-        HookRegistry::with_policy_and_trust(HookPolicy::AllEnabled, TrustState::Untrusted);
+    let reg = HookRegistry::with_policy_and_trust(HookPolicy::AllEnabled, TrustState::Untrusted);
     reg.register(user_hook);
     reg.register(project_hook);
     reg.register(managed_hook);
@@ -591,8 +590,7 @@ fn test_trust_untrusted_skips_local() {
         HookVerdict::Deny("local".into()),
         HookSource::Local,
     );
-    let mut reg =
-        HookRegistry::with_policy_and_trust(HookPolicy::AllEnabled, TrustState::Untrusted);
+    let reg = HookRegistry::with_policy_and_trust(HookPolicy::AllEnabled, TrustState::Untrusted);
     reg.register(local_hook);
     let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
     let results: Vec<_> = reg.dispatch(&ctx).into_iter().map(|o| o.result).collect();
@@ -629,8 +627,7 @@ fn test_untrusted_skip_notice() {
 
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let cap = Arc::clone(&captured);
-    let mut reg =
-        HookRegistry::with_policy_and_trust(HookPolicy::AllEnabled, TrustState::Untrusted);
+    let reg = HookRegistry::with_policy_and_trust(HookPolicy::AllEnabled, TrustState::Untrusted);
     reg.register(make_sourced_hook(
         vec![HookEvent::PreToolUse],
         HookVerdict::Allow,
@@ -676,8 +673,7 @@ fn test_trust_acknowledged_runs_all() {
         HookVerdict::Allow,
         HookSource::Local,
     );
-    let mut reg =
-        HookRegistry::with_policy_and_trust(HookPolicy::AllEnabled, TrustState::Acknowledged);
+    let reg = HookRegistry::with_policy_and_trust(HookPolicy::AllEnabled, TrustState::Acknowledged);
     reg.register(project_hook);
     reg.register(local_hook);
     let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
@@ -697,7 +693,7 @@ fn test_parallel_dispatch_returns_all() {
     let hook_a = make_hook(vec![HookEvent::PreToolUse], HookVerdict::Allow);
     let hook_b = make_hook(vec![HookEvent::PreToolUse], HookVerdict::Deny("b".into()));
     let hook_c = make_hook(vec![HookEvent::PreToolUse], HookVerdict::Allow);
-    let mut reg = HookRegistry::new().with_timeout(5000);
+    let reg = HookRegistry::new().with_timeout(5000);
     reg.register(hook_a);
     reg.register(hook_b);
     reg.register(hook_c);
@@ -723,7 +719,7 @@ fn test_timeout_returns_timeout_error() {
         source: HookSource::User,
     });
     // timeout_ms=20, hook sleeps 200ms: must time out.
-    let mut reg = HookRegistry::new().with_timeout(20);
+    let reg = HookRegistry::new().with_timeout(20);
     reg.register(slow_hook);
     let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
     let results: Vec<_> = reg.dispatch(&ctx).into_iter().map(|o| o.result).collect();
@@ -753,7 +749,7 @@ fn test_timeout_bounded_wall_clock() {
         verdict: HookVerdict::Allow,
         source: HookSource::User,
     });
-    let mut reg = HookRegistry::new().with_timeout(50);
+    let reg = HookRegistry::new().with_timeout(50);
     reg.register(slow_hook);
     let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
 
@@ -782,7 +778,7 @@ fn test_panic_returns_guest_panic() {
         events: vec![HookEvent::PreToolUse],
         source: HookSource::User,
     });
-    let mut reg = HookRegistry::new().with_timeout(0);
+    let reg = HookRegistry::new().with_timeout(0);
     reg.register(panic_hook);
     let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
     let results: Vec<_> = reg.dispatch(&ctx).into_iter().map(|o| o.result).collect();

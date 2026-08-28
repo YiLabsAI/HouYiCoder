@@ -176,7 +176,7 @@ fn test_registry_deny_wins_arbitration() {
         vec![HookEvent::PreToolUse],
         HookVerdict::Deny("forbidden".into()),
     );
-    let mut reg = HookRegistry::new();
+    let reg = HookRegistry::new();
     reg.register(allow_hook);
     reg.register(deny_hook);
     assert_eq!(reg.len(), 2);
@@ -203,7 +203,7 @@ fn test_registry_error_hook_denies() {
         },
         source: HookSource::User,
     });
-    let mut reg = HookRegistry::new();
+    let reg = HookRegistry::new();
     reg.register(ok_hook);
     reg.register(err_hook);
     let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);

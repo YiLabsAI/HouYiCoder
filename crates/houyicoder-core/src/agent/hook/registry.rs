@@ -3,23 +3,20 @@
 //! registry + list visibility method live here.
 
 use super::*;
+use std::sync::RwLock;
 
-pub struct HookRegistry {
+/// Mutable inner state: the hook list + the event-to-index map. Both
+/// are mutated together on register, so a single RwLock covers both.
+struct HookInner {
     hooks: Vec<Arc<dyn Hook>>,
     by_event: HashMap<HookEvent, Vec<usize>>,
+}
+
+pub struct HookRegistry {
+    inner: RwLock<HookInner>,
     policy: HookPolicy,
     trust: TrustState,
-    /// Per-hook evaluate timeout in milliseconds. Default 5000 (mechanical
-    /// rules). 0 disables timeout (sequential dispatch, for tests). A
-    /// two-tier timeout (5s mechanical / 60s verify) lands when the Hook
-    /// trait gains a kind discriminator or the WASM executor lands.
     timeout_ms: u64,
-    /// Hooks skipped for untrusted workspace, pending a one-time notice to
-    /// the caller. The skip itself is per-dispatch, but the user only needs
-    /// to be told once — a project hook that never fires is a configuration
-    /// they wrote and cannot see the effect of. Once drained, later
-    /// dispatches skip silently: trust is fixed at construction, so the skip
-    /// set cannot change over the registry's lifetime.
     pending_skip_notice: Mutex<Option<Vec<String>>>,
 }
 
@@ -28,8 +25,10 @@ impl HookRegistry {
     /// trusted state.
     pub fn new() -> Self {
         Self {
-            hooks: Vec::new(),
-            by_event: HashMap::new(),
+            inner: RwLock::new(HookInner {
+                hooks: Vec::new(),
+                by_event: HashMap::new(),
+            }),
             policy: HookPolicy::default(),
             trust: TrustState::Trusted,
             timeout_ms: 5000,
@@ -37,11 +36,12 @@ impl HookRegistry {
         }
     }
 
-    /// Create an empty registry with an explicit policy (trusted by default).
     pub fn with_policy(policy: HookPolicy) -> Self {
         Self {
-            hooks: Vec::new(),
-            by_event: HashMap::new(),
+            inner: RwLock::new(HookInner {
+                hooks: Vec::new(),
+                by_event: HashMap::new(),
+            }),
             policy,
             trust: TrustState::Trusted,
             timeout_ms: 5000,
@@ -49,11 +49,12 @@ impl HookRegistry {
         }
     }
 
-    /// Create an empty registry with an explicit policy and trust state.
     pub fn with_policy_and_trust(policy: HookPolicy, trust: TrustState) -> Self {
         Self {
-            hooks: Vec::new(),
-            by_event: HashMap::new(),
+            inner: RwLock::new(HookInner {
+                hooks: Vec::new(),
+                by_event: HashMap::new(),
+            }),
             policy,
             trust,
             timeout_ms: 5000,
@@ -78,14 +79,17 @@ impl HookRegistry {
             .take()
     }
 
-    /// Register a hook. Indexes it under every event it subscribes to for
-    /// O(1) lookup at dispatch time.
-    pub fn register(&mut self, hook: Arc<dyn Hook>) {
-        let idx = self.hooks.len();
+    /// Register a hook. Takes &self (interior mutability via RwLock)
+    /// so hooks can be registered on a shared Arc<HookRegistry>
+    /// after the runner is constructed. This enables future
+    /// skill-hook registration at invocation time.
+    pub fn register(&self, hook: Arc<dyn Hook>) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let idx = inner.hooks.len();
         for ev in hook.events() {
-            self.by_event.entry(*ev).or_default().push(idx);
+            inner.by_event.entry(*ev).or_default().push(idx);
         }
-        self.hooks.push(hook);
+        inner.hooks.push(hook);
     }
 
     /// Dispatch an event to all subscribed hooks, collecting HookOutcomes
@@ -99,17 +103,16 @@ impl HookRegistry {
         if self.policy == HookPolicy::Disabled {
             return Vec::new();
         }
-        let Some(indices) = self.by_event.get(&ctx.event) else {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let Some(indices) = inner.by_event.get(&ctx.event) else {
             return Vec::new();
         };
-        // Partition the registered hooks into the trusted set (the ones
-        // that will run) and the skipped set (filtered by policy or
-        // trust). The skip is surfaced (not silent) so a user who wired a
-        // project-level hook sees why it never fired (untrusted workspace).
         let mut filtered: Vec<&Arc<dyn Hook>> = Vec::new();
         let mut skipped_untrusted: Vec<String> = Vec::new();
         for &i in indices {
-            let Some(h) = self.hooks.get(i) else { continue };
+            let Some(h) = inner.hooks.get(i) else {
+                continue;
+            };
             if !policy_allows(&h.source(), &self.policy) {
                 continue;
             }
@@ -135,9 +138,18 @@ impl HookRegistry {
             return Vec::new();
         }
 
+        // Clone the Arcs out of the lock before evaluating, so the read
+        // lock is released before any hook runs. This prevents a latent
+        // deadlock if a future built-in hook calls register() during
+        // evaluate (std RwLock is non-reentrant). The parallel path
+        // already clones into threads, so this makes sequential
+        // symmetric.
+        let cloned: Vec<Arc<dyn Hook>> = filtered.iter().map(|h| Arc::clone(*h)).collect();
+        drop(inner);
+
         // No timeout: sequential dispatch (fast path for in-process hooks).
         if self.timeout_ms == 0 {
-            return filtered
+            return cloned
                 .iter()
                 .map(|h| {
                     let name = h.name().to_string();
@@ -166,7 +178,7 @@ impl HookRegistry {
         let deadline = Instant::now() + Duration::from_millis(self.timeout_ms);
         let timeout_ms = self.timeout_ms;
 
-        let receivers: Vec<(mpsc::Receiver<Result<HookVerdict, HookError>>, String)> = filtered
+        let receivers: Vec<(mpsc::Receiver<Result<HookVerdict, HookError>>, String)> = cloned
             .iter()
             .map(|hook| {
                 let (tx, rx) = mpsc::channel();
@@ -206,18 +218,24 @@ impl HookRegistry {
 
     /// How many hooks are registered.
     pub fn len(&self) -> usize {
-        self.hooks.len()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .hooks
+            .len()
     }
 
-    /// Whether no hooks are registered.
     pub fn is_empty(&self) -> bool {
-        self.hooks.is_empty()
+        self.len() == 0
     }
 
-    /// List all registered hooks for visibility (/hooks command). Each entry
-    /// carries the hook name, subscribed events, and config source.
+    /// List all registered hooks for visibility. Each entry carries
+    /// the hook name, subscribed events, and config source.
     pub fn list(&self) -> Vec<HookEntry> {
-        self.hooks
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .hooks
             .iter()
             .map(|h| HookEntry {
                 name: h.name().to_string(),
@@ -270,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_list_returns_registered_hooks() {
-        let mut reg = HookRegistry::new();
+        let reg = HookRegistry::new();
         reg.register(Arc::new(StubHook {
             name: "pre-check".into(),
             events: vec![HookEvent::PreToolUse, HookEvent::PostToolUse],
@@ -290,5 +308,36 @@ mod tests {
     fn test_list_empty_registry() {
         let reg = HookRegistry::new();
         assert!(reg.list().is_empty());
+    }
+
+    /// The motivating use case for &self register: register on a
+    /// shared Arc<HookRegistry> after construction, then dispatch
+    /// and verify the hook fires. Proves the interior-mutability
+    /// change works end-to-end on a shared reference.
+    #[test]
+    fn test_register_on_shared_arc() {
+        use houyicoder_context::SessionId;
+
+        let reg = Arc::new(HookRegistry::new());
+        // Register on the shared Arc — this is the &self path.
+        reg.register(Arc::new(StubHook {
+            name: "late-hook".into(),
+            events: vec![HookEvent::PostToolUse],
+            source: HookSource::User,
+        }));
+        let ctx = HookContext {
+            event: HookEvent::PostToolUse,
+            payload: HookPayload::PostToolUse {
+                tool_name: "bash".into(),
+                input: serde_json::json!({}),
+                result: ToolResult {
+                    output: "{}".into(),
+                },
+            },
+            session: SessionId::new(),
+        };
+        let outcomes = reg.dispatch(&ctx);
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "late-hook");
     }
 }

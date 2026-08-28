@@ -130,7 +130,7 @@ fn deny_runner() -> (crate::agent::Runner, SessionId, Arc<AtomicU8>) {
     };
     let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
         Arc::new(FakeProvider::new(vec![first, second]));
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(Arc::new(DenyRecordableHook));
     let runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
     let session = SessionId::new();
@@ -229,7 +229,7 @@ async fn test_pre_tool_use_observe() {
     };
     let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
         Arc::new(FakeProvider::new(vec![first, second]));
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(Arc::new(ObserveRecordableHook));
     let runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
     let session = SessionId::new();
@@ -358,7 +358,7 @@ async fn test_pre_tool_use_feedback() {
     };
     let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
         Arc::new(FakeProvider::new(vec![first, second]));
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(Arc::new(FeedbackRecordableHook));
     let runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
     let session = SessionId::new();
@@ -404,7 +404,7 @@ async fn test_post_tool_use_fires() {
     };
     let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
         Arc::new(FakeProvider::new(vec![first, second]));
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(Arc::new(ObserveRecordableHook));
     let runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
     let session = SessionId::new();
@@ -678,7 +678,7 @@ async fn test_deny_records_gate_violation() {
     };
     let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
         Arc::new(FakeProvider::new(vec![first, second]));
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(Arc::new(DenyNamedRule));
     let runner = runner_with(provider, tools)
         .with_hooks(Arc::new(registry))
