@@ -193,7 +193,7 @@ pub trait Lifecycle: Send + Sync {
     fn handoff(
         &self,
         session_id: SessionId,
-        target: houyicoder_core::agent::AgentId,
+        target: houyicoder_context::AgentId,
     ) -> PFut<'_, Result<(), LifecycleError>>;
 
     /// Abort a session. Reaps any in-flight run and any pending permission ask,
@@ -560,7 +560,7 @@ impl Lifecycle for SessionLeaseStore {
     fn handoff(
         &self,
         session_id: SessionId,
-        _target: houyicoder_core::agent::AgentId,
+        _target: houyicoder_context::AgentId,
     ) -> PFut<'_, Result<(), LifecycleError>> {
         Box::pin(async move {
             let state = self

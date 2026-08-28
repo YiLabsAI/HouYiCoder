@@ -35,9 +35,7 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use houyicoder_context::{CheckpointId, SessionId};
-
-use crate::agent::step::AgentId;
+use houyicoder_context::{AgentId, CheckpointId, SessionId};
 
 /// Whether a compaction was triggered manually (the /compact command) or
 /// automatically (the pre-flight or overflow handler in the agent loop). The

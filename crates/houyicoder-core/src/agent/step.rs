@@ -16,13 +16,8 @@
 //! only adds the matching ToolResults — no counter rewind (the lossless log
 //! makes a persisted-item counter unnecessary).
 
+use houyicoder_context::AgentId;
 use houyicoder_protocol::llm::OutputItem;
-use serde::{Deserialize, Serialize};
-
-/// A typed agent identity for the Handoff variant. a name string; the
-/// multi-agent runtime (4.x) gives this a real registry and capability set.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AgentId(pub String);
 
 /// What the loop does next, computed once per turn by resolve_turn. A
 /// NextStep union with typed payloads.

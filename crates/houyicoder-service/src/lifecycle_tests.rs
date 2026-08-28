@@ -157,10 +157,9 @@ fn test_handoff_rejected_cancelled_session() {
     let sid = SessionId::new();
     store.insert(record(sid));
     futures::executor::block_on(store.cancel(sid)).expect("cancel");
-    let err = futures::executor::block_on(
-        store.handoff(sid, houyicoder_core::agent::AgentId("t".into())),
-    )
-    .expect_err("handoff on cancelled must fail");
+    let err =
+        futures::executor::block_on(store.handoff(sid, houyicoder_context::AgentId("t".into())))
+            .expect_err("handoff on cancelled must fail");
     assert!(matches!(err, LifecycleError::InvalidTransition(_)));
 }
 
@@ -169,11 +168,11 @@ fn test_handoff_handoff_is_noop() {
     let store = SessionLeaseStore::new();
     let sid = SessionId::new();
     store.insert(record(sid));
-    futures::executor::block_on(store.handoff(sid, houyicoder_core::agent::AgentId("t".into())))
+    futures::executor::block_on(store.handoff(sid, houyicoder_context::AgentId("t".into())))
         .expect("handoff");
     assert_eq!(store.state(sid), LifecycleState::Shutdown);
     // A second handoff on the already-Shutdown session does not error.
-    futures::executor::block_on(store.handoff(sid, houyicoder_core::agent::AgentId("t".into())))
+    futures::executor::block_on(store.handoff(sid, houyicoder_context::AgentId("t".into())))
         .expect("second handoff is no-op");
     assert_eq!(store.state(sid), LifecycleState::Shutdown);
 }
@@ -183,7 +182,7 @@ fn test_cancel_rejected_shutdown_session() {
     let store = SessionLeaseStore::new();
     let sid = SessionId::new();
     store.insert(record(sid));
-    futures::executor::block_on(store.handoff(sid, houyicoder_core::agent::AgentId("t".into())))
+    futures::executor::block_on(store.handoff(sid, houyicoder_context::AgentId("t".into())))
         .expect("handoff");
     let err =
         futures::executor::block_on(store.cancel(sid)).expect_err("cancel on shutdown must fail");
@@ -251,7 +250,7 @@ fn test_handoff_removes_persisted_record() {
     let sid = SessionId::new();
     let store = SessionLeaseStore::with_registry(reg.clone());
     store.insert(record(sid));
-    futures::executor::block_on(store.handoff(sid, houyicoder_core::agent::AgentId("t".into())))
+    futures::executor::block_on(store.handoff(sid, houyicoder_context::AgentId("t".into())))
         .expect("handoff");
     // Handoff is terminal and drops the persisted file so a reconnect
     // sees NotFound, matching in-memory state.

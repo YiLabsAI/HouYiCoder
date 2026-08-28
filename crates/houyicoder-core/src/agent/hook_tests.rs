@@ -4,11 +4,11 @@
 use super::registry::HookRegistry;
 use super::*;
 use houyicoder_api::trust::TrustState;
+use houyicoder_context::AgentId;
 use houyicoder_context::{CheckpointId, SessionId};
 use std::path::PathBuf;
 
 use super::ToolResult;
-use crate::agent::step::AgentId;
 
 // --- test doubles ---
 

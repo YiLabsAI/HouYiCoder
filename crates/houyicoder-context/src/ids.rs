@@ -144,3 +144,10 @@ pub struct BlockHash(pub String);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PrevHash(pub [u8; 32]);
+
+/// A typed agent identity for the NextStep::Handoff variant and the
+/// multi-agent handoff surface. A name string today; the multi-agent
+/// runtime gives this a real registry and capability set. Sibling to the
+/// spawn-port AgentIdentity type, which stays a distinct type (not merged).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct AgentId(pub String);

@@ -50,7 +50,7 @@ pub use plan::{CheckpointManifest, ContextSnapshot, Disposition, TurnGroup};
 /// The identifier newtypes (session, event, checkpoint ids + the two hash
 /// wrappers a logged event carries).
 mod ids;
-pub use ids::{BlockHash, CheckpointId, EventId, PrevHash, SessionId};
+pub use ids::{AgentId, BlockHash, CheckpointId, EventId, PrevHash, SessionId};
 
 /// The append-only log's wire types (TurnEvent + the vocabulary of what a
 /// record can be).

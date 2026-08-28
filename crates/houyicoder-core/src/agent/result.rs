@@ -6,8 +6,9 @@
 use houyicoder_context::ContextError;
 use houyicoder_protocol::llm::{ProviderError, Usage};
 
-use super::step::{AgentId, ApprovalRequest};
+use super::step::ApprovalRequest;
 use super::verify::VerifyFailure;
+use houyicoder_context::AgentId;
 
 /// How a run ended.
 #[derive(Debug)]

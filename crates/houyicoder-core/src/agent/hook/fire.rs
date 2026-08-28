@@ -19,7 +19,7 @@ use super::{HookContext, HookEvent, HookPayload, HookRegistry};
 use crate::agent::Runner;
 use crate::agent::append::{emit_live_line, record_hook_signals};
 use crate::agent::obs_wire::SharedObservability;
-use crate::agent::step::AgentId;
+use houyicoder_context::AgentId;
 
 /// The HookFire implementor: a bundle of the parent runner's hook deps as
 /// Arc clones. Built once at the composition root after the runner and its
