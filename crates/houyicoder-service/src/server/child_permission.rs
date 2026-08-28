@@ -36,6 +36,7 @@ pub(crate) async fn handle(
 ) -> Result<(), WireError> {
     let BusMessage::PermissionRequest {
         child_id,
+        subagent_type,
         call_id,
         tool,
         input,
@@ -46,7 +47,16 @@ pub(crate) async fn handle(
         return Ok(());
     };
     let approval = ApprovalRequest::new(call_id.clone(), tool.clone(), input.clone());
-    let (approved, updated_input) = match server.handle_approval(io, &approval).await {
+    // Label the ask with its origin so the TUI card shows which delegation
+    // the ask belongs to (a child ask vs the parent's own tool call).
+    let delegation = houyicoder_protocol::frontend::run::DelegationSource {
+        child_id: child_id.clone(),
+        subagent_type: subagent_type.clone(),
+    };
+    let (approved, updated_input) = match server
+        .handle_approval(io, &approval, Some(delegation))
+        .await
+    {
         Ok(d) => (d.approved, d.updated_input),
         Err(e) => {
             // Fail-closed: publish a deny so the child resumes (rejected)
@@ -164,7 +174,7 @@ mod tests {
         });
         let req = BusMessage::PermissionRequest {
             child_id: "c1".into(),
-            agent_type: "explore".into(),
+            subagent_type: "explore".into(),
             call_id: "call-1".into(),
             tool: "bash".into(),
             input: serde_json::json!({"command": "echo hi"}),

@@ -403,6 +403,7 @@ fn test_permission_ask_raises_popup() {
         input: serde_json::json!({"command": "ls"}),
         options: Vec::new(),
         reason: None,
+        delegation: None,
     };
     app.handle_agent_message(AgentMessage::PermissionAsk {
         req_id: houyicoder_protocol::envelope::RequestId(1),
@@ -413,6 +414,41 @@ fn test_permission_ask_raises_popup() {
     let a = app.approval.as_ref().unwrap();
     assert_eq!(a.tool, "bash");
     assert_eq!(a.call_id, "c1");
+}
+
+/// A permission ask routed up from a spawned child carries its delegation
+/// origin onto the approval card so the user can tell a child's ask from the
+/// parent's own tool call. Pins the wire→TUI source-label path: the
+/// ApprovalRequest.delegation field lands in Approval.delegation and the
+/// card header prefixes the child agent type.
+#[test]
+fn test_approval_ask_carries_delegation() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    let ask = ApprovalRequest {
+        call_id: "c1".into(),
+        tool_name: "bash".into(),
+        input: serde_json::json!({"command": "ls"}),
+        options: Vec::new(),
+        reason: None,
+        delegation: Some(houyicoder_protocol::frontend::run::DelegationSource {
+            child_id: "child-1".into(),
+            subagent_type: "explore".into(),
+        }),
+    };
+    app.handle_agent_message(AgentMessage::PermissionAsk {
+        req_id: houyicoder_protocol::envelope::RequestId(2),
+        ask,
+    });
+    let a = app.approval.as_ref().expect("approval raised");
+    let d = a.delegation.as_ref().expect("delegation carried");
+    assert_eq!(d.child_id, "child-1");
+    assert_eq!(d.subagent_type, "explore");
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        out.contains("explore"),
+        "card header prefixes the child agent type: {out}"
+    );
 }
 
 #[test]

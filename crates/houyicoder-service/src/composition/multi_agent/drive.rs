@@ -104,7 +104,7 @@ pub(super) async fn route_approvals_via_bus(
             permission_request_topic(),
             BusMessage::PermissionRequest {
                 child_id: child_id.to_string(),
-                agent_type: agent_type.to_string(),
+                subagent_type: agent_type.to_string(),
                 call_id: call_id.clone(),
                 tool: req.tool_name.clone(),
                 input: req.input.clone(),

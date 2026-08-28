@@ -51,10 +51,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         chunks[0],
     );
 
-    // Header: "<Tool> command"
+    // Header: "<Tool> command", prefixed with the child agent type when the
+    // ask was routed up from a delegation so the user can tell a child's ask
+    // from the parent's own tool call.
+    let header = match &a.delegation {
+        Some(d) => format!(" {} · {} command", d.subagent_type, cap_first(&a.tool)),
+        None => format!(" {} command", cap_first(&a.tool)),
+    };
     f.render_widget(
-        Paragraph::new(format!(" {} command", cap_first(&a.tool)))
-            .style(Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Paragraph::new(header).style(Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
         chunks[1],
     );
 

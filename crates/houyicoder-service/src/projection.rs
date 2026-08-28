@@ -94,6 +94,7 @@ pub(crate) fn project_run_result(run: &houyicoder_core::agent::RunResult) -> Run
 pub(crate) fn build_approval_request(
     req: &houyicoder_core::agent::ApprovalRequest,
     reason: Option<&houyicoder_permission::AskReason>,
+    delegation: Option<&houyicoder_protocol::frontend::run::DelegationSource>,
 ) -> ApprovalRequest {
     ApprovalRequest {
         call_id: req.call_id.clone(),
@@ -101,6 +102,7 @@ pub(crate) fn build_approval_request(
         input: req.input.clone(),
         options: Vec::new(),
         reason: reason.map(houyicoder_protocol::frontend::permission::AskReason::from),
+        delegation: delegation.cloned(),
     }
 }
 

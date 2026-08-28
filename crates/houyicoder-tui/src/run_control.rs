@@ -279,6 +279,7 @@ impl App {
             args,
             reason,
             source,
+            delegation: ask.delegation,
             containment_note,
             selected,
             call_id,

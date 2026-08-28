@@ -27,6 +27,7 @@ fn sample_approval_request() -> ApprovalRequest {
         input: serde_json::Value::Null,
         options: Vec::new(),
         reason: None,
+        delegation: None,
     }
 }
 

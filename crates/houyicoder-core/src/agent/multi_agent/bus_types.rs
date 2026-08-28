@@ -38,7 +38,7 @@ pub enum BusMessage {
     /// publishes a PermissionResponse on the per-request response topic.
     PermissionRequest {
         child_id: String,
-        agent_type: String,
+        subagent_type: String,
         call_id: String,
         tool: String,
         input: serde_json::Value,
@@ -160,7 +160,7 @@ mod tests {
             permission_request_topic(),
             BusMessage::PermissionRequest {
                 child_id: child_id.into(),
-                agent_type: "explore".into(),
+                subagent_type: "explore".into(),
                 call_id: call_id.into(),
                 tool: "bash".into(),
                 input: serde_json::json!({"command": "rm -rf x"}),

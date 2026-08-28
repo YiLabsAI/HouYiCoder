@@ -29,6 +29,7 @@ impl Server {
         &mut self,
         io: &mut ServerIo,
         approval: &houyicoder_core::agent::ApprovalRequest,
+        delegation: Option<houyicoder_protocol::frontend::run::DelegationSource>,
     ) -> Result<houyicoder_core::agent::ApprovalDecision, WireError> {
         let mut reason = self.reconstruct_reason(&approval.tool_name, &approval.input);
         // Enrich the wire-display detail with the skill script path so the
@@ -42,7 +43,11 @@ impl Server {
         let ask_id = self.mint_req_id();
         let ask = ServerRequestEnvelope::new(
             ask_id,
-            ServerRequestPayload::Permission(build_approval_request(approval, reason.as_ref())),
+            ServerRequestPayload::Permission(build_approval_request(
+                approval,
+                reason.as_ref(),
+                delegation.as_ref(),
+            )),
         );
         self.send_typed(io, &ServerFrame::Request(ask)).await?;
         // Read the matching reverse response. Loop, not a single read, so a

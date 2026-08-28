@@ -556,6 +556,12 @@ pub struct Approval {
     /// card: a SystemSafety source hides the "remember" option because
     /// consent cannot override a protected-path check.
     pub source: Option<houyicoder_protocol::frontend::permission::AskSource>,
+    /// The child delegation this ask was routed up from, when the ask
+    /// originates from a spawned child rather than the parent's own run.
+    /// None for a parent tool call. The card labels the child type so the
+    /// user can tell a child's ask from the parent's when delegations are
+    /// in flight.
+    pub delegation: Option<houyicoder_protocol::frontend::run::DelegationSource>,
     /// An optional note from the containment layer the card renders as a
     /// fourth line when present.
     pub containment_note: Option<String>,

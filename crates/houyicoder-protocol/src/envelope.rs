@@ -338,6 +338,7 @@ mod tests {
             input: Value::Null,
             options: Vec::new(),
             reason: None,
+            delegation: None,
         }
     }
 

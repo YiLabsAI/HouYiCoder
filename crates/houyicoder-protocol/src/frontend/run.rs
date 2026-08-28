@@ -69,6 +69,23 @@ pub struct ApprovalRequest {
     /// an old client ignores it, an old server omits it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<crate::frontend::permission::AskReason>,
+    /// The child delegation this ask was routed up from over the bus, when
+    /// the ask originates from a spawned child rather than the parent's own
+    /// run. None for a parent tool call. The card labels the child type so a
+    /// user can tell a child's ask from the parent's when several delegations
+    /// are in flight. Default + skip-when-none keep the field backward
+    /// compatible both ways.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<DelegationSource>,
+}
+
+/// The origin of a permission ask routed up from a spawned child: the child
+/// session id and its agent type, so the approval card can label which
+/// delegation the ask belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationSource {
+    pub child_id: String,
+    pub subagent_type: String,
 }
 
 /// A caller decision on one approval. A rejected call gets a rejected-by-user
@@ -158,6 +175,42 @@ mod tests {
         assert_eq!(back.turns, 3);
         assert_eq!(back.stop_reason, StopReason::EndTurn);
         assert!(matches!(back.outcome, RunOutcome::FinalOutput { .. }));
+    }
+
+    #[test]
+    fn test_approval_request_round_trips() {
+        // A delegation-sourced ask serializes the child origin and survives a
+        // round-trip so the frontend reads which delegation the ask came from.
+        let ask = ApprovalRequest {
+            call_id: "c1".into(),
+            tool_name: "bash".into(),
+            input: serde_json::json!({"command": "ls"}),
+            options: Vec::new(),
+            reason: None,
+            delegation: Some(DelegationSource {
+                child_id: "child-1".into(),
+                subagent_type: "explore".into(),
+            }),
+        };
+        let json = serde_json::to_string(&ask).expect("serialize");
+        assert!(json.contains("delegation"), "delegation serialized: {json}");
+        assert!(json.contains("child-1"));
+        let back: ApprovalRequest = serde_json::from_str(&json).expect("deserialize");
+        let d = back.delegation.as_ref().expect("delegation survived");
+        assert_eq!(d.child_id, "child-1");
+        assert_eq!(d.subagent_type, "explore");
+
+        // None delegation is omitted (skip-when-none) so an old client or
+        // server that does not know the field still round-trips the rest.
+        let none_ask = ApprovalRequest {
+            delegation: None,
+            ..ask.clone()
+        };
+        let none_json = serde_json::to_string(&none_ask).expect("serialize");
+        assert!(
+            !none_json.contains("delegation"),
+            "None omitted: {none_json}"
+        );
     }
 
     #[test]

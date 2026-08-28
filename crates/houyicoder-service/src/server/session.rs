@@ -132,6 +132,7 @@ pub(crate) async fn resume_pending(
                     input: ask_perm.input.clone(),
                     options: Vec::new(),
                     reason: None,
+                    delegation: None,
                 }),
             );
             server.send_typed(io, &ServerFrame::Request(ask)).await?;

@@ -628,7 +628,7 @@ impl Server {
                         }
                         let mut decisions = Vec::with_capacity(approvals.len());
                         for approval in approvals {
-                            let decision = self.handle_approval(io, &approval).await?;
+                            let decision = self.handle_approval(io, &approval, None).await?;
                             decisions.push(decision);
                             // A cancel mid-ask aborts the run; stop asking the
                             // remaining approvals so resume() (which checks the
