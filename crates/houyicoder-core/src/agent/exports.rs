@@ -18,7 +18,7 @@ pub use super::hook::fire::build_hook_fire;
 pub use super::hook::registry::{HookEntry, HookRegistry};
 pub use super::hook::{
     ArbitratedVerdict, Hook, HookContext, HookEvent, HookPayload, HookPolicy, HookSource,
-    HookVerdict, TrustState, arbitrate,
+    HookVerdict, ToolResult, TrustState, arbitrate,
 };
 pub use super::lifecycle::{CompressResult, LlmSummarizer, compress_session};
 pub use super::manifest::{

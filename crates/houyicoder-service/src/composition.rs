@@ -539,9 +539,20 @@ pub(crate) fn assemble(
     let hook_launcher: Arc<dyn ProcessLauncher> =
         Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
     let hooks = hooks::build_hook_registry(&houyicoder_config::resolve_hooks(), hook_launcher);
+    // The skill grant hook is a built-in PostToolUse hook that reads
+    // allowed_tools from the SkillTool result + adds session-scoped Allow
+    // rules. Always registered (not user-configured).
+    let skill_grant = hooks::SkillGrantHook::new(gate_dyn.clone());
     let runner = match hooks {
-        Some(registry) => runner.with_hooks(registry),
-        None => runner,
+        Some(mut reg) => {
+            reg.register(Arc::new(skill_grant));
+            runner.with_hooks(Arc::new(reg))
+        }
+        None => {
+            let mut reg = HookRegistry::new();
+            reg.register(Arc::new(skill_grant));
+            runner.with_hooks(Arc::new(reg))
+        }
     };
     let hook_fire = houyicoder_core::agent::build_hook_fire(&runner);
     if let Some(controller) = &worktree_controller {
