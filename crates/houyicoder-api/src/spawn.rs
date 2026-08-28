@@ -175,6 +175,32 @@ pub trait SpawnHandle: Send + Sync {
     fn send_to_child_inbox(&self, _child_id: &str, _text: String) -> Result<(), String> {
         Err("no multi-agent bus wired".into())
     }
+
+    /// First-party spawn: a service/hook-layer caller spawns a child without
+    /// going through the model's agent tool. The hook name stamps the durable
+    /// SubagentSpawn boundary (trigger_source = system:{hook}) so a replay
+    /// distinguishes a flow-driven spawn from a model delegation. The child
+    /// runs the same spawn pipeline as the model path, so a system trigger
+    /// introduces no new bypass: the tool-set narrowing (the disallowed
+    /// list) applies the same way. Note the capability-token intersection is
+    /// not yet wired on either path — a separate task — so neither path
+    /// enforces a permission-mode intersection yet.
+    ///
+    /// The default returns Err (the runtime does not expose first-party
+    /// spawn); a multi-agent runtime overrides it. v0 limits: the caller
+    /// must be the root session (a system spawn from a nested context would
+    /// reset the recursion counter, since the entry has no parent depth); a
+    /// system-trigger spawn does not fire SubagentStart/Stop hooks (no
+    /// per-call hook-fire seam from a non-tool caller); the first real
+    /// consumer wires those.
+    fn spawn_system(
+        &self,
+        _parent_sid: houyicoder_context::SessionId,
+        _hook: &str,
+        _args: SpawnArgs,
+    ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
+        Box::pin(async { Err(SpawnFailure::Recursive) })
+    }
 }
 
 #[cfg(test)]
@@ -202,6 +228,22 @@ mod tests {
         let ctx = crate::tool::ToolCtx::new("c1");
         let outcome = handle.spawn(&ctx, args).await;
         assert!(matches!(outcome, Err(SpawnFailure::Recursive)));
+    }
+
+    /// The default spawn_system returns Err (a runtime that does not expose
+    /// first-party spawn refuses, so a service/hook caller learns it is
+    /// unsupported rather than panicking).
+    #[tokio::test]
+    async fn test_spawn_system_default_refuses() {
+        let handle: Box<dyn SpawnHandle> = Box::new(NoSpawn);
+        let args = SpawnArgs::new("explore", "review", "review");
+        let outcome = handle
+            .spawn_system(houyicoder_context::SessionId::new(), "review_gate", args)
+            .await;
+        assert!(
+            matches!(outcome, Err(SpawnFailure::Recursive)),
+            "default spawn_system refuses, got {outcome:?}"
+        );
     }
 
     #[test]
