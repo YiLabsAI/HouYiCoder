@@ -729,14 +729,6 @@ fn test_misc_commands_visible() {
     let w = render(&app);
     println!("--- /worktree ---\n{w}\n--- end ---");
     assert!(w.contains("worktrees"), "worktree list missing");
-    app.run_command(SlashCommand::PasteImage);
-    let p = render(&app);
-    println!("--- /paste-image ---\n{p}\n--- end ---");
-    assert!(p.contains("TUI"), "paste-image limitation missing");
-    app.run_command(SlashCommand::Voice);
-    let v = render(&app);
-    println!("--- /voice ---\n{v}\n--- end ---");
-    assert!(v.contains("whisper"), "voice placeholder missing");
     app.run_command(SlashCommand::Skills);
     let s = render(&app);
     println!("--- /skills ---\n{s}\n--- end ---");

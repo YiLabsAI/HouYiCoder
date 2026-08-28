@@ -180,10 +180,6 @@ impl App {
                     self.system_line("undo: no server connected");
                 }
             }
-            C::PasteImage => self.system_line(
-                "paste-image: TUI is file-path/drag limited; web shell fully supports images",
-            ),
-            C::Voice => self.system_line("voice: whisper transcription (placeholder)"),
             // Palette-registered local commands. The argless select form (and
             // any direct run_command call) delegates to the string dispatcher;
             // arg-bearing forms typed in the input box are caught there first

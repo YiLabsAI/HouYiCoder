@@ -113,9 +113,6 @@ pub enum SlashCommand {
     /// Undo the most recent recoverable destructive operation (a CoW snapshot
     /// restore or a per-file before-image).
     Undo,
-    // multimodal
-    PasteImage,
-    Voice,
     // TUI-local commands registered in the palette so they are discoverable
     // (previously lived only in the string dispatcher and were invisible
     // when the user typed /). Arg-bearing forms still parse in the TUI's
@@ -307,16 +304,6 @@ const COMMANDS: &[CommandDescriptor] = &[
         help: "undo the most recent destructive operation",
     },
     CommandDescriptor {
-        variant: SlashCommand::PasteImage,
-        name: "/paste-image",
-        help: "paste an image (screenshot / UI)",
-    },
-    CommandDescriptor {
-        variant: SlashCommand::Voice,
-        name: "/voice",
-        help: "voice input (whisper)",
-    },
-    CommandDescriptor {
         variant: SlashCommand::Search,
         name: "/search",
         help: "search the transcript",
@@ -335,10 +322,10 @@ const COMMANDS: &[CommandDescriptor] = &[
 
 /// Build the ALL array from the command table at compile time so ALL and
 /// COMMANDS cannot drift apart. Const-eval reads the table by index.
-const fn all_variants() -> [SlashCommand; 36] {
-    let mut out = [SlashCommand::Login; 36];
+const fn all_variants() -> [SlashCommand; 34] {
+    let mut out = [SlashCommand::Login; 34];
     let mut i = 0;
-    while i < 36 {
+    while i < 34 {
         out[i] = COMMANDS[i].variant;
         i += 1;
     }
@@ -348,7 +335,7 @@ const fn all_variants() -> [SlashCommand; 36] {
 impl SlashCommand {
     /// All commands in palette order. Derived from the COMMANDS table at
     /// compile time, so the array and the table stay in sync.
-    pub const ALL: [SlashCommand; 36] = all_variants();
+    pub const ALL: [SlashCommand; 34] = all_variants();
 
     /// Parse a /foo input line. None if not a recognized command. Linear
     /// search over the COMMANDS table by name.
@@ -674,13 +661,6 @@ pub enum FrontendRequest {
     /// stays in sync without a separate poll.
     PermissionAskBeforeGit {
         enabled: Option<bool>,
-    },
-    // multimodal
-    PasteImage {
-        path: String,
-    },
-    Voice {
-        text: String,
     },
     /// Undo the most recent recoverable destructive operation (a CoW snapshot
     /// or a per-file before-image). The server pops the undo stack and
