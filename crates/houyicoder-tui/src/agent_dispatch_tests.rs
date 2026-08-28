@@ -903,6 +903,54 @@ fn test_subagent_toggle_expand() {
     assert!(app.expanded_subagents.is_empty(), "second toggle collapses");
 }
 
+/// Feeding a ChildTranscriptResult fills the matching Subagent line's
+/// folded_transcript so the expanded render shows the fetched child rows.
+/// Pins the fetch-result to update path (lookup by child_sid + in-place swap).
+#[test]
+fn test_child_transcript_fills() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "child-1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    app.expanded_subagents.insert("child-1".into());
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "child-1".into(),
+        frames: vec![tool_call_frame(
+            "c1",
+            "grep auth",
+            ToolCallStatus::Completed,
+        )],
+    });
+    let folded = app
+        .transcript
+        .iter()
+        .find_map(|l| match l {
+            TranscriptLine::Subagent {
+                child_sid,
+                folded_transcript,
+                ..
+            } if child_sid == "child-1" => Some(folded_transcript.clone()),
+            _ => None,
+        })
+        .expect("subagent line present");
+    assert!(
+        !folded.is_empty(),
+        "ChildTranscriptResult fills folded_transcript, got empty"
+    );
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        out.to_lowercase().contains("grep auth"),
+        "expanded render shows the fetched child row: {out}"
+    );
+}
+
 /// When no Subagent is present, Ctrl+O falls through to the ThoughtFor
 /// expand path. Pins the fallthrough so a refactor that drops it fails.
 #[test]
@@ -1169,6 +1217,110 @@ fn test_subagent_collapse_keeps_folded() {
         }
         other => panic!("subagent line preserved, got {other:?}"),
     }
+}
+
+/// Clicking a Subagent delegation's head row expands it inline — the same
+/// toggle Ctrl+O drives — instead of starting a drag-select. The head row
+/// carries the subagent tag plus a child_sid fold key, so the mouse-down
+/// intercept routes the click to the toggle. Pins the click-to-expand path
+/// (the head tag + fold key + handle_down branch) so a refactor that reverts
+/// the head to a plain selectable row fails here.
+#[test]
+fn test_click_subagent_head_expands() {
+    use crate::records::TranscriptLine;
+    use crate::selection::surface::{Surface, TranscriptSurface};
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    let _out = crate::test_support::render_text(&app, 80, 24);
+    let rect = app.transcript_rect.get();
+    assert!(!app.expanded_subagents.contains("c1"), "starts collapsed");
+    {
+        let mut surface = TranscriptSurface { app: &mut app };
+        surface.handle_down(rect.x, rect.y);
+    }
+    assert!(
+        app.expanded_subagents.contains("c1"),
+        "clicking the subagent head expands the delegation: {:?}",
+        app.expanded_subagents
+    );
+    // Toggle symmetry: a second click on the (still-head) row collapses.
+    let _out = crate::test_support::render_text(&app, 80, 24);
+    let rect = app.transcript_rect.get();
+    {
+        let mut surface = TranscriptSurface { app: &mut app };
+        surface.handle_down(rect.x, rect.y);
+    }
+    assert!(
+        !app.expanded_subagents.contains("c1"),
+        "clicking an expanded head collapses it"
+    );
+}
+
+/// toggle_subagent_expand_at_row on a row with no fold key (a non-head row,
+/// or an out-of-range index) is a no-op that returns false rather than
+/// misfiring on a None fold key. Pins the None branch of the row resolver.
+#[test]
+fn test_subagent_toggle_no_key() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    // An out-of-range row index has no fold key.
+    assert!(
+        !app.toggle_subagent_expand_at_row(usize::MAX),
+        "out-of-range row returns false, no misfire"
+    );
+    assert!(
+        app.expanded_subagents.is_empty(),
+        "nothing expanded on a no-fold-key row"
+    );
+}
+
+/// A stale row stash (a fold key whose child session id no longer matches any
+/// Subagent line in the transcript) defaults to fetch-first rather than
+/// treating the line as already loaded. Pins the fallback so a stale stash
+/// cannot silently skip a needed fetch.
+#[test]
+fn test_subagent_toggle_stale_key() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "real".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    // Forge a stale stash: row 0 carries a child id the transcript no longer
+    // holds (a post-rebuild drift the resolver must tolerate).
+    app.last_row_fold_keys
+        .borrow_mut()
+        .push(Some("ghost".into()));
+    assert!(
+        app.toggle_subagent_expand_at_row(0),
+        "stale row still toggles (treats the ghost as a delegation)"
+    );
+    assert!(
+        app.expanded_subagents.contains("ghost"),
+        "stale fold key expanded under the ghost id"
+    );
 }
 
 /// Cursor targeting: when the cursor is on a specific Subagent line, Ctrl+O

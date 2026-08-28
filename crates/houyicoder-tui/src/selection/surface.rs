@@ -297,6 +297,20 @@ impl Surface for TranscriptSurface<'_> {
             self.app.toggle_fold_at_row(ri);
             return;
         }
+        // A non-fold row carrying a fold key is a Subagent delegation head:
+        // only Subagent heads and TAG_FOLD rows publish a fold key, and the
+        // TAG_FOLD case already returned. Click toggles inline expansion
+        // instead of starting a drag-select.
+        if self
+            .app
+            .last_row_fold_keys
+            .borrow()
+            .get(ri)
+            .is_some_and(|k| k.is_some())
+        {
+            self.app.toggle_subagent_expand_at_row(ri);
+            return;
+        }
         if text.contains("Thought for") {
             self.app.toggle_thinking_expand_at_row(ri);
             return;

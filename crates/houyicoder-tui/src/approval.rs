@@ -103,6 +103,44 @@ impl App {
         let Some((child_sid, needs_fetch)) = self.subagent_target_at_cursor() else {
             return false;
         };
+        self.apply_subagent_toggle(child_sid, needs_fetch);
+        true
+    }
+
+    /// Toggle a Subagent delegation's inline expansion by visible row index
+    /// (the click handler). The row's fold key carries the child session id,
+    /// so a click on the head row resolves the target delegation directly —
+    /// no cursor walk, no fallback. Returns true when the row was a
+    /// delegation head.
+    pub(crate) fn toggle_subagent_expand_at_row(&mut self, ri: usize) -> bool {
+        let Some(child_sid) = self.last_row_fold_keys.borrow().get(ri).cloned().flatten() else {
+            return false;
+        };
+        // The row stash carries only the fold key, not the loaded flag, so
+        // look up the matching Subagent line to decide first-expand fetch.
+        // A missing match (stale stash) defaults to fetch — the backend's
+        // empty-case guard surfaces "unavailable" rather than refetching.
+        let needs_fetch = self
+            .transcript
+            .iter()
+            .find_map(|line| match line {
+                crate::records::TranscriptLine::Subagent {
+                    child_sid: sid,
+                    folded_transcript,
+                    ..
+                } if sid == &child_sid => Some(folded_transcript.is_empty()),
+                _ => None,
+            })
+            .unwrap_or(true);
+        self.apply_subagent_toggle(child_sid, needs_fetch);
+        true
+    }
+
+    /// Shared post-resolution body: flip the expand state for a child session
+    /// id and, on a first expand of an unloaded line, fire the one-shot
+    /// transcript fetch. The fetch lands asynchronously and fills
+    /// folded_transcript in place; a re-expand reuses the cached rows.
+    fn apply_subagent_toggle(&mut self, child_sid: String, needs_fetch: bool) {
         let expanding = !self.expanded_subagents.contains(&child_sid);
         if expanding {
             self.expanded_subagents.insert(child_sid.clone());
@@ -110,9 +148,6 @@ impl App {
             self.expanded_subagents.remove(&child_sid);
         }
         self.transcript_scroll.follow_tail = false;
-        // First expand of an unloaded line fires the fetch. The placeholder
-        // renders until the snapshot returns; with no backend wired the
-        // placeholder stays, matching the other on-demand queries.
         if expanding
             && needs_fetch
             && let Some(req_id) = self.mint_request_id()
@@ -122,7 +157,6 @@ impl App {
                 child_sid: houyicoder_protocol::frontend::SessionId(child_sid),
             });
         }
-        true
     }
 
     /// Resolve the Subagent delegation under the selection cursor, or fall

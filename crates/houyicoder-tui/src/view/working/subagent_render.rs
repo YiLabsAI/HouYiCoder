@@ -43,9 +43,14 @@ pub(crate) fn push_subagent_rows(
         "(ctrl+o to expand)"
     };
     let head = format!("\u{23bf} {subagent_type}: {summary}  {hint}");
+    // The head is the delegation's fold-group header. Keep the plain tag (the
+    // head is content the user can still drag-select across), but publish the
+    // child session id as the row's fold key so a click on it routes to the
+    // subagent toggle instead of a drag-select — the handle_down fold-key
+    // branch fires before the selection start.
     rows.push((PLAIN, head.clone(), None));
     row_callids.push(None);
-    fold_keys.push(None);
+    fold_keys.push(Some(child_sid.to_string()));
     expanded_group.push(grp_key.clone());
     turn_ids.push(None);
     // When the agent has a badge color, publish a styled line so the
