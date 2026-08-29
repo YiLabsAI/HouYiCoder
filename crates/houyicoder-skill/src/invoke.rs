@@ -37,27 +37,23 @@ pub fn load_skill_body(def: &SkillDefinition) -> Result<String, std::io::Error> 
 ///
 /// Token reference (aligned with the ecosystem standard):
 /// - $ARGUMENTS — replaced with the full arguments string.
-/// - $ARGUMENTS[N] — replaced with the Nth whitespace-split arg (0-indexed).
+/// - $ARGUMENTS[N] — replaced with the Nth parsed arg (0-indexed).
 /// - $N — shorthand for $ARGUMENTS[N]; scanned high-to-low so $12 is
-///   tried before $1; word-boundary guard prevents $100 from matching
-///   $1 + literal "00".
+///   tried before $1; word-boundary guard prevents $1 from matching
+///   inside $12 or $12abc.
 ///
-/// No-placeholder fallback: if no argument token consumed the args,
-/// append "ARGUMENTS: {args}" to the end of the body so user input
-/// is never silently lost. Path/variable tokens ($SKILL_DIR etc.)
-/// do NOT suppress the fallback — only true argument tokens do.
+/// An empty args string substitutes (replaces $ARGUMENTS with ""), unlike
+/// None which leaves the body untouched — "no args provided" is distinct
+/// from "empty args". No-placeholder fallback fires only when args were
+/// actually provided (non-empty), so an empty-args call appends nothing.
 pub fn substitute_args(body: &str, args: &str) -> String {
-    if args.is_empty() {
-        return body.to_string();
-    }
-
-    let parts: Vec<&str> = args.split_whitespace().collect();
+    let parts = parse_args(args);
     let mut consumed_args = false;
 
     let mut result = body.to_string();
     for n in (0..=99).rev() {
         let token = format!("${n}");
-        let replacement = parts.get(n).copied().unwrap_or("");
+        let replacement = parts.get(n).map(|s| s.as_str()).unwrap_or("");
         let count = replace_token_with_boundary(&mut result, &token, replacement);
         if count > 0 {
             consumed_args = true;
@@ -66,7 +62,7 @@ pub fn substitute_args(body: &str, args: &str) -> String {
 
     for n in (0..=99).rev() {
         let token = format!("$ARGUMENTS[{n}]");
-        let replacement = parts.get(n).copied().unwrap_or("");
+        let replacement = parts.get(n).map(|s| s.as_str()).unwrap_or("");
         let before = result.clone();
         result = result.replace(&token, replacement);
         if result != before {
@@ -79,12 +75,47 @@ pub fn substitute_args(body: &str, args: &str) -> String {
         consumed_args = true;
     }
 
-    if !consumed_args {
-        result.push_str("\n\n**ARGUMENTS:** ");
+    if !consumed_args && !args.is_empty() {
+        result.push_str("\n\nARGUMENTS: ");
         result.push_str(args);
     }
 
     result
+}
+
+/// Parse an args string into tokens, honoring single + double quotes and
+/// backslash escapes outside single quotes. A minimal shell-aware split so
+/// the args string foo "hello world" baz yields three tokens (foo, hello
+/// world, baz); the quote characters are consumed, not part of the token.
+/// Matches the ecosystem standard shell-quote parser for common cases.
+fn parse_args(args: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+    for ch in args.chars() {
+        if escape {
+            cur.push(ch);
+            escape = false;
+        } else if ch == '\\' && !in_single {
+            escape = true;
+        } else if ch == '\'' && !in_double {
+            in_single = !in_single;
+        } else if ch == '"' && !in_single {
+            in_double = !in_double;
+        } else if ch.is_whitespace() && !in_single && !in_double {
+            if !cur.is_empty() {
+                parts.push(std::mem::take(&mut cur));
+            }
+        } else {
+            cur.push(ch);
+        }
+    }
+    if !cur.is_empty() {
+        parts.push(cur);
+    }
+    parts
 }
 
 /// Substitute environment variables in the body text. Dual aliases
@@ -145,8 +176,9 @@ pub fn prepare_body(
 }
 
 /// Replace a token with a word-boundary guard. Returns the number of
-/// replacements made. The guard ensures $N is not followed by another
-/// digit (which would make $1 match the "1" in $12).
+/// replacements made. The guard ensures $N is not followed by a word
+/// char (digit/letter/underscore), so $1 does not match inside $12 or
+/// $12abc, matching the ecosystem standard's (?!\w) boundary.
 fn replace_token_with_boundary(text: &mut String, token: &str, replacement: &str) -> usize {
     let token_bytes = token.as_bytes();
     let token_len = token.len();
@@ -157,8 +189,10 @@ fn replace_token_with_boundary(text: &mut String, token: &str, replacement: &str
     while start + token_len <= bytes.len() {
         if &bytes[start..start + token_len] == token_bytes {
             let next = bytes.get(start + token_len).copied();
-            let is_followed_by_digit = next.map(|b| b.is_ascii_digit()).unwrap_or(false);
-            if !is_followed_by_digit {
+            let is_followed_by_word = next
+                .map(|b| b.is_ascii_alphanumeric() || b == b'_')
+                .unwrap_or(false);
+            if !is_followed_by_word {
                 positions.push((start, token_len));
             }
             start += token_len;
@@ -213,8 +247,8 @@ mod tests {
         let body = "just some text";
         let result = substitute_args(body, "extra input");
         assert!(
-            result.contains("**ARGUMENTS:** extra input"),
-            "must append fallback"
+            result.contains("\n\nARGUMENTS: extra input"),
+            "must append the plain fallback (no markup): {result}"
         );
     }
 
@@ -223,10 +257,44 @@ mod tests {
         let body = "args: $ARGUMENTS";
         let result = substitute_args(body, "hello");
         assert!(
-            !result.contains("**ARGUMENTS:** "),
-            "must not append fallback"
+            !result.contains("ARGUMENTS: "),
+            "must not append fallback: {result}"
         );
         assert_eq!(result, "args: hello");
+    }
+
+    /// An empty args string replaces $ARGUMENTS with "" (not left literal).
+    /// None means "no args" (caller skips); "" means "empty args provided".
+    #[test]
+    fn test_empty_args_replaces_placeholder() {
+        let result = substitute_args("echo $ARGUMENTS", "");
+        assert_eq!(result, "echo ", "empty args replaces $ARGUMENTS with empty");
+        // No $ARGUMENTS token and empty args: no fallback appended.
+        let result2 = substitute_args("no tokens", "");
+        assert_eq!(result2, "no tokens", "empty args + no token: no fallback");
+    }
+
+    /// Quoted args parse shell-style: "hello world" is one arg, not two.
+    #[test]
+    fn test_quoted_arg_kept_intact() {
+        let result = substitute_args("val: $1", "foo \"hello world\" baz");
+        assert_eq!(result, "val: hello world", "double-quoted arg is one token");
+        let result2 = substitute_args("val: $1", "foo 'hello world' baz");
+        assert_eq!(
+            result2, "val: hello world",
+            "single-quoted arg is one token"
+        );
+    }
+
+    /// The boundary guard treats letter/underscore as a word char, so $12
+    /// does not match inside $12abc (left literal, matching the standard).
+    #[test]
+    fn test_boundary_guard_word_char() {
+        let result = substitute_args("$12abc", "a b c d e f g h i j k l m");
+        assert!(
+            result.contains("$12abc"),
+            "$12 must not match inside $12abc: {result}"
+        );
     }
 
     #[test]
