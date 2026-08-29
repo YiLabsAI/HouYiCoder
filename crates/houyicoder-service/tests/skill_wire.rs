@@ -39,8 +39,8 @@ fn write_skill(dir: &Path, name: &str, body: &str) {
 /// The real end-to-end slash path. A real SKILL.md on disk is discovered,
 /// then Runner.run("/commit fix typo") resolves the slash, keeps the raw
 /// /-text as UserInput, and appends the real body (file content + the
-/// base-dir header) as a MetaUser. Proves discover then resolve then
-/// prepare_body then inject with real files, not stubs.
+/// base-dir header) as a durable SkillBody. Proves discover then resolve
+/// then prepare_body then inject with real files, not stubs.
 #[tokio::test]
 async fn test_run_slash_real_body() {
     let tmp = std::env::temp_dir().join(format!("skill-wire-slash-{}", std::process::id()));
@@ -73,21 +73,32 @@ async fn test_run_slash_real_body() {
         _ => None,
     });
     assert_eq!(user.as_deref(), Some("/commit fix typo"), "raw /-text kept");
-    // The real body read from disk lands as a MetaUser with the base-dir
+    // The real body read from disk lands as a durable SkillBody (not a
+    // MetaUser, so it survives a compaction boundary) with the base-dir
     // header, not a stub string.
-    let meta = view.events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::MetaUser { text } => Some(text.clone()),
+    let body = view.events.iter().find_map(|e| match &e.kind {
+        TurnEventKind::SkillBody {
+            skill_name,
+            content,
+            untrusted,
+            ..
+        } => Some((skill_name.clone(), content.clone(), *untrusted)),
         _ => None,
     });
-    let meta = meta.expect("a MetaUser with the real body was appended");
+    let (name, content, untrusted) = body.expect("a SkillBody with the real body was appended");
+    assert_eq!(name, "commit", "skill_name carried: {name}");
     assert!(
-        meta.contains("run git status"),
-        "real body content from disk: {meta}"
+        content.contains("run git status"),
+        "real body content from disk: {content}"
     );
     assert!(
-        meta.contains("Base directory for this skill"),
-        "base-dir header prepended: {meta}"
+        content.contains("Base directory for this skill"),
+        "base-dir header prepended: {content}"
     );
+    // A project-local skill (discovered under the cwd, not a managed or
+    // user source) is untrusted, so the projection frames its body as
+    // data — the fail-closed trust determination the slash path carries.
+    assert!(untrusted, "project-local skill body is untrusted");
     drop(std::fs::remove_dir_all(&tmp));
 }
 
