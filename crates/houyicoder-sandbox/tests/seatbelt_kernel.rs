@@ -311,6 +311,57 @@ fn test_allows_workspace_write() {
     );
 }
 
+/// A skill directory inside the workspace is readable but not writable.
+///
+/// This is the kernel-level proof of the resource-layer posture: the
+/// agent may read a skill's reference and script files, but cannot plant or
+/// rewrite a SKILL.md. The native skills dir is write-only-denied (reads
+/// allowed back), so the broad read-allow + the workspace allow-back reach
+/// it for reads, while the write-deny overrides the workspace write-allow
+/// (last-match-wins). A string assertion on the rendered rule cannot show
+/// the write-deny actually fires against the workspace's own write-allow,
+/// nor that the read-allow survives the deny segment — only the kernel
+/// verdict does.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_allows_skill_dir_read() {
+    let f = Fence::new("skillread");
+    let dir = f.workspace.join(".houyicoder/skills/commit");
+    std::fs::create_dir_all(&dir).expect("create skill dir");
+    std::fs::write(dir.join("reference.md"), "skill reference content").expect("seed reference");
+    let read = f.probe("read-ref", "cat .houyicoder/skills/commit/reference.md");
+    assert!(
+        read.allowed(),
+        "a skill's reference file must be readable (resource layer): {}",
+        read.detail()
+    );
+}
+
+/// The write counterpart: planting a SKILL.md inside a workspace skill dir
+/// must be denied even though the workspace allow-back permits writes
+/// there. The write-only skill-dir deny must override the workspace
+/// write-allow, or an agent could author a SKILL.md that hijacks a later
+/// invocation.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_denies_skill_dir_write() {
+    let f = Fence::new("skillwrite");
+    let dir = f.workspace.join(".houyicoder/skills/commit");
+    std::fs::create_dir_all(&dir).expect("create skill dir");
+    let probe = dir.join("SKILL.md");
+    let write = f.probe(
+        "plant-skill",
+        "printf x >> .houyicoder/skills/commit/SKILL.md",
+    );
+    let leaked = probe.exists();
+    std::fs::remove_file(&probe).ok();
+    assert!(
+        !write.allowed() && !leaked,
+        "planting a SKILL.md in the skill dir must be denied: {}",
+        write.detail()
+    );
+}
+
 /// The persisted permission rules must not be writable from inside the fence.
 ///
 /// Those files are the record of what the user has already consented to, so a
