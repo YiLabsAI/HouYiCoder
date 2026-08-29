@@ -108,9 +108,19 @@ impl Tool for SkillTool {
             let untrusted = super::super::skill_body::origin_untrusted(&*registry, &params.skill);
             let body =
                 super::super::skill_body::frame_untrusted_body(&params.skill, &body, untrusted);
-            Ok(
-                json!({ "skill": params.skill, "result": body, "allowed_tools": desc.allowed_tools }),
-            )
+            // Carry the trust decision so the grant hook gates the
+            // session-scoped allowed-tools grant by source: only a managed
+            // or user source may install an always-allow for its tools, so a
+            // project or ecosystem skill's tools re-ask on each call. This
+            // field is engine-internal metadata the grant hook reads; the
+            // model cannot forge it (derived from the registry's origin
+            // snapshot, independent of the body it dresses).
+            Ok(json!({
+                "skill": params.skill,
+                "result": body,
+                "allowed_tools": desc.allowed_tools,
+                "trusted": !untrusted,
+            }))
         })
     }
 
