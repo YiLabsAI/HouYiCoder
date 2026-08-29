@@ -3,3 +3,4 @@
 //! so the model can address them by path without a discovery call.
 
 pub mod resources;
+pub mod script_gate;

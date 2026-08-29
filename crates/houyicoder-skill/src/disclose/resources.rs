@@ -102,7 +102,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<ResourceEntry>) {
 /// Infer a file's role from its location + name. Files under a scripts
 /// directory, or with a script extension anywhere, are Scripts; files
 /// under templates are Templates; markdown is Reference; the rest is Data.
-fn classify(rel: &str, name: &str) -> ResourceKind {
+pub(crate) fn classify(rel: &str, name: &str) -> ResourceKind {
     let lower = name.to_ascii_lowercase();
     let first_seg = rel.split(std::path::MAIN_SEPARATOR).next().unwrap_or("");
     if first_seg == "scripts" || is_script_ext(&lower) {
