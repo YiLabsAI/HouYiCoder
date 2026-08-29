@@ -477,6 +477,185 @@ async fn test_async_spawn_notifies_parent() {
     assert!(notif.contains("done"), "carries the child summary");
 }
 
+/// A provider whose stream yields one non-retryable error then ends, so a
+/// child run fails fast through the real stream path: Auth is not retryable,
+/// so the drive loop maps it to ProviderFatal and terminates without retry or
+/// backoff. The canned fake only errors the complete path, not the stream
+/// path the runner takes, so this struct owns the stream error.
+use houyicoder_async::PStream;
+use houyicoder_protocol::llm::{CompletionRequest, CompletionResponse, ProviderError};
+
+struct FailingProvider {
+    err: ProviderError,
+}
+
+impl FailingProvider {
+    fn new(err: ProviderError) -> Self {
+        Self { err }
+    }
+}
+
+impl ModelProvider for FailingProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        let err = self.err.clone();
+        Box::pin(async move { Err(err) })
+    }
+    fn stream(
+        &self,
+        _req: CompletionRequest,
+    ) -> PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>> {
+        let err = self.err.clone();
+        Box::pin(futures::stream::once(async move { Err(err) }))
+    }
+    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
+        houyicoder_protocol::llm::ModelCapabilities::default()
+    }
+}
+
+/// A sync child whose run fails (non-retryable provider error) surfaces the
+/// failure to the parent as the spawn tool result: status=failed + a
+/// non-empty summary carrying the error. The durable SubagentReturn boundary
+/// lands in the parent log with the failed status so replay is honest about
+/// the outcome. Pins the sync propagation path: the parent learns of a child
+/// failure through the tool result, not a silent hang or an empty answer.
+#[tokio::test]
+async fn test_sync_failed_child_propagates() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FailingProvider::new(ProviderError::Auth));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store: store.clone(),
+        provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(std::path::PathBuf::from("/tmp")),
+        bus: None,
+    });
+    let parent_sid = SessionId::new();
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let args = SpawnArgs::new("explore", "find the auth module", "find auth");
+    let outcome = runtime.spawn(&ctx, args).await.expect("spawn resolves");
+    assert_eq!(
+        outcome.status.as_deref(),
+        Some("failed"),
+        "a failed child surfaces status=failed to the parent tool result",
+    );
+    assert!(
+        outcome.summary.as_ref().is_some_and(|s| s.contains("auth")),
+        "the failure summary carries the error reason so the model can act on it",
+    );
+    // The durable SubagentReturn boundary records the failure so replay
+    // reconstructs the delegation honestly (not a silent drop).
+    let events = store.trajectory_snapshot(parent_sid);
+    let ret_status = events.iter().find_map(|e| match &e.kind {
+        TurnEventKind::SubagentReturn { status, .. } => Some(status.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        ret_status.as_deref(),
+        Some("failed"),
+        "SubagentReturn records the failed status for replay/audit",
+    );
+}
+
+/// An async (detached) child whose run fails notifies the parent through the
+/// bus completion path: the run emits RunCompleted with a failed status, the
+/// bus bridge maps it to ChildStatus::Failed, and the notification injector
+/// enqueues a lower-priority message the parent reads mid-turn. Pins the
+/// async propagation path: a background child failure reaches the parent even
+/// though the parent is not blocked on the spawn — the parent learns of the
+/// failure, not a perpetual running pill.
+#[tokio::test]
+async fn test_async_failed_child_notifies() {
+    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+    use houyicoder_core::agent::{Runner, ToolRegistry};
+
+    let bus = Arc::new(AgentBus::new());
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let child_provider: Arc<dyn ModelProvider> =
+        Arc::new(FailingProvider::new(ProviderError::Auth));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    // The parent runner is the notification sink; it never runs a turn here,
+    // so its provider is a placeholder.
+    let parent_runner = Arc::new(Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("ok")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    ));
+    super::super::notification_drain::spawn(
+        Some(bus.clone()),
+        Arc::clone(&parent_runner),
+        tokio::runtime::Handle::current(),
+    );
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store: store.clone(),
+        provider: child_provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(std::path::PathBuf::from("/tmp")),
+        bus: Some(bus.clone()),
+    });
+    let parent_sid = SessionId::new();
+    let mut args = SpawnArgs::new("explore", "review the diff", "review the diff");
+    args.run_in_background = true;
+    let outcome = runtime
+        .spawn_system(parent_sid, "review_gate", args)
+        .await
+        .expect("async spawn launches");
+    assert!(
+        outcome.status.is_none(),
+        "async spawn returns no terminal status",
+    );
+    let mut found = false;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+        let snap = parent_runner.queued_notifications_snapshot();
+        if !snap.is_empty() {
+            assert!(
+                snap[0].contains("explore"),
+                "the failure notification carries the subagent type",
+            );
+            assert!(
+                snap[0].contains("failed"),
+                "the failure notification carries the failed status",
+            );
+            assert!(
+                snap[0].contains("auth"),
+                "the failure notification carries the error reason, not just the status label",
+            );
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "a failed async child reaches the parent notification queue",
+    );
+    // The durable SubagentReturn boundary lands even on the async path — the
+    // detached driver runs finalize_child, which records the return with the
+    // failed status. The status is pinned, not just the boundary's existence,
+    // so a regression that records the wrong terminal on the async path goes
+    // red rather than staying green on a status=completed mislabel.
+    let events = store.trajectory_snapshot(parent_sid);
+    let ret_status = events.iter().find_map(|e| match &e.kind {
+        TurnEventKind::SubagentReturn { status, .. } => Some(status.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        ret_status.as_deref(),
+        Some("failed"),
+        "the async failed child records SubagentReturn with status=failed",
+    );
+}
+
 /// cancel_child_turn upgrades a registered child's Weak to reach the runner
 /// (returns true); a dropped child's stale Weak is pruned (returns false);
 /// an unknown child is a no-op (returns false). The registry does not leak
