@@ -60,8 +60,14 @@ pub(crate) enum SkillSlashOutcome {
     NotASkill,
     /// A user-invocable skill: append the prepared body as a durable
     /// SkillBody the model reads as a directive (and that survives a
-    /// compaction boundary, unlike a MetaUser which compaction folds).
-    Prepared { name: String, body: String },
+    /// compaction boundary, unlike a MetaUser which compaction folds). The
+    /// untrusted flag marks bodies from non-managed/user sources so the
+    /// projection can frame them as data, not trusted instruction.
+    Prepared {
+        name: String,
+        body: String,
+        untrusted: bool,
+    },
     /// A skill that is not user-invocable. Surface the notice to the user
     /// as a system line and end the turn without a model call — the model
     /// has nothing to do for a refused skill.
@@ -104,8 +110,22 @@ impl Runner {
                  Ask the assistant to use the {name} skill for you."
             ));
         }
+        // Determine trust: a body from a non-managed/user source is
+        // untrusted so the projection frames it as data, not trusted
+        // instruction. The origin scan is O(skills) but invoke is not a
+        // hot path.
+        let untrusted = registry
+            .list_with_origin()
+            .iter()
+            .find(|s| s.descriptor.name == name)
+            .map(|s| s.origin.as_str() != "managed" && s.origin.as_str() != "user")
+            .unwrap_or(true);
         match registry.prepare_body(&name, args, Some(&sid)) {
-            Ok(body) => SkillSlashOutcome::Prepared { name, body },
+            Ok(body) => SkillSlashOutcome::Prepared {
+                name,
+                body,
+                untrusted,
+            },
             Err(SkillError::NotFound(_)) => SkillSlashOutcome::NotASkill,
             Err(other) => SkillSlashOutcome::Refused(format!("skill invocation failed: {other}")),
         }
@@ -240,9 +260,17 @@ mod tests {
             .resolve_skill_slash(SessionId::new(), "/commit fix typo")
             .await;
         match outcome {
-            SkillSlashOutcome::Prepared { name, body } => {
+            SkillSlashOutcome::Prepared {
+                name,
+                body,
+                untrusted,
+            } => {
                 assert_eq!(name, "commit", "name carried: {name}");
-                assert!(body.contains("commit body: fix typo"), "{body}")
+                assert!(body.contains("commit body: fix typo"), "{body}");
+                // The stub leaves list_with_origin at the default (empty),
+                // so the origin scan finds nothing and defaults to
+                // untrusted=true (fail-closed for an unknown source).
+                assert!(untrusted, "unknown origin defaults to untrusted");
             }
             other => panic!("expected Prepared, got {other:?}"),
         }

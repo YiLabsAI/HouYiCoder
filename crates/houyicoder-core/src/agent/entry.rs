@@ -113,7 +113,11 @@ impl Runner {
         self.append_user_input(session, user_input).await?;
         match skill_meta {
             crate::agent::skill_slash::SkillSlashOutcome::NotASkill => {}
-            crate::agent::skill_slash::SkillSlashOutcome::Prepared { name, body } => {
+            crate::agent::skill_slash::SkillSlashOutcome::Prepared {
+                name,
+                body,
+                untrusted,
+            } => {
                 self.store
                     .append(new_event(
                         session,
@@ -121,7 +125,7 @@ impl Runner {
                             skill_name: name,
                             content: body,
                             agent_id: None,
-                            untrusted: false,
+                            untrusted,
                         },
                     ))
                     .await?;
