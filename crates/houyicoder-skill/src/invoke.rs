@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use super::definition::SkillDefinition;
+use super::disclose::resources;
 
 /// Context for variable substitution. All fields are optional; a
 /// missing field means the corresponding variable is left as-is.
@@ -116,8 +117,11 @@ pub fn substitute_variables(body: &str, ctx: &SubstitutionContext) -> String {
 }
 
 /// Full preparation pipeline: load body from disk, substitute args,
-/// then substitute variables. Returns the final text ready for
-/// injection into the agent message stream.
+/// then substitute variables. For sources allowed to surface a resource
+/// manifest, the files alongside the body are listed by name + path
+/// (content not loaded) so the model can address them without a
+/// discovery call. Returns the final text ready for injection into the
+/// agent message stream.
 pub fn prepare_body(
     def: &SkillDefinition,
     args: Option<&str>,
@@ -129,7 +133,15 @@ pub fn prepare_body(
     } else {
         body
     };
-    Ok(substitute_variables(&body, ctx))
+    let mut body = substitute_variables(&body, ctx);
+    // The manifest is appended after substitution so file paths are not
+    // altered by arg/variable tokens. A missing or unreadable directory
+    // yields an empty manifest, so a resource failure never breaks the body.
+    if resources::is_manifest_eligible(&def.source) {
+        let manifest = resources::format_manifest(&resources::list_resources(&def.skill_dir));
+        body.push_str(&manifest);
+    }
+    Ok(body)
 }
 
 /// Replace a token with a word-boundary guard. Returns the number of
@@ -274,5 +286,120 @@ mod tests {
         // $10 = parts[10] = "k", $1 = parts[1] = "b". Boundary guard
         // prevents $1 from matching the "1" inside "$10".
         assert_eq!(result, "b and k");
+    }
+
+    use crate::definition::{SkillContext, SkillSource, SpecFields};
+
+    /// Write a SKILL.md + the given resource files into a temp skill dir,
+    /// return a definition pointing at it with the given source.
+    fn def_with(
+        source: SkillSource,
+        files: &[(&str, &str)],
+    ) -> (std::path::PathBuf, SkillDefinition) {
+        let dir = std::env::temp_dir().join(format!(
+            "skill-invoke-{}-{}",
+            source_as_str(&source),
+            std::process::id()
+        ));
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: x\ndescription: d\n---\nbody\n",
+        )
+        .expect("write SKILL.md");
+        for (rel, content) in files {
+            let p = dir.join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).expect("mkdir");
+            }
+            std::fs::write(p, content).expect("write");
+        }
+        let def = SkillDefinition {
+            name: "x".into(),
+            display_name: None,
+            description: "d".into(),
+            when_to_use: None,
+            allowed_tools: Vec::new(),
+            argument_hint: None,
+            version: None,
+            model: None,
+            effort: None,
+            disable_model_invocation: false,
+            user_invocable: true,
+            context: SkillContext::Inline,
+            paths: Vec::new(),
+            shell: false,
+            source,
+            body_path: dir.join("SKILL.md"),
+            skill_dir: dir.clone(),
+            hooks_raw: None,
+            spec_fields: SpecFields::default(),
+            unknown_fields: serde_yaml::Mapping::new(),
+        };
+        (dir, def)
+    }
+
+    fn source_as_str(s: &SkillSource) -> &'static str {
+        match s {
+            SkillSource::Managed => "managed",
+            SkillSource::User => "user",
+            SkillSource::Project => "project",
+            SkillSource::ClaudeEco => "eco",
+            SkillSource::Agents => "agents",
+            SkillSource::Mcp => "mcp",
+            SkillSource::Local => "local",
+        }
+    }
+
+    /// An eligible source (project) gets the resource manifest appended
+    /// to the prepared body: the scripts and reference files appear by
+    /// path so the model can address them.
+    #[test]
+    fn test_manifest_appended_for_eligible() {
+        let (dir, def) = def_with(
+            SkillSource::Project,
+            &[
+                ("scripts/deploy.py", "print('hi')\n"),
+                ("reference.md", "see\n"),
+            ],
+        );
+        let ctx = SubstitutionContext {
+            skill_dir: Some(&def.skill_dir),
+            ..Default::default()
+        };
+        let body = prepare_body(&def, None, &ctx).expect("prepared");
+        assert!(
+            body.contains("Base directory for this skill"),
+            "header kept"
+        );
+        assert!(
+            body.contains("Resources in this skill's directory"),
+            "manifest appended: {body}"
+        );
+        assert!(body.contains("script: scripts/deploy.py"), "{body}");
+        assert!(body.contains("reference: reference.md"), "{body}");
+        drop(std::fs::remove_dir_all(&dir));
+    }
+
+    /// A non-eligible source (ecosystem-compat path) gets no manifest: a
+    /// crafted file set in a shared repository must not be surfaced.
+    #[test]
+    fn test_manifest_skipped_for_eco() {
+        let (dir, def) = def_with(SkillSource::ClaudeEco, &[("scripts/evil.py", "rm -rf /\n")]);
+        let ctx = SubstitutionContext {
+            skill_dir: Some(&def.skill_dir),
+            ..Default::default()
+        };
+        let body = prepare_body(&def, None, &ctx).expect("prepared");
+        assert!(
+            !body.contains("Resources in this skill's directory"),
+            "no manifest for eco source: {body}"
+        );
+        assert!(
+            !body.contains("evil.py"),
+            "eco resource file not surfaced: {body}"
+        );
+        drop(std::fs::remove_dir_all(&dir));
     }
 }

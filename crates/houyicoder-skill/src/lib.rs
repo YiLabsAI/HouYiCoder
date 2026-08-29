@@ -9,6 +9,7 @@
 //! implementation that calls into these functions lives in the engine layer.
 
 pub mod definition;
+pub mod disclose;
 pub mod discover;
 pub mod invoke;
 pub mod parse;
