@@ -18,11 +18,16 @@ pub enum BusMessage {
         tool_uses: u32,
         last_activity: Option<String>,
     },
-    /// Terminal state: the child is done (or failed, or was killed).
+    /// Terminal state: the child is done, failed, or killed.
+    /// Carries subagent_type and run_in_background so the notification
+    /// drain does not depend on the Spawned message, which can be lost
+    /// to broadcast lag.
     Completed {
         agent_id: String,
         status: ChildStatus,
         summary: String,
+        subagent_type: String,
+        run_in_background: bool,
     },
     /// A message delivered to a child's inbox (parent -> child).
     Inbox { text: String },

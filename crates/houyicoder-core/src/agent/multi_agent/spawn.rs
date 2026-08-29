@@ -198,6 +198,8 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         runner.set_live_sink(super::bus_sink::bus_live_sink(
             bus.clone(),
             child_sid.to_string(),
+            req.subagent_type.clone(),
+            req.run_in_background,
         ));
         // Register a point-to-point inbox so the parent can steer this
         // child mid-task: the drive loop drains the receiver at each turn

@@ -33,7 +33,12 @@ fn child_status_of(status: &str) -> ChildStatus {
 /// Spawned) and the global channel (for a watcher subscribed at startup, so
 /// the one-shot terminal event cannot be lost to a subscribe-after-publish
 /// race).
-pub fn bus_live_sink(bus: Arc<AgentBus>, agent_id: String) -> LiveSink {
+pub fn bus_live_sink(
+    bus: Arc<AgentBus>,
+    agent_id: String,
+    subagent_type: String,
+    run_in_background: bool,
+) -> LiveSink {
     Arc::new(move |ev: &LiveEvent| match ev {
         LiveEvent::TurnBoundary {
             turn,
@@ -56,6 +61,8 @@ pub fn bus_live_sink(bus: Arc<AgentBus>, agent_id: String) -> LiveSink {
                 agent_id: agent_id.clone(),
                 status: child_status_of(status),
                 summary: summary.clone(),
+                subagent_type: subagent_type.clone(),
+                run_in_background,
             };
             bus.publish(&completed_topic(&agent_id), msg.clone());
             bus.publish(global_completed_topic(), msg);
@@ -75,7 +82,7 @@ mod tests {
     fn test_sink_publishes_progress() {
         let bus = AgentBus::new();
         let mut rx = bus.subscribe(&progress_topic("child-1"));
-        let sink = bus_live_sink(Arc::new(bus), "child-1".into());
+        let sink = bus_live_sink(Arc::new(bus), "child-1".into(), "explore".into(), true);
         sink(&LiveEvent::TurnBoundary {
             turn: 3,
             cumulative_tokens: 1200,
@@ -106,7 +113,7 @@ mod tests {
     fn test_sink_text_only_turn() {
         let bus = AgentBus::new();
         let mut rx = bus.subscribe(&progress_topic("child-2"));
-        let sink = bus_live_sink(Arc::new(bus), "child-2".into());
+        let sink = bus_live_sink(Arc::new(bus), "child-2".into(), "explore".into(), true);
         sink(&LiveEvent::TurnBoundary {
             turn: 1,
             cumulative_tokens: 50,
@@ -133,7 +140,7 @@ mod tests {
     fn test_sink_ignores_non_boundary() {
         let bus = AgentBus::new();
         let mut rx = bus.subscribe(&progress_topic("child-3"));
-        let sink = bus_live_sink(Arc::new(bus), "child-3".into());
+        let sink = bus_live_sink(Arc::new(bus), "child-3".into(), "explore".into(), true);
         sink(&LiveEvent::AssistantDelta {
             text: "hello".into(),
         });
@@ -152,7 +159,7 @@ mod tests {
     fn test_sink_publishes_completion() {
         let bus = AgentBus::new();
         let mut rx = bus.subscribe(&completed_topic("child-4"));
-        let sink = bus_live_sink(Arc::new(bus), "child-4".into());
+        let sink = bus_live_sink(Arc::new(bus), "child-4".into(), "explore".into(), true);
         sink(&LiveEvent::RunCompleted {
             status: "completed".into(),
             summary: "found auth module".into(),
@@ -162,6 +169,7 @@ mod tests {
                 agent_id,
                 status,
                 summary,
+                ..
             } => {
                 assert_eq!(agent_id, "child-4");
                 assert_eq!(status, ChildStatus::Completed);
@@ -176,7 +184,7 @@ mod tests {
     fn test_sink_completion_failed() {
         let bus = AgentBus::new();
         let mut rx = bus.subscribe(&completed_topic("child-5"));
-        let sink = bus_live_sink(Arc::new(bus), "child-5".into());
+        let sink = bus_live_sink(Arc::new(bus), "child-5".into(), "explore".into(), true);
         sink(&LiveEvent::RunCompleted {
             status: "failed".into(),
             summary: "provider fatal".into(),
@@ -196,7 +204,7 @@ mod tests {
     fn test_sink_completion_turn_limit() {
         let bus = AgentBus::new();
         let mut rx = bus.subscribe(&completed_topic("child-6"));
-        let sink = bus_live_sink(Arc::new(bus), "child-6".into());
+        let sink = bus_live_sink(Arc::new(bus), "child-6".into(), "explore".into(), true);
         sink(&LiveEvent::RunCompleted {
             status: "max_turns".into(),
             summary: "partial findings".into(),
@@ -220,7 +228,7 @@ mod tests {
         let bus = Arc::new(AgentBus::new());
         let mut global_progress = bus.subscribe(global_progress_topic());
         let mut global_completed = bus.subscribe(global_completed_topic());
-        let sink = bus_live_sink(Arc::clone(&bus), "child-7".into());
+        let sink = bus_live_sink(Arc::clone(&bus), "child-7".into(), "explore".into(), true);
         sink(&LiveEvent::TurnBoundary {
             turn: 2,
             cumulative_tokens: 300,
@@ -249,6 +257,7 @@ mod tests {
                 agent_id,
                 status,
                 summary,
+                ..
             } => {
                 assert_eq!(agent_id, "child-7");
                 assert_eq!(status, ChildStatus::Completed);

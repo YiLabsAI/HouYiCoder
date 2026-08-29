@@ -72,7 +72,7 @@ pub fn spawn(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },
                 msg = completed_rx.recv() => match msg {
-                    Ok(BusMessage::Completed { agent_id, status, summary }) => {
+                    Ok(BusMessage::Completed { agent_id, status, summary, .. }) => {
                         if let Some((subagent_type, snap)) = children.get_mut(&agent_id) {
                             snap.completed = Some(status_str(&status));
                             snap.last_activity = Some(summary);
@@ -221,6 +221,8 @@ mod tests {
                 agent_id: "c2".into(),
                 status: ChildStatus::Completed,
                 summary: "done".into(),
+                subagent_type: "explore".into(),
+                run_in_background: true,
             },
         );
         tokio::task::yield_now().await;

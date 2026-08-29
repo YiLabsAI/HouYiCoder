@@ -377,6 +377,7 @@ async fn test_spawn_publishes_completion() {
             agent_id,
             status,
             summary,
+            ..
         } => {
             assert_eq!(agent_id, child_id);
             assert_eq!(status, ChildStatus::Completed);
