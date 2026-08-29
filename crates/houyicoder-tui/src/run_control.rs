@@ -76,7 +76,16 @@ impl App {
             });
         if let Some((child_sid, completed)) = steer {
             if completed {
-                self.system_line("this child has finished — press Esc to exit or start a new task");
+                // The child's inbox is closed (it finished), so the typed
+                // input cannot be steered to it. Exit the teammate view +
+                // surface a notice in the PARENT transcript (visible at the
+                // tail) so the user learns the child is done + is back at the
+                // parent to start a new task. Pushing the notice into the
+                // viewed transcript instead would race the async re-fetch
+                // (fill_teammate_view replaces view.transcript) + the
+                // window-scroll follow, hiding it.
+                self.exit_teammate_view();
+                self.system_line("this child has finished — start a new task or /agents to review");
             } else {
                 if let Some(view) = self.teammate_view.as_mut() {
                     view.transcript.push(TranscriptLine::User(input.clone()));

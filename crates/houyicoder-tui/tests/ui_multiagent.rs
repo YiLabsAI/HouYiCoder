@@ -354,3 +354,32 @@ fn test_teammate_slash_routes_parent() {
         s.output()
     );
 }
+
+/// Steering a completed child exits the teammate view + surfaces a
+/// "finished" notice in the parent transcript (visible at the tail), so the
+/// user learns the child is done + is back at the parent to start a new
+/// task. The unit test (test_steer_completed_surfaces_notice) checks the
+/// state; this is the real-binary end-to-end. Slow, ignored by default.
+#[test]
+#[ignore]
+fn test_steer_completed_notice() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth is in src/auth"}],
+        [{"type":"Text","text":"the auth module is in src/auth"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    s.send_str("do more analysis");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("has finished", RENDER_TIMEOUT),
+        "steering a completed child should surface the finished notice:\n{}",
+        s.output()
+    );
+}

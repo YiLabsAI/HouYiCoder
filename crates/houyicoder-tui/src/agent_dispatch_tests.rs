@@ -2038,23 +2038,33 @@ fn test_steer_completed_surfaces_notice() {
         completed_at: None,
     });
     app.spawn_run("steer this".into());
-    // The completed child surfaces a notice, not a silent drop.
+    // The completed child's inbox is closed, so the steer exits the teammate
+    // view + surfaces a notice in the PARENT transcript (visible at the tail)
+    // so the user learns the child is done + is back at the parent.
+    assert!(
+        app.teammate_view.is_none(),
+        "steering a completed child exits the view"
+    );
     assert!(
         app.transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("has finished"))),
-        "a completed child surfaces a finished notice"
+        "a completed child surfaces a finished notice in the parent transcript"
     );
-    // The echo line is not appended (the child won't drain it).
+    // No echo line is appended (the child won't drain it; the view is gone).
     assert!(
-        !app.teammate_view.as_ref().is_some_and(|v| v
-            .transcript
+        !app.transcript
             .iter()
-            .any(|l| matches!(l, TranscriptLine::User(t) if t == "steer this"))),
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "steer this")),
         "no echo appended for a completed child"
     );
-    // A running child still steers (echo appended, no notice).
+    // A running child still steers (echo appended, no notice). The completed
+    // steer above exited the view, so re-enter it for the running case.
     app.fleet.entries[0].completed = None;
+    app.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
     app.transcript.clear();
     app.spawn_run("steer running".into());
     assert!(
