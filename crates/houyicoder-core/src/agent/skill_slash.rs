@@ -112,14 +112,10 @@ impl Runner {
         }
         // Determine trust: a body from a non-managed/user source is
         // untrusted so the projection frames it as data, not trusted
-        // instruction. The origin scan is O(skills) but invoke is not a
-        // hot path.
-        let untrusted = registry
-            .list_with_origin()
-            .iter()
-            .find(|s| s.descriptor.name == name)
-            .map(|s| s.origin.as_str() != "managed" && s.origin.as_str() != "user")
-            .unwrap_or(true);
+        // instruction. Shared with the Skill tool path so framing does
+        // not differ by invocation path. Fails closed (untrusted) when
+        // the skill is absent from the origin snapshot.
+        let untrusted = super::skill_body::origin_untrusted(&**registry, &name);
         match registry.prepare_body(&name, args, Some(&sid)) {
             Ok(body) => SkillSlashOutcome::Prepared {
                 name,

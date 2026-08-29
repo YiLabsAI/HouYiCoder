@@ -163,6 +163,17 @@ async fn test_run_model_skill_tool() {
         tr.to_string().contains("Base directory for this skill"),
         "base-dir header in ToolResult: {tr}"
     );
+    // A project-local skill (discovered under the cwd) is untrusted, so the
+    // Skill tool frames its body as data — the same framing the slash path
+    // applies, so the two invocation paths do not differ.
+    assert!(
+        tr.to_string().contains("untrusted_skill"),
+        "untrusted project skill body framed in the ToolResult: {tr}"
+    );
+    assert!(
+        tr.to_string().contains("unverified data"),
+        "framing note in the ToolResult: {tr}"
+    );
     drop(std::fs::remove_dir_all(&tmp));
 }
 

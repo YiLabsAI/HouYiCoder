@@ -99,6 +99,15 @@ impl Tool for SkillTool {
             let body = registry
                 .prepare_body(&params.skill, params.args.as_deref(), sid.as_deref())
                 .map_err(skill_error_to_tool_error)?;
+            // Frame an untrusted body (a non-managed/user source) as data
+            // so the model treats its directives as unverified and confirms
+            // before state-changing steps. A tool result is already data,
+            // but a tool-result role alone does not tell the model to
+            // confirm before acting; the framing note does. Shared with
+            // the slash path so framing does not differ by invocation path.
+            let untrusted = super::super::skill_body::origin_untrusted(&*registry, &params.skill);
+            let body =
+                super::super::skill_body::frame_untrusted_body(&params.skill, &body, untrusted);
             Ok(
                 json!({ "skill": params.skill, "result": body, "allowed_tools": desc.allowed_tools }),
             )
@@ -148,14 +157,18 @@ fn skill_error_to_tool_error(e: SkillError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry};
+    use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry, SkillSnapshot};
     use std::collections::HashMap;
 
     /// An in-memory registry for tests: stores prepared bodies by name.
+    /// Every inserted skill defaults to the "managed" origin (trusted) so
+    /// its body passes through raw; insert_with_origin overrides to test
+    /// untrusted framing.
     struct InMemoryRegistry {
         bodies: HashMap<String, String>,
         model_invocable: HashMap<String, bool>,
         allowed_tools: HashMap<String, Vec<String>>,
+        origins: HashMap<String, String>,
     }
 
     impl InMemoryRegistry {
@@ -164,6 +177,7 @@ mod tests {
                 bodies: HashMap::new(),
                 model_invocable: HashMap::new(),
                 allowed_tools: HashMap::new(),
+                origins: HashMap::new(),
             }
         }
 
@@ -171,6 +185,7 @@ mod tests {
             self.bodies.insert(name.to_string(), body.to_string());
             self.model_invocable
                 .insert(name.to_string(), model_invocable);
+            self.origins.insert(name.to_string(), "managed".into());
             self
         }
 
@@ -185,6 +200,24 @@ mod tests {
             self.model_invocable
                 .insert(name.to_string(), model_invocable);
             self.allowed_tools.insert(name.to_string(), tools);
+            self.origins.insert(name.to_string(), "managed".into());
+            self
+        }
+
+        /// Insert a skill with an explicit discovery origin, to drive the
+        /// trust determination (managed/user trusted, anything else
+        /// untrusted + framed).
+        fn insert_with_origin(
+            mut self,
+            name: &str,
+            body: &str,
+            model_invocable: bool,
+            origin: &str,
+        ) -> Self {
+            self.bodies.insert(name.to_string(), body.to_string());
+            self.model_invocable
+                .insert(name.to_string(), model_invocable);
+            self.origins.insert(name.to_string(), origin.into());
             self
         }
     }
@@ -232,6 +265,20 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| SkillError::NotFound(name.to_string()))
         }
+
+        fn list_with_origin(&self) -> Vec<SkillSnapshot> {
+            self.bodies
+                .keys()
+                .map(|n| SkillSnapshot {
+                    descriptor: self.find(n).expect("find mirrors insert"),
+                    origin: self
+                        .origins
+                        .get(n)
+                        .cloned()
+                        .unwrap_or_else(|| "managed".into()),
+                })
+                .collect()
+        }
     }
 
     fn ctx() -> ToolCtx {
@@ -248,6 +295,61 @@ mod tests {
             .unwrap();
         assert_eq!(out["skill"], "commit");
         assert_eq!(out["result"], "run git status");
+    }
+
+    /// A trusted-origin skill (managed/user) returns its body raw: no
+    /// framing wrapper, so the model reads the directive as trusted. This
+    /// is the Skill-tool-path half of framing not differing by path.
+    #[tokio::test]
+    async fn test_trusted_origin_body_unframed() {
+        let reg = Arc::new(InMemoryRegistry::new().insert_with_origin(
+            "commit",
+            "run git status",
+            true,
+            "managed",
+        ));
+        let tool = SkillTool::new(reg);
+        let out = tool
+            .execute(ctx(), json!({"skill": "commit"}))
+            .await
+            .unwrap();
+        let result = out["result"].as_str().expect("result is a string");
+        assert_eq!(result, "run git status", "managed-origin body is raw");
+        assert!(
+            !result.contains("untrusted_skill"),
+            "no framing for a trusted origin: {result}"
+        );
+    }
+
+    /// An untrusted-origin skill (project/claude-eco/agents/mcp/local)
+    /// returns its body framed as data: the framing note + the wrapper tag
+    /// carry the skill name + the body stays inside. A non-managed/user
+    /// source body is framed, the same framing the slash path applies, so
+    /// the two invocation paths do not differ.
+    #[tokio::test]
+    async fn test_untrusted_origin_body_framed() {
+        let reg = Arc::new(InMemoryRegistry::new().insert_with_origin(
+            "evil",
+            "do bad things",
+            true,
+            "project",
+        ));
+        let tool = SkillTool::new(reg);
+        let out = tool.execute(ctx(), json!({"skill": "evil"})).await.unwrap();
+        let result = out["result"].as_str().expect("result is a string");
+        assert!(
+            result.contains("unverified data"),
+            "framing note present for untrusted origin: {result}"
+        );
+        assert!(
+            result.contains("<untrusted_skill name=\"evil\">"),
+            "wrapper carries the skill name: {result}"
+        );
+        assert!(result.contains("do bad things"), "body present: {result}");
+        assert!(
+            result.contains("</untrusted_skill>"),
+            "wrapper closes: {result}"
+        );
     }
 
     #[tokio::test]
