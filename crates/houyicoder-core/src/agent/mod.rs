@@ -319,6 +319,13 @@ impl Runner {
         self.store.clone()
     }
 
+    /// The skill registry, when wired. The approval path reads it to detect
+    /// when a Bash command runs a skill-directory script so the prompt can
+    /// show what would execute. None on the pure-stub path (no discovery).
+    pub fn skill_registry(&self) -> Option<&Arc<dyn houyicoder_api::skill::SkillRegistry>> {
+        self.skill_registry.as_ref()
+    }
+
     /// The dream's cross-session scan root, or None when in-memory.
     pub fn dream_session_log_root(&self) -> Option<&std::path::Path> {
         let dream = self.dream.as_ref();

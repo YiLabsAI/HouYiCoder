@@ -8,7 +8,9 @@
 
 use std::path::Path;
 
-use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry, SkillSnapshot};
+use houyicoder_api::skill::{
+    SkillDescriptor, SkillError, SkillRegistry, SkillScriptRef, SkillSnapshot,
+};
 use houyicoder_skill::definition::{SkillDefinition, SkillSource};
 use houyicoder_skill::{discover, invoke};
 
@@ -115,6 +117,24 @@ impl SkillRegistry for SkillRegistryImpl {
             .map(|s| SkillSnapshot {
                 descriptor: to_descriptor(s),
                 origin: source_label(&s.source).into(),
+            })
+            .collect()
+    }
+
+    fn detect_run_scripts(&self, command: &str) -> Vec<SkillScriptRef> {
+        use houyicoder_skill::disclose::script_gate::detect_skill_scripts;
+        // No file read: the card shows the verifiable path, not a first-line
+        // summary (attacker-controlled text framed as authoritative).
+        let scan: Vec<(String, SkillSource, &Path)> = self
+            .skills
+            .iter()
+            .map(|s| (s.name.clone(), s.source.clone(), s.skill_dir.as_path()))
+            .collect();
+        detect_skill_scripts(command, &scan)
+            .into_iter()
+            .map(|r| SkillScriptRef {
+                skill_name: r.skill_name,
+                script_rel_path: r.script_rel_path,
             })
             .collect()
     }
@@ -348,6 +368,37 @@ mod tests {
         assert!(
             body.contains("sid: abc-123"),
             "session id substituted: {body}"
+        );
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    /// detect_run_scripts returns the skill name + relative script path for a
+    /// Bash command that runs a script from a discovered skill's directory. No
+    /// file is read — the card shows the verifiable path, not a first-line
+    /// summary (attacker-controlled text).
+    #[test]
+    fn test_detect_run_scripts_summary() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-detect-{}", std::process::id()));
+        let skill_dir = tmp.join(".houyicoder").join("skills").join("deploy");
+        fs::create_dir_all(skill_dir.join("scripts")).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: deploy\ndescription: deploy skill\n---\nbody\n",
+        )
+        .unwrap();
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
+        // Discovery stores the canonical skill dir, so the command must name
+        // the canonical form for the detector's substring match to fire.
+        let canon_dir = std::fs::canonicalize(&skill_dir).unwrap();
+        let cmd = format!("python {}/scripts/deploy.py", canon_dir.to_string_lossy());
+        let scripts = reg.detect_run_scripts(&cmd);
+        assert_eq!(scripts.len(), 1, "one skill script detected: {scripts:?}");
+        assert_eq!(scripts[0].skill_name, "deploy");
+        assert_eq!(scripts[0].script_rel_path, "scripts/deploy.py");
+        // A command that runs no skill script returns empty.
+        assert!(
+            reg.detect_run_scripts("echo hello && ls /tmp").is_empty(),
+            "non-skill command detected nothing"
         );
         drop(fs::remove_dir_all(&tmp));
     }

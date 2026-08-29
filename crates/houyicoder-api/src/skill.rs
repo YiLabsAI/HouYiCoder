@@ -106,6 +106,16 @@ pub trait SkillRegistry: Send + Sync {
     fn list_with_origin(&self) -> Vec<SkillSnapshot> {
         Vec::new()
     }
+
+    /// Detect skill-directory script executions in a Bash command. Returns one
+    /// entry per script the command runs from a discovered skill's directory,
+    /// carrying the skill + relative script path for the approval card. The
+    /// default returns empty: a registry that does not track skill directories
+    /// reports no scripts, so the existing protected-path ask still surfaces
+    /// but without the script path.
+    fn detect_run_scripts(&self, _command: &str) -> Vec<SkillScriptRef> {
+        Vec::new()
+    }
 }
 
 /// A model-invocable descriptor paired with where it was discovered, for
@@ -116,4 +126,20 @@ pub struct SkillSnapshot {
     /// snake_case discovery source (managed/user/project/claude_eco/agents/
     /// mcp/local). Empty when the registry does not track origin.
     pub origin: String,
+}
+
+/// A skill-directory script a Bash command runs, surfaced for the per-script
+/// confirmation card. The approval prompt shows the skill + relative script
+/// path so the user can see what would execute before approving. The path is
+/// verifiable (the user can read the file); a first-line summary is NOT shown,
+/// because it is attacker-controlled text the card would frame as an
+/// authoritative summary. The detection is a heuristic over the command string
+/// and the discovered skill directories; a deliberately obfuscated command
+/// can evade it, but the sandbox fence remains the hard floor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillScriptRef {
+    /// The skill whose directory the script lives under.
+    pub skill_name: String,
+    /// Path relative to the skill directory, e.g. "scripts/deploy.py".
+    pub script_rel_path: String,
 }
