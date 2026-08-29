@@ -444,6 +444,10 @@ pub enum Key {
     Right,
     Up,
     Down,
+    /// Shift+Up / Shift+Down — the fleet-pill row selection keys. Crossterm
+    /// emits these as CSI sequences with the Shift modifier byte (2).
+    ShiftUp,
+    ShiftDown,
 }
 
 impl Key {
@@ -467,6 +471,10 @@ impl Key {
             Key::Right => b"\x1b[C".to_vec(),
             Key::Up => b"\x1b[A".to_vec(),
             Key::Down => b"\x1b[B".to_vec(),
+            // Shift-modified arrows: CSI ... ;2 <final>. The binary's crossterm
+            // parser decodes the modifier byte (2 = Shift) + KeyEventModifiers.
+            Key::ShiftUp => b"\x1b[1;2A".to_vec(),
+            Key::ShiftDown => b"\x1b[1;2B".to_vec(),
         }
     }
 }

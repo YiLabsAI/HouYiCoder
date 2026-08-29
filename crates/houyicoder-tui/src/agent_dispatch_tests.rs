@@ -2013,3 +2013,61 @@ fn test_teammate_echo_preserved() {
         "the echo clears once the durable line lands"
     );
 }
+
+/// Steering a completed child surfaces a clear "finished" notice instead
+/// of silently dropping on the closed inbox (CC drops silently; this is a
+/// UX improvement). The echo line is not appended (the child won't drain
+/// it). A running child still steers normally.
+#[test]
+fn test_steer_completed_surfaces_notice() {
+    use crate::agent_message::FleetEntry;
+    use crate::records::{TeammateView, TranscriptLine};
+    let mut app = crate::composition::app();
+    app.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    app.fleet.entries.push(FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 3,
+        tokens: 100,
+        tool_uses: 1,
+        last_activity: None,
+        completed: Some("completed".into()),
+        completed_at: None,
+    });
+    app.spawn_run("steer this".into());
+    // The completed child surfaces a notice, not a silent drop.
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("has finished"))),
+        "a completed child surfaces a finished notice"
+    );
+    // The echo line is not appended (the child won't drain it).
+    assert!(
+        !app.teammate_view.as_ref().is_some_and(|v| v
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "steer this"))),
+        "no echo appended for a completed child"
+    );
+    // A running child still steers (echo appended, no notice).
+    app.fleet.entries[0].completed = None;
+    app.transcript.clear();
+    app.spawn_run("steer running".into());
+    assert!(
+        !app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("has finished"))),
+        "a running child does not surface the finished notice"
+    );
+    assert!(
+        app.teammate_view.as_ref().is_some_and(|v| v
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "steer running"))),
+        "a running child gets the optimistic echo"
+    );
+}

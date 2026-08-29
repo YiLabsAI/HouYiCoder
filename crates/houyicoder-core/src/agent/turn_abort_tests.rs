@@ -14,7 +14,7 @@ use houyicoder_protocol::llm::{
 };
 
 use crate::agent::tests::runner_with;
-use crate::agent::{RunOutcome, ToolRegistry};
+use crate::agent::{RunError, RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 
 /// A provider whose first stream call never yields (the model fetch is
@@ -194,4 +194,48 @@ async fn test_mid_stream_abort() {
             .any(|e| matches!(e.kind, TurnEventKind::TurnAborted { .. })),
         "a TurnAborted marker lands for the mid-stream-interrupted turn"
     );
+}
+
+/// A provider whose stream never yields — every call stalls forever. Used
+/// to exercise the stream_idle_timeout path: the idle timeout fires, retries
+/// exhaust, and the run fails with ProviderFatal(Network).
+struct AlwaysStallProvider;
+
+impl ModelProvider for AlwaysStallProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        Box::pin(async { Err(ProviderError::Network) })
+    }
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        Box::pin(futures::stream::pending())
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// The stream_idle_timeout (50ms in test) fires when the provider stalls,
+/// retries exhaust, and the run fails with ProviderFatal(Network). A
+/// perpetually stalling provider must fail, not hang the run indefinitely.
+#[tokio::test]
+async fn test_idle_timeout_to_fatal() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(AlwaysStallProvider);
+    let runner = Arc::new(runner_with(provider, ToolRegistry::new()));
+    let session = SessionId::new();
+    let r = runner.clone();
+    let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), task)
+        .await
+        .expect("run resolved within 10s (idle timeout retries)")
+        .expect("run task");
+    assert!(
+        result.is_err(),
+        "a perpetually stalling provider must fail, not hang"
+    );
+    match result {
+        Err(RunError::ProviderFatal(ProviderError::Network)) => {}
+        other => panic!("expected ProviderFatal(Network) from idle timeout, got {other:?}"),
+    }
 }

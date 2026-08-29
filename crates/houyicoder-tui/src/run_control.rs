@@ -57,22 +57,37 @@ impl App {
         // routes to that child's inbox, not the parent. An optimistic echo
         // appends the text as a user line to the viewed transcript right
         // away; the live refetch on the child's next turn replaces it with
-        // the durable line the child drained into its log.
+        // the durable line the child drained into its log. A completed child
+        // (fleet entry done, or retired from the footer) gets a clear notice
+        // instead of a silent drop on the closed inbox.
         let steer = self
             .teammate_view
             .as_ref()
             .filter(|_| !input.is_empty())
-            .map(|v| v.child_sid.clone());
-        if let Some(child_sid) = steer {
-            if let Some(view) = self.teammate_view.as_mut() {
-                view.transcript.push(TranscriptLine::User(input.clone()));
-                view.pending_echo = Some(input.clone());
-                self.transcript_scroll.follow_tail = true;
-            }
-            self.send_cmd(ClientCommand::InjectToChild {
-                child_sid,
-                text: input,
+            .map(|v| {
+                let completed = self
+                    .fleet
+                    .entries
+                    .iter()
+                    .find(|e| e.agent_id == v.child_sid)
+                    .map(|e| e.completed.is_some())
+                    .unwrap_or(true);
+                (v.child_sid.clone(), completed)
             });
+        if let Some((child_sid, completed)) = steer {
+            if completed {
+                self.system_line("this child has finished — press Esc to exit or start a new task");
+            } else {
+                if let Some(view) = self.teammate_view.as_mut() {
+                    view.transcript.push(TranscriptLine::User(input.clone()));
+                    view.pending_echo = Some(input.clone());
+                    self.transcript_scroll.follow_tail = true;
+                }
+                self.send_cmd(ClientCommand::InjectToChild {
+                    child_sid,
+                    text: input,
+                });
+            }
             return;
         }
         // Queue path: when a run is in flight, the new input is mirrored to
