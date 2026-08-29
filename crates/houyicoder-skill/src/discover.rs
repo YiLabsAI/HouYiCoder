@@ -31,10 +31,13 @@ const MANAGED_DIR: &str = "/etc/houyicoder/skills";
 
 /// Entry point: discover all skills from the filesystem.
 ///
-/// Scans managed, user, and project levels. Returns skills sorted by
-/// precedence (highest first). Same-name skills across sources are
-/// resolved by precedence; the loser is shadowed with a warn-level log.
-pub fn discover_skills(cwd: Option<&Path>) -> Vec<SkillDefinition> {
+/// Scans managed, user (when a home directory is given), and project
+/// levels. Returns skills sorted by precedence (highest first). Same-name
+/// skills across sources are resolved by precedence; the loser is shadowed
+/// with a warn-level log. A None home skips the user level so a caller that
+/// wants only the project + managed levels is not coupled to the process's
+/// real home directory.
+pub fn discover_skills(cwd: Option<&Path>, home: Option<&Path>) -> Vec<SkillDefinition> {
     let mut all: Vec<(SkillDefinition, u8)> = Vec::new();
     let mut seen_canonical: HashSet<PathBuf> = HashSet::new();
     let mut seen_names: HashSet<String> = HashSet::new();
@@ -72,9 +75,10 @@ pub fn discover_skills(cwd: Option<&Path>) -> Vec<SkillDefinition> {
         }
     }
 
-    // Level 3: user (lowest precedence).
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
+    // Level 3: user (lowest precedence). Skipped when home is None so a
+    // caller that wants only the project + managed levels (a hermetic
+    // test) is not coupled to the process's real home directory.
+    if let Some(home) = home {
         for (i, family) in CONFIG_DIR_FAMILIES.iter().enumerate() {
             let skills_dir = home.join(family).join("skills");
             let source = user_source_for_family(i);
@@ -276,7 +280,7 @@ mod tests {
         let skill_dir = tmp.join(".houyicoder").join("skills").join("my-skill");
         create_skill_md(&skill_dir, "my-skill", "Does a thing");
 
-        let found = discover_skills(Some(&tmp));
+        let found = discover_skills(Some(&tmp), None);
         assert!(found.iter().any(|s| s.name == "my-skill"));
 
         drop(fs::remove_dir_all(&tmp));
@@ -298,7 +302,7 @@ mod tests {
             .join("evil2");
         create_skill_md(&node_skill, "evil2", "should not load");
 
-        let found = discover_skills(Some(&tmp));
+        let found = discover_skills(Some(&tmp), None);
         assert!(
             !found.iter().any(|s| s.name == "evil"),
             ".git must be pruned"
@@ -316,7 +320,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("skill-shadow-{}", std::process::id()));
         let proj = tmp.join(".houyicoder").join("skills").join("shared");
         create_skill_md(&proj, "shared", "from project");
-        let found = discover_skills(Some(&tmp));
+        let found = discover_skills(Some(&tmp), None);
         let shared = found.iter().find(|s| s.name == "shared");
         assert!(shared.is_some());
         assert_eq!(shared.unwrap().description, "from project");
@@ -383,7 +387,7 @@ mod tests {
             "spec",
         );
 
-        let found = discover_skills(Some(&tmp));
+        let found = discover_skills(Some(&tmp), None);
         let names: Vec<&str> = found.iter().map(|s| s.name.as_str()).collect();
         assert!(
             names.contains(&"native-skill"),

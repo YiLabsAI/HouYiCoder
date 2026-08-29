@@ -45,7 +45,8 @@ fn write_skill(dir: &Path, name: &str, body: &str) {
 async fn test_run_slash_real_body() {
     let tmp = std::env::temp_dir().join(format!("skill-wire-slash-{}", std::process::id()));
     write_skill(&tmp, "commit", "run git status\nstage changes\n");
-    let reg: Arc<dyn SkillRegistry> = Arc::new(SkillRegistryImpl::discover(Some(&tmp)));
+    let reg: Arc<dyn SkillRegistry> =
+        Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
     let store: Arc<dyn houyicoder_api::session::SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::with_shared_store(
@@ -113,7 +114,8 @@ async fn test_run_slash_real_body() {
 async fn test_run_model_skill_tool() {
     let tmp = std::env::temp_dir().join(format!("skill-wire-model-{}", std::process::id()));
     write_skill(&tmp, "commit", "run git status\nstage changes\n");
-    let reg: Arc<dyn SkillRegistry> = Arc::new(SkillRegistryImpl::discover(Some(&tmp)));
+    let reg: Arc<dyn SkillRegistry> =
+        Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(SkillTool::new(Arc::clone(&reg))));
     // First call: the model asks for the commit skill. Second: done.
@@ -189,7 +191,8 @@ async fn test_run_large_body_compacts() {
     // + JSON envelope are added.
     let large_body = "x".repeat(9_000);
     write_skill(&tmp, "big", &large_body);
-    let reg: Arc<dyn SkillRegistry> = Arc::new(SkillRegistryImpl::discover(Some(&tmp)));
+    let reg: Arc<dyn SkillRegistry> =
+        Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(SkillTool::new(Arc::clone(&reg))));
     let provider = FakeProvider::from_outputs(vec![
@@ -267,7 +270,8 @@ async fn test_compact_reinjects_listing() {
 
     let tmp = std::env::temp_dir().join(format!("skill-wire-compact-{}", std::process::id()));
     write_skill(&tmp, "commit", "run git status");
-    let reg: Arc<dyn SkillRegistry> = Arc::new(SkillRegistryImpl::discover(Some(&tmp)));
+    let reg: Arc<dyn SkillRegistry> =
+        Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
     let store: Arc<dyn houyicoder_api::session::SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::with_shared_store(

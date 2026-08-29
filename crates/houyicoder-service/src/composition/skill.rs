@@ -52,13 +52,24 @@ pub struct SkillRegistryImpl {
 }
 
 impl SkillRegistryImpl {
-    /// Discover skills from the filesystem, anchored at the given cwd
-    /// for the project-level walk. The managed and user levels are
-    /// scanned regardless of cwd. A skill whose name collides with a
-    /// builtin slash command is rejected at registration (warned, not
-    /// silently dropped) so it cannot shadow the builtin at invoke.
+    /// Discover skills reading the user-level home from the process env.
+    /// Production entry point. Delegates to discover_with_home, which
+    /// rejects skills whose names collide with builtin slash commands.
+    /// Tests use discover_with_home to pass an explicit (or None) home so
+    /// they are not coupled to the real home directory of the machine
+    /// running the suite.
     pub fn discover(cwd: Option<&Path>) -> Self {
-        let skills = discover::discover_skills(cwd)
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        Self::discover_with_home(cwd, home.as_deref())
+    }
+
+    /// Discover skills with an explicit user-level home directory. A None
+    /// home skips the user level so the scan covers only managed + project,
+    /// which is what a hermetic test wants. A skill whose name collides with
+    /// a builtin slash command is rejected at registration (warned, not
+    /// silently dropped) so it cannot shadow the builtin at invoke.
+    pub fn discover_with_home(cwd: Option<&Path>, home: Option<&Path>) -> Self {
+        let skills = discover::discover_skills(cwd, home)
             .into_iter()
             .filter(|s| {
                 if houyicoder_protocol::frontend::SlashCommand::is_reserved_skill_name(&s.name) {
@@ -157,7 +168,7 @@ mod tests {
             "---\nname: off\ndescription: off skill\ndisable-model-invocation: true\n---\noff body\n",
         )
         .unwrap();
-        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         let listing = reg.list_model_invocable();
         let names: Vec<&str> = listing.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"on"), "model-invocable skill listed");
@@ -176,7 +187,7 @@ mod tests {
     fn test_list_origin_tags_project() {
         let tmp = std::env::temp_dir().join(format!("skill-reg-origin-{}", std::process::id()));
         write_skill(&tmp, "on", "on body");
-        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         let snap = reg.list_with_origin();
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].descriptor.name, "on");
@@ -203,7 +214,7 @@ mod tests {
             "---\nname: off\ndescription: off skill\ndisable-model-invocation: true\n---\noff body\n",
         )
         .unwrap();
-        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         let snap = reg.list_with_origin();
         // Both skills present — the disabled one is NOT filtered out here
         // (list_model_invocable would return only "on").
@@ -234,7 +245,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("skill-reg-conflict-{}", std::process::id()));
         write_skill(&tmp, "compact", "hijack body");
         write_skill(&tmp, "commit", "legit body");
-        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         // The "compact" skill is rejected; "commit" is kept.
         assert!(
             reg.find("compact").is_none(),
@@ -253,7 +264,7 @@ mod tests {
     fn test_prepare_body_returns_body() {
         let tmp = std::env::temp_dir().join(format!("skill-reg-body-{}", std::process::id()));
         write_skill(&tmp, "commit", "run git status");
-        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         let body = reg.prepare_body("commit", None, None).unwrap();
         assert!(body.contains("run git status"), "body present: {body}");
         assert!(
@@ -273,7 +284,7 @@ mod tests {
             "---\nname: echo\ndescription: echo args\n---\nargs: $ARGUMENTS\n",
         )
         .unwrap();
-        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         let body = reg.prepare_body("echo", Some("hello world"), None).unwrap();
         assert!(
             body.contains("args: hello world"),
@@ -285,7 +296,7 @@ mod tests {
     #[test]
     fn test_unknown_skill_not_found() {
         let tmp = std::env::temp_dir().join(format!("skill-reg-nf-{}", std::process::id()));
-        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         let err = reg.prepare_body("nope", None, None).unwrap_err();
         match err {
             SkillError::NotFound(n) => assert_eq!(n, "nope"),
@@ -308,7 +319,7 @@ mod tests {
             "---\nname: off\ndescription: off\ndisable-model-invocation: true\n---\nbody\n",
         )
         .unwrap();
-        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         let desc = reg.find("off").expect("find returns the disabled skill");
         assert!(
             desc.disable_model_invocation,
@@ -332,7 +343,7 @@ mod tests {
             "---\nname: sid\ndescription: sid skill\n---\nsid: ${HOUYI_SESSION_ID}\n",
         )
         .unwrap();
-        let reg = SkillRegistryImpl::discover(Some(&tmp));
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         let body = reg.prepare_body("sid", None, Some("abc-123")).unwrap();
         assert!(
             body.contains("sid: abc-123"),
