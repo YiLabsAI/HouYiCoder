@@ -64,34 +64,36 @@ pub fn safety_check(tool_name: &str, input: Option<&Value>) -> Option<Effect> {
 }
 
 /// Whether a string references a protected marker, case-insensitively, with
-/// the worktree-container exemption applied. Split out from safety_check so
-/// the same judgement can be applied to a path that has been resolved to the
-/// file it actually names, not only to the string the caller supplied.
+/// the worktree-container exemption applied PER OCCURRENCE. Split out from
+/// safety_check so the same judgement can be applied to a path that has been
+/// resolved to the file it actually names, not only to the string the caller
+/// supplied.
 pub(crate) fn marker_hit(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     for marker in PROTECTED {
-        if lower.contains(marker) {
-            // The worktree container is the workspace, not a config store, so
-            // a path there does not trip its config-dir protection. Other
-            // markers (.git/ inside a worktree, .bashrc, ...) still fire.
-            if is_worktree_subpath(marker, &lower) {
-                continue;
+        // For each occurrence of the marker, check whether that occurrence is
+        // a worktree container path (the workspace, exempt) or a real config
+        // dir (fire). The exempt is per-occurrence, not whole-content: a
+        // nested config dir inside the workspace (a second marker occurrence
+        // after the container) must still fire, or a workspace skill script
+        // would bypass the protected-path ask under a blanket bash allow.
+        for idx in lower.match_indices(marker).map(|(i, _)| i) {
+            let after = &lower[idx + marker.len()..];
+            if !is_container_occurrence(marker, after) {
+                return true;
             }
-            return true;
         }
     }
     false
 }
 
-/// Whether the matched marker is followed by a worktree-container subpath, so
-/// the call is operating in the agent workspace (not the config store) and the
-/// marker is exempt.
-fn is_worktree_subpath(marker: &str, lower_content: &str) -> bool {
+/// Whether a marker occurrence is immediately followed by a worktree-container
+/// suffix, meaning the occurrence names the workspace, not a config store.
+/// Only the occurrence that IS the container path is exempt; a nested
+/// config-dir occurrence (not followed by the container suffix) still fires.
+fn is_container_occurrence(marker: &str, after_marker: &str) -> bool {
     WORKTREE_EXEMPTS.iter().any(|exempt| {
-        // The exempt must start with the same config-dir prefix (e.g. the
-        // .claude/ marker is exempt only by .claude/worktrees/, not by the
-        // project's own worktrees/ subpath).
-        exempt.starts_with(marker) && lower_content.contains(*exempt)
+        exempt.starts_with(marker) && after_marker.starts_with(&exempt[marker.len()..])
     })
 }
 
@@ -121,6 +123,21 @@ mod tests {
                 safety_check("bash", Some(&v)),
                 Some(Effect::Ask),
                 "{dir} must escalate to Ask (bypass-immune)"
+            );
+        }
+        // A nested config dir INSIDE a worktree container must still fire: the
+        // per-occurrence exempt skips only the container occurrence, not the
+        // nested marker. Without this a workspace skill script under a blanket
+        // bash allow would execute with no second confirmation.
+        for cmd in [
+            "bash /srv/repo/.houyicoder/worktrees/feat/.houyicoder/skills/evil/run.sh",
+            "bash /srv/repo/.claude/worktrees/s6t2-gate/.claude/skills/evil/run.sh",
+        ] {
+            let v = serde_json::json!({"command": cmd});
+            assert_eq!(
+                safety_check("bash", Some(&v)),
+                Some(Effect::Ask),
+                "nested config dir in worktree must still Ask: {cmd}"
             );
         }
     }

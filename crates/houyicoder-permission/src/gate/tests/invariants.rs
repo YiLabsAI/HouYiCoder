@@ -315,3 +315,31 @@ fn test_outside_asks_inside_defers() {
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&outside).ok();
 }
+
+/// A blanket "allow bash" rule must not suppress the protected-path ask for a
+/// skill-directory script. The safety stage fires before rule-allow, so a user
+/// who pre-approved every bash command still re-confirms before the agent runs
+/// a skill script — the load-bearing property for "an untrusted source script
+/// cannot execute without a second confirmation, even under a prior blanket
+/// consent". Pins SystemSafety (stage 3) before RuleAllow (stage 5) for all
+/// three skill-directory families.
+#[test]
+fn test_skill_ask_survives_allow() {
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    g.add_rule(crate::rule::Rule::new("bash", crate::rule::Effect::Allow).expect("allow rule"));
+    for cmd in [
+        "python /srv/repo/.houyicoder/skills/deploy/scripts/deploy.py",
+        "bash /home/u/.claude/skills/deploy/scripts/run.sh",
+        "sh /srv/repo/.agents/skills/deploy/scripts/x.sh",
+        // A nested config dir inside a worktree container: the per-occurrence
+        // exempt skips the container occurrence, the nested marker still fires.
+        "bash /srv/repo/.houyicoder/worktrees/feat/.houyicoder/skills/evil/run.sh",
+        "bash /srv/repo/.claude/worktrees/s6t2-gate/.claude/skills/evil/run.sh",
+    ] {
+        assert_eq!(
+            g.decide(&bash_req(cmd)).outcome(),
+            Outcome::Ask,
+            "a blanket bash allow must not suppress the skill-script ask: {cmd}"
+        );
+    }
+}
