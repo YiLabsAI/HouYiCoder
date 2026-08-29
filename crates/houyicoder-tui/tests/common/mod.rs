@@ -46,6 +46,9 @@ pub struct PtySession {
     output: Arc<std::sync::Mutex<Vec<u8>>>,
     _reader: thread::JoinHandle<()>,
     sessions_dir: std::path::PathBuf,
+    /// A temp home the harness created (not caller-provided); cleaned in Drop
+    /// so isolated config roots do not accumulate in /tmp.
+    _owned_home: Option<std::path::PathBuf>,
 }
 
 const ROWS: u16 = 24;
@@ -201,19 +204,31 @@ impl PtySession {
     ) -> Self {
         let bin = houyi_binary_path();
         let cwd = cwd_override.unwrap_or_else(workspace_root);
+        // Default to an isolated temp home when none is provided: the test
+        // owns its config root (no leakage into the developer's real home)
+        // and the trust gate pre-trusts the test cwd there so the startup
+        // prompt does not obscure the screen the test asserts on.
+        let home_provided = home.is_some();
+        let home = home.unwrap_or_else(|| fresh_temp_dir("pty-home"));
+        let _owned_home = if home_provided {
+            None
+        } else {
+            Some(home.clone())
+        };
         let mut cmd = CommandBuilder::new(&bin);
-        cmd.cwd(cwd);
+        cmd.cwd(&cwd);
         for arg in extra_args {
             cmd.arg(arg);
         }
-        if let Some(h) = home {
-            cmd.env("HOME", &h);
-            // config_home() checks HOUYICODER_CONFIG_HOME BEFORE HOME, so an
-            // ambient value in the developer's shell leaks into the subprocess
-            // and the server writes settings.json to the wrong path. Point it
-            // at the temp home so the test owns the config root regardless.
-            cmd.env("HOUYICODER_CONFIG_HOME", h.join(".houyicoder"));
-        }
+        cmd.env("HOME", &home);
+        // config_home() checks HOUYICODER_CONFIG_HOME BEFORE HOME, so an
+        // ambient value in the developer's shell leaks into the subprocess
+        // and the server writes settings.json to the wrong path. Point it
+        // at the temp home so the test owns the config root regardless.
+        cmd.env("HOUYICODER_CONFIG_HOME", home.join(".houyicoder"));
+        let settings = home.join(".houyicoder").join("settings.json");
+        houyicoder_config::persist_project_trust(&settings, &cwd)
+            .expect("pre-trust cwd in temp settings");
         // Isolate the session log root: the production binary now persists
         // every durable event to a file backend at the sessions root, so
         // without this override each PTY test would write its session log
@@ -285,6 +300,7 @@ impl PtySession {
             output,
             _reader: reader_thread,
             sessions_dir,
+            _owned_home,
         }
     }
 
@@ -405,6 +421,9 @@ impl Drop for PtySession {
             }
         }
         let _wait = self._child.wait();
+        if let Some(h) = &self._owned_home {
+            drop(std::fs::remove_dir_all(h));
+        }
     }
 }
 
