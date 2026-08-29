@@ -279,7 +279,7 @@ pub struct Runner {
     /// always lands before a notification that queued at the same instant —
     /// notifications never starve user input. std Mutex: drain is non-blocking,
     /// no await under the lock.
-    queued_notifications: std::sync::Mutex<std::collections::VecDeque<String>>,
+    queued_notifications: std::sync::Mutex<std::collections::VecDeque<(String, String)>>,
     /// Texts the drive loop drained from queued_input this run. The host
     /// reads + clears it at run end so it can tell the frontend which queued
     /// messages were injected (the frontend removes them from its copy).
@@ -582,7 +582,7 @@ impl Runner {
         // them only when no user input is pending, so a notification that
         // queued the same instant as a user message never lands first. A
         // pending notification waits for the next idle boundary.
-        let pending_notifications: Vec<String> = if pending_user.is_empty() {
+        let pending_notifications: Vec<(String, String)> = if pending_user.is_empty() {
             let mut q = self
                 .queued_notifications
                 .lock()
@@ -606,8 +606,14 @@ impl Runner {
         for msg in inbox_pending {
             self.append_mid_turn_input(session, msg).await?;
         }
-        for msg in pending_notifications {
-            self.append_mid_turn_input(session, msg).await?;
+        // A child-completion notification is a distinct boundary from a user
+        // interjection: it records which child finished (NotificationInjected,
+        // not MidTurnInput) so the durable log + the projection distinguish
+        // "a background subagent reported a result" from "the user sent a
+        // message" -- the model sees a child-completion framing, not a
+        // continue-the-task note.
+        for (child_id, text) in pending_notifications {
+            self.append_notification(session, child_id, text).await?;
         }
         // Recall memory for the injected query (the latest user input), so a
         // mid-turn "now help with X" gets X's memories rather than riding the

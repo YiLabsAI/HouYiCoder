@@ -117,6 +117,20 @@ pub fn project_input_items_with(
                 append_user_text(&mut items, &framed);
                 i += 1;
             }
+            // A background subagent finished: the notification carries the
+            // child's result summary. Frame it as a child-completion report
+            // (not a user interjection) so the model reads it as a background
+            // result to act on, not a fresh user instruction that drops the
+            // in-flight task. The bare summary stays in the durable log; the
+            // framing is model-only.
+            TurnEventKind::NotificationInjected { summary, .. } => {
+                let framed = format!(
+                    "[A background subagent completed. Act on its result if \
+                     relevant to the current task.]\n{summary}"
+                );
+                append_user_text(&mut items, &framed);
+                i += 1;
+            }
             // Reward observations are audit signals, not model input.
             TurnEventKind::RewardObservation { .. } => i += 1,
             TurnEventKind::Unknown => i += 1,
@@ -193,8 +207,7 @@ pub fn project_input_items_with(
             | TurnEventKind::HookSignal { .. }
             | TurnEventKind::TurnStarted { .. }
             | TurnEventKind::SubagentSpawn { .. }
-            | TurnEventKind::SubagentReturn { .. }
-            | TurnEventKind::NotificationInjected { .. } => {
+            | TurnEventKind::SubagentReturn { .. } => {
                 i += 1;
             }
         }

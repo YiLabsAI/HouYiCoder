@@ -458,6 +458,12 @@ pub fn project_session_update(kind: &TurnEventKind) -> Option<SessionUpdate> {
     Some(match kind {
         TurnEventKind::UserInput { text } => SessionUpdate::UserMessageChunk(text_chunk(text)),
         TurnEventKind::MidTurnInput { text } => SessionUpdate::UserMessageChunk(text_chunk(text)),
+        // A child-completion notification surfaces in the transcript so the
+        // user sees what the model was told (the durable kind distinguishes
+        // it from a user interjection; the visual chunk is the text summary).
+        TurnEventKind::NotificationInjected { summary, .. } => {
+            SessionUpdate::UserMessageChunk(text_chunk(summary))
+        }
         // The thinking field is a projection convenience folded from sibling
         // Reasoning events; the wire streams those as AgentThoughtChunk
         // separately, so the message chunk carries text only.
@@ -498,8 +504,7 @@ pub fn project_session_update(kind: &TurnEventKind) -> Option<SessionUpdate> {
         | TurnEventKind::TurnStarted { .. }
         | TurnEventKind::CacheBreak { .. }
         | TurnEventKind::SubagentSpawn { .. }
-        | TurnEventKind::SubagentReturn { .. }
-        | TurnEventKind::NotificationInjected { .. } => return None,
+        | TurnEventKind::SubagentReturn { .. } => return None,
         // TurnAborted is the user-visible boundary marker: project it as a
         // message chunk so the host renders the notice. The model-input
         // projection skips it (the partial turn events are already there).

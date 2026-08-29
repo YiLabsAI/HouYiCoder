@@ -9,6 +9,7 @@ use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnOutcome};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::multi_agent::child_prompt::{child_system_prompt, child_user_context};
+use houyicoder_core::agent::multi_agent::concurrency_gate::AcquireResult;
 use houyicoder_core::agent::multi_agent::registry::{
     AgentError, IsolationMode, PromptSource, ResolveCtx,
 };
@@ -99,9 +100,10 @@ pub(super) async fn finalize_child(
 /// publishes Progress/Completed as the child runs, and the detached driver
 /// runs the same finalization as sync (worktree cleanup, inbox close,
 /// SubagentStop, SubagentReturn). The result reaches the parent via the bus
-/// completed publish, not a return value. Concurrency cap is not enforced
-/// on the async path yet — a first cut; the gate acquires inside the driver
-/// once the try-acquire path lands.
+/// completed publish, not a return value. The concurrency cap applies the same
+/// way as the sync path: a resolved spawn acquires a running slot before any
+/// side effect, the permit is moved into the detached driver, and dropping it
+/// at the end of the run releases the slot so a queued spawn can proceed.
 pub(super) async fn run_async_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
@@ -121,6 +123,16 @@ pub(super) async fn run_async_spawn(
     let isolation = match args.isolation.as_str() {
         "worktree" => IsolationMode::Worktree,
         _ => IsolationMode::None,
+    };
+    // Concurrency cap (non-blocking for the async path): a free slot is taken
+    // now + held until the detached driver completes; a full cap rejects with
+    // backpressure so the model re-queues next turn rather than freezing the
+    // parent turn. The queue is sync-path only — a background spawn does not
+    // wait inline (run_in_background returns async_launched immediately on a
+    // free slot, ConcurrencySaturated on a full one).
+    let permit = match this.gate.try_acquire() {
+        AcquireResult::Acquired(p) => p,
+        AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
     };
     let base_prompt = match &def.system_prompt {
         PromptSource::Owned(p) => p.clone(),
@@ -171,9 +183,11 @@ pub(super) async fn run_async_spawn(
     let parent_sid_f = parent_sid;
     let child_str_f = child_str.clone();
     tokio::spawn(async move {
-        // The result reaches the parent via the bus completed publish; the
-        // return is intentionally dropped (side effects — cleanup, Stop,
-        // Return boundary — already ran inside finalize_child).
+        // The permit releases here (end of the driver) so the slot frees when
+        // the child completes — the async run cannot outlive the cap. The
+        // result reaches the parent via the bus completed publish; the return
+        // is dropped (cleanup, Stop, Return boundary ran in finalize_child).
+        let _permit = permit;
         let _outcome = finalize_child(
             handle,
             store,

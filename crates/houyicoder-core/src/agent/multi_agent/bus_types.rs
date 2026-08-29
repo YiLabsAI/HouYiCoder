@@ -76,14 +76,40 @@ pub enum ChildStatus {
 /// message type.
 pub type AgentBus = houyicoder_async::bus::InProcBus<BusMessage>;
 
-/// Build a topic string for a child's progress channel.
+/// Build a topic string for a child's progress channel. Per-child targeted
+/// channel for a watcher that already learned the id from Spawned. The live
+/// sink also fans Progress out to the global progress topic so a watcher
+/// subscribed before any child spawns cannot lose a one-shot message to the
+/// subscribe-after-publish race.
 pub fn progress_topic(agent_id: &str) -> String {
     format!("task.{agent_id}.progress")
 }
 
-/// Build a topic string for a child's completion channel.
+/// Build a topic string for a child's completion channel. Per-child targeted
+/// channel for a watcher that already learned the id from Spawned. The live
+/// sink also fans Completed out to the global completion topic so a watcher
+/// subscribed before any child spawns cannot lose the terminal event: a
+/// per-child subscribe that lands after the child already completed would
+/// miss the one-shot Completed entirely (broadcast does not replay history),
+/// leaving the parent notification lost and the footer pill stuck on running.
 pub fn completed_topic(agent_id: &str) -> String {
     format!("task.{agent_id}.completed")
+}
+
+/// The global progress topic: a watcher subscribes once at startup (before
+/// any child spawns) and demuxes by the agent_id each Progress carries. The
+/// live sink fans out to this + the per-child channel.
+pub fn global_progress_topic() -> &'static str {
+    "agents.progress"
+}
+
+/// The global completion topic: a watcher subscribes once at startup (before
+/// any child spawns) and demuxes by the agent_id each Completed carries.
+/// Subscribe-before-publish guarantees the terminal event is never lost to a
+/// per-child subscribe landing after the child already completed. The live
+/// sink fans out to this + the per-child channel.
+pub fn global_completed_topic() -> &'static str {
+    "agents.completed"
 }
 
 /// The global topic a watcher subscribes to before any child spawns: the
@@ -142,6 +168,8 @@ mod tests {
     fn test_topic_helpers() {
         assert_eq!(progress_topic("abc"), "task.abc.progress");
         assert_eq!(completed_topic("abc"), "task.abc.completed");
+        assert_eq!(global_progress_topic(), "agents.progress");
+        assert_eq!(global_completed_topic(), "agents.completed");
         assert_eq!(permission_request_topic(), "agents.permission_request");
         assert_eq!(
             permission_response_topic("c1", "call-9"),

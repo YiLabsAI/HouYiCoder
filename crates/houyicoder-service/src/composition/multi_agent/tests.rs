@@ -359,6 +359,24 @@ async fn test_spawn_rejected_when_saturated() {
     );
 }
 
+/// The concurrency cap applies to the async path too: a zero-cap gate rejects
+/// a background spawn with ConcurrencySaturated, not a successful async launch.
+/// Pins DEFECT-2 — before the fix, the async path bypassed the gate and the
+/// spawn succeeded like the launches test.
+#[tokio::test]
+async fn test_async_spawn_saturated_rejects() {
+    let (runtime, _store, parent_sid) = runtime_with_text_child("x");
+    let runtime = runtime.with_gate(std::sync::Arc::new(ConcurrencyGate::new(0, 0)));
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let mut args = SpawnArgs::new("explore", "task", "task");
+    args.run_in_background = true;
+    let err = runtime.spawn(&ctx, args).await.unwrap_err();
+    assert!(
+        matches!(err, SpawnFailure::ConcurrencySaturated),
+        "zero-cap gate must reject the async spawn too, got {err:?}"
+    );
+}
+
 /// run_sync_spawn fires SubagentStart at the spawn boundary (after
 /// spawn_child, before the run) and SubagentStop at the return boundary
 /// (before record_subagent_return), threaded through ToolCtx.hook_fire.

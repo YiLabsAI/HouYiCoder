@@ -89,12 +89,71 @@ fn test_notification_round_trip() {
             turn: 3,
             order: 1,
             topic: "task.child-1.completed".into(),
+            summary: "Subagent explore completed: found auth".into(),
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
     let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, e);
     assert!(json.contains("\"type\":\"NotificationInjected\""));
+    assert!(
+        json.contains("Subagent explore completed: found auth"),
+        "summary round-trips: {json}"
+    );
+}
+
+/// An older log written before the summary field existed must still
+/// deserialize (the field is #[serde(default)]) so a version bump does not
+/// brick prior sessions. Build a real event's JSON, strip the summary key,
+/// and confirm the missing field defaults to empty rather than failing.
+#[test]
+fn test_notification_old_log_deserializes() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        TurnEventKind::NotificationInjected {
+            child_session_id: "child-2".into(),
+            turn: 1,
+            order: 0,
+            topic: "completion".into(),
+            summary: "to be stripped".into(),
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    // Strip the summary field so the JSON looks like a pre-summary log line.
+    let value = serde_json::from_str::<serde_json::Value>(&json).expect("parse");
+    let kind = value
+        .get("kind")
+        .and_then(serde_json::Value::as_object)
+        .expect("kind object");
+    let mut kind_obj = kind.clone();
+    kind_obj.remove("summary");
+    let mut wrapped = serde_json::Map::new();
+    if let serde_json::Value::Object(top) = value {
+        for (k, v) in top {
+            if k == "kind" {
+                wrapped.insert("kind".into(), serde_json::Value::Object(kind_obj.clone()));
+            } else {
+                wrapped.insert(k, v);
+            }
+        }
+    }
+    let old = serde_json::to_string(&serde_json::Value::Object(wrapped)).expect("re-serialize");
+    let back: TurnEvent = serde_json::from_str(&old).expect("old log deserializes");
+    match back.kind {
+        TurnEventKind::NotificationInjected {
+            child_session_id,
+            summary,
+            turn,
+            ..
+        } => {
+            assert_eq!(child_session_id, "child-2");
+            assert_eq!(turn, 1);
+            assert!(summary.is_empty(), "missing summary defaults to empty");
+        }
+        other => panic!("expected NotificationInjected, got {other:?}"),
+    }
 }
 
 #[test]

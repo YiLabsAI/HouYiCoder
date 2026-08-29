@@ -23,13 +23,15 @@ impl Runner {
     /// Enqueue a lower-priority notification (an async child completed) for
     /// mid-turn injection. The drive loop drains this queue at the next turn
     /// boundary only after the user-input queue is empty, so a notification
-    /// never jumps ahead of a pending user message. Callable from any
-    /// Arc<Runner> the host holds, like enqueue_input.
-    pub fn enqueue_notification(&self, text: String) {
+    /// never jumps ahead of a pending user message. The child session id is
+    /// carried alongside the text so the durable event records which child
+    /// finished (a NotificationInjected boundary), not just a bare text blob.
+    /// Callable from any Arc<Runner> the host holds, like enqueue_input.
+    pub fn enqueue_notification(&self, child_session_id: String, text: String) {
         self.queued_notifications
             .lock()
             .expect("queued_notifications lock")
-            .push_back(text);
+            .push_back((child_session_id, text));
     }
 
     /// Remove the first queued message whose text matches. The frontend calls
@@ -106,15 +108,16 @@ impl Runner {
             .collect()
     }
 
-    /// Test-only snapshot of the queued notifications, in FIFO order. Lets a
-    /// test prove the injector enqueued (and the priority drain deferred)
-    /// without driving a full run.
+    /// Test-only snapshot of the queued notification texts, in FIFO order. Lets
+    /// a test prove the injector enqueued (and the priority drain deferred)
+    /// without driving a full run. Returns the text half only (the child id is
+    /// durable-log metadata, not assertion-relevant for the queue order).
     pub fn queued_notifications_snapshot(&self) -> Vec<String> {
         self.queued_notifications
             .lock()
             .expect("queued_notifications lock")
             .iter()
-            .cloned()
+            .map(|(_, text)| text.clone())
             .collect()
     }
 }

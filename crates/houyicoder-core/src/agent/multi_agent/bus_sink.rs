@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 use houyicoder_api::live::{LiveEvent, LiveSink};
 
-use super::bus_types::{AgentBus, BusMessage, ChildStatus, completed_topic, progress_topic};
+use super::bus_types::{
+    AgentBus, BusMessage, ChildStatus, completed_topic, global_completed_topic,
+    global_progress_topic, progress_topic,
+};
 use houyicoder_async::bus::MessageBus;
 
 /// Map the runner's coarse terminal status string to the bus ChildStatus.
@@ -25,7 +28,11 @@ fn child_status_of(status: &str) -> ChildStatus {
 /// Build a live sink that forwards turn-boundary snapshots + terminal
 /// completion onto the child's bus topics. The agent_id is the child session
 /// id; other LiveEvent variants are ignored — the bridge carries turn-level
-/// progress + completion, not token deltas.
+/// progress + completion, not token deltas. Each event fans out to the
+/// per-child channel (for a targeted watcher that learned the id from
+/// Spawned) and the global channel (for a watcher subscribed at startup, so
+/// the one-shot terminal event cannot be lost to a subscribe-after-publish
+/// race).
 pub fn bus_live_sink(bus: Arc<AgentBus>, agent_id: String) -> LiveSink {
     Arc::new(move |ev: &LiveEvent| match ev {
         LiveEvent::TurnBoundary {
@@ -33,24 +40,26 @@ pub fn bus_live_sink(bus: Arc<AgentBus>, agent_id: String) -> LiveSink {
             cumulative_tokens,
             tool_uses,
             last_activity,
-        } => bus.publish(
-            &progress_topic(&agent_id),
-            BusMessage::Progress {
+        } => {
+            let msg = BusMessage::Progress {
                 agent_id: agent_id.clone(),
                 turn: *turn,
                 tokens: *cumulative_tokens,
                 tool_uses: *tool_uses,
                 last_activity: last_activity.clone(),
-            },
-        ),
-        LiveEvent::RunCompleted { status, summary } => bus.publish(
-            &completed_topic(&agent_id),
-            BusMessage::Completed {
+            };
+            bus.publish(&progress_topic(&agent_id), msg.clone());
+            bus.publish(global_progress_topic(), msg);
+        }
+        LiveEvent::RunCompleted { status, summary } => {
+            let msg = BusMessage::Completed {
                 agent_id: agent_id.clone(),
                 status: child_status_of(status),
                 summary: summary.clone(),
-            },
-        ),
+            };
+            bus.publish(&completed_topic(&agent_id), msg.clone());
+            bus.publish(global_completed_topic(), msg);
+        }
         _ => {}
     })
 }
@@ -59,7 +68,6 @@ pub fn bus_live_sink(bus: Arc<AgentBus>, agent_id: String) -> LiveSink {
 mod tests {
     use super::*;
     use houyicoder_async::bus::MessageBus;
-
     /// A TurnBoundary published through the sink lands on the child's progress
     /// topic with every field intact — the causal path the acceptance pins:
     /// publish → receive.
@@ -196,6 +204,55 @@ mod tests {
         match rx.try_recv().expect("completion received") {
             BusMessage::Completed { status, .. } => {
                 assert_eq!(status, ChildStatus::TurnLimit);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// The sink fans Progress + Completed out to the global topics, not only
+    /// the per-child channel. A watcher subscribed to the global completion
+    /// topic before the child spawned must receive the terminal event — the
+    /// subscribe-before-publish guarantee that fixes the per-child
+    /// subscribe-after-publish race (a child completing before the per-child
+    /// subscribe landed would lose the one-shot Completed entirely).
+    #[test]
+    fn test_sink_fans_out_global() {
+        let bus = Arc::new(AgentBus::new());
+        let mut global_progress = bus.subscribe(global_progress_topic());
+        let mut global_completed = bus.subscribe(global_completed_topic());
+        let sink = bus_live_sink(Arc::clone(&bus), "child-7".into());
+        sink(&LiveEvent::TurnBoundary {
+            turn: 2,
+            cumulative_tokens: 300,
+            tool_uses: 1,
+            last_activity: Some("read".into()),
+        });
+        sink(&LiveEvent::RunCompleted {
+            status: "completed".into(),
+            summary: "done".into(),
+        });
+        match global_progress
+            .try_recv()
+            .expect("progress on the global topic")
+        {
+            BusMessage::Progress { agent_id, turn, .. } => {
+                assert_eq!(agent_id, "child-7");
+                assert_eq!(turn, 2);
+            }
+            other => panic!("expected Progress, got {other:?}"),
+        }
+        match global_completed
+            .try_recv()
+            .expect("completion on the global topic")
+        {
+            BusMessage::Completed {
+                agent_id,
+                status,
+                summary,
+            } => {
+                assert_eq!(agent_id, "child-7");
+                assert_eq!(status, ChildStatus::Completed);
+                assert_eq!(summary, "done");
             }
             other => panic!("expected Completed, got {other:?}"),
         }

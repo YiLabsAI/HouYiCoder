@@ -96,6 +96,7 @@ mod tests {
                 turn: 0,
                 order: 0,
                 topic: String::new(),
+                summary: String::new(),
             }),
             "notify"
         );

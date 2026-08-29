@@ -1,17 +1,19 @@
-//! Completion notification injector: subscribes to the multi-agent bus and,
+//! Completion notification injector. Subscribes to the global bus topics;
 //! when a detached (async) child completes, enqueues a lower-priority
-//! notification into the parent runner's mid-turn queue so the parent model
-//! learns the child finished on its next turn boundary. Sync children are
-//! skipped (their result returns as the tool result); a duplicate signal for
-//! the same child dedups to one notification via a check-and-set.
+//! notification into the parent runner's mid-turn queue. Sync children are
+//! skipped (their result returns as the tool result).
+//!
+//! Race-free: both subscriptions exist at startup, before any child spawns,
+//! so a per-child subscribe landing after completion cannot miss the
+//! one-shot terminal event. A biased select drains Spawned before Completed.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use houyicoder_async::bus::MessageBus;
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::multi_agent::bus_types::{
-    AgentBus, BusMessage, ChildStatus, completed_topic, spawned_topic,
+    AgentBus, BusMessage, ChildStatus, global_completed_topic, spawned_topic,
 };
 
 /// Lowercase label for a child's terminal status, mirrored from the fleet
@@ -42,86 +44,64 @@ fn notification_text(
     )
 }
 
-/// Spawn the injector. Subscribes to the spawned topic; per detached child,
-/// subscribes to that child's completed topic. On Completed, a check-and-set
-/// on the shared notified set drops a second signal for the same child, and
-/// the notification is enqueued into the parent's lower-priority mid-turn
-/// queue. No-op when the bus is absent.
+/// Spawn the injector. On Spawned with run_in_background, record the child in
+/// a local map; on Completed, if recorded, enqueue the notification and
+/// remove the entry (a duplicate completion dedups to one). No-op when the
+/// bus is absent.
 pub fn spawn(bus: Option<Arc<AgentBus>>, runner: Arc<Runner>, runtime: tokio::runtime::Handle) {
     let Some(bus) = bus else {
         return;
     };
     let mut spawned_rx = bus.subscribe(spawned_topic());
-    let notified: Arc<std::sync::Mutex<HashSet<String>>> =
-        Arc::new(std::sync::Mutex::new(HashSet::new()));
-    let inner_runtime = runtime.clone();
+    let mut completed_rx = bus.subscribe(global_completed_topic());
     runtime.spawn(async move {
+        // agent_id -> subagent_type, async children only. Remove-on-complete
+        // keeps the map bounded to in-flight async children.
+        let mut pending: HashMap<String, String> = HashMap::new();
         loop {
-            // On Lagged (a burst overflowed the broadcast buffer) skip the
-            // missed announcement + keep draining; on Closed (all bus
-            // senders gone) exit so the task does not tight-loop on a dead
-            // receiver. A child whose Spawned was lost to lag is later
-            // covered by its SubagentReturn boundary in the parent log.
-            match spawned_rx.recv().await {
-                Ok(BusMessage::Spawned {
-                    agent_id,
-                    subagent_type,
-                    run_in_background,
-                }) => {
-                    // Sync children return their result as the tool result; a
-                    // notification here would double-tell the parent.
-                    if !run_in_background {
-                        continue;
-                    }
-                    let completed_rx = bus.subscribe(&completed_topic(&agent_id));
-                    inner_runtime.spawn(drain_completion(
+            // Biased: drain Spawned before Completed when both ready. A
+            // child's Spawned is always announced before its Completed, so
+            // the map entry exists by the time the matching Completed lands.
+            tokio::select! {
+                biased;
+                msg = spawned_rx.recv() => match msg {
+                    Ok(BusMessage::Spawned {
                         agent_id,
                         subagent_type,
-                        completed_rx,
-                        Arc::clone(&notified),
-                        Arc::clone(&runner),
-                    ));
-                }
-                Ok(_) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        run_in_background,
+                    }) => {
+                        if run_in_background {
+                            pending.insert(agent_id, subagent_type);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                msg = completed_rx.recv() => match msg {
+                    Ok(BusMessage::Completed {
+                        agent_id,
+                        status,
+                        summary,
+                    }) => {
+                        // A missing entry is a sync child or a Spawned lost
+                        // to broadcast lag. The lag case: SubagentReturn is
+                        // in the parent log (replay/audit honest) but does
+                        // not project into model input — the model misses
+                        // this child's result this turn. Bounded by the cap.
+                        if let Some(subagent_type) = pending.remove(&agent_id) {
+                            let text =
+                                notification_text(&subagent_type, &agent_id, &status, &summary);
+                            runner.enqueue_notification(agent_id, text);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
             }
         }
     });
-}
-
-/// Drain one child's completed topic. On the first Completed, check-and-set
-/// the shared notified set + enqueue if this is the first signal for the
-/// child, then return (the child is terminal).
-async fn drain_completion(
-    child_id: String,
-    subagent_type: String,
-    mut completed_rx: tokio::sync::broadcast::Receiver<BusMessage>,
-    notified: Arc<std::sync::Mutex<HashSet<String>>>,
-    runner: Arc<Runner>,
-) {
-    while let Ok(msg) = completed_rx.recv().await {
-        if let BusMessage::Completed {
-            status, summary, ..
-        } = msg
-        {
-            // Check-and-set: a duplicate Spawned race or a double-publish
-            // lands a second signal; the first insert wins, the second drops.
-            let fresh = notified
-                .lock()
-                .expect("notified set lock")
-                .insert(child_id.clone());
-            if fresh {
-                runner.enqueue_notification(notification_text(
-                    &subagent_type,
-                    &child_id,
-                    &status,
-                    &summary,
-                ));
-            }
-            return;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -167,17 +147,19 @@ mod tests {
                 run_in_background: true,
             },
         );
-        // Let the dispatch task subscribe before publishing completed.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // No sleep: the global completion subscription exists at startup, so
+        // publishing Completed immediately cannot lose it to a per-child
+        // subscribe race. A yield lets the drain task process both messages.
+        tokio::task::yield_now().await;
         bus.publish(
-            &completed_topic("c1"),
+            global_completed_topic(),
             BusMessage::Completed {
                 agent_id: "c1".into(),
                 status: ChildStatus::Completed,
                 summary: "found auth".into(),
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         let snap = runner.queued_notifications_snapshot();
         assert_eq!(snap.len(), 1, "one notification for one completion");
         assert!(snap[0].contains("explore"), "carries the subagent type");
@@ -185,7 +167,8 @@ mod tests {
     }
 
     /// A sync child is skipped: its result returns as the tool result, so no
-    /// notification is enqueued.
+    /// notification is enqueued even though its completion lands on the global
+    /// topic alongside async children.
     #[tokio::test]
     async fn test_sync_completion_skipped() {
         let bus = Arc::new(AgentBus::new());
@@ -203,24 +186,25 @@ mod tests {
                 run_in_background: false,
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         bus.publish(
-            &completed_topic("c2"),
+            global_completed_topic(),
             BusMessage::Completed {
                 agent_id: "c2".into(),
                 status: ChildStatus::Completed,
                 summary: "done".into(),
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         assert!(
             runner.queued_notifications_snapshot().is_empty(),
             "sync children do not enqueue a notification"
         );
     }
 
-    /// A duplicate signal for the same child (double Spawned race) dedups to
-    /// one notification via the check-and-set.
+    /// A duplicate Spawned for the same child cannot produce two
+    /// notifications: the map holds the latest entry by key, and a single
+    /// remove-on-complete yields one notification.
     #[tokio::test]
     async fn test_duplicate_signal_dedups() {
         let bus = Arc::new(AgentBus::new());
@@ -246,16 +230,16 @@ mod tests {
                 run_in_background: true,
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         bus.publish(
-            &completed_topic("c3"),
+            global_completed_topic(),
             BusMessage::Completed {
                 agent_id: "c3".into(),
                 status: ChildStatus::Completed,
                 summary: "done".into(),
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         assert_eq!(
             runner.queued_notifications_snapshot().len(),
             1,
@@ -283,16 +267,16 @@ mod tests {
                 run_in_background: true,
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         bus.publish(
-            &completed_topic("c4"),
+            global_completed_topic(),
             BusMessage::Completed {
                 agent_id: "c4".into(),
                 status: ChildStatus::Failed,
                 summary: "provider fatal".into(),
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         let snap = runner.queued_notifications_snapshot();
         assert_eq!(snap.len(), 1, "a failed child still notifies the parent");
         assert!(snap[0].contains("failed"), "carries the failed status");
@@ -300,8 +284,8 @@ mod tests {
     }
 
     /// Multiple async children completing near-simultaneously each enqueue a
-    /// distinct notification (no cross-child dedup): the check-and-set is
-    /// keyed by child id, so three children produce three notifications.
+    /// distinct notification (no cross-child dedup): the map is keyed by
+    /// child id, so three children produce three notifications.
     #[tokio::test]
     async fn test_multi_child_concurrent_enqueues() {
         let bus = Arc::new(AgentBus::new());
@@ -321,10 +305,10 @@ mod tests {
                 },
             );
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         for (id, summary) in [("c5", "found a"), ("c6", "found b"), ("c7", "found c")] {
             bus.publish(
-                &completed_topic(id),
+                global_completed_topic(),
                 BusMessage::Completed {
                     agent_id: id.into(),
                     status: ChildStatus::Completed,
@@ -332,20 +316,18 @@ mod tests {
                 },
             );
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         let snap = runner.queued_notifications_snapshot();
         assert_eq!(snap.len(), 3, "three children produce three notifications");
-        // Each notification carries its own child's summary (no cross-child
-        // bleed). Distinct summaries land in the queue.
         let joined = snap.join(";");
         assert!(joined.contains("found a"), "c5 summary lands");
         assert!(joined.contains("found b"), "c6 summary lands");
         assert!(joined.contains("found c"), "c7 summary lands");
     }
 
-    /// An empty summary does not crash or drop the notification — the
-    /// parent still learns the child finished (type + status), just
-    /// without a result line. Edge boundary for the summary field.
+    /// An empty summary does not crash or drop the notification — the parent
+    /// still learns the child finished (type + status), just without a result
+    /// line. Edge boundary for the summary field.
     #[tokio::test]
     async fn test_empty_summary_still_enqueues() {
         let bus = Arc::new(AgentBus::new());
@@ -363,16 +345,16 @@ mod tests {
                 run_in_background: true,
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         bus.publish(
-            &completed_topic("c8"),
+            global_completed_topic(),
             BusMessage::Completed {
                 agent_id: "c8".into(),
                 status: ChildStatus::Completed,
                 summary: String::new(),
             },
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
         let snap = runner.queued_notifications_snapshot();
         assert_eq!(
             snap.len(),
@@ -382,6 +364,77 @@ mod tests {
         assert!(
             snap[0].contains("explore"),
             "carries the subagent type even with no summary"
+        );
+    }
+
+    /// Race boundary: Spawned + Completed published back-to-back with no
+    /// yield between them must still deliver the notification. This was the
+    /// original subscribe-after-publish failure (a per-child subscribe landing
+    /// after completion lost the one-shot terminal event). The global
+    /// subscribe-before-publish guarantee + biased select make the loss
+    /// structurally impossible.
+    #[tokio::test]
+    async fn test_back_to_back_deliver() {
+        let bus = Arc::new(AgentBus::new());
+        let runner = bare_runner();
+        spawn(
+            Some(bus.clone()),
+            Arc::clone(&runner),
+            tokio::runtime::Handle::current(),
+        );
+        bus.publish(
+            spawned_topic(),
+            BusMessage::Spawned {
+                agent_id: "c9".into(),
+                subagent_type: "explore".into(),
+                run_in_background: true,
+            },
+        );
+        bus.publish(
+            global_completed_topic(),
+            BusMessage::Completed {
+                agent_id: "c9".into(),
+                status: ChildStatus::Completed,
+                summary: "race".into(),
+            },
+        );
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        let snap = runner.queued_notifications_snapshot();
+        assert_eq!(
+            snap.len(),
+            1,
+            "back-to-back spawn + completion must not lose the notification"
+        );
+        assert!(snap[0].contains("race"), "carries the summary");
+    }
+
+    /// A completion for a child whose Spawned was never published (or was lost
+    /// to broadcast lag) does not enqueue a notification and does not panic.
+    /// The parent still learns of the result via the SubagentReturn boundary
+    /// in its own log. Pins the missing-entry path as a clean skip.
+    #[tokio::test]
+    async fn test_completion_without_spawn_skips() {
+        let bus = Arc::new(AgentBus::new());
+        let runner = bare_runner();
+        spawn(
+            Some(bus.clone()),
+            Arc::clone(&runner),
+            tokio::runtime::Handle::current(),
+        );
+        tokio::task::yield_now().await;
+        bus.publish(
+            global_completed_topic(),
+            BusMessage::Completed {
+                agent_id: "orphan".into(),
+                status: ChildStatus::Completed,
+                summary: "no spawn seen".into(),
+            },
+        );
+        tokio::task::yield_now().await;
+        assert!(
+            runner.queued_notifications_snapshot().is_empty(),
+            "an unknown child completion is skipped, not notified"
         );
     }
 }

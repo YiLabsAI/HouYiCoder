@@ -56,7 +56,9 @@ impl ConcurrencyGate {
 
     /// Acquire a running slot. Fast path: a slot is free, returns Acquired.
     /// Slow path: slots full but the queue has room, blocks until a slot
-    /// frees. Reject path: queue saturated, returns Rejected.
+    /// frees. Reject path: queue saturated, returns Rejected. The sync spawn
+    /// path uses this (interactive, blocking — a queued spawn waits for a
+    /// slot rather than refusing the user's request).
     pub async fn acquire(&self) -> AcquireResult {
         if let Ok(permit) = self.running.clone().try_acquire_owned() {
             return AcquireResult::Acquired(permit);
@@ -83,6 +85,20 @@ impl ConcurrencyGate {
                 self.queued.fetch_sub(1, Ordering::Relaxed);
                 AcquireResult::Rejected
             }
+        }
+    }
+
+    /// Non-blocking acquire: take a free slot if one is open, else Reject
+    /// immediately — no queue, no wait. The async spawn path uses this so a
+    /// background spawn never blocks the parent turn: a spawn that finds the
+    /// cap full rejects with ConcurrencySaturated and the model re-queues
+    /// next turn, rather than freezing the parent until a child completes.
+    /// The queue is sync-path only (interactive spawns wait; background
+    /// spawns refuse and retry).
+    pub fn try_acquire(&self) -> AcquireResult {
+        match self.running.clone().try_acquire_owned() {
+            Ok(permit) => AcquireResult::Acquired(permit),
+            Err(_) => AcquireResult::Rejected,
         }
     }
 
@@ -206,5 +222,24 @@ mod tests {
             "with no queue, overflow rejects immediately"
         );
         drop(p1);
+    }
+
+    /// try_acquire is non-blocking + never queues: under cap it Acquired, at
+    /// cap Rejected with no queue growth. Pins the async-spawn contract (a
+    /// background spawn must not freeze the parent turn waiting for a slot).
+    #[test]
+    fn test_try_acquire_rejects() {
+        let gate = ConcurrencyGate::new(1, 5);
+        let _p1 = gate.try_acquire();
+        assert_eq!(gate.queued_count(), 0, "try_acquire does not queue");
+        assert!(
+            matches!(gate.try_acquire(), AcquireResult::Rejected),
+            "at cap, try_acquire rejects immediately without waiting"
+        );
+        assert_eq!(
+            gate.queued_count(),
+            0,
+            "rejected try_acquire leaves no queue"
+        );
     }
 }

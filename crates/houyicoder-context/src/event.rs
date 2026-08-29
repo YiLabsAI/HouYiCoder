@@ -437,15 +437,21 @@ pub enum TurnEventKind {
         reasoning_tokens: u64,
     },
     /// A sub-agent notification injected into the parent's context at a turn
-    /// boundary. turn + order pin the injection point so a replay restores
-    /// the exact order (the parent model saw the child's result here, not
-    /// later) -- the replay-critical field the bare event log would lose.
+    /// boundary. child_session_id pins which child finished; summary is the
+    /// text the parent model reads (subagent type + terminal status + the
+    /// child's own result line) so the parent can act on the result without
+    /// re-reading the child transcript. turn + order are best-effort anchors
+    /// for replay ordering; the event-log order is authoritative (as with
+    /// SubagentReturn), so a zero is acceptable when the caller lacks the
+    /// counters.
     #[serde(rename = "NotificationInjected")]
     NotificationInjected {
         child_session_id: String,
         turn: u32,
         order: u32,
         topic: String,
+        #[serde(default)]
+        summary: String,
     },
     /// An event kind this build does not know (written by a newer version).
     /// Lets an old binary read a newer log instead of failing the whole

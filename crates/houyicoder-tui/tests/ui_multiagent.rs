@@ -30,14 +30,12 @@ fn test_multi_sync_delegation() {
     );
     s.send_str("find the auth module");
     s.send_str("\r");
+    // Wait for the fold-group expand hint, which only renders once the child
+    // completes — NOT "explore"/"explore:", which the footer pill renders at
+    // spawn ("explore: thinking") and would match prematurely.
     assert!(
-        s.wait_for_plain("explore", RENDER_TIMEOUT * 2),
+        s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2),
         "Subagent fold-group should appear after delegation:\n{}",
-        s.output()
-    );
-    assert!(
-        s.output_plain().contains("ctrl+o"),
-        "expand hint should render:\n{}",
         s.output()
     );
     // Enter opens the teammate view on the last Subagent.
@@ -82,8 +80,10 @@ fn test_multi_expand_teammate() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
+    // Wait for the fold-group hint, not "explore" (the footer pill renders
+    // "explore: ..." at spawn + would match before the child completes).
     assert!(
-        s.wait_for_plain("explore", RENDER_TIMEOUT * 2),
+        s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2),
         "Subagent fold should appear"
     );
     s.send_key(&Key::Ctrl('o'));
@@ -127,11 +127,13 @@ fn test_multi_large_child_summary() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    // The fold-group summary line appears after the child completes.
-    // "explore:" is the fold-group label (distinct from the chip's
-    // "Agent(→ explore)"). agentId survived field-level externalization.
+    // The fold-group summary line appears after the child completes. Wait
+    // for the child's content text, not "explore:" — the footer pill renders
+    // "explore: thinking" at spawn + would match before completion. The
+    // summary one-liner carries the first ~80 chars of the child text, so
+    // "First sentence" only lands once the child's result is projected.
     assert!(
-        s.wait_for_plain("explore:", RENDER_TIMEOUT * 5),
+        s.wait_for_plain("First sentence", RENDER_TIMEOUT * 5),
         "Subagent fold-group renders with large child summary:\n{}",
         s.output()
     );

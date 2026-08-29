@@ -441,7 +441,7 @@ impl Tool for EnqueueBothTool {
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
             r.enqueue_input(self.user_msg.clone());
-            r.enqueue_notification(self.notification.clone());
+            r.enqueue_notification("test-child".into(), self.notification.clone());
         }
         Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
     }
@@ -475,7 +475,7 @@ impl Tool for EnqueueNotificationTool {
         _input: serde_json::Value,
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
-            r.enqueue_notification(self.notification.clone());
+            r.enqueue_notification("test-child".into(), self.notification.clone());
         }
         Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
     }
