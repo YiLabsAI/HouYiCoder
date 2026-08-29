@@ -298,6 +298,24 @@ fn test_artifact_page_down_moves() {
 }
 
 #[test]
+fn test_artifact_page_up_moves() {
+    // PageUp in the artifact pane pages the line cursor instead of entering
+    // transcript scroll, so a long document stays navigable in place.
+    let mut app = working_app();
+    app.pane = Pane::Artifact;
+    app.input.clear();
+    // Move down first so a PageUp has somewhere to go.
+    handle_working(&mut app, key(KeyCode::PageDown));
+    let after_down = app.artifact.focus();
+    handle_working(&mut app, key(KeyCode::PageUp));
+    assert_ne!(
+        app.artifact.focus(),
+        after_down,
+        "page up must move the cursor back, not no-op"
+    );
+}
+
+#[test]
 fn test_artifact_esc_exits() {
     // Esc with empty input in Normal mode exits the artifact pane back to the
     // main transcript view.

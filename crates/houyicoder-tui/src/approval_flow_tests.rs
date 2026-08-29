@@ -219,6 +219,41 @@ fn test_approval_enter_approve_current() {
     assert!(app.approval.is_none(), "approval cleared after approve");
 }
 
+/// The a/1 and r/3 keys pin the approval selection without resolving it: a
+/// selects Yes, r selects No when remember is shown. The card stays open so
+/// the user can confirm with Enter or change again. Covers the selection arms
+/// the Enter/Esc tests do not reach (they resolve immediately).
+#[test]
+fn test_approval_char_keys_select() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    fn key(c: KeyCode) -> KeyEvent {
+        KeyEvent::new(c, KeyModifiers::NONE)
+    }
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    let mk = || crate::state::Approval {
+        tool: "bash".to_string(),
+        args: "".to_string(),
+        reason: "".to_string(),
+        selected: 2,
+        call_id: "c1".to_string(),
+        options: Vec::new(),
+        ..Default::default()
+    };
+    // 'a' (or '1') pins Yes.
+    app.approval = Some(mk());
+    crate::keys::handle_working(&mut app, key(KeyCode::Char('a')));
+    assert_eq!(app.approval.as_ref().unwrap().selected, 0, "a pins Yes");
+    assert!(app.approval.is_some(), "card stays open after a");
+
+    // 'r' (or '3') pins No when remember is shown (default approval, not a
+    // protected path, so the arm fires).
+    app.approval = Some(mk());
+    crate::keys::handle_working(&mut app, key(KeyCode::Char('r')));
+    assert_eq!(app.approval.as_ref().unwrap().selected, 1, "r pins No");
+    assert!(app.approval.is_some(), "card stays open after r");
+}
+
 #[test]
 fn test_approval_pretext_survives_rebuild() {
     // When the agent produces text followed by a guarded tool call, the

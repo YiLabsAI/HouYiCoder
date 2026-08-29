@@ -1,3 +1,6 @@
+use super::approval::handle_approval;
+use super::input::{cycle_pane, handle_input};
+use super::palette::handle_palette;
 use super::*;
 use crate::composition;
 use crate::state::Screen;
@@ -380,6 +383,24 @@ fn test_diff_reject_key_sets() {
     app.input.clear();
     handle_working(&mut app, key(KeyCode::Char('r')));
     assert_eq!(app.diff.current().unwrap().approved, Verdict::Rejected);
+}
+
+/// The 'i' key on the Review pane in Verify stage routes to rework_in_pane.
+/// 'r' is caught first by the reject arm (both rejectable and reworkable hold
+/// on Review+Verify), so 'i' is the unique path to the rework arm. With no
+/// finding under the cursor, rework is a no-op (no panic); the arm still fires.
+#[test]
+fn test_review_rework_key_routes() {
+    let mut app = working_app();
+    app.pane = Pane::Review;
+    app.stage = Stage::Verify;
+    app.input.clear();
+    handle_working(&mut app, key(KeyCode::Char('i')));
+    assert_eq!(app.pane, Pane::Review, "no finding -> rework is a no-op");
+    assert!(
+        app.input.is_empty(),
+        "i consumed by the rework arm, not pushed to the input box"
+    );
 }
 
 #[test]

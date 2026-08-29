@@ -118,3 +118,75 @@ fn test_hooks_pane_list_detail() {
         "detail shows the settings.json hint: {detail}"
     );
 }
+
+/// /hooks pane navigation keys: level-0 Esc exits to the transcript, Up/Down
+/// move the cursor, Enter drills into the detail level. These arms had no
+/// unit coverage before (only the PTY layer exercised them).
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+fn hkey(c: KeyCode) -> KeyEvent {
+    KeyEvent::new(c, KeyModifiers::NONE)
+}
+
+#[test]
+fn test_hooks_esc_to_list() {
+    let mut app = working();
+    app.pane = crate::state::Pane::Hooks;
+    app.hooks_level.set(1);
+    crate::keys::handle_working(&mut app, hkey(KeyCode::Esc));
+    assert_eq!(
+        app.hooks_level.get(),
+        0,
+        "Esc at level 1 returns to the list"
+    );
+    assert_eq!(
+        app.pane,
+        crate::state::Pane::Hooks,
+        "stays in the hooks pane"
+    );
+}
+
+#[test]
+fn test_hooks_esc_exits() {
+    let mut app = working();
+    app.pane = crate::state::Pane::Hooks;
+    app.hooks_level.set(0);
+    crate::keys::handle_working(&mut app, hkey(KeyCode::Esc));
+    assert_eq!(
+        app.pane,
+        crate::state::Pane::Transcript,
+        "Esc at level 0 exits"
+    );
+}
+
+#[test]
+fn test_hooks_up_moves() {
+    let mut app = working();
+    app.pane = crate::state::Pane::Hooks;
+    app.hooks_level.set(0);
+    app.hooks_sel.set(2);
+    crate::keys::handle_working(&mut app, hkey(KeyCode::Up));
+    assert_eq!(app.hooks_sel.get(), 1, "Up moves the cursor back");
+}
+
+#[test]
+fn test_hooks_down_clamps() {
+    let mut app = working();
+    app.pane = crate::state::Pane::Hooks;
+    app.hooks_level.set(0);
+    app.hooks_sel.set(0);
+    crate::keys::handle_working(&mut app, hkey(KeyCode::Down));
+    assert_eq!(app.hooks_sel.get(), 0, "Down clamps at 0 with no entries");
+}
+
+#[test]
+fn test_hooks_enter_detail() {
+    let mut app = working();
+    app.pane = crate::state::Pane::Hooks;
+    app.hooks_level.set(0);
+    crate::keys::handle_working(&mut app, hkey(KeyCode::Enter));
+    assert_eq!(
+        app.hooks_level.get(),
+        1,
+        "Enter drills into the detail level"
+    );
+}
