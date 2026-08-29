@@ -308,17 +308,20 @@ pub(crate) fn wire_mode_to_engine(
 /// Apply a Yes-don't-ask consent rule at the service boundary when the human
 /// approves a tool call with scope "always". For bash-family tools the rule is
 /// scoped to a command prefix (refusing compound/destructive commands → None,
-/// so the call is approved this once only); for other tools a content-less
-/// tool rule. The server owns the approval (tool name + input Value), so the
-/// prefix is computed here from the same data the engine raised the
-/// interruption with — the frontend never imports the permission crate's
-/// prefix-scoping helpers. Mirrors the frontend's former always_allow_rule,
-/// moved server-side so the tui->permission dep closes.
+/// so the call is approved this once only); for the skill tool the rule is
+/// scoped to the specific skill name and lands at Local scope (machine-local,
+/// not repo-shared) so one approval cannot pre-authorize every future skill
+/// invocation for every collaborator; for other tools a content-less tool rule.
+/// The server owns the approval (tool name + input Value), so the prefix is
+/// computed here from the same data the engine raised the interruption with —
+/// the frontend never imports the permission crate's prefix-scoping helpers.
+/// Mirrors the frontend's former always_allow_rule, moved server-side so the
+/// tui->permission dep closes.
 pub(crate) fn consent_rule_for(
     tool_name: &str,
     input: &serde_json::Value,
 ) -> Option<houyicoder_permission::Rule> {
-    use houyicoder_permission::{Effect, Rule, RuleContent};
+    use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
     let is_bash = matches!(
         tool_name.to_ascii_lowercase().as_str(),
         "bash" | "sh" | "exec" | "shell"
@@ -326,11 +329,22 @@ pub(crate) fn consent_rule_for(
     if is_bash {
         let command = houyicoder_permission::input_content(tool_name, Some(input));
         let prefix = houyicoder_permission::bash_always_allow_prefix(&command)?;
-        Rule::with_content(tool_name, RuleContent::Prefix(prefix), Effect::Allow)
+        Rule::with_content(tool_name, RuleContent::Prefix(prefix), Effect::Allow).ok()
+    } else if tool_name.eq_ignore_ascii_case("skill") {
+        // Scope to the specific skill name, not a blanket tool-level rule, and
+        // land at Local (machine-local) so a skill approval never travels
+        // with the repo. A missing skill name installs nothing durable.
+        let skill = input.get("skill").and_then(|v| v.as_str())?;
+        Rule::with_content(
+            tool_name,
+            RuleContent::Exact(skill.to_string()),
+            Effect::Allow,
+        )
+        .ok()
+        .map(|r| r.with_scope(Scope::Local))
     } else {
-        Rule::new(tool_name, Effect::Allow)
+        Rule::new(tool_name, Effect::Allow).ok()
     }
-    .ok()
 }
 
 /// Project a wire rule back to the engine form at the service boundary so

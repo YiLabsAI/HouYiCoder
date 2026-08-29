@@ -300,6 +300,9 @@ pub fn input_content(tool_name: &str, input: Option<&serde_json::Value>) -> Stri
         "bash" | "sh" | "exec" | "shell" => "command",
         "write" | "edit" | "multiedit" | "patch" | "str_replace" => "path",
         "webfetch" | "netfetch" | "fetch" | "curl" | "wget" => "url",
+        // The skill tool's identity is the skill name; rules + consent match
+        // per-skill, so the content string is the name, not the full input.
+        "skill" => "skill",
         _ => return v.to_string(),
     };
     v.get(key)
@@ -534,6 +537,15 @@ mod tests {
     fn test_input_content_extracts_url() {
         let v = serde_json::json!({"url": "https://example.com"});
         assert_eq!(input_content("webfetch", Some(&v)), "https://example.com");
+    }
+
+    #[test]
+    fn test_input_content_extracts_skill() {
+        let v = serde_json::json!({"skill": "deploy"});
+        assert_eq!(input_content("skill", Some(&v)), "deploy");
+        // A missing skill key yields empty, so a content rule never matches.
+        let v2 = serde_json::json!({"args": "x"});
+        assert_eq!(input_content("skill", Some(&v2)), "");
     }
 
     #[test]

@@ -295,3 +295,82 @@ fn test_project_trajectory_carries_duration() {
     let entries2 = super::project_trajectory(std::slice::from_ref(&user));
     assert_eq!(entries2[0].duration_ms, None);
 }
+
+/// A skill-tool always-allow scopes to the specific skill name + lands at
+/// Local (machine-local), not a blanket repo-shared tool-level rule. One
+/// approval cannot pre-authorize every future skill invocation for
+/// collaborators, and a different skill re-asks.
+#[test]
+fn test_skill_consent_name_local() {
+    use houyicoder_permission::{Effect, RuleContent, Scope};
+    let rule = super::consent_rule_for("skill", &serde_json::json!({"skill": "deploy"}))
+        .expect("skill rule");
+    assert_eq!(rule.action, "skill");
+    assert_eq!(rule.effect, Effect::Allow);
+    assert_eq!(
+        rule.scope,
+        Scope::Local,
+        "lands machine-local, not repo-shared"
+    );
+    match &rule.content {
+        Some(RuleContent::Exact(s)) => assert_eq!(s, "deploy", "scoped to the specific skill name"),
+        _ => panic!("expected Exact(deploy), not a blanket tool rule"),
+    }
+
+    // A different skill name produces a different Exact rule (per-skill).
+    let rule2 =
+        super::consent_rule_for("skill", &serde_json::json!({"skill": "lint"})).expect("lint rule");
+    match &rule2.content {
+        Some(RuleContent::Exact(s)) => assert_eq!(s, "lint"),
+        _ => panic!("expected Exact(lint)"),
+    }
+
+    // A missing skill name installs nothing durable (approved once only).
+    assert!(
+        super::consent_rule_for("skill", &serde_json::json!({})).is_none(),
+        "missing skill name: no durable rule"
+    );
+}
+
+/// The per-skill consent rule, once installed in the gate, matches ONLY the
+/// approved skill and not a different one. This is the landmine-defusal pin:
+/// if the skill tool ever joins the gate ladder, a persisted rule grants only
+/// the skill the user actually approved, not every future skill invocation.
+#[test]
+fn test_skill_rule_scoped() {
+    use houyicoder_permission::{DefaultModeGate, ModeGate, Outcome, ToolRequest};
+    let gate = DefaultModeGate::new();
+    let rule =
+        super::consent_rule_for("skill", &serde_json::json!({"skill": "deploy"})).expect("rule");
+    gate.add_rule(rule);
+
+    // Same skill: the rule matches at RuleAllow -> Allow.
+    let deploy = serde_json::json!({"skill": "deploy"});
+    let req = ToolRequest {
+        tool_name: "skill",
+        input: Some(&deploy),
+        is_destructive: false,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    assert_eq!(
+        gate.decide(&req).outcome(),
+        Outcome::Allow,
+        "same skill: the per-skill rule matches"
+    );
+
+    // Different skill: no match -> re-asks (not Allow).
+    let lint = serde_json::json!({"skill": "lint"});
+    let req2 = ToolRequest {
+        tool_name: "skill",
+        input: Some(&lint),
+        is_destructive: false,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    assert_ne!(
+        gate.decide(&req2).outcome(),
+        Outcome::Allow,
+        "different skill: the per-skill rule does not blanket-match"
+    );
+}
