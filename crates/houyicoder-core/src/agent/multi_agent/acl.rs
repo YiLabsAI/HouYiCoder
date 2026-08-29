@@ -1,16 +1,10 @@
-//! Bus ACL: deny-by-default subscription control.
-//!
-//! The bus transport is dumb (it carries any message to any
-//! subscriber). The ACL layer sits on top to enforce who can
-//! subscribe to whose topics. The default is deny: a child agent
-//! cannot subscribe to another child's inbox or progress channel
-//! unless the policy explicitly allows it.
-//!
-//! Topic policy:
-//! - progress: subscribers = parent + orchestrator only
-//! - completed: subscribers = parent + orchestrator only
-//! - inbox: publishers = parent + orchestrator only (a child cannot
-//!   publish into another child's inbox)
+//! Bus ACL: deny-by-default subscription control. The bus transport is
+//! dumb (carries any message to any subscriber); this layer enforces who
+//! can subscribe to whose topics (progress/completed: parent only; inbox:
+//! publishers = parent only, so a child cannot spoof another's inbox).
+//! Status: implemented + unit-tested but not yet wired into the bus — the
+//! transport does not consult these policies, so deny-by-default is not
+//! enforced end-to-end. Defer to a wiring task.
 
 use std::collections::HashSet;
 

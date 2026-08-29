@@ -1,12 +1,11 @@
 //! Capability token: the effective permission mode a child agent runs
-//! with, computed as the intersection of the parent's mode and the
-//! agent definition's declared mode.
+//! with, computed as parent ∩ declared (monotonic narrowing — a child
+//! never holds a capability the parent does not; an over-asking
+//! definition is downgraded, not rejected).
 //!
-//! The invariant: child capability = parent ∩ declared. This is a
-//! monotonic narrowing — a child can never hold a capability the
-//! parent does not. An agent definition that asks for a mode the
-//! parent lacks is downgraded to the parent's mode, never rejected
-//! (the agent still runs, just with less autonomy than it asked for).
+//! Status: the narrowing logic is implemented + unit-tested but not yet
+//! wired into the spawn path — neither spawn path calls effective, so
+//! the property is not enforced end-to-end. Defer to a wiring task.
 
 use houyicoder_protocol::frontend::permission::PermissionMode;
 
