@@ -88,8 +88,12 @@ pub fn run_with_runner(
         // Retire completed footer rows whose grace window elapsed. Runs
         // every poll regardless of agent-busy: a child completes on its own
         // timeline, and the footer should drop its terse done row five
-        // seconds later whether the parent is still running or idle.
-        if app.fleet.retire_completed() {
+        // seconds later whether the parent is still running or idle. The
+        // child the user is drilled into (teammate view) is pinned — its
+        // row stays past the grace window so the footer does not drop the
+        // child the user is reading; it retires once the user exits.
+        let retain_viewed = app.teammate_view.as_ref().map(|v| v.child_sid.as_str());
+        if app.fleet.retire_completed(retain_viewed) {
             dirty = true;
         }
         if dirty || app.agent_busy {

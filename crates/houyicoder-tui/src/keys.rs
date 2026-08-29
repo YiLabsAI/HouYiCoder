@@ -96,11 +96,11 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         handle_palette(app, k);
         return;
     }
-    // Esc while viewing a teammate transcript exits to the parent. Sync
-    // spawn children are always completed, so Esc always exits. A non-empty
-    // input clears first via the generic arm below.
+    // Esc while viewing a teammate: a running child aborts its current
+    // turn (non-terminal); a completed/non-running child exits the view.
+    // Non-empty input clears first via the generic arm below.
     if app.teammate_view.is_some() && k.code == KeyCode::Esc && app.input.is_empty() {
-        app.exit_teammate_view();
+        app.esc_teammate_view_or_abort();
         return;
     }
     // Approval pending: handled inline at the top of handle_input so scroll,

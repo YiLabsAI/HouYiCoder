@@ -10,6 +10,12 @@
 mod common;
 
 use common::{Key, RENDER_TIMEOUT, session_on_working_with_script};
+use std::time::Duration;
+
+/// The grace window after which a completed pill row retires when the user
+/// is not viewing it. Tests wait past this to prove the pin holds + the
+/// post-exit retire fires. Mirrors the FLEET_GRACE constant in agent_message.
+const FLEET_GRACE: Duration = Duration::from_secs(5);
 
 /// PTY real-binary sync delegation full chain. Send a message, the stub
 /// returns an agent-tool call, the sync spawn runs the child, the parent
@@ -130,10 +136,26 @@ fn test_multi_large_child_summary() {
     // The fold-group summary line appears after the child completes. Wait
     // for the child's content text, not "explore:" — the footer pill renders
     // "explore: thinking" at spawn + would match before completion. The
-    // summary one-liner carries the first ~80 chars of the child text, so
-    // "First sentence" only lands once the child's result is projected.
+    // summary one-liner carries the first ~80 chars of the child text. The
+    // check is whitespace-agnostic: under parallel PTY load, ratatui's
+    // cell-diff rendering can collapse the spaces between words, so a
+    // spaced marker flakes; the compacted form is stable.
+    let deadline = std::time::Instant::now() + RENDER_TIMEOUT * 5;
+    let mut ok = false;
+    while std::time::Instant::now() < deadline {
+        let compact: String = s
+            .output_plain()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        if compact.contains("Firstsentenceofthechildanalysis") {
+            ok = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert!(
-        s.wait_for_plain("First sentence", RENDER_TIMEOUT * 5),
+        ok,
         "Subagent fold-group renders with large child summary:\n{}",
         s.output()
     );
@@ -229,6 +251,106 @@ fn test_multi_async_delegation() {
     assert!(
         s.output_plain().contains("completed"),
         "notification carries the terminal status:\n{}",
+        s.output()
+    );
+}
+
+/// Teammate-view pill + stay journey: when the user drills into a
+/// completed child's transcript, the footer pill renders alongside (the
+/// row the user is reading), and the view stays on normal completion — the
+/// user exits with Esc, not an auto-dismiss. The pill-pin past the grace
+/// window (the row does not retire while the child is being viewed) is
+/// pinned at the unit level (test_retire_pins_viewed_child); this journey
+/// covers the end-to-end rendering + the stay-on-complete contract. Slow,
+/// ignored by default.
+#[test]
+#[ignore]
+fn test_teammate_pill_pins_view() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth is in src/auth"}],
+        [{"type":"Text","text":"the auth module is in src/auth"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    // The fold-group hint lands once the child completes — not the running
+    // pill text, which renders at spawn and would match before completion.
+    assert!(
+        s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2),
+        "Subagent fold-group should appear after delegation:\n{}",
+        s.output()
+    );
+    // Enter the teammate view on the just-completed child. The first full
+    // render of the view carries the banner + the pill row (the child's
+    // terse done row), so the token marker is present alongside the banner.
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        "teammate view banner should render:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_plain().contains("tok"),
+        "pill should render alongside the viewed child's transcript:\n{}",
+        s.output()
+    );
+    // The view stays on normal completion — no auto-dismiss fires for a
+    // completed (non-killed, non-failed) child. Wait past the grace window
+    // to prove the stay is not a transient render: the banner is still the
+    // active state (Esc exits, which only happens from inside the view).
+    std::thread::sleep(FLEET_GRACE + Duration::from_secs(2));
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for("let's build", RENDER_TIMEOUT),
+        "Esc should exit the teammate view (the view stayed until Esc, not \
+         auto-dismissed on completion):\n{}",
+        s.output()
+    );
+}
+
+/// A slash typed inside the teammate view routes to the parent command
+/// palette, not the child's inbox: typing "/" while viewing a child opens
+/// the parent slash palette (the command list), proving the slash did not
+/// route as a steering message to the child. Esc closes the palette, then
+/// Esc exits the teammate view. Slow, ignored by default.
+#[test]
+#[ignore]
+fn test_teammate_slash_routes_parent() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth is in src/auth"}],
+        [{"type":"Text","text":"the auth module is in src/auth"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        "teammate view should open:\n{}",
+        s.output()
+    );
+    // Type a slash while viewing the child. The slash opens the parent
+    // command palette — it does not route to the child inbox (which would
+    // silently consume the text with no palette). The palette header is
+    // the proof the slash reached the parent command path.
+    s.send_key(&Key::Char('/'));
+    assert!(
+        s.wait_for_plain("commands", RENDER_TIMEOUT),
+        "slash should open the parent command palette, not route to the \
+         child:\n{}",
+        s.output()
+    );
+    // Esc closes the palette; a second Esc exits the teammate view.
+    s.send_key(&Key::Esc);
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for("let's build", RENDER_TIMEOUT),
+        "Esc should close the palette + exit the teammate view:\n{}",
         s.output()
     );
 }

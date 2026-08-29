@@ -242,6 +242,13 @@ pub struct TeammateView {
     pub color: Option<String>,
     /// The child's projected transcript. Empty until the fetch returns.
     pub transcript: Vec<TranscriptLine>,
+    /// The turn number of the last live re-fetch, so a Progress for a turn
+    /// already fetched does not refire the query. Reset on each enter.
+    pub last_fetched_turn: Option<u32>,
+    /// A steering message echoed optimistically before the child drains it.
+    /// The refetch handler preserves it until the durable User line appears,
+    /// then clears it. None when no echo is pending.
+    pub pending_echo: Option<String>,
 }
 
 /// A tool call's resolved outcome, for chip coloring. Running = no matching

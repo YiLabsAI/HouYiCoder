@@ -210,7 +210,7 @@ mod tests {
             completed: Some("completed".into()),
             completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         });
-        assert!(fleet.retire_completed(), "expired entry retired");
+        assert!(fleet.retire_completed(None), "expired entry retired");
         assert!(fleet.entries.is_empty(), "footer emptied after retire");
     }
 
@@ -233,7 +233,10 @@ mod tests {
             completed: Some("completed".into()),
             completed_at: Some(Instant::now()),
         });
-        assert!(!fleet.retire_completed(), "nothing retired inside grace");
+        assert!(
+            !fleet.retire_completed(None),
+            "nothing retired inside grace"
+        );
         assert_eq!(fleet.entries.len(), 2, "running + recent both kept");
     }
 
@@ -256,7 +259,44 @@ mod tests {
         });
         fleet.entries.push(entry("c2", "plan", 1, 10, "read"));
         fleet.selected = Some(0);
-        assert!(fleet.retire_completed(), "first entry retired");
+        assert!(fleet.retire_completed(None), "first entry retired");
         assert_eq!(fleet.selected, Some(0), "selection clamped to the survivor");
+    }
+
+    /// retain_viewed pins the child the user is drilled into: even past the
+    /// grace window, the viewed child's row stays in the footer so it does
+    /// not vanish while the user reads its transcript. A second completed
+    /// child the user is not viewing still retires on schedule.
+    #[test]
+    fn test_retire_pins_viewed_child() {
+        use crate::agent_message::FleetState;
+        use std::time::{Duration, Instant};
+        let mut fleet = FleetState::default();
+        fleet.entries.push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 3,
+            tokens: 100,
+            tool_uses: 1,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
+        });
+        fleet.entries.push(FleetEntry {
+            agent_id: "c2".into(),
+            subagent_type: "plan".into(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
+        });
+        assert!(
+            fleet.retire_completed(Some("c1")),
+            "non-viewed child retired, viewed kept"
+        );
+        assert_eq!(fleet.entries.len(), 1, "viewed child stays past grace");
+        assert_eq!(fleet.entries[0].agent_id, "c1");
     }
 }

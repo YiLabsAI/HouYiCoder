@@ -81,6 +81,7 @@ impl Runner {
         turn: u32,
         max_turns: u32,
         token: &CancellationToken,
+        turn_token: &CancellationToken,
     ) -> Result<Option<CompletionResponse>, RunError> {
         const MAX_OVERFLOW_RETRIES: u32 = 2;
         const CONVERGE_REMINDER_TURNS: u32 = 5;
@@ -214,6 +215,7 @@ impl Runner {
                         economy_fired_this_turn = true;
                         let progress = tokio::select! {
                             _ = token.cancelled() => return Ok(None),
+                            _ = turn_token.cancelled() => return Ok(None),
                             p = self.compress(session) => p?,
                         };
                         if progress {
@@ -240,6 +242,7 @@ impl Runner {
                         // provider stall here otherwise hangs the run past
                         // the sandbox fence with no Esc path.
                         _ = token.cancelled() => return Ok(None),
+                        _ = turn_token.cancelled() => return Ok(None),
                         p = self.compress(session) => p?,
                     };
                     if !progress {
@@ -326,10 +329,8 @@ impl Runner {
             tracing::debug!("stream opened");
             let first = loop {
                 tokio::select! {
-                    _ = token.cancelled() => {
-                        tracing::debug!("cancelled by esc");
-                        return Ok(None);
-                    }
+                    _ = token.cancelled() => return Ok(None),
+                    _ = turn_token.cancelled() => return Ok(None),
                     _ = tokio::time::sleep(stream_idle_timeout()) => {
                         tracing::debug!(elapsed = ?api_start.elapsed(), "stall retry (no chunk for idle timeout)");
                         if attempts + 1 < max_attempts {
@@ -392,6 +393,7 @@ impl Runner {
                         // provider stall here otherwise hangs the run past
                         // the sandbox fence with no Esc path.
                         _ = token.cancelled() => return Ok(None),
+                        _ = turn_token.cancelled() => return Ok(None),
                         p = self.compress(session) => p?,
                     };
                             if !progress {
@@ -417,11 +419,8 @@ impl Runner {
             };
 
             let mut state = StreamFold::default();
-            // Process events INLINE as they arrive — not buffered. The live sink
-            // must fire during the stream (so the host sees tokens form in real
-            // time) and each delta must hit the durable log as it lands. Buffering
-            // the whole stream first would defeat the streaming UX (the host would
-            // see a spinner for the whole turn, then a burst).
+            // Process events INLINE as they arrive — not buffered — so the
+            // live sink fires during the stream + each delta hits the log.
             if let Some(ev) = first {
                 self.fold_event(ev, &mut state, session, &live).await?;
             }
@@ -432,10 +431,14 @@ impl Runner {
                         self.append_response_events(session, &response).await?;
                         return Ok(None);
                     }
+                    _ = turn_token.cancelled() => {
+                        // Per-turn abort mid-stream: flush partial; drive loop appends marker + next turn.
+                        let response = state.clone().into_response(self.config.model.clone());
+                        self.append_response_events(session, &response).await?;
+                        return Ok(None);
+                    }
                     _ = tokio::time::sleep(stream_idle_timeout()) => {
-                        // Stall mid-stream: flush the partial response so the
-                        // turn's text is not lost, then fail. No retry here
-                        // (a retry would replay already-emitted events).
+                        // Stall mid-stream: flush the partial so text is not lost, then fail (no retry — would replay emitted events).
                         let response = state.clone().into_response(self.config.model.clone());
                         self.append_response_events(session, &response).await?;
                         return Err(RunError::ProviderFatal(ProviderError::Network));

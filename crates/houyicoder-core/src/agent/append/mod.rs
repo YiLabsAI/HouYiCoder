@@ -531,6 +531,23 @@ impl Runner {
         Ok(())
     }
 
+    /// Append a per-turn abort marker: the viewed-child Esc cancelled the
+    /// turn's model call without killing the run. The marker is a durable
+    /// boundary so the transcript shows the interrupt + the next turn starts
+    /// fresh. Skipped from model input (a TurnAborted is a boundary, not
+    /// content), so the model does not see the marker on the next call.
+    pub(crate) async fn append_turn_interrupted(&self, session: SessionId) -> Result<(), RunError> {
+        self.store
+            .append(new_event(
+                session,
+                TurnEventKind::TurnAborted {
+                    reason: "interrupted by user".into(),
+                },
+            ))
+            .await?;
+        Ok(())
+    }
+
     /// Append the per-turn usage event: the durable cost record the
     /// trajectory's cost + cache dimensions read on resume, export, and the
     /// self-evolution re-reads. Inline primitive fields (not the provider

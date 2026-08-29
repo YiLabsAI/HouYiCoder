@@ -118,6 +118,22 @@ impl Server {
                     tracing::warn!("inject_child: {e}");
                 }
             }
+            "session/cancel_child_turn" => {
+                // Per-turn abort: the viewed-child Esc path. Cancels the
+                // child's in-flight model call without killing the run; the
+                // drive loop appends an interrupt marker + starts the next
+                // turn. Fire-and-forget; a missing runtime or a child
+                // between turns is a no-op.
+                let Some(child_sid) = notif
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("childSid"))
+                    .and_then(|v| v.as_str())
+                else {
+                    return;
+                };
+                self.runner.cancel_child(child_sid);
+            }
             _ => {}
         }
     }
@@ -160,13 +176,26 @@ mod tests {
         ));
     }
 
-    /// A missing childSid param is a silent no-op (no panic on unwrap).
+    /// A session/cancel_child_turn notification routes to the runner's
+    /// cancel_child. No spawn handle on a single-agent server, so the call
+    /// is a no-op (no panic). Pins the wire-method routing so a rename
+    /// makes the abort silently no-op (red).
     #[tokio::test]
-    async fn test_inject_child_missing_sid() {
+    async fn test_cancel_child_routes() {
         let server = server_no_runtime();
         server.handle_session_notification(&AcpNotification::new(
-            "session/inject_child",
-            serde_json::json!({ "text": "x" }),
+            "session/cancel_child_turn",
+            serde_json::json!({ "childSid": "c1" }),
+        ));
+    }
+
+    /// A session/cancel_child_turn with no childSid is a silent no-op.
+    #[tokio::test]
+    async fn test_cancel_child_no_sid() {
+        let server = server_no_runtime();
+        server.handle_session_notification(&AcpNotification::new(
+            "session/cancel_child_turn",
+            serde_json::json!({}),
         ));
     }
 }

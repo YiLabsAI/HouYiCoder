@@ -47,6 +47,31 @@ impl App {
         }
     }
 
+    /// Fill the teammate view with the fetched child transcript. A pending
+    /// optimistic echo (a steering message sent before the child drained
+    /// it) is preserved across a refetch that lands before the durable
+    /// line, so the echo does not vanish mid-turn; once the durable User
+    /// line appears, the echo clears. follow_tail is left as-is so a live
+    /// refetch does not yank a scrolled-up user.
+    fn fill_teammate_view(&mut self, child_sid: &str, mut folded: Vec<TranscriptLine>) {
+        let Some(view) = self.teammate_view.as_mut() else {
+            return;
+        };
+        if view.child_sid != child_sid {
+            return;
+        }
+        if let Some(echo) = view.pending_echo.clone()
+            && !folded
+                .iter()
+                .any(|l| matches!(l, TranscriptLine::User(t) if t == &echo))
+        {
+            folded.push(TranscriptLine::User(echo));
+        } else {
+            view.pending_echo = None;
+        }
+        view.transcript = folded;
+    }
+
     #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
     fn handle_agent_message_inner(&mut self, msg: AgentMessage) {
         match msg {
@@ -262,15 +287,15 @@ impl App {
                     self.transcript.insert(idx, line);
                 }
                 // When the fetched child is the one the user is viewing, swap
-                // the rows into the teammate view too so the drilled-in
-                // transcript fills the same frame the inline fold received.
-                // Isomorphic: the view reads the same projection the fold
-                // shows, not a parallel simplification.
-                if let Some(view) = self.teammate_view.as_mut()
-                    && view.child_sid == child_sid
+                // the rows into the teammate view too. The view-fill path
+                // (echo preservation + scroll) lives in its own helper so
+                // this dispatch arm does not balloon.
+                if self
+                    .teammate_view
+                    .as_ref()
+                    .is_some_and(|v| v.child_sid == child_sid)
                 {
-                    view.transcript = folded;
-                    self.transcript_scroll.follow_tail = true;
+                    self.fill_teammate_view(&child_sid, folded);
                 }
             }
             AgentMessage::HooksResult { hooks } => {
@@ -379,6 +404,10 @@ impl App {
                 last_activity,
                 completed,
             } => {
+                // A running child (no completed status) drives the live
+                // refetch below; capture it before the fleet update moves
+                // the field.
+                let is_running = completed.is_none();
                 // Auto-exit the teammate view only when the viewed child is
                 // gone or broken (killed/failed). A turn-limit, budget, or
                 // normal completion leaves partial output worth reading, so
@@ -412,7 +441,7 @@ impl App {
                     entry.completed = completed;
                 } else {
                     self.fleet.entries.push(crate::agent_message::FleetEntry {
-                        agent_id,
+                        agent_id: agent_id.clone(),
                         subagent_type,
                         turn,
                         tokens,
@@ -421,6 +450,26 @@ impl App {
                         completed_at: completed.as_ref().map(|_| Instant::now()),
                         completed,
                     });
+                }
+                // Live-tracking: when the user is viewing a running child,
+                // each turn-advance Progress refetches the child transcript
+                // so the drilled-in view streams the child's turns as they
+                // land (not a frozen snapshot taken at enter). The turn
+                // guard debounces: one fetch per turn, not one per status
+                // echo. A completed child stops refetching (the final fetch
+                // on enter already holds the full result).
+                if is_running
+                    && let Some(view) = self.teammate_view.as_mut()
+                    && view.child_sid == agent_id
+                    && view.last_fetched_turn.is_none_or(|t| turn > t)
+                {
+                    view.last_fetched_turn = Some(turn);
+                    if let Some(req_id) = self.mint_request_id() {
+                        self.send_cmd(crate::run_control::ClientCommand::ChildTranscriptQuery {
+                            req_id,
+                            child_sid: houyicoder_protocol::frontend::SessionId(agent_id.clone()),
+                        });
+                    }
                 }
             }
         }

@@ -42,6 +42,18 @@ impl Runner {
         }
     }
 
+    /// Abort the viewed child's current turn without killing the run (the
+    /// teammate-view Esc path). Delegates to the spawn handle's child
+    /// registry; returns false when no runtime is attached or the child is
+    /// not in a live turn. Non-terminal: the child's drive loop appends an
+    /// interrupt marker + starts the next turn.
+    pub fn cancel_child(&self, child_id: &str) -> bool {
+        match self.spawn_handle.as_ref() {
+            Some(h) => h.cancel_child_turn(child_id),
+            None => false,
+        }
+    }
+
     /// Install the agent directory section the system prompt carries so the
     /// model can discover sub-agent types. Set once at the composition root.
     pub fn set_agent_directory(&self, section: String) {

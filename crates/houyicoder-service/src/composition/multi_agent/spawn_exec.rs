@@ -162,6 +162,9 @@ pub(super) async fn run_async_spawn(
     let handle = spawn_child(req).await.map_err(super::map_spawn_err)?;
     let child_sid = handle.session;
     let child_str = child_sid.to_string();
+    // Register the child's live runner so a per-turn abort (the viewed-child
+    // Esc path) can reach its turn-cancel token while the async driver runs.
+    this.register_child(&child_str, &handle.runner);
     super::announce_spawn(this.bus.as_ref(), &child_str, &args.subagent_type, true);
     super::fire_subagent_start(
         hook_fire.as_ref(),

@@ -44,6 +44,17 @@ fn test_inject_child_notif_shape() {
     );
 }
 
+/// The abort-child-turn notification carries the childSid the server's
+/// handle_session_notification reads. A typo in the method name or the
+/// param key would make the per-turn abort silently no-op.
+#[test]
+fn test_cancel_child_notif_shape() {
+    let n = cancel_child_turn_notification("c1");
+    assert_eq!(n.method, "session/cancel_child_turn");
+    let p = n.params.expect("params present");
+    assert_eq!(p.get("childSid").and_then(|v| v.as_str()), Some("c1"));
+}
+
 /// A read failure (the server closed or a wire error mid-stream) must
 /// surface as Done{Err} so the App clears agent_busy. The prior silent
 /// return wedged the TUI on any server-side fatal. Pins the fix at the

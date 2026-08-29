@@ -176,6 +176,17 @@ pub trait SpawnHandle: Send + Sync {
         Err("no multi-agent bus wired".into())
     }
 
+    /// Abort the viewed child's current turn without killing the run: the
+    /// in-flight model fetch for this turn cancels, the drive loop appends
+    /// an interrupt marker + starts the next turn with a fresh token. No-op
+    /// when the child is between turns or has completed (no live turn
+    /// token). The default returns false (no multi-agent runtime wired); a
+    /// runtime with a child registry overrides it. Returns true when a live
+    /// turn was aborted.
+    fn cancel_child_turn(&self, _child_id: &str) -> bool {
+        false
+    }
+
     /// First-party spawn: a service/hook-layer caller spawns a child without
     /// going through the model's agent tool. The hook name stamps the durable
     /// SubagentSpawn boundary (trigger_source = system:{hook}) so a replay

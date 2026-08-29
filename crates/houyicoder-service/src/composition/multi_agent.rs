@@ -26,7 +26,7 @@ use houyicoder_core::agent::multi_agent::{
 };
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
-use houyicoder_core::agent::{RunOutcome, RunResult, ToolRegistry};
+use houyicoder_core::agent::{RunOutcome, RunResult, Runner, ToolRegistry};
 use houyicoder_protocol::llm::Usage;
 
 mod drive;
@@ -66,6 +66,12 @@ pub struct MultiAgentRuntime {
     /// per-call clone in spawn shares the Arc so all concurrent spawns of
     /// one parent cap against the same slots.
     gate: Arc<ConcurrencyGate>,
+    /// Live child runners keyed by child session id, so a per-turn abort
+    /// (the viewed-child Esc path) can reach the child's turn-cancel token
+    /// without holding the Arc (the async driver moves the Arc into its
+    /// task; a Weak upgrades only while the child is still running). Stale
+    /// entries (child completed + dropped) are pruned on a failed upgrade.
+    children: Arc<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<Runner>>>>,
 }
 
 impl MultiAgentRuntime {
@@ -85,6 +91,20 @@ impl MultiAgentRuntime {
                 ConcurrencyGate::DEFAULT_CAP,
                 ConcurrencyGate::DEFAULT_QUEUE_CAP,
             )),
+            children: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// Register a live child runner so a later per-turn abort can reach it.
+    /// The Weak drops to nothing when the child's Arc is released (the async
+    /// driver task ends); cancel_child_turn prunes the entry it queries. To
+    /// keep a long-lived parent's registry from accumulating stale Weaks for
+    /// completed children that were never Esc'd, sweep dead entries on each
+    /// register (amortized: one sweep per spawn, not per poll).
+    pub(super) fn register_child(&self, child_id: &str, runner: &Arc<Runner>) {
+        if let Ok(mut g) = self.children.lock() {
+            g.retain(|_, weak| weak.upgrade().is_some());
+            g.insert(child_id.to_string(), Arc::downgrade(runner));
         }
     }
 
@@ -159,6 +179,7 @@ impl SpawnHandle for MultiAgentRuntime {
             cwd: self.cwd.clone(),
             bus: self.bus.clone(),
             gate: Arc::clone(&self.gate),
+            children: Arc::clone(&self.children),
         };
         let trigger = TriggerSource::ModelTool {
             tool_call_id: ctx.call_id.clone(),
@@ -183,6 +204,32 @@ impl SpawnHandle for MultiAgentRuntime {
         match self.bus.as_ref() {
             Some(bus) => bus.send_inbox(child_id, BusMessage::Inbox { text }),
             None => Err("no bus wired".into()),
+        }
+    }
+
+    /// Abort the viewed child's current turn via its live runner handle. The
+    /// child's turn-cancel token is set per turn by the drive loop and
+    /// cleared when the turn ends, so this only cancels an in-flight model
+    /// call; the run continues (next turn, fresh token). A stale Weak (the
+    /// child completed and dropped) is pruned so the registry does not leak
+    /// across a long-lived parent.
+    fn cancel_child_turn(&self, child_id: &str) -> bool {
+        let mut registry = match self.children.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let Some(weak) = registry.get(child_id).cloned() else {
+            return false;
+        };
+        match weak.upgrade() {
+            Some(runner) => {
+                runner.cancel_turn();
+                true
+            }
+            None => {
+                registry.remove(child_id);
+                false
+            }
         }
     }
 
@@ -214,6 +261,7 @@ impl SpawnHandle for MultiAgentRuntime {
             cwd: self.cwd.clone(),
             bus: self.bus.clone(),
             gate: Arc::clone(&self.gate),
+            children: Arc::clone(&self.children),
         };
         let trigger = TriggerSource::System {
             hook: hook.to_string(),
@@ -369,6 +417,10 @@ async fn run_sync_spawn(
     let handle = spawn_child(req).await.map_err(map_spawn_err)?;
     let child_sid = handle.session;
     let child_str = child_sid.to_string();
+    // Register the live runner for a per-turn abort (moot for sync — the
+    // parent blocks on the tool call + cannot be viewing the child mid-run —
+    // but the registry is shared so the async path's contract holds uniformly).
+    this.register_child(&child_str, &handle.runner);
     announce_spawn(this.bus.as_ref(), &child_str, &args.subagent_type, false);
     // SubagentStart fires at the durable spawn boundary (child session exists,
     // SubagentSpawn recorded, run not started); pairs with the later

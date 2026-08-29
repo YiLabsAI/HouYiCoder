@@ -42,6 +42,19 @@ impl Runner {
         }
     }
 
+    /// Cancel the active turn's model call without killing the run. The
+    /// drive loop observes the per-turn token in the model-call select; on
+    /// abort it appends an interrupt marker + starts the next turn with a
+    /// fresh token. No-op when no turn is in flight (the token is cleared
+    /// between turns + after the run). Distinct from abort (terminal).
+    pub fn cancel_turn(&self) {
+        if let Ok(guard) = self.turn_cancel.lock()
+            && let Some(t) = guard.as_ref()
+        {
+            t.cancel();
+        }
+    }
+
     /// Whether abort() was called since the last run() entry AND the run was
     /// paused (so the durable flag was set). The serve loop checks this after
     /// each handle_approval to break the approval batch.

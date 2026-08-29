@@ -46,6 +46,7 @@ impl Runner {
             cancel: std::sync::Mutex::new(None),
             aborted: std::sync::atomic::AtomicBool::new(false),
             paused: std::sync::atomic::AtomicBool::new(false),
+            turn_cancel: std::sync::Mutex::new(None),
             verify_gate: None,
             undo_stack: None,
             snapshot_store: None,

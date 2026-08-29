@@ -53,10 +53,18 @@ impl FleetState {
     /// one entry retired so the caller marks the view dirty. The selection
     /// index is clamped back into the new bounds (a retired selected row
     /// clears selection rather than pointing past the end).
-    pub fn retire_completed(&mut self) -> bool {
+    ///
+    /// retain_viewed pins the child the user is drilled into (teammate
+    /// view): its pill stays past the grace window so the footer does not
+    /// drop the row the user is reading. The result lives in the transcript
+    /// fold-group regardless; this only holds the terse done row. Retires
+    /// once the user exits the view (caller passes None).
+    pub fn retire_completed(&mut self, retain_viewed: Option<&str>) -> bool {
         let before = self.entries.len();
-        self.entries
-            .retain(|e| e.completed_at.is_none_or(|t| t.elapsed() < FLEET_GRACE));
+        self.entries.retain(|e| {
+            e.completed_at.is_none_or(|t| t.elapsed() < FLEET_GRACE)
+                || e.agent_id == retain_viewed.unwrap_or("")
+        });
         let retired = self.entries.len() != before;
         let len = self.entries.len();
         match self.selected {
@@ -462,6 +470,14 @@ pub enum ClientCommand {
     InjectToChild {
         child_sid: String,
         text: String,
+    },
+    /// Abort the viewed child's current turn without killing the run (the
+    /// teammate-view Esc path). The child's drive loop cancels the in-flight
+    /// model fetch, appends an interrupt marker, and starts the next turn
+    /// with a fresh token. Fire-and-forget; a no-op when the child is
+    /// between turns or has completed.
+    CancelChildTurn {
+        child_sid: String,
     },
     /// Remove a queued message by text (the overlay-delete path, or popping
     /// the head to start a follow-up run so the new run does not re-inject

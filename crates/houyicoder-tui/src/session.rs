@@ -399,6 +399,15 @@ async fn drive_client(
                         &text,
                     )));
                 }
+                Some(ClientCommand::CancelChildTurn { child_sid }) => {
+                    // Per-turn abort (the teammate-view Esc path). The server
+                    // cancels the viewed child's in-flight model fetch; the
+                    // child's drive loop appends an interrupt marker + starts
+                    // the next turn. No reply.
+                    outbound.push_back(Outbound::Notification(
+                        cancel_child_turn_notification(&child_sid),
+                    ));
+                }
                 Some(ClientCommand::QueueRemove { session_id, text }) => {
                     // A session/queue_remove notification: the server drops
                     // the first queued message whose text matches. No reply.
@@ -680,6 +689,18 @@ fn inject_child_notification(
     houyicoder_protocol::acp_wire::AcpNotification::new(
         "session/inject_child",
         serde_json::json!({ "childSid": child_sid, "text": text }),
+    )
+}
+
+/// Build a session/cancel_child_turn notification. Pure so the wire shape
+/// (the childSid the server's handle_session_notification reads) is
+/// unit-testable: a typo would make the abort silently no-op.
+fn cancel_child_turn_notification(
+    child_sid: &str,
+) -> houyicoder_protocol::acp_wire::AcpNotification {
+    houyicoder_protocol::acp_wire::AcpNotification::new(
+        "session/cancel_child_turn",
+        serde_json::json!({ "childSid": child_sid }),
     )
 }
 

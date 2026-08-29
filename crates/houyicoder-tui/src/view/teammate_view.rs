@@ -59,6 +59,7 @@ mod tests {
             prompt: "find auth".into(),
             color: None,
             transcript: vec![],
+            ..Default::default()
         });
         let view = app.teammate_view.as_ref().unwrap();
         let name = if view.subagent_type.is_empty() {
@@ -78,6 +79,7 @@ mod tests {
             prompt: String::new(),
             color: None,
             transcript: vec![],
+            ..Default::default()
         });
         let view = app.teammate_view.as_ref().unwrap();
         let name = if view.subagent_type.is_empty() {
@@ -103,6 +105,7 @@ mod tests {
             prompt: "find auth".into(),
             color: None,
             transcript: vec![TranscriptLine::Agent("child reply".into())],
+            ..Default::default()
         });
         let out = render_text(&app, 80, 24);
         assert!(
@@ -151,6 +154,7 @@ mod tests {
             prompt: "ran deep review".into(),
             color: Some("red".into()),
             transcript: vec![],
+            ..Default::default()
         });
         let buf = render_buffer(&app, 80, 24);
         // The banner is the only row carrying an "@"; assert the @ cell is

@@ -84,4 +84,33 @@ impl App {
         self.teammate_view = None;
         self.transcript_scroll.follow_tail = true;
     }
+
+    /// Esc while viewing a teammate: a running child aborts its current
+    /// turn (the drive loop cancels the in-flight model fetch, appends an
+    /// interrupt marker, starts the next turn — non-terminal); a
+    /// completed or non-running child exits the view back to the parent.
+    /// The running check reads the fleet entry's completion flag so a
+    /// child that finished mid-view still exits cleanly on Esc.
+    pub(crate) fn esc_teammate_view_or_abort(&mut self) {
+        let running = self
+            .teammate_view
+            .as_ref()
+            .and_then(|v| {
+                self.fleet
+                    .entries
+                    .iter()
+                    .find(|e| e.agent_id == v.child_sid)
+                    .map(|e| e.completed.is_none())
+            })
+            .unwrap_or(false);
+        if running {
+            if let Some(view) = self.teammate_view.as_ref() {
+                self.send_cmd(crate::run_control::ClientCommand::CancelChildTurn {
+                    child_sid: view.child_sid.clone(),
+                });
+            }
+        } else {
+            self.exit_teammate_view();
+        }
+    }
 }

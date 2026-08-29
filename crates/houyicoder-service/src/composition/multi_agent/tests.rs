@@ -476,3 +476,34 @@ async fn test_async_spawn_notifies_parent() {
     assert!(notif.contains("explore"), "carries the subagent type");
     assert!(notif.contains("done"), "carries the child summary");
 }
+
+/// cancel_child_turn upgrades a registered child's Weak to reach the runner
+/// (returns true); a dropped child's stale Weak is pruned (returns false);
+/// an unknown child is a no-op (returns false). The registry does not leak
+/// across a long-lived parent because the stale entry is removed on the
+/// failed upgrade.
+#[test]
+fn test_cancel_child_turn_registry() {
+    use houyicoder_core::agent::Runner;
+    let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
+    let runner = Arc::new(Runner::with_shared_store(
+        runtime.store.clone(),
+        Arc::new(FakeProvider::text("ok")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    ));
+    runtime.register_child("c1", &runner);
+    assert!(
+        runtime.cancel_child_turn("c1"),
+        "a registered live child upgrades and returns true"
+    );
+    assert!(
+        !runtime.cancel_child_turn("unknown"),
+        "an unknown child returns false"
+    );
+    drop(runner);
+    assert!(
+        !runtime.cancel_child_turn("c1"),
+        "a dropped child's stale Weak returns false"
+    );
+}

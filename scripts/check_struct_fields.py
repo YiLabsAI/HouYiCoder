@@ -27,8 +27,11 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 517
-# 516->517 T31c: Runner +queued_notifications (lower-priority async-completion queue).
+STRUCT_FIELD_BASELINE = 519
+# 517->519 teammate-view live: Runner +turn_cancel (per-turn abort token,
+# non-terminal Esc path) + MultiAgentRuntime +children (live child registry
+# so the per-turn abort can reach the viewed child's runner without holding
+# the Arc the async driver moved into its task).
 # pub(crate) fields drop from the count (regex gap); re-raise when fixed.
 # The counter regex only matches private and pub fields, so pub(crate)
 # fields drop from the count (known gap); re-raise when the regex is fixed.

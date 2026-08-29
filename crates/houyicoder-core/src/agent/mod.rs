@@ -157,6 +157,14 @@ pub struct Runner {
     cancel: std::sync::Mutex<Option<CancellationToken>>,
     aborted: std::sync::atomic::AtomicBool,
     paused: std::sync::atomic::AtomicBool,
+    /// The active turn's cancellation token, set at each turn start +
+    /// cleared when the turn ends. A per-turn abort (the viewed-child Esc
+    /// path) cancels it so the in-flight model fetch for this turn aborts
+    /// without killing the run: the drive loop appends an interrupt
+    /// marker + starts the next turn with a fresh token. Distinct from
+    /// the cancel field (the lifecycle token, terminal). Guarded by a std
+    /// Mutex.
+    turn_cancel: std::sync::Mutex<Option<CancellationToken>>,
     /// Optional post-run verification gate. When set, after a run reaches
     /// FinalOutput the runner calls verify before returning. A failed verify
     /// surfaces RunOutcome::VerifyFailed instead of FinalOutput so the caller
@@ -491,13 +499,23 @@ impl Runner {
                     // appending each as a user message before the next model
                     // call. Extracted so the drive loop body stays readable.
                     self.drain_turn_boundary(session).await?;
+                    // Arm the per-turn abort token so an external cancel_turn
+                    // (the viewed-child Esc path) can abort this turn's model
+                    // fetch without killing the run. Cleared after the call.
+                    let turn_token = CancellationToken::new();
+                    if let Ok(mut guard) = self.turn_cancel.lock() {
+                        *guard = Some(turn_token.clone());
+                    }
                     let response = self
-                        .model_call_stream(session, turn, self.config.max_turns, token)
+                        .model_call_stream(session, turn, self.config.max_turns, token, &turn_token)
                         .await?;
+                    if let Ok(mut guard) = self.turn_cancel.lock() {
+                        *guard = None;
+                    }
                     let response = match response {
                         Some(r) => r,
-                        None => {
-                            // External abort: reconcile orphan results so the
+                        None if token.is_cancelled() => {
+                            // Lifecycle abort: reconcile orphan results so the
                             // session log stays lossless (no ToolCall without a
                             // ToolResult) then surface the interruption. The
                             // server buffer is cleared at the run/resume exit
@@ -508,6 +526,16 @@ impl Runner {
                                 turns: turn,
                                 usage,
                             });
+                        }
+                        None => {
+                            // Per-turn abort: the viewed-child Esc cancelled
+                            // the turn token (not the lifecycle). Drop a
+                            // durable marker so the transcript shows the
+                            // interrupt + start the next turn with a fresh
+                            // token. Non-terminal: the run continues.
+                            self.append_turn_interrupted(session).await?;
+                            next_step = NextStep::RunAgain;
+                            continue;
                         }
                     };
                     accumulate_usage(&mut usage, &response.usage);
@@ -645,5 +673,7 @@ mod tests;
 mod tool_duration_tests;
 #[cfg(test)]
 mod tool_result_baseline_tests;
+#[cfg(test)]
+mod turn_abort_tests;
 #[cfg(test)]
 mod turn_usage_emit_tests;
