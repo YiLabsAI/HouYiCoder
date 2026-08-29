@@ -686,3 +686,34 @@ fn test_cancel_child_turn_registry() {
         "a dropped child's stale Weak returns false"
     );
 }
+
+/// kill_child mirrors cancel_child_turn's registry contract (live Weak
+/// upgrades + abort fires → true; stale/dropped → false + prune; unknown →
+/// false). Distinct from cancel_child_turn: kill_child calls the lifecycle
+/// abort (terminal), not the per-turn cancel. Pins the lifecycle-kill path
+/// for background children.
+#[test]
+fn test_kill_child_registry() {
+    use houyicoder_core::agent::Runner;
+    let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
+    let runner = Arc::new(Runner::with_shared_store(
+        runtime.store.clone(),
+        Arc::new(FakeProvider::text("ok")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    ));
+    runtime.register_child("c1", &runner);
+    assert!(
+        runtime.kill_child("c1"),
+        "a registered live child upgrades + abort fires → true"
+    );
+    assert!(
+        !runtime.kill_child("unknown"),
+        "an unknown child returns false"
+    );
+    drop(runner);
+    assert!(
+        !runtime.kill_child("c1"),
+        "a dropped child's stale Weak returns false"
+    );
+}

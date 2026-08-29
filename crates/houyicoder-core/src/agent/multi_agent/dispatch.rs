@@ -54,6 +54,18 @@ impl Runner {
         }
     }
 
+    /// Kill a background (async) child: cancel its lifecycle token so the
+    /// drive loop returns Interrupted (terminal), distinct from
+    /// cancel_child which only aborts the current turn (non-terminal).
+    /// Delegates to the spawn handle's child registry; returns false when
+    /// no runtime is attached or the child is no longer live (dropped).
+    pub fn kill_child(&self, child_id: &str) -> bool {
+        match self.spawn_handle.as_ref() {
+            Some(h) => h.kill_child(child_id),
+            None => false,
+        }
+    }
+
     /// Install the agent directory section the system prompt carries so the
     /// model can discover sub-agent types. Set once at the composition root.
     pub fn set_agent_directory(&self, section: String) {

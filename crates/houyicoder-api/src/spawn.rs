@@ -187,6 +187,17 @@ pub trait SpawnHandle: Send + Sync {
         false
     }
 
+    /// Kill a background (async) child: cancel its lifecycle token so the
+    /// drive loop returns Interrupted (terminal), release the concurrency
+    /// slot, + record the SubagentReturn boundary. Distinct from
+    /// cancel_child_turn (per-turn, non-terminal — the run continues).
+    /// The default returns false (no multi-agent runtime wired); a runtime
+    /// with a child registry overrides it. Returns true when a live child
+    /// was killed.
+    fn kill_child(&self, _child_id: &str) -> bool {
+        false
+    }
+
     /// First-party spawn: a service/hook-layer caller spawns a child without
     /// going through the model's agent tool. The hook name stamps the durable
     /// SubagentSpawn boundary (trigger_source = system:{hook}) so a replay

@@ -233,6 +233,32 @@ impl SpawnHandle for MultiAgentRuntime {
         }
     }
 
+    /// Kill a background child: cancel its lifecycle token (abort, terminal)
+    /// via the live runner handle, distinct from cancel_child_turn (per-turn,
+    /// non-terminal). A stale Weak (the child completed and dropped) is pruned.
+    /// The detached driver's finalize_child records the SubagentReturn
+    /// boundary (status interrupted) + the concurrency permit releases when
+    /// the driver task ends.
+    fn kill_child(&self, child_id: &str) -> bool {
+        let mut registry = match self.children.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let Some(weak) = registry.get(child_id).cloned() else {
+            return false;
+        };
+        match weak.upgrade() {
+            Some(runner) => {
+                runner.abort();
+                true
+            }
+            None => {
+                registry.remove(child_id);
+                false
+            }
+        }
+    }
+
     /// First-party spawn from a service/hook caller: same spawn pipeline as
     /// the model path, but the trigger is System{hook} so the durable
     /// boundary records a flow-driven origin. A system trigger introduces no

@@ -134,6 +134,17 @@ impl Server {
                 };
                 self.runner.cancel_child(child_sid);
             }
+            "session/kill_child" => {
+                let Some(child_sid) = notif
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("childSid"))
+                    .and_then(|v| v.as_str())
+                else {
+                    return;
+                };
+                self.runner.kill_child(child_sid);
+            }
             _ => {}
         }
     }
@@ -195,6 +206,27 @@ mod tests {
         let server = server_no_runtime();
         server.handle_session_notification(&AcpNotification::new(
             "session/cancel_child_turn",
+            serde_json::json!({}),
+        ));
+    }
+
+    /// session/kill_child routes to the runner's lifecycle kill (terminal,
+    /// distinct from cancel_child_turn's per-turn). No runtime → no-op.
+    #[tokio::test]
+    async fn test_kill_child_routes() {
+        let server = server_no_runtime();
+        server.handle_session_notification(&AcpNotification::new(
+            "session/kill_child",
+            serde_json::json!({ "childSid": "c1" }),
+        ));
+    }
+
+    /// A session/kill_child with no childSid is a silent no-op.
+    #[tokio::test]
+    async fn test_kill_child_no_sid() {
+        let server = server_no_runtime();
+        server.handle_session_notification(&AcpNotification::new(
+            "session/kill_child",
             serde_json::json!({}),
         ));
     }
