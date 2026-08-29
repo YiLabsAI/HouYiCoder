@@ -18,10 +18,11 @@ use crate::rule::{Effect, input_content};
 /// any of these (case-insensitive) escalates to Ask. The trailing slash on the
 /// directory markers avoids matching bare names while still catching nested
 /// paths like repo/.git/hooks.
-const PROTECTED: [&str; 6] = [
+const PROTECTED: [&str; 7] = [
     ".git/",
     ".houyicoder/",
     ".claude/",
+    ".agents/",
     ".bashrc",
     ".zshrc",
     ".profile",
@@ -102,6 +103,26 @@ mod tests {
     fn test_bash_touching_git_dir() {
         let v = serde_json::json!({"command": "rm -rf .git/"});
         assert_eq!(safety_check("bash", Some(&v)), Some(Effect::Ask));
+    }
+
+    /// All three skill-directory families are bypass-immune: a command that
+    /// runs or touches a skill under any of them must Ask in every mode,
+    /// regardless of any stored always-allow rule. The safety stage fires
+    /// before the rule-allow stage, so an untrusted skill script cannot be
+    /// pre-authorized by a broad rule. This is the load-bearing structure
+    /// for the skill-script execution MUST — without the third family
+    /// here, a script from the spec-interop source could be let through by
+    /// a blanket bash always-allow rule.
+    #[test]
+    fn test_skill_dirs_bypass_immune() {
+        for dir in [".houyicoder/skills/", ".claude/skills/", ".agents/skills/"] {
+            let v = serde_json::json!({"command": format!("bash {dir}evil/run.sh")});
+            assert_eq!(
+                safety_check("bash", Some(&v)),
+                Some(Effect::Ask),
+                "{dir} must escalate to Ask (bypass-immune)"
+            );
+        }
     }
 
     /// The agent's own config dir is bypass-immune: a write to its settings,
