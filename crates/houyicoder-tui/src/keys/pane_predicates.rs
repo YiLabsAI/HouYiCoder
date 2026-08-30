@@ -14,6 +14,25 @@ pub(crate) fn pane_navigable(app: &App) -> bool {
     )
 }
 
+/// Panes that own Esc for their own close or back navigation: Esc there must
+/// close or back the pane, not reach the run interrupt or the queue recall.
+/// A single predicate shared by both Esc arms so the two cannot drift apart
+/// (a copied list is how Pane::Trajectory fell out of one arm and stayed in
+/// none).
+pub(crate) fn pane_owns_esc(pane: Pane) -> bool {
+    matches!(
+        pane,
+        Pane::Memory
+            | Pane::Artifact
+            | Pane::Worktree
+            | Pane::Status
+            | Pane::Resume
+            | Pane::Hooks
+            | Pane::Model
+            | Pane::Trajectory
+    )
+}
+
 /// True when the current pane + stage accepts an approve action. The artifact
 /// pane approves a pending proposed edit whenever one exists (stage-independent).
 pub(crate) fn pane_approvable(app: &App) -> bool {

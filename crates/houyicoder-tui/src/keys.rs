@@ -14,7 +14,9 @@ use crate::state::{App, Pane, ViewportMode};
 
 mod input;
 mod pane_predicates;
-use pane_predicates::{pane_approvable, pane_navigable, pane_rejectable, pane_reworkable};
+use pane_predicates::{
+    pane_approvable, pane_navigable, pane_owns_esc, pane_rejectable, pane_reworkable,
+};
 
 mod palette;
 
@@ -94,7 +96,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     }
     // Esc while viewing a teammate: a running child aborts its current
     // turn (non-terminal); a completed/non-running child exits the view.
-    // Non-empty input clears first via the generic arm below.
+    // Requires an empty input box so a mid-type Esc does not yank the view.
     if app.teammate_view.is_some() && k.code == KeyCode::Esc && app.input.is_empty() {
         app.esc_teammate_view_or_abort();
         return;
@@ -111,52 +113,31 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         handle_focus(app, k);
         return;
     }
-    // Esc while a run is in flight aborts it, but only when the input box
-    // is empty and no pane with its own Esc-close is open. A non-empty
-    // input during a run is a queued draft; Esc clears it first, so a
-    // second Esc aborts. Panes with their own Esc (Memory, Artifact) are
-    // gated out so Esc closes the pane first.
-    if app.agent_busy
-        && k.code == KeyCode::Esc
-        && app.input.is_empty()
-        && !matches!(
-            app.pane,
-            Pane::Memory
-                | Pane::Artifact
-                | Pane::Worktree
-                | Pane::Status
-                | Pane::Resume
-                | Pane::Hooks
-                | Pane::Skills
-                | Pane::Model
-        )
-    {
-        // Esc to interrupt a busy run. If the queue holds a pending input,
-        // pop its head to the input box NOW (one Esc = abort and pop): the
-        // un-executed item is the user's pending intent, so on a redirect it
-        // comes back for editing and re-send, not auto-fired (the run ends
-        // Interrupted, the clean-end gate holds, remaining items park).
-        if !app.pending.is_empty() {
-            tracing::debug!("abort_run + pop_queued (busy + queued)");
-            app.abort_run();
-            app.pop_queued_to_input();
-        } else {
-            tracing::debug!("abort_run (busy + empty input)");
-            app.abort_run();
-        }
-        return;
-    }
-    // Idle and a parked queued input (a non-clean run end left it, not
-    // auto-sent): Esc pops the head into the input box for editing (no
-    // running task to abort). Suppressed outside Working so a scroll/search
-    // Esc is not stolen; Ctrl+G's per-item recall (e) picks a non-head item.
-    if !app.agent_busy
+    // the input box (merged with any draft). This fires after Esc1 interrupted
+    // (cancelling, agent_busy still true until Done) or when idle, so a
+    // second Esc recalls instead of re-aborting. Panes that own Esc (Memory,
+    // Artifact, /trajectory, ...) are gated out via pane_owns_esc so Esc
+    // closes or backs the pane first. Suppressed outside Working so a
+    // scroll/search Esc is not stolen; Ctrl+G's per-item recall (e) picks a
+    // non-head item.
+    if (app.cancelling || !app.agent_busy)
         && app.viewport == ViewportMode::Working
         && !app.pending.is_empty()
-        && app.input.is_empty()
         && k.code == KeyCode::Esc
+        && !pane_owns_esc(app.pane)
     {
         app.pop_queued_to_input();
+        return;
+    }
+    // Esc while a run is in flight interrupts it and nothing else: the queue
+    // is left intact and the input draft is untouched. Fires only when not
+    // already cancelling (the first Esc); a subsequent Esc during the
+    // cancelling window is caught by the recall arm above (pending) or, with
+    // no pending, re-aborts here (idempotent -- a lost AbortRun gets a second
+    // chance). Panes that own Esc are gated out so Esc closes the pane first.
+    if app.agent_busy && k.code == KeyCode::Esc && !pane_owns_esc(app.pane) {
+        tracing::debug!("abort_run (busy, queue left intact)");
+        app.abort_run();
         return;
     }
     input::handle_input(app, k);

@@ -176,6 +176,19 @@ impl InputField {
         self.cursor = self.text.len();
     }
 
+    /// Set the cursor to a byte offset, clamped to the text bounds. The caller
+    /// must pass a char boundary (the queue-recall merge passes a newline
+    /// boundary); a mid-grapheme offset would split a multi-byte char, so the
+    /// assert is enforced in debug builds.
+    pub fn move_to(&mut self, byte_pos: usize) {
+        let pos = byte_pos.min(self.text.len());
+        debug_assert!(
+            self.text.is_char_boundary(pos),
+            "move_to offset must be a char boundary"
+        );
+        self.cursor = pos;
+    }
+
     /// Move the cursor to the start of the wrapped visual line it is on.
     /// Readline-style double-press: if the cursor is already at column 0 of
     /// this visual line and there is a visual line above, jump to that one's

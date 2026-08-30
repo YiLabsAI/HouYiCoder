@@ -493,22 +493,36 @@ impl App {
         // not re-fill the input box with the old origin and lose the popped
         // text (which is already removed from the queue).
         self.last_run_input = None;
-        match &item {
+        let (text, drop_from_wire): (&str, bool) = match &item {
             // A message with a live server copy (InjectUser'd): recall drops
             // it from the wire queue too so a follow-up run does not re-inject.
-            PendingItem::Message(text) => {
-                self.send_cmd(ClientCommand::QueueRemove {
-                    session_id: self.session_id.clone(),
-                    text: text.clone(),
-                });
-                self.input.set(text.clone());
-            }
+            PendingItem::Message(text) => (text.as_str(), true),
             // A parked message has no server copy: recall just re-fills the
             // input box (no QueueRemove -- nothing to drop on the wire).
-            PendingItem::ParkedMessage(text) => self.input.set(text.clone()),
+            PendingItem::ParkedMessage(text) => (text.as_str(), false),
             // A command is local-only (never InjectUser'd), so recall just
             // re-fills the input box with the raw text (incl. the slash).
-            PendingItem::Command(text) => self.input.set(text.clone()),
+            PendingItem::Command(text) => (text.as_str(), false),
+        };
+        if drop_from_wire {
+            self.send_cmd(ClientCommand::QueueRemove {
+                session_id: self.session_id.clone(),
+                text: text.to_string(),
+            });
+        }
+        // Merge the recalled text with any in-progress draft rather than
+        // overwriting it: the queued text prepends, a newline separates, and
+        // the cursor parks at the draft start so the user resumes typing
+        // where they were. An empty draft just takes the queued text (cursor
+        // at the end). Overwriting would destroy the user's half-typed draft.
+        let draft = self.input.value().to_string();
+        if draft.is_empty() {
+            self.input.set(text.to_string());
+        } else {
+            let merged = format!("{text}\n{draft}");
+            let draft_start = text.len() + 1; // past the text + newline
+            self.input.set(merged);
+            self.input.move_to(draft_start);
         }
     }
 

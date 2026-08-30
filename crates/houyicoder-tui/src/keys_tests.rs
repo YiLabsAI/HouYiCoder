@@ -403,6 +403,118 @@ fn test_review_rework_key_routes() {
     );
 }
 
+/// Esc while a run is in flight interrupts but leaves the queue intact: the
+/// head is NOT popped on the same press. A panic double-press used to
+/// abort+pop in one, then the second Esc fell through to clear-input and
+/// wiped the just-recalled message (abort sets cancelling but agent_busy
+/// stays true until Done). Now interrupt and recall are separate presses, so
+/// the common double-press is interrupt+recall, not interrupt+destroy.
+#[test]
+fn test_esc_double_press_safe() {
+    use crate::pending_queue::PendingItem;
+    let mut app = working_app();
+    app.agent_busy = true;
+    app.pending.push(PendingItem::Message("task a".into()));
+    // Esc1: interrupt only. The queue still holds "task a"; input stays empty.
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert!(
+        app.pending
+            .iter()
+            .any(|p| matches!(p, PendingItem::Message(t) if t == "task a")),
+        "Esc1 interrupts without popping -- the queue keeps the message"
+    );
+    assert!(app.input.is_empty(), "Esc1 does not touch the input box");
+    assert!(app.cancelling, "Esc1 set cancelling (abort in flight)");
+    // Esc2: recall. The head pops into the input. A double-press is safe now.
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(
+        app.input.value(),
+        "task a",
+        "Esc2 recalls the queued message"
+    );
+}
+
+/// Recall merges the queued message with a half-typed draft instead of
+/// overwriting it: the queued message prepends, a newline separates, the
+/// cursor parks at the draft start. The prior pop overwrote the draft,
+/// destroying the user's half-typed text.
+#[test]
+fn test_esc_recall_merges_draft() {
+    use crate::pending_queue::PendingItem;
+    let mut app = working_app();
+    app.agent_busy = true;
+    app.pending.push(PendingItem::Message("task a".into()));
+    app.input.set("half draft".into());
+    // Esc1: interrupt -- the draft is untouched (not cleared).
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(
+        app.input.value(),
+        "half draft",
+        "Esc1 leaves the draft alone"
+    );
+    // Esc2: recall -- the queued message prepends, the draft survives.
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(
+        app.input.value(),
+        "task a\nhalf draft",
+        "Esc2 merges the queued message with the draft, not overwrites"
+    );
+}
+
+/// During the cancelling window (after Esc1 interrupted, agent_busy still
+/// true until Done), Esc on a pane with its own close (Memory) must close
+/// the pane, not pop the queue. The pop arm shares the busy-Esc arm's pane
+/// gate so the cancelling window does not steal the pane-close key.
+#[test]
+fn test_esc_cancelling_closes_pane() {
+    use crate::pending_queue::PendingItem;
+    let mut app = working_app();
+    app.agent_busy = true;
+    app.pending.push(PendingItem::Message("task a".into()));
+    // Esc1: interrupt (cancelling, agent_busy still true, queue intact).
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert!(app.cancelling);
+    // Open a pane with its own Esc, then Esc: the pane closes, the queue
+    // is NOT popped (the pane-close key is not stolen for a recall).
+    app.pane = Pane::Memory;
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.pane, Pane::Transcript, "Esc closes the Memory pane");
+    assert!(
+        !app.pending.is_empty(),
+        "the queue is not popped while closing the pane"
+    );
+    assert!(
+        app.input.is_empty(),
+        "input stays empty -- no recall on the pane-close Esc"
+    );
+}
+
+/// Same gate for /trajectory, which owns multi-level Esc (level 2 -> 1 -> 0
+/// -> close). The cancelling window must not steal its Esc for a queue pop.
+/// Pins that pane_owns_esc covers Trajectory, the pane the copied-list bug
+/// left in neither Esc arm.
+#[test]
+fn test_esc_cancelling_backs_trajectory() {
+    use crate::pending_queue::PendingItem;
+    let mut app = working_app();
+    app.agent_busy = true;
+    app.pending.push(PendingItem::Message("task a".into()));
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert!(app.cancelling);
+    app.pane = Pane::Trajectory;
+    app.trajectory_level.set(1);
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(
+        app.trajectory_level.get(),
+        0,
+        "Esc backs the trajectory pane a level, not pops the queue"
+    );
+    assert!(
+        !app.pending.is_empty(),
+        "the queue is not popped while backing the pane"
+    );
+}
+
 #[test]
 fn test_console_signoff_appends_audit() {
     let mut app = composition::app();
@@ -608,26 +720,19 @@ fn test_esc_idle_clears_input() {
     assert!(app.input.is_empty(), "idle Esc on empty input is a no-op");
 }
 
-/// While a run is in flight, Esc on a non-empty input clears it first
-/// (matching idle Esc); only a second Esc on the now-empty input aborts.
-/// Without this gate the only whole-input clear was unreachable while busy,
-/// so a recalled draft could not be wiped.
+/// While a run is in flight, Esc interrupts and leaves the draft untouched.
+/// The prior behavior cleared the draft first (then aborted on a second
+/// Esc), which destroyed the user's half-typed text and forced a two-press
+/// interrupt. One Esc now interrupts; the draft survives for the user to
+/// edit or clear deliberately.
 #[test]
-fn test_busy_esc_clears() {
+fn test_busy_esc_keeps_draft() {
     let mut app = working_app();
     app.agent_busy = true;
     app.input.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
-    assert!(
-        app.input.is_empty(),
-        "busy + non-empty Esc clears input first"
-    );
-    assert!(
-        !app.cancelling,
-        "must not abort while input is non-empty (first Esc clears)"
-    );
-    handle_working(&mut app, key(KeyCode::Esc));
-    assert!(app.cancelling, "second Esc on empty input aborts the run");
+    assert!(app.cancelling, "busy Esc interrupts the run");
+    assert_eq!(app.input.value(), "draft", "the draft is left untouched");
 }
 
 /// While a run is in flight, Esc in the /worktrees pane closes the pane back

@@ -174,12 +174,14 @@ fn test_interrupted_no_content_restores() {
     );
 }
 
-/// Esc during a busy run with a queued message pops the queue head into the
-/// input box (abort + pop in one keystroke). The pop is the user's explicit
-/// recall, so the no-content restore on the subsequent Done(Interrupted) -
-/// which re-fills the input with the aborted run's origin - must not clobber
-/// it: the queued text was already removed from pending, so an overwrite
-/// would lose it entirely.
+/// Esc1 during a busy run interrupts (queue stays intact); Esc2 recalls the
+/// queue head into the input box (merged with any draft). The pop is the
+/// user's explicit recall, so the no-content restore on the subsequent
+/// Done(Interrupted) -- which re-fills the input with the aborted run's
+/// origin - must not clobber it: the queued text was already removed from
+/// pending, so an overwrite would lose it entirely. Splitting interrupt
+/// from recall stops a panic double-press from wiping the just-recalled
+/// message.
 #[test]
 fn test_esc_pop_survives_interrupt() {
     let mut app = composition::app();
@@ -191,15 +193,21 @@ fn test_esc_pop_survives_interrupt() {
     // pending push; no session is wired so the wire side is a no-op).
     app.spawn_run("zzsecond".into());
     assert!(!app.pending.is_empty(), "message queues while busy");
-    // Esc: abort the run + pop the queue head into the input box.
-    crate::keys::handle_working(
-        &mut app,
-        crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Esc,
-            crossterm::event::KeyModifiers::NONE,
-        ),
+    // Esc1: interrupt the run. The queue stays intact; input stays empty.
+    let esc = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
     );
-    assert_eq!(app.input.value(), "zzsecond", "Esc pops the queue head");
+    crate::keys::handle_working(&mut app, esc);
+    assert!(app.cancelling, "first Esc interrupts the run");
+    assert!(!app.pending.is_empty(), "queue intact after the interrupt");
+    // Esc2: recall the queue head into the input box.
+    crate::keys::handle_working(&mut app, esc);
+    assert_eq!(
+        app.input.value(),
+        "zzsecond",
+        "second Esc recalls the queue head"
+    );
     // The aborted run settles Interrupted with no real content.
     app.handle_agent_message(AgentMessage::Done {
         result: Ok(RunResult {

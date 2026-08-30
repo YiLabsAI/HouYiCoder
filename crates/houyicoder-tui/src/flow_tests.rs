@@ -129,29 +129,39 @@ fn test_idle_esc_recalls_head() {
     );
 }
 
-/// While a run is in flight with a queued input, Esc aborts the run AND
-/// pops the queued head to the input box for editing (one Esc = abort +
-/// pop). The user redirected — the un-executed queued item comes back to
-/// the input for editing + re-send, it is not auto-sent (the run ends
-/// interrupted, idle_drain's clean-end gate holds, the tail parks). The
-/// tail stays queued.
+/// While a run is in flight with a queued input, the first Esc interrupts
+/// (the queue stays intact, the draft untouched); the second Esc recalls
+/// the head into the input box. Splitting interrupt from recall stops a
+/// panic double-press from destroying the just-recalled message: the old
+/// combined abort+pop left agent_busy true after the abort, so the second
+/// Esc fell through to clear-input and wiped the popped text.
 #[test]
-fn test_busy_esc_pops_head() {
+fn test_busy_esc_recall() {
     let mut app = working();
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(app.cancelling, "busy Esc aborts the run");
-    assert_eq!(
-        app.input.value(),
-        "task a",
-        "queued head popped to the input box for editing"
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    crate::keys::handle_working(&mut app, esc);
+    assert!(app.cancelling, "first Esc interrupts the run");
+    assert!(
+        app.input.is_empty(),
+        "first Esc does not touch the input box"
     );
     assert_eq!(
         app.pending,
+        vec![
+            PendingItem::Message("task a".into()),
+            PendingItem::Message("task b".into())
+        ],
+        "the queue stays intact after the interrupt"
+    );
+    crate::keys::handle_working(&mut app, esc);
+    assert_eq!(app.input.value(), "task a", "second Esc recalls the head");
+    assert_eq!(
+        app.pending,
         vec![PendingItem::Message("task b".into())],
-        "tail stays queued (head popped to input)"
+        "tail stays queued (head recalled to input)"
     );
 }
 
