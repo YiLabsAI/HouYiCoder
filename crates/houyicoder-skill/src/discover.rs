@@ -13,13 +13,13 @@ use super::definition::{SkillDefinition, SkillSource};
 use super::parse;
 
 /// Maximum recursion depth when walking for SKILL.md files.
-const MAX_WALK_DEPTH: usize = 5;
+pub(crate) const MAX_WALK_DEPTH: usize = 5;
 
 /// Maximum number of skills to collect before stopping (bound).
 const MAX_SKILL_COUNT: usize = 2000;
 
 /// Directory names that are pruned during the walk (never recursed into).
-const PRUNED_DIRS: &[&str] = &[".git", "node_modules", ".svn", "target"];
+pub(crate) const PRUNED_DIRS: &[&str] = &[".git", "node_modules", ".svn", "target"];
 
 /// Config directory families, in precedence order within the same level
 /// (highest first). Each is joined under a scan root to form the skills
