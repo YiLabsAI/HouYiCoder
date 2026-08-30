@@ -53,7 +53,9 @@ After launching you know nothing about what the child found. Never fabricate or 
 - When the task needs context only you hold and cannot be conveyed in a prompt.
 - To break a large task into pieces you should instead do in one turn.
 
-Input: {description: short 3-5 word label, prompt: the task, subagent_type?: agent type (defaults to general-purpose), run_in_background?: bool (default false, blocks until the child finishes), isolation?: \"none\" | \"worktree\" (default none)}.";
+Input: {description: short 3-5 word label, prompt: the task, subagent_type?: agent type (defaults to general-purpose), isolation?: \"none\" | \"worktree\" (default none)}.
+
+Subagents run synchronously (the parent turn blocks until the child finishes). Background delegation is not yet exposed: an async child cannot be stopped from the TUI today, so advertising it would let an unkillable agent run. The field stays in the wire schema for when the kill UX lands.";
 
 impl Tool for AgentTool {
     fn name(&self) -> &str {
@@ -78,10 +80,11 @@ impl Tool for AgentTool {
                     "type": "string",
                     "description": "The type of specialized agent to use; defaults to general-purpose"
                 },
-                "run_in_background": {
-                    "type": "boolean",
-                    "description": "If true, return immediately and report completion later; if false (default), block until the child finishes"
-                },
+                // run_in_background is intentionally absent from the schema:
+                // an async child cannot be stopped from the TUI yet, so
+                // exposing it would let an unkillable agent run. The wire
+                // struct still carries the field (defaults false) for when
+                // the kill UX lands.
                 "isolation": {
                     "type": "string",
                     "enum": ["none", "worktree"],
@@ -300,8 +303,15 @@ mod tests {
         assert!(props.contains_key("description"));
         assert!(props.contains_key("prompt"));
         assert!(props.contains_key("subagent_type"));
-        assert!(props.contains_key("run_in_background"));
         assert!(props.contains_key("isolation"));
+        // run_in_background is intentionally absent from the schema: an async
+        // child cannot be stopped from the TUI yet, so advertising it would
+        // let an unkillable agent run. Re-add when the kill UX lands. Pins
+        // the temporary narrowing so it is not silently re-exposed.
+        assert!(
+            !props.contains_key("run_in_background"),
+            "run_in_background must stay out of the schema until kill UX lands"
+        );
         let required = schema.get("required").unwrap().as_array().unwrap();
         assert!(required.iter().any(|v| v == "description"));
         assert!(required.iter().any(|v| v == "prompt"));
