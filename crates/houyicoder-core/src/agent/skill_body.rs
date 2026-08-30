@@ -22,13 +22,21 @@ const SKILL_BODY_BUDGET_BYTES: usize = 25_000;
 const PER_SKILL_BUDGET_BYTES: usize = 5_000;
 
 /// Head-truncate a string to a byte budget, keeping the head + an ellipsis
-/// so the model sees the directive's opening + knows it was trimmed.
+/// so the model sees the directive's opening + knows it was trimmed. The
+/// cut is byte-based (the budget is bytes) and backs off to the nearest char
+/// boundary so a multi-byte char is never split — a char-count cut let a CJK
+/// body (3 bytes/char) take ~3x the byte budget and starve the rest.
 fn head_truncate(s: &str, budget: usize) -> String {
     if s.len() <= budget {
         return s.to_string();
     }
-    let keep = budget.saturating_sub(3);
-    let mut t: String = s.chars().take(keep).collect();
+    if budget < 3 {
+        // No room for content + an ellipsis; an empty string keeps the cap.
+        return String::new();
+    }
+    let keep = budget - 3; // leave room for the ellipsis
+    let end = s.floor_char_boundary(keep.min(s.len()));
+    let mut t = s[..end].to_string();
     t.push_str("...");
     t
 }
@@ -180,6 +188,29 @@ mod tests {
     use houyicoder_memory::InMemoryBackend;
     use houyicoder_resilience::Retry;
     use houyicoder_session::SessionStore;
+
+    /// head_truncate cuts by bytes (not chars), backing off to a char
+    /// boundary, so a CJK body (3 bytes/char) cannot exceed the byte budget.
+    /// The old char-count cut let 5000 chars = ~15000 bytes through a 5000
+    /// byte budget. Pin the byte cap + the no-split guarantee.
+    #[test]
+    fn test_truncate_byte_cjk() {
+        // 3 bytes/char; 600 chars = 1800 bytes, budget 1000.
+        let cjk = "字".repeat(600);
+        let t = head_truncate(&cjk, 1000);
+        assert!(t.len() <= 1000, "byte cap held: {} > 1000", t.len());
+        assert!(t.ends_with("..."), "ellipsis marker present");
+        // The byte cap is the distinguishing pin: the old char-count cut let
+        // 997 chars (2991 bytes) through a 1000-byte budget. The no-split
+        // property is guaranteed by str slicing (s[..end] panics if end is
+        // mid-char), so it is not re-asserted on the output.
+    }
+
+    #[test]
+    fn test_truncate_under_budget() {
+        let t = head_truncate("short", 100);
+        assert_eq!(t, "short", "under budget: unchanged, no ellipsis");
+    }
     use std::sync::Arc;
 
     struct EmptyRegistry;
