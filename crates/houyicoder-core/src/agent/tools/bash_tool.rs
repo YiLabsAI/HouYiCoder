@@ -52,7 +52,7 @@ impl Tool for BashTool {
     }
     fn description(&self) -> &str {
         "Run a shell command in the sandbox workspace. \
-         Input: {command: string, workdir?: string}. \
+         Input: {command: string}. \
          Returns stdout/stderr/exit_code. \
          When issuing multiple commands: if they are independent, make \
          multiple Bash calls in a single message so they run in parallel \
@@ -67,8 +67,7 @@ impl Tool for BashTool {
         json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string"},
-                "workdir": {"type": "string"}
+                "command": {"type": "string"}
             },
             "required": ["command"]
         })

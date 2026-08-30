@@ -4,7 +4,9 @@
 //! bash_snapshot.rs.
 
 use super::*;
+use crate::agent::BashTool;
 use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::tool::Tool;
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use std::path::{Path, PathBuf};
@@ -165,4 +167,30 @@ fn test_prepare_poisoned_stack_refuses() {
     assert!(msg.contains("corrupted"), "{msg}");
     assert!(msg.contains("refusing"), "{msg}");
     std::fs::remove_dir_all(&ws).ok();
+}
+
+/// The bash schema does not advertise a workdir field. The sandbox runs in
+/// a fixed workspace cwd and the executor never reads workdir, so
+/// advertising it would let the model believe a different directory is in
+/// effect while the command runs in the workspace root. Pin the schema so
+/// the field is not re-added without an executor that honors it.
+#[test]
+fn test_bash_schema_no_workdir() {
+    let t = BashTool::new(Arc::new(StubSession {
+        root: PathBuf::from("/tmp"),
+        extra: vec![],
+    }));
+    let schema = t.input_schema();
+    assert!(
+        schema["properties"].get("workdir").is_none(),
+        "workdir must not be advertised: {schema}"
+    );
+    let props = schema["properties"]
+        .as_object()
+        .expect("properties is an object");
+    assert_eq!(props.len(), 1, "command is the sole field: {schema}");
+    assert!(
+        props.contains_key("command"),
+        "command is the sole field: {schema}"
+    );
 }
