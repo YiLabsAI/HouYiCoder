@@ -48,9 +48,14 @@ fn to_descriptor(s: &SkillDefinition) -> SkillDescriptor {
 /// once at construction; the set is fixed for the session (a skill added
 /// mid-session surfaces on the next run, mirroring the external tool
 /// server contract). Skills are sorted by precedence at discovery time,
-/// so a name lookup returns the highest-precedence match.
+/// so a name lookup returns the highest-precedence match. Descriptors are
+/// materialized once at construction and cached: the listing, find, and
+/// origin paths clone the cached value instead of re-reading every body
+/// file per call (the body token estimate is the only field that touches
+/// disk, so caching it once bounds the per-call cost to a clone).
 pub struct SkillRegistryImpl {
     skills: Vec<SkillDefinition>,
+    descriptors: Vec<SkillDescriptor>,
 }
 
 impl SkillRegistryImpl {
@@ -71,7 +76,7 @@ impl SkillRegistryImpl {
     /// a builtin slash command is rejected at registration (warned, not
     /// silently dropped) so it cannot shadow the builtin at invoke.
     pub fn discover_with_home(cwd: Option<&Path>, home: Option<&Path>) -> Self {
-        let skills = discover::discover_skills(cwd, home)
+        let skills: Vec<SkillDefinition> = discover::discover_skills(cwd, home)
             .into_iter()
             .filter(|s| {
                 if houyicoder_protocol::frontend::SlashCommand::is_reserved_skill_name(&s.name) {
@@ -85,37 +90,48 @@ impl SkillRegistryImpl {
                 }
             })
             .collect();
-        Self { skills }
+        // Materialize descriptors once: to_descriptor reads each body file
+        // for the token estimate. Caching the results here bounds that to
+        // one read per skill for the registry's lifetime, so the listing +
+        // find paths do not re-read on every call.
+        let descriptors = skills.iter().map(to_descriptor).collect();
+        Self {
+            skills,
+            descriptors,
+        }
     }
 }
 
 impl SkillRegistry for SkillRegistryImpl {
     fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
-        self.skills
+        self.descriptors
             .iter()
-            .filter(|s| !s.disable_model_invocation)
-            .map(to_descriptor)
+            .filter(|d| !d.disable_model_invocation)
+            .cloned()
             .collect()
     }
 
     fn find(&self, name: &str) -> Option<SkillDescriptor> {
-        self.skills
-            .iter()
-            .find(|s| s.name == name)
-            .map(to_descriptor)
+        self.descriptors.iter().find(|d| d.name == name).cloned()
     }
 
     fn list_with_origin(&self) -> Vec<SkillSnapshot> {
-        // All discovered skills, NOT filtered by disable-model-invocation:
-        // this feeds the /skills user-facing visibility surface, where a
-        // disabled skill must appear (marked not invocable) so the user can
-        // see it is blocked from the model. The model's own per-turn listing
-        // uses list_model_invocable, which DOES filter disabled skills so the
-        // model never sees or calls them.
+        // Not filtered by disable-model-invocation: this feeds the /skills
+        // visibility surface, where a disabled skill must appear marked not
+        // invocable. list_model_invocable filters for the model's listing.
+        // Descriptors cache parallel to skills (same order, same filter); the
+        // assert pins lockstep so a future single-vec mutation fails loudly,
+        // not as a silent zip truncation.
+        debug_assert_eq!(
+            self.skills.len(),
+            self.descriptors.len(),
+            "skills/descriptors must stay lockstep"
+        );
         self.skills
             .iter()
-            .map(|s| SkillSnapshot {
-                descriptor: to_descriptor(s),
+            .zip(self.descriptors.iter())
+            .map(|(s, d)| SkillSnapshot {
+                descriptor: d.clone(),
                 origin: source_label(&s.source).into(),
             })
             .collect()
@@ -349,6 +365,35 @@ mod tests {
         assert!(
             reg.prepare_body("off", None, None).is_ok(),
             "ungated body loads"
+        );
+        drop(fs::remove_dir_all(&tmp));
+    }
+
+    /// The body token estimate is read once at construction and cached on
+    /// the registry. find/listing clone the cached descriptor instead of
+    /// re-reading the body file: after construction the body is rewritten
+    /// much larger, and the estimate stays at the construction-time value.
+    /// A re-reading impl would report the new size; the cache does not.
+    #[test]
+    fn test_token_estimate_cached() {
+        let tmp = std::env::temp_dir().join(format!("skill-reg-tok-{}", std::process::id()));
+        write_skill(&tmp, "commit", "run git status");
+        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
+        let at_discovery = reg.find("commit").unwrap().body_token_estimate;
+        assert!(at_discovery > 0, "estimate computed at discovery");
+        let skill_dir = tmp.join(".houyicoder").join("skills").join("commit");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: commit\ndescription: commit skill\n---\n{}\n",
+                "x".repeat(4000)
+            ),
+        )
+        .unwrap();
+        let after = reg.find("commit").unwrap().body_token_estimate;
+        assert_eq!(
+            after, at_discovery,
+            "cached estimate unchanged after body rewritten"
         );
         drop(fs::remove_dir_all(&tmp));
     }

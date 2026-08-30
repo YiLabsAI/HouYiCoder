@@ -100,8 +100,10 @@ pub struct SpecFields {
 
 impl SkillDefinition {
     /// Estimated body token count for listing display. Lets the model
-    /// make informed invocation decisions (cost-visible).
-    /// v0: rough estimate (bytes / 4); v1: real tokenizer.
+    /// make informed invocation decisions (cost-visible). Reads the body
+    /// file; the registry caches the result at construction so listing +
+    /// find do not re-read per call. Rough estimate (bytes / 4); a real
+    /// tokenizer would replace the divisor without changing the contract.
     pub fn body_token_estimate(&self) -> u32 {
         match std::fs::read_to_string(&self.body_path) {
             Ok(content) => (content.len() / 4) as u32,
