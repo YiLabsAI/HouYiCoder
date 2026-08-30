@@ -142,7 +142,12 @@ fn walk(
 pub(crate) fn classify(rel: &str, name: &str) -> ResourceKind {
     let lower = name.to_ascii_lowercase();
     let first_seg = rel.split(std::path::MAIN_SEPARATOR).next().unwrap_or("");
-    if first_seg == "scripts" || is_script_ext(&lower) {
+    // A file under a scripts directory, or with a script extension
+    // anywhere, is a Script. The bare "scripts" directory name itself is
+    // not: a path that is exactly the directory carries no file, so it
+    // must not surface as a script run or a script manifest entry.
+    let under_scripts = first_seg == "scripts" && rel.contains(std::path::MAIN_SEPARATOR);
+    if under_scripts || is_script_ext(&lower) {
         return ResourceKind::Script;
     }
     if first_seg == "templates" {
@@ -335,6 +340,9 @@ mod tests {
         );
         assert_eq!(classify("notes.md", "notes.md"), ResourceKind::Reference);
         assert_eq!(classify("data.csv", "data.csv"), ResourceKind::Data);
+        // The bare "scripts" directory name is not a script file: a path
+        // that is exactly the directory carries no file to run.
+        assert_eq!(classify("scripts", "scripts"), ResourceKind::Data);
     }
 
     #[test]

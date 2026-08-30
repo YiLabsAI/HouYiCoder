@@ -1,9 +1,10 @@
-//! Detect when a Bash command runs a script from a skill's directory, so
-//! the agent loop can route it through a per-script confirmation gate.
-//! Reference-file reads are not flagged (the resource fence allows them;
-//! this gate is for running a script that takes action). Heuristic
-//! string-match — a deliberately obfuscated command can evade it, but the
-//! gate is defense-in-depth on top of the sandbox, not the sole control.
+//! Detect when a Bash command runs a skill-directory script so the agent
+//! loop can route it through a per-script confirmation gate. Reference
+//! reads are not flagged; this gate is for running a script. The match is
+//! the canonical skill path followed by a script file path: forms that
+//! carry no canonical path evade — a cd then a relative run, an unexpanded
+//! env var, a relative path from another cwd. Defense-in-depth on top of
+//! the sandbox, not a sole control.
 
 use std::path::Path;
 
@@ -204,5 +205,56 @@ mod tests {
     fn test_skips_trailing_slash_dir() {
         let refs = detect_skill_scripts("python /srv/skills/deploy/scripts/", &skills());
         assert!(refs.is_empty(), "trailing-slash dir not flagged: {refs:?}");
+    }
+
+    /// A bare scripts directory path with no file under it is not a script
+    /// run. classify treats only a file under scripts/ as a Script, not the
+    /// directory itself, so an ls or cd into the scripts dir does not
+    /// raise a per-script Ask on a wrong path.
+    #[test]
+    fn test_bare_scripts_dir_skipped() {
+        let refs = detect_skill_scripts("ls /srv/skills/deploy/scripts", &skills());
+        assert!(refs.is_empty(), "bare scripts dir not flagged: {refs:?}");
+    }
+
+    /// A cd into the skill dir then a relative script run evades the gate:
+    /// the cd match is dropped because the dir is followed by a space, not
+    /// a slash, and the relative path carries no canonical directory string.
+    /// Pins the honest coverage boundary — the gate catches the
+    /// canonical-path form, not every form that resolves to a skill script.
+    #[test]
+    fn test_cd_relative_evades() {
+        let refs = detect_skill_scripts(
+            "cd /srv/skills/deploy && python scripts/deploy.py",
+            &skills(),
+        );
+        assert!(
+            refs.is_empty(),
+            "cd+relative evades the literal match: {refs:?}"
+        );
+    }
+
+    /// An unexpanded environment variable evades the gate for the same
+    /// reason: the literal canonical path is not present. The shell expands
+    /// the variable at exec time, after the gate has run.
+    #[test]
+    fn test_unexpanded_var_evades() {
+        let refs = detect_skill_scripts("python $HOUYI_SKILL_DIR/scripts/deploy.py", &skills());
+        assert!(
+            refs.is_empty(),
+            "unexpanded var evades the literal match: {refs:?}"
+        );
+    }
+
+    /// A relative path from a different cwd evades for the same reason:
+    /// the canonical skill path is not in the command, so there is nothing
+    /// to match.
+    #[test]
+    fn test_relative_from_cwd_evades() {
+        let refs = detect_skill_scripts("python skills/deploy/scripts/deploy.py", &skills());
+        assert!(
+            refs.is_empty(),
+            "relative path from another cwd evades: {refs:?}"
+        );
     }
 }
