@@ -40,7 +40,12 @@ pub fn parse_skill(
     });
 
     let display_name = field_string(&frontmatter, "name");
-    let name = display_name.as_deref().unwrap_or(dir_name).to_string();
+    // The directory name is the skill identity (matches the ecosystem
+    // standard: the directory is the slash-command name + the dedup key; the
+    // frontmatter name is display-only). The frontmatter name never overrides
+    // the identity, so a skill in a directory named "commit" is invoked as
+    // /commit regardless of its frontmatter name.
+    let name = dir_name.to_string();
 
     let description = field_string(&frontmatter, "description")
         .or_else(|| {
@@ -306,7 +311,13 @@ mod tests {
             SkillSource::User,
         )
         .expect("parse");
-        assert_eq!(def.name, "DifferentName");
+        // Directory name is identity; frontmatter name is display-only.
+        assert_eq!(def.name, "dir-name", "directory name is the identity");
+        assert_eq!(
+            def.display_name.as_deref(),
+            Some("DifferentName"),
+            "frontmatter name is display-only"
+        );
     }
 
     #[test]
