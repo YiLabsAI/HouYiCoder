@@ -188,9 +188,21 @@ fn field_string(map: &serde_yaml::Mapping, key: &str) -> Option<String> {
         .and_then(coerce_to_string)
 }
 
+/// Parse a frontmatter bool, accepting both YAML bool and string "true"/"false".
+/// The string form matters when the YAML fallback stores every field as a
+/// string; without it, bool fields like disable-model-invocation would be
+/// lost (fail-open) on a malformed-YAML recovery.
 fn field_bool(map: &serde_yaml::Mapping, key: &str) -> Option<bool> {
     map.get(serde_yaml::Value::String(key.into()))
-        .and_then(|v| v.as_bool())
+        .and_then(|v| match v {
+            serde_yaml::Value::Bool(b) => Some(*b),
+            serde_yaml::Value::String(s) => match s.as_str() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            },
+            _ => None,
+        })
 }
 
 fn field_string_list(map: &serde_yaml::Mapping, key: &str) -> Option<Vec<String>> {
@@ -362,6 +374,54 @@ mod tests {
                 SkillSource::User
             )
             .is_ok()
+        );
+    }
+
+    /// field_bool accepts both YAML bool and string "true"/"false", so the
+    /// YAML-fallback recovery path (which stores everything as String) does
+    /// not lose bool fields. Without this, disable-model-invocation would
+    /// fail-open (false) on a malformed-YAML recovery.
+    #[test]
+    fn test_field_bool_string_form() {
+        let mut map = serde_yaml::Mapping::new();
+        map.insert(
+            serde_yaml::Value::String("k".into()),
+            serde_yaml::Value::String("true".into()),
+        );
+        assert_eq!(field_bool(&map, "k"), Some(true), "String(true) -> true");
+
+        map.insert(
+            serde_yaml::Value::String("k".into()),
+            serde_yaml::Value::String("false".into()),
+        );
+        assert_eq!(field_bool(&map, "k"), Some(false), "String(false) -> false");
+
+        map.insert(
+            serde_yaml::Value::String("k".into()),
+            serde_yaml::Value::Bool(true),
+        );
+        assert_eq!(field_bool(&map, "k"), Some(true), "Bool(true) -> true");
+    }
+
+    /// A malformed-YAML recovery preserves disable-model-invocation. The
+    /// tab in indentation breaks serde_yaml; the scalar recovery stores
+    /// "true" as a string; field_bool must read it. Under the old code this
+    /// returned false (fail-open: the model could invoke a disabled skill).
+    #[test]
+    fn test_malformed_yaml_preserves_disable() {
+        let text =
+            "---\n\tdisable-model-invocation: true\ndescription: test\nname: test\n---\nbody";
+        let def = parse_skill(
+            text,
+            "test",
+            Path::new("/tmp/test"),
+            Path::new("/tmp/test/SKILL.md"),
+            SkillSource::User,
+        )
+        .expect("parse with recovery");
+        assert!(
+            def.disable_model_invocation,
+            "disable-model-invocation preserved through YAML recovery"
         );
     }
 }
