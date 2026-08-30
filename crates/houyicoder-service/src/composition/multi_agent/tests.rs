@@ -515,6 +515,53 @@ impl ModelProvider for FailingProvider {
     }
 }
 
+/// A provider that streams a complete text block then errors mid-stream
+/// (before any StepFinish). Exercises the partial-output-on-failure branch:
+/// the child produced assistant text before the run failed, and the parent
+/// should see both the partial work and the failure reason. FailingProvider
+/// errors at the first event (no partial), so the branch's partial path
+/// (spawn_exec finalize_child line: Some(p) => "...Partial output:\n{p}") was
+/// never exercised.
+struct PartialThenFailProvider {
+    err: ProviderError,
+}
+
+impl PartialThenFailProvider {
+    fn new(err: ProviderError) -> Self {
+        Self { err }
+    }
+}
+
+impl ModelProvider for PartialThenFailProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
+        let err = self.err.clone();
+        Box::pin(async move { Err(err) })
+    }
+    fn stream(
+        &self,
+        _req: CompletionRequest,
+    ) -> houyicoder_async::PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>>
+    {
+        use houyicoder_protocol::llm::LlmEvent;
+        let err = self.err.clone();
+        Box::pin(futures::stream::iter(vec![
+            Ok(LlmEvent::TextStart { id: "t1".into() }),
+            Ok(LlmEvent::TextDelta {
+                id: "t1".into(),
+                text: "partial findings".into(),
+            }),
+            Ok(LlmEvent::TextEnd { id: "t1".into() }),
+            Err(err),
+        ]))
+    }
+    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
+        houyicoder_protocol::llm::ModelCapabilities::default()
+    }
+}
+
 /// A sync child whose run fails (non-retryable provider error) surfaces the
 /// failure to the parent as the spawn tool result: status=failed + a
 /// non-empty summary carrying the error. The durable SubagentReturn boundary
@@ -560,6 +607,67 @@ async fn test_sync_failed_child_propagates() {
         ret_status.as_deref(),
         Some("failed"),
         "SubagentReturn records the failed status for replay/audit",
+    );
+}
+
+/// A child whose stream errors mid-response (text deltas arrive, then the
+/// stream errors before any StepFinish) currently LOSES the partial text: the
+/// extractor flushes an AssistantMessage only on StepFinish, so the in-flight
+/// deltas never land in the child log, and finalize_child's partial-output
+/// branch (line: Some(p) => "...Partial output:\n{p}") never fires -- the
+/// summary is just the error reason. Pins the current behavior so a future
+/// fix (flush the accumulated text buffer on stream-error) flips this red.
+#[tokio::test]
+async fn test_sync_failed_midstream() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> =
+        Arc::new(PartialThenFailProvider::new(ProviderError::Auth));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store: store.clone(),
+        provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(std::path::PathBuf::from("/tmp")),
+        bus: None,
+    });
+    let parent_sid = SessionId::new();
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let args = SpawnArgs::new("explore", "find the auth module", "find auth");
+    let outcome = runtime.spawn(&ctx, args).await.expect("spawn resolves");
+    assert_eq!(
+        outcome.status.as_deref(),
+        Some("failed"),
+        "a mid-stream failure surfaces status=failed",
+    );
+    assert!(
+        outcome.summary.as_ref().is_some_and(|s| s.contains("auth")),
+        "the summary carries the failure reason: {:?}",
+        outcome.summary,
+    );
+    // GAP: the partial text ("partial findings") the child emitted before the
+    // error is NOT in the summary -- the extractor does not flush in-flight
+    // deltas on stream-error. When that is fixed, this flips to assert the
+    // partial is carried.
+    assert!(
+        !outcome
+            .summary
+            .as_ref()
+            .is_some_and(|s| s.contains("partial findings")),
+        "partial text is currently lost on mid-stream error (extractor flushes on StepFinish only): {:?}",
+        outcome.summary,
+    );
+    let events = store.trajectory_snapshot(parent_sid);
+    let ret_status = events.iter().find_map(|e| match &e.kind {
+        TurnEventKind::SubagentReturn { status, .. } => Some(status.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        ret_status.as_deref(),
+        Some("failed"),
+        "SubagentReturn records the failed status",
     );
 }
 
