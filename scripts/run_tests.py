@@ -87,9 +87,35 @@ use_cov = shutil.which("cargo-llvm-cov") is not None and not use_nextest
 # its build cache on RUSTFLAGS; llvm-cov runs with instrumentation flags,
 # plain cargo test does not -- sharing the default target/ thrashes the
 # cache (a full rebuild on every cov<->plain switch, even for a docs-only
-# change). Pin the cov cache to target/cov/ so the plain target/ stays warm
-# + both caches go incremental on real .rs changes only.
-COV_TARGET_DIR = os.path.join("target", "cov")
+# change). Pin the cov cache to a shared target/cov/ under the main
+# checkout so all worktrees reuse the same instrumented binaries — a new
+# worktree's first make check is warm, not a cold full-cov rebuild.
+# Cargo's incremental cache is content-addressed, so differing source
+# states across worktrees re-compile only the changed crates.
+def _resolve_cov_target_dir():
+    fallback = os.path.join("target", "cov")
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode != 0:
+            return fallback
+        common = out.stdout.strip()
+        if not os.path.isabs(common):
+            repo_root = os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))
+            )
+            common = os.path.normpath(os.path.join(repo_root, common))
+        shared = os.path.join(common, "target", "cov")
+        if os.path.isdir(os.path.dirname(shared)):
+            return shared
+        return fallback
+    except (OSError, subprocess.SubprocessError):
+        return fallback
+
+
+COV_TARGET_DIR = _resolve_cov_target_dir()
 LCOV_PATH = os.path.join(COV_TARGET_DIR, "houyi-cov.lcov")
 
 # Scope the coverage pass to the CHANGED crates only (--package), not the
