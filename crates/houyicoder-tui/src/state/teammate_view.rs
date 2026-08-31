@@ -22,7 +22,7 @@ impl App {
     /// fires the on-demand fetch and the view fills when it returns. Returns
     /// false when no Subagent line exists.
     pub(crate) fn enter_teammate_view(&mut self) -> bool {
-        let Some((child_sid, needs_fetch)) = self.subagent_target_at_cursor() else {
+        let Some((child_sid, needs_fetch)) = self.subagent_target_or_last() else {
             return false;
         };
         self.enter_teammate_view_for_sid(&child_sid, needs_fetch)

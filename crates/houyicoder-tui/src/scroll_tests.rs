@@ -156,7 +156,7 @@ fn test_subagent_expand_pins() {
     let total = app.transcript_scroll.total.get();
     let top_before = app.transcript_scroll.top_offset(total);
     assert!(top_before > 0, "fixture taller than the viewport");
-    assert!(app.toggle_subagent_expand(), "the delegation is expandable");
+    assert!(app.toggle_tail_expand(), "the delegation is expandable");
     assert_eq!(
         app.transcript_scroll.top_offset(total),
         top_before,

@@ -80,31 +80,74 @@ impl App {
     }
 
     /// Toggle expand/collapse of the fold group under the selection anchor
-    /// (Ctrl+O on a summary or collapse-hint row). If the anchor row carries
-    /// a fold-group key, toggle that group in expanded_fold_groups. No-op
-    /// when the anchor is not on a fold row.
-    pub(crate) fn toggle_focused_fold_expand(&mut self) {
+    /// (Ctrl+O on a summary or collapse-hint row). Returns false when the
+    /// anchor is not on a fold row, so the caller can try the next target.
+    pub(crate) fn toggle_focused_fold_expand(&mut self) -> bool {
         let key = self
             .anchor_visible_row()
             .and_then(|ri| self.last_row_fold_keys.borrow().get(ri).cloned().flatten());
-        if let Some(key) = key
-            && !self.expanded_fold_groups.remove(&key)
-        {
+        let Some(key) = key else {
+            return false;
+        };
+        if !self.expanded_fold_groups.remove(&key) {
             self.expanded_fold_groups.insert(key);
         }
+        true
     }
 
-    /// Toggle a Subagent delegation's inline expansion (Ctrl+O). If the
-    /// cursor is on a Subagent line, toggle that one; otherwise fall back to
-    /// the most recent. On first expand of a line whose child rows are not
-    /// yet loaded, fires a one-shot fetch; a re-expand reuses the cached
-    /// rows.
+    /// Toggle the inline expansion of the delegation the cursor is on. False
+    /// when the cursor is elsewhere, so the caller can offer the row to the
+    /// other expandable kinds. A first expand of an unloaded line fires a
+    /// one-shot fetch; a re-expand reuses the cached rows.
     pub(crate) fn toggle_subagent_expand(&mut self) -> bool {
         let Some((child_sid, needs_fetch)) = self.subagent_target_at_cursor() else {
             return false;
         };
         self.apply_subagent_toggle(child_sid, needs_fetch);
         true
+    }
+
+    /// Toggle the expandable block the transcript holds latest, delegation or
+    /// reasoning summary. Comparing across kinds is the point: picking the
+    /// latest of one kind first is what let a delegation outrank a newer
+    /// reasoning block. False when the transcript holds neither.
+    pub(crate) fn toggle_tail_expand(&mut self) -> bool {
+        use crate::records::TranscriptLine;
+        let last_subagent = self
+            .transcript
+            .iter()
+            .rposition(|l| matches!(l, TranscriptLine::Subagent { .. }));
+        let last_thinking = self.transcript.iter().rposition(|l| {
+            matches!(
+                l,
+                TranscriptLine::ThoughtFor {
+                    reasoning: Some(_),
+                    ..
+                }
+            )
+        });
+        let subagent_wins = match (last_subagent, last_thinking) {
+            (Some(s), Some(t)) => s > t,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        if subagent_wins {
+            let Some(idx) = last_subagent else {
+                return false;
+            };
+            let TranscriptLine::Subagent {
+                child_sid,
+                folded_transcript,
+                ..
+            } = &self.transcript[idx]
+            else {
+                return false;
+            };
+            let (sid, needs_fetch) = (child_sid.clone(), folded_transcript.is_empty());
+            self.apply_subagent_toggle(sid, needs_fetch);
+            return true;
+        }
+        self.toggle_thinking_expand()
     }
 
     /// Toggle a Subagent delegation's inline expansion by visible row index
@@ -159,11 +202,10 @@ impl App {
         }
     }
 
-    /// Resolve the Subagent delegation under the selection cursor, or fall
-    /// back to the most recent when no cursor is set. Returns the child
-    /// session id and whether the child transcript still needs fetching.
-    /// Shared by inline expand (Ctrl+O) and teammate-view entry (Enter) so
-    /// the line targeted for one is the line drilled into by the other.
+    /// Resolve the delegation under the selection cursor: the child session id
+    /// and whether its transcript still needs fetching. None when the cursor
+    /// is unset or on another kind of line; a caller wanting a default names
+    /// its own.
     ///
     /// The walk mirrors the render path (build_slots_rows), not the flat
     /// per-line sum: a collapsed run of tool calls renders as one summary
@@ -180,57 +222,61 @@ impl App {
             &self.expanded_fold_groups,
             self.verbose,
         );
-        self.selection
-            .anchor
-            .and_then(|(_, content_row)| {
-                let mut row = 0usize;
-                let mut first = true;
-                for slot in &slots {
-                    let (rows, line_idx, is_interrupted) = match slot {
-                        DisplaySlot::Line(i, _) => {
-                            let l = &transcript[*i];
-                            (
-                                self.line_display_rows(l),
-                                Some(*i),
-                                matches!(l, TranscriptLine::Interrupted),
-                            )
-                        }
-                        DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, None, false),
-                    };
-                    if !first && !is_interrupted {
-                        row += 1;
+        self.selection.anchor.and_then(|(_, content_row)| {
+            let mut row = 0usize;
+            let mut first = true;
+            for slot in &slots {
+                let (rows, line_idx, is_interrupted) = match slot {
+                    DisplaySlot::Line(i, _) => {
+                        let l = &transcript[*i];
+                        (
+                            self.line_display_rows(l),
+                            Some(*i),
+                            matches!(l, TranscriptLine::Interrupted),
+                        )
                     }
-                    if row + rows > content_row {
-                        // Cursor lands in this slot. A Summary slot or a
-                        // non-Subagent Line is not a delegation, so return
-                        // None and let the caller fall back to the most
-                        // recent Subagent.
-                        if let Some(i) = line_idx
-                            && let TranscriptLine::Subagent {
-                                child_sid,
-                                folded_transcript,
-                                ..
-                            } = &transcript[i]
-                        {
-                            return Some((child_sid.clone(), folded_transcript.is_empty()));
-                        }
-                        return None;
-                    }
-                    row += rows;
-                    first = false;
+                    DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, None, false),
+                };
+                if !first && !is_interrupted {
+                    row += 1;
                 }
-                None
+                if row + rows > content_row {
+                    // Cursor lands in this slot. A Summary slot or a
+                    // non-Subagent Line is not a delegation, so the answer
+                    // is None -- this walk does not look elsewhere.
+                    if let Some(i) = line_idx
+                        && let TranscriptLine::Subagent {
+                            child_sid,
+                            folded_transcript,
+                            ..
+                        } = &transcript[i]
+                    {
+                        return Some((child_sid.clone(), folded_transcript.is_empty()));
+                    }
+                    return None;
+                }
+                row += rows;
+                first = false;
+            }
+            None
+        })
+    }
+
+    /// The delegation the cursor is on, else the most recent. The drill-in key
+    /// means "open a child", so with no line named it opens the newest; the
+    /// expand key has other kinds of block to weigh and defaults differently.
+    pub(crate) fn subagent_target_or_last(&self) -> Option<(String, bool)> {
+        use crate::records::TranscriptLine;
+        self.subagent_target_at_cursor().or_else(|| {
+            self.transcript.iter().rev().find_map(|line| match line {
+                TranscriptLine::Subagent {
+                    child_sid,
+                    folded_transcript,
+                    ..
+                } => Some((child_sid.clone(), folded_transcript.is_empty())),
+                _ => None,
             })
-            .or_else(|| {
-                self.transcript.iter().rev().find_map(|line| match line {
-                    TranscriptLine::Subagent {
-                        child_sid,
-                        folded_transcript,
-                        ..
-                    } => Some((child_sid.clone(), folded_transcript.is_empty())),
-                    _ => None,
-                })
-            })
+        })
     }
 
     /// Toggle the LAST ThoughtFor line's inline reasoning expansion (Ctrl+O).

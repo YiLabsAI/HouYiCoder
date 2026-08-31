@@ -25,7 +25,7 @@ fn test_expand_fetches_child_wired() {
         color: None,
     });
     // First expand: fires a one-shot fetch (the line has no child rows yet).
-    assert!(app.toggle_subagent_expand(), "toggle targeted the subagent");
+    assert!(app.toggle_tail_expand(), "toggle targeted the subagent");
     assert!(app.expanded_subagents.contains("c1"), "expanded");
     // Pump the driver round-trip until the fill arm swaps in the child rows
     // (the server reply for a sid with no log is an empty frame list, which

@@ -967,3 +967,83 @@ fn test_enter_fleet_drills_teammate() {
         "view targets the fleet agent id"
     );
 }
+
+/// With no cursor, Ctrl+O expands whichever block the transcript holds
+/// latest — here the reasoning summary that arrived after the delegation.
+/// A single delegation anywhere used to swallow the key for every kind.
+#[test]
+fn test_ctrl_o_expands_latest() {
+    let mut app = working_app();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    app.transcript.push(TranscriptLine::ThoughtFor {
+        secs: 19,
+        reasoning: Some("a long train of reasoning".into()),
+        tool_summary: None,
+        turn_id: "t1".into(),
+    });
+    assert!(app.selection.anchor.is_none(), "no cursor");
+    handle_ctrl_o(&mut app);
+    assert!(
+        app.expanded_thinking.contains("t1"),
+        "the later block expands: {:?}",
+        app.expanded_thinking
+    );
+    assert!(
+        app.expanded_subagents.is_empty(),
+        "the earlier delegation is untouched: {:?}",
+        app.expanded_subagents
+    );
+    handle_ctrl_o(&mut app);
+    assert!(
+        app.expanded_thinking.is_empty(),
+        "the same key collapses what it expanded"
+    );
+}
+
+/// With a cursor, the row under it decides. A reasoning summary the cursor
+/// sits on expands even though a delegation follows it in the transcript,
+/// which the tail-most rule would otherwise pick.
+#[test]
+fn test_ctrl_o_follows_cursor() {
+    let mut app = working_app();
+    app.transcript.push(TranscriptLine::ThoughtFor {
+        secs: 19,
+        reasoning: Some("a long train of reasoning".into()),
+        tool_summary: None,
+        turn_id: "t1".into(),
+    });
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    drop(crate::test_support::render_text(&app, 80, 24));
+    let ri = app
+        .last_transcript_rows
+        .borrow()
+        .iter()
+        .position(|(_, text)| text.contains("Thought for"))
+        .expect("the reasoning row is on screen");
+    let total = app.transcript_scroll.total.get();
+    let top = app.transcript_scroll.top_offset(total);
+    app.selection.start(0, top + ri);
+    handle_ctrl_o(&mut app);
+    assert!(
+        app.expanded_thinking.contains("t1"),
+        "the row under the cursor expands"
+    );
+    assert!(
+        app.expanded_subagents.is_empty(),
+        "the later delegation stays collapsed"
+    );
+}

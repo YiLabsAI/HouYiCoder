@@ -894,12 +894,12 @@ fn test_subagent_toggle_expand() {
         color: None,
     });
     assert!(app.expanded_subagents.is_empty(), "starts collapsed");
-    assert!(app.toggle_subagent_expand(), "toggle returns true");
+    assert!(app.toggle_tail_expand(), "toggle returns true");
     assert!(
         app.expanded_subagents.contains("child-1"),
         "first toggle expands"
     );
-    assert!(app.toggle_subagent_expand(), "toggle returns true again");
+    assert!(app.toggle_tail_expand(), "toggle returns true again");
     assert!(app.expanded_subagents.is_empty(), "second toggle collapses");
 }
 
@@ -978,13 +978,13 @@ fn test_subagent_toggle_repaints() {
         !out.contains("child reply here"),
         "first render is collapsed: {out}"
     );
-    app.toggle_subagent_expand();
+    app.toggle_tail_expand();
     let out = crate::test_support::render_text(&app, 80, 24);
     assert!(
         out.contains("child reply here"),
         "expand must repaint the child rows: {out}"
     );
-    app.toggle_subagent_expand();
+    app.toggle_tail_expand();
     let out = crate::test_support::render_text(&app, 80, 24);
     assert!(
         !out.contains("child reply here"),
@@ -1284,9 +1284,9 @@ fn test_subagent_collapse_keeps_folded() {
         color: None,
     });
     // Expand, then collapse: the child rows survive the collapse.
-    app.toggle_subagent_expand();
+    app.toggle_tail_expand();
     assert!(app.expanded_subagents.contains("c1"));
-    app.toggle_subagent_expand();
+    app.toggle_tail_expand();
     assert!(!app.expanded_subagents.contains("c1"), "collapsed");
     match &app.transcript[0] {
         TranscriptLine::Subagent {
@@ -1404,9 +1404,10 @@ fn test_subagent_toggle_stale_key() {
 }
 
 /// Cursor targeting: when the cursor is on a specific Subagent line, Ctrl+O
-/// expands that line, not the last one. Without a cursor, falls back to the
-/// last Subagent. Pins the cursor walk's spacer logic against the flat
-/// content-row space the selection lives in.
+/// expands that line, not the last one. Pins the cursor walk's spacer logic
+/// against the flat content-row space the selection lives in. Without a
+/// cursor the walk resolves nothing at all — naming a default is the
+/// caller's decision, and the tail-most rule then picks the later line.
 #[test]
 fn test_subagent_cursor_targeting() {
     use crate::records::TranscriptLine;
@@ -1428,7 +1429,10 @@ fn test_subagent_cursor_targeting() {
         color: None,
     });
     app.selection.start(0, 0);
-    app.toggle_subagent_expand();
+    assert!(
+        app.toggle_subagent_expand(),
+        "the cursor names a delegation"
+    );
     assert!(
         app.expanded_subagents.contains("c1"),
         "cursor on first line expands it"
@@ -1439,10 +1443,14 @@ fn test_subagent_cursor_targeting() {
     );
     app.expanded_subagents.clear();
     app.selection.anchor = None;
-    app.toggle_subagent_expand();
+    assert!(
+        !app.toggle_subagent_expand(),
+        "with no cursor the walk resolves nothing"
+    );
+    assert!(app.toggle_tail_expand(), "the tail-most rule picks one");
     assert!(
         app.expanded_subagents.contains("c2"),
-        "no cursor falls back to the last Subagent"
+        "and it is the later line"
     );
 }
 

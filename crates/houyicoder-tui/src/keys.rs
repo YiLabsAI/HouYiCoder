@@ -156,29 +156,34 @@ fn handle_trust(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// Focus mode keys: input is hidden, so only per-pane action keys (a/r/i),
-/// Up/Down, PgUp to scroll, and Esc to fold to Working are accepted.
+/// Expand or collapse one block. Each kind is offered the cursor's row in
+/// turn and declines a row that is not its own; only when no kind claims the
+/// row does the key fall back to the tail-most block. A kind that answers for
+/// rows it does not own makes every later kind here unreachable.
 pub(crate) fn handle_ctrl_o(app: &mut App) {
     if app.toggle_subagent_expand() {
         return;
     }
-    if app.toggle_thinking_expand() {
+    if let Some(ri) = app.anchor_visible_row()
+        && app.toggle_thinking_expand_at_row(ri)
+    {
         return;
     }
-    let has_fold_key = app
-        .anchor_visible_row()
-        .and_then(|ri| app.last_row_fold_keys.borrow().get(ri).cloned().flatten())
-        .is_some();
-    let has_active_todo = !app.todos_cache.is_empty();
-    if has_fold_key {
-        app.toggle_focused_fold_expand();
-    } else if has_active_todo {
-        app.todo_expanded = !app.todo_expanded;
-    } else {
-        app.toggle_focused_result_expand();
+    if app.toggle_focused_fold_expand() {
+        return;
     }
+    if app.toggle_tail_expand() {
+        return;
+    }
+    if !app.todos_cache.is_empty() {
+        app.todo_expanded = !app.todo_expanded;
+        return;
+    }
+    app.toggle_focused_result_expand();
 }
 
+/// Focus mode keys: input is hidden, so only per-pane action keys (a/r/i),
+/// Up/Down, PgUp to scroll, and Esc to fold to Working are accepted.
 fn handle_focus(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Esc => app.fold_to_working(),
