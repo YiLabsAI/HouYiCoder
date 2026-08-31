@@ -234,6 +234,10 @@ impl ResponseEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 #[non_exhaustive]
+// Two-variant reverse-request payload, one alive at a time (never bulk-stored),
+// so the size difference is harmless; the Permission variant carries a
+// serde_json::Value tool input that is large by nature.
+#[allow(clippy::large_enum_variant)]
 pub enum ServerRequestPayload {
     /// A tool needs a human verdict before the run proceeds. The turn stays
     /// live; the client answers with a permission decision on the same req_id.

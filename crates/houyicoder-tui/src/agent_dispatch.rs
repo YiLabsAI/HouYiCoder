@@ -603,3 +603,7 @@ fn frame_log_msg(frame: &crate::transcript::TranscriptFrame) -> Option<String> {
 #[cfg(test)]
 #[path = "agent_dispatch_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "agent_dispatch_teammate_tests.rs"]
+mod teammate_tests;

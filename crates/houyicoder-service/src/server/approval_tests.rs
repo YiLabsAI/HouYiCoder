@@ -21,7 +21,7 @@ fn test_build_request_carries_reason() {
         detail: "rm needs confirmation".into(),
         containment_note: None,
     };
-    let wired = build_approval_request(&req, Some(&reason));
+    let wired = build_approval_request(&req, Some(&reason), None);
     assert_eq!(wired.call_id, "call-1");
     assert_eq!(wired.tool_name, "bash");
     let wire_reason = wired.reason.as_ref().expect("reason carried onto the wire");
@@ -34,7 +34,7 @@ fn test_build_request_carries_reason() {
     assert_eq!(back.reason.unwrap().detail, "rm needs confirmation");
 
     // None reason: the card falls back to a generic prompt.
-    let no_reason = build_approval_request(&req, None);
+    let no_reason = build_approval_request(&req, None, None);
     assert!(no_reason.reason.is_none());
     let json = serde_json::to_string(&no_reason).unwrap();
     assert!(
@@ -495,7 +495,7 @@ async fn test_handle_drops_non_matching() {
             .expect("send response");
     });
     let decision = server
-        .handle_approval(&mut io, &approval)
+        .handle_approval(&mut io, &approval, None)
         .await
         .expect("handle_approval did not fatal on the non-matching frame");
     feeder.await.expect("feeder done");
@@ -541,7 +541,7 @@ async fn test_handle_cancel_returns_deny() {
             .expect("send cancel");
     });
     let decision = server
-        .handle_approval(&mut io, &approval)
+        .handle_approval(&mut io, &approval, None)
         .await
         .expect("handle_approval returned on cancel");
     feeder.await.expect("feeder done");

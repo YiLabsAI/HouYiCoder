@@ -229,6 +229,9 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Esc if app.pane == Pane::Model => {
             app.pane = Pane::Transcript;
         }
+        KeyCode::Esc if app.pane == Pane::Skills => {
+            app.pane = Pane::Transcript;
+        }
         KeyCode::Esc if app.pane == Pane::Hooks => {
             if app.hooks_level.get() > 0 {
                 app.hooks_level.set(0);

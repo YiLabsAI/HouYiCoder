@@ -52,6 +52,7 @@ mod synthetic;
 mod thinking;
 mod tool;
 mod tools;
+mod truncation;
 mod turn_group;
 mod verify;
 pub mod worktree_controller;
