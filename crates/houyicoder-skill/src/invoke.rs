@@ -397,7 +397,6 @@ mod tests {
             user_invocable: true,
             context: SkillContext::Inline,
             paths: Vec::new(),
-            shell: false,
             source,
             body_path: dir.join("SKILL.md"),
             skill_dir: dir.clone(),

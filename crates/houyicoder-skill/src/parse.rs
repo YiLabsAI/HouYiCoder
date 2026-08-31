@@ -75,7 +75,6 @@ pub fn parse_skill(
         .or_else(|| field_bool(&frontmatter, "userInvocable"))
         .unwrap_or(true);
     let paths = field_string_list(&frontmatter, "paths").unwrap_or_default();
-    let shell = field_bool(&frontmatter, "shell").unwrap_or(false);
 
     let context_str = field_string(&frontmatter, "context");
     let context = match context_str.as_deref() {
@@ -121,7 +120,6 @@ pub fn parse_skill(
         "context",
         "agent",
         "paths",
-        "shell",
         "license",
         "compatibility",
         "metadata",
@@ -156,7 +154,6 @@ pub fn parse_skill(
         user_invocable,
         context,
         paths,
-        shell,
         source,
         body_path: body_path.to_path_buf(),
         skill_dir: skill_dir.to_path_buf(),
@@ -263,7 +260,6 @@ mod tests {
         assert_eq!(def.name, "my-skill");
         assert_eq!(def.description, "Does a thing");
         assert!(def.user_invocable);
-        assert!(!def.shell);
     }
 
     #[test]

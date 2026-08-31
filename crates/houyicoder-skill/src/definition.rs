@@ -67,9 +67,6 @@ pub struct SkillDefinition {
     /// Conditional activation: gitignore-style path patterns. The skill
     /// activates for the session when a touched file matches.
     pub paths: Vec<String>,
-    /// Gates inline shell execution in the body. Deny by default;
-    /// MCP skills never get shell.
-    pub shell: bool,
     pub source: SkillSource,
     /// Absolute path to the SKILL.md file (body read on demand at
     /// invocation time, not at load).

@@ -27,7 +27,7 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 523
+STRUCT_FIELD_BASELINE = 522
 # pub(crate) fields drop from the count (regex gap); re-raise when fixed.
 
 
