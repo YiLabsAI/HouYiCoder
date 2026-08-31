@@ -37,11 +37,7 @@ pub mod word_diff;
 pub mod working;
 pub mod worktree_pane;
 
-use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::Color,
-};
+use ratatui::{Frame, layout::Rect, style::Color};
 
 use crate::state::{App, Screen};
 
@@ -78,38 +74,18 @@ pub fn draw(f: &mut Frame, app: &App) {
     // drag copied Working's text + painted a highlight on a row the status
     // surface no longer owned).
     app.status_rect.set(Rect::new(0, 0, 0, 0));
+    // The startup workspace-trust banner is the sole pre-chat setup screen
+    // while a trust ask is pending — the main view does not mount until the
+    // user answers. A top banner, not a centered popup over a live chat.
+    if app.pending_trust.is_some() {
+        trust::draw(f, app);
+        return;
+    }
     match app.screen {
         Screen::Login => login::draw(f, app),
         Screen::Console => console::draw(f, app),
         Screen::Working => working::draw(f, app),
     }
-    // The startup workspace-trust card overlays last so it sits above the
-    // screen content. Only present while a trust ask is pending (one-time
-    // startup gate, not a per-run concern).
-    trust::draw(f, app);
-    // The /search slash-command result renders inline as a pane inside the
-    // working surface (see working::draw_search_pane), not as a centered
-    // popup overlay, so opening it does not cover the transcript.
-}
-
-/// A centered rect of the given percent width/height within area.
-pub fn centered(width_pct: u16, height_pct: u16, area: Rect) -> Rect {
-    let pop = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - height_pct) / 2),
-            Constraint::Percentage(height_pct),
-            Constraint::Percentage((100 - height_pct) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - width_pct) / 2),
-            Constraint::Percentage(width_pct),
-            Constraint::Percentage((100 - width_pct) / 2),
-        ])
-        .split(pop[1])[1]
 }
 
 #[cfg(test)]
