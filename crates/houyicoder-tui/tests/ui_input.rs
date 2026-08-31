@@ -137,16 +137,18 @@ fn test_ctrlu_clears_busy_draft() {
     );
 }
 
-/// Esc while a run is in flight AND the queue holds a pending message: one
-/// keystroke aborts the run AND pops the queue head into the input box for
-/// editing. The popped text must NOT be auto-sent (the run ends Interrupted,
-/// the clean-end auto-drain gate holds) and must NOT be clobbered by the
-/// interrupt's input-restore path. Proven behaviorally: after the Esc, wait
-/// for the interrupt notice (the abort really landed through the server),
-/// then Enter. The queued token appearing as a contiguous user echo proves it
-/// was sitting in the input box at submit time: an auto-send leaves the box
-/// empty (no echo), and a clobber-by-restore submits the aborted run's origin
-/// instead (the first message's text, not the token).
+/// Esc while a run is in flight AND the queue holds a pending message: the
+/// split-Esc design takes two keystrokes — Esc1 aborts the run (queue left
+/// intact), then after the interrupt lands, Esc2 recalls the queue head into
+/// the input box. The popped text must NOT be auto-sent (an Interrupted end
+/// holds the clean-end auto-drain gate) and must NOT be clobbered by the
+/// interrupt's input-restore: Done fires before Esc2 and fills the empty box
+/// with the aborted origin, then Esc2's pop merges the queued text on top so
+/// both survive. Proven behaviorally: after Esc1, wait for the interrupt
+/// notice (the abort really landed through the server), Esc2 to recall, then
+/// Enter. The queued token appearing as a contiguous user echo proves it was
+/// in the input box at submit time — skip Esc2 and the restore submits the
+/// aborted run's origin instead (the first message's text, not the token).
 #[test]
 #[ignore]
 fn test_busy_esc_pops_queue() {
@@ -159,24 +161,51 @@ fn test_busy_esc_pops_queue() {
     s.send_str(QUEUED_TOKEN);
     s.send_key(&Key::Enter);
     std::thread::sleep(std::time::Duration::from_millis(300));
-    // Esc: abort + pop the queue head to the input box. The gap lets
-    // crossterm resolve the bare 0x1b as Esc before anything follows.
+    // Esc1: abort the in-flight run. The queue is left intact (split-Esc
+    // design: recall moves to Esc2). The gap lets crossterm resolve the bare
+    // 0x1b as Esc before anything follows.
     s.send_key(&Key::Esc);
     // The abort resolves through the server and lands the interrupt notice.
     assert!(
         s.wait_for("What should Houyi do instead", RENDER_TIMEOUT),
-        "Esc should abort the in-flight run:\n{}",
+        "Esc1 should abort the in-flight run:\n{}",
+        s.output()
+    );
+    // Esc2: recall — pop the queue head into the input box, merging onto the
+    // restored origin so both survive. The latch is the queue strip clearing:
+    // it renders every frame while pending is non-empty and vanishes once
+    // the pop empties it — the token itself can't latch (the strip shows it
+    // while pending, and the buffer accumulates). Sampling the latest frame
+    // per poll avoids stale frames and orders Enter after 0x1b resolves, so
+    // the Esc-timeout race can't swallow the 0x1b+\r pair. No fixed sleep.
+    s.send_key(&Key::Esc);
+    let popped = {
+        let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
+        loop {
+            s.clear_output();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if !s.output_compact().contains("queued:") {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+        }
+    };
+    assert!(
+        popped,
+        "Esc2 should pop the queue head (queue strip should clear):\n{}",
         s.output()
     );
     // Wipe history so only what renders after the submit is read; the queued
     // token was typed char-by-char (never contiguous) and the popped input
     // box may render it, so the contiguous USER ECHO is the proof it was
-    // submitted from the box - not auto-sent, not clobbered by the restore.
+    // submitted from the box - not auto-sent, not left as the restored origin.
     s.clear_output();
     s.send_key(&Key::Enter);
     assert!(
         s.wait_for(QUEUED_TOKEN, RENDER_TIMEOUT),
-        "queued token should be popped to the input box and submit on Enter:\n{}",
+        "Esc2 should pop the queue head to the input box and submit on Enter:\n{}",
         s.output()
     );
 }
