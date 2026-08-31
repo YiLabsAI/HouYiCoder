@@ -25,6 +25,7 @@ use crate::view::{
 mod flat_transcript;
 mod fleet_pill;
 mod live_rows;
+mod row_sink;
 mod subagent_render;
 mod working_transcript;
 

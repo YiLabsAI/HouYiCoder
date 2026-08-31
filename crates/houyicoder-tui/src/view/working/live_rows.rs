@@ -6,6 +6,7 @@
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
+use super::row_sink::{Row, RowSink};
 use crate::records::ToolOutcome;
 use crate::state::App;
 
@@ -29,77 +30,44 @@ pub(super) fn build_live_rows(area: Rect, app: &App, has_slots: bool) -> LiveRow
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
     const SPINNER: u8 = crate::selection::TAG_SPINNER;
 
-    let mut rows: Vec<(u8, String, Option<ToolOutcome>)> = Vec::new();
-    let mut callids: Vec<Option<String>> = Vec::new();
-    let mut fold_keys: Vec<Option<String>> = Vec::new();
-    let mut expanded_group: Vec<Option<String>> = Vec::new();
-    let mut turn_ids: Vec<Option<String>> = Vec::new();
-    let mut pre_rendered: Vec<Option<Line<'static>>> = Vec::new();
+    let mut sink = RowSink::default();
+    // Each section is preceded by a spacer when anything sits above it,
+    // whether that is the slots cache or an earlier live section.
+    let spacer_if_needed = |sink: &mut RowSink| {
+        if has_slots || !sink.is_empty() {
+            sink.push(Row::spacer());
+        }
+    };
 
     if app.live_active && !app.live_assistant_text.is_empty() {
-        if has_slots || !rows.is_empty() {
-            rows.push((PLAIN, String::new(), None));
-            callids.push(None);
-            fold_keys.push(None);
-            expanded_group.push(None);
-            turn_ids.push(None);
-            pre_rendered.push(None);
-        }
+        spacer_if_needed(&mut sink);
         let (md_lines, md_plain) = app
             .render_cache
             .borrow_mut()
             .live_agent_rows(&app.live_assistant_text, area.width);
         for (md_line, plain) in md_lines.into_iter().zip(md_plain) {
-            rows.push((PLAIN, plain, None));
-            callids.push(None);
-            fold_keys.push(None);
-            expanded_group.push(None);
-            turn_ids.push(None);
-            pre_rendered.push(Some(md_line));
+            sink.push(Row::new(PLAIN, plain).pre(Some(md_line)));
         }
     }
 
     if app.agent_busy
         && let Some(start) = app.run_started
     {
-        if has_slots || !rows.is_empty() {
-            rows.push((PLAIN, String::new(), None));
-            callids.push(None);
-            fold_keys.push(None);
-            expanded_group.push(None);
-            turn_ids.push(None);
-            pre_rendered.push(None);
-        }
+        spacer_if_needed(&mut sink);
         let text = crate::view::spinner::spinner_row_text(app, start.elapsed(), area.width);
-        rows.push((SPINNER, text, None));
-        callids.push(None);
-        fold_keys.push(None);
-        expanded_group.push(None);
-        turn_ids.push(None);
-        pre_rendered.push(None);
+        sink.push(Row::new(SPINNER, text));
     }
 
     let todo_rows = crate::view::todo_list::render_rows(app);
     if !todo_rows.is_empty() {
-        if has_slots || !rows.is_empty() {
-            rows.push((PLAIN, String::new(), None));
-            callids.push(None);
-            fold_keys.push(None);
-            expanded_group.push(None);
-            turn_ids.push(None);
-            pre_rendered.push(None);
-        }
+        spacer_if_needed(&mut sink);
         for (plain, styled) in todo_rows {
-            rows.push((PLAIN, plain, None));
-            callids.push(None);
-            fold_keys.push(None);
-            expanded_group.push(None);
-            turn_ids.push(None);
-            pre_rendered.push(Some(styled));
+            sink.push(Row::new(PLAIN, plain).pre(Some(styled)));
         }
     }
 
-    let all_rows: Vec<(u8, String)> = rows.iter().map(|(t, s, _)| (*t, s.clone())).collect();
+    let all_rows = sink.text_rows();
+    let (rows, callids, fold_keys, expanded_group, turn_ids, pre_rendered) = sink.into_parts();
     LiveRows {
         rows,
         callids,

@@ -15,6 +15,7 @@ use ratatui::{
 };
 
 use super::live_rows::build_live_rows;
+use super::row_sink::{Row, RowParts, RowSink};
 use crate::records::ToolOutcome;
 use crate::state::App;
 use crate::state::ViewportMode;
@@ -321,19 +322,13 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
 /// spacer. The flat window view calls this with grp = None (no fold), so it
 /// never touches display_slots/TranscriptScroll/total. Returns false for a
 /// Thinking line (emits nothing); true otherwise.
-#[expect(clippy::too_many_arguments, reason = "row builder params")]
 #[expect(clippy::too_many_lines, reason = "row formatting")]
 pub(crate) fn push_line_rows(
     line: &crate::records::TranscriptLine,
     grp: Option<&str>,
     width: u16,
     app: &App,
-    rows: &mut Vec<(u8, String, Option<ToolOutcome>)>,
-    row_callids: &mut Vec<Option<String>>,
-    fold_keys: &mut Vec<Option<String>>,
-    expanded_group: &mut Vec<Option<String>>,
-    turn_ids: &mut Vec<Option<String>>,
-    pre_rendered: &mut Vec<Option<Line<'static>>>,
+    sink: &mut RowSink,
 ) -> bool {
     use crate::records::TranscriptLine;
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
@@ -363,13 +358,8 @@ pub(crate) fn push_line_rows(
     let grp_key: Option<String> = grp.map(|g| g.to_string());
     // No spacer before the interrupt notice: it is a child row of the message
     // above, so a blank line between them would read as a separate utterance.
-    if !rows.is_empty() && !matches!(line, TranscriptLine::Interrupted) {
-        rows.push((PLAIN, String::new(), None));
-        row_callids.push(None);
-        fold_keys.push(None);
-        expanded_group.push(grp_key.clone());
-        turn_ids.push(None);
-        pre_rendered.push(None);
+    if !sink.is_empty() && !matches!(line, TranscriptLine::Interrupted) {
+        sink.push(Row::spacer().group(grp_key.clone()));
     }
     if let TranscriptLine::Tool { name, call_id, .. } = line
         && name.as_str() == "result"
@@ -381,28 +371,28 @@ pub(crate) fn push_line_rows(
             .borrow_mut()
             .tool_rows(&body, call_id, outcome, expanded, is_diff, width)
         {
-            rows.push((tag, text.clone(), oc));
-            row_callids.push(cid);
-            fold_keys.push(None);
-            expanded_group.push(grp_key.clone());
-            turn_ids.push(None);
             let pre = if matches!(tag, DIFF_ADD | DIFF_DEL | DIFF_HUNK | DIFF_CTX) {
                 Some(diff_row(&text, tag, width, word.as_deref()))
             } else {
                 None
             };
-            pre_rendered.push(pre);
+            sink.push(
+                Row::new(tag, text)
+                    .outcome(oc)
+                    .callid(cid)
+                    .group(grp_key.clone())
+                    .pre(pre),
+            );
         }
         return true;
     }
     if let TranscriptLine::ContextGrid(view) = line {
         for (plain, styled) in context_view::render_as_rows(view) {
-            rows.push((PLAIN, plain, None));
-            row_callids.push(None);
-            fold_keys.push(None);
-            expanded_group.push(grp_key.clone());
-            turn_ids.push(None);
-            pre_rendered.push(Some(styled));
+            sink.push(
+                Row::new(PLAIN, plain)
+                    .group(grp_key.clone())
+                    .pre(Some(styled)),
+            );
         }
         return true;
     }
@@ -415,22 +405,14 @@ pub(crate) fn push_line_rows(
         color,
     } = line
     {
-        super::subagent_render::push_subagent_rows(
+        let delegation = super::subagent_render::Delegation {
             child_sid,
             subagent_type,
             summary,
             folded_transcript,
-            color.as_deref(),
-            grp,
-            width,
-            app,
-            rows,
-            row_callids,
-            fold_keys,
-            expanded_group,
-            turn_ids,
-            pre_rendered,
-        );
+            color: color.as_deref(),
+        };
+        super::subagent_render::push_subagent_rows(&delegation, grp, width, app, sink);
         return true;
     }
     if let TranscriptLine::Agent(text) = line {
@@ -442,12 +424,11 @@ pub(crate) fn push_line_rows(
             } else {
                 PLAIN
             };
-            rows.push((tag, plain, None));
-            row_callids.push(None);
-            fold_keys.push(None);
-            expanded_group.push(grp_key.clone());
-            turn_ids.push(None);
-            pre_rendered.push(Some(md_line));
+            sink.push(
+                Row::new(tag, plain)
+                    .group(grp_key.clone())
+                    .pre(Some(md_line)),
+            );
             first = false;
         }
         return true;
@@ -474,34 +455,23 @@ pub(crate) fn push_line_rows(
             "" => format!("✻ Thought for {}s", secs),
             _ => format!("✻ Thought for {}s (ctrl+o to {})", secs, hint),
         };
-        rows.push((SYSTEM, row_text, None));
-        row_callids.push(None);
-        fold_keys.push(None);
-        expanded_group.push(grp_key.clone());
-        turn_ids.push(Some(turn_id.clone()));
-        pre_rendered.push(None);
+        sink.push(
+            Row::new(SYSTEM, row_text)
+                .group(grp_key.clone())
+                .turn_id(Some(turn_id.clone())),
+        );
         if let Some(r) = reasoning
             && expanded
         {
             for rline in app.render_cache.borrow_mut().thought_rows(r, width) {
-                rows.push((SYSTEM, rline, None));
-                row_callids.push(None);
-                fold_keys.push(None);
-                expanded_group.push(grp_key.clone());
-                turn_ids.push(None);
-                pre_rendered.push(None);
+                sink.push(Row::new(SYSTEM, rline).group(grp_key.clone()));
             }
         }
         return true;
     }
     if let TranscriptLine::User(text) = line {
         for row in app.render_cache.borrow_mut().user_rows(text, width) {
-            rows.push((tag, row, outcome));
-            row_callids.push(None);
-            fold_keys.push(None);
-            expanded_group.push(grp_key.clone());
-            turn_ids.push(None);
-            pre_rendered.push(None);
+            sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
         }
         return true;
     }
@@ -529,12 +499,7 @@ pub(crate) fn push_line_rows(
         text
     };
     for row in text.split('\n') {
-        rows.push((tag, row.to_string(), outcome));
-        row_callids.push(None);
-        fold_keys.push(None);
-        expanded_group.push(grp_key.clone());
-        turn_ids.push(None);
-        pre_rendered.push(None);
+        sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
     }
     true
 }
@@ -583,15 +548,6 @@ pub(crate) fn highlighted_line(row: &str, query: &str, current: bool) -> Line<'s
     }
     Line::from(spans)
 }
-
-type DisplayRows = (
-    Vec<(u8, String, Option<ToolOutcome>)>,
-    Vec<Option<String>>,
-    Vec<Option<String>>,
-    Vec<Option<String>>,
-    Vec<Option<String>>,
-    Vec<Option<Line<'static>>>,
-);
 
 /// Order-independent content hash of a string set: XOR each element's stable
 /// byte hash so the result does not depend on HashSet iteration order. Replaces
@@ -665,16 +621,11 @@ fn visible_window<T: Clone>(
     out
 }
 
-fn build_slots_rows(area: Rect, app: &App) -> DisplayRows {
+fn build_slots_rows(area: Rect, app: &App) -> RowParts {
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
     const FOLD: u8 = crate::selection::TAG_FOLD;
 
-    let mut rows: Vec<(u8, String, Option<ToolOutcome>)> = Vec::new();
-    let mut row_callids: Vec<Option<String>> = Vec::new();
-    let mut fold_keys: Vec<Option<String>> = Vec::new();
-    let mut expanded_group: Vec<Option<String>> = Vec::new();
-    let mut turn_ids: Vec<Option<String>> = Vec::new();
-    let mut pre_rendered: Vec<Option<Line<'static>>> = Vec::new();
+    let mut sink = RowSink::default();
 
     let slots = crate::fold::display_slots(
         app.active_transcript(),
@@ -685,64 +636,39 @@ fn build_slots_rows(area: Rect, app: &App) -> DisplayRows {
     for slot in &slots {
         match slot {
             crate::fold::DisplaySlot::Summary(g) => {
-                if !rows.is_empty() {
-                    rows.push((PLAIN, String::new(), None));
-                    row_callids.push(None);
-                    fold_keys.push(None);
-                    expanded_group.push(None);
-                    turn_ids.push(None);
-                    pre_rendered.push(None);
+                if !sink.is_empty() {
+                    sink.push(Row::spacer());
                 }
+                // A collapsed group's rows carry its key as the enclosing
+                // group only while expanded, so the block background paints
+                // the expanded region and not the collapsed handle.
+                let enclosing = app
+                    .expanded_fold_groups
+                    .contains(&g.key)
+                    .then(|| g.key.clone());
                 let sr = crate::fold::render_summary(&g.stats, &g.git_ops, g.active);
-                rows.push((FOLD, sr.plain, None));
-                row_callids.push(None);
-                fold_keys.push(Some(g.key.clone()));
-                expanded_group.push(if app.expanded_fold_groups.contains(&g.key) {
-                    Some(g.key.clone())
-                } else {
-                    None
-                });
-                turn_ids.push(None);
-                pre_rendered.push(Some(sr.line));
+                sink.push(
+                    Row::new(FOLD, sr.plain)
+                        .fold_key(Some(g.key.clone()))
+                        .group(enclosing.clone())
+                        .pre(Some(sr.line)),
+                );
                 if let Some(hint) = g.hint.as_ref() {
-                    rows.push((FOLD, format!("  \u{23bf}  {hint}"), None));
-                    row_callids.push(None);
-                    fold_keys.push(Some(g.key.clone()));
-                    expanded_group.push(if app.expanded_fold_groups.contains(&g.key) {
-                        Some(g.key.clone())
-                    } else {
-                        None
-                    });
-                    turn_ids.push(None);
-                    pre_rendered.push(None);
+                    sink.push(
+                        Row::new(FOLD, format!("  \u{23bf}  {hint}"))
+                            .fold_key(Some(g.key.clone()))
+                            .group(enclosing),
+                    );
                 }
             }
             crate::fold::DisplaySlot::Line(i, grp) => {
                 let line = &app.active_transcript()[*i];
-                push_line_rows(
-                    line,
-                    grp.as_deref(),
-                    area.width,
-                    app,
-                    &mut rows,
-                    &mut row_callids,
-                    &mut fold_keys,
-                    &mut expanded_group,
-                    &mut turn_ids,
-                    &mut pre_rendered,
-                );
+                push_line_rows(line, grp.as_deref(), area.width, app, &mut sink);
             }
         }
     }
 
-    (
-        rows,
-        row_callids,
-        fold_keys,
-        expanded_group,
-        turn_ids,
-        pre_rendered,
-    )
+    sink.into_parts()
 }
 
 #[cfg(test)]

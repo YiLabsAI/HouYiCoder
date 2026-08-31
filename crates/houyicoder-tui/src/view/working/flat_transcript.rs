@@ -38,7 +38,6 @@ use crate::view::working::working_transcript::{highlighted_line, push_line_rows}
 // and make the flat-walk parity harder to hold. It is the simplified isomorph
 // of draw_transcript (same shape minus the fold slot layer); keep them
 // structurally parallel.
-#[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub(super) fn draw_flat_transcript(f: &mut Frame, area: Rect, app: &App) {
     // Pump one index chunk per frame while the G full-scan builds (keeps the
     // UI responsive + lets Esc interrupt). Done before rendering so the
@@ -51,28 +50,13 @@ pub(super) fn draw_flat_transcript(f: &mut Frame, area: Rect, app: &App) {
     const DIFF_DEL: u8 = crate::selection::TAG_DIFF_DEL;
     const DIFF_HUNK: u8 = crate::selection::TAG_DIFF_HUNK;
     const DIFF_CTX: u8 = crate::selection::TAG_DIFF_CTX;
-    let mut rows: Vec<(u8, String, Option<ToolOutcome>)> = Vec::new();
-    let mut row_callids: Vec<Option<String>> = Vec::new();
-    let mut fold_keys: Vec<Option<String>> = Vec::new();
-    let mut expanded_group: Vec<Option<String>> = Vec::new();
-    let mut turn_ids: Vec<Option<String>> = Vec::new();
-    let mut pre_rendered: Vec<Option<Line<'static>>> = Vec::new();
+    let mut sink = super::row_sink::RowSink::default();
     // No slot layer: each line is its own row set. grp is None -- the window
-    // has no fold groups, so expanded_group stays None throughout.
+    // has no fold groups, so the enclosing group stays None throughout.
     for line in app.active_transcript() {
-        push_line_rows(
-            line,
-            None,
-            area.width,
-            app,
-            &mut rows,
-            &mut row_callids,
-            &mut fold_keys,
-            &mut expanded_group,
-            &mut turn_ids,
-            &mut pre_rendered,
-        );
+        push_line_rows(line, None, area.width, app, &mut sink);
     }
+    let (rows, row_callids, fold_keys, expanded_group, turn_ids, pre_rendered) = sink.into_parts();
     let cap = area.height as usize;
     app.window_scroll.cap.set(cap);
     let total = rows.len();
