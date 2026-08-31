@@ -76,10 +76,12 @@ pub(super) fn build_hook_registry(
 /// resolved env specs) plus the always-on skill-grant hook. Returns an Arc
 /// so the caller can share it between the runner fire points and the
 /// skill-hook registrar. An empty spec set still yields an empty registry so
-/// the fire points have a home.
-pub(super) fn build_session_registry(gate: Arc<dyn ModeGate>) -> Arc<HookRegistry> {
-    let launcher: Arc<dyn ProcessLauncher> =
-        Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
+/// the fire points have a home. The launcher is shared with the caller so
+/// the skill-hook registrar spawns through the same chokepoint.
+pub(super) fn build_session_registry(
+    gate: Arc<dyn ModeGate>,
+    launcher: Arc<dyn ProcessLauncher>,
+) -> Arc<HookRegistry> {
     let reg: Arc<HookRegistry> =
         match build_hook_registry(&houyicoder_config::resolve_hooks(), launcher) {
             Some(r) => Arc::new(r),

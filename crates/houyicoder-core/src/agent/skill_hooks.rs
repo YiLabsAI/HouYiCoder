@@ -7,11 +7,13 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
 
-use houyicoder_api::skill::{HookSourceKind, SkillRegistry};
+use houyicoder_api::launcher::ProcessLauncher;
+use houyicoder_api::skill::{HookSourceKind, SkillHookSpec, SkillRegistry};
 use houyicoder_api::trust::TrustState;
 
 use super::exports::{
-    Hook, HookContext, HookError, HookEvent, HookRegistry, HookSource, HookVerdict,
+    CommandHook, Hook, HookContext, HookError, HookEvent, HookPayload, HookRegistry, HookSource,
+    HookVerdict,
 };
 use super::parse_event;
 
@@ -22,6 +24,7 @@ use super::parse_event;
 pub struct SkillHookRegistrar {
     hook_reg: Arc<HookRegistry>,
     trust: Arc<RwLock<TrustState>>,
+    launcher: Arc<dyn ProcessLauncher>,
     seen: Mutex<HashSet<DedupKey>>,
 }
 
@@ -38,13 +41,19 @@ struct DedupKey {
 }
 
 impl SkillHookRegistrar {
-    /// Build from the session hook registry and a live trust ref. The trust
-    /// ref starts fail-closed (Untrusted); the server writes the resolved
+    /// Build from the session hook registry, a live trust ref, and the
+    /// process launcher the command hooks spawn through. The trust ref
+    /// starts fail-closed (Untrusted); the server writes the resolved
     /// state back so a Project or Local source invoked later reads it.
-    pub fn new(hook_reg: Arc<HookRegistry>, trust: Arc<RwLock<TrustState>>) -> Self {
+    pub fn new(
+        hook_reg: Arc<HookRegistry>,
+        trust: Arc<RwLock<TrustState>>,
+        launcher: Arc<dyn ProcessLauncher>,
+    ) -> Self {
         Self {
             hook_reg,
             trust,
+            launcher,
             seen: Mutex::new(HashSet::new()),
         }
     }
@@ -104,7 +113,13 @@ impl SkillHookRegistrar {
                 continue;
             }
             let source = map_source(spec.source);
-            let hook = SkillCommandHook::new(skill_name.to_string(), vec![event], source);
+            let hook = SkillCommandHook::new(
+                skill_name.to_string(),
+                vec![event],
+                source,
+                &spec,
+                Arc::clone(&self.launcher),
+            );
             self.hook_reg.register(Arc::new(hook));
             count += 1;
             tracing::info!(
@@ -128,22 +143,45 @@ fn map_source(kind: HookSourceKind) -> HookSource {
     }
 }
 
-/// A hook built from a skill frontmatter spec. Carries the skill name for
-/// diagnostics, the subscribed event, and the source level for the registry
-/// policy and trust filters at dispatch. The verdict is Allow: this stage
-/// wires registration, trust gating, dedup, and dispatch visibility.
+/// A hook built from a skill frontmatter spec. The matcher gates by tool
+/// name (exact, pipe-separated, or regex); the if-rule gates by tool and
+/// input pattern; the wrapped command hook spawns the configured program
+/// and parses its verdict. The verdict is narrowed by source: a Project or
+/// Local source cannot Inject (downgraded to Observe so a project hook
+/// cannot speak with engine authority) and an Ask is tagged with the skill
+/// name; Managed and User sources pass through.
 pub(crate) struct SkillCommandHook {
     name: String,
     events: Vec<HookEvent>,
     source: HookSource,
+    matcher: Option<String>,
+    if_rule: Option<String>,
+    command: CommandHook,
 }
 
 impl SkillCommandHook {
-    pub(crate) fn new(name: String, events: Vec<HookEvent>, source: HookSource) -> Self {
+    pub(crate) fn new(
+        name: String,
+        events: Vec<HookEvent>,
+        source: HookSource,
+        spec: &SkillHookSpec,
+        launcher: Arc<dyn ProcessLauncher>,
+    ) -> Self {
+        let command = CommandHook::new(
+            name.clone(),
+            events.clone(),
+            spec.command.clone(),
+            spec.args.clone(),
+            launcher,
+            source.clone(),
+        );
         Self {
             name,
             events,
             source,
+            matcher: spec.matcher.clone(),
+            if_rule: spec.if_rule.clone(),
+            command,
         }
     }
 }
@@ -158,198 +196,173 @@ impl Hook for SkillCommandHook {
     fn source(&self) -> HookSource {
         self.source.clone()
     }
-    fn evaluate(&self, _ctx: &HookContext) -> Result<HookVerdict, HookError> {
-        Ok(HookVerdict::Allow)
+    fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
+        if self
+            .matcher
+            .as_ref()
+            .is_some_and(|m| !matcher_passes(ctx, m))
+        {
+            return Ok(HookVerdict::Allow);
+        }
+        if self
+            .if_rule
+            .as_ref()
+            .is_some_and(|rule| !if_rule_passes(ctx, rule))
+        {
+            return Ok(HookVerdict::Allow);
+        }
+        let verdict = self.command.evaluate(ctx)?;
+        Ok(narrow_by_source(verdict, self.source.clone(), &self.name))
+    }
+}
+
+/// Whether the context's tool name satisfies a matcher pattern. Empty or
+/// "*" matches all. A pattern of ascii letters, digits, underscores, and
+/// pipes is an exact or pipe-separated list. Anything else is a regex. A
+/// non-tool event (no tool name in the payload) never matches.
+fn matcher_passes(ctx: &HookContext, matcher: &str) -> bool {
+    if matcher.is_empty() || matcher == "*" {
+        return true;
+    }
+    let Some(tool) = tool_name(ctx) else {
+        return false;
+    };
+    if matcher
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '|')
+    {
+        if matcher.contains('|') {
+            return matcher.split('|').any(|p| p.trim() == tool);
+        }
+        return matcher == tool;
+    }
+    match regex::Regex::new(matcher) {
+        Ok(re) => re.is_match(tool),
+        Err(_) => {
+            tracing::warn!(matcher = %matcher, "skill hook matcher is not valid regex");
+            false
+        }
+    }
+}
+
+/// Whether the context satisfies a Tool(pattern) if-rule. The tool name
+/// must match; a bare Tool (no parens) passes on tool match. A pattern is
+/// glob-matched (* and ?) against the tool input's string values as an
+/// over-approximation — precise per-field matching is not wired here. A
+/// non-tool event never passes.
+fn if_rule_passes(ctx: &HookContext, rule: &str) -> bool {
+    let (rule_tool, pattern) = parse_if_rule(rule);
+    let Some(tool) = tool_name(ctx) else {
+        return false;
+    };
+    if tool != rule_tool {
+        return false;
+    }
+    let Some(pattern) = pattern else {
+        return true;
+    };
+    glob_matches_any(&tool_input(ctx), pattern)
+}
+
+/// Split a Tool(pattern) rule into (tool, optional pattern). A bare Tool
+/// has no parens.
+fn parse_if_rule(rule: &str) -> (&str, Option<&str>) {
+    if let Some(open) = rule.find('(') {
+        let tool = rule[..open].trim();
+        let inner = rule[open + 1..].trim_end_matches(')').trim();
+        (tool, Some(inner))
+    } else {
+        (rule.trim(), None)
+    }
+}
+
+fn tool_name(ctx: &HookContext) -> Option<&str> {
+    match &ctx.payload {
+        HookPayload::PreToolUse { tool_name, .. }
+        | HookPayload::PostToolUse { tool_name, .. }
+        | HookPayload::PostToolUseFailure { tool_name, .. } => Some(tool_name),
+        _ => None,
+    }
+}
+
+fn tool_input(ctx: &HookContext) -> serde_json::Value {
+    match &ctx.payload {
+        HookPayload::PreToolUse { input, .. } | HookPayload::PostToolUse { input, .. } => {
+            input.clone()
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Glob-match a pattern against any string value in the input JSON. The
+/// pattern supports * and ? (translated to regex); other characters are
+/// literal. Anchored as a full match.
+fn glob_matches_any(input: &serde_json::Value, pattern: &str) -> bool {
+    let Some(re) = glob_to_regex(pattern) else {
+        return false;
+    };
+    for s in collect_strings(input) {
+        if re.is_match(&s) {
+            return true;
+        }
+    }
+    false
+}
+
+fn glob_to_regex(pattern: &str) -> Option<regex::Regex> {
+    let mut out = String::from("^");
+    for c in pattern.chars() {
+        match c {
+            '*' => out.push_str(".*"),
+            '?' => out.push('.'),
+            _ => out.push_str(&regex::escape(&c.to_string())),
+        }
+    }
+    out.push('$');
+    regex::Regex::new(&out).ok()
+}
+
+/// Collect every string value reachable in the JSON (object values, array
+/// elements, nested). Non-string leaves are ignored.
+fn collect_strings(value: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_strings_into(value, &mut out);
+    out
+}
+
+fn collect_strings_into(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(a) => {
+            for v in a {
+                collect_strings_into(v, out);
+            }
+        }
+        serde_json::Value::Object(o) => {
+            for (_, v) in o {
+                collect_strings_into(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Narrow a verdict by source level. A Project or Local source cannot
+/// Inject (the content is downgraded to an Observe so a project hook cannot
+/// inject instructions the model reads as engine-authoritative) and an Ask
+/// is tagged with the skill name so the user sees which skill is asking.
+/// Managed and User sources pass through unchanged.
+fn narrow_by_source(verdict: HookVerdict, source: HookSource, name: &str) -> HookVerdict {
+    match source {
+        HookSource::Project | HookSource::Local => match verdict {
+            HookVerdict::Inject(content) => HookVerdict::Observe(content),
+            HookVerdict::Ask(msg) => HookVerdict::Ask(format!("[skill {name}] {msg}")),
+            other => other,
+        },
+        _ => verdict,
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillHookSpec, SkillRegistry};
-    use houyicoder_context::SessionId;
-    use std::sync::RwLock;
-
-    use super::super::{HookPayload, ToolResult};
-
-    /// A stub registry that returns a fixed vec of specs from hooks_for. find
-    /// and prepare_body are not exercised by the registrar.
-    struct SpecRegistry {
-        specs: Vec<SkillHookSpec>,
-    }
-    impl SkillRegistry for SpecRegistry {
-        fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
-            Vec::new()
-        }
-        fn find(&self, _name: &str) -> Option<SkillDescriptor> {
-            None
-        }
-        fn prepare_body(
-            &self,
-            name: &str,
-            _args: Option<&str>,
-            _sid: Option<&str>,
-        ) -> Result<String, SkillError> {
-            Err(SkillError::NotFound(name.into()))
-        }
-        fn hooks_for(&self, _name: &str) -> Vec<SkillHookSpec> {
-            self.specs.clone()
-        }
-    }
-
-    fn spec(event: &str, source: HookSourceKind) -> SkillHookSpec {
-        SkillHookSpec {
-            event: event.into(),
-            matcher: None,
-            command: "echo".into(),
-            args: vec![],
-            once: false,
-            if_rule: None,
-            source,
-        }
-    }
-
-    fn registrar(trust: TrustState) -> (SkillHookRegistrar, Arc<HookRegistry>) {
-        let reg = Arc::new(HookRegistry::new());
-        let trust = Arc::new(RwLock::new(trust));
-        let r = SkillHookRegistrar::new(reg.clone(), trust);
-        (r, reg)
-    }
-
-    fn post_tool_ctx() -> HookContext {
-        HookContext {
-            event: HookEvent::PostToolUse,
-            payload: HookPayload::PostToolUse {
-                tool_name: "bash".into(),
-                input: serde_json::json!({}),
-                result: ToolResult {
-                    output: "{}".into(),
-                },
-            },
-            session: SessionId::new(),
-        }
-    }
-
-    /// A registered Managed hook fires on dispatch (an Allow outcome).
-    #[test]
-    fn test_register_fires_on_dispatch() {
-        let (r, reg) = registrar(TrustState::Trusted);
-        let registry = SpecRegistry {
-            specs: vec![spec("PostToolUse", HookSourceKind::Managed)],
-        };
-        assert_eq!(r.register(&registry, "deploy"), 1);
-        let outcomes = reg.dispatch(&post_tool_ctx());
-        assert_eq!(outcomes.len(), 1);
-        assert!(matches!(outcomes[0].result, Ok(HookVerdict::Allow)));
-    }
-
-    /// An empty specs vec registers nothing (the shape a Mcp source
-    /// produces: parse filtered it to empty).
-    #[test]
-    fn test_empty_specs_registers_nothing() {
-        let (r, reg) = registrar(TrustState::Trusted);
-        let registry = SpecRegistry { specs: vec![] };
-        assert_eq!(r.register(&registry, "deploy"), 0);
-        assert!(reg.is_empty());
-    }
-
-    /// A second register call for the same spec is a no-op: the dedup key is
-    /// already in the seen set, so dispatch still fires once.
-    #[test]
-    fn test_dedup_skips_duplicate() {
-        let (r, reg) = registrar(TrustState::Trusted);
-        let registry = SpecRegistry {
-            specs: vec![spec("PostToolUse", HookSourceKind::Managed)],
-        };
-        assert_eq!(r.register(&registry, "deploy"), 1);
-        assert_eq!(r.register(&registry, "deploy"), 0, "second call is no-op");
-        let outcomes = reg.dispatch(&post_tool_ctx());
-        assert_eq!(outcomes.len(), 1, "one hook, not two");
-    }
-
-    /// Two specs that differ only by args both register: args are part of the
-    /// dedup key, so two argument sets on the same command are distinct hooks.
-    #[test]
-    fn test_args_differ_both_register() {
-        let (r, reg) = registrar(TrustState::Trusted);
-        let mut a = spec("PostToolUse", HookSourceKind::Managed);
-        a.args = vec!["lint".into()];
-        let mut b = spec("PostToolUse", HookSourceKind::Managed);
-        b.args = vec!["test".into()];
-        let registry = SpecRegistry { specs: vec![a, b] };
-        assert_eq!(r.register(&registry, "deploy"), 2);
-        assert_eq!(reg.dispatch(&post_tool_ctx()).len(), 2);
-    }
-
-    /// A Project source under an Untrusted workspace is skipped before
-    /// registration: the hook never enters the registry, so dispatch cannot
-    /// fire it.
-    #[test]
-    fn test_project_untrusted_skipped() {
-        let (r, reg) = registrar(TrustState::Untrusted);
-        let registry = SpecRegistry {
-            specs: vec![spec("PostToolUse", HookSourceKind::Project)],
-        };
-        assert_eq!(r.register(&registry, "deploy"), 0);
-        assert!(reg.is_empty(), "no hook registered for untrusted project");
-    }
-
-    /// A Project source under a Trusted or Acknowledged workspace registers.
-    #[test]
-    fn test_project_trusted_registers() {
-        let (r, reg) = registrar(TrustState::Acknowledged);
-        let registry = SpecRegistry {
-            specs: vec![spec("PostToolUse", HookSourceKind::Project)],
-        };
-        assert_eq!(r.register(&registry, "deploy"), 1);
-        assert_eq!(reg.dispatch(&post_tool_ctx()).len(), 1);
-    }
-
-    /// A User source passes the trust gate even when the workspace is
-    /// Untrusted: a user-level hook lives on the user's machine, not in the
-    /// repository, so the clone-and-open threat the gate defends against does
-    /// not arise.
-    #[test]
-    fn test_user_source_passes_untrusted() {
-        let (r, reg) = registrar(TrustState::Untrusted);
-        let registry = SpecRegistry {
-            specs: vec![spec("PostToolUse", HookSourceKind::User)],
-        };
-        assert_eq!(r.register(&registry, "deploy"), 1);
-        assert_eq!(reg.dispatch(&post_tool_ctx()).len(), 1);
-    }
-
-    /// An unknown event name is skipped with a warning; the rest of the specs
-    /// still register.
-    #[test]
-    fn test_unknown_event_skipped() {
-        let (r, reg) = registrar(TrustState::Trusted);
-        let registry = SpecRegistry {
-            specs: vec![
-                spec("BogusEvent", HookSourceKind::Managed),
-                spec("PostToolUse", HookSourceKind::Managed),
-            ],
-        };
-        assert_eq!(r.register(&registry, "deploy"), 1, "only the known event");
-        assert_eq!(reg.dispatch(&post_tool_ctx()).len(), 1);
-    }
-
-    /// set_trust is read live, not snapshotted: a registrar built Untrusted
-    /// skips a Project spec on the first call, but after set_trust the same
-    /// spec registers.
-    #[test]
-    fn test_set_trust_liveness() {
-        let (r, reg) = registrar(TrustState::Untrusted);
-        let registry = SpecRegistry {
-            specs: vec![spec("PostToolUse", HookSourceKind::Project)],
-        };
-        assert_eq!(r.register(&registry, "deploy"), 0, "untrusted skips");
-        r.set_trust(TrustState::Acknowledged);
-        assert_eq!(
-            r.register(&registry, "deploy"),
-            1,
-            "after trust resolves, the spec registers"
-        );
-        assert_eq!(reg.dispatch(&post_tool_ctx()).len(), 1);
-    }
-}
+#[path = "skill_hooks_tests.rs"]
+mod tests;

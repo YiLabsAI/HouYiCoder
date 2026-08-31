@@ -459,7 +459,10 @@ mod tests {
         fn hooks_for(&self, _name: &str) -> Vec<SkillHookSpec> {
             vec![SkillHookSpec {
                 event: "PostToolUse".into(),
-                matcher: None,
+                // Matcher targets a different tool than the dispatch ctx
+                // (bash), so the hook returns Allow without spawning — the
+                // timing test asserts registration, not the spawn path.
+                matcher: Some("Write".into()),
                 command: "echo".into(),
                 args: vec![],
                 once: false,
@@ -477,7 +480,9 @@ mod tests {
     async fn test_invoke_registers_hook_timing() {
         let hook_reg = Arc::new(HookRegistry::new());
         let trust = Arc::new(RwLock::new(TrustState::Trusted));
-        let registrar = Arc::new(SkillHookRegistrar::new(hook_reg.clone(), trust));
+        let launcher: Arc<dyn houyicoder_api::launcher::ProcessLauncher> =
+            Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
+        let registrar = Arc::new(SkillHookRegistrar::new(hook_reg.clone(), trust, launcher));
         let store: Arc<dyn houyicoder_api::session::SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
         let runner = Runner::with_shared_store(

@@ -462,15 +462,19 @@ pub(crate) fn assemble(
     let conversation_search = ConversationSearchTool::new(store.clone(), recall_meter.clone());
     tools.register(Arc::new(conversation_search));
     // Hook registry + skill-hook registrar: built before the Skill tool so
-    // the registrar is ready at SkillTool construction. The skill-grant hook
-    // is always registered.
-    let hook_registry = hooks::build_session_registry(gate_dyn.clone());
+    // the registrar is ready at SkillTool construction. The launcher is
+    // shared between the command hooks and the skill-hook registrar.
+    let hook_launcher: Arc<dyn houyicoder_api::launcher::ProcessLauncher> =
+        Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
+    let hook_registry =
+        hooks::build_session_registry(gate_dyn.clone(), std::sync::Arc::clone(&hook_launcher));
     // Live workspace-trust ref: fail-closed (Untrusted) until the server
     // writes the resolved state back after the startup trust prompt.
     let trust_state = Arc::new(RwLock::new(TrustState::Untrusted));
     let skill_registrar = Arc::new(SkillHookRegistrar::new(
         std::sync::Arc::clone(&hook_registry),
         std::sync::Arc::clone(&trust_state),
+        std::sync::Arc::clone(&hook_launcher),
     ));
     // The skill tool resolves skill names through the skill registry, which
     // discovers SKILL.md files across the scan paths at startup. Not
