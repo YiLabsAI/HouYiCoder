@@ -194,7 +194,11 @@ fn test_chat_replies_to_greeting() {
 #[test]
 #[ignore]
 fn test_live_provider_returns_text() {
-    let key = std::env::var("DASHSCOPE_API_KEY").expect("DASHSCOPE_API_KEY set");
+    if std::env::var("DASHSCOPE_API_KEY").is_err() {
+        eprintln!("skip: DASHSCOPE_API_KEY not set");
+        return;
+    }
+    let key = std::env::var("DASHSCOPE_API_KEY").unwrap();
     let base = std::env::var("DASHSCOPE_BASE_URL").unwrap_or_default();
     let model = houyicoder_config::resolve_model();
     let provider: Arc<dyn ModelProvider> = Arc::new(OpenAiCompatibleProvider::new(base, key));
