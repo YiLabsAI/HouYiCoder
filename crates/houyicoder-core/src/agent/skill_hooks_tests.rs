@@ -75,6 +75,12 @@ fn spec(event: &str, source: HookSourceKind) -> SkillHookSpec {
     spec_with(event, source, None, None)
 }
 
+fn spec_once(event: &str, source: HookSourceKind) -> SkillHookSpec {
+    let mut s = spec(event, source);
+    s.once = true;
+    s
+}
+
 fn registrar(trust: TrustState) -> (SkillHookRegistrar, Arc<HookRegistry>) {
     registrar_with(trust, r#"{"verdict":"allow"}"#)
 }
@@ -474,4 +480,48 @@ fn test_project_deny_passes() {
     r.register(&registry, "deploy");
     let outcomes = reg.dispatch(&post_tool_ctx());
     assert!(matches!(outcomes[0].result, Ok(HookVerdict::Deny(_))));
+}
+
+// ---- C4: once self-unregister ----
+
+/// A once hook fires on the first dispatch (the stub's Deny) and is gone on
+/// the second: the compare_exchange won the race, the hook spawned, then it
+/// self-unregistered.
+#[test]
+fn test_once_fires_once() {
+    let (r, reg) = registrar_with(TrustState::Trusted, r#"{"verdict":"deny","reason":"x"}"#);
+    let registry = SpecRegistry {
+        specs: vec![spec_once("PostToolUse", HookSourceKind::Managed)],
+    };
+    r.register(&registry, "deploy");
+    let first = reg.dispatch(&post_tool_ctx());
+    assert_eq!(first.len(), 1, "first fires");
+    assert!(matches!(first[0].result, Ok(HookVerdict::Deny(_))));
+    let second = reg.dispatch(&post_tool_ctx());
+    assert!(second.is_empty(), "second: hook self-unregistered");
+}
+
+/// A non-once hook fires on every dispatch (no self-unregister).
+#[test]
+fn test_non_once_fires_repeatedly() {
+    let (r, reg) = registrar_with(TrustState::Trusted, r#"{"verdict":"deny","reason":"x"}"#);
+    let registry = SpecRegistry {
+        specs: vec![spec("PostToolUse", HookSourceKind::Managed)],
+    };
+    r.register(&registry, "deploy");
+    assert_eq!(reg.dispatch(&post_tool_ctx()).len(), 1);
+    assert_eq!(reg.dispatch(&post_tool_ctx()).len(), 1, "still registered");
+}
+
+/// A once hook removes itself from the registry after its first fire.
+#[test]
+fn test_once_unregisters_after_fire() {
+    let (r, reg) = registrar_with(TrustState::Trusted, r#"{"verdict":"allow"}"#);
+    let registry = SpecRegistry {
+        specs: vec![spec_once("PostToolUse", HookSourceKind::Managed)],
+    };
+    r.register(&registry, "deploy");
+    assert_eq!(reg.len(), 1, "hook registered");
+    reg.dispatch(&post_tool_ctx());
+    assert_eq!(reg.len(), 0, "hook self-unregistered after firing");
 }

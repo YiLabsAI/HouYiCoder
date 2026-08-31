@@ -5,15 +5,16 @@
 //! registration under an Untrusted workspace.
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use houyicoder_api::launcher::ProcessLauncher;
 use houyicoder_api::skill::{HookSourceKind, SkillHookSpec, SkillRegistry};
 use houyicoder_api::trust::TrustState;
 
 use super::exports::{
-    CommandHook, Hook, HookContext, HookError, HookEvent, HookPayload, HookRegistry, HookSource,
-    HookVerdict,
+    CommandHook, Hook, HookContext, HookError, HookEvent, HookId, HookPayload, HookRegistry,
+    HookSource, HookVerdict,
 };
 use super::parse_event;
 
@@ -119,8 +120,15 @@ impl SkillHookRegistrar {
                 source,
                 &spec,
                 Arc::clone(&self.launcher),
+                Arc::clone(&self.hook_reg),
             );
-            self.hook_reg.register(Arc::new(hook));
+            // Keep a concrete Arc so bind_hook_id can reach the same instance
+            // the registry holds (both Arcs share the allocation). The dyn
+            // coercion happens at the typed let, not in register's arg.
+            let concrete = Arc::new(hook);
+            let dyn_hook: Arc<dyn Hook> = concrete.clone();
+            let id = self.hook_reg.register(dyn_hook);
+            concrete.bind_hook_id(id);
             count += 1;
             tracing::info!(
                 skill = %skill_name,
@@ -149,7 +157,10 @@ fn map_source(kind: HookSourceKind) -> HookSource {
 /// and parses its verdict. The verdict is narrowed by source: a Project or
 /// Local source cannot Inject (downgraded to Observe so a project hook
 /// cannot speak with engine authority) and an Ask is tagged with the skill
-/// name; Managed and User sources pass through.
+/// name; Managed and User sources pass through. A once hook self-removes
+/// after its first spawn via an AtomicBool race winner; the flag is the sole
+/// authority so concurrent dispatches spawn exactly once. A once hook fires
+/// once regardless of spawn outcome — a failed spawn does not retry.
 pub(crate) struct SkillCommandHook {
     name: String,
     events: Vec<HookEvent>,
@@ -157,6 +168,10 @@ pub(crate) struct SkillCommandHook {
     matcher: Option<String>,
     if_rule: Option<String>,
     command: CommandHook,
+    once: bool,
+    fired: AtomicBool,
+    hook_reg: Arc<HookRegistry>,
+    hook_id: OnceLock<HookId>,
 }
 
 impl SkillCommandHook {
@@ -166,6 +181,7 @@ impl SkillCommandHook {
         source: HookSource,
         spec: &SkillHookSpec,
         launcher: Arc<dyn ProcessLauncher>,
+        hook_reg: Arc<HookRegistry>,
     ) -> Self {
         let command = CommandHook::new(
             name.clone(),
@@ -182,7 +198,19 @@ impl SkillCommandHook {
             matcher: spec.matcher.clone(),
             if_rule: spec.if_rule.clone(),
             command,
+            once: spec.once,
+            fired: AtomicBool::new(false),
+            hook_reg,
+            hook_id: OnceLock::new(),
         }
+    }
+
+    /// Bind the registry-assigned id so the hook can self-unregister after a
+    /// once fire. Called by the registrar right after registration; a
+    /// concurrent dispatch that fires before this is set skips the unregister
+    /// (the AtomicBool still blocks a second spawn).
+    pub(crate) fn bind_hook_id(&self, id: HookId) {
+        let _ = self.hook_id.set(id);
     }
 }
 
@@ -211,7 +239,28 @@ impl Hook for SkillCommandHook {
         {
             return Ok(HookVerdict::Allow);
         }
-        let verdict = self.command.evaluate(ctx)?;
+        // once: only the dispatch that wins the compare_exchange spawns.
+        // A lost race returns Allow without spawning; the AtomicBool is the
+        // sole authority, so concurrent dispatches spawn exactly once.
+        if self.once
+            && self
+                .fired
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return Ok(HookVerdict::Allow);
+        }
+        let result = self.command.evaluate(ctx);
+        // Self-unregister after the once spawn (best-effort cleanup so later
+        // dispatches do not call a dead hook; correctness is in the AtomicBool).
+        // Dispatch releases the read lock before evaluate, so unregister takes
+        // the write lock without deadlocking.
+        if self.once
+            && let Some(&id) = self.hook_id.get()
+        {
+            self.hook_reg.unregister(id);
+        }
+        let verdict = result?;
         Ok(narrow_by_source(verdict, self.source.clone(), &self.name))
     }
 }
