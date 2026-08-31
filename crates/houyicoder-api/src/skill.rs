@@ -116,6 +116,15 @@ pub trait SkillRegistry: Send + Sync {
     fn detect_run_scripts(&self, _command: &str) -> Vec<SkillScriptRef> {
         Vec::new()
     }
+
+    /// Parsed frontmatter hooks for a skill, deep-parsed at discovery
+    /// (safeParse: malformed hooks drop the hooks, not the skill). Each
+    /// spec carries the event, matcher, command + args, once flag, if-rule,
+    /// and the hook-source level the registry gates by (MCP skills produce
+    /// no specs — they never register). The default returns empty.
+    fn hooks_for(&self, _name: &str) -> Vec<SkillHookSpec> {
+        Vec::new()
+    }
 }
 
 /// A model-invocable descriptor paired with where it was discovered, for
@@ -142,4 +151,38 @@ pub struct SkillScriptRef {
     pub skill_name: String,
     /// Path relative to the skill directory, e.g. "scripts/deploy.py".
     pub script_rel_path: String,
+}
+
+/// The trust level a skill-sourced hook registers under, mirroring the
+/// registry's HookSource. MCP skills produce no specs (filtered at parse),
+/// so this carries no remote variant. Managed/User are trusted; Project
+/// and Local gate on the current workspace trust at registration time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookSourceKind {
+    Managed,
+    User,
+    Project,
+    Local,
+}
+
+/// One parsed frontmatter hook, ready for the registry to build a command
+/// hook from. The event is a string (the port cannot depend on the
+/// engine's HookEvent enum); the engine maps it at registration. The
+/// matcher and if-rule filter at fire time, not registration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillHookSpec {
+    /// Lifecycle event name (e.g. "PreToolUse"); the engine maps it to HookEvent.
+    pub event: String,
+    /// Tool-name pattern (exact, A|B, or regex); None fires for every tool.
+    pub matcher: Option<String>,
+    /// Program to spawn for the hook.
+    pub command: String,
+    /// Args to the program; command + args form the spawn vector.
+    pub args: Vec<String>,
+    /// Self-remove after the first successful fire.
+    pub once: bool,
+    /// Tool-input permission-rule (e.g. "Bash(git *)"); None is unconditional.
+    pub if_rule: Option<String>,
+    /// Trust level the registry gates the hook by.
+    pub source: HookSourceKind,
 }

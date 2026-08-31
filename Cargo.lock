@@ -1419,6 +1419,7 @@ dependencies = [
  "houyicoder-skill",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tokio",
  "tracing",
  "tracing-subscriber",

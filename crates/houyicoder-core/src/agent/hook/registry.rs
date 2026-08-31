@@ -76,8 +76,9 @@ impl HookRegistry {
         }
     }
 
-    /// Set the per-hook evaluate timeout. 0 disables timeout (sequential
-    /// dispatch). Returns self for chaining.
+    /// Set the registry-wide evaluate timeout (applies to all hooks at
+    /// dispatch; per-hook timeout is not supported yet). 0 disables
+    /// timeout (sequential dispatch). Returns self for chaining.
     pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
         self.timeout_ms = timeout_ms;
         self
