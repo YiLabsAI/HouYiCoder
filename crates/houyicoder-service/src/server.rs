@@ -329,7 +329,11 @@ impl Server {
         // yet acknowledged in user-level settings prompts once, persists the
         // answer on accept, and ends the session on decline. No-op for a
         // non-project session (project_path None) or an already-trusted path.
-        let _trust = self.ensure_trust(&mut io).await?;
+        // The resolved state is written back through the runner's registrar so
+        // a Project or Local skill hook invoked later reads the live value,
+        // not the fail-closed default the registrar was built with.
+        let trust = self.ensure_trust(&mut io).await?;
+        self.runner.set_trust(trust);
         // A reattaching connection may find a parked PendingTurn in the host
         // store (the prior connection disconnected mid-permission). Re-emit
         // the remaining asks + resume before entering the frame loop. No-op

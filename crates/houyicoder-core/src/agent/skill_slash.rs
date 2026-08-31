@@ -117,11 +117,20 @@ impl Runner {
         // the skill is absent from the origin snapshot.
         let untrusted = super::skill_body::origin_untrusted(&**registry, &name);
         match registry.prepare_body(&name, args, Some(&sid)) {
-            Ok(body) => SkillSlashOutcome::Prepared {
-                name,
-                body,
-                untrusted,
-            },
+            Ok(body) => {
+                // Register the skill's frontmatter hooks (invoke-time,
+                // session-scoped). The registrar dedups across both
+                // invocation paths so a slash dispatch followed by a Skill-tool
+                // call for the same skill does not stack a second firing copy.
+                if let Some(r) = self.registrar.as_ref() {
+                    r.register(&**registry, &name);
+                }
+                SkillSlashOutcome::Prepared {
+                    name,
+                    body,
+                    untrusted,
+                }
+            }
             Err(SkillError::NotFound(_)) => SkillSlashOutcome::NotASkill,
             Err(other) => SkillSlashOutcome::Refused(format!("skill invocation failed: {other}")),
         }
@@ -185,11 +194,16 @@ mod tests {
 
     // ---- resolve_skill_slash method ----
 
-    use houyicoder_api::skill::{SkillDescriptor, SkillRegistry};
+    use houyicoder_api::skill::{SkillDescriptor, SkillHookSpec, SkillRegistry};
+    use houyicoder_api::trust::TrustState;
     use houyicoder_memory::InMemoryBackend;
     use houyicoder_resilience::Retry;
     use houyicoder_session::SessionStore;
     use std::sync::Arc;
+    use std::sync::RwLock;
+
+    use crate::agent::SkillHookRegistrar;
+    use crate::agent::{HookEvent, HookPayload, HookRegistry, ToolResult};
 
     /// A stub registry: "commit" is user-invocable + echoes args, "secret"
     /// is not user-invocable, anything else NotFound.
@@ -404,6 +418,105 @@ mod tests {
                 TurnEventKind::SkillBody { .. } | TurnEventKind::AssistantMessage { .. }
             )),
             "refusal skips the model (no SkillBody, no assistant message)"
+        );
+    }
+
+    /// A stub registry whose hooks_for returns a single Managed spec, so a
+    /// slash dispatch registers a hook. prepare_body returns a body for
+    /// "commit".
+    struct HookStubRegistry;
+    impl SkillRegistry for HookStubRegistry {
+        fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+            Vec::new()
+        }
+        fn find(&self, name: &str) -> Option<SkillDescriptor> {
+            if name == "commit" {
+                Some(SkillDescriptor {
+                    name: name.into(),
+                    description: "d".into(),
+                    when_to_use: None,
+                    argument_hint: None,
+                    disable_model_invocation: false,
+                    user_invocable: true,
+                    body_token_estimate: 0,
+                    allowed_tools: Vec::new(),
+                })
+            } else {
+                None
+            }
+        }
+        fn prepare_body(
+            &self,
+            name: &str,
+            _args: Option<&str>,
+            _sid: Option<&str>,
+        ) -> Result<String, SkillError> {
+            match name {
+                "commit" => Ok("body".into()),
+                _ => Err(SkillError::NotFound(name.into())),
+            }
+        }
+        fn hooks_for(&self, _name: &str) -> Vec<SkillHookSpec> {
+            vec![SkillHookSpec {
+                event: "PostToolUse".into(),
+                matcher: None,
+                command: "echo".into(),
+                args: vec![],
+                once: false,
+                if_rule: None,
+                source: houyicoder_api::skill::HookSourceKind::Managed,
+            }]
+        }
+    }
+
+    /// Registration is invoke-time, not discovery-time: a skill whose
+    /// hooks_for returns a spec does not register until the slash dispatch
+    /// resolves it. Before invoke the hook registry is empty; after, dispatch
+    /// fires the registered hook.
+    #[tokio::test]
+    async fn test_invoke_registers_hook_timing() {
+        let hook_reg = Arc::new(HookRegistry::new());
+        let trust = Arc::new(RwLock::new(TrustState::Trusted));
+        let registrar = Arc::new(SkillHookRegistrar::new(hook_reg.clone(), trust));
+        let store: Arc<dyn houyicoder_api::session::SessionLog> =
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        let runner = Runner::with_shared_store(
+            store,
+            Arc::new(crate::provider::test_support::FakeProvider::text("done")),
+            crate::agent::ToolRegistry::new(),
+            crate::agent::runner_config::RunnerConfig {
+                model: "test".into(),
+                instructions: String::new(),
+                max_turns: 5,
+                max_output_tokens: 8_000,
+                retry: Retry::default(),
+            },
+        )
+        .with_skill_registry(Arc::new(HookStubRegistry))
+        .with_hooks(hook_reg.clone())
+        .with_registrar(registrar);
+        // Before invoke: discovery does not register, dispatch fires nothing.
+        assert!(hook_reg.is_empty(), "discovery does not register hooks");
+        let outcome = runner
+            .resolve_skill_slash(SessionId::new(), "/commit")
+            .await;
+        assert!(matches!(outcome, SkillSlashOutcome::Prepared { .. }));
+        // After invoke: the spec registered, dispatch fires it.
+        let ctx = crate::agent::HookContext {
+            event: HookEvent::PostToolUse,
+            payload: HookPayload::PostToolUse {
+                tool_name: "bash".into(),
+                input: serde_json::json!({}),
+                result: ToolResult {
+                    output: "{}".into(),
+                },
+            },
+            session: SessionId::new(),
+        };
+        assert_eq!(
+            hook_reg.dispatch(&ctx).len(),
+            1,
+            "invoke registered the hook"
         );
     }
 }

@@ -44,6 +44,7 @@ mod resolve;
 mod retention;
 pub(crate) mod reward_snapshot;
 mod skill_body;
+mod skill_hooks;
 mod skill_listing;
 mod skill_slash;
 mod status;
@@ -203,6 +204,12 @@ pub struct Runner {
     /// self-correction signal, Observe logs, Trigger fires downstream, Allow
     /// proceeds). None means no hooks fire at runtime. See hook_pipeline.rs.
     hooks: Option<Arc<crate::agent::hook::registry::HookRegistry>>,
+    /// Optional skill-hook registrar. When wired, invoking a skill (via the
+    /// Skill tool or the slash dispatch) registers its frontmatter hooks into
+    /// the session hook registry. Holds a live workspace-trust ref so a
+    /// Project or Local source fails closed before registration under an
+    /// untrusted workspace. None in tests and the pure-stub path.
+    registrar: Option<Arc<crate::agent::SkillHookRegistrar>>,
     /// Prompt-cache breakpoint policy. Decides where to carve a stable prefix
     /// for prompt-cache reuse (the wire kinds live in the wire crate;
     /// the provider lowers each kind to its own format). Defaults to the Auto

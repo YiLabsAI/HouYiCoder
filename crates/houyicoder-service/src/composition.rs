@@ -37,11 +37,11 @@ use std::sync::Arc;
 
 use tokio::sync::Notify;
 
-use houyicoder_api::launcher::ProcessLauncher;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
+use houyicoder_api::trust::TrustState;
 use houyicoder_context::ContextBackend;
 use houyicoder_context::SessionId;
 use houyicoder_context::SessionMetaStore;
@@ -51,7 +51,8 @@ use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
     AgentTool, CommandHook, ConversationSearchTool, GitWorkspaceProbe, HookRegistry, HookSource,
-    HotPathReducer, LlmSummarizer, Runner, SkillTool, TodoWriteTool, ToolRegistry, parse_event,
+    HotPathReducer, LlmSummarizer, Runner, SkillHookRegistrar, SkillTool, TodoWriteTool,
+    ToolRegistry, parse_event,
 };
 use houyicoder_memory::{FileMetaStore, InMemoryBackend, InMemoryMetaStore, LocalFileBackend};
 use houyicoder_permission::{DefaultModeGate, ModeGate, RuleStore};
@@ -61,6 +62,7 @@ use houyicoder_sandbox::PlatformSession;
 use houyicoder_session::SessionStore;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 
 /// Give up on a capability, and say so, returning the absence as None.
@@ -459,16 +461,29 @@ pub(crate) fn assemble(
     // reads.
     let conversation_search = ConversationSearchTool::new(store.clone(), recall_meter.clone());
     tools.register(Arc::new(conversation_search));
+    // Hook registry + skill-hook registrar: built before the Skill tool so
+    // the registrar is ready at SkillTool construction. The skill-grant hook
+    // is always registered.
+    let hook_registry = hooks::build_session_registry(gate_dyn.clone());
+    // Live workspace-trust ref: fail-closed (Untrusted) until the server
+    // writes the resolved state back after the startup trust prompt.
+    let trust_state = Arc::new(RwLock::new(TrustState::Untrusted));
+    let skill_registrar = Arc::new(SkillHookRegistrar::new(
+        std::sync::Arc::clone(&hook_registry),
+        std::sync::Arc::clone(&trust_state),
+    ));
     // The skill tool resolves skill names through the skill registry, which
     // discovers SKILL.md files across the scan paths at startup. Not
     // sandbox-backed (it reads skill files directly), so registered directly
     // like the recall tool. The workspace anchors the project-level skill
-    // walk; managed and user levels are scanned regardless.
+    // walk; managed and user levels are scanned regardless. Wired with the
+    // registrar so invoking a skill registers its frontmatter hooks.
     let skill_registry: Arc<dyn houyicoder_api::skill::SkillRegistry> =
         Arc::new(skill::SkillRegistryImpl::discover(workspace.as_deref()));
-    tools.register(Arc::new(SkillTool::new(std::sync::Arc::clone(
-        &skill_registry,
-    ))));
+    tools.register(Arc::new(
+        SkillTool::new(std::sync::Arc::clone(&skill_registry))
+            .with_registrar(std::sync::Arc::clone(&skill_registrar)),
+    ));
     // The agent tool delegates a sub-task to a spawned child. Like the recall
     // tool it is not sandbox-backed; it resolves the requested type against
     // the agent registry (built-ins) and goes through the ToolCtx spawn port
@@ -530,31 +545,12 @@ pub(crate) fn assemble(
     // + truncates a large bash result before serving it (the raw stays in the
     // CAS for on-demand retrieval).
     runner = runner.with_reducer(std::sync::Arc::new(HotPathReducer));
-    // External command hooks: resolve the specs from the same env-config path
-    // as external tool servers, build a CommandHook per spec through the same
-    // process-launcher chokepoint (the clippy spawn ban routes every spawn
-    // there), and attach the registry so the runner's fire points drive them.
-    // A spec with an unknown event name is skipped with a stderr warning; an
-    // empty or unset config yields no registry, so the fire points run with
-    // no external verdict source and the engine still runs.
-    let hook_launcher: Arc<dyn ProcessLauncher> =
-        Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
-    let hooks = hooks::build_hook_registry(&houyicoder_config::resolve_hooks(), hook_launcher);
-    // The skill grant hook is a built-in PostToolUse hook that reads
-    // allowed_tools from the SkillTool result + adds session-scoped Allow
-    // rules. Always registered (not user-configured).
-    let skill_grant = hooks::SkillGrantHook::new(gate_dyn.clone());
-    let runner = match hooks {
-        Some(reg) => {
-            reg.register(Arc::new(skill_grant));
-            runner.with_hooks(Arc::new(reg))
-        }
-        None => {
-            let reg = HookRegistry::new();
-            reg.register(Arc::new(skill_grant));
-            runner.with_hooks(Arc::new(reg))
-        }
-    };
+    // Attach the hook registry (built above, before the Skill tool) + the
+    // skill-hook registrar to the runner so the fire points drive the
+    // registered hooks and both skill-invocation paths share one registrar.
+    let runner = runner
+        .with_hooks(std::sync::Arc::clone(&hook_registry))
+        .with_registrar(std::sync::Arc::clone(&skill_registrar));
     let hook_fire = houyicoder_core::agent::build_hook_fire(&runner);
     if let Some(controller) = &worktree_controller {
         controller.set_hook_fire(hook_fire);

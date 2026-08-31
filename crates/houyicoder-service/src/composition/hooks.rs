@@ -7,6 +7,7 @@
 
 use super::*;
 
+use houyicoder_api::launcher::ProcessLauncher;
 use houyicoder_core::agent::{Hook, HookContext, HookError, HookEvent, HookPayload, HookVerdict};
 use houyicoder_permission::{Effect, ModeGate, Rule, RuleContent, Scope};
 use std::sync::Arc;
@@ -69,6 +70,23 @@ pub(super) fn build_hook_registry(
     } else {
         Some(registry)
     }
+}
+
+/// Build the session hook registry: the external command hooks (from the
+/// resolved env specs) plus the always-on skill-grant hook. Returns an Arc
+/// so the caller can share it between the runner fire points and the
+/// skill-hook registrar. An empty spec set still yields an empty registry so
+/// the fire points have a home.
+pub(super) fn build_session_registry(gate: Arc<dyn ModeGate>) -> Arc<HookRegistry> {
+    let launcher: Arc<dyn ProcessLauncher> =
+        Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
+    let reg: Arc<HookRegistry> =
+        match build_hook_registry(&houyicoder_config::resolve_hooks(), launcher) {
+            Some(r) => Arc::new(r),
+            None => Arc::new(HookRegistry::new()),
+        };
+    reg.register(Arc::new(SkillGrantHook::new(gate)));
+    reg
 }
 
 /// A built-in PostToolUse hook that reads the SkillTool result for

@@ -163,6 +163,27 @@ impl Runner {
         self
     }
 
+    /// Wire the skill-hook registrar shared by the Skill tool and the slash
+    /// dispatch. The registrar holds a live workspace-trust ref the server
+    /// writes after the startup trust prompt resolves; both invocation paths
+    /// call its register method after a skill body prepares. Unwired in tests
+    /// and the pure-stub path: no skill hooks register and set_trust is a
+    /// no-op.
+    pub fn with_registrar(mut self, registrar: Arc<crate::agent::SkillHookRegistrar>) -> Self {
+        self.registrar = Some(registrar);
+        self
+    }
+
+    /// Write the resolved workspace trust through the registrar. The server
+    /// calls this once after the startup trust prompt so a Project or Local
+    /// skill hook invoked later reads the resolved value, not the
+    /// fail-closed default. No-op when no registrar is wired.
+    pub fn set_trust(&self, state: houyicoder_api::trust::TrustState) {
+        if let Some(r) = self.registrar.as_ref() {
+            r.set_trust(state);
+        }
+    }
+
     /// Override the cache policy (defaults to the Auto three-breakpoint set).
     /// A provider with no prompt-cache support swaps NoCachePolicy; a
     /// config-driven explicit policy lands when that wires.

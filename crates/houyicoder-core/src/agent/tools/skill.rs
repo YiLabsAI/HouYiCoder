@@ -27,11 +27,23 @@ use serde_json::{Value, json};
 /// returns text; it mutates no external state.
 pub struct SkillTool {
     registry: Arc<dyn SkillRegistry>,
+    registrar: Option<Arc<super::super::SkillHookRegistrar>>,
 }
 
 impl SkillTool {
     pub fn new(registry: Arc<dyn SkillRegistry>) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            registrar: None,
+        }
+    }
+
+    /// Wire the skill-hook registrar so invoking a skill registers its
+    /// frontmatter hooks into the session hook registry. Unwired in tests
+    /// that do not exercise hooks; the execute path skips registration.
+    pub fn with_registrar(mut self, registrar: Arc<super::super::SkillHookRegistrar>) -> Self {
+        self.registrar = Some(registrar);
+        self
     }
 }
 
@@ -76,6 +88,7 @@ impl Tool for SkillTool {
 
     fn execute(&self, ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let registry = Arc::clone(&self.registry);
+        let registrar = self.registrar.clone();
         Box::pin(async move {
             let params: SkillInput = serde_json::from_value(input)
                 .map_err(|e| ToolError::InvalidInput(format!("skill: {e}")))?;
@@ -99,6 +112,14 @@ impl Tool for SkillTool {
             let body = registry
                 .prepare_body(&params.skill, params.args.as_deref(), sid.as_deref())
                 .map_err(skill_error_to_tool_error)?;
+            // Register the skill's frontmatter hooks into the session hook
+            // registry (invoke-time, session-scoped). The registrar dedups
+            // across both invocation paths so a slash dispatch followed by a
+            // Skill-tool call for the same skill does not stack a second
+            // firing copy. Unwired (None) in tests that do not exercise hooks.
+            if let Some(r) = registrar.as_ref() {
+                r.register(&*registry, &params.skill);
+            }
             // Frame an untrusted body (a non-managed/user source) as data
             // so the model treats its directives as unverified and confirms
             // before state-changing steps. A tool result is already data,
