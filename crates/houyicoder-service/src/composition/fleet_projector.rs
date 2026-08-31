@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use futures::SinkExt;
 use futures::channel::mpsc;
 
 use houyicoder_async::bus::MessageBus;
@@ -51,7 +52,7 @@ pub fn spawn(
                 msg = spawned_rx.recv() => match msg {
                     Ok(BusMessage::Spawned { agent_id, subagent_type, run_in_background: _ }) => {
                         let snap = Snapshot { turn: 0, tokens: 0, tool_uses: 0, last_activity: None, completed: None };
-                        emit(&mut out_tx, &next_seq, &agent_id, &subagent_type, &snap);
+                        emit(&mut out_tx, &next_seq, &agent_id, &subagent_type, &snap).await;
                         children.insert(agent_id, (subagent_type, snap));
                     }
                     Ok(_) => {}
@@ -62,7 +63,7 @@ pub fn spawn(
                     Ok(BusMessage::Progress { agent_id, turn, tokens, tool_uses, last_activity }) => {
                         if let Some((subagent_type, snap)) = children.get_mut(&agent_id) {
                             *snap = Snapshot { turn, tokens, tool_uses, last_activity, completed: None };
-                            emit(&mut out_tx, &next_seq, &agent_id, subagent_type, snap);
+                            emit(&mut out_tx, &next_seq, &agent_id, subagent_type, snap).await;
                         }
                         // A progress frame for an unknown child is a Spawned
                         // lost to broadcast lag; the next frame still renders.
@@ -76,7 +77,7 @@ pub fn spawn(
                         if let Some((subagent_type, snap)) = children.get_mut(&agent_id) {
                             snap.completed = Some(status_str(&status));
                             snap.last_activity = Some(summary);
-                            emit(&mut out_tx, &next_seq, &agent_id, subagent_type, snap);
+                            emit(&mut out_tx, &next_seq, &agent_id, subagent_type, snap).await;
                             children.remove(&agent_id);
                         }
                         // A completion for an unknown child is a Spawned lost
@@ -111,7 +112,7 @@ fn status_str(status: &ChildStatus) -> String {
     .to_string()
 }
 
-fn emit(
+async fn emit(
     out_tx: &mut mpsc::Sender<String>,
     next_seq: &Arc<AtomicU64>,
     agent_id: &str,
@@ -131,14 +132,18 @@ fn emit(
             completed: snap.completed.clone(),
         },
     ));
-    if let Ok(line) = encode(&frame) {
-        let _send = out_tx.try_send(line);
-    }
+    let Ok(line) = encode(&frame) else { return };
+    // AgentStatus is load-bearing pill state, not an ephemeral preview a
+    // later frame replaces, so a full channel backpressures instead of
+    // dropping the marker. The projector owns its task, so blocking only
+    // delays the pill update; broadcast buffers messages while send awaits.
+    let _ = out_tx.send(line).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::FutureExt;
     use futures::StreamExt;
     use houyicoder_protocol::envelope::ServerFrame;
     use houyicoder_protocol::frontend::event_kind::FrontendEventKind;
@@ -244,5 +249,55 @@ mod tests {
             saw_terminal,
             "immediate completion must still emit a terminal frame"
         );
+    }
+
+    /// A full outbound channel must not drop an AgentStatus frame. The pill
+    /// state is load-bearing, not an ephemeral preview, so the projector
+    /// backpressures (send.await) instead of try_send-dropping. This is the
+    /// regression guard for the real-provider streaming case: delta try_sends
+    /// saturate the shared s2c channel, and a try_send projector would lose
+    /// every spawn/progress frame.
+    ///
+    /// Distinguishing mutation: poll emit once on a FULL channel. Under
+    /// send().await the future parks Pending (now_or_never None); under
+    /// try_send it drops the frame and returns Ready (now_or_never Some).
+    /// A try_send revert makes the assertion fail. No spawn race: the poll
+    /// is synchronous and single-step, so the frame cannot slip past the
+    /// full channel into an emptied slot.
+    #[tokio::test]
+    async fn test_projector_backpressures_full_channel() {
+        let (mut tx, mut rx) = mpsc::channel(1);
+        let next_seq = Arc::new(AtomicU64::new(0));
+        // Fill the single slot so the next send faces a full channel.
+        tx.try_send("placeholder".into()).unwrap();
+        let snap = Snapshot {
+            turn: 2,
+            tokens: 50,
+            tool_uses: 1,
+            last_activity: None,
+            completed: None,
+        };
+        let mut emit_fut = Box::pin(emit(&mut tx, &next_seq, "c1", "explore", &snap));
+        // One poll on the full channel: send().await stays pending; try_send
+        // would drop the frame and return Ready.
+        assert!(
+            emit_fut.as_mut().now_or_never().is_none(),
+            "emit must block on a full channel, not drop the frame and return"
+        );
+        // Free the slot; the parked send wakes and delivers the frame.
+        let _placeholder = rx.next().await.expect("placeholder drained");
+        emit_fut.as_mut().await;
+        let line = rx
+            .next()
+            .await
+            .expect("frame delivered after capacity freed");
+        let frame: ServerFrame = serde_json::from_str(&line).unwrap();
+        if let ServerFrame::Event(ev) = frame
+            && let FrontendEventKind::AgentStatus { turn, .. } = ev.payload
+        {
+            assert_eq!(turn, 2, "the saturated-channel frame kept its payload");
+        } else {
+            panic!("expected AgentStatus after saturation");
+        }
     }
 }
