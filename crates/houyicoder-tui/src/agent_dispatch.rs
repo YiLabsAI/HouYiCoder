@@ -285,6 +285,11 @@ impl App {
                         *folded_transcript = folded.clone();
                     }
                     self.transcript.insert(idx, line);
+                    // The swap mutates a line's payload in place instead of
+                    // pushing, so the row cache needs an explicit bump — the
+                    // fetched child rows would otherwise stay invisible until
+                    // an unrelated change invalidated the cache.
+                    self.bump_transcript_version();
                 }
                 // When the fetched child is the one the user is viewing, swap
                 // the rows into the teammate view too. The view-fill path

@@ -52,6 +52,15 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         v = v
             .wrapping_mul(31)
             .wrapping_add(set_content_hash(&app.expanded_results));
+        // Subagent expansion changes the row set exactly like the other three
+        // expand states do: the head row's hint flips and the child rows are
+        // inserted below it. Leaving it out made every subagent expand and
+        // collapse a no-op on screen until an unrelated input bumped the
+        // version, which read as "the toggle is broken" and then as a block
+        // appearing on its own later.
+        v = v
+            .wrapping_mul(31)
+            .wrapping_add(set_content_hash(&app.expanded_subagents));
         // bash_progress is baked into the slots text (push_line_rows appends
         // the elapsed/line-count suffix to a Tool chip), so the cache must
         // rebuild when it changes -- include its content hash so the cache

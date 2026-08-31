@@ -278,8 +278,7 @@ impl App {
         // the login screen mid-session. Every current swap bundle passes
         // skip_login=true, but this one line makes that invariant unbreakable.
         self.screen = crate::state::Screen::Working;
-        let v = self.transcript_version.get().wrapping_add(1);
-        self.transcript_version.set(v);
+        self.bump_transcript_version();
         self.pending = pending;
         // A swap is a clean transition (the prior run ended FinalOutput, the
         // /resume Command drained at idle, then the swap ran). Carried items

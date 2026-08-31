@@ -951,6 +951,86 @@ fn test_child_transcript_fills() {
     );
 }
 
+/// A toggle taken after a first render must change what the next render
+/// shows, in both directions. The row cache is keyed on a content version,
+/// and subagent expansion was missing from that key: the state flipped, the
+/// screen did not, so expand looked dead and collapse impossible — until an
+/// unrelated input invalidated the cache and the block appeared on its own.
+/// The existing render tests all seeded the expand state before the first
+/// render, where the cache is cold and rebuilds unconditionally, so none of
+/// them could see this. Render first, then toggle.
+#[test]
+fn test_subagent_toggle_repaints() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::User("task".into()));
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply here".into())],
+        color: None,
+    });
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        !out.contains("child reply here"),
+        "first render is collapsed: {out}"
+    );
+    app.toggle_subagent_expand();
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        out.contains("child reply here"),
+        "expand must repaint the child rows: {out}"
+    );
+    app.toggle_subagent_expand();
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        !out.contains("child reply here"),
+        "collapse must repaint too: {out}"
+    );
+}
+
+/// A fetched child transcript lands by swapping the payload into the existing
+/// Subagent line, which skips the push path that invalidates the row cache.
+/// Render the expanded-but-unloaded state first so the cache is warm, then
+/// feed the reply: the fetched rows must appear on the next render rather
+/// than waiting for an unrelated change to bump the version.
+#[test]
+fn test_child_fetch_repaints() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "child-1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    app.expanded_subagents.insert("child-1".into());
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        out.contains("not yet loaded"),
+        "warm the cache on the unloaded state: {out}"
+    );
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "child-1".into(),
+        frames: vec![tool_call_frame(
+            "c1",
+            "grep auth",
+            ToolCallStatus::Completed,
+        )],
+    });
+    let out = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        out.to_lowercase().contains("grep auth"),
+        "the fetched child rows must repaint: {out}"
+    );
+}
+
 /// When no Subagent is present, Ctrl+O falls through to the ThoughtFor
 /// expand path. Pins the fallthrough so a refactor that drops it fails.
 #[test]

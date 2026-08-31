@@ -111,8 +111,7 @@ impl App {
         // Re-derive the view caches incrementally: verdicts parse only past
         // the verdict cursor, todos scan only the current turn (turn_start).
         self.accumulate_wire_state(turn_start);
-        let v = self.transcript_version.get().wrapping_add(1);
-        self.transcript_version.set(v);
+        self.bump_transcript_version();
     }
 
     /// The oldest frame the transcript projects: the newest MAX_PROJECT_FRAMES,
@@ -194,8 +193,7 @@ impl App {
         let cur = self.transcript_scroll.raw_top();
         self.transcript_scroll.set_raw_top(cur + prepended);
         // Invalidate the display cache (transcript changed).
-        let v = self.transcript_version.get().wrapping_add(1);
-        self.transcript_version.set(v);
+        self.bump_transcript_version();
     }
 
     /// The current turn's seal point: the index after the last

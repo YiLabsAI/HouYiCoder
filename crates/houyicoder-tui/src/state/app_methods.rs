@@ -71,6 +71,17 @@ impl App {
     pub fn push_transcript_line(&mut self, line: TranscriptLine) {
         self.transcript.push(line);
         crate::scroll::bound_scrollback(&mut self.transcript);
+        self.bump_transcript_version();
+    }
+
+    /// Invalidate the render pass's cached row set by bumping the transcript
+    /// content version. Every mutation of transcript content must end here,
+    /// including one that swaps a payload into an existing line rather than
+    /// pushing a new one: the row cache is keyed on this version, so a
+    /// mutation that skips the bump renders the pre-mutation rows until some
+    /// unrelated change happens to bump it — the change appears to be lost,
+    /// then materializes later at the wrong moment.
+    pub fn bump_transcript_version(&self) {
         let v = self.transcript_version.get().wrapping_add(1);
         self.transcript_version.set(v);
     }
