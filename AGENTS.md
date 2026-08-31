@@ -470,7 +470,7 @@ Microsoft CRT and Windows SDK, the sysroot the TLS stack needs to build from
 a non-Windows host. Use a separate `CARGO_TARGET_DIR` so it does not clobber
 the native build cache.
 
-Four patterns fail on Windows and cannot be seen on macOS, where
+Five patterns fail on Windows and cannot be seen on macOS, where
 `cfg(unix)` is always true and paths have no backslashes:
 
 - **`format!` building JSON around a path.** A backslash is an invalid JSON
@@ -486,6 +486,13 @@ Four patterns fail on Windows and cannot be seen on macOS, where
   `#[cfg(all(test, unix))] mod tests`.
 - **An unconditional `use` of a type only referenced under `#[cfg(unix)]`**,
   an unused import on Windows. Gate the import to match.
+- **String path matching that assumes forward slashes.** Markers or
+  patterns carrying `/` do not match Windows paths, which use backslashes
+  after canonicalize — the protected-path gate silently skips. Normalize
+  `\` to `/` before the match (no-op on Unix). A related sub-case:
+  `std::fs::canonicalize` adds a `\\?\` verbatim prefix on Windows that a
+  `dunce::canonicalize` path lacks — a substring match between them fails.
+  Use `dunce` on both sides.
 
 Reference implementations are platform-correct, not portable: copying a
 crate's `cfg(windows)` body into a shared helper breaks Unix. Read the cfg

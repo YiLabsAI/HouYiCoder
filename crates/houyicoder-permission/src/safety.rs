@@ -69,7 +69,9 @@ pub fn safety_check(tool_name: &str, input: Option<&Value>) -> Option<Effect> {
 /// resolved to the file it actually names, not only to the string the caller
 /// supplied.
 pub(crate) fn marker_hit(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
+    // Normalize backslashes to forward slashes so the forward-slash markers
+    // match Windows paths. No-op on Unix.
+    let lower = content.replace('\\', "/").to_ascii_lowercase();
     for marker in PROTECTED {
         // For each occurrence of the marker, check whether that occurrence is
         // a worktree container path (the workspace, exempt) or a real config
@@ -226,6 +228,15 @@ mod tests {
     fn test_nested_git_path_triggers() {
         let v = serde_json::json!({"path": "repo/.git/hooks/pre-commit"});
         assert_eq!(safety_check("write", Some(&v)), Some(Effect::Ask));
+    }
+
+    /// A Windows-style path with backslashes still matches the forward-slash
+    /// markers after normalization. Without it the gate would silently Allow
+    /// a protected path on Windows.
+    #[test]
+    fn test_backslash_path_matches_marker() {
+        let v = serde_json::json!({"command": "cat repo\\.git\\config"});
+        assert_eq!(safety_check("bash", Some(&v)), Some(Effect::Ask));
     }
 }
 

@@ -81,7 +81,7 @@ fn test_reconstruct_skill_script() {
         Arc::new(houyicoder_permission::DefaultModeGate::new()),
     );
     let cmd = {
-        let canon = std::fs::canonicalize(&skill_dir).unwrap();
+        let canon = dunce::canonicalize(&skill_dir).unwrap();
         format!("python {}/scripts/deploy.py", canon.to_string_lossy())
     };
     let input = serde_json::json!({"command": cmd});
@@ -162,7 +162,7 @@ fn test_augment_skips_non_shell() {
         houyicoder_context::SessionId::new(),
         Arc::new(houyicoder_permission::DefaultModeGate::new()),
     );
-    let canon = std::fs::canonicalize(&skill_dir).unwrap();
+    let canon = dunce::canonicalize(&skill_dir).unwrap();
     let input = serde_json::json!({"command": format!("python {}/scripts/deploy.py", canon.to_string_lossy())});
 
     // A non-shell tool: the detail stays as the gate wrote it.
@@ -229,7 +229,7 @@ fn test_consent_reaches_both_layers() {
         .with_session(session.clone());
     let input = serde_json::json!({"path": outside.to_string_lossy(), "pattern": "x"});
     server.apply_consent_directory("grep", &input, "always");
-    let coutside = std::fs::canonicalize(&outside).unwrap();
+    let coutside = dunce::canonicalize(&outside).unwrap();
     let dirs = session.working_dirs();
     assert!(
         dirs.iter()
@@ -318,7 +318,7 @@ fn test_ask_reason_selects_grant() {
         containment_note: None,
     };
     server.route_consent("grep", &input, "always", Some(&path_bounds_reason));
-    let coutside = std::fs::canonicalize(&outside).unwrap();
+    let coutside = dunce::canonicalize(&outside).unwrap();
     assert!(
         store.load_directories().iter().any(|d| d == &coutside),
         "path-bounds grep grants the directory"

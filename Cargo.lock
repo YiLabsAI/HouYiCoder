@@ -1402,6 +1402,7 @@ name = "houyicoder-service"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "dunce",
  "futures",
  "houyicoder-api",
  "houyicoder-async",

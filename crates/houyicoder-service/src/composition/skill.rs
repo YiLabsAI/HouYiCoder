@@ -628,7 +628,7 @@ mod tests {
         let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
         // Discovery stores the canonical skill dir, so the command must name
         // the canonical form for the detector's substring match to fire.
-        let canon_dir = std::fs::canonicalize(&skill_dir).unwrap();
+        let canon_dir = dunce::canonicalize(&skill_dir).unwrap();
         let cmd = format!("python {}/scripts/deploy.py", canon_dir.to_string_lossy());
         let scripts = reg.detect_run_scripts(&cmd);
         assert_eq!(scripts.len(), 1, "one skill script detected: {scripts:?}");

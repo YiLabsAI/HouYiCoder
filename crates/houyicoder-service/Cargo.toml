@@ -79,3 +79,4 @@ required-features = ["acp-cross-decode"]
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 serde = { version = "1", features = ["derive"] }
 houyicoder-client = { path = "../houyicoder-client" }
+dunce = "1"
