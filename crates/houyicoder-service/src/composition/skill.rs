@@ -11,6 +11,7 @@ use std::path::Path;
 use houyicoder_api::skill::{
     SkillDescriptor, SkillError, SkillRegistry, SkillScriptRef, SkillSnapshot,
 };
+use houyicoder_core::agent::HookSource;
 use houyicoder_skill::definition::{SkillDefinition, SkillSource};
 use houyicoder_skill::{discover, invoke};
 
@@ -26,6 +27,25 @@ fn source_label(source: &SkillSource) -> &'static str {
         SkillSource::Agents => "agents",
         SkillSource::Mcp => "mcp",
         SkillSource::Local => "local",
+    }
+}
+
+/// Map a skill's discovery source to the hook-source level the hook
+/// registry gates by. MCP skills are remote and never register command
+/// hooks (None); the others map to the trust level they were discovered
+/// at. ClaudeEco and Agents are shared-repo paths, grouped with Project
+/// so they are skipped under an untrusted project like checked-in hooks.
+/// A skill hook built with this source flows through the registry's
+/// policy + trust gate the same as a persisted hook.
+pub(crate) fn skill_source_to_hook_source(s: &SkillSource) -> Option<HookSource> {
+    match s {
+        SkillSource::Managed => Some(HookSource::Managed),
+        SkillSource::User => Some(HookSource::User),
+        SkillSource::Project | SkillSource::ClaudeEco | SkillSource::Agents => {
+            Some(HookSource::Project)
+        }
+        SkillSource::Local => Some(HookSource::Local),
+        SkillSource::Mcp => None,
     }
 }
 
@@ -182,6 +202,45 @@ impl SkillRegistry for SkillRegistryImpl {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// A skill's discovery source maps to the hook-source level the
+    /// registry gates by. MCP never registers (remote, untrusted); the
+    /// others map to their trust level. ClaudeEco/Agents group with
+    /// Project (shared-repo, skipped under an untrusted project).
+    #[test]
+    fn test_skill_source_hook_map() {
+        assert_eq!(
+            skill_source_to_hook_source(&SkillSource::Managed),
+            Some(HookSource::Managed)
+        );
+        assert_eq!(
+            skill_source_to_hook_source(&SkillSource::User),
+            Some(HookSource::User)
+        );
+        assert_eq!(
+            skill_source_to_hook_source(&SkillSource::Project),
+            Some(HookSource::Project)
+        );
+        assert_eq!(
+            skill_source_to_hook_source(&SkillSource::ClaudeEco),
+            Some(HookSource::Project),
+            "ClaudeEco groups with Project"
+        );
+        assert_eq!(
+            skill_source_to_hook_source(&SkillSource::Agents),
+            Some(HookSource::Project),
+            "Agents groups with Project"
+        );
+        assert_eq!(
+            skill_source_to_hook_source(&SkillSource::Local),
+            Some(HookSource::Local)
+        );
+        assert_eq!(
+            skill_source_to_hook_source(&SkillSource::Mcp),
+            None,
+            "MCP never registers command hooks"
+        );
+    }
 
     fn write_skill(dir: &Path, name: &str, body: &str) {
         let skill_dir = dir.join(".houyicoder").join("skills").join(name);
