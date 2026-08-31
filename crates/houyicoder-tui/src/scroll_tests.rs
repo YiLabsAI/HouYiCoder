@@ -100,6 +100,70 @@ fn test_page_down_after_up() {
     );
 }
 
+/// An inline expand must leave the visible top where it is: it stops
+/// following the tail, and an unpinned fallback offset is 0, which throws the
+/// view to the top of the transcript. Both expandable inline blocks (a
+/// reasoning summary and a delegation) go through the same pin.
+#[test]
+fn test_thinking_expand_pins() {
+    use crate::records::TranscriptLine;
+    let mut app = working();
+    for _ in 0..40 {
+        app.system_line("a long line of transcript history");
+    }
+    app.push_transcript_line(TranscriptLine::ThoughtFor {
+        secs: 19,
+        reasoning: Some("a long train of reasoning".into()),
+        tool_summary: None,
+        turn_id: "t1".into(),
+    });
+    drop(render(&app));
+    let total = app.transcript_scroll.total.get();
+    let top_before = app.transcript_scroll.top_offset(total);
+    assert!(
+        top_before > 0,
+        "the fixture must be taller than the viewport, else the pin is untestable"
+    );
+    assert!(app.transcript_scroll.follow_tail);
+    assert!(app.toggle_thinking_expand(), "the ThoughtFor is expandable");
+    assert!(
+        !app.transcript_scroll.follow_tail,
+        "expand stops following the tail so the rows below can grow"
+    );
+    assert_eq!(
+        app.transcript_scroll.top_offset(total),
+        top_before,
+        "expand must keep the visible top, not fall back to offset 0"
+    );
+}
+
+#[test]
+fn test_subagent_expand_pins() {
+    use crate::records::TranscriptLine;
+    let mut app = working();
+    for _ in 0..40 {
+        app.system_line("a long line of transcript history");
+    }
+    app.push_transcript_line(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+        color: None,
+    });
+    drop(render(&app));
+    let total = app.transcript_scroll.total.get();
+    let top_before = app.transcript_scroll.top_offset(total);
+    assert!(top_before > 0, "fixture taller than the viewport");
+    assert!(app.toggle_subagent_expand(), "the delegation is expandable");
+    assert_eq!(
+        app.transcript_scroll.top_offset(total),
+        top_before,
+        "expand must keep the visible top, not fall back to offset 0"
+    );
+}
+
 /// The input caret (invert) hides when the terminal loses focus and re-shows
 /// on refocus. The native cursor stays hidden + parked at the caret
 /// (set_cursor_position) so IME preedit still lands correctly.

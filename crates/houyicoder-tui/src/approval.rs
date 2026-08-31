@@ -147,15 +147,7 @@ impl App {
         } else {
             self.expanded_subagents.remove(&child_sid);
         }
-        // Pin the viewport at its current top before breaking follow-tail,
-        // so expanding a fold mid-tail keeps the on-screen rows in place
-        // instead of jumping to a stale pinned offset (often 0, which
-        // scrolled the transcript to the top and looked like render
-        // corruption). The draw pass republishes the post-expand total next
-        // tick; jump_to clamps to the valid range then.
-        let total = self.transcript_scroll.total.get();
-        let top = self.transcript_scroll.top_offset(total);
-        self.transcript_scroll.jump_to(top);
+        self.pin_transcript_top();
         if expanding
             && needs_fetch
             && let Some(req_id) = self.mint_request_id()
@@ -262,7 +254,7 @@ impl App {
                 if !self.expanded_thinking.remove(turn_id) {
                     self.expanded_thinking.insert(turn_id.clone());
                 }
-                self.transcript_scroll.follow_tail = false;
+                self.pin_transcript_top();
                 return true;
             }
         }
@@ -301,7 +293,7 @@ impl App {
         if !self.expanded_thinking.remove(&turn_id) {
             self.expanded_thinking.insert(turn_id.clone());
         }
-        self.transcript_scroll.follow_tail = false;
+        self.pin_transcript_top();
         true
     }
 

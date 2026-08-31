@@ -38,6 +38,16 @@ impl App {
         self.scrolled_from_frame = None;
     }
 
+    /// Break follow-tail while keeping the current top row on screen. Callers
+    /// that expand a line in place need this: clearing the follow flag alone
+    /// falls back to the last pinned offset, which is 0 on a session that
+    /// never scrolled, so the view jumps to the top of the transcript.
+    pub fn pin_transcript_top(&mut self) {
+        let total = self.transcript_scroll.total.get();
+        let top = self.transcript_scroll.top_offset(total);
+        self.transcript_scroll.jump_to(top);
+    }
+
     /// Capture the frame index the first time a scroll breaks follow-tail
     /// this scroll-back session. The null guard preserves the original
     /// baseline across subsequent scroll actions (a second wheel-up must not
@@ -64,20 +74,14 @@ impl App {
     }
 
     /// Number of new agent turns since the user scrolled away from the tail
-    /// — the N in the "N new messages" pill. Counts one per user-to-assistant
-    /// turn that produced agent text: prev_was_agent resets only on a new
-    /// UserMessageChunk (the turn boundary), so a tool call or thought within
-    /// one turn does NOT split it into N segments (the agent's "look at X" →
-    /// bash → "now Y" → bash is one turn, not four). Tool-only segments
-    /// (ToolCall/Result with no adjacent agent text) do not tick; one
-    /// streaming response however many chunks counts as one. This is the agent
-    /// content produced while the user reads history, which is the whole point
-    /// of the pill; counting user-message frames instead would be dead in
-    /// production (a user frame only arrives via submit, which clears the
-    /// snapshot first). The snapshot is a frame index, not transcript.len(),
-    /// so bound_scrollback eviction and transcript pops cannot silently zero
-    /// the count. Clamps the snapshot when rewind truncated frames below it.
-    /// Zero while following the tail.
+    /// — the N in the "N new messages" pill. Zero while following the tail.
+    ///
+    /// One turn counts once, however many agent chunks, tool calls, or
+    /// thoughts it contains: only a user message resets prev_was_agent, so
+    /// the count follows turn boundaries rather than frame arrivals. The
+    /// snapshot is a frame index rather than a transcript length so
+    /// scrollback eviction cannot silently zero the count, and it is clamped
+    /// in case a rewind truncated frames below it.
     pub fn jump_pill_new_count(&self) -> usize {
         let Some(from) = self.scrolled_from_frame else {
             return 0;
