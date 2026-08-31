@@ -28,14 +28,14 @@ def _test(n):
     return evaluate([(TEST, n)])
 
 
-def test_prod_file_over_800_hits_per_file_error():
+def test_prod_overflow_errors():
     # Per-file cliff stays for production: 850 >= 800 -> error.
     r = _prod(850)
     assert r["errs"], "prod 850 must trip the per-file error"
     assert r["excess"] == 150  # 850 - 700
 
 
-def test_test_file_at_850_does_not_error():
+def test_split_test_no_error():
     # The split: a test file at 850 is fine (test error is 2000).
     r = _test(850)
     assert not r["errs"], "test 850 must not trip the per-file error (split)"
@@ -43,7 +43,7 @@ def test_test_file_at_850_does_not_error():
     assert r["excess"] == 0
 
 
-def test_699_to_700_changes_excess_by_zero_no_cliff():
+def test_threshold_no_cliff():
     # THE core case: crossing the 700 threshold adds +0 to excess.
     # A count ratchet would +1 here -- recreating the cliff at 700.
     # The continuous metric has no discontinuity at the threshold.
@@ -53,7 +53,7 @@ def test_699_to_700_changes_excess_by_zero_no_cliff():
     assert _prod(701)["excess"] == 1, "701 -> excess 1 (continuous from 0)"
 
 
-def test_750_to_760_adds_ten_continuous():
+def test_excess_grows_continuous():
     # Continuity in the danger band: 750 -> 760 is +10, not a cliff jump.
     assert _prod(750)["excess"] == 50
     assert _prod(760)["excess"] == 60
@@ -67,7 +67,7 @@ def test_split_drops_excess_proportionally():
     assert before == 98 and after == 0
 
 
-def test_test_file_does_not_swallow_prod_excess():
+def test_split_isolates_excess():
     # A test file at 1500 contributes 0 to production excess.
     r = evaluate([(PROD, 798), (TEST, 1500)])
     assert r["excess"] == 98
