@@ -40,6 +40,20 @@ pub struct FleetState {
     pub selected: Option<usize>,
 }
 
+impl FleetState {
+    /// Move the selection by a signed delta (clamped, no wrap). Used by
+    /// the /agents pane Up/Down navigation — the working-screen footer
+    /// uses Shift+arrows via fleet_shift_selected instead.
+    pub fn move_selection(&mut self, delta: i32) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let len = self.entries.len();
+        let base = self.selected.unwrap_or(0) as i32;
+        self.selected = Some((base + delta).clamp(0, (len - 1) as i32) as usize);
+    }
+}
+
 /// How long a completed child stays in the footer before retiring. The
 /// grace window lets the user see the result landed (a terse done row),
 /// then the pill leaves so the input box rises back under the transcript.

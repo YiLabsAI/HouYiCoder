@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
 use crate::state::enums::CyclicTab;
@@ -32,7 +32,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         Pane::Review => draw_review(f, area, app),
         Pane::Verify => draw_verify(f, area, app),
         Pane::Graph => draw_graph(f, area, app),
-        Pane::Agents => draw_agents(f, area, app),
+        Pane::Agents => super::agents_pane::draw_agents(f, area, app),
         Pane::Tools => draw_tools(f, area, app),
         Pane::Artifact => crate::view::artifact::draw(f, area, app),
         // The interactive rule manager. draw_main intercepts Pane::Permission
@@ -640,38 +640,6 @@ fn draw_graph(f: &mut Frame, area: Rect, app: &App) {
     render_lines(f, area, block, lines);
 }
 
-fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
-    let block = titled_block(app, "agents");
-    // When the fleet status is empty (no running child agents in v0),
-    // show the registered agent directory (the types the model may
-    // delegate to) fetched by the /agents query. The fleet list
-    // replaces this when child tracking lands.
-    if app.agents.is_empty() {
-        // The directory is a multi-line markdown string (header + bullets).
-        // Split per source line so each renders on its own terminal row;
-        // a single Line::from would flatten \n into same-row spans.
-        // Filter empty so a Some("") reply still shows the placeholder.
-        let dir = app
-            .agent_directory
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("(no agent directory loaded)");
-        let lines: Vec<Line> = dir.lines().map(|l| Line::from(l.to_string())).collect();
-        render_lines(f, area, block, lines);
-        return;
-    }
-    let items: Vec<ListItem> = app
-        .agents
-        .iter()
-        .map(|a| ListItem::new(format!("{} ({}) -- {}", a.name, a.role, a.state)))
-        .collect();
-    f.render_widget(
-        List::new(items).style(Style::new().fg(Color::White)),
-        block.inner(area),
-    );
-    f.render_widget(block, area);
-}
-
 fn draw_tools(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "tools");
     if app.tool_entries.is_empty() {
@@ -700,11 +668,11 @@ fn draw_tools(f: &mut Frame, area: Rect, app: &App) {
     render_lines(f, area, block, lines);
 }
 
-fn titled_block(app: &App, base: &str) -> Block<'static> {
+pub(super) fn titled_block(app: &App, base: &str) -> Block<'static> {
     focus_titled_block(app, base)
 }
 
-fn render_lines(f: &mut Frame, area: Rect, block: Block, lines: Vec<Line>) {
+pub(super) fn render_lines(f: &mut Frame, area: Rect, block: Block, lines: Vec<Line>) {
     f.render_widget(
         Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
         block.inner(area),

@@ -177,6 +177,12 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Up if app.pane == Pane::Memory => app.move_memory_cursor(-1),
         KeyCode::Down if app.pane == Pane::Memory => app.move_memory_cursor(1),
+        KeyCode::Up if app.pane == Pane::Agents && !app.fleet.entries.is_empty() => {
+            app.fleet.move_selection(-1);
+        }
+        KeyCode::Down if app.pane == Pane::Agents && !app.fleet.entries.is_empty() => {
+            app.fleet.move_selection(1);
+        }
         // Shift+Tab cycles the permission mode: default, auto, bypass, default. No pane shadows it now (the /memory scope filter moved to
         // Left/Right), so Shift+Tab is always the global mode cycle.
         KeyCode::BackTab => app.tab_cycle_mode(),
