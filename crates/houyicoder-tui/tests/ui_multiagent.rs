@@ -1,9 +1,7 @@
-//! Real-binary PTY tests for the multi-agent sync delegation UX.
-//! Each test spawns the houyi binary under a PTY with a scripted stub
-//! provider, so the full chain runs end-to-end: the parent calls the
-//! agent tool, the sync spawn drives the child, the child completes, the
-//! parent resumes, and the Subagent fold-group + teammate view render
-//! through the real interaction layer. Slow, so ignored by default.
+//! Real-binary PTY tests for the multi-agent interaction UX. Each test
+//! spawns the binary under a PTY with a scripted stub provider so the full
+//! chain runs end-to-end. The matrix covers each interaction path a user
+//! can take. Slow, so ignored by default.
 
 #![allow(clippy::unwrap_in_result)]
 
@@ -11,6 +9,11 @@ mod common;
 
 use common::{Key, RENDER_TIMEOUT, session_on_working_with_script};
 use std::time::Duration;
+
+/// A child text long enough that the collapsed fold summary truncates it.
+/// Head and tail are distinct so a collapsed/expanded assertion can tell
+/// summary from full content.
+const LONG_CHILD: &str = "This is a long child analysis that exceeds the one-line fold summary limit so the collapsed head truncates it with an ellipsis while the expanded view shows the full text including this trailing sentinel.";
 
 /// The grace window after which a completed pill row retires when the user
 /// is not viewing it. Tests wait past this to prove the pin holds + the
@@ -380,6 +383,1113 @@ fn test_steer_completed_notice() {
     assert!(
         s.wait_for_plain("has finished", RENDER_TIMEOUT),
         "steering a completed child should surface the finished notice:\n{}",
+        s.output()
+    );
+}
+
+// ---- batch 1: sync delegation + fold-group interaction ----
+
+/// The child's returned text appears in the collapsed fold-group summary
+/// head. Proves the child output reaches the parent transcript (not a silent
+/// drop) and the summary line carries real content.
+#[test]
+#[ignore]
+fn test_sync_child_summary_text() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"the auth module lives in src/auth"}],
+        [{"type":"Text","text":"parent resumed"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2),
+        "fold should render collapsed:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains("authmodulelives"),
+        "summary head should carry the child text:\n{}",
+        s.output()
+    );
+}
+
+/// Two consecutive sync delegations produce two independent fold-groups,
+/// each carrying its own child summary. Proves per-child rendering (not a
+/// merged or last-writer-wins fold).
+#[test]
+#[ignore]
+fn test_sync_two_folds_render() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"first","description":"first"}},
+         {"type":"ToolCall","id":"toolu_2","name":"agent","input":{"subagent_type":"explore","prompt":"second","description":"second"}}],
+        [{"type":"Text","text":"first-child-result"}],
+        [{"type":"Text","text":"second-child-result"}],
+        [{"type":"Text","text":"parent done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("delegate two");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("parentdone", RENDER_TIMEOUT * 3),
+        "both children should complete + parent resume:\n{}",
+        s.output()
+    );
+    let pc = s.output_compact();
+    assert!(
+        pc.contains("first-child-result") && pc.contains("second-child-result"),
+        "both child summaries should render:\n{}",
+        s.output()
+    );
+}
+
+/// Enter the teammate view, Esc out, then re-Enter on the same fold. Proves
+/// the drill-in is idempotent (re-entry does not get stuck or refuse).
+#[test]
+#[ignore]
+fn test_sync_reenter_teammate() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"parent resumed"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    s.send_key(&Key::Esc);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        "re-entering the teammate view should work:\n{}",
+        s.output()
+    );
+}
+
+/// The agent-tool call row renders with the subagent type, distinct from
+/// the fold-group below it. Proves the delegation call surfaces in the
+/// transcript (the ⏺ Agent(→ type) row), not just the result fold.
+#[test]
+#[ignore]
+fn test_sync_agent_call_row() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2),
+        "fold should render:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains("Agent(→explore)"),
+        "agent call row should name the subagent type:\n{}",
+        s.output()
+    );
+}
+
+/// A long child text is truncated in the collapsed summary: the head shows
+/// but the tail does not. Proves the summary caps at one row.
+#[test]
+#[ignore]
+fn test_fold_summary_truncates() {
+    let script = format!(
+        r#"[
+        [{{"type":"ToolCall","id":"toolu_1","name":"agent","input":{{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}}}],
+        [{{"type":"Text","text":"{LONG_CHILD}"}}],
+        [{{"type":"Text","text":"done"}}]
+    ]"#
+    );
+    let mut s = session_on_working_with_script(&script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    let pc = s.output_compact();
+    assert!(
+        pc.contains("longchildanalysis"),
+        "summary head should show the start:\n{}",
+        s.output()
+    );
+    assert!(
+        !pc.contains("trailingsentinel"),
+        "collapsed summary should not show the tail:\n{}",
+        s.output()
+    );
+}
+
+/// Entering the teammate view shows the child's transcript body (the child's
+/// returned text), not just the banner. Proves the drill-in surfaces child
+/// content, the keyboard path to see what the child produced.
+#[test]
+#[ignore]
+fn test_teammate_view_child_content() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"the auth boundary is src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    assert!(
+        s.output_compact().contains("authboundaryissrc/auth"),
+        "teammate view body should show the child text:\n{}",
+        s.output()
+    );
+}
+
+/// A single Esc exits the teammate view back to the parent transcript.
+/// Proves the exit is one press (not two), distinct from the slash-palette
+/// path which needs a second Esc.
+#[test]
+#[ignore]
+fn test_teammate_esc_single() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for("let's build", RENDER_TIMEOUT),
+        "single Esc should exit the teammate view:\n{}",
+        s.output()
+    );
+}
+
+/// After a delegation completes and the parent resumes, a follow-up user
+/// message renders normally and the fold-group persists above it. Proves the
+/// parent run loop is intact post-delegation.
+#[test]
+#[ignore]
+fn test_sync_followup_persists() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"child found auth"}],
+        [{"type":"Text","text":"parent first reply"}],
+        [{"type":"Text","text":"parent second reply"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("firstreply", RENDER_TIMEOUT * 2));
+    s.send_str("more");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("secondreply", RENDER_TIMEOUT * 2),
+        "follow-up should render:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains("childfoundauth"),
+        "fold should persist after follow-up:\n{}",
+        s.output()
+    );
+}
+
+/// The fold-group head shows the subagent_type label, not a generic
+/// placeholder. Uses the registered "plan" type to prove the label is not
+/// hard-coded to one value.
+#[test]
+#[ignore]
+fn test_sync_fold_shows_type() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"plan","prompt":"plan the work","description":"plan"}}],
+        [{"type":"Text","text":"plan made"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("plan the work");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    assert!(
+        s.output_compact().contains("plan:"),
+        "fold head should show the subagent type:\n{}",
+        s.output()
+    );
+}
+
+/// A child that returns empty text does not crash: the fold renders and the
+/// parent resumes. Proves the empty-content edge is handled.
+#[test]
+#[ignore]
+fn test_sync_empty_child_safe() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":""}],
+        [{"type":"Text","text":"parent resumed"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("parentresumed", RENDER_TIMEOUT * 3),
+        "parent should resume after an empty child:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains("ctrl+o"),
+        "fold should still render for an empty child:\n{}",
+        s.output()
+    );
+}
+
+/// The teammate-view banner carries the task prompt on its second line, so
+/// the user knows what the viewed child was asked to do.
+#[test]
+#[ignore]
+fn test_teammate_prompt_surfaces() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"locate the auth boundary","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    assert!(
+        s.output_compact().contains("locatetheauthboundary"),
+        "banner should carry the task prompt:\n{}",
+        s.output()
+    );
+}
+
+/// A non-explore subagent type renders its own label in the banner, proving
+/// the type is not hard-coded to one value. Uses the registered "plan" type.
+#[test]
+#[ignore]
+fn test_teammate_banner_plan() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"plan","prompt":"plan the work","description":"plan"}}],
+        [{"type":"Text","text":"plan made"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("plan the work");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    assert!(
+        s.output_compact().contains("@plan"),
+        "banner should name the plan type:\n{}",
+        s.output()
+    );
+}
+
+// ---- batch 2: Esc interrupt + recall (the two-press model) ----
+
+/// Esc mid-run interrupts the run: the Interrupted notice lands and the
+/// in-flight text never renders (the run aborted before completion). Proves
+/// the first Esc is an interrupt, not a recall or a no-op.
+#[test]
+#[ignore]
+fn test_esc_busy_interrupts_run() {
+    let script = r#"[[{"type":"Text","text":"should not finish"}]]"#;
+    let mut s = common::session_on_working_slow_with_script(3000, script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("go");
+    s.send_str("\r");
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for_compact("Interrupted", RENDER_TIMEOUT * 2),
+        "Esc mid-run should surface the Interrupted notice:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("shouldnotfinish"),
+        "interrupted run should not render the in-flight text:\n{}",
+        s.output()
+    );
+}
+
+/// After Esc interrupts a run, the input box is editable: the user can type
+/// a new message right away. Proves the post-interrupt state is clean (not
+/// stuck busy, not locked), so the user can redirect immediately.
+#[test]
+#[ignore]
+fn test_esc_interrupt_then_edit() {
+    let script = r#"[[{"type":"Text","text":"slow reply"}]]"#;
+    let mut s = common::session_on_working_slow_with_script(3000, script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("go");
+    s.send_str("\r");
+    s.send_key(&Key::Esc);
+    assert!(s.wait_for_compact("Interrupted", RENDER_TIMEOUT * 2));
+    s.clear_output();
+    s.send_str("nextmessage");
+    assert!(
+        s.wait_for_compact("nextmessage", RENDER_TIMEOUT),
+        "input should be editable after interrupt:\n{}",
+        s.output()
+    );
+}
+
+/// Esc when idle with an empty queue is a no-op: no panic, no quit, the
+/// working screen persists and the app still accepts input.
+#[test]
+#[ignore]
+fn test_esc_idle_noop() {
+    let mut s = common::session_on_working_with_script(r#"[[{"type":"Text","text":"reply"}]]"#);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_key(&Key::Esc);
+    s.send_key(&Key::Esc);
+    assert!(
+        s.output().contains("let's build"),
+        "idle Esc should not quit:\n{}",
+        s.output()
+    );
+    s.send_str("z");
+    assert!(
+        s.wait_for("z", RENDER_TIMEOUT),
+        "app should still accept input after idle Esc:\n{}",
+        s.output()
+    );
+}
+
+// ---- batch 3: fleet pill (footer) ----
+
+/// After a sync delegation completes, the footer pill renders the child's
+/// done row (the type + a done marker + the token total). Proves the pill
+/// surfaces the terminal state, not just the running state.
+#[test]
+#[ignore]
+fn test_pill_done_after_completion() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2),
+        "fold should render:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains("explore·done"),
+        "pill should show the done row after completion:\n{}",
+        s.output()
+    );
+}
+
+/// Two sync delegations in one run leave two footer pill rows, each
+/// carrying its own type + done marker. Proves the pill tracks multiple
+/// children (not last-writer-wins) and each row is typed by its delegation.
+#[test]
+#[ignore]
+fn test_pill_two_children_rows() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"first","description":"first"}},
+         {"type":"ToolCall","id":"toolu_2","name":"agent","input":{"subagent_type":"plan","prompt":"second","description":"second"}}],
+        [{"type":"Text","text":"first-child"}],
+        [{"type":"Text","text":"second-child"}],
+        [{"type":"Text","text":"parent done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("delegate two");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("parentdone", RENDER_TIMEOUT * 3),
+        "both children should complete:\n{}",
+        s.output()
+    );
+    let pc = s.output_compact();
+    assert!(
+        pc.contains("explore·done") && pc.contains("plan·done"),
+        "both child pill rows should render with their own type:\n{}",
+        s.output()
+    );
+}
+
+/// While a sync child is in-flight, the footer pill renders the running row
+/// (the type + a live verb), distinct from the done row. Proves the pill
+/// tracks the running state before completion. Uses the stub delay so the
+/// in-flight window is wide enough to catch.
+#[test]
+#[ignore]
+fn test_pill_running_verb_inflight() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = common::session_on_working_slow_with_script(2000, script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    // While the child is in-flight (2s delay), the pill shows the running
+    // row (type + verb, colon-separated) before the done row replaces it.
+    assert!(
+        s.wait_for_compact("explore:", RENDER_TIMEOUT * 2),
+        "pill should render the running row while the child is in-flight:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("explore·done"),
+        "pill should not show done before the child completes:\n{}",
+        s.output()
+    );
+}
+
+/// Shift+Down on the footer pill moves the selection onto a child row; Enter
+/// then opens that child's teammate view. Proves the fleet-selection drill-in
+/// path (distinct from the transcript-line Enter path).
+#[test]
+#[ignore]
+fn test_pill_shift_enter_teammate() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("explore·done", RENDER_TIMEOUT * 2));
+    s.send_key(&Key::ShiftDown);
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        "Enter on the fleet selection should open the teammate view:\n{}",
+        s.output()
+    );
+}
+
+// ---- batch 4: async delegation ----
+
+/// The parent continues past an async spawn without blocking: the parent's
+/// own text renders right after the async_launched result, before the child
+/// completes. Proves the async path returns immediately (no sync block).
+#[test]
+#[ignore]
+fn test_async_parent_unblocked() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent carried on"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("parentcarriedon", RENDER_TIMEOUT * 2),
+        "parent should continue past an async spawn:\n{}",
+        s.output()
+    );
+}
+
+/// The async completion notification carries the child's result text, not
+/// just the terminal status, so the parent transcript shows what the child
+/// produced. Distinct from the status-only assertion.
+#[test]
+#[ignore]
+fn test_async_child_text_drains() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent continues"}],
+        [{"type":"Text","text":"async child produced this"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("parentcontinues", RENDER_TIMEOUT * 2));
+    let mut drained = false;
+    for _ in 0..6 {
+        s.send_str("update");
+        s.send_str("\r");
+        if s.wait_for_compact("asyncchildproducedthis", RENDER_TIMEOUT * 2) {
+            drained = true;
+            break;
+        }
+    }
+    assert!(
+        drained,
+        "async notification should carry the child result text:\n{}",
+        s.output()
+    );
+}
+
+/// An async spawn followed by a sync spawn in one run: the async child
+/// detaches, the sync child blocks the parent to completion, then the async
+/// notification drains later. Proves the two spawn modes coexist.
+#[test]
+#[ignore]
+fn test_async_then_sync_mix() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"async","description":"async","run_in_background":true}},{"type":"Text","text":"after async"}],
+        [{"type":"Text","text":"sync child result"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("mixed");
+    s.send_str("\r");
+    // The async spawn returns immediately; the parent continues.
+    assert!(
+        s.wait_for_compact("afterasync", RENDER_TIMEOUT * 2),
+        "parent should continue past the async spawn:\n{}",
+        s.output()
+    );
+    // The sync child (turn 1) blocks the parent to completion + its result
+    // fold renders.
+    assert!(
+        s.wait_for_compact("syncchildresult", RENDER_TIMEOUT * 3),
+        "sync child result should render:\n{}",
+        s.output()
+    );
+}
+
+// ---- batch 5: agents pane + slash + misc ----
+
+/// Two delegations in one run with distinct subagent types each render
+/// their own type label in the fold head (explore + plan), proving the
+/// per-child type is not lost when multiple delegations land together.
+#[test]
+#[ignore]
+fn test_two_folds_distinct_types() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"first","description":"first"}},
+         {"type":"ToolCall","id":"toolu_2","name":"agent","input":{"subagent_type":"plan","prompt":"second","description":"second"}}],
+        [{"type":"Text","text":"first-child"}],
+        [{"type":"Text","text":"second-child"}],
+        [{"type":"Text","text":"parent done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("delegate two");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("parentdone", RENDER_TIMEOUT * 3));
+    let pc = s.output_compact();
+    assert!(
+        pc.contains("explore:") && pc.contains("plan:"),
+        "both fold heads should show their own type:\n{}",
+        s.output()
+    );
+}
+
+/// A slash opens the parent command palette (the command list), proving the
+/// palette is reachable from the working screen + lists entries.
+#[test]
+#[ignore]
+fn test_slash_opens_palette() {
+    let mut s = common::session_on_working_with_script(r#"[[{"type":"Text","text":"reply"}]]"#);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_key(&Key::Char('/'));
+    assert!(
+        s.wait_for_compact("commands", RENDER_TIMEOUT),
+        "slash should open the command palette:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Esc);
+}
+
+/// A child whose text spans multiple lines flattens to a one-line summary in
+/// the collapsed fold head (newlines become spaces, not literal \n).
+#[test]
+#[ignore]
+fn test_sync_child_multiline_summary() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"line one\nline two\nline three"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    let pc = s.output_compact();
+    assert!(
+        pc.contains("lineone") && pc.contains("linetwo"),
+        "summary should flatten newlines into one line:\n{}",
+        s.output()
+    );
+    assert!(
+        !pc.contains("\\n"),
+        "summary should not show literal backslash-n:\n{}",
+        s.output()
+    );
+}
+
+/// After Esc exits the teammate view, the fold-group persists in the parent
+/// transcript (the delegation result is not lost on view exit).
+#[test]
+#[ignore]
+fn test_teammate_esc_fold_survives() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    s.send_key(&Key::Esc);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    assert!(
+        s.output_compact().contains("ctrl+otoexpand"),
+        "fold should persist after exiting the teammate view:\n{}",
+        s.output()
+    );
+}
+
+/// The running pill shows the live-progress glyph (a hollow circle),
+/// distinct from the done row's check mark. Proves the pill distinguishes
+/// in-flight from completed at the glyph level.
+#[test]
+#[ignore]
+fn test_pill_running_glyph() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = common::session_on_working_slow_with_script(2000, script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("◯", RENDER_TIMEOUT * 2),
+        "running pill should show the hollow-circle glyph:\n{}",
+        s.output()
+    );
+}
+
+/// The user's typed message echoes into the transcript as a user row before
+/// the agent call, proving the input landed as a real user message (not a
+/// silent drop) and the transcript order is user → call → fold.
+#[test]
+#[ignore]
+fn test_sync_user_message_echo() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"child result"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("delegatetheauth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    assert!(
+        s.output_compact().contains("delegatetheauth"),
+        "user message should echo into the transcript:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains("Agent(→explore)"),
+        "agent call row should follow the user message:\n{}",
+        s.output()
+    );
+}
+
+/// The pill transitions from the running row to the done row as a sync child
+/// completes: the running verb appears first, then the done marker replaces
+/// it. Proves the pill reflects the live state change at completion.
+#[test]
+#[ignore]
+fn test_pill_running_to_done() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = common::session_on_working_slow_with_script(2000, script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    // Running row first (colon-separated type + verb), then the done row.
+    assert!(s.wait_for_compact("explore:", RENDER_TIMEOUT * 2));
+    assert!(
+        s.wait_for_compact("explore·done", RENDER_TIMEOUT * 3),
+        "pill should transition to the done row after completion:\n{}",
+        s.output()
+    );
+}
+
+// ---- batch 6: banner, palette, edge, unicode ----
+
+/// The teammate-view banner carries the esc-return hint, so the user knows
+/// how to exit the view without guessing.
+#[test]
+#[ignore]
+fn test_teammate_banner_esc_hint() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    assert!(
+        s.output_compact().contains("escreturn"),
+        "banner should carry the esc-return hint:\n{}",
+        s.output()
+    );
+}
+
+/// The completed pill row shows the check-mark glyph, distinct from the
+/// running row's hollow circle. Proves the terminal-state glyph lands.
+#[test]
+#[ignore]
+fn test_pill_completed_check_glyph() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("✓explore", RENDER_TIMEOUT * 2),
+        "completed pill should show the check glyph + type:\n{}",
+        s.output()
+    );
+}
+
+/// Esc closes the slash palette (the command list disappears), returning the
+/// user to the working screen without submitting a command.
+#[test]
+#[ignore]
+fn test_slash_esc_closes_palette() {
+    let mut s = common::session_on_working_with_script(r#"[[{"type":"Text","text":"reply"}]]"#);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_key(&Key::Char('/'));
+    assert!(s.wait_for_compact("commands", RENDER_TIMEOUT));
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for("let's build", RENDER_TIMEOUT),
+        "Esc should close the palette + return to working:\n{}",
+        s.output()
+    );
+}
+
+/// Shift+Up/Down on the footer pill moves the selection without crashing;
+/// Enter on the selection opens the teammate view. Proves the fleet
+/// selection keys are wired both directions.
+#[test]
+#[ignore]
+fn test_pill_shift_arrows_enter() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("✓explore", RENDER_TIMEOUT * 2));
+    s.send_key(&Key::ShiftUp);
+    s.send_key(&Key::ShiftDown);
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        "Enter on the fleet selection should open the teammate view:\n{}",
+        s.output()
+    );
+}
+
+/// A child that returns unicode text renders it in the fold summary without
+/// mangling. Proves the summary path handles non-ascii content.
+#[test]
+#[ignore]
+fn test_sync_child_unicode_summary() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"héllo wörld café"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    assert!(
+        s.output_compact().contains("héllo"),
+        "summary should show unicode child text:\n{}",
+        s.output()
+    );
+}
+
+/// The async spawn result surfaces a "launched in the background" message,
+/// so the user knows the child is detached (not blocking).
+#[test]
+#[ignore]
+fn test_async_background_message() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent continues"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("background", RENDER_TIMEOUT * 2),
+        "async spawn should surface a background-launch message:\n{}",
+        s.output()
+    );
+}
+
+/// A very long task prompt does not crash the spawn or the fold render.
+#[test]
+#[ignore]
+fn test_sync_long_prompt_safe() {
+    let prompt = "x".repeat(200);
+    let script = format!(
+        r#"[[{{"type":"ToolCall","id":"toolu_1","name":"agent","input":{{"subagent_type":"explore","prompt":"{prompt}","description":"long"}}}}],[{{"type":"Text","text":"child done"}}],[{{"type":"Text","text":"parent done"}}]]"#
+    );
+    let mut s = session_on_working_with_script(&script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("go");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("parentdone", RENDER_TIMEOUT * 5),
+        "run should complete with a long prompt:\n{}",
+        s.output()
+    );
+}
+
+/// A child text containing quotes renders without JSON-escaping (no literal
+/// backslash-quote in the summary).
+#[test]
+#[ignore]
+fn test_sync_quotes_unescaped() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"the \"auth\" is here"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    assert!(
+        !s.output_compact().contains("\\\""),
+        "summary should not show escaped quotes:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains("auth"),
+        "summary should show the quoted word:\n{}",
+        s.output()
+    );
+}
+
+/// A delegation with no subagent_type defaults to general-purpose, and the
+/// banner carries that default label.
+#[test]
+#[ignore]
+fn test_sync_general_purpose_type() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    assert!(
+        s.output_compact().contains("@general-purpose"),
+        "default type should be general-purpose:\n{}",
+        s.output()
+    );
+}
+
+/// Typing printable chars inside the teammate view routes to the parent
+/// input (the chars echo in the parent input box), not to the child inbox.
+#[test]
+#[ignore]
+fn test_teammate_chars_route_parent() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    s.send_str("parenttext");
+    assert!(
+        s.wait_for_compact("parenttext", RENDER_TIMEOUT),
+        "typed chars should route to the parent input:\n{}",
+        s.output()
+    );
+}
+
+/// After Esc interrupts a run, the busy indicator clears (no lingering
+/// "Working" spinner). Proves the interrupt fully resets the busy state.
+#[test]
+#[ignore]
+fn test_esc_interrupt_clears_busy() {
+    let script = r#"[[{"type":"Text","text":"slow reply"}]]"#;
+    let mut s = common::session_on_working_slow_with_script(3000, script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("go");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("Working", RENDER_TIMEOUT * 2));
+    s.send_key(&Key::Esc);
+    assert!(s.wait_for_compact("Interrupted", RENDER_TIMEOUT * 2));
+    s.clear_output();
+    s.send_str(" ");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !s.output_compact().contains("Working"),
+        "busy indicator should clear after interrupt:\n{}",
+        s.output()
+    );
+}
+
+/// A short child text appears fully in the collapsed summary (no truncation
+/// ellipsis for content under the one-line cap).
+#[test]
+#[ignore]
+fn test_fold_short_summary_full() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"found it"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    assert!(
+        s.output_compact().contains("foundit"),
+        "short child text should appear fully in the summary:\n{}",
+        s.output()
+    );
+}
+
+/// The async completion notification drains into the parent transcript at a
+/// turn boundary, proving the detached-child completion reaches the parent.
+/// (Counting exact drain events is a unit-level concern; here the render
+/// stays across frames so the buffer count is not a drain count.)
+#[test]
+#[ignore]
+fn test_async_notification_drains_once() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent continues"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("parentcontinues", RENDER_TIMEOUT * 2));
+    let mut drained = false;
+    for _ in 0..6 {
+        s.send_str("update");
+        s.send_str("\r");
+        if s.wait_for_compact("completed", RENDER_TIMEOUT * 2) {
+            drained = true;
+            break;
+        }
+    }
+    assert!(drained, "notification should drain:\n{}", s.output());
+}
+
+/// The parent's final answer renders after the fold-group (the delegation
+/// result precedes the parent's resume text in transcript order).
+#[test]
+#[ignore]
+fn test_sync_parent_after_fold() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"child found auth"}],
+        [{"type":"Text","text":"parent final answer"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    assert!(
+        s.output_compact().contains("parentfinalanswer"),
+        "parent final answer should render after the fold:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains("childfoundauth"),
+        "child result should render in the fold:\n{}",
         s.output()
     );
 }

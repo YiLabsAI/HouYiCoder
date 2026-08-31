@@ -369,6 +369,32 @@ impl PtySession {
         self.output_plain().contains(marker)
     }
 
+    /// The accumulated output ANSI-stripped and with all whitespace removed.
+    /// ratatui's cell-diff repaint can split a phrase across styled spans and
+    /// collapse the spaces between words, so a spaced marker ("ctrl+o to
+    /// expand") flakes; the compacted form ("ctrl+otoexpand") is stable. Use
+    /// for any marker that contains a space.
+    pub fn output_compact(&self) -> String {
+        self.output_plain()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
+    /// Poll until the compact (whitespace-stripped) output contains marker,
+    /// or timeout elapses. The marker itself must be whitespace-free so it
+    /// matches the compacted form (e.g. "ctrl+otoexpand").
+    pub fn wait_for_compact(&mut self, marker: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.output_compact().contains(marker) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        self.output_compact().contains(marker)
+    }
+
     /// Drop the accumulated output so a subsequent absence check (wait_for
     /// returning false) tests the CURRENT render, not the historical one.
     /// Needed because the buffer accumulates every byte ever written — a
@@ -724,6 +750,21 @@ pub fn session_on_working_with_script_rows(script_json: &str, rows: u16) -> PtyS
 /// one commit + a workspace manifest) before launching.
 pub fn session_on_working_in_repo(repo: std::path::PathBuf, script_json: &str) -> PtySession {
     session_on_working_inner(PtySession::launch_in_repo_with_script(repo, script_json))
+}
+
+/// Like session_on_working_with_script, but the stub streams with an
+/// inter-chunk delay so a run stays in-flight long enough to drive mid-run
+/// keys (Esc interrupt, recall). Used by the multi-agent Esc tests.
+pub fn session_on_working_slow_with_script(ms: u64, script_json: &str) -> PtySession {
+    let sessions_dir = fresh_temp_dir("sessions");
+    session_on_working_inner(PtySession::launch_with_sessions_dir(
+        Some(script_json.to_string()),
+        Some(ms),
+        None,
+        None,
+        &[],
+        sessions_dir,
+    ))
 }
 
 fn session_on_working_inner(mut s: PtySession) -> PtySession {

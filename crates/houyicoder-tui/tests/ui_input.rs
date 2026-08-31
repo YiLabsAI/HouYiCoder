@@ -11,7 +11,10 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working, session_on_working_slow_in_repo};
+use common::{
+    Key, RENDER_TIMEOUT, session_on_working, session_on_working_slow_in_repo,
+    session_on_working_slow_with_script,
+};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -57,39 +60,79 @@ const UNIQUE_TOKEN: &str = "zzqxwaffle";
 /// path re-filling the box with the aborted run's origin) fails the wait.
 const QUEUED_TOKEN: &str = "zzqueuedpony";
 
-/// #15: Esc while a run is in-flight AND the input has a draft must clear the
-/// draft (not abort the run), so a second Esc is needed to abort. The gate is
-/// the fix; without it the first Esc would abort, stranding any way to wipe a
-/// recalled draft while busy. Proven without a flaky busy-marker by clearing
-/// output between the two Escs: if the first Esc wrongly aborted, the
-/// "input restored" line it produced is wiped by clear_output and the second
-/// Esc (now idle) is a no-op, so wait_for(input restored) fails. When the gate
-/// works, the first Esc clears the draft (run stays alive), the second Esc
-/// (busy + empty) aborts + restores, and "input restored" renders fresh.
+/// Esc while a run is in-flight with a draft aborts the run AND leaves the
+/// draft intact (so the user can resend after redirecting). This is the
+/// property the interrupt/recall split buys: a panic Esc never destroys the
+/// user's half-typed input. The earlier clear-draft-on-first-Esc gate was
+/// removed because it made "stop the run" require first destroying the
+/// draft — a panic key must not force data loss as its first step.
 #[test]
 #[ignore]
-fn test_esc_clears_keeps_run() {
-    let mut s = session_on_working_slow_in_repo(make_temp_repo(1), RUN_DELAY_MS);
+fn test_esc_draft_aborts_kept() {
+    let mut s = session_on_working_slow_with_script(
+        RUN_DELAY_MS,
+        r#"[[{"type":"Text","text":"slow reply"}]]"#,
+    );
     s.send_str("hi");
     s.send_key(&Key::Enter);
-    // Type a draft while the run is in-flight. It is not submitted (busy), so
-    // it sits in the input box.
+    // Type a draft while the run is in-flight (busy, not submitted).
     s.send_str(UNIQUE_TOKEN);
-    // First Esc: busy + non-empty input -> clears the draft, does NOT abort.
-    // Sleep after the byte: crossterm reads a bare 0x1b as Esc only when no
-    // following byte arrives within its escape-sequence window, so a gap is
-    // needed before the next send (the second Esc) or the two merge.
-    s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    // Wipe history so a "input restored" from a (wrong) first-Esc abort is
-    // gone; the second Esc must produce it fresh to pass.
-    s.clear_output();
-    // Second Esc: the draft is cleared so input is empty -> busy+empty aborts.
+    // Esc aborts the run; the draft stays in the input box.
     s.send_key(&Key::Esc);
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert!(
-        s.wait_for("input restored", RENDER_TIMEOUT),
-        "first Esc should clear the draft (not abort); second Esc should abort + restore:\n{}",
+        s.wait_for("Interrupted", RENDER_TIMEOUT),
+        "Esc should abort the in-flight run:\n{}",
+        s.output()
+    );
+    // Done(Interrupted) restores the run's origin into the input box ONLY
+    // when the input is empty. A surviving draft (non-empty input) blocks
+    // the restore, so "input restored" never lands — proving the draft is
+    // still in the input box (a panic Esc did not destroy it). If Esc
+    // wrongly cleared the draft, Done would restore the origin + surface
+    // "input restored", failing this absence check.
+    assert!(
+        !s.wait_for_compact("inputrestored", RENDER_TIMEOUT),
+        "the draft should survive the abort (no origin restore):\n{}",
+        s.output()
+    );
+}
+
+/// Ctrl+U clears a half-typed draft while a run is in-flight WITHOUT
+/// aborting the run. Esc no longer clears the draft (it aborts), so Ctrl+U
+/// is the one path to wipe a busy draft; this test pins that path so a
+/// future change cannot silently remove the only clear-draft escape hatch.
+#[test]
+#[ignore]
+fn test_ctrlu_clears_busy_draft() {
+    let mut s = session_on_working_slow_in_repo(make_temp_repo(3), RUN_DELAY_MS);
+    s.send_str("hi");
+    s.send_key(&Key::Enter);
+    s.send_str(UNIQUE_TOKEN);
+    // Ctrl+U clears the draft; the run is not aborted.
+    s.send_key(&Key::Ctrl('u'));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    s.clear_output();
+    // A sentinel char proves the input box is alive + now holds only the new
+    // char (the draft was wiped, not the run's input frozen).
+    s.send_str("z");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        !s.output_compact().contains(UNIQUE_TOKEN),
+        "Ctrl+U should clear the draft:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains('z'),
+        "input should still accept a new char after Ctrl+U:\n{}",
+        s.output()
+    );
+    // Ctrl+U must not abort the run: the Interrupted notice never lands.
+    // (If it did, the clear-draft escape hatch would double as a panic key,
+    // defeating the Esc/ctrl-u split this test pins.)
+    assert!(
+        !s.wait_for_compact("Interrupted", RENDER_TIMEOUT),
+        "Ctrl+U should not abort the run:\n{}",
         s.output()
     );
 }

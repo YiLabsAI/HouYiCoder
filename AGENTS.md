@@ -134,6 +134,14 @@ commit gate (fast unit suite + diff coverage); `make verify` is the done gate
 cross-layer or interactive behavior is not finished until verify is green —
 `make check` alone cannot see those paths.
 
+Key-semantics changes (key rebinding, Esc/Enter/ctrl-key routing, pane-owns-esc
+gates) MUST run `make verify`, not just `make check`. The unit layer cannot see
+the real crossterm byte dispatch order — the key-routing decision depends on
+which branch fires first in the live terminal, and an `#[ignore]` PTY test is the
+only layer that pins it. A `make check`-green key change can still regress an
+`#[ignore]` behavioral test (the ignored suite is where this class of regression
+hides); verify is the gate that catches it.
+
 ## Coding Standards
 
 ### Formatting & Lint
