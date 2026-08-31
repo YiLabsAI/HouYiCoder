@@ -95,11 +95,8 @@ fn walk(
         let Ok(rel) = path.strip_prefix(root) else {
             continue;
         };
-        let rel_str = rel.to_string_lossy();
-        if rel_str
-            .split(std::path::MAIN_SEPARATOR)
-            .any(|seg| seg.starts_with('.'))
-        {
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        if rel_str.split('/').any(|seg| seg.starts_with('.')) {
             continue;
         }
         if path.is_dir() {
@@ -130,7 +127,7 @@ fn walk(
         let kind = classify(&rel_str, &name);
         out.push(ResourceEntry {
             name,
-            rel_path: rel_str.into(),
+            rel_path: rel_str,
             kind,
         });
     }
@@ -141,12 +138,8 @@ fn walk(
 /// under templates are Templates; markdown is Reference; the rest is Data.
 pub(crate) fn classify(rel: &str, name: &str) -> ResourceKind {
     let lower = name.to_ascii_lowercase();
-    let first_seg = rel.split(std::path::MAIN_SEPARATOR).next().unwrap_or("");
-    // A file under a scripts directory, or with a script extension
-    // anywhere, is a Script. The bare "scripts" directory name itself is
-    // not: a path that is exactly the directory carries no file, so it
-    // must not surface as a script run or a script manifest entry.
-    let under_scripts = first_seg == "scripts" && rel.contains(std::path::MAIN_SEPARATOR);
+    let first_seg = rel.split('/').next().unwrap_or("");
+    let under_scripts = first_seg == "scripts" && rel.contains('/');
     if under_scripts || is_script_ext(&lower) {
         return ResourceKind::Script;
     }
@@ -294,6 +287,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_skips_control_char_names() {
         // A path with a control char — in the file name or a parent
         // directory name — could forge an extra manifest line; such
