@@ -309,6 +309,15 @@ fn test_event_variants_round_trip() {
                 call_in_turn: Some(2),
             },
         ),
+        event(
+            s,
+            EventId::new(),
+            TurnEventKind::SkillListing {
+                text: "- commit: commit changes".into(),
+                bytes: 26,
+                content_hash: 0xdeadbeef,
+            },
+        ),
     ];
     for e in &cases {
         let json = serde_json::to_string(e).expect("serialize");
@@ -320,6 +329,29 @@ fn test_event_variants_round_trip() {
     assert!(json.contains("\"checkpoint\""));
     let back: TurnEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(back, cases[5]);
+    // SkillListing's content_hash is on the wire, and an old-log JSON
+    // missing the field deserializes to 0 (forward compat for logs written
+    // before the field existed).
+    let sl = cases
+        .iter()
+        .find(|e| matches!(e.kind, TurnEventKind::SkillListing { .. }))
+        .expect("SkillListing case present");
+    let sl_json = serde_json::to_string(sl).unwrap();
+    assert!(
+        sl_json.contains("\"content_hash\""),
+        "hash on the wire: {sl_json}"
+    );
+    let mut v: serde_json::Value = serde_json::from_str(&sl_json).unwrap();
+    if let Some(serde_json::Value::Object(kind_map)) = v.get_mut("kind") {
+        kind_map.remove("content_hash");
+    }
+    let legacy: TurnEvent = serde_json::from_value(v).expect("legacy deserialize");
+    match legacy.kind {
+        TurnEventKind::SkillListing {
+            content_hash: 0, ..
+        } => {}
+        other => panic!("expected legacy SkillListing with hash 0, got {other:?}"),
+    }
 }
 
 #[test]

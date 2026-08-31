@@ -131,14 +131,34 @@ pub fn format_skill_listing(descriptors: &[SkillDescriptor], context_window_toke
         .join("\n")
 }
 
+/// Fingerprint the descriptor set a listing announces. Two listings with
+/// the same hash need no re-announce. The hash covers only the
+/// listing-relevant fields (name, description, when-to-use, token
+/// estimate), so a body-only edit that leaves the listing text unchanged
+/// does not flip it. The SkillListing event field defaults to 0 in old
+/// logs (pre-content_hash), which then re-inject once to upgrade.
+fn listing_content_hash(descs: &[SkillDescriptor]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    for d in descs {
+        d.name.hash(&mut h);
+        d.description.hash(&mut h);
+        d.when_to_use.hash(&mut h);
+        d.body_token_estimate.hash(&mut h);
+    }
+    h.finish()
+}
+
 impl Runner {
     /// Append a skill-discovery listing attachment for this turn when no
-    /// listing survives in the served view. The listing carries
+    /// up-to-date listing survives in the served view. The listing carries
     /// descriptions only (progressive disclosure); the Skill tool loads
     /// full bodies on demand. No-op when no registry is wired, when the
-    /// registry has no model-invocable skills, or when a listing already
-    /// survives in the view (first-turn announce, then skip until
-    /// compaction folds it out and the scan naturally resets).
+    /// registry has no model-invocable skills, or when a surviving listing's
+    /// content hash already matches the current set (the model has an
+    /// up-to-date discovery view, so re-announcing is pure cache cost). A
+    /// mismatch (the set changed since the surviving listing) or a folded
+    /// listing re-injects full.
     pub(crate) async fn inject_skill_listing(&self, session: SessionId) -> Result<(), RunError> {
         let Some(registry) = &self.skill_registry else {
             return Ok(());
@@ -151,14 +171,20 @@ impl Runner {
             Some(m) => projection::apply_manifest(&view.events, m, Some(self.store.backend())),
             None => view.events.clone(),
         };
-        let already_listed = filtered
-            .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SkillListing { .. }));
-        if already_listed {
-            return Ok(());
-        }
         let descriptors = registry.list_model_invocable();
         if descriptors.is_empty() {
+            return Ok(());
+        }
+        let chash = listing_content_hash(&descriptors);
+        // Skip when the NEWEST surviving listing already reflects the
+        // current set. An older non-matching listing is irrelevant (a
+        // newer one supersedes it); a stale newest (set changed since) or
+        // no survivor at all re-injects full.
+        let already_current = filtered.iter().rev().find_map(|e| match &e.kind {
+            TurnEventKind::SkillListing { content_hash, .. } => Some(*content_hash),
+            _ => None,
+        }) == Some(chash);
+        if already_current {
             return Ok(());
         }
         let window = model_window::resolve_context_window(&self.config.model);
@@ -170,7 +196,11 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::SkillListing { text, bytes },
+                TurnEventKind::SkillListing {
+                    text,
+                    bytes,
+                    content_hash: chash,
+                },
             ))
             .await?;
         Ok(())
@@ -373,6 +403,62 @@ mod tests {
         }
     }
 
+    /// A registry whose descriptor changes after the first read, to simulate a
+    /// skill-set refresh (hot reload). The first call returns one description;
+    /// every later call returns a different one, so the content hash flips.
+    struct ChangingSkillRegistry {
+        calls: std::sync::atomic::AtomicU32,
+    }
+    impl houyicoder_api::skill::SkillRegistry for ChangingSkillRegistry {
+        fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let desc = if n == 0 {
+                "commit changes"
+            } else {
+                "commit changes v2"
+            };
+            vec![descriptor("commit", desc, None)]
+        }
+        fn find(&self, name: &str) -> Option<SkillDescriptor> {
+            if name == "commit" {
+                Some(descriptor("commit", "commit changes", None))
+            } else {
+                None
+            }
+        }
+        fn prepare_body(
+            &self,
+            _name: &str,
+            _args: Option<&str>,
+            _session_id: Option<&str>,
+        ) -> Result<String, SkillError> {
+            Ok("body".into())
+        }
+    }
+
+    fn runner_with_changing_skills() -> (Runner, SessionId) {
+        use houyicoder_context::SessionId;
+        let store: Arc<dyn houyicoder_api::session::SessionLog> =
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        let runner = Runner::with_shared_store(
+            store,
+            Arc::new(StubProvider),
+            crate::agent::ToolRegistry::new(),
+            crate::agent::runner_config::RunnerConfig {
+                model: "test".into(),
+                instructions: String::new(),
+                max_turns: 5,
+                max_output_tokens: 8_000,
+                retry: Retry::default(),
+            },
+        )
+        .with_skill_registry(Arc::new(ChangingSkillRegistry {
+            calls: std::sync::atomic::AtomicU32::new(0),
+        }));
+        let session = SessionId::new();
+        (runner, session)
+    }
+
     fn runner_with_skills() -> (Runner, SessionId) {
         use houyicoder_context::SessionId;
         let store: Arc<dyn houyicoder_api::session::SessionLog> =
@@ -434,6 +520,72 @@ mod tests {
         assert_eq!(
             after_first, after_second,
             "second inject is a no-op when a listing survives"
+        );
+    }
+
+    /// A content-hash mismatch — the descriptor set changed since the
+    /// surviving listing was announced (here a simulated registry refresh;
+    /// in production a hot-reload invalidation) — re-announces instead of
+    /// skipping. A body-only edit that leaves the listing text unchanged
+    /// does not flip the hash, so it does not re-announce; a description
+    /// change does.
+    #[tokio::test]
+    async fn test_re_announces_on_change() {
+        let (runner, session) = runner_with_changing_skills();
+        runner.inject_skill_listing(session).await.unwrap();
+        let after_first: Vec<_> = runner
+            .store()
+            .current_view(session)
+            .await
+            .unwrap()
+            .events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                TurnEventKind::SkillListing {
+                    text, content_hash, ..
+                } => Some((text.clone(), *content_hash)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(after_first.len(), 1, "first inject appends one listing");
+        assert!(
+            after_first[0].0.contains("commit changes"),
+            "{:?}",
+            after_first
+        );
+        let first_hash = after_first[0].1;
+
+        // Second inject: the registry now returns a different description, so
+        // the content hash flips and the listing re-announces.
+        runner.inject_skill_listing(session).await.unwrap();
+        let after_second: Vec<_> = runner
+            .store()
+            .current_view(session)
+            .await
+            .unwrap()
+            .events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                TurnEventKind::SkillListing {
+                    text, content_hash, ..
+                } => Some((text.clone(), *content_hash)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            after_second.len(),
+            2,
+            "changed set re-announces: {:?}",
+            after_second
+        );
+        assert!(
+            after_second[1].0.contains("commit changes v2"),
+            "re-announce carries the new description: {:?}",
+            after_second
+        );
+        assert_ne!(
+            after_second[1].1, first_hash,
+            "re-announced listing has a new content hash"
         );
     }
 

@@ -388,6 +388,7 @@ fn test_skill_section_recomputed_projection() {
             kind: TurnEventKind::SkillListing {
                 text: listing_text.to_string(),
                 bytes: listing_text.len() as u32,
+                content_hash: 0,
             },
         },
     ];

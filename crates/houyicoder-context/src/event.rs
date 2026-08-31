@@ -148,6 +148,12 @@ pub enum TurnEventKind {
         /// the text. Old logs deserialize to 0.
         #[serde(default)]
         bytes: u32,
+        /// Fingerprint of the announced descriptor set (name, description,
+        /// when-to-use, token estimate). Two listings with the same hash need
+        /// no re-announce, so a turn skips when the surviving listing's hash
+        /// matches the current set. 0 in old logs, which re-inject.
+        #[serde(default)]
+        content_hash: u64,
     },
     /// A durable record of an invoked skill's body, appended alongside the
     /// MetaUser the model reads as a directive. Unlike the MetaUser (which
