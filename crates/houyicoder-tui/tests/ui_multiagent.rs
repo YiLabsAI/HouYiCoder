@@ -95,25 +95,114 @@ fn test_multi_expand_teammate() {
         s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2),
         "Subagent fold should appear"
     );
-    s.send_key(&Key::Ctrl('o'));
+    // Settle the run before toggling. While the parent is still streaming,
+    // every arriving chunk repaints the transcript, so an expand that failed
+    // to invalidate the row cache still appeared on the next chunk and the
+    // toggle looked fine. Idle is where a broken toggle is visible.
     assert!(
-        s.wait_for_plain("src/auth", RENDER_TIMEOUT),
-        "expanded fold should show child text:\n{}",
+        s.wait_for_plain("done", RENDER_TIMEOUT * 2),
+        "the parent run should finish before the toggle:\n{}",
         s.output()
     );
+    // Assert on the expanded BODY, not on the summary. The summary is the
+    // child's answer, so it is on screen collapsed too, and matching it
+    // proves nothing about the toggle. Clearing first makes the match
+    // evidence of this repaint rather than of an earlier one -- the stream
+    // accumulates, and ratatui repaints only the cells that changed, so the
+    // head's unchanged prefix is not re-emitted and only the flipped tail of
+    // the hint arrives.
+    s.clear_output();
     s.send_key(&Key::Ctrl('o'));
     assert!(
-        s.wait_for_plain("ctrl+o", RENDER_TIMEOUT),
-        "fold should collapse back"
+        s.wait_for_compact("childtranscript", RENDER_TIMEOUT),
+        "expanding should open the delegation's body:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_key(&Key::Ctrl('o'));
+    assert!(
+        s.wait_for_compact("expand)", RENDER_TIMEOUT),
+        "the head should offer expand again after collapsing:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("childtranscript"),
+        "collapsing should drop the body it opened:\n{}",
+        s.output()
     );
     s.send_str("\r");
     assert!(
-        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        s.wait_for_compact("Viewing@explore", RENDER_TIMEOUT),
         "teammate view should open after Enter:\n{}",
         s.output()
     );
+    // Esc returns to the parent flow. Assert the parent's delegation row is
+    // repainted and the banner is gone; the input row is identical in both
+    // views, so a marker from it is never re-emitted and would only ever
+    // match bytes from before the view opened.
+    s.clear_output();
     s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for_compact("explore:authisin", RENDER_TIMEOUT),
+        "Esc should repaint the parent transcript:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("Viewing@explore"),
+        "the teammate banner should be gone:\n{}",
+        s.output()
+    );
+}
+
+/// A delegation in the transcript must not swallow Ctrl+O for the blocks
+/// that follow it. The delegation runs first, then the parent answers with
+/// reasoning, so the reasoning summary is the latest expandable block and the
+/// key belongs to it. Delegation expand used to answer for every Ctrl+O
+/// whatever the cursor pointed at, which left reasoning expandable by mouse
+/// and impossible to collapse by keyboard. Only the real terminal proves the
+/// key reaches the routing at all — a unit test calling the handler directly
+/// skips the dispatch this pins.
+#[test]
+#[ignore]
+fn test_multi_ctrl_o_thought() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth is in src/auth"}],
+        [{"type":"Reasoning","text":"weighing the auth options"},{"type":"Text","text":"all done"}]
+    ]"#;
+    let mut s = session_on_working_with_script(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("Thoughtfor", RENDER_TIMEOUT * 3),
+        "the reasoning summary should render after the delegation:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_key(&Key::Ctrl('o'));
+    assert!(
+        s.wait_for_compact("weighingtheauthoptions", RENDER_TIMEOUT),
+        "Ctrl+O should expand the reasoning, not the earlier delegation:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("childtranscript"),
+        "the delegation should stay collapsed:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_key(&Key::Ctrl('o'));
+    assert!(
+        s.wait_for_compact("expand)", RENDER_TIMEOUT),
+        "a second Ctrl+O should offer expand again:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("weighingtheauthoptions"),
+        "collapsing should drop the reasoning body:\n{}",
+        s.output()
+    );
 }
 
 /// Large child summary (>8KB, newline + quote dense) — the shape that
