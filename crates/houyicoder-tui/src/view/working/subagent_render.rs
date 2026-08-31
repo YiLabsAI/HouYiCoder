@@ -2,8 +2,8 @@
 //! flow. Split from working_transcript so the row builder stays under the
 //! size gate.
 
-use ratatui::style::Style;
-use ratatui::text::Line;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 
 use super::row_sink::{Row, RowSink};
 use crate::records::TranscriptLine;
@@ -45,23 +45,25 @@ pub(crate) fn push_subagent_rows(
     } = *d;
     let grp_key: Option<String> = grp.map(|g| g.to_string());
     let expanded = app.expanded_subagents.contains(child_sid);
-    let hint = if expanded {
-        "(ctrl+o to collapse)"
-    } else {
-        "(ctrl+o to expand)"
+    // A delegation nested inside an expanded one is shown, not operated: it
+    // carries no hint and no fold key, so the block the user opened stays the
+    // only thing their next Ctrl+O or click acts on.
+    let nested = sink.in_subagent();
+    let hint = match (nested, expanded) {
+        (true, _) => String::new(),
+        (false, true) => "  (ctrl+o to collapse)".to_string(),
+        (false, false) => "  (ctrl+o to expand)".to_string(),
     };
-    let head = format!("\u{23bf} {subagent_type}: {summary}  {hint}");
+    let head = format!("\u{23bf} {subagent_type}: {summary}{hint}");
     // Plain tag so the head stays drag-selectable, plus the child session id
     // as its fold key: the mouse-down fold-key branch runs before selection
     // starts, so a click on the head toggles instead of selecting.
-    let styled = color
-        .and_then(badge_color)
-        .map(|c| Line::from(head.clone()).style(Style::default().fg(c)));
+    let fold_key = (!nested).then(|| child_sid.to_string());
     sink.push(
-        Row::new(crate::selection::TAG_PLAIN, head)
-            .fold_key(Some(child_sid.to_string()))
+        Row::new(crate::selection::TAG_PLAIN, head.clone())
+            .fold_key(fold_key)
             .group(grp_key.clone())
-            .pre(styled),
+            .pre(Some(head_line(subagent_type, summary, &hint, color))),
     );
     if !expanded {
         return;
@@ -70,7 +72,27 @@ pub(crate) fn push_subagent_rows(
         sink.push(Row::new(SYSTEM, "  child transcript not yet loaded").group(grp_key));
         return;
     }
-    for child in folded_transcript {
-        super::working_transcript::push_line_rows(child, grp, width, app, sink);
-    }
+    sink.within_subagent(|sink| {
+        for child in folded_transcript {
+            super::working_transcript::push_line_rows(child, grp, width, app, sink);
+        }
+    });
+}
+
+/// The head as a styled line: dim throughout, with the agent type in its
+/// badge color when it has one. Dim is this transcript's mark of a collapsed
+/// block -- every other fold handle carries it, and the head was the one
+/// expandable row rendered as ordinary content, which is why it read as a
+/// message that happened to mention a keybinding. The type keeps its color so
+/// parallel delegations stay distinguishable at a glance.
+fn head_line(subagent_type: &str, summary: &str, hint: &str, color: Option<&str>) -> Line<'static> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let type_style = color
+        .and_then(badge_color)
+        .map_or(dim, |c| Style::default().fg(c));
+    Line::from(vec![
+        Span::styled("\u{23bf} ".to_string(), dim),
+        Span::styled(subagent_type.to_string(), type_style),
+        Span::styled(format!(": {summary}{hint}"), dim),
+    ])
 }

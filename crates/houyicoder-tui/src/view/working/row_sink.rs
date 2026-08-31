@@ -99,9 +99,30 @@ pub(super) struct RowSink {
     groups: Vec<Option<String>>,
     turn_ids: Vec<Option<String>>,
     pre_rendered: Vec<Option<Line<'static>>>,
+    in_subagent: bool,
 }
 
 impl RowSink {
+    /// True while emitting the rows of an expanded delegation. Row builders
+    /// read it to leave out their own expand affordances: a delegation's
+    /// block is already one expanded thing, and every row inside advertising
+    /// its own toggle turns a summary into a wall of hints nested one level
+    /// deeper than the block the user opened.
+    pub(super) fn in_subagent(&self) -> bool {
+        self.in_subagent
+    }
+
+    /// Emit rows as the inside of a delegation. Saves and restores the flag
+    /// rather than clearing it, so a nested delegation does not hand the
+    /// outer one back its parent's context on the way out.
+    pub(super) fn within_subagent<R>(&mut self, emit: impl FnOnce(&mut Self) -> R) -> R {
+        let outer = self.in_subagent;
+        self.in_subagent = true;
+        let out = emit(self);
+        self.in_subagent = outer;
+        out
+    }
+
     pub(super) fn push(&mut self, row: Row) {
         self.rows.push((row.tag, row.text, row.outcome));
         self.callids.push(row.callid);

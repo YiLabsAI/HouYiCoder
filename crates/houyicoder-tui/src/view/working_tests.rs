@@ -792,3 +792,81 @@ fn test_distinct_keys_callid_reuse() {
         "both summaries render (group 1 header, group 2 collapsed)"
     );
 }
+
+/// A collapsed delegation head is dim, like every other collapse handle in
+/// the transcript. It was the one expandable row rendered as ordinary
+/// content, so it read as a message that happened to mention a keybinding.
+/// The agent type keeps its badge color so parallel delegations stay
+/// distinguishable.
+#[test]
+fn test_subagent_head_dim() {
+    use crate::composition;
+    use crate::records::TranscriptLine;
+    use crate::state::Screen;
+    use crate::test_support::render_buffer;
+    use ratatui::style::Color;
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    let buf = render_buffer(&app, 80, 24);
+    let handle = buf
+        .content()
+        .iter()
+        .find(|c| c.symbol() == "\u{23bf}")
+        .expect("the delegation handle glyph renders");
+    assert_eq!(
+        handle.style().fg,
+        Some(Color::DarkGray),
+        "the collapsed head is dim"
+    );
+}
+
+/// Inside an expanded delegation the child rows are shown, not operated: no
+/// row advertises its own expand, and none publishes a toggle handle. The
+/// enclosing block is the one thing the next Ctrl+O or click acts on, so the
+/// user cannot end up toggling a block nested inside the one they opened.
+#[test]
+fn test_child_rows_hide_handles() {
+    use crate::composition;
+    use crate::records::TranscriptLine;
+    use crate::state::Screen;
+    use crate::test_support::render_text;
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: vec![
+            TranscriptLine::ThoughtFor {
+                secs: 4,
+                reasoning: Some("child reasoning".into()),
+                tool_summary: None,
+                turn_id: "child-turn".into(),
+            },
+            TranscriptLine::Agent("child answer".into()),
+        ],
+        color: None,
+    });
+    app.expanded_subagents.insert("c1".into());
+    let out = render_text(&app, 80, 24);
+    assert!(out.contains("child answer"), "child rows render: {out}");
+    assert_eq!(
+        out.matches("ctrl+o").count(),
+        1,
+        "only the delegation head advertises a toggle: {out}"
+    );
+    assert!(
+        app.last_row_turn_ids.borrow().iter().all(|t| t.is_none()),
+        "no child row publishes a reasoning handle: {:?}",
+        app.last_row_turn_ids.borrow()
+    );
+}

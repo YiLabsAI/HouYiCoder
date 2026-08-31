@@ -376,6 +376,9 @@ pub(crate) fn push_line_rows(
             } else {
                 None
             };
+            // Same rule as the reasoning row: a result inside a delegation
+            // publishes no call id, so it is not a separate expand target.
+            let cid = if sink.in_subagent() { None } else { cid };
             sink.push(
                 Row::new(tag, text)
                     .outcome(oc)
@@ -441,24 +444,24 @@ pub(crate) fn push_line_rows(
     } = line
     {
         let expanded = app.expanded_thinking.contains(turn_id) || app.verbose;
+        // Inside an expanded delegation the reasoning row is shown, not
+        // operated: no hint, and no turn id below, so the enclosing block
+        // stays the only thing the next toggle acts on.
         let hint = match reasoning {
-            Some(_) => {
-                if expanded {
-                    "collapse"
-                } else {
-                    "expand"
-                }
-            }
+            Some(_) if sink.in_subagent() => "",
+            Some(_) if expanded => "collapse",
+            Some(_) => "expand",
             None => "",
         };
         let row_text = match hint {
             "" => format!("✻ Thought for {}s", secs),
             _ => format!("✻ Thought for {}s (ctrl+o to {})", secs, hint),
         };
+        let handle = (!sink.in_subagent()).then(|| turn_id.clone());
         sink.push(
             Row::new(SYSTEM, row_text)
                 .group(grp_key.clone())
-                .turn_id(Some(turn_id.clone())),
+                .turn_id(handle),
         );
         if let Some(r) = reasoning
             && expanded
