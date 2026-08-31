@@ -15,35 +15,35 @@ use houyicoder_protocol::llm::EffortLevel;
 
 use crate::agent::prompt::project_context_section;
 
-/// Append the env details block to a child's base prompt: cwd, git-repo
-/// presence, platform, and model. The current date is deliberately absent
-/// here -- it rides the user context, which is rebuilt per run, so a child
-/// spawned across a local-midnight boundary still sees the right day.
-pub fn child_system_prompt(base_prompt: &str, cwd: &Path, model: &str) -> String {
+/// Assemble a child's system prompt: its base instructions, the project
+/// memory file (AGENTS.md equivalent plus the local overlay) unless the
+/// definition omits it, then the env details block as the tail.
+///
+/// Host-injected context belongs here and not in the child's first user
+/// message, matching where the parent carries it. A child's user message is
+/// recorded as conversation and replayed into the parent's inline view, so
+/// context injected there is shown to the user as if the delegation had
+/// asked for it -- a whole memory file rendered above the actual task, and
+/// identical for every child, which reads as the view repeating itself.
+/// Keeping it in the system prompt also makes the cached prefix identical
+/// across children of the same type in one repo.
+pub fn child_system_prompt(
+    base_prompt: &str,
+    cwd: &Path,
+    model: &str,
+    omit_project_context: bool,
+) -> String {
     let mut text = String::new();
     if !base_prompt.is_empty() {
         text.push_str(base_prompt);
         text.push_str("\n\n");
     }
+    if !omit_project_context && let Some(project) = project_context_section(cwd) {
+        text.push_str(&project);
+        text.push_str("\n\n");
+    }
     text.push_str(&env_block(cwd, model));
     text
-}
-
-/// The child's user context: the project memory file content (AGENTS.md
-/// equivalent + local overlay) plus the current date line. The omit flag
-/// drops only the project memory -- the date survives, because a child that
-/// reads or writes anything time-sensitive still needs it. Yields only the
-/// date line when the flag is set or no memory file is found.
-pub fn child_user_context(cwd: &Path, omit_project_context: bool) -> String {
-    let project = if omit_project_context {
-        None
-    } else {
-        project_context_section(cwd)
-    };
-    match project {
-        Some(p) => format!("{p}\n\n{}", utc_date_line()),
-        None => utc_date_line(),
-    }
 }
 
 /// The effort level a child's requests carry: the lowest tier. On thinking
@@ -58,14 +58,17 @@ pub fn resolve_child_effort() -> Option<EffortLevel> {
 /// The env details block. The git line is a presence flag, not a status
 /// snapshot: a status read at spawn time would be stale by the time the
 /// child's first turn runs, and the child can read status itself when a task
-/// actually needs it.
+/// actually needs it. The date sits here with the rest of the run's ground
+/// truth; a child is short-lived, so a spawn-time reading cannot go stale
+/// within its own life.
 fn env_block(cwd: &Path, model: &str) -> String {
     let repo = if is_git_workdir(cwd) { "Yes" } else { "No" };
     format!(
         "<env>\nWorking directory: {cwd}\nIs directory a git repo: {repo}\n\
-         Platform: {platform}\nYou are powered by the model named {model}.\n</env>",
+         Platform: {platform}\n{date}\nYou are powered by the model named {model}.\n</env>",
         cwd = cwd.display(),
         platform = std::env::consts::OS,
+        date = utc_date_line(),
     )
 }
 
@@ -140,7 +143,7 @@ mod tests {
     #[test]
     fn test_env_block_appended_tail() {
         let dir = scratch_dir("tail");
-        let p = child_system_prompt("Base instructions.", &dir, "qwen3-coder");
+        let p = child_system_prompt("Base instructions.", &dir, "qwen3-coder", false);
         assert!(p.starts_with("Base instructions."));
         assert!(p.ends_with("</env>"), "env block is the tail: {p}");
         assert!(p.contains("Working directory: "));
@@ -155,7 +158,7 @@ mod tests {
     fn test_git_repo_detected() {
         let dir = scratch_dir("git-yes");
         fs::create_dir_all(dir.join(".git")).expect("mkdir .git");
-        let p = child_system_prompt("base", &dir, "m");
+        let p = child_system_prompt("base", &dir, "m", false);
         assert!(p.contains("Is directory a git repo: Yes"), "{p}");
     }
 
@@ -165,43 +168,48 @@ mod tests {
         fs::create_dir_all(root.join(".git")).expect("mkdir .git");
         let sub = root.join("sub");
         fs::create_dir_all(&sub).expect("mkdir sub");
-        let p = child_system_prompt("base", &sub, "m");
+        let p = child_system_prompt("base", &sub, "m", false);
         assert!(p.contains("Is directory a git repo: Yes"), "{p}");
     }
 
     #[test]
     fn test_plain_dir_not_repo() {
         let dir = scratch_dir("git-no");
-        let p = child_system_prompt("base", &dir, "m");
+        let p = child_system_prompt("base", &dir, "m", false);
         assert!(p.contains("Is directory a git repo: No"), "{p}");
     }
 
+    /// The project memory rides the system prompt, where the parent carries
+    /// it too. Injecting it into the child's first user message instead put a
+    /// whole memory file into the recorded conversation, which the parent's
+    /// inline view then showed above the task.
     #[test]
-    fn test_user_context_inherits_memory() {
+    fn test_prompt_inherits_memory() {
         let dir = scratch_dir("ctx-inherit");
         fs::write(dir.join("AGENTS.md"), "project rules here").expect("write");
-        let ctx = child_user_context(&dir, false);
-        assert!(ctx.contains("project rules here"), "{ctx}");
-        assert!(ctx.contains("Today's date is "), "{ctx}");
+        let p = child_system_prompt("base", &dir, "m", false);
+        assert!(p.contains("project rules here"), "{p}");
+        assert!(p.contains("Today's date is "), "{p}");
+        assert!(p.ends_with("</env>"), "env block stays the tail: {p}");
     }
 
-    /// The omit flag drops only the project memory; the date survives,
-    /// because a child that reads or writes anything time-sensitive still
-    /// needs it.
+    /// The omit flag drops the project memory; the date survives, because a
+    /// child that reads or writes anything time-sensitive still needs it.
     #[test]
-    fn test_user_context_omit_memory() {
+    fn test_prompt_omits_memory() {
         let dir = scratch_dir("ctx-omit");
         fs::write(dir.join("AGENTS.md"), "secret project rules").expect("write");
-        let ctx = child_user_context(&dir, true);
-        assert!(!ctx.contains("secret project rules"), "{ctx}");
-        assert!(ctx.contains("Today's date is "), "{ctx}");
+        let p = child_system_prompt("base", &dir, "m", true);
+        assert!(!p.contains("secret project rules"), "{p}");
+        assert!(p.contains("Today's date is "), "{p}");
     }
 
     #[test]
-    fn test_user_context_date_only() {
+    fn test_prompt_without_memory_file() {
         let dir = scratch_dir("ctx-none");
-        let ctx = child_user_context(&dir, false);
-        assert!(ctx.starts_with("Today's date is "), "{ctx}");
+        let p = child_system_prompt("base", &dir, "m", false);
+        assert!(!p.contains("# Project context"), "{p}");
+        assert!(p.contains("Today's date is "), "{p}");
     }
 
     /// The cost gate: a child's requests carry no extended thinking. On the

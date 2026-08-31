@@ -15,7 +15,7 @@ use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::PFut;
 use houyicoder_context::{HookEventKind, HookFirePayload, SessionId};
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-use houyicoder_core::agent::multi_agent::child_prompt::{child_system_prompt, child_user_context};
+use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
 use houyicoder_core::agent::multi_agent::concurrency_gate::{AcquireResult, ConcurrencyGate};
 use houyicoder_core::agent::multi_agent::registry::{
     AgentError, AgentRegistry, IsolationMode, PromptSource, ResolveCtx,
@@ -420,7 +420,12 @@ async fn run_sync_spawn(
         PromptSource::InheritParent => this.config.instructions.clone(),
     };
     let child_config = RunnerConfig {
-        instructions: child_system_prompt(&base_prompt, &this.cwd, &this.config.model),
+        instructions: child_system_prompt(
+            &base_prompt,
+            &this.cwd,
+            &this.config.model,
+            def.omit_project_context,
+        ),
         ..this.config.clone()
     };
     let req = SpawnRequest {
@@ -458,11 +463,7 @@ async fn run_sync_spawn(
         &args.subagent_type,
     )
     .await;
-    let task = format!(
-        "{}\n\n{}",
-        child_user_context(&this.cwd, def.omit_project_context),
-        args.prompt,
-    );
+    let task = args.prompt.clone();
     let (status, summary, usage) = spawn_exec::finalize_child(
         handle,
         this.store.clone(),

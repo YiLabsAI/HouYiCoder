@@ -8,7 +8,7 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnOutcome};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-use houyicoder_core::agent::multi_agent::child_prompt::{child_system_prompt, child_user_context};
+use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
 use houyicoder_core::agent::multi_agent::concurrency_gate::AcquireResult;
 use houyicoder_core::agent::multi_agent::registry::{
     AgentError, IsolationMode, PromptSource, ResolveCtx,
@@ -139,7 +139,12 @@ pub(super) async fn run_async_spawn(
         PromptSource::InheritParent => this.config.instructions.clone(),
     };
     let child_config = RunnerConfig {
-        instructions: child_system_prompt(&base_prompt, &this.cwd, &this.config.model),
+        instructions: child_system_prompt(
+            &base_prompt,
+            &this.cwd,
+            &this.config.model,
+            def.omit_project_context,
+        ),
         ..this.config.clone()
     };
     let req = SpawnRequest {
@@ -173,11 +178,7 @@ pub(super) async fn run_async_spawn(
         &args.subagent_type,
     )
     .await;
-    let task = format!(
-        "{}\n\n{}",
-        child_user_context(&this.cwd, def.omit_project_context),
-        args.prompt,
-    );
+    let task = args.prompt.clone();
     let store = this.store.clone();
     let bus = this.bus.clone();
     let worktree_controller = this.worktree_controller.clone();

@@ -51,6 +51,52 @@ async fn test_sync_spawn_drives_terminal() {
     );
 }
 
+/// The child's recorded conversation holds the task and nothing the host
+/// injected. Project memory used to be prepended to the child's first user
+/// message, so a whole memory file was recorded as if the delegation had
+/// written it, and the parent's inline view showed that file above the task
+/// -- identically for every child, which read as the view repeating itself.
+#[tokio::test]
+async fn test_child_task_excludes_memory() {
+    let dir = std::env::temp_dir().join(format!("child-task-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("AGENTS.md"), "MEMORYMARKER project rules").expect("write");
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("child answer"));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store: store.clone(),
+        provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(dir.clone()),
+        bus: None,
+    });
+    let parent_sid = SessionId::new();
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    // general-purpose is the type that carries project memory (explore and
+    // plan omit it), so it is the type that could leak it into the task.
+    let args = SpawnArgs::new("general-purpose", "find the auth module", "find auth");
+    let outcome = runtime.spawn(&ctx, args).await.expect("spawn");
+    let child_sid =
+        SessionId::from_display_string(&outcome.child_session_id).expect("child sid parses");
+    let text: String = store
+        .trajectory_snapshot(child_sid)
+        .iter()
+        .map(|e| format!("{:?}", e.kind))
+        .collect();
+    assert!(
+        text.contains("find the auth module"),
+        "the task is recorded: {text}"
+    );
+    assert!(
+        !text.contains("MEMORYMARKER"),
+        "project memory must not enter the child's conversation: {text}"
+    );
+}
+
 #[tokio::test]
 async fn test_max_turns_surfaces_partial() {
     // A child that emits text then keeps calling tools past the cap
