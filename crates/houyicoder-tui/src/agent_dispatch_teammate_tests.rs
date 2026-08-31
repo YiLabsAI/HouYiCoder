@@ -111,9 +111,9 @@ fn test_teammate_echo_preserved() {
 }
 
 /// Steering a completed child surfaces a clear "finished" notice instead
-/// of silently dropping on the closed inbox (CC drops silently; this is a
-/// UX improvement). The echo line is not appended (the child won't drain
-/// it). A running child still steers normally.
+/// of silently dropping on the closed inbox. The echo line is not
+/// appended (the child won't drain it). A running child still steers
+/// normally.
 #[test]
 fn test_steer_completed_surfaces_notice() {
     use crate::agent_message::FleetEntry;

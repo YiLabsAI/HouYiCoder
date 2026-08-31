@@ -640,10 +640,10 @@ fn test_skills_pane_renders_entries() {
     );
 }
 
-/// UX showcase: the /skills pane with a realistic mixed list — a CC-path
-/// skill (model-invocable), a disabled one, and a large one — so the render
-/// format (name, description, source tag, token cost) can be eyeballed.
-/// Run with --nocapture to view.
+/// UX showcase: the /skills pane with a realistic mixed list — a
+/// model-invocable skill, a disabled one, and a large one — so the
+/// render format (name, description, source tag, token cost) can be
+/// eyeballed. Run with --nocapture to view.
 #[test]
 fn test_skills_pane_showcase() {
     use houyicoder_protocol::frontend::skills::SkillEntry;

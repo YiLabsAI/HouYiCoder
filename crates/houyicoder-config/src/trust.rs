@@ -2,7 +2,7 @@
 //! directories in user-level settings. The host asks once at startup whether
 //! to trust a project folder; the answer persists here so the prompt does
 //! not repeat. Ancestor trust covers descendants (trusting a parent trusts
-//! its children), mirroring the CC config.projects[path] walk-up. Lives in
+//! its children), mirroring the config.projects[path] walk-up. Lives in
 //! user-level settings, never project-local, so a malicious repository
 //! cannot self-author trust by shipping a trusted flag in the repo.
 

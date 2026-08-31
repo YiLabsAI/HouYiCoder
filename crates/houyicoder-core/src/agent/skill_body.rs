@@ -43,7 +43,7 @@ fn head_truncate(s: &str, budget: usize) -> String {
 
 /// Discovery origins whose skill bodies are served as trusted directives:
 /// managed (policy/built-in) and user-level sources are machine-local and
-/// admin-installed. Every other origin (project, claude-eco, agents, mcp,
+/// admin-installed. Every other origin (project, eco, agents, mcp,
 /// local) is untrusted and framed as data at injection.
 fn is_trusted_origin(origin: &str) -> bool {
     origin == "managed" || origin == "user"
