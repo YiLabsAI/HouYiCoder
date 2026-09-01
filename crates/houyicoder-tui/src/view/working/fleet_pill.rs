@@ -38,7 +38,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let lines = if area.height == 1 && app.fleet.entries.len() > 1 {
         vec![summary_line(app)]
     } else {
-        build_lines(app)
+        build_lines(app, area.height as usize)
     };
     f.render_widget(Paragraph::new(lines), area);
 }
@@ -59,14 +59,6 @@ fn summary_line(app: &App) -> Line<'static> {
     Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }
 
-/// First entry index the pill shows. When the fleet is longer than
-/// MAX_VISIBLE the window slides so the selected row stays on screen. The
-/// click router maps a row back through the same start, so the row clicked
-/// is the entry acted on.
-pub fn window_start(app: &App) -> usize {
-    window_start_idx(app.fleet.selected, app.fleet.entries.len())
-}
-
 /// What a click in the strip does. The summary row of a multi-child fleet
 /// names no child, so it opens the pane — the surface its own hint names.
 /// A child row selects; the already-selected row drills in.
@@ -81,10 +73,12 @@ pub enum FleetClick {
 /// the decision is testable without one; the mouse handler applies it.
 pub fn click_route(fleet: &FleetState, granted: u16, row: usize) -> FleetClick {
     let n = fleet.entries.len();
-    if granted == 1 && n > 1 {
+    let g = granted as usize;
+    if g == 1 && n > 1 {
         return FleetClick::OpenAgentsPane;
     }
-    let idx = window_start_idx(fleet.selected, n) + row;
+    let visible = visible_rows(n, g);
+    let idx = window_start_idx(fleet.selected, n, visible) + row;
     let Some(entry) = fleet.entries.get(idx) else {
         return FleetClick::OpenAgentsPane;
     };
@@ -97,17 +91,35 @@ pub fn click_route(fleet: &FleetState, granted: u16, row: usize) -> FleetClick {
 
 /// The sliding window's start as a free function, so click_route and the
 /// draw share one definition without either needing an App.
-fn window_start_idx(selected: Option<usize>, len: usize) -> usize {
+fn window_start_idx(selected: Option<usize>, len: usize, visible: usize) -> usize {
     selected
-        .map(|s| s.min(len.saturating_sub(MAX_VISIBLE)))
+        .map(|s| s.min(len.saturating_sub(visible)))
         .unwrap_or(0)
 }
 
-/// Build the visible window of pill rows.
-fn build_lines(app: &App) -> Vec<Line<'_>> {
+/// Rows of the sliding window: the granted height capped at the fleet size.
+/// The strip spends every row it gets on a child rather than on a "+N more"
+/// line. Such a line is misleading in a sliding window — the hidden count is
+/// constant, but once the user scrolls the hidden rows sit above the window,
+/// so "+N more" reads as "below" when the tail is already in view. The user
+/// discovers more rows by scrolling; completed entries retire in the grace
+/// window, so a hidden completed row is ephemeral.
+fn visible_rows(len: usize, granted: usize) -> usize {
+    granted.min(len)
+}
+
+/// Build the sliding window of pill rows, capped by the granted height.
+/// The window follows the selection so the highlighted row stays on screen;
+/// the strip spends every row it gets on a child rather than on an
+/// overflow indicator (see visible_rows for why that line is dropped).
+fn build_lines(app: &App, granted: usize) -> Vec<Line<'_>> {
     let len = app.fleet.entries.len();
-    let start = window_start(app);
-    let end = (start + MAX_VISIBLE).min(len);
+    if len == 0 || granted == 0 {
+        return Vec::new();
+    }
+    let visible = visible_rows(len, granted);
+    let start = window_start_idx(app.fleet.selected, len, visible);
+    let end = (start + visible).min(len);
     app.fleet.entries[start..end]
         .iter()
         .enumerate()
@@ -250,6 +262,68 @@ mod tests {
             !text.contains("explore"),
             "no single child is named in the collapsed row: {text}"
         );
+    }
+
+    /// The sliding window follows the selection so the highlighted row
+    /// stays on screen, and never spends a row on a "+N more" line — the
+    /// status bar's "N agents" count is the overflow indicator. With five
+    /// agents and three granted rows, an unset selection shows the head
+    /// (t0,t1,t2); a tail selection slides the window (t2,t3,t4); a head
+    /// selection shows the head again. No row is ever a "+N" indicator.
+    #[test]
+    fn test_window_follows_selection() {
+        let mut app = composition::app();
+        for (i, kind) in ["t0", "t1", "t2", "t3", "t4"].iter().enumerate() {
+            app.fleet
+                .entries
+                .push(entry(&format!("a{i}"), kind, 1, 10, "grep"));
+        }
+        let text = |app: &App| -> Vec<String> {
+            build_lines(app, 3)
+                .iter()
+                .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                .collect()
+        };
+        let head = text(&app);
+        assert_eq!(head.len(), 3, "three rows, no +N row");
+        assert!(
+            head[0].contains("t0"),
+            "head window starts at t0: {}",
+            head[0]
+        );
+        assert!(
+            !head.iter().any(|s| s.contains("more")),
+            "no +N row: {head:?}"
+        );
+
+        app.fleet.selected = Some(4);
+        let tail = text(&app);
+        assert_eq!(tail.len(), 3);
+        assert!(
+            tail[0].contains("t2"),
+            "tail window slid to t2: {}",
+            tail[0]
+        );
+        assert!(tail[2].contains("t4"), "selection t4 in view: {}", tail[2]);
+        assert!(
+            !tail.iter().any(|s| s.contains("more")),
+            "no +N at tail: {tail:?}"
+        );
+
+        app.fleet.selected = Some(0);
+        let back = text(&app);
+        assert!(back[0].contains("t0"), "head window restored: {}", back[0]);
+    }
+
+    /// When the fleet fits the granted height, every row is a child — the
+    /// window covers the whole fleet and there is nothing to scroll past.
+    #[test]
+    fn test_window_fits_granted() {
+        let mut app = composition::app();
+        app.fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
+        app.fleet.entries.push(entry("b", "plan", 1, 10, "read"));
+        let lines = build_lines(&app, 3);
+        assert_eq!(lines.len(), 2, "two children fill two of three rows");
     }
 
     /// Click routing: a row selects, the selected row drills in, and the

@@ -344,7 +344,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             if frect.width > 0 && frect.height > 0 && in_rect(frect, m.column, m.row) {
                 let route = crate::view::working::fleet_pill::click_route(
                     &app.fleet,
-                    app.fleet.granted.get(),
+                    frect.height,
                     (m.row - frect.y) as usize,
                 );
                 match route {
