@@ -59,22 +59,29 @@ pub(crate) fn push_subagent_rows(
     // as its fold key: the mouse-down fold-key branch runs before selection
     // starts, so a click on the head toggles instead of selecting.
     let fold_key = (!nested).then(|| child_sid.to_string());
+    // Expanded, the head belongs to its own block so it shades with it;
+    // collapsed, it inherits whatever group encloses it.
+    let enclosing = if expanded {
+        Some(child_sid.to_string())
+    } else {
+        grp_key.clone()
+    };
     sink.push(
         Row::new(crate::selection::TAG_PLAIN, head.clone())
             .fold_key(fold_key)
-            .group(grp_key.clone())
+            .group(enclosing.clone())
             .pre(Some(head_line(subagent_type, summary, &hint, color))),
     );
     if !expanded {
         return;
     }
     if folded_transcript.is_empty() {
-        sink.push(Row::new(SYSTEM, "  child transcript not yet loaded").group(grp_key));
+        sink.push(Row::new(SYSTEM, "  child transcript not yet loaded").group(enclosing));
         return;
     }
     sink.within_subagent(|sink| {
         for child in folded_transcript {
-            super::working_transcript::push_line_rows(child, grp, width, app, sink);
+            super::working_transcript::push_line_rows(child, Some(child_sid), width, app, sink);
         }
     });
 }

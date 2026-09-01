@@ -870,3 +870,66 @@ fn test_child_rows_hide_handles() {
         app.last_row_turn_ids.borrow()
     );
 }
+
+/// An expanded delegation shades its whole block, head included, the way an
+/// expanded tool fold group does. Without it the same gesture produced two
+/// different results and the block's extent was invisible — a reader could
+/// not tell where the child's output ended, which is how an expanded
+/// delegation came to look like the transcript repeating itself.
+#[test]
+fn test_expanded_subagent_shaded() {
+    use crate::composition;
+    use crate::records::TranscriptLine;
+    use crate::state::Screen;
+    use crate::test_support::render_buffer;
+    use ratatui::style::Color;
+    let shade = Color::Indexed(238);
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: vec![TranscriptLine::Agent("child answer".into())],
+        color: None,
+    });
+    // Collapsed: the head is ordinary transcript, no block background.
+    let buf = render_buffer(&app, 80, 24);
+    let head_bg = |buf: &ratatui::buffer::Buffer| {
+        buf.content()
+            .iter()
+            .find(|c| c.symbol() == "\u{23bf}")
+            .expect("the delegation handle glyph renders")
+            .style()
+            .bg
+    };
+    assert_ne!(head_bg(&buf), Some(shade), "collapsed head is not shaded");
+    app.expanded_subagents.insert("c1".into());
+    let buf = render_buffer(&app, 80, 24);
+    assert_eq!(
+        head_bg(&buf),
+        Some(shade),
+        "expanded head joins the shaded block"
+    );
+    // A child row inside the block is shaded too: find the row carrying the
+    // child's answer and read a cell from it.
+    let width = buf.area().width;
+    let child_row = (0..buf.area().height)
+        .find(|y| {
+            (0..width)
+                .map(|x| {
+                    buf.cell((x, *y))
+                        .map_or(" ".to_string(), |c| c.symbol().to_string())
+                })
+                .collect::<String>()
+                .contains("child answer")
+        })
+        .expect("the child row renders");
+    let cell = buf.cell((1, child_row)).expect("a cell on the child row");
+    assert_eq!(
+        cell.style().bg,
+        Some(shade),
+        "child rows are shaded as part of the block"
+    );
+}

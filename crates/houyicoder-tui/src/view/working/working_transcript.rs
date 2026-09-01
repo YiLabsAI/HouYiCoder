@@ -215,21 +215,28 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
             let is_current = focused_range
                 .as_ref()
                 .is_some_and(|rng| rng.start <= row && row < rng.end);
-            // A row inside an expanded fold block carries that block's group
-            // key here; paint it with the gray block bg so the whole expanded
-            // region reads as one selectable/collapsible affordance (matches
-            // an editor's expanded-block selection region).
+            // A row inside an expanded block carries that block's key here;
+            // the gray background makes the whole region read as one
+            // collapsible affordance. Both expand sets are consulted -- a
+            // delegation keys into its own.
             let in_expanded = exp_grp
                 .get(idx)
                 .and_then(|f| f.as_ref())
-                .map(|k| exp_groups.contains(k))
+                .map(|k| exp_groups.contains(k) || app.expanded_subagents.contains(k))
                 .unwrap_or(false);
             match pre {
                 Some(line) => {
-                    if q.is_empty() {
+                    let base = if q.is_empty() {
                         line
                     } else {
                         highlighted_line(r, &q, is_current)
+                    };
+                    // Patch, not replace: a pre-styled line's spans carry the
+                    // badge color and markdown styling.
+                    if in_expanded {
+                        base.patch_style(user_bg)
+                    } else {
+                        base
                     }
                 }
                 None => match *tag {

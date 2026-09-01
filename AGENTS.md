@@ -85,6 +85,34 @@ the bug, then fix. Tests enable safe refactoring.
 - **Reproducibility = control-plane-flow reproducible + snapshot-replay**,
   not literal re-run.
 - **Token is a first-class budget** — explicit, measured, cache-aware.
+- **Three surfaces, three questions.** Everything the terminal shows answers
+  exactly one of them, and that answer decides where it lives:
+
+  | Surface | Question | Properties |
+  |---------|----------|------------|
+  | transcript | what happened, and what is the current state of the work | permanent, scrolls, grows |
+  | footer | what is happening right now that I may act on this second | pinned, budgeted, self-retires |
+  | pane | what exists / what are my options | on demand, Esc closes |
+
+  Live is not the test for the footer — the todo list is live and belongs in
+  the transcript. All three must hold: it retires on its own, a key acts on
+  it now, and losing it from view costs the user an action. Queued input and
+  running delegations pass; a todo list fails the first two (it stays
+  relevant for the whole task and is not keyed), so it renders as transcript
+  content whose latest version sits at the tail.
+
+  Consequences, in priority order when they conflict:
+  1. **The caret never moves.** Footer rows grow by shrinking the transcript,
+     never by pushing the input box. A strip placed below the input violates
+     this the moment a child spawns while the user is typing.
+  2. **The footer has one budget, not one per strip.** A transcript floor
+     applies to their sum; each strip degrades full rows → one summary line →
+     a status-bar count before the floor is breached. Queued input outranks
+     agent progress: it is the user's own unsent content.
+  3. **An affordance degrades with its surface.** A per-row marker only
+     exists while rows do; a collapsed strip advertises the pane instead. The
+     status bar, being the one row that never degrades, carries the count and
+     the key hint whenever the footer holds anything live.
 
 ## Repository Layout
 
