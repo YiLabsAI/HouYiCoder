@@ -494,10 +494,9 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
 
 /// Dispatch a key to the right handler based on screen and overlays.
 pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
+    // ctrl+C copies a selection (with a toast); interrupts a running turn;
+    // otherwise no-op. It never quits -- the panic key is not an exit.
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
-        // ctrl+C copies the current selection; the highlight stays as an
-        // independent visual affordance (it clears on Esc or the next click,
-        // not on copy). With no selection, ctrl+C quits.
         if app.selection.has_selection() {
             let copied =
                 crate::selection::surface::TranscriptSurface { app: &mut *app }.copy_current();
@@ -508,7 +507,37 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
             }
             return;
         }
-        app.quit = true;
+        if app.agent_busy {
+            app.abort_run();
+        }
+        return;
+    }
+    // ctrl+D exits on a double press within 800ms. The exit-confirm toast
+    // being current is the first-press signal; it expires at the window so
+    // a slow second press restarts. Only in base working -- a pane owns the
+    // key otherwise. Never clears or deletes the input.
+    if k.modifiers.contains(KeyModifiers::CONTROL)
+        && k.code == KeyCode::Char('d')
+        && app.pane == crate::state::Pane::Transcript
+        && app.viewport == crate::state::ViewportMode::Working
+    {
+        let pending = app
+            .notifications
+            .current()
+            .is_some_and(|n| n.key == "exit-confirm");
+        if pending {
+            app.quit = true;
+        } else {
+            app.notifications
+                .add(crate::notifications::Notification::immediate(
+                    "exit-confirm",
+                    crate::notifications::NotifKind::Text {
+                        text: "Press Ctrl+D again to exit".to_string(),
+                        color: None,
+                    },
+                    Duration::from_millis(800),
+                ));
+        }
         return;
     }
     match app.screen {

@@ -69,9 +69,9 @@ fn test_resume_sid_reopens_history() {
 }
 
 /// The file lock is released on a clean exit: binary 1 --resume <sid> holds
-/// the lock, quits cleanly (Esc at the login screen), then binary 2 --resume
-/// <sid> acquires the released lock. The lock-rejects-second test covers the
-/// contention case; this covers the release-on-exit invariant.
+/// the lock, quits cleanly (ctrl+D double-press on the working screen), then
+/// binary 2 --resume <sid> acquires the released lock. The lock-rejects-second
+/// test covers the contention case; this covers the release-on-exit invariant.
 #[test]
 #[ignore]
 fn test_resume_lock_released_exit() {
@@ -86,7 +86,10 @@ fn test_resume_lock_released_exit() {
         &["--resume".to_string(), sid.to_string()],
         sessions_dir.clone(),
     );
-    s1.send_key(&Key::Char('q'));
+    // b1 holds the lock on the resumed session (working screen). Quit it
+    // cleanly via ctrl+D double-press so the lock is released for b2.
+    s1.send_key(&Key::Ctrl('d'));
+    s1.send_key(&Key::Ctrl('d'));
     std::thread::sleep(std::time::Duration::from_millis(1000));
     let mut s2 = PtySession::launch_with_sessions_dir(
         None,

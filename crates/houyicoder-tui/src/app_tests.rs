@@ -222,11 +222,37 @@ fn test_slash_exit_quits() {
 }
 
 #[test]
-fn test_ctrl_c_quits() {
+fn test_ctrl_c_idle_noop() {
     let mut app = working_app();
-    let k = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-    handle_key(&mut app, k);
-    assert!(app.quit);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    );
+    assert!(!app.quit, "ctrl+C idle must not quit (interrupt, not exit)");
+}
+
+#[test]
+fn test_ctrl_d_twice_quits() {
+    let mut app = working_app();
+    let d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+    handle_key(&mut app, d);
+    assert!(!app.quit, "a single ctrl+D must not quit");
+    assert!(
+        app.notifications
+            .current()
+            .is_some_and(|n| n.key == "exit-confirm"),
+        "the first ctrl+D shows the exit-confirm toast"
+    );
+    handle_key(&mut app, d);
+    assert!(app.quit, "a second ctrl+D within the window quits");
+}
+
+#[test]
+fn test_q_empty_no_quit() {
+    let mut app = working_app();
+    crate::keys::handle_working(&mut app, key(KeyCode::Char('q')));
+    assert!(!app.quit, "q with empty input must not quit (it types)");
+    assert_eq!(app.input.value(), "q");
 }
 
 /// An unknown /-prefix (not a known command) is a message to the model,

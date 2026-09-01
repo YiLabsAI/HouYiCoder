@@ -134,7 +134,6 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
     }
     let editing = artifact_editing(app);
     match k.code {
-        KeyCode::Char('q') if app.input.is_empty() && !editing => app.quit = true,
         // Esc leaves the artifact pane back to the conversation (the main
         // view). Only when the input is empty so mid-typing Esc is a no-op
         // (the user can still Backspace to clear, then Esc to exit). Esc in
