@@ -6,19 +6,31 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
-    text::Line,
-    widgets::{List, ListItem},
+    text::{Line, Text},
+    widgets::{List, ListItem, Paragraph, Wrap},
 };
 
 use crate::state::App;
-use crate::view::capability::{render_lines, titled_block};
+use crate::view::capability::titled_block;
 
-/// Render the agents pane. A non-empty fleet shows one row per child with
-/// type, status, tokens, and turn; the selection gets a marker. An idle
-/// fleet falls back to the directory the /agents query fetched, or a
-/// placeholder when the reply has not landed yet.
+/// Rows the pane reserves when opened inline by the slash command.
+pub(crate) const AGENTS_PANE_HEIGHT: u16 = 14;
+
+/// Render the agents pane inside a titled block. Used by the capability grid,
+/// which hands over a bare rect; the inline slash-command pane draws its own
+/// frame and calls draw_content with the inner rect instead.
 pub(super) fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "agents");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    draw_content(f, inner, app);
+}
+
+/// The pane's content rows: one row per live child with type, status, tokens,
+/// and turn, the selected one marked; an idle fleet falls back to the
+/// directory the query fetched, or a placeholder while the reply is in
+/// flight.
+pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     if !app.fleet.entries.is_empty() {
         let items: Vec<ListItem> = app
             .fleet
@@ -41,11 +53,7 @@ pub(super) fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
                 }
             })
             .collect();
-        f.render_widget(
-            List::new(items).style(Style::new().fg(Color::White)),
-            block.inner(area),
-        );
-        f.render_widget(block, area);
+        f.render_widget(List::new(items).style(Style::new().fg(Color::White)), area);
         return;
     }
     if app.agents.is_empty() {
@@ -55,7 +63,10 @@ pub(super) fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
             .filter(|s| !s.is_empty())
             .unwrap_or("(no agent directory loaded)");
         let lines: Vec<Line> = dir.lines().map(|l| Line::from(l.to_string())).collect();
-        render_lines(f, area, block, lines);
+        f.render_widget(
+            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+            area,
+        );
         return;
     }
     let items: Vec<ListItem> = app
@@ -63,11 +74,7 @@ pub(super) fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|a| ListItem::new(format!("{} ({}) -- {}", a.name, a.role, a.state)))
         .collect();
-    f.render_widget(
-        List::new(items).style(Style::new().fg(Color::White)),
-        block.inner(area),
-    );
-    f.render_widget(block, area);
+    f.render_widget(List::new(items).style(Style::new().fg(Color::White)), area);
 }
 
 #[cfg(test)]

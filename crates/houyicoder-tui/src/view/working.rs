@@ -363,6 +363,7 @@ fn draw_focus_main(f: &mut Frame, area: Rect, app: &App) {
         Pane::Hooks => draw_hooks_pane(f, area, app),
         Pane::Skills => draw_skills_pane(f, area, app),
         Pane::Model => draw_model_pane(f, area, app),
+        Pane::Agents => draw_agents_pane(f, area, app),
         _ => capability::draw(f, area, app),
     }
 }
@@ -441,6 +442,12 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // above, the selectable model list below.
     if matches!(app.pane, Pane::Model) {
         draw_model_pane(f, area, app);
+        return;
+    }
+    // The /agents pane renders inline (the Pane primitive): transcript tail
+    // above, the live fleet or the registered directory below.
+    if matches!(app.pane, Pane::Agents) {
+        draw_agents_pane(f, area, app);
         return;
     }
     if app.session.is_some() {
@@ -642,6 +649,16 @@ fn draw_hooks_pane(f: &mut Frame, area: Rect, app: &App) {
         app,
         hooks_pane::HOOKS_PANE_HEIGHT,
         hooks_pane::draw_content,
+    );
+}
+
+fn draw_agents_pane(f: &mut Frame, area: Rect, app: &App) {
+    draw_command_pane(
+        f,
+        area,
+        app,
+        crate::view::agents_pane::AGENTS_PANE_HEIGHT,
+        crate::view::agents_pane::draw_content,
     );
 }
 

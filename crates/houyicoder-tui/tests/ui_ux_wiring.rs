@@ -289,3 +289,35 @@ fn test_resume_picker_disambiguates_empty() {
         "picker rows should carry the disambiguating short sid:\n{out}"
     );
 }
+
+/// /agents opens the agents pane. The command sets the pane and fires the
+/// directory query, but the Working-mode router only routes the panes it
+/// lists by name, and this one was missing from that list — so in a live
+/// session the pane fell through to the transcript and the command showed
+/// nothing at all. The pane's own render tests call its draw function
+/// directly, which is why they stayed green.
+#[test]
+#[ignore]
+fn test_agents_opens_pane() {
+    let mut s = PtySession::launch();
+    assert!(
+        s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
+        "should reach login"
+    );
+    s.send_key(&Key::Char('3'));
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen"
+    );
+    run_slash_command(&mut s, "agents");
+    assert!(
+        s.wait_for_compact("Availableagents", RENDER_TIMEOUT),
+        "/agents should render the agent directory in a pane:\n{}",
+        s.output_plain()
+    );
+    assert!(
+        s.output_compact().contains("general-purpose"),
+        "the directory should list the built-in types:\n{}",
+        s.output_plain()
+    );
+}
