@@ -17,6 +17,7 @@ mod builder;
 mod cache_liveness;
 mod call;
 pub mod compact;
+mod conditional_activation;
 mod context;
 mod diff;
 mod durable_scan;
@@ -210,6 +211,9 @@ pub struct Runner {
     /// Project or Local source fails closed before registration under an
     /// untrusted workspace. None in tests and the pure-stub path.
     registrar: Option<Arc<crate::agent::SkillHookRegistrar>>,
+    /// Paths-gated skill activator; file-touch tools activate, the listing
+    /// filters by its active set. None when the feature is off.
+    conditional: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
     /// Prompt-cache breakpoint policy. Decides where to carve a stable prefix
     /// for prompt-cache reuse (the wire kinds live in the wire crate;
     /// the provider lowers each kind to its own format). Defaults to the Auto

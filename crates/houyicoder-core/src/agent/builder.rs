@@ -174,6 +174,16 @@ impl Runner {
         self
     }
 
+    /// Wire the paths-gated skill activator shared by the file-touch tools
+    /// and the listing. None when off; the listing then shows every skill.
+    pub fn with_conditional(
+        mut self,
+        conditional: Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>,
+    ) -> Self {
+        self.conditional = Some(conditional);
+        self
+    }
+
     /// Write the resolved workspace trust through the registrar. The server
     /// calls this once after the startup trust prompt so a Project or Local
     /// skill hook invoked later reads the resolved value, not the

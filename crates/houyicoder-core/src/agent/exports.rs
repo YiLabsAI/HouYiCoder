@@ -6,6 +6,7 @@ pub use super::backbone::{
     BackboneDerivation, CompactBackbone, ConflictRate, GitWorkspaceProbe, StubWorkspaceProbe,
     WorkspaceProbe, derive_backbone, merge_summary, render_backbone_block,
 };
+pub use super::conditional_activation::{ConditionalActivation, ConditionalSkillActivator};
 pub use super::context::{
     CategoryBreakdown, ContextBreakdown, ContextBuilder, GridSquare, Section, SectionKind,
     ServedView, Tokenizer, build_grid, stub_breakdown,

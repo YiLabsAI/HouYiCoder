@@ -27,8 +27,7 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 523
-# pub(crate) fields drop from the count (regex gap); re-raise when fixed.
+STRUCT_FIELD_BASELINE = 524
 
 
 def evaluate(total, baseline=STRUCT_FIELD_BASELINE) -> int:

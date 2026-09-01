@@ -480,10 +480,9 @@ pub(crate) fn assemble(
     // discovers SKILL.md files across the scan paths at startup. Not
     // sandbox-backed (it reads skill files directly), so registered directly
     // like the recall tool. The workspace anchors the project-level skill
-    // walk; managed and user levels are scanned regardless. Wired with the
-    // registrar so invoking a skill registers its frontmatter hooks.
-    let skill_registry: Arc<dyn houyicoder_api::skill::SkillRegistry> =
-        Arc::new(skill::SkillRegistryImpl::discover(workspace.as_deref()));
+    // Skill registry + conditional activator; the SkillTool registers below.
+    let (skill_registry, skill_conditional) =
+        hooks::build_skill_registry_and_activator(workspace.as_deref());
     tools.register(Arc::new(
         SkillTool::new(std::sync::Arc::clone(&skill_registry))
             .with_registrar(std::sync::Arc::clone(&skill_registrar)),
@@ -534,7 +533,8 @@ pub(crate) fn assemble(
         .with_effort_resolver(std::sync::Arc::new(effort_resolver))
         .with_denied_agents(std::sync::Arc::clone(&denied_agents))
         .with_spawn_handle(spawn_handle)
-        .with_skill_registry(std::sync::Arc::clone(&skill_registry));
+        .with_skill_registry(std::sync::Arc::clone(&skill_registry))
+        .with_conditional(std::sync::Arc::clone(&skill_conditional));
     // Wire a workspace probe for the re-derivable compaction backbone's
     // derivation watermark. Shares the runner's cwd handle so a worktree
     // switch propagates to the next probe. Set after the builder chain (the

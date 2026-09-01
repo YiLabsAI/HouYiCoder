@@ -172,9 +172,24 @@ impl Runner {
             None => view.events.clone(),
         };
         let descriptors = registry.list_model_invocable();
+        // Hide paths-gated skills until activated; unwrap_or(true) means
+        // unwired = feature off = show all, not fail-closed.
+        let descriptors: Vec<_> = descriptors
+            .into_iter()
+            .filter(|d| {
+                if registry.paths_for(&d.name).is_empty() {
+                    return true;
+                }
+                self.conditional
+                    .as_ref()
+                    .map(|a| a.is_active(&d.name))
+                    .unwrap_or(true)
+            })
+            .collect();
         if descriptors.is_empty() {
             return Ok(());
         }
+        // Hash over the filtered set so an activation flips it + re-announces.
         let chash = listing_content_hash(&descriptors);
         // Skip when the NEWEST surviving listing already reflects the
         // current set. An older non-matching listing is irrelevant (a
@@ -210,6 +225,7 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::conditional_activation::ConditionalSkillActivator;
 
     fn descriptor(name: &str, desc: &str, when: Option<&str>) -> SkillDescriptor {
         SkillDescriptor {
@@ -617,5 +633,124 @@ mod tests {
                 .all(|e| !matches!(e.kind, TurnEventKind::SkillListing { .. })),
             "no listing appended without a registry"
         );
+    }
+
+    /// A registry carrying one unconditional + one paths-gated skill.
+    struct ConditionalRegistry {
+        skills: Vec<(String, Vec<String>)>,
+    }
+    impl ConditionalRegistry {
+        fn new(skills: &[(&str, &[&str])]) -> Self {
+            Self {
+                skills: skills
+                    .iter()
+                    .map(|(n, p)| (n.to_string(), p.iter().map(|s| s.to_string()).collect()))
+                    .collect(),
+            }
+        }
+    }
+    impl houyicoder_api::skill::SkillRegistry for ConditionalRegistry {
+        fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+            self.skills
+                .iter()
+                .map(|(n, _)| descriptor(n, "d", None))
+                .collect()
+        }
+        fn find(&self, name: &str) -> Option<SkillDescriptor> {
+            self.skills
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(n, _)| descriptor(n, "d", None))
+        }
+        fn prepare_body(
+            &self,
+            _name: &str,
+            _args: Option<&str>,
+            _session_id: Option<&str>,
+        ) -> Result<String, SkillError> {
+            Ok("body".into())
+        }
+        fn paths_for(&self, name: &str) -> Vec<String> {
+            self.skills
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, p)| p.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_conditional_hidden_until_active() {
+        let registry: Arc<dyn houyicoder_api::skill::SkillRegistry> =
+            Arc::new(ConditionalRegistry::new(&[
+                ("always", &[]),
+                ("gated", &["src"]),
+            ]));
+        let cwd = std::env::temp_dir().join("houyi-listing-test");
+        let activator = Arc::new(
+            crate::agent::conditional_activation::ConditionalActivation::new(
+                std::sync::Arc::clone(&registry),
+                cwd,
+            ),
+        );
+        let store: Arc<dyn houyicoder_api::session::SessionLog> =
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        let runner = Runner::with_shared_store(
+            store.clone(),
+            Arc::new(StubProvider),
+            crate::agent::ToolRegistry::new(),
+            crate::agent::runner_config::RunnerConfig {
+                model: "test".into(),
+                instructions: String::new(),
+                max_turns: 5,
+                max_output_tokens: 8_000,
+                retry: Retry::default(),
+            },
+        )
+        .with_skill_registry(registry)
+        .with_conditional(std::sync::Arc::clone(&activator)
+            as Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>);
+        let session = SessionId::new();
+
+        // Before activation: only the unconditional skill is listed.
+        runner.inject_skill_listing(session).await.unwrap();
+        let text = store
+            .current_view(session)
+            .await
+            .unwrap()
+            .events
+            .iter()
+            .find_map(|e| match &e.kind {
+                TurnEventKind::SkillListing { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .expect("listing appended");
+        assert!(text.contains("- always"), "unconditional shown: {text}");
+        assert!(
+            !text.contains("gated"),
+            "gated hidden before activation: {text}"
+        );
+
+        // After a matching file-touch the gated skill activates + the
+        // content-hash change re-announces with it visible.
+        activator.activate_for_paths(&["src/foo.rs".to_string()]);
+        runner.inject_skill_listing(session).await.unwrap();
+        let last = store
+            .current_view(session)
+            .await
+            .unwrap()
+            .events
+            .iter()
+            .rev()
+            .find_map(|e| match &e.kind {
+                TurnEventKind::SkillListing { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .expect("re-announced listing");
+        assert!(
+            last.contains("gated"),
+            "gated shown after activation: {last}"
+        );
+        assert!(last.contains("always"), "unconditional still shown: {last}");
     }
 }

@@ -91,6 +91,34 @@ pub(super) fn build_session_registry(
     reg
 }
 
+/// Build the session-scoped paths-skill activator. One Arc shared by the
+/// Runner and the file-touch tools so the active set is per-session.
+pub(super) fn build_conditional_activator(
+    registry: Arc<dyn houyicoder_api::skill::SkillRegistry>,
+    workspace: Option<&std::path::Path>,
+) -> Arc<dyn houyicoder_core::agent::ConditionalSkillActivator> {
+    Arc::new(houyicoder_core::agent::ConditionalActivation::new(
+        registry,
+        workspace
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
+    ))
+}
+
+/// Discover the skill registry + build its conditional activator in one
+/// step; the composition root registers the SkillTool separately.
+pub(super) fn build_skill_registry_and_activator(
+    workspace: Option<&std::path::Path>,
+) -> (
+    Arc<dyn houyicoder_api::skill::SkillRegistry>,
+    Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>,
+) {
+    let registry: Arc<dyn houyicoder_api::skill::SkillRegistry> =
+        Arc::new(super::skill::SkillRegistryImpl::discover(workspace));
+    let activator = build_conditional_activator(std::sync::Arc::clone(&registry), workspace);
+    (registry, activator)
+}
+
 /// A built-in PostToolUse hook that reads the SkillTool result for
 /// allowed_tools and adds them as session-scoped Allow rules. This is
 /// the additive grant: after a skill with allowed_tools is invoked
