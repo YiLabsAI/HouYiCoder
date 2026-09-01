@@ -174,3 +174,25 @@ def test_cov_dir_override() -> None:
             del os.environ["HOUYICODER_COV_DIR"]
         else:
             os.environ["HOUYICODER_COV_DIR"] = prev
+
+
+def test_cov_env_stable_keys() -> None:
+    """The shared instrumented-build env pins the cache-key inputs: the
+    target-dir remap (path-independent rmetas, so a new worktree hits the
+    dependency cache), incremental off (sccache refuses incremental), and
+    debug info off (coverage line tables come from the coverage mapping, not
+    DWARF). One gate drifting from another lands in the cargo fingerprint and
+    the gates then rebuild each other's artifacts on every alternation."""
+    import os
+
+    import cov_lcov
+
+    env = cov_lcov.cov_env("/tmp/covx", {"RUSTFLAGS": "-Cfoo"})
+    assert env["CARGO_TARGET_DIR"] == "/tmp/covx"
+    assert env["CARGO_INCREMENTAL"] == "0"
+    assert env["CARGO_PROFILE_DEV_DEBUG"] == "0"
+    assert "--remap-path-prefix=/tmp/covx=/houyi-cov" in env["RUSTFLAGS"]
+    assert "-Cfoo" in env["RUSTFLAGS"], "caller flags survive"
+    again = cov_lcov.cov_env("/tmp/covx", dict(env))
+    assert again["RUSTFLAGS"] == env["RUSTFLAGS"], "idempotent, no flag doubling"
+    _ = os

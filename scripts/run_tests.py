@@ -33,7 +33,7 @@ import signal
 import subprocess
 import sys
 
-from cov_lcov import cov_target_dir, lcov_path
+from cov_lcov import cov_env, cov_target_dir, lcov_path
 
 # FULL needs a higher default ceiling (heavier subprocess E2E), but both
 # paths honor GATE_SECS so CI can tune the budget per step (ci.yml sets 120
@@ -165,8 +165,8 @@ elif use_cov:
     if FULL or force_full_cov:
         # Full gate (or forced): whole workspace, full lcov trace.
         drop_stale_profraw()
-        cmd += ["llvm-cov", "--no-clean", "--workspace", "--lcov", "--output-path",
-                LCOV_PATH]
+        cmd += ["llvm-cov", "--no-clean", "--no-cfg-coverage", "--workspace",
+                "--lcov", "--output-path", LCOV_PATH]
         if not FULL:
             cmd.append("--lib")
         cmd += ["--", "--format", "terse"]
@@ -175,7 +175,7 @@ elif use_cov:
         # (no re-instrument, no run for them). The lcov carries only the
         # changed crates' coverage -- all diff-cov needs.
         drop_stale_profraw()
-        cmd += ["llvm-cov", "--lib", "--no-clean"]
+        cmd += ["llvm-cov", "--lib", "--no-clean", "--no-cfg-coverage"]
         for c in crates:
             cmd += ["--package", c]
         cmd += ["--lcov", "--output-path", LCOV_PATH, "--", "--format", "terse"]
@@ -206,24 +206,12 @@ env = {
     "HOUYICODER_FAST_TOKENS": "1",
     "HOUYICODER_SANDBOX_NO_ENFORCE": "1",
 }
-# sccache caches rustc artifacts -- including the -Cinstrument-coverage
-# instrumented .rlib, in its own namespace -- across cleans + worktrees, so a
-# cold target/cov rebuild hits the cache instead of recompiling every dep.
-# No-op when sccache is absent; honors an explicit RUSTC_WRAPPER from the
-# environment so a user override (or a different wrapper) is not clobbered.
-if shutil.which("sccache") and "RUSTC_WRAPPER" not in env:
-    env["RUSTC_WRAPPER"] = "sccache"
-    # sccache refuses to cache an incremental compile, and the dev profile
-    # turns incremental on, so the wrapper was paying its hashing cost for a
-    # zero percent hit rate. Incremental buys nothing here anyway: this build
-    # lives in its own cache, and the cross-worktree reuse it replaces is what
-    # sccache is for.
-    env.setdefault("CARGO_INCREMENTAL", "0")
-# Route the instrumented build to the isolated cov cache so it does not
-# displace the plain dev cache (see COV_TARGET_DIR above). Plain
-# cargo test (the clean-tree branch) keeps the default target/.
+# The instrumented build's cache-friendly environment (target dir, sccache,
+# path remap, no incremental, no debug info) is assembled in one place so
+# every gate that runs one agrees. Plain cargo test (the clean-tree branch)
+# keeps the default target/ and plain env.
 if use_cov:
-    env["CARGO_TARGET_DIR"] = COV_TARGET_DIR
+    env = cov_env(COV_TARGET_DIR, env)
 
 # Compile the test binaries BEFORE starting the clock, so the gate measures
 # test execution and not the compiler. The gate exists to catch a slow test,

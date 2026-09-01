@@ -50,6 +50,11 @@ THRESHOLD=${COV_THRESHOLD:-85}
 # samples go stale. Resolve the shared cache dir from cov_lcov so this gate
 # agrees with run_tests.py + check_diff_coverage.py (writer/reader one path).
 COV_DIR="$(python3 scripts/cov_lcov.py --cov-dir 2>/dev/null || echo target/cov)"
+# One instrumented-build env for every gate (cov_lcov.py --env): a flag that
+# differs between this gate and run_tests.py lands in the cargo fingerprint,
+# and the two gates then rebuild each other's artifacts on every alternation
+# -- the chronic "cold again" between make check and make check-full.
+eval "$(python3 scripts/cov_lcov.py --env 2>/dev/null || true)"
 # The report name carries this worktree: the cache is shared, and a report is
 # a snapshot of one worktree's sources, so a shared name lets the last writer
 # hand its line table to another worktree's gate.
@@ -60,7 +65,7 @@ find "$COV_DIR" -name '*.profraw' -delete 2>/dev/null || true
 # --locked: this runs as its own CI job in parallel with the lint/test jobs,
 # so it cannot rely on an earlier `cargo check --locked` in the same job to
 # catch a stale Cargo.lock -- pin the dependency set here too.
-CARGO_TARGET_DIR="$COV_DIR" cargo llvm-cov --locked --no-cfg-coverage --lib --workspace \
+cargo llvm-cov --locked --no-cfg-coverage --lib --workspace \
   --lcov --output-path "$LCOV"
 
 # Stale-mapping guard: the line table is baked into the instrumented binary, so

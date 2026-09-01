@@ -20,10 +20,15 @@ entry. That check was tried and fired on a correct report.
 CLI: python3 scripts/cov_lcov.py --check <lcov-path>
      python3 scripts/cov_lcov.py --cov-dir
      python3 scripts/cov_lcov.py --lcov-path
+     python3 scripts/cov_lcov.py --env
   --check exits 0 if no stale mapping found, 2 if found (with evidence
   printed to stderr), 1 if the lcov file cannot be read. --cov-dir prints
   the resolved shared instrumented-cache dir (used by the gates + shell).
   --lcov-path prints this worktree's report path inside that dir.
+  --env prints shell export lines for the shared instrumented-build env,
+  so the shell gate builds with the same flags as the python gates -- a
+  flag that differs between them lands in the cargo fingerprint and makes
+  the two gates rebuild each other's artifacts on every alternation.
 """
 from __future__ import annotations
 
@@ -57,6 +62,33 @@ def cov_target_dir() -> str:
     if override:
         return override
     return os.path.join("target", "cov")
+
+
+def cov_env(cov_dir: str, base: dict | None = None) -> dict:
+    """Environment for an instrumented build, shared by every gate that runs
+    one, so the writer and the readers agree and the cache keys stay stable.
+
+    Remapping the cov dir out of the compile is what lets sccache hit across
+    worktrees: a build-script crate's rmeta embeds paths under the target
+    dir, so without the remap every downstream unit's key changes with the
+    directory and a new worktree misses the whole dependency graph.
+    Incremental is off because sccache refuses to cache incremental
+    compiles. Debug info is off because coverage line tables come from the
+    coverage mapping section, not DWARF -- dropping it cuts both the compile
+    and the seventeen test-binary links that dominate a cold run."""
+    import shutil
+
+    env = dict(os.environ if base is None else base)
+    env["CARGO_TARGET_DIR"] = cov_dir
+    remap = f"--remap-path-prefix={os.path.abspath(cov_dir)}=/houyi-cov"
+    flags = env.get("RUSTFLAGS", "")
+    if remap not in flags:
+        env["RUSTFLAGS"] = f"{flags} {remap}".strip()
+    if shutil.which("sccache") and "RUSTC_WRAPPER" not in env:
+        env["RUSTC_WRAPPER"] = "sccache"
+    env.setdefault("CARGO_INCREMENTAL", "0")
+    env.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
+    return env
 
 
 def lcov_path(cov_dir: str | None = None) -> str:
@@ -164,6 +196,13 @@ def check(report: Path) -> int:
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--lcov-path":
         print(lcov_path())
+        return 0
+    if len(sys.argv) == 2 and sys.argv[1] == "--env":
+        import shlex
+
+        base = cov_env(cov_target_dir())
+        for key in sorted(k for k in base if k not in os.environ or base[k] != os.environ[k]):
+            print(f"export {key}={shlex.quote(base[key])}")
         return 0
     if len(sys.argv) == 2 and sys.argv[1] == "--cov-dir":
         print(cov_target_dir())

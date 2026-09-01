@@ -32,6 +32,7 @@ from pathlib import Path
 # and check_coverage.sh so a stale line-table cannot pass either consumer.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cov_lcov import (  # noqa: E402
+    cov_env,
     cov_target_dir,
     lcov_executable_lines,
     normalize,
@@ -337,16 +338,10 @@ def instrumented_report(cov_dir: str, rebuild: bool) -> Path | None:
         drop_profraw(cov_dir)
     with tempfile.NamedTemporaryFile(suffix=".lcov", delete=False) as tf:
         out = Path(tf.name)
-    env = {**os.environ, "HOUYICODER_FAST_TOKENS": "1", "CARGO_TARGET_DIR": cov_dir}
-    if shutil.which("sccache") and "RUSTC_WRAPPER" not in env:
-        # Same wrapper + non-incremental pairing as the test step: sccache does
-        # not cache incremental compiles, so leaving it on costs hashing for no
-        # hits.
-        env["RUSTC_WRAPPER"] = "sccache"
-        env.setdefault("CARGO_INCREMENTAL", "0")
+    env = cov_env(cov_dir, {**os.environ, "HOUYICODER_FAST_TOKENS": "1"})
     cov = subprocess.run(
-        ["cargo", "llvm-cov", "--no-clean", "--lib", "--workspace", "--lcov",
-         "--output-path", str(out)],
+        ["cargo", "llvm-cov", "--no-clean", "--no-cfg-coverage", "--lib",
+         "--workspace", "--lcov", "--output-path", str(out)],
         cwd=ROOT, capture_output=True, text=True, env=env,
     )
     if cov.returncode != 0:
