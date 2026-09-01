@@ -161,15 +161,21 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-/// The fleet affordance for the status bar, present whenever the fleet holds
-/// entries (they self-retire after the completion grace window, so nothing
-/// lingers here). The wording follows what the strip can honor this frame:
+/// The fleet affordance for the status bar: present while the fleet has
+/// running children (completed children stay in the strip through the grace
+/// window but do not count as live, so the hint drops once nothing is
+/// running). The wording follows what the strip can honor this frame:
 /// per-row selection needs visible rows, so a strip collapsed to its summary
 /// or dropped by the budget advertises the pane instead. The status bar is
 /// the one row that never degrades, which is why the count lives here and
 /// not only in the strip.
 fn agents_hint(app: &App) -> Option<String> {
-    let n = app.fleet.entries.len();
+    let n = app
+        .fleet
+        .entries
+        .iter()
+        .filter(|e| e.completed.is_none())
+        .count();
     if n == 0 {
         return None;
     }
@@ -466,6 +472,28 @@ mod tests {
             "3 agents · /agents to manage"
         );
         assert_eq!(agents_hint(&fleet_app(3, 0)).unwrap(), "3 agents · /agents");
+    }
+
+    /// A completed child still in the grace window is excluded from the
+    /// hint count — the strip keeps the row briefly so the user sees the
+    /// result, but the status bar must not call a finished delegation live.
+    #[test]
+    fn test_agents_hint_excludes_completed() {
+        let mut app = fleet_app(2, 2);
+        let done = crate::agent_message::FleetEntry {
+            agent_id: "done".into(),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: Some(std::time::Instant::now()),
+        };
+        app.fleet.entries.push(done);
+        let hint = agents_hint(&app).unwrap();
+        assert!(hint.contains("2 agents"), "completed excluded: {hint}");
+        assert!(!hint.contains("3 agent"), "no false live count: {hint}");
     }
 
     #[test]
