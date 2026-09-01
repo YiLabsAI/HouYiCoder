@@ -102,6 +102,13 @@ impl InputField {
         self.cursor = self.text.len();
     }
 
+    /// Replace the text and park the cursor at the start (Up-arrow recall:
+    /// the recalled prompt is for review/edit from the beginning).
+    pub fn set_at_start(&mut self, s: String) {
+        self.text = s;
+        self.cursor = 0;
+    }
+
     /// Reset to empty.
     pub fn clear(&mut self) {
         self.text.clear();
@@ -215,26 +222,28 @@ impl InputField {
 
     /// Move the cursor one wrapped line up, preserving the column. No-op on
     /// the first wrapped line.
-    pub fn move_up(&mut self, cols: usize) {
+    pub fn move_up(&mut self, cols: usize) -> bool {
         let (idx, col) = self.cursor_position(cols);
         if idx == 0 {
-            return;
+            return false;
         }
         let lines = self.wrapped_lines(cols);
         let target = &lines[idx - 1];
         self.cursor = self.byte_at_column(target, col);
+        true
     }
 
-    /// Move the cursor one wrapped line down, preserving the column. No-op on
-    /// the last wrapped line.
-    pub fn move_down(&mut self, cols: usize) {
+    /// Move the cursor one wrapped line down, preserving the column. Returns
+    /// false on the last wrapped line (the caller routes to history there).
+    pub fn move_down(&mut self, cols: usize) -> bool {
         let (idx, col) = self.cursor_position(cols);
         let lines = self.wrapped_lines(cols);
         if idx + 1 >= lines.len() {
-            return;
+            return false;
         }
         let target = &lines[idx + 1];
         self.cursor = self.byte_at_column(target, col);
+        true
     }
 
     /// Hard-wrap the text to the given column count (display cells). Each

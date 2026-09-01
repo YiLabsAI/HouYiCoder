@@ -27,6 +27,7 @@ fn test_bundle() -> RunnerBundle {
         session_lister: None,
         skip_login: false,
         startup_warnings,
+        history_path: std::env::temp_dir().join("houyi-history-swap-test.jsonl"),
     }
 }
 
@@ -58,6 +59,7 @@ fn test_bundle_tracked() -> (RunnerBundle, tokio::task::JoinHandle<()>) {
             session_lister: None,
             skip_login: false,
             startup_warnings,
+            history_path: std::env::temp_dir().join("houyi-history-swap2-test.jsonl"),
         },
         serve,
     )

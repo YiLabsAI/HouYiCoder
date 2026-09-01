@@ -75,6 +75,9 @@ pub struct RunnerBundle {
     /// pair time so they land before any run output (no async-sink race).
     /// Empty on the stub/test path.
     pub startup_warnings: Vec<String>,
+    /// The prompt-history JSONL file path. Injected by the host (which owns
+    /// the config home) so the TUI never imports the config layer.
+    pub history_path: std::path::PathBuf,
 }
 
 /// A shared tokio runtime for tests. Building a multi-thread runtime with
@@ -130,6 +133,7 @@ pub fn build_app(bundle: RunnerBundle) -> App {
         session_lister,
         skip_login,
         startup_warnings,
+        history_path,
     } = bundle;
     let runtime = shared_runtime();
     // The live session: spawns the driver task on the shared runtime and
@@ -161,6 +165,7 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     for w in startup_warnings {
         app.system_line(w);
     }
+    app.history = crate::history::HistoryNav::with_path(history_path);
     app
 }
 
@@ -328,6 +333,14 @@ pub fn build_app_for_test(project: Option<String>) -> App {
         session_lister: None,
         skip_login: false,
         startup_warnings,
+        history_path: std::env::temp_dir().join(format!(
+            "houyi-history-test-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        )),
     })
 }
 

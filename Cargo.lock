@@ -1508,6 +1508,7 @@ dependencies = [
  "pulldown-cmark",
  "ratatui",
  "regex",
+ "serde",
  "serde_json",
  "similar",
  "syntect",

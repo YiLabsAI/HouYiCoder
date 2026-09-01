@@ -13,6 +13,7 @@ crossterm = { version = "0", features = ["osc52"] }
 base64 = { version = "0.23", default-features = false, features = ["alloc"] }
 houyicoder-protocol = { path = "../houyicoder-protocol" }
 houyicoder-client = { path = "../houyicoder-client" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }
 unicode-segmentation = "1"

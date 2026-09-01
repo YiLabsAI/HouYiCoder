@@ -81,7 +81,12 @@ impl super::App {
                                 // any partial turn content so the transcript
                                 // drops the user line (the submit is undone),
                                 // then restore the input for edit + resend.
+                                // Unwrite the prompt from history too -- no
+                                // real content arrived, so the submit is
+                                // semantically void; keeping it in recall would
+                                // show the restored text twice on Up.
                                 self.rewind_to_last_user_input();
+                                self.history.remove_last();
                                 self.input.set(text);
                                 true
                             }

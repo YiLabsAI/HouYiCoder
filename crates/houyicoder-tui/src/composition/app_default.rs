@@ -12,6 +12,7 @@ pub fn app() -> App {
         viewport: ViewportMode::Working,
         prev_viewport: ViewportMode::Working,
         input: crate::input::InputField::new(),
+        history: crate::history::HistoryNav::default(),
         transcript: transcript(),
         frames: Vec::new(),
         sealed_frames_end: 0,

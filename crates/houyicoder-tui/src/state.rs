@@ -67,6 +67,9 @@ pub struct App {
     /// The viewport the user was in before entering Scroll, so Esc/End returns to it rather than re-deriving from stage (which would lose a manual Focus->Working fold).
     pub prev_viewport: ViewportMode,
     pub input: InputField,
+    /// Up/Down prompt history navigation (cache + cursor + draft + abort
+    /// skip-set). Backed by a JSONL file at the config home.
+    pub history: crate::history::HistoryNav,
     pub transcript: Vec<TranscriptLine>,
     /// The durable wire frame history, owned by App (not the driver). The
     /// driver ships one Frame per server frame; App pushes here and the

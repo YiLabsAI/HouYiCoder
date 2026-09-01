@@ -442,6 +442,9 @@ impl App {
         // reply so tests and the no-runtime path keep working.
         let text = crate::paste::PasteStore::expand(&text, &self.pasted);
         if self.session.is_some() {
+            let project = crate::history::current_project();
+            self.history
+                .submit(&text, &project, &self.session_id.to_string());
             self.spawn_run(text);
             return;
         }

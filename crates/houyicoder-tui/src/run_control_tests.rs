@@ -72,6 +72,7 @@ pub(super) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolReg
         session_lister: None,
         skip_login: false,
         startup_warnings,
+        history_path: std::env::temp_dir().join("houyi-history-rc-test.jsonl"),
     })
 }
 

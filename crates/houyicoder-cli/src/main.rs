@@ -318,6 +318,7 @@ fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn std::err
         session_lister: None,
         skip_login: false,
         startup_warnings: Vec::new(),
+        history_path: houyicoder_config::config_home().join("history.jsonl"),
     };
     // Attach mode has no session_log/meta_store, so the /resume picker cannot
     // open (run_resume reports no store wired); pending_resume_target stays None.
@@ -644,6 +645,7 @@ pub(crate) fn assemble_bundle(
         )),
         skip_login,
         startup_warnings,
+        history_path: houyicoder_config::config_home().join("history.jsonl"),
     }
 }
 

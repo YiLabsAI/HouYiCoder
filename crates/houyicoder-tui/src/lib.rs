@@ -36,6 +36,7 @@ pub mod console_state;
 pub mod evidence;
 pub mod fold;
 pub mod git_op;
+pub mod history;
 pub mod input;
 pub mod keys;
 mod list_pane_state;
