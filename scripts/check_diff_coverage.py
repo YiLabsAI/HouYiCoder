@@ -37,6 +37,7 @@ from cov_lcov import (  # noqa: E402
     normalize,
     stale_mapping_evidence,
 )
+from cov_lcov import lcov_path as worktree_lcov_path  # noqa: E402
 
 THRESHOLD = int(os.environ.get("COV_DIFF_THRESHOLD", "85"))
 BASE = os.environ.get("COV_BASE", "HEAD")
@@ -337,6 +338,12 @@ def instrumented_report(cov_dir: str, rebuild: bool) -> Path | None:
     with tempfile.NamedTemporaryFile(suffix=".lcov", delete=False) as tf:
         out = Path(tf.name)
     env = {**os.environ, "HOUYICODER_FAST_TOKENS": "1", "CARGO_TARGET_DIR": cov_dir}
+    if shutil.which("sccache") and "RUSTC_WRAPPER" not in env:
+        # Same wrapper + non-incremental pairing as the test step: sccache does
+        # not cache incremental compiles, so leaving it on costs hashing for no
+        # hits.
+        env["RUSTC_WRAPPER"] = "sccache"
+        env.setdefault("CARGO_INCREMENTAL", "0")
     cov = subprocess.run(
         ["cargo", "llvm-cov", "--no-clean", "--lib", "--workspace", "--lcov",
          "--output-path", str(out)],
@@ -393,7 +400,7 @@ def main() -> int:
     # does not thrash the plain dev cache (target/). See run_tests.py
     # COV_TARGET_DIR. The lcov report lives in the same cov dir.
     COV_DIR = cov_target_dir()
-    LCOV = os.path.join(COV_DIR, "houyi-cov.lcov")
+    LCOV = worktree_lcov_path(COV_DIR)
     created_temp = False
 
     def lcov_is_fresh(lcov_path: Path) -> bool:

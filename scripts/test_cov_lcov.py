@@ -134,3 +134,43 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_lcov_path_carries_worktree() -> None:
+    """The report name identifies the worktree that wrote it. The build cache
+    is shared across worktrees on purpose; a shared report name is not the
+    same thing, because a report describes one worktree's sources -- the
+    stale-mapping check then refuses a neighbour's line table, which reads as
+    a broken gate rather than as the collision it is."""
+    import cov_lcov
+
+    path = cov_lcov.lcov_path("/tmp/cov")
+    assert path.startswith("/tmp/cov/houyi-cov-"), path
+    assert path.endswith(".lcov"), path
+    root = cov_lcov._worktree_root()
+    assert Path(root).name in path, (root, path)
+    # Two different worktrees resolve to different names, so neither reads the
+    # other's report.
+    other = cov_lcov.lcov_path("/tmp/cov")
+    assert other == path, "stable for one worktree"
+
+
+def test_cov_dir_override() -> None:
+    """A worktree can opt out of the shared cache. It has to be able to: the
+    report generator scans the target dir for objects, so a sibling's test
+    binaries land in the report with their own line tables and the gate
+    refuses a verdict it cannot draw."""
+    import os
+
+    import cov_lcov
+
+    prev = os.environ.get("HOUYICODER_COV_DIR")
+    os.environ["HOUYICODER_COV_DIR"] = "/tmp/private-cov"
+    try:
+        assert cov_lcov.cov_target_dir() == "/tmp/private-cov"
+        assert cov_lcov.lcov_path().startswith("/tmp/private-cov/houyi-cov-")
+    finally:
+        if prev is None:
+            del os.environ["HOUYICODER_COV_DIR"]
+        else:
+            os.environ["HOUYICODER_COV_DIR"] = prev

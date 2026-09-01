@@ -19,12 +19,15 @@ entry. That check was tried and fired on a correct report.
 
 CLI: python3 scripts/cov_lcov.py --check <lcov-path>
      python3 scripts/cov_lcov.py --cov-dir
+     python3 scripts/cov_lcov.py --lcov-path
   --check exits 0 if no stale mapping found, 2 if found (with evidence
   printed to stderr), 1 if the lcov file cannot be read. --cov-dir prints
   the resolved shared instrumented-cache dir (used by the gates + shell).
+  --lcov-path prints this worktree's report path inside that dir.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -34,28 +37,56 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def cov_target_dir() -> str:
-    """Resolve the shared instrumented-build cache dir so every worktree
-    reuses the main checkout's target/cov instead of a cold per-worktree
-    rebuild. git-common-dir is the main checkout's .git path; its parent is
-    the main checkout root, where target/cov actually lives (not inside
-    .git). Falls back to a local target/cov when that cannot be resolved."""
-    fallback = os.path.join("target", "cov")
+    """The instrumented-build cache dir for THIS worktree, overridable with
+    HOUYICODER_COV_DIR.
+
+    It was shared across worktrees for a while, to spare a new worktree the
+    cold instrumented build. That is not sound: a coverage report is derived
+    from the objects in the target dir, so a sibling worktree's test binaries
+    join the report and bring their own line tables, and the stale-mapping
+    guard then refuses to draw a verdict -- deterministically, for every
+    worktree whose sibling built more recently, not only under concurrent
+    runs. Two other hazards rode along: the report was written under one
+    shared name, and a rebuild-on-stale wipes the whole tree out from under
+    whoever else is using it.
+
+    The cold cost the sharing was paying for belongs to the dependency graph,
+    which sccache caches by content -- so it is recovered without any shared
+    mutable state (RUSTC_WRAPPER is wired in run_tests.py)."""
+    override = os.environ.get("HOUYICODER_COV_DIR")
+    if override:
+        return override
+    return os.path.join("target", "cov")
+
+
+def lcov_path(cov_dir: str | None = None) -> str:
+    """This worktree's report path inside the shared cache dir.
+
+    Sharing the build cache is safe -- cargo keys artifacts by content. A
+    report is not an artifact of that kind: it is a snapshot of one
+    worktree's sources, so a single shared name lets whichever worktree ran
+    last hand its line table to the next worktree's gate, which the
+    stale-mapping check above then correctly refuses. One name per writer.
+    """
+    base = cov_dir if cov_dir is not None else cov_target_dir()
+    root = _worktree_root()
+    slug = hashlib.sha1(root.encode()).hexdigest()[:10]
+    return os.path.join(base, f"houyi-cov-{os.path.basename(root)}-{slug}.lcov")
+
+
+def _worktree_root() -> str:
+    """This checkout's root, which identifies the worktree. Falls back to the
+    script's own parent so a non-git invocation still yields a stable name."""
     try:
         out = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
+            ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=5,
         )
-        if out.returncode != 0:
-            return fallback
-        common = os.path.normpath(out.stdout.strip())
-        if not os.path.isabs(common):
-            common = os.path.normpath(os.path.join(str(ROOT), common))
-        shared = os.path.join(os.path.dirname(common), "target", "cov")
-        if os.path.isdir(os.path.dirname(shared)):
-            return shared
-        return fallback
+        if out.returncode == 0 and out.stdout.strip():
+            return os.path.normpath(out.stdout.strip())
     except (OSError, subprocess.SubprocessError):
-        return fallback
+        pass
+    return str(ROOT)
 
 
 def normalize(path: str) -> str:
@@ -108,14 +139,14 @@ def stale_mapping_evidence(executable: dict, root: Path = ROOT) -> list[str]:
     return evidence
 
 
-def check(lcov_path: Path) -> int:
+def check(report: Path) -> int:
     """Parse the lcov, detect stale mapping, print evidence, return exit code."""
-    if not lcov_path.is_file():
-        print(f"error: lcov report not found at {lcov_path}", file=sys.stderr)
+    if not report.is_file():
+        print(f"error: lcov report not found at {report}", file=sys.stderr)
         return 1
-    executable = lcov_executable_lines(lcov_path)
+    executable = lcov_executable_lines(report)
     if not executable:
-        print(f"error: no executable lines parsed from {lcov_path}", file=sys.stderr)
+        print(f"error: no executable lines parsed from {report}", file=sys.stderr)
         return 1
     evidence = stale_mapping_evidence(executable)
     if evidence:
@@ -131,11 +162,17 @@ def check(lcov_path: Path) -> int:
 
 
 def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] == "--lcov-path":
+        print(lcov_path())
+        return 0
     if len(sys.argv) == 2 and sys.argv[1] == "--cov-dir":
         print(cov_target_dir())
         return 0
     if len(sys.argv) != 3 or sys.argv[1] != "--check":
-        print("usage: cov_lcov.py --check <lcov-path> | --cov-dir", file=sys.stderr)
+        print(
+            "usage: cov_lcov.py --check <lcov-path> | --cov-dir | --lcov-path",
+            file=sys.stderr,
+        )
         return 1
     return check(Path(sys.argv[2]))
 

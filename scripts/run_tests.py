@@ -33,7 +33,7 @@ import signal
 import subprocess
 import sys
 
-from cov_lcov import cov_target_dir
+from cov_lcov import cov_target_dir, lcov_path
 
 # FULL needs a higher default ceiling (heavier subprocess E2E), but both
 # paths honor GATE_SECS so CI can tune the budget per step (ci.yml sets 120
@@ -96,7 +96,11 @@ use_cov = shutil.which("cargo-llvm-cov") is not None and not use_nextest
 # states across worktrees re-compile only the changed crates. The path
 # is resolved in cov_lcov so the writer here + the diff-cov reader agree.
 COV_TARGET_DIR = cov_target_dir()
-LCOV_PATH = os.path.join(COV_TARGET_DIR, "houyi-cov.lcov")
+# The report name carries this worktree. The instrumented binaries are shared
+# because cargo keys them by content; a report describes one worktree's
+# sources, so sharing its name hands the last writer's line table to the next
+# worktree's gate.
+LCOV_PATH = lcov_path(COV_TARGET_DIR)
 
 # Scope the coverage pass to the CHANGED crates only (--package), not the
 # whole workspace. cargo-llvm-cov reuses the cached instrumented binaries for
@@ -209,6 +213,12 @@ env = {
 # environment so a user override (or a different wrapper) is not clobbered.
 if shutil.which("sccache") and "RUSTC_WRAPPER" not in env:
     env["RUSTC_WRAPPER"] = "sccache"
+    # sccache refuses to cache an incremental compile, and the dev profile
+    # turns incremental on, so the wrapper was paying its hashing cost for a
+    # zero percent hit rate. Incremental buys nothing here anyway: this build
+    # lives in its own cache, and the cross-worktree reuse it replaces is what
+    # sccache is for.
+    env.setdefault("CARGO_INCREMENTAL", "0")
 # Route the instrumented build to the isolated cov cache so it does not
 # displace the plain dev cache (see COV_TARGET_DIR above). Plain
 # cargo test (the clean-tree branch) keeps the default target/.
