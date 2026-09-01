@@ -20,10 +20,10 @@ use crate::state::App;
 /// pill so the transcript is never pushed off-screen.
 const MAX_VISIBLE: usize = 3;
 
-/// Height the working layout should reserve for the pill. Zero when the
-/// fleet is empty so the pill vanishes and the input box sits right under
-/// the transcript.
-pub fn height(app: &App) -> u16 {
+/// Rows the pill would like: one per child, capped so a large fleet scrolls
+/// within the pill instead of pushing the transcript off-screen. Zero when
+/// the fleet is empty. The shared footer budget decides what it gets.
+pub fn want(app: &App) -> u16 {
     app.fleet
         .entries
         .len()
@@ -31,11 +31,32 @@ pub fn height(app: &App) -> u16 {
         .min(u16::MAX as usize) as u16
 }
 
-/// Draw the pill into the reserved area. The caller reserves height only
-/// while the fleet is non-empty, so no empty/guard branch is needed here.
+/// Draw the pill into the granted area. One row for a multi-child fleet is
+/// the collapsed form: a single row of per-child detail would name one child
+/// and silently omit the rest, so it becomes a count instead.
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
-    let lines = build_lines(app);
+    let lines = if area.height == 1 && app.fleet.entries.len() > 1 {
+        vec![summary_line(app)]
+    } else {
+        build_lines(app)
+    };
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// The collapsed form: how many children are live and how many just landed.
+fn summary_line(app: &App) -> Line<'static> {
+    let done = app
+        .fleet
+        .entries
+        .iter()
+        .filter(|e| e.completed.is_some())
+        .count();
+    let running = app.fleet.entries.len() - done;
+    let mut text = format!("  {running} running");
+    if done > 0 {
+        text.push_str(&format!(" \u{00b7} {done} done"));
+    }
+    Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }
 
 /// Build the visible window of pill rows. When the fleet is longer than
@@ -151,20 +172,45 @@ mod tests {
         assert_eq!(format_tokens(1200), "1.2k tok");
     }
 
-    /// Height tracks the fleet up to the cap; a one-entry fleet reserves
-    /// one row, a five-entry fleet still reserves three.
+    /// The wanted height tracks the fleet up to the cap; a one-entry fleet
+    /// asks for one row, a five-entry fleet still asks for three.
     #[test]
-    fn test_height_caps_at_three() {
+    fn test_want_caps_at_three() {
         let mut app = composition::app();
-        assert_eq!(height(&app), 0);
+        assert_eq!(want(&app), 0);
         app.fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
-        assert_eq!(height(&app), 1);
+        assert_eq!(want(&app), 1);
         for i in 0..5 {
             app.fleet
                 .entries
                 .push(entry(&format!("b{i}"), "plan", 1, 10, "read"));
         }
-        assert_eq!(height(&app), 3);
+        assert_eq!(want(&app), 3);
+    }
+
+    /// One row for a multi-child fleet is the collapsed form: a count, not
+    /// the first child's detail. Naming one child and omitting the rest is
+    /// worse than not naming any, since nothing tells the reader the others
+    /// exist.
+    #[test]
+    fn test_one_row_counts() {
+        let mut app = composition::app();
+        app.fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
+        app.fleet.entries.push(entry("b", "plan", 1, 10, "read"));
+        let mut done = entry("c", "verify", 1, 10, "test");
+        done.completed = Some("completed".into());
+        done.completed_at = Some(std::time::Instant::now());
+        app.fleet.entries.push(done);
+        let line = summary_line(&app);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(
+            text.contains("2 running") && text.contains("1 done"),
+            "the collapsed row counts instead of naming: {text}"
+        );
+        assert!(
+            !text.contains("explore"),
+            "no single child is named in the collapsed row: {text}"
+        );
     }
 
     /// A completed row goes terse: it shows the type, a done marker, and the

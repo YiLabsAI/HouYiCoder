@@ -54,13 +54,11 @@ pub fn draw_queue_overlay(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
-/// Bounded height of the ambient queued-input footer strip (the sibling of
-/// the Ctrl+G overlay). Zero when the queue is empty; otherwise the number of
-/// preview rows capped at two plus a +N more overflow line — and further
-/// capped so a transcript floor (max of ten rows or half the window) always
-/// survives beneath it. Below twenty rows the strip collapses to a one-line
-/// summary so the interaction view is never buried.
-pub(super) fn strip_height(app: &App, total_h: u16, input_h: u16) -> u16 {
+/// Rows the ambient queued-input strip would like: two previews plus a
+/// "+N more" line. Zero when the queue is empty. What it actually gets comes
+/// from the shared footer budget, which weighs it against the other strips;
+/// with one row the strip draws its one-line summary.
+pub(super) fn strip_want(app: &App) -> u16 {
     let n = app
         .pending
         .iter()
@@ -69,19 +67,7 @@ pub(super) fn strip_height(app: &App, total_h: u16, input_h: u16) -> u16 {
     if n == 0 {
         return 0;
     }
-    if total_h < 20 {
-        return 1;
-    }
-    let want = std::cmp::min(n, 2) as u16 + u16::from(n > 2);
-    let floor = std::cmp::max(10, total_h / 2);
-    let budget = total_h
-        .saturating_sub(input_h)
-        .saturating_sub(1)
-        .saturating_sub(floor);
-    // Never fully hide a non-empty queue: if the transcript-floor budget
-    // collapsed to zero, fall back to the one-line summary so ambient
-    // awareness survives (one row is cheaper than losing the queue entirely).
-    want.min(budget).max(1)
+    std::cmp::min(n, 2) as u16 + u16::from(n > 2)
 }
 
 /// Render the read-only ambient queued-input strip below the input box: the

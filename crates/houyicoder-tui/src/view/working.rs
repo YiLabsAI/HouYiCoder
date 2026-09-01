@@ -24,6 +24,7 @@ use crate::view::{
 
 mod flat_transcript;
 mod fleet_pill;
+mod footer_budget;
 mod live_rows;
 mod row_sink;
 mod subagent_render;
@@ -89,12 +90,15 @@ fn draw_working(f: &mut Frame, app: &App) {
     // (bounded, only while items are pending — moved out of the transcript
     // so a long queue never eats the interaction view), and the dim status
     // row at the bottom.
-    let queue_h = if app.queue_view_open {
+    // Both pinned strips draw from one budget, in priority order, so their
+    // sum cannot starve the transcript.
+    let queue_want = if app.queue_view_open {
         0
     } else {
-        queue_overlay::strip_height(app, total_h, input_h)
+        queue_overlay::strip_want(app)
     };
-    let layout = build_working_layout(app, input_h, queue_h);
+    let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_pill::want(app));
+    let layout = build_working_layout(app, input_h, footer.queue, footer.fleet);
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints(layout.constraints)
@@ -209,7 +213,7 @@ struct LayoutSlots {
 /// the transcript is the fixed Min(1) remainder. Indices are positions in the
 /// returned constraints vec, so the caller splits once and indexes by them.
 #[allow(clippy::too_many_lines)]
-fn build_working_layout(app: &App, input_h: u16, queue_h: u16) -> WorkingLayout {
+fn build_working_layout(app: &App, input_h: u16, queue_h: u16, fleet_h: u16) -> WorkingLayout {
     let mut constraints: Vec<Constraint> = vec![];
     let banner_h = if app.teammate_view.is_some() {
         3u16
@@ -247,7 +251,6 @@ fn build_working_layout(app: &App, input_h: u16, queue_h: u16) -> WorkingLayout 
         constraints.push(Constraint::Length(10));
         overlay = Some(constraints.len() - 1);
     }
-    let fleet_h = fleet_pill::height(app);
     let fleet = if fleet_h > 0 {
         constraints.push(Constraint::Length(fleet_h));
         Some(constraints.len() - 1)
@@ -290,7 +293,7 @@ fn draw_focus(f: &mut Frame, app: &App) {
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.last_terminal_rows.set(f.area().height);
     let total_h = f.area().height;
-    let queue_h = queue_overlay::strip_height(app, total_h, 0);
+    let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
     let mut constraints: Vec<Constraint> = vec![Constraint::Min(1)];
     let queue_idx = if queue_h > 0 {
         constraints.push(Constraint::Length(queue_h));
@@ -320,7 +323,7 @@ fn draw_scroll(f: &mut Frame, app: &App) {
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.last_terminal_rows.set(f.area().height);
     let total_h = f.area().height;
-    let queue_h = queue_overlay::strip_height(app, total_h, 0);
+    let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
     let mut constraints: Vec<Constraint> = vec![Constraint::Min(1)];
     let queue_idx = if queue_h > 0 {
         constraints.push(Constraint::Length(queue_h));
