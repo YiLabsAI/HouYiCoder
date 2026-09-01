@@ -29,8 +29,5 @@ def test_exact_green():
 
 
 if __name__ == "__main__":
-    g = {k: v for k, v in globals().items() if k.startswith("test_")}
-    for name, fn in g.items():
-        fn()
-        print(f"  ok  {name}")
-    print(f"=== {len(g)} passed ===")
+    from test_runner import run
+    sys.exit(run("app-mut-borrows", dict(globals())))

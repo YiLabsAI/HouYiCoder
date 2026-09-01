@@ -287,15 +287,6 @@ def _check_flat_prefix(
             f"on disk (converted or deleted). Remove this line in the same "
             f"commit that converted the pair, so the ratchet stays honest."
         )
-    # Live baseline entries (backed by a pair still on disk) print so the
-    # stock is visible; stale ones are errors above, not silently tolerated.
-    live = baseline & detected
-    if live:
-        print(
-            f"[flat-prefix] {len(live)} pre-existing pair(s) tolerated "
-            f"(see _FLAT_PREFIX_BASELINE); ratchet down as pairs convert.",
-            file=sys.stderr,
-        )
 
 
 def _jargon_violation(path, lineno, name, kind, errors) -> None:

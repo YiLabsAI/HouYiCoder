@@ -53,8 +53,9 @@ def main() -> int:
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)
+        print(f"\n[app-coupling-tests] {len(failures)} failure(s).", file=sys.stderr)
         return 1
-    print("app-coupling: default-include + explicit-exclude + method-call + unclustered ok")
+    print("[app-coupling-tests] ok")
     return 0
 
 

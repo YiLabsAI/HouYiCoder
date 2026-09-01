@@ -95,8 +95,9 @@ def main() -> int:
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)
+        print(f"\n[comment-block-tests] {len(failures)} failure(s).", file=sys.stderr)
         return 1
-    print("comment-block narrowing: indented-only + doc/col-0 exempt + boundary ok")
+    print("[comment-block-tests] ok")
     return 0
 
 
