@@ -937,12 +937,18 @@ fn fleet_app(n: usize) -> App {
     app
 }
 
-/// Shift+Down on a populated fleet moves the selection off the implicit 0
-/// to row 1; Shift+Up clamps at the top.
+/// Shift+Down from no selection snaps to the top row (not past it); further
+/// presses advance; Shift+Up clamps at the top without wrapping.
 #[test]
 fn test_shift_arrow_moves_fleet() {
     let mut app = fleet_app(3);
     assert!(app.fleet.selected.is_none());
+    handle_working(&mut app, shift_key(KeyCode::Down));
+    assert_eq!(
+        app.fleet.selected,
+        Some(0),
+        "first press snaps to the top row"
+    );
     handle_working(&mut app, shift_key(KeyCode::Down));
     assert_eq!(app.fleet.selected, Some(1));
     handle_working(&mut app, shift_key(KeyCode::Up));

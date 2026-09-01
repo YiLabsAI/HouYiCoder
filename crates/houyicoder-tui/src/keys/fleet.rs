@@ -45,8 +45,10 @@ fn next_selection(cur: Option<usize>, len: usize, delta: i32) -> usize {
     if len == 0 {
         return 0;
     }
-    let base = cur.unwrap_or(0) as i32;
-    (base + delta).clamp(0, (len - 1) as i32) as usize
+    let Some(base) = cur else {
+        return 0;
+    };
+    (base as i32 + delta).clamp(0, (len - 1) as i32) as usize
 }
 
 #[cfg(test)]
@@ -57,7 +59,7 @@ mod tests {
     /// wrapping, including the empty-fleet guard.
     #[test]
     fn test_selection_clamps_at_bounds() {
-        assert_eq!(next_selection(None, 3, 1), 1);
+        assert_eq!(next_selection(None, 3, 1), 0);
         assert_eq!(next_selection(Some(2), 3, 1), 2);
         assert_eq!(next_selection(Some(0), 3, -1), 0);
         assert_eq!(next_selection(None, 3, -1), 0);
