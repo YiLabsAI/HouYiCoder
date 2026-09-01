@@ -25,6 +25,7 @@ pub(super) struct BuiltInToolProvider {
     gate: Arc<dyn ModeGate>,
     undo_stack: Option<Arc<std::sync::Mutex<UndoStack>>>,
     snapshot_store: Option<Arc<SnapshotStore>>,
+    activator: Option<Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>>,
 }
 
 impl BuiltInToolProvider {
@@ -55,7 +56,18 @@ impl BuiltInToolProvider {
             gate,
             undo_stack,
             snapshot_store,
+            activator: None,
         }
+    }
+
+    /// Wire the paths-skill activator into the file-touch tools so a touch
+    /// activates matching conditional skills.
+    pub(super) fn with_activator(
+        mut self,
+        activator: Option<Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>>,
+    ) -> Self {
+        self.activator = activator;
+        self
     }
 
     /// The shared undo stack (cloned into the BashTool; also set on the Runner
@@ -89,19 +101,21 @@ impl ToolProvider for BuiltInToolProvider {
                 self.gate.clone(),
             )));
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(ReadTool::new(session.clone())),
+                Arc::new(ReadTool::new(session.clone()).with_activator(self.activator.clone())),
                 self.gate.clone(),
             )));
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(WriteTool::new(session.clone())),
+                Arc::new(WriteTool::new(session.clone()).with_activator(self.activator.clone())),
                 self.gate.clone(),
             )));
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(EditTool::new(session.clone())),
+                Arc::new(EditTool::new(session.clone()).with_activator(self.activator.clone())),
                 self.gate.clone(),
             )));
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(MultiEditTool::new(session.clone())),
+                Arc::new(
+                    MultiEditTool::new(session.clone()).with_activator(self.activator.clone()),
+                ),
                 self.gate.clone(),
             )));
             v.push(Arc::new(GuardedTool::new(

@@ -35,11 +35,22 @@ pub use bash_tool::BashTool;
 /// Read a file from the sandbox workspace. Read-only ⇒ no approval.
 pub struct ReadTool {
     session: Arc<dyn SandboxSession>,
+    activator: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
 }
 
 impl ReadTool {
     pub fn new(session: Arc<dyn SandboxSession>) -> Self {
-        Self { session }
+        Self {
+            session,
+            activator: None,
+        }
+    }
+    pub fn with_activator(
+        mut self,
+        activator: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
+    ) -> Self {
+        self.activator = activator;
+        self
     }
 }
 
@@ -62,11 +73,16 @@ impl Tool for ReadTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let session = self.session.clone();
+        let activator = self.activator.clone();
         Box::pin(async move {
             let path = input
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::InvalidInput("read: path (string) required".into()))?;
+            // Activate paths-gated skills by intent, before the read.
+            if let Some(a) = &activator {
+                a.activate_for_paths(&[path.to_string()]);
+            }
             let max = input
                 .get("max_bytes")
                 .and_then(|v| v.as_u64())
@@ -112,11 +128,22 @@ fn validate_read_max_bytes(max: usize) -> Result<(), ToolError> {
 /// Write a file in the sandbox workspace. Destructive ⇒ requires approval.
 pub struct WriteTool {
     session: Arc<dyn SandboxSession>,
+    activator: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
 }
 
 impl WriteTool {
     pub fn new(session: Arc<dyn SandboxSession>) -> Self {
-        Self { session }
+        Self {
+            session,
+            activator: None,
+        }
+    }
+    pub fn with_activator(
+        mut self,
+        activator: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
+    ) -> Self {
+        self.activator = activator;
+        self
     }
 }
 
@@ -140,11 +167,16 @@ impl Tool for WriteTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let session = self.session.clone();
+        let activator = self.activator.clone();
         Box::pin(async move {
             let path = input
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::InvalidInput("write: path (string) required".into()))?;
+            // Activate paths-gated skills by intent, before the write.
+            if let Some(a) = &activator {
+                a.activate_for_paths(&[path.to_string()]);
+            }
             let content = input
                 .get("content")
                 .and_then(|v| v.as_str())
@@ -197,11 +229,22 @@ impl Tool for WriteTool {
 /// what changed. Destructive ⇒ approval-gated.
 pub struct EditTool {
     session: Arc<dyn SandboxSession>,
+    activator: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
 }
 
 impl EditTool {
     pub fn new(session: Arc<dyn SandboxSession>) -> Self {
-        Self { session }
+        Self {
+            session,
+            activator: None,
+        }
+    }
+    pub fn with_activator(
+        mut self,
+        activator: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
+    ) -> Self {
+        self.activator = activator;
+        self
     }
 }
 
@@ -234,11 +277,16 @@ impl Tool for EditTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let session = self.session.clone();
+        let activator = self.activator.clone();
         Box::pin(async move {
             let path = input
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::InvalidInput("edit: path (string) required".into()))?;
+            // Activate paths-gated skills by intent, before the edit.
+            if let Some(a) = &activator {
+                a.activate_for_paths(&[path.to_string()]);
+            }
             let old = input
                 .get("old_string")
                 .and_then(|v| v.as_str())
@@ -282,11 +330,22 @@ impl Tool for EditTool {
 /// TODO). Returns a unified diff of original→final.
 pub struct MultiEditTool {
     session: Arc<dyn SandboxSession>,
+    activator: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
 }
 
 impl MultiEditTool {
     pub fn new(session: Arc<dyn SandboxSession>) -> Self {
-        Self { session }
+        Self {
+            session,
+            activator: None,
+        }
+    }
+    pub fn with_activator(
+        mut self,
+        activator: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
+    ) -> Self {
+        self.activator = activator;
+        self
     }
 }
 
@@ -323,10 +382,15 @@ impl Tool for MultiEditTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let session = self.session.clone();
+        let activator = self.activator.clone();
         Box::pin(async move {
             let path = input.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
                 ToolError::InvalidInput("multiedit: path (string) required".into())
             })?;
+            // Activate paths-gated skills by intent, before the edit.
+            if let Some(a) = &activator {
+                a.activate_for_paths(&[path.to_string()]);
+            }
             let edits = input
                 .get("edits")
                 .and_then(|v| v.as_array())
@@ -479,7 +543,7 @@ async fn apply_edit(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_one, should_skip_write, validate_read_max_bytes};
+    use super::*;
 
     #[test]
     fn test_apply_one_single_replace() {
@@ -560,5 +624,97 @@ mod tests {
         let err = apply_one(&after_first, "nonexistent", "x", false);
         assert!(err.is_err(), "second edit must fail");
         assert_eq!(original, "fn foo() { 1 }\n", "original is unchanged");
+    }
+
+    /// A stub session that satisfies read/write without touching disk.
+    struct StubSession;
+    impl houyicoder_api::sandbox::SandboxSession for StubSession {
+        fn exec_with_config(
+            &self,
+            _command: &str,
+            _config: houyicoder_context::ExecConfig,
+        ) -> PFut<'_, Result<houyicoder_context::ExecResult, houyicoder_context::SandboxError>>
+        {
+            Box::pin(async { Err(houyicoder_context::SandboxError::Unsupported("test".into())) })
+        }
+        fn read_file(
+            &self,
+            _path: &str,
+            _max_bytes: usize,
+        ) -> PFut<'_, Result<Vec<u8>, houyicoder_context::SandboxError>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn write_file(
+            &self,
+            _path: &str,
+            _content: Vec<u8>,
+        ) -> PFut<'_, Result<(), houyicoder_context::SandboxError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn workspace_root(&self) -> Arc<std::path::Path> {
+            Arc::from(std::path::PathBuf::from("/"))
+        }
+    }
+
+    /// An activator that records the paths it is asked to activate on.
+    struct CountingActivator {
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+    impl crate::agent::conditional_activation::ConditionalSkillActivator for CountingActivator {
+        fn activate_for_paths(&self, file_paths: &[String]) -> Vec<String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .extend(file_paths.iter().cloned());
+            Vec::new()
+        }
+        fn is_active(&self, _name: &str) -> bool {
+            false
+        }
+    }
+
+    /// Every file-touch tool activates paths-gated skills by intent, before
+    /// the file op. The edit/multiedit calls error on the empty stub read
+    /// (no match), but activation has already run.
+    #[tokio::test]
+    async fn test_file_tools_activate() {
+        let session: Arc<dyn houyicoder_api::sandbox::SandboxSession> = Arc::new(StubSession);
+        let activator = Arc::new(CountingActivator {
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let a = activator.clone();
+        let ctx = ToolCtx::new("c");
+        super::ReadTool::new(session.clone())
+            .with_activator(Some(a.clone()))
+            .execute(ctx.clone(), json!({"path":"src/a.rs"}))
+            .await
+            .unwrap();
+        super::WriteTool::new(session.clone())
+            .with_activator(Some(a.clone()))
+            .execute(ctx.clone(), json!({"path":"src/b.rs","content":"x"}))
+            .await
+            .unwrap();
+        super::EditTool::new(session.clone())
+            .with_activator(Some(a.clone()))
+            .execute(
+                ctx.clone(),
+                json!({"path":"src/c.rs","old_string":"x","new_string":"y"}),
+            )
+            .await
+            .ok();
+        super::MultiEditTool::new(session)
+            .with_activator(Some(a))
+            .execute(
+                ctx,
+                json!({"path":"src/d.rs","edits":[{"old_string":"x","new_string":"y"}]}),
+            )
+            .await
+            .ok();
+        let calls = activator.calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            vec!["src/a.rs", "src/b.rs", "src/c.rs", "src/d.rs"],
+            "each tool activated on its path: {calls:?}"
+        );
     }
 }

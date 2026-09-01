@@ -396,14 +396,13 @@ pub(crate) fn assemble(
         &mut tools,
         &gate_dyn,
     );
-    // Assemble tools from providers. The composition root gathers providers
-    // (built-in here; an external crate adds its own ToolProvider) and
-    // registers each tool, so adding a tool set is adding a provider, not
-    // editing the registry call list. TodoWriteTool is registered above
-    // (it carries its own state and needs no sandbox); the rest come from
-    // providers.
+    // Assemble tools from providers (built-in here; an external crate adds
+    // its own). TodoWriteTool is registered above; the rest come from here.
+    let (skill_registry, skill_conditional) =
+        hooks::build_skill_registry_and_activator(workspace.as_deref());
     let builtin =
-        built_in_tools::BuiltInToolProvider::new(sandbox_session.clone(), gate_dyn.clone());
+        built_in_tools::BuiltInToolProvider::new(sandbox_session.clone(), gate_dyn.clone())
+            .with_activator(Some(std::sync::Arc::clone(&skill_conditional)));
     let undo_handles = builtin.undo_handles();
     let mut providers: Vec<Box<dyn houyicoder_api::tool::ToolProvider>> = vec![Box::new(builtin)];
     // External tool servers (block-on-init): spawn each subprocess via the
@@ -480,12 +479,10 @@ pub(crate) fn assemble(
     // discovers SKILL.md files across the scan paths at startup. Not
     // sandbox-backed (it reads skill files directly), so registered directly
     // like the recall tool. The workspace anchors the project-level skill
-    // Skill registry + conditional activator; the SkillTool registers below.
-    let (skill_registry, skill_conditional) =
-        hooks::build_skill_registry_and_activator(workspace.as_deref());
     tools.register(Arc::new(
         SkillTool::new(std::sync::Arc::clone(&skill_registry))
-            .with_registrar(std::sync::Arc::clone(&skill_registrar)),
+            .with_registrar(std::sync::Arc::clone(&skill_registrar))
+            .with_activator(Some(std::sync::Arc::clone(&skill_conditional))),
     ));
     // The agent tool delegates a sub-task to a spawned child. Like the recall
     // tool it is not sandbox-backed; it resolves the requested type against

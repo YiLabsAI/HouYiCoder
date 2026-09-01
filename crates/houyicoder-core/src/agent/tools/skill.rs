@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 pub struct SkillTool {
     registry: Arc<dyn SkillRegistry>,
     registrar: Option<Arc<super::super::SkillHookRegistrar>>,
+    activator: Option<Arc<dyn super::super::conditional_activation::ConditionalSkillActivator>>,
 }
 
 impl SkillTool {
@@ -35,6 +36,7 @@ impl SkillTool {
         Self {
             registry,
             registrar: None,
+            activator: None,
         }
     }
 
@@ -43,6 +45,17 @@ impl SkillTool {
     /// that do not exercise hooks; the execute path skips registration.
     pub fn with_registrar(mut self, registrar: Arc<super::super::SkillHookRegistrar>) -> Self {
         self.registrar = Some(registrar);
+        self
+    }
+
+    /// Wire the paths-skill activator so a conditional skill refuses until a
+    /// matching file touch activates it. Unwired in tests; the gate then
+    /// passes (feature off).
+    pub fn with_activator(
+        mut self,
+        activator: Option<Arc<dyn super::super::conditional_activation::ConditionalSkillActivator>>,
+    ) -> Self {
+        self.activator = activator;
         self
     }
 }
@@ -89,6 +102,7 @@ impl Tool for SkillTool {
     fn execute(&self, ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let registry = Arc::clone(&self.registry);
         let registrar = self.registrar.clone();
+        let activator = self.activator.clone();
         Box::pin(async move {
             let params: SkillInput = serde_json::from_value(input)
                 .map_err(|e| ToolError::InvalidInput(format!("skill: {e}")))?;
@@ -107,6 +121,22 @@ impl Tool for SkillTool {
                 return Err(ToolError::Failed(format!(
                     "skill {} is disabled for model invocation",
                     params.skill
+                )));
+            }
+            // Gate on paths: a conditional skill refuses until a file touch
+            // activates it. unwrap_or(true) means unwired = feature off =
+            // pass, not fail-closed.
+            let paths = registry.paths_for(&params.skill);
+            if !paths.is_empty()
+                && !activator
+                    .as_ref()
+                    .map(|a| a.is_active(&params.skill))
+                    .unwrap_or(true)
+            {
+                return Err(ToolError::Failed(format!(
+                    "skill {} is conditional; touch a matching file to activate: {}",
+                    params.skill,
+                    paths.join(", ")
                 )));
             }
             let body = registry
@@ -493,5 +523,105 @@ mod tests {
             !tool.requires_approval_for(&json!({"skill":"unknown"})),
             "unknown skill does not ask (NotFound is clearer)"
         );
+    }
+
+    /// A registry carrying one paths-gated skill.
+    struct PathsRegistry;
+    impl SkillRegistry for PathsRegistry {
+        fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+            vec![SkillDescriptor {
+                name: "gated".to_string(),
+                description: "d".into(),
+                when_to_use: None,
+                argument_hint: None,
+                disable_model_invocation: false,
+                user_invocable: true,
+                body_token_estimate: 0,
+                allowed_tools: Vec::new(),
+            }]
+        }
+        fn find(&self, name: &str) -> Option<SkillDescriptor> {
+            (name == "gated").then(|| SkillDescriptor {
+                name: "gated".to_string(),
+                description: "d".into(),
+                when_to_use: None,
+                argument_hint: None,
+                disable_model_invocation: false,
+                user_invocable: true,
+                body_token_estimate: 0,
+                allowed_tools: Vec::new(),
+            })
+        }
+        fn prepare_body(
+            &self,
+            _name: &str,
+            _args: Option<&str>,
+            _session_id: Option<&str>,
+        ) -> Result<String, SkillError> {
+            Ok("body".into())
+        }
+        fn paths_for(&self, name: &str) -> Vec<String> {
+            if name == "gated" {
+                vec!["src".to_string()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    /// A stub activator with a fixed active set.
+    struct StubActivator {
+        active: std::sync::Mutex<std::collections::HashSet<String>>,
+    }
+    impl StubActivator {
+        fn new_empty() -> Self {
+            Self {
+                active: std::sync::Mutex::new(std::collections::HashSet::new()),
+            }
+        }
+        fn with_active(name: &str) -> Self {
+            let s = Self::new_empty();
+            s.active.lock().unwrap().insert(name.to_string());
+            s
+        }
+    }
+    impl crate::agent::conditional_activation::ConditionalSkillActivator for StubActivator {
+        fn activate_for_paths(&self, _file_paths: &[String]) -> Vec<String> {
+            Vec::new()
+        }
+        fn is_active(&self, name: &str) -> bool {
+            self.active.lock().unwrap().contains(name)
+        }
+    }
+
+    /// A conditional skill refuses until activated; the message names the
+    /// paths so the model knows what to touch.
+    #[tokio::test]
+    async fn test_conditional_refuses_until_active() {
+        let reg = Arc::new(PathsRegistry);
+        let tool = SkillTool::new(reg).with_activator(Some(Arc::new(StubActivator::new_empty())));
+        let err = tool
+            .execute(ctx(), json!({"skill": "gated"}))
+            .await
+            .unwrap_err();
+        match err {
+            ToolError::Failed(m) => {
+                assert!(m.contains("conditional"), "{m}");
+                assert!(m.contains("src"), "message names paths: {m}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_conditional_passes_when_active() {
+        let reg = Arc::new(PathsRegistry);
+        let tool =
+            SkillTool::new(reg).with_activator(Some(Arc::new(StubActivator::with_active("gated"))));
+        let out = tool
+            .execute(ctx(), json!({"skill": "gated"}))
+            .await
+            .unwrap();
+        assert_eq!(out["skill"], "gated");
     }
 }

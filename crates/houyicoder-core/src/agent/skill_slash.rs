@@ -110,6 +110,21 @@ impl Runner {
                  Ask the assistant to use the {name} skill for you."
             ));
         }
+        // Gate on paths: a conditional skill refuses until a file touch
+        // activates it. unwrap_or(true) means unwired = feature off = pass.
+        let paths = registry.paths_for(&name);
+        if !paths.is_empty()
+            && !self
+                .conditional
+                .as_ref()
+                .map(|a| a.is_active(&name))
+                .unwrap_or(true)
+        {
+            return SkillSlashOutcome::Refused(format!(
+                "skill {name} is conditional; touch a matching file to activate: {}",
+                paths.join(", ")
+            ));
+        }
         // Determine trust: a body from a non-managed/user source is
         // untrusted so the projection frames it as data, not trusted
         // instruction. Shared with the Skill tool path so framing does
@@ -140,6 +155,7 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::ConditionalSkillActivator;
 
     #[test]
     fn test_parse_plain_skill() {
@@ -523,5 +539,99 @@ mod tests {
             1,
             "invoke registered the hook"
         );
+    }
+
+    /// A registry with one paths-gated, user-invocable skill.
+    struct PathsSlashRegistry;
+    impl SkillRegistry for PathsSlashRegistry {
+        fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+            vec![paths_descriptor("gated")]
+        }
+        fn find(&self, name: &str) -> Option<SkillDescriptor> {
+            (name == "gated").then(|| paths_descriptor("gated"))
+        }
+        fn prepare_body(
+            &self,
+            _name: &str,
+            _args: Option<&str>,
+            _sid: Option<&str>,
+        ) -> Result<String, SkillError> {
+            Ok("gated body".into())
+        }
+        fn paths_for(&self, name: &str) -> Vec<String> {
+            if name == "gated" {
+                vec!["src".to_string()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    fn paths_descriptor(name: &str) -> SkillDescriptor {
+        SkillDescriptor {
+            name: name.to_string(),
+            description: "d".into(),
+            when_to_use: None,
+            argument_hint: None,
+            disable_model_invocation: false,
+            user_invocable: true,
+            body_token_estimate: 0,
+            allowed_tools: Vec::new(),
+        }
+    }
+
+    fn runner_with_paths(activator: Arc<dyn crate::agent::ConditionalSkillActivator>) -> Runner {
+        let store: Arc<dyn houyicoder_api::session::SessionLog> =
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        Runner::with_shared_store(
+            store,
+            Arc::new(crate::provider::test_support::FakeProvider::text("done")),
+            crate::agent::ToolRegistry::new(),
+            crate::agent::runner_config::RunnerConfig {
+                model: "test".into(),
+                instructions: String::new(),
+                max_turns: 5,
+                max_output_tokens: 8_000,
+                retry: Retry::default(),
+            },
+        )
+        .with_skill_registry(Arc::new(PathsSlashRegistry))
+        .with_conditional(activator)
+    }
+
+    /// A conditional skill refuses via slash until activated; the message
+    /// names the paths.
+    #[tokio::test]
+    async fn test_slash_conditional_refuses() {
+        let reg: Arc<dyn houyicoder_api::skill::SkillRegistry> = Arc::new(PathsSlashRegistry);
+        let cwd = std::env::temp_dir().join("houyi-slash-refuse");
+        let activator = Arc::new(crate::agent::ConditionalActivation::new(reg, cwd));
+        let runner = runner_with_paths(activator);
+        let outcome = runner.resolve_skill_slash(SessionId::new(), "/gated").await;
+        match outcome {
+            SkillSlashOutcome::Refused(m) => {
+                assert!(m.contains("conditional"), "{m}");
+                assert!(m.contains("src"), "message names paths: {m}");
+            }
+            other => panic!("expected Refused, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_slash_conditional_passes() {
+        let reg: Arc<dyn houyicoder_api::skill::SkillRegistry> = Arc::new(PathsSlashRegistry);
+        let cwd = std::env::temp_dir().join("houyi-slash-pass");
+        let activator = Arc::new(crate::agent::ConditionalActivation::new(reg, cwd));
+        // Activate via a matching file, then slash reaches the body.
+        activator.activate_for_paths(&["src/foo.rs".to_string()]);
+        let runner = runner_with_paths(activator);
+        let outcome = runner.resolve_skill_slash(SessionId::new(), "/gated").await;
+        match outcome {
+            SkillSlashOutcome::Prepared { name, body, .. } => {
+                assert_eq!(name, "gated");
+                assert!(body.contains("gated body"), "{body}");
+            }
+            other => panic!("expected Prepared, got {other:?}"),
+        }
     }
 }
