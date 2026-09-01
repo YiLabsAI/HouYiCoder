@@ -125,6 +125,17 @@ pub trait SkillRegistry: Send + Sync {
     fn hooks_for(&self, _name: &str) -> Vec<SkillHookSpec> {
         Vec::new()
     }
+
+    /// Normalized frontmatter paths for a skill (gitignore-style globs the
+    /// skill activates on when a touched file matches). Empty means the
+    /// skill is unconditional (always visible to the model). The conditional
+    /// activation is session-scoped: the listing step filters these out
+    /// until a file touch matches, then they stay visible for the session.
+    /// Kept off SkillDescriptor so the descriptor stays under the field-count
+    /// warn line, mirroring hooks_for. The default returns empty.
+    fn paths_for(&self, _name: &str) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// A model-invocable descriptor paired with where it was discovered, for

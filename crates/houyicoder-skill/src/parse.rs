@@ -74,7 +74,7 @@ pub fn parse_skill(
     let user_invocable = field_bool(&frontmatter, "user-invocable")
         .or_else(|| field_bool(&frontmatter, "userInvocable"))
         .unwrap_or(true);
-    let paths = field_string_list(&frontmatter, "paths").unwrap_or_default();
+    let paths = parse_skill_paths(&frontmatter);
 
     let context_str = field_string(&frontmatter, "context");
     let context = match context_str.as_deref() {
@@ -220,6 +220,132 @@ fn coerce_to_string(v: &serde_yaml::Value) -> Option<String> {
         serde_yaml::Value::Bool(b) => Some(b.to_string()),
         _ => None,
     }
+}
+
+/// Normalize the paths frontmatter into gitignore-style glob patterns.
+/// The raw value is a comma-separated string or a YAML list; brace
+/// expansion turns src/*.{ts,tsx} into two patterns. A trailing /** is
+/// stripped because the gitignore matcher treats a bare directory name as
+/// matching itself and all descendants. If every pattern reduces to **
+/// (match-all) or the list is empty, the skill is unconditional (empty =
+/// always visible). A malformed value silently yields an empty vec —
+/// fail-open to visible. This direction is intentional: a skill that
+/// narrows its own visibility with a broken pattern widening to
+/// always-visible is the safe default since skill visibility defaults to
+/// on. C1 pins this with a test so a future change cannot silently flip
+/// it to fail-closed.
+fn parse_skill_paths(map: &serde_yaml::Mapping) -> Vec<String> {
+    let Some(value) = map.get(serde_yaml::Value::String("paths".into())) else {
+        return Vec::new();
+    };
+    let mut patterns: Vec<String> = Vec::new();
+    for raw in collect_paths_strings(value) {
+        for part in split_comma_brace_aware(&raw) {
+            if part.is_empty() {
+                continue;
+            }
+            patterns.extend(expand_braces(&part));
+        }
+    }
+    for p in &mut patterns {
+        if p.ends_with("/**") {
+            p.truncate(p.len() - "/**".len());
+        }
+    }
+    patterns.retain(|p| !p.is_empty());
+    if patterns.iter().all(|p| p == "**") {
+        return Vec::new();
+    }
+    patterns
+}
+
+/// Collect the raw path strings from a paths value, recursing into a YAML
+/// sequence so a nested list flattens the way an array flatMap does. A
+/// scalar yields a single string.
+fn collect_paths_strings(value: &serde_yaml::Value) -> Vec<String> {
+    match value {
+        serde_yaml::Value::Sequence(seq) => seq.iter().flat_map(collect_paths_strings).collect(),
+        v => coerce_to_string(v).into_iter().collect(),
+    }
+}
+
+/// Split a string on commas while respecting brace depth, so {a,b},c keeps
+/// the brace group intact. Each part is trimmed; empty parts are dropped.
+fn split_comma_brace_aware(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    for ch in s.chars() {
+        match ch {
+            '{' => {
+                depth += 1;
+                current.push(ch);
+            }
+            '}' => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        parts.push(trimmed);
+    }
+    parts
+}
+
+/// Expand brace groups into one pattern per combination. src/*.{ts,tsx}
+/// becomes two patterns; {a,b}/{c,d} becomes the four crosses. Nested and
+/// multiple groups expand left-to-right via recursion. An unmatched brace
+/// (no closing brace) is treated as a literal character.
+fn expand_braces(pattern: &str) -> Vec<String> {
+    let chars: Vec<char> = pattern.chars().collect();
+    expand_braces_chars(&chars)
+}
+
+fn expand_braces_chars(chars: &[char]) -> Vec<String> {
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '{' {
+            let mut depth = 1;
+            let mut j = i + 1;
+            while j < chars.len() && depth > 0 {
+                match chars[j] {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if depth == 0 {
+                let prefix: String = chars[..i].iter().collect();
+                let group: String = chars[i + 1..j].iter().collect();
+                let suffix: &[char] = &chars[j + 1..];
+                let options = split_comma_brace_aware(&group);
+                let mut results = Vec::new();
+                for opt in options {
+                    let mut combined: Vec<char> = prefix.chars().collect();
+                    combined.extend(opt.chars());
+                    combined.extend(suffix.iter().copied());
+                    results.extend(expand_braces_chars(&combined));
+                }
+                return results;
+            }
+        }
+        i += 1;
+    }
+    vec![chars.iter().collect()]
 }
 
 fn recover_scalar_fields(yaml_str: &str) -> serde_yaml::Mapping {
@@ -419,5 +545,110 @@ mod tests {
             def.disable_model_invocation,
             "disable-model-invocation preserved through YAML recovery"
         );
+    }
+
+    fn paths_map(value: serde_yaml::Value) -> serde_yaml::Mapping {
+        let mut m = serde_yaml::Mapping::new();
+        m.insert(serde_yaml::Value::String("paths".into()), value);
+        m
+    }
+
+    #[test]
+    fn test_paths_comma_split() {
+        let map = paths_map(serde_yaml::Value::String("src, docs".into()));
+        assert_eq!(
+            parse_skill_paths(&map),
+            vec!["src".to_string(), "docs".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_paths_yaml_list() {
+        let seq = serde_yaml::Value::Sequence(vec![
+            serde_yaml::Value::String("src".into()),
+            serde_yaml::Value::String("docs".into()),
+        ]);
+        let map = paths_map(seq);
+        assert_eq!(
+            parse_skill_paths(&map),
+            vec!["src".to_string(), "docs".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_paths_brace_single() {
+        let map = paths_map(serde_yaml::Value::String("src/*.{ts,tsx}".into()));
+        assert_eq!(
+            parse_skill_paths(&map),
+            vec!["src/*.ts".to_string(), "src/*.tsx".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_paths_brace_cross() {
+        // {a,b}/{c,d} expands to the four crosses, left-to-right.
+        let map = paths_map(serde_yaml::Value::String("{a,b}/{c,d}".into()));
+        assert_eq!(
+            parse_skill_paths(&map),
+            vec![
+                "a/c".to_string(),
+                "a/d".to_string(),
+                "b/c".to_string(),
+                "b/d".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_paths_strip_suffix() {
+        // A bare directory name matches itself + descendants under
+        // gitignore semantics, so the trailing /** is stripped at parse.
+        let map = paths_map(serde_yaml::Value::String("src/**".into()));
+        assert_eq!(parse_skill_paths(&map), vec!["src".to_string()]);
+    }
+
+    #[test]
+    fn test_paths_allstar_unconditional() {
+        // A lone ** matches everything, so the skill is unconditional
+        // (empty = always visible).
+        let map = paths_map(serde_yaml::Value::String("**".into()));
+        assert!(parse_skill_paths(&map).is_empty());
+        let seq = serde_yaml::Value::Sequence(vec![
+            serde_yaml::Value::String("**".into()),
+            serde_yaml::Value::String("**".into()),
+        ]);
+        let map = paths_map(seq);
+        assert!(parse_skill_paths(&map).is_empty());
+    }
+
+    #[test]
+    fn test_paths_missing_unconditional() {
+        let map = serde_yaml::Mapping::new();
+        assert!(parse_skill_paths(&map).is_empty());
+    }
+
+    /// A malformed paths value (a mapping where a string or list is
+    /// expected) fails open to empty — the skill becomes unconditional
+    /// (always visible). This is intentional: skill visibility defaults to
+    /// on, and a broken pattern widening to always-visible is the safe
+    /// direction. Pinning it here stops a future change from silently
+    /// flipping to fail-closed.
+    #[test]
+    fn test_paths_malformed_open() {
+        let nested = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+        let map = paths_map(nested);
+        assert!(
+            parse_skill_paths(&map).is_empty(),
+            "malformed paths value must fail open to unconditional"
+        );
+    }
+
+    /// An unmatched brace (no closing brace) is treated as a literal
+    /// character — no expansion, the pattern survives as-is. Pins the
+    /// documented behavior so a refactor cannot silently change it.
+    #[test]
+    fn test_paths_unmatched_brace() {
+        let map = paths_map(serde_yaml::Value::String("foo{bar".into()));
+        assert_eq!(parse_skill_paths(&map), vec!["foo{bar".to_string()]);
     }
 }

@@ -265,6 +265,19 @@ impl SkillRegistry for SkillRegistryImpl {
         self.hooks.get(i).cloned().unwrap_or_default()
     }
 
+    fn paths_for(&self, name: &str) -> Vec<String> {
+        // The normalized globs live on the parsed definition (parse_skill_paths
+        // runs at load). A positional lookup mirrors hooks_for; empty for an
+        // unknown skill or one with no paths (unconditional = always visible).
+        let Some(i) = self.descriptors.iter().position(|d| d.name == name) else {
+            return Vec::new();
+        };
+        self.skills
+            .get(i)
+            .map(|s| s.paths.clone())
+            .unwrap_or_default()
+    }
+
     fn list_with_origin(&self) -> Vec<SkillSnapshot> {
         // Not filtered by disable-model-invocation: this feeds the /skills
         // visibility surface, where a disabled skill must appear marked not
