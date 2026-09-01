@@ -96,6 +96,7 @@ pub fn app() -> App {
         session: None,
         pending_permission_req_id: std::cell::Cell::new(None),
         agent_busy: false,
+        notifications: crate::notifications::NotificationState::default(),
         terminal_focused: true,
         active_run_req_id: std::cell::Cell::new(None),
         run_started: None,

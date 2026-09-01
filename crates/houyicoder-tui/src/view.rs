@@ -31,6 +31,7 @@ pub mod skills_pane;
 pub mod spinner;
 pub mod status;
 pub mod teammate_view;
+pub mod toast;
 pub mod todo_list;
 pub mod trajectory_pane;
 pub mod trust;

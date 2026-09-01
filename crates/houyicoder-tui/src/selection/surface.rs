@@ -78,7 +78,7 @@ pub fn finish_release(
     rows: &[(u8, String)],
     clipboard: &dyn ClipboardWriter,
     persist: bool,
-) {
+) -> Option<String> {
     sel.finish();
     sel.cursor = None;
     if sel.drag_moved {
@@ -86,15 +86,20 @@ pub fn finish_release(
     }
     if sel.is_click_only() && sel.span_origin.is_none() {
         sel.clear();
-    } else {
-        let text = extract_text(rows, rect, sel);
-        if !text.trim().is_empty() {
-            clipboard.write(&text);
-        }
+        return None;
+    }
+    let text = extract_text(rows, rect, sel);
+    if !text.trim().is_empty() {
+        clipboard.write(&text);
         if !persist {
             sel.clear();
         }
+        return Some(text);
     }
+    if !persist {
+        sel.clear();
+    }
+    None
 }
 
 /// Cancel a click-only drag before a scroll. A left-down always starts a drag
@@ -196,7 +201,7 @@ pub trait Surface {
     fn handle_up(&mut self) {
         let persist = self.persist();
         let p = self.parts();
-        finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist);
+        let _text = finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist);
     }
     fn handle_moved(&mut self) {
         self.handle_up();
@@ -205,16 +210,18 @@ pub trait Surface {
     /// Copy the current selection without finishing or clearing it (the
     /// ctrl+C path). No-op when there is no range. The highlight stays as an
     /// independent visual affordance — it clears on Esc or the next click,
-    /// not on copy.
-    fn copy_current(&mut self) {
+    /// not on copy. Returns the copied text so the caller can show a toast.
+    fn copy_current(&mut self) -> Option<String> {
         let p = self.parts();
         if !p.sel.has_selection() {
-            return;
+            return None;
         }
         let text = extract_text(&p.rows, p.rect, p.sel);
-        if !text.trim().is_empty() {
-            p.clipboard.write(&text);
+        if text.trim().is_empty() {
+            return None;
         }
+        p.clipboard.write(&text);
+        Some(text)
     }
 }
 
@@ -227,7 +234,7 @@ fn down_body<S: Surface + ?Sized>(s: &mut S, x: u16, y: u16) {
     let (col, cr) = s.to_content(x, y);
     let p = s.parts();
     if was_dragging {
-        finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist);
+        let _text = finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist);
     }
     let count = p.sel.on_click(x, y);
     p.sel.cursor = Some((x, y));
@@ -349,8 +356,18 @@ impl Surface for TranscriptSurface<'_> {
         {
             return;
         }
-        let p = self.parts();
-        finish_release(p.sel, p.rect, &p.rows, p.clipboard, true);
+        // Scope p so its split-borrows of app fields (selection, clipboard,
+        // rows) release before we touch app.notifications (a different field).
+        let copied = {
+            let p = self.parts();
+            finish_release(p.sel, p.rect, &p.rows, p.clipboard, true)
+        };
+        if let Some(text) = copied {
+            let path = crate::selection::get_clipboard_path();
+            self.app
+                .notifications
+                .add(crate::notifications::copy_toast(&text, path));
+        }
     }
 }
 

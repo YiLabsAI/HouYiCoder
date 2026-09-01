@@ -40,6 +40,7 @@ pub mod input;
 pub mod keys;
 mod list_pane_state;
 pub mod markdown;
+pub mod notifications;
 pub mod palette;
 pub mod paste;
 pub mod pending_queue;

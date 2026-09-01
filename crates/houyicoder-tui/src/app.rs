@@ -96,6 +96,9 @@ pub fn run_with_runner(
         if app.fleet.retire_completed(retain_viewed) {
             dirty = true;
         }
+        if app.notifications.tick(std::time::Instant::now()) {
+            dirty = true;
+        }
         if dirty || app.agent_busy {
             // Progressive prepend: project older frames if the user scrolled
             // to the top of the projected region. Must run before draw (it
@@ -496,7 +499,13 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         // independent visual affordance (it clears on Esc or the next click,
         // not on copy). With no selection, ctrl+C quits.
         if app.selection.has_selection() {
-            crate::selection::surface::TranscriptSurface { app: &mut *app }.copy_current();
+            let copied =
+                crate::selection::surface::TranscriptSurface { app: &mut *app }.copy_current();
+            if let Some(text) = copied {
+                let path = crate::selection::get_clipboard_path();
+                app.notifications
+                    .add(crate::notifications::copy_toast(&text, path));
+            }
             return;
         }
         app.quit = true;

@@ -284,6 +284,9 @@ pub struct App {
     /// True while a run or resume is in flight, so a second Enter queues
     /// instead of stacking a second run.
     pub agent_busy: bool,
+    /// Transient notification toast: one-line auto-expiring hint above the
+    /// input box (copy feedback, exit-again prompt). Poll-driven expiry.
+    pub notifications: crate::notifications::NotificationState,
     /// Whether the terminal window has focus (FocusGained/FocusLost events).
     /// The input cursor (invert) gates on this so the caret hides when the
     /// window is unfocused, following a renderPlaceholder terminal

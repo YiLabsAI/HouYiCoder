@@ -19,7 +19,7 @@ use ratatui::{
 use crate::state::{App, Pane, ViewportMode};
 use crate::view::{
     artifact, capability, hooks_pane, input_bar, memory_pane, model_pane, palette, queue_overlay,
-    resume_picker, skills_pane, status, trajectory_pane, worktree_pane,
+    resume_picker, skills_pane, status, toast, trajectory_pane, worktree_pane,
 };
 
 mod flat_transcript;
@@ -100,6 +100,9 @@ fn draw_working(f: &mut Frame, app: &App) {
         super::teammate_view::draw_banner(f, app, outer[i]);
     }
     draw_main(f, outer[layout.transcript_idx], app);
+    if !pane_hides_input {
+        toast::draw_toast(f, outer[layout.transcript_idx], app);
+    }
     if let Some(i) = layout.slots.approval {
         super::approval::draw(f, app, outer[i]);
     }
