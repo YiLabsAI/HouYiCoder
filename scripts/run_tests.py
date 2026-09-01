@@ -33,6 +33,8 @@ import signal
 import subprocess
 import sys
 
+from cov_lcov import cov_target_dir
+
 # FULL needs a higher default ceiling (heavier subprocess E2E), but both
 # paths honor GATE_SECS so CI can tune the budget per step (ci.yml sets 120
 # for the unit step, 300 for the integration step). The old code hardcoded
@@ -91,31 +93,9 @@ use_cov = shutil.which("cargo-llvm-cov") is not None and not use_nextest
 # checkout so all worktrees reuse the same instrumented binaries — a new
 # worktree's first make check is warm, not a cold full-cov rebuild.
 # Cargo's incremental cache is content-addressed, so differing source
-# states across worktrees re-compile only the changed crates.
-def _resolve_cov_target_dir():
-    fallback = os.path.join("target", "cov")
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if out.returncode != 0:
-            return fallback
-        common = out.stdout.strip()
-        if not os.path.isabs(common):
-            repo_root = os.path.dirname(
-                os.path.dirname(os.path.abspath(__file__))
-            )
-            common = os.path.normpath(os.path.join(repo_root, common))
-        shared = os.path.join(common, "target", "cov")
-        if os.path.isdir(os.path.dirname(shared)):
-            return shared
-        return fallback
-    except (OSError, subprocess.SubprocessError):
-        return fallback
-
-
-COV_TARGET_DIR = _resolve_cov_target_dir()
+# states across worktrees re-compile only the changed crates. The path
+# is resolved in cov_lcov so the writer here + the diff-cov reader agree.
+COV_TARGET_DIR = cov_target_dir()
 LCOV_PATH = os.path.join(COV_TARGET_DIR, "houyi-cov.lcov")
 
 # Scope the coverage pass to the CHANGED crates only (--package), not the
@@ -151,6 +131,11 @@ def drop_stale_profraw():
 
     Only the samples go here. The compiled artifacts stay, so this costs
     nothing but the re-run that was going to happen anyway.
+
+    The cache is shared across worktrees, so this walks the shared dir;
+    a single-runner assumption holds here (concurrent make check across
+    worktrees would delete a sibling's in-flight samples). Per-run profraw
+    isolation for the parallel case is follow-up.
     """
     if not os.path.isdir(COV_TARGET_DIR):
         return
@@ -217,6 +202,13 @@ env = {
     "HOUYICODER_FAST_TOKENS": "1",
     "HOUYICODER_SANDBOX_NO_ENFORCE": "1",
 }
+# sccache caches rustc artifacts -- including the -Cinstrument-coverage
+# instrumented .rlib, in its own namespace -- across cleans + worktrees, so a
+# cold target/cov rebuild hits the cache instead of recompiling every dep.
+# No-op when sccache is absent; honors an explicit RUSTC_WRAPPER from the
+# environment so a user override (or a different wrapper) is not clobbered.
+if shutil.which("sccache") and "RUSTC_WRAPPER" not in env:
+    env["RUSTC_WRAPPER"] = "sccache"
 # Route the instrumented build to the isolated cov cache so it does not
 # displace the plain dev cache (see COV_TARGET_DIR above). Plain
 # cargo test (the clean-tree branch) keeps the default target/.

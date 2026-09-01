@@ -47,9 +47,12 @@ THRESHOLD=${COV_THRESHOLD:-85}
 # Isolate the instrumented build cache (target/cov) so it does not thrash the
 # plain dev cache. Clean profraw only (not the build): llvm-cov merges every
 # sample it finds, and the instrumented binary is cargo-dep-tracked so only the
-# samples go stale.
-COV_DIR="target/cov"
+# samples go stale. Resolve the shared cache dir from cov_lcov so this gate
+# agrees with run_tests.py + check_diff_coverage.py (writer/reader one path).
+COV_DIR="$(python3 scripts/cov_lcov.py --cov-dir 2>/dev/null || echo target/cov)"
 LCOV="$COV_DIR/houyi-cov.lcov"
+# Single-runner assumption: COV_DIR is shared, so this delete could hit a
+# sibling worktree's in-flight samples under concurrent make check.
 find "$COV_DIR" -name '*.profraw' -delete 2>/dev/null || true
 # --locked: this runs as its own CI job in parallel with the lint/test jobs,
 # so it cannot rely on an earlier `cargo check --locked` in the same job to

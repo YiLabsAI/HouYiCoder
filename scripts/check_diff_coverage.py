@@ -31,7 +31,12 @@ from pathlib import Path
 # Shared lcov parse + stale-mapping detect + reject, used by both this gate
 # and check_coverage.sh so a stale line-table cannot pass either consumer.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cov_lcov import normalize, lcov_executable_lines, stale_mapping_evidence  # noqa: E402
+from cov_lcov import (  # noqa: E402
+    cov_target_dir,
+    lcov_executable_lines,
+    normalize,
+    stale_mapping_evidence,
+)
 
 THRESHOLD = int(os.environ.get("COV_DIFF_THRESHOLD", "85"))
 BASE = os.environ.get("COV_BASE", "HEAD")
@@ -298,7 +303,10 @@ def drop_profraw(cov_dir: str) -> None:
     The instrumented run keeps its build cache on purpose, but the same flag
     leaves the samples, and the report merges every one it finds. A sample from
     an earlier revision carries that revision's line numbers, so merging it
-    attributes hits to whatever now occupies those lines.
+    attributes hits to whatever now occupies those lines. Single-runner
+    assumption: cov_dir is shared, so a concurrent make check in another
+    worktree could have in-flight samples here (see drop_stale_profraw in
+    run_tests.py for the same hazard).
     """
     for root, _dirs, files in os.walk(cov_dir):
         for name in files:
@@ -319,6 +327,10 @@ def instrumented_report(cov_dir: str, rebuild: bool) -> Path | None:
     usual path fast, and is right until a verdict depends on them being current.
     """
     if rebuild:
+        # Nukes the shared cov tree to force a fresh line table. Single-runner
+        # assumption: a concurrent make check in another worktree compiling
+        # against the same shared target/cov would see its artifacts deleted
+        # mid-flight. Per-dir lock or private rebuild dir is follow-up.
         shutil.rmtree(os.path.join(ROOT, cov_dir), ignore_errors=True)
     else:
         drop_profraw(cov_dir)
@@ -380,7 +392,7 @@ def main() -> int:
     # Isolate the cov build cache (target/cov) so the instrumented build
     # does not thrash the plain dev cache (target/). See run_tests.py
     # COV_TARGET_DIR. The lcov report lives in the same cov dir.
-    COV_DIR = os.path.join("target", "cov")
+    COV_DIR = cov_target_dir()
     LCOV = os.path.join(COV_DIR, "houyi-cov.lcov")
     created_temp = False
 

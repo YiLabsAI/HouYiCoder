@@ -18,15 +18,44 @@ it covers, so comments inside a multi-line expression legitimately carry an
 entry. That check was tried and fired on a correct report.
 
 CLI: python3 scripts/cov_lcov.py --check <lcov-path>
-  Exits 0 if no stale mapping found, 2 if found (with evidence printed to
-  stderr). Exits 1 if the lcov file cannot be read.
+     python3 scripts/cov_lcov.py --cov-dir
+  --check exits 0 if no stale mapping found, 2 if found (with evidence
+  printed to stderr), 1 if the lcov file cannot be read. --cov-dir prints
+  the resolved shared instrumented-cache dir (used by the gates + shell).
 """
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def cov_target_dir() -> str:
+    """Resolve the shared instrumented-build cache dir so every worktree
+    reuses the main checkout's target/cov instead of a cold per-worktree
+    rebuild. git-common-dir is the main checkout's .git path; its parent is
+    the main checkout root, where target/cov actually lives (not inside
+    .git). Falls back to a local target/cov when that cannot be resolved."""
+    fallback = os.path.join("target", "cov")
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode != 0:
+            return fallback
+        common = os.path.normpath(out.stdout.strip())
+        if not os.path.isabs(common):
+            common = os.path.normpath(os.path.join(str(ROOT), common))
+        shared = os.path.join(os.path.dirname(common), "target", "cov")
+        if os.path.isdir(os.path.dirname(shared)):
+            return shared
+        return fallback
+    except (OSError, subprocess.SubprocessError):
+        return fallback
 
 
 def normalize(path: str) -> str:
@@ -102,8 +131,11 @@ def check(lcov_path: Path) -> int:
 
 
 def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] == "--cov-dir":
+        print(cov_target_dir())
+        return 0
     if len(sys.argv) != 3 or sys.argv[1] != "--check":
-        print("usage: cov_lcov.py --check <lcov-path>", file=sys.stderr)
+        print("usage: cov_lcov.py --check <lcov-path> | --cov-dir", file=sys.stderr)
         return 1
     return check(Path(sys.argv[2]))
 
