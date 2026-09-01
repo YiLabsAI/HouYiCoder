@@ -933,3 +933,46 @@ fn test_expanded_subagent_shaded() {
         "child rows are shaded as part of the block"
     );
 }
+
+/// Clicking the fleet strip selects the row under the pointer, and a second
+/// click on the selected row drills into that child. The strip was the one
+/// clickable-looking surface with no click target at all, which read as the
+/// selection not existing.
+#[test]
+fn test_fleet_click_selects() {
+    use crate::agent_message::FleetEntry;
+    use crate::composition;
+    use crate::state::Screen;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    for i in 0..2 {
+        app.fleet.entries.push(FleetEntry {
+            agent_id: format!("c{i}"),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+        });
+    }
+    drop(crate::test_support::render_text(&app, 80, 24));
+    let rect = app.fleet.rect.get();
+    assert!(rect.height >= 2, "the strip is drawn: {rect:?}");
+    let click = |app: &mut crate::state::App, y: u16| {
+        crate::app::handle_mouse(
+            app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+    };
+    click(&mut app, rect.y + 1);
+    assert_eq!(app.fleet.selected, Some(1), "first click selects the row");
+    assert!(app.teammate_view.is_none(), "one click does not drill in");
+}

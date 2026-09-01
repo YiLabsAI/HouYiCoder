@@ -38,6 +38,14 @@ pub struct FleetEntry {
 pub struct FleetState {
     pub entries: Vec<FleetEntry>,
     pub selected: Option<usize>,
+    /// Rows the footer budget granted this frame, published by the draw pass.
+    /// The status-bar hint reads it to advertise the affordance the strip can
+    /// actually honor: per-row selection while rows are visible, the pane
+    /// when the strip is a summary or gone.
+    pub granted: std::cell::Cell<u16>,
+    /// Where the strip was drawn this frame, for the mouse router. Zero when
+    /// not drawn, so a stale rect cannot swallow clicks.
+    pub rect: std::cell::Cell<ratatui::layout::Rect>,
 }
 
 impl FleetState {

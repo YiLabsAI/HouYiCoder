@@ -95,6 +95,14 @@ fn test_multi_expand_teammate() {
         s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2),
         "Subagent fold should appear"
     );
+    // While the child is live the status bar names it and the keys that act
+    // on it: without this the strip is the one surface whose affordance is
+    // never stated anywhere, and the selection reads as nonexistent.
+    assert!(
+        s.wait_for_compact("1agent", RENDER_TIMEOUT * 2),
+        "the status bar should count the live agent:\n{}",
+        s.output()
+    );
     // Settle the run before toggling. While the parent is still streaming,
     // every arriving chunk repaints the transcript, so an expand that failed
     // to invalidate the row cache still appeared on the next chunk and the

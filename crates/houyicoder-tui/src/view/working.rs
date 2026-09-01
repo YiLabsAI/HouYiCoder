@@ -23,7 +23,7 @@ use crate::view::{
 };
 
 mod flat_transcript;
-mod fleet_pill;
+pub(crate) mod fleet_pill;
 mod footer_budget;
 mod live_rows;
 mod row_sink;
@@ -98,6 +98,8 @@ fn draw_working(f: &mut Frame, app: &App) {
         queue_overlay::strip_want(app)
     };
     let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_pill::want(app));
+    app.fleet.granted.set(footer.fleet);
+    app.fleet.rect.set(Rect::new(0, 0, 0, 0));
     let layout = build_working_layout(app, input_h, footer.queue, footer.fleet);
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -142,6 +144,7 @@ fn draw_working(f: &mut Frame, app: &App) {
         }
     }
     if let Some(i) = layout.slots.fleet {
+        app.fleet.rect.set(outer[i]);
         fleet_pill::draw(f, outer[i], app);
     }
     if !pane_hides_input {

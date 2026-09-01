@@ -116,6 +116,10 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(" · ", dim),
         Span::styled(mode_label, mode_style),
     ];
+    if let Some(hint) = agents_hint(app) {
+        left.push(Span::styled(" · ", dim));
+        left.push(Span::styled(hint, dim));
+    }
     let mut right: Option<Line<'static>> = None;
     if let Some(snap) = &app.status_cache {
         if snap.breaker_state.as_deref() == Some("Open") {
@@ -155,6 +159,30 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         }
         None => f.render_widget(Paragraph::new(Line::from(left)), area),
     }
+}
+
+/// The fleet affordance for the status bar, present whenever the fleet holds
+/// entries (they self-retire after the completion grace window, so nothing
+/// lingers here). The wording follows what the strip can honor this frame:
+/// per-row selection needs visible rows, so a strip collapsed to its summary
+/// or dropped by the budget advertises the pane instead. The status bar is
+/// the one row that never degrades, which is why the count lives here and
+/// not only in the strip.
+fn agents_hint(app: &App) -> Option<String> {
+    let n = app.fleet.entries.len();
+    if n == 0 {
+        return None;
+    }
+    let label = if n == 1 {
+        "1 agent".to_string()
+    } else {
+        format!("{n} agents")
+    };
+    Some(match app.fleet.granted.get() {
+        0 => format!("{label} · /agents"),
+        1 if n > 1 => format!("{label} · /agents to manage"),
+        _ => format!("{label} · shift+\u{2191}\u{2193} · enter"),
+    })
 }
 
 /// Color the context gauge by load so a filling window reads at a glance:
@@ -397,6 +425,47 @@ mod tests {
     #[test]
     fn test_tiny_mark_two_spans() {
         assert_eq!(logo::tiny().len(), 2);
+    }
+
+    fn fleet_app(n: usize, granted: u16) -> crate::state::App {
+        let mut app = crate::composition::app();
+        for i in 0..n {
+            app.fleet.entries.push(crate::agent_message::FleetEntry {
+                agent_id: format!("c{i}"),
+                subagent_type: "explore".into(),
+                turn: 1,
+                tokens: 10,
+                tool_uses: 0,
+                last_activity: None,
+                completed: None,
+                completed_at: None,
+            });
+        }
+        app.fleet.granted.set(granted);
+        app
+    }
+
+    /// The hint follows what the strip can honor: rows visible -> per-row
+    /// keys; summary -> the pane; strip dropped -> the pane, tersely. Empty
+    /// fleet -> no hint at all, so nothing lingers after the grace window
+    /// retires the entries.
+    #[test]
+    fn test_agents_hint_ladder() {
+        assert_eq!(agents_hint(&fleet_app(0, 0)), None);
+        assert_eq!(
+            agents_hint(&fleet_app(2, 2)).unwrap(),
+            "2 agents · shift+\u{2191}\u{2193} · enter"
+        );
+        assert_eq!(
+            agents_hint(&fleet_app(1, 1)).unwrap(),
+            "1 agent · shift+\u{2191}\u{2193} · enter",
+            "a single agent on one row is a real row, not a summary"
+        );
+        assert_eq!(
+            agents_hint(&fleet_app(3, 1)).unwrap(),
+            "3 agents · /agents to manage"
+        );
+        assert_eq!(agents_hint(&fleet_app(3, 0)).unwrap(), "3 agents · /agents");
     }
 
     #[test]

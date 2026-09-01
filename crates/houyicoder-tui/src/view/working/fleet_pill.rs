@@ -13,7 +13,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::agent_message::FleetEntry;
+use crate::agent_message::{FleetEntry, FleetState};
 use crate::state::App;
 
 /// Max child rows the pill ever shows. A longer fleet scrolls within the
@@ -59,15 +59,54 @@ fn summary_line(app: &App) -> Line<'static> {
     Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }
 
-/// Build the visible window of pill rows. When the fleet is longer than
-/// MAX_VISIBLE the window slides so the selected row stays on screen.
+/// First entry index the pill shows. When the fleet is longer than
+/// MAX_VISIBLE the window slides so the selected row stays on screen. The
+/// click router maps a row back through the same start, so the row clicked
+/// is the entry acted on.
+pub fn window_start(app: &App) -> usize {
+    window_start_idx(app.fleet.selected, app.fleet.entries.len())
+}
+
+/// What a click in the strip does. The summary row of a multi-child fleet
+/// names no child, so it opens the pane — the surface its own hint names.
+/// A child row selects; the already-selected row drills in.
+#[derive(Debug)]
+pub enum FleetClick {
+    OpenAgentsPane,
+    Select(usize),
+    Drill(String),
+}
+
+/// Pure routing of a click at the strip's given row. Kept free of App so
+/// the decision is testable without one; the mouse handler applies it.
+pub fn click_route(fleet: &FleetState, granted: u16, row: usize) -> FleetClick {
+    let n = fleet.entries.len();
+    if granted == 1 && n > 1 {
+        return FleetClick::OpenAgentsPane;
+    }
+    let idx = window_start_idx(fleet.selected, n) + row;
+    let Some(entry) = fleet.entries.get(idx) else {
+        return FleetClick::OpenAgentsPane;
+    };
+    if fleet.selected == Some(idx) {
+        FleetClick::Drill(entry.agent_id.clone())
+    } else {
+        FleetClick::Select(idx)
+    }
+}
+
+/// The sliding window's start as a free function, so click_route and the
+/// draw share one definition without either needing an App.
+fn window_start_idx(selected: Option<usize>, len: usize) -> usize {
+    selected
+        .map(|s| s.min(len.saturating_sub(MAX_VISIBLE)))
+        .unwrap_or(0)
+}
+
+/// Build the visible window of pill rows.
 fn build_lines(app: &App) -> Vec<Line<'_>> {
     let len = app.fleet.entries.len();
-    let start = app
-        .fleet
-        .selected
-        .map(|s| s.min(len.saturating_sub(MAX_VISIBLE)))
-        .unwrap_or(0);
+    let start = window_start(app);
     let end = (start + MAX_VISIBLE).min(len);
     app.fleet.entries[start..end]
         .iter()
@@ -211,6 +250,34 @@ mod tests {
             !text.contains("explore"),
             "no single child is named in the collapsed row: {text}"
         );
+    }
+
+    /// Click routing: a row selects, the selected row drills in, and the
+    /// multi-child summary opens the pane (its click target names no child,
+    /// so it must not act on one). An out-of-range row falls back to the pane
+    /// rather than ignoring the click outright.
+    #[test]
+    fn test_click_route() {
+        let fleet = |selected: Option<usize>| FleetState {
+            entries: vec![
+                entry("a", "explore", 1, 10, "grep"),
+                entry("b", "plan", 1, 10, "read"),
+            ],
+            selected,
+            ..Default::default()
+        };
+        match click_route(&fleet(None), 2, 1) {
+            FleetClick::Select(1) => {}
+            other => panic!("unselected row selects: {other:?}"),
+        }
+        match click_route(&fleet(Some(1)), 2, 1) {
+            FleetClick::Drill(sid) => assert_eq!(sid, "b"),
+            other => panic!("the selected row drills in: {other:?}"),
+        }
+        match click_route(&fleet(Some(0)), 1, 0) {
+            FleetClick::OpenAgentsPane => {}
+            other => panic!("summary row opens the pane: {other:?}"),
+        }
     }
 
     /// A completed row goes terse: it shows the type, a done marker, and the

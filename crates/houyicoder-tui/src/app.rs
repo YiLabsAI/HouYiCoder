@@ -334,6 +334,29 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     .handle_down(m.column, m.row);
                 return;
             }
+            // Fleet strip: the routing is pure (click_route); applying it
+            // rides the two existing broad-access points, run_command and
+            // enter_teammate_view_for_sid, so no new &mut App fn is born.
+            let frect = app.fleet.rect.get();
+            if frect.width > 0 && frect.height > 0 && in_rect(frect, m.column, m.row) {
+                let route = crate::view::working::fleet_pill::click_route(
+                    &app.fleet,
+                    app.fleet.granted.get(),
+                    (m.row - frect.y) as usize,
+                );
+                match route {
+                    crate::view::working::fleet_pill::FleetClick::OpenAgentsPane => {
+                        app.run_command(houyicoder_protocol::frontend::SlashCommand::Agents)
+                    }
+                    crate::view::working::fleet_pill::FleetClick::Select(i) => {
+                        app.fleet.selected = Some(i)
+                    }
+                    crate::view::working::fleet_pill::FleetClick::Drill(sid) => {
+                        app.enter_teammate_view_for_sid(&sid, true);
+                    }
+                }
+                return;
+            }
             let rect = app.transcript_rect.get();
             if in_rect(rect, m.column, m.row) {
                 // Byte-window mode is a read/browse surface: drag-select would
