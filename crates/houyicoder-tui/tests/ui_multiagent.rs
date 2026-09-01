@@ -1590,3 +1590,72 @@ fn test_sync_parent_after_fold() {
         s.output()
     );
 }
+/// The /agents pane lists this session's returned delegations once the
+/// footer strip has retired them: a returned delegation is durable history,
+/// so the pane (the record surface) keeps it after the strip (the present
+/// tense) drops it. Selectable, Enter opens the delegation's view.
+#[test]
+fn test_agents_pane_lists_returned() {
+    use houyicoder_tui::records::TranscriptLine;
+    let mut app = houyicoder_tui::composition::app();
+    app.screen = houyicoder_tui::state::Screen::Working;
+    app.pane = houyicoder_tui::state::Pane::Agents;
+    app.agent_directory = None;
+    app.push_transcript_line(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+        color: None,
+    });
+    let v = app.transcript_version.get();
+    app.agents.refresh(&app.transcript, v);
+    assert_eq!(
+        app.agents.rows.len(),
+        1,
+        "the returned delegation is listed"
+    );
+    assert!(app.agents.rows[0].loaded, "loaded fold detected");
+    // Enter on the selected row opens that delegation's view.
+    houyicoder_tui::keys::handle_working(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    let view = app.teammate_view.as_ref().expect("view opened");
+    assert_eq!(view.child_sid, "c1");
+    assert!(
+        !view.transcript.is_empty(),
+        "the loaded fold is copied into the view"
+    );
+}
+/// Arrows walk the returned-delegation list when the fleet is retired, and
+/// the cursor clamps at the bounds.
+#[test]
+fn test_agents_pane_cursor_walks() {
+    use houyicoder_tui::records::TranscriptLine;
+    let mut app = houyicoder_tui::composition::app();
+    app.screen = houyicoder_tui::state::Screen::Working;
+    app.pane = houyicoder_tui::state::Pane::Agents;
+    for (sid, summary) in [("c1", "first"), ("c2", "second")] {
+        app.push_transcript_line(TranscriptLine::Subagent {
+            child_sid: sid.into(),
+            subagent_type: "explore".into(),
+            summary: summary.into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
+    }
+    let v = app.transcript_version.get();
+    app.agents.refresh(&app.transcript, v);
+    app.agents.move_selection(1);
+    assert_eq!(app.agents.sel, 1);
+    app.agents.move_selection(1);
+    assert_eq!(app.agents.sel, 1, "clamped at the last row");
+    app.agents.move_selection(-1);
+    assert_eq!(app.agents.sel, 0, "clamped at the first row");
+}

@@ -60,6 +60,8 @@ impl App {
             }
             C::Agents => {
                 self.pane = Pane::Agents;
+                let v = self.transcript_version.get();
+                self.agents.refresh(&self.transcript, v);
                 if let Some(req_id) = self.mint_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::AgentsQuery { req_id });
                 }

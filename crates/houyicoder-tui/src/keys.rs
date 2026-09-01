@@ -14,6 +14,7 @@ use crate::state::{App, Pane, ViewportMode};
 
 mod input;
 mod pane_predicates;
+pub(crate) use pane_predicates::pane_replaces_input;
 use pane_predicates::{
     pane_approvable, pane_navigable, pane_owns_esc, pane_rejectable, pane_reworkable,
 };

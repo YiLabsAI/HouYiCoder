@@ -13,7 +13,8 @@ use super::approval::handle_approval;
 use super::ask_question::handle_ask_question;
 use super::fleet;
 use super::pane_predicates::{
-    artifact_editing, pane_approvable, pane_navigable, pane_rejectable, pane_reworkable,
+    artifact_editing, pane_approvable, pane_navigable, pane_rejectable, pane_replaces_input,
+    pane_reworkable,
 };
 use super::worktree_pane;
 
@@ -183,6 +184,26 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Down if app.pane == Pane::Agents && !app.fleet.entries.is_empty() => {
             app.fleet.move_selection(1);
         }
+        // Fleet retired: the pane lists this session's returned delegations,
+        // and the same arrows walk them.
+        KeyCode::Up if app.pane == Pane::Agents => app.agents.move_selection(-1),
+        KeyCode::Down if app.pane == Pane::Agents => app.agents.move_selection(1),
+        // Enter drills into the selected row of the list being rendered. The
+        // branch follows the render (the live fleet when it has entries, else
+        // the returned delegations), not the presence of a selection: keying
+        // off the selection let an unselected live fleet fall through and
+        // open a delegation that was not even on screen.
+        KeyCode::Enter if app.pane == Pane::Agents && app.input.is_empty() => {
+            if app.fleet.entries.is_empty() {
+                if let Some(row) = app.agents.rows.get(app.agents.sel) {
+                    let sid = row.child_sid.clone();
+                    let loaded = row.loaded;
+                    app.enter_teammate_view_for_sid(&sid, !loaded);
+                }
+            } else if let Some(sid) = fleet::selected_fleet_sid(app) {
+                app.enter_teammate_view_for_sid(&sid, true);
+            }
+        }
         // Shift+Tab cycles the permission mode: default, auto, bypass, default. No pane shadows it now (the /memory scope filter moved to
         // Left/Right), so Shift+Tab is always the global mode cycle.
         KeyCode::BackTab => app.tab_cycle_mode(),
@@ -236,6 +257,12 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.pane = Pane::Transcript;
         }
         KeyCode::Esc if app.pane == Pane::Skills => {
+            app.pane = Pane::Transcript;
+        }
+        // /agents pane: same close-to-transcript as the other slash panes.
+        // Without this arm the key fell through to the recall/abort arms --
+        // while agents ran, Esc interrupted the parent run.
+        KeyCode::Esc if app.pane == Pane::Agents => {
             app.pane = Pane::Transcript;
         }
         KeyCode::Esc if app.pane == Pane::Hooks => {
@@ -327,31 +354,11 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             if app.input.is_empty()
                 && !editing
                 && !app.permission_input.is_active()
-                && !matches!(
-                    app.pane,
-                    Pane::Model
-                        | Pane::Hooks
-                        | Pane::Status
-                        | Pane::Memory
-                        | Pane::Worktree
-                        | Pane::Trajectory
-                        | Pane::Resume
-                ) =>
+                && !pane_replaces_input(app.pane) =>
         {
             app.open_palette()
         }
-        KeyCode::Enter
-            if !matches!(
-                app.pane,
-                Pane::Model
-                    | Pane::Hooks
-                    | Pane::Status
-                    | Pane::Memory
-                    | Pane::Worktree
-                    | Pane::Trajectory
-                    | Pane::Resume
-            ) =>
-        {
+        KeyCode::Enter if !pane_replaces_input(app.pane) => {
             // Empty-input Enter drills into a teammate view: the pill
             // selection takes priority, then the Subagent line at cursor.
             if app.input.is_empty() && app.teammate_view.is_none() {
@@ -400,34 +407,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
             app.input.kill_to_line_start(app.last_cols.get());
         }
-        KeyCode::Backspace
-            if !matches!(
-                app.pane,
-                Pane::Model
-                    | Pane::Hooks
-                    | Pane::Status
-                    | Pane::Memory
-                    | Pane::Worktree
-                    | Pane::Trajectory
-                    | Pane::Resume
-            ) =>
-        {
-            app.input.pop()
-        }
-        KeyCode::Char(c)
-            if !matches!(
-                app.pane,
-                Pane::Model
-                    | Pane::Hooks
-                    | Pane::Status
-                    | Pane::Memory
-                    | Pane::Worktree
-                    | Pane::Trajectory
-                    | Pane::Resume
-            ) =>
-        {
-            app.input.push(c)
-        }
+        KeyCode::Backspace if !pane_replaces_input(app.pane) => app.input.pop(),
+        KeyCode::Char(c) if !pane_replaces_input(app.pane) => app.input.push(c),
         _ => {}
     }
 }

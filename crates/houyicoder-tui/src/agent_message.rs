@@ -31,6 +31,71 @@ pub struct FleetEntry {
     pub completed_at: Option<Instant>,
 }
 
+/// One returned delegation, for the /agents pane's session list: the child
+/// session id to drill into, what it was, and the summary it came back with.
+#[derive(Debug, Clone)]
+pub struct DelegationRow {
+    pub child_sid: String,
+    pub subagent_type: String,
+    pub summary: String,
+    /// Whether the child transcript is already loaded in the fold. False on
+    /// first open fires the on-demand fetch, same as the inline fold.
+    pub loaded: bool,
+}
+
+/// The /agents pane's list of this session's returned delegations, plus its
+/// cursor. Rebuilt from the transcript when the transcript version moves; a
+/// returned delegation is durable history, so the list survives the footer
+/// strip's grace-window retirement (the strip is the present tense, this is
+/// the record).
+#[derive(Debug, Default)]
+pub struct PaneAgents {
+    pub rows: Vec<DelegationRow>,
+    pub sel: usize,
+    version: u64,
+}
+
+impl PaneAgents {
+    /// Rebuild the rows when the transcript version moved; a no-op
+    /// otherwise, so it can be called on every agent message without cost.
+    /// The caller passes the version it read, so the rebuild and the version
+    /// check see one consistent transcript.
+    pub fn refresh(&mut self, transcript: &[crate::records::TranscriptLine], version: u64) {
+        use crate::records::TranscriptLine;
+        if version == self.version {
+            return;
+        }
+        self.version = version;
+        self.rows = transcript
+            .iter()
+            .filter_map(|l| match l {
+                TranscriptLine::Subagent {
+                    child_sid,
+                    subagent_type,
+                    summary,
+                    folded_transcript,
+                    ..
+                } => Some(DelegationRow {
+                    child_sid: child_sid.clone(),
+                    subagent_type: subagent_type.clone(),
+                    summary: summary.clone(),
+                    loaded: !folded_transcript.is_empty(),
+                }),
+                _ => None,
+            })
+            .collect();
+        self.sel = self.sel.min(self.rows.len().saturating_sub(1));
+    }
+
+    /// Move the cursor by a signed delta, clamped at the bounds.
+    pub fn move_selection(&mut self, delta: i32) {
+        if self.rows.is_empty() {
+            return;
+        }
+        self.sel = (self.sel as i32 + delta).clamp(0, self.rows.len() as i32 - 1) as usize;
+    }
+}
+
 /// The footer fleet state: the child snapshots plus the Shift-arrow
 /// selection index. Grouped so the pill reads one field and the
 /// struct-fields ratchet counts the pair as one App field, not two.
@@ -524,4 +589,78 @@ pub enum ClientCommand {
         req_id: RequestId,
         level: houyicoder_protocol::frontend::debug::DebugLevel,
     },
+}
+
+#[cfg(test)]
+mod pane_agents_tests {
+    use super::*;
+    use crate::records::TranscriptLine;
+
+    fn subagent(sid: &str, summary: &str, fold: Vec<TranscriptLine>) -> TranscriptLine {
+        TranscriptLine::Subagent {
+            child_sid: sid.into(),
+            subagent_type: "explore".into(),
+            summary: summary.into(),
+            prompt: String::new(),
+            folded_transcript: fold,
+            color: None,
+        }
+    }
+
+    /// Refresh rebuilds the rows when the version moves and is a no-op when
+    /// it has not, so calling it on every agent message costs nothing.
+    #[test]
+    fn test_refresh_rebuilds_on_version() {
+        let mut pane = PaneAgents::default();
+        let t = vec![subagent("c1", "first", Vec::new())];
+        pane.refresh(&t, 1);
+        assert_eq!(pane.rows.len(), 1);
+        assert_eq!(pane.rows[0].child_sid, "c1");
+        // Same version: a second call does not rebuild even if the
+        // transcript changed under it (the caller is the source of truth).
+        let t2 = vec![
+            subagent("c1", "first", Vec::new()),
+            subagent("c2", "second", Vec::new()),
+        ];
+        pane.refresh(&t2, 1);
+        assert_eq!(pane.rows.len(), 1, "same version = no rebuild");
+        pane.refresh(&t2, 2);
+        assert_eq!(pane.rows.len(), 2, "new version = rebuild");
+    }
+
+    /// A loaded fold is detected so the pane knows the drill-in needs no
+    /// fetch; an empty fold fires the on-demand load.
+    #[test]
+    fn test_refresh_marks_loaded() {
+        let mut pane = PaneAgents::default();
+        let t = vec![
+            subagent("c1", "loaded", vec![TranscriptLine::Agent("reply".into())]),
+            subagent("c2", "empty", Vec::new()),
+        ];
+        pane.refresh(&t, 1);
+        assert!(pane.rows[0].loaded, "non-empty fold = loaded");
+        assert!(!pane.rows[1].loaded, "empty fold = not loaded");
+    }
+
+    /// The cursor clamps at the bounds, so a delta past either end stays
+    /// on the first or last row rather than wrapping or panicking.
+    #[test]
+    fn test_move_selection_clamps() {
+        let mut pane = PaneAgents::default();
+        pane.refresh(
+            &[
+                subagent("a", "x", Vec::new()),
+                subagent("b", "y", Vec::new()),
+            ],
+            1,
+        );
+        pane.move_selection(5);
+        assert_eq!(pane.sel, 1, "clamped at last");
+        pane.move_selection(-5);
+        assert_eq!(pane.sel, 0, "clamped at first");
+        // Empty list: no-op, no panic.
+        pane.rows.clear();
+        pane.move_selection(1);
+        assert_eq!(pane.sel, 0);
+    }
 }

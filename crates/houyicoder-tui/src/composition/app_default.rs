@@ -82,7 +82,7 @@ pub fn app() -> App {
         trajectory_list_len: std::cell::Cell::new(0),
         trajectory_turn_idx: std::cell::Cell::new(0),
         trajectory_at_bg: std::cell::Cell::new(false),
-        agents: agents(),
+        agents: Default::default(),
         agent_directory: None,
         artifact: ArtifactSession::stub(),
         proposer: StubProposer::new(),

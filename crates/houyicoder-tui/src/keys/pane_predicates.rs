@@ -20,16 +20,35 @@ pub(crate) fn pane_navigable(app: &App) -> bool {
 /// (a copied list is how Pane::Trajectory fell out of one arm and stayed in
 /// none).
 pub(crate) fn pane_owns_esc(pane: Pane) -> bool {
+    pane_replaces_input(pane) || pane == Pane::Artifact
+}
+
+/// The panes that stand in for the interaction surface: the input box and the
+/// status row retract, Esc closes them, and the typing keys must not reach a
+/// box that is not on screen.
+///
+/// One list, because six hand-copied copies of it drifted apart three times.
+/// The failures were not symmetric: a pane missing from the Esc list had its
+/// key stolen by the abort arm, so Esc interrupted the running agent; a pane
+/// missing from the typing lists took characters into a hidden box, and the
+/// resulting non-empty input silently disabled the pane's own Enter. Adding a
+/// pane to one list and not the others is how both were built.
+///
+/// The artifact surface is deliberately not here: it owns Esc through its own
+/// multi-level handler but keeps the input box, since its edit mode types
+/// into it.
+pub(crate) fn pane_replaces_input(pane: Pane) -> bool {
     matches!(
         pane,
-        Pane::Memory
-            | Pane::Artifact
-            | Pane::Worktree
-            | Pane::Status
-            | Pane::Resume
+        Pane::Model
             | Pane::Hooks
-            | Pane::Model
+            | Pane::Status
+            | Pane::Memory
+            | Pane::Worktree
             | Pane::Trajectory
+            | Pane::Resume
+            | Pane::Skills
+            | Pane::Agents
     )
 }
 

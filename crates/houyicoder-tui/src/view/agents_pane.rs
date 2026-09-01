@@ -56,25 +56,38 @@ pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(List::new(items).style(Style::new().fg(Color::White)), area);
         return;
     }
-    if app.agents.is_empty() {
-        let dir = app
-            .agent_directory
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("(no agent directory loaded)");
-        let lines: Vec<Line> = dir.lines().map(|l| Line::from(l.to_string())).collect();
-        f.render_widget(
-            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
-            area,
-        );
+    // Returned delegations outlive the footer strip: the strip retires a
+    // completed child after its grace window, but the pane is the record of
+    // what ran this session, selectable and enterable.
+    if !app.agents.rows.is_empty() {
+        let items: Vec<ListItem> = app
+            .agents
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let row = format!("\u{2713} {} \u{00b7} {}", r.subagent_type, r.summary);
+                if app.agents.sel == i {
+                    ListItem::new(format!("\u{25b6} {row}"))
+                } else {
+                    ListItem::new(format!("  {row}"))
+                }
+            })
+            .collect();
+        f.render_widget(List::new(items).style(Style::new().fg(Color::White)), area);
         return;
     }
-    let items: Vec<ListItem> = app
-        .agents
-        .iter()
-        .map(|a| ListItem::new(format!("{} ({}) -- {}", a.name, a.role, a.state)))
-        .collect();
-    f.render_widget(List::new(items).style(Style::new().fg(Color::White)), area);
+    // Nothing live and nothing returned yet: the registered directory.
+    let dir = app
+        .agent_directory
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("(no agent directory loaded)");
+    let lines: Vec<Line> = dir.lines().map(|l| Line::from(l.to_string())).collect();
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 #[cfg(test)]
@@ -155,6 +168,40 @@ mod tests {
         assert!(
             content.contains("no agent directory"),
             "placeholder should render when the directory has not landed: {content}"
+        );
+    }
+
+    /// Once delegations have returned, the pane lists them with a cursor
+    /// marker instead of the registered-agent directory: the directory is
+    /// what exists, the list is what ran, and what ran is the actionable
+    /// thing. The marker shows which row Enter opens.
+    #[test]
+    fn test_returned_list_over_directory() {
+        use crate::records::TranscriptLine;
+        let mut app = composition::app();
+        app.agent_directory = Some("## Available agents\n- explore: fast".into());
+        app.push_transcript_line(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found the auth path".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
+        let v = app.transcript_version.get();
+        app.agents.refresh(&app.transcript, v);
+        let out = render(&app, 60, 8);
+        assert!(
+            out.contains("found the auth path"),
+            "the returned delegation is listed: {out}"
+        );
+        assert!(
+            !out.contains("Available agents"),
+            "the directory yields to the session list: {out}"
+        );
+        assert!(
+            out.contains("\u{25b6}"),
+            "the selected row carries the cursor marker: {out}"
         );
     }
 }

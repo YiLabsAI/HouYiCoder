@@ -138,13 +138,51 @@ fn test_model_pane_esc_closes() {
     assert_eq!(app.pane, Pane::Transcript);
 }
 
-/// The /skills pane Esc key closes back to the transcript.
+/// The /skills pane Esc key closes back to the transcript, through the real
+/// entry point and while an agent runs. Calling the inner input handler
+/// skipped the abort and recall arms that Esc meets first, so the test passed
+/// while the key was in fact being taken to interrupt the running agent.
 #[test]
 fn test_skills_pane_esc_closes() {
     let mut app = working_app();
+    app.agent_busy = true;
     app.pane = Pane::Skills;
-    handle_input(&mut app, key(KeyCode::Esc));
+    handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(app.pane, Pane::Transcript);
+    assert!(
+        !app.cancelling,
+        "closing a pane must not interrupt the running agent"
+    );
+}
+
+/// Typing keys do not reach the input box while a pane stands in for it. The
+/// box is off screen, so a character pushed into it is invisible -- and the
+/// resulting non-empty input silently disables the pane's own Enter, which
+/// guards on an empty box. Both panes that were missing from the typing lists
+/// are pinned here.
+#[test]
+fn test_pane_swallows_typing() {
+    for pane in [Pane::Agents, Pane::Skills] {
+        let mut app = working_app();
+        app.pane = pane;
+        handle_working(&mut app, key(KeyCode::Char('x')));
+        assert!(
+            app.input.is_empty(),
+            "{pane:?}: a character must not enter the hidden input box"
+        );
+        handle_working(&mut app, key(KeyCode::Char('/')));
+        assert!(
+            !app.palette.open,
+            "{pane:?}: slash does not open the palette over a pane"
+        );
+        app.input.push('a');
+        handle_working(&mut app, key(KeyCode::Backspace));
+        assert_eq!(
+            app.input.value(),
+            "a",
+            "{pane:?}: backspace does not edit the hidden box"
+        );
+    }
 }
 
 /// Pasting routes to the palette query when the palette is open (the
@@ -1045,5 +1083,101 @@ fn test_ctrl_o_follows_cursor() {
     assert!(
         app.expanded_subagents.is_empty(),
         "the later delegation stays collapsed"
+    );
+}
+
+/// Esc closes the /agents pane. The pane had no Esc arm at all -- the key
+/// fell through to the queue-recall and abort arms, so while agents ran, Esc
+/// interrupted the parent run instead of closing a pane, and idle it was a
+/// dead key. The only way out was quitting.
+#[test]
+fn test_esc_closes_agents_pane() {
+    let mut app = working_app();
+    app.pane = Pane::Agents;
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(
+        app.pane,
+        Pane::Transcript,
+        "Esc must close the agents pane back to the transcript"
+    );
+}
+
+/// While agents run, Esc on the open pane closes the pane -- it must not
+/// reach the abort arm. pane_owns_esc gates that; the agents pane was not on
+/// the list.
+#[test]
+fn test_agents_esc_no_abort() {
+    let mut app = working_app();
+    app.agent_busy = true;
+    app.pane = Pane::Agents;
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.pane, Pane::Transcript, "Esc closes the pane");
+    assert!(
+        !app.cancelling,
+        "a pane-open Esc must not interrupt the running agents"
+    );
+}
+
+/// The agents pane retracts the input box like the other command panes.
+/// It sat on neither of the two pane lists, so the input box stayed up while
+/// the pane was open -- inconsistent with every other pane and misleading,
+/// since typing there does not reach the pane.
+#[test]
+fn test_agents_pane_hides_input() {
+    let mut app = working_app();
+    let before = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        before.contains("for commands"),
+        "the input box shows its prompt while the transcript is up"
+    );
+    app.pane = Pane::Agents;
+    let after = crate::test_support::render_text(&app, 80, 24);
+    assert!(
+        !after.contains("for commands"),
+        "the input box retracts while the agents pane is open:\n{after}"
+    );
+}
+
+/// With a live fleet on screen, Enter acts on the fleet -- never on a
+/// returned delegation the pane is not showing. The selection is None until
+/// the user moves it, and keying the branch off the selection instead of off
+/// the rendered list let that unselected case open an off-screen delegation.
+#[test]
+fn test_agents_enter_follows_list() {
+    use crate::agent_message::FleetEntry;
+    use crate::records::TranscriptLine;
+    let mut app = working_app();
+    app.pane = Pane::Agents;
+    app.push_transcript_line(TranscriptLine::Subagent {
+        child_sid: "returned".into(),
+        subagent_type: "explore".into(),
+        summary: "old".into(),
+        prompt: String::new(),
+        folded_transcript: vec![TranscriptLine::Agent("reply".into())],
+        color: None,
+    });
+    let v = app.transcript_version.get();
+    app.agents.refresh(&app.transcript, v);
+    app.fleet.entries.push(FleetEntry {
+        agent_id: "live".into(),
+        subagent_type: "explore".into(),
+        turn: 1,
+        tokens: 10,
+        tool_uses: 0,
+        last_activity: None,
+        completed: None,
+        completed_at: None,
+    });
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(
+        app.teammate_view.is_none(),
+        "an unselected live fleet opens nothing, not the off-screen delegation"
+    );
+    app.fleet.selected = Some(0);
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        app.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        Some("live"),
+        "Enter opens the selected fleet child"
     );
 }

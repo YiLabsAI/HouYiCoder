@@ -45,16 +45,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 /// Whether the open command pane retracts the input box. /permissions is
 /// excluded — its Add/Remove sub-mode types rule specs into the input box.
 fn pane_hides_input(app: &App) -> bool {
-    matches!(
-        app.pane,
-        Pane::Model
-            | Pane::Hooks
-            | Pane::Status
-            | Pane::Memory
-            | Pane::Worktree
-            | Pane::Trajectory
-            | Pane::Resume
-    )
+    crate::keys::pane_replaces_input(app.pane)
 }
 
 /// Whether the open command pane retracts the status bar. Broader than

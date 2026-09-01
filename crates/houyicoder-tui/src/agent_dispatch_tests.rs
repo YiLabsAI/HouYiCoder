@@ -730,39 +730,6 @@ fn test_tools_pane_renders_empty() {
     );
 }
 
-/// When the fleet is populated (child agents running), the /agents pane
-/// lists each agent with name, role, and state. v0 has no live fleet, so this
-/// pins the fleet-render contract child-tracking will drive. The directory
-/// branch is exercised separately by the stub /agents render.
-#[test]
-fn test_agents_pane_renders_fleet() {
-    use crate::evidence::AgentStatus;
-    let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = crate::state::Pane::Agents;
-    app.agent_directory = None;
-    app.agents = vec![
-        AgentStatus {
-            name: "explore".into(),
-            role: "search".into(),
-            state: "idle".into(),
-        },
-        AgentStatus {
-            name: "build".into(),
-            role: "implement".into(),
-            state: "running".into(),
-        },
-    ];
-    let out = crate::test_support::render_text(&app, 80, 24);
-    assert!(out.contains("explore"), "fleet name renders: {out}");
-    assert!(out.contains("search"), "fleet role renders: {out}");
-    assert!(out.contains("running"), "fleet state renders: {out}");
-}
-
-/// The agent directory is a multi-line string (header + bullets). Each source
-/// line must render on its own terminal row; a single Line::from would
-/// flatten newlines into same-row spans. Pins the per-line split so a
-/// refactor that re-flattens fails here.
 #[test]
 fn test_agents_directory_renders_lines() {
     let mut app = crate::composition::app();

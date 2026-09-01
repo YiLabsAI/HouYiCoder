@@ -14,9 +14,8 @@ pub use worktree::{WorktreeEntry, parse_worktrees};
 use crate::artifact::{ArtifactSession, StubProposer};
 use crate::console_state::ConsoleState;
 use crate::evidence::{
-    AgentStatus, AuditEntry, ConsoleTodo, DiffData, Divergence, GraphResult, Hunk, HunkEvidence,
-    MemoryEntry, PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult,
-    audit_entry,
+    AuditEntry, ConsoleTodo, DiffData, Divergence, GraphResult, Hunk, HunkEvidence, MemoryEntry,
+    PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
 use crate::palette::PaletteState;
 use crate::review_queue::ReviewQueue;
@@ -637,13 +636,6 @@ fn memory_entries() -> Vec<MemoryEntry> {
             source: "reference".to_string(),
         },
     ]
-}
-
-fn agents() -> Vec<AgentStatus> {
-    // Empty in v0: no live child fleet exists until child-tracking lands.
-    // The /agents pane shows the fetched agent directory instead; the fleet
-    // list renders only when child events populate this field.
-    Vec::new()
 }
 
 fn console_todos() -> Vec<ConsoleTodo> {

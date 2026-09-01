@@ -44,9 +44,8 @@ pub use crate::artifact::{
     StubProposer, TuiError,
 };
 pub use crate::evidence::{
-    AgentStatus, AuditEntry, ConsoleTodo, DiffData, Divergence, GraphResult, Hunk, HunkEvidence,
-    MemoryEntry, PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult,
-    audit_entry,
+    AuditEntry, ConsoleTodo, DiffData, Divergence, GraphResult, Hunk, HunkEvidence, MemoryEntry,
+    PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
 pub use crate::records::{Approval, SpecContext, StatusStub, TranscriptLine};
 pub use crate::run_control::AgentMessage;
@@ -248,7 +247,7 @@ pub struct App {
     pub trajectory_turn_idx: std::cell::Cell<usize>,
     /// True when the L0 row is a bg event (skips L2 drill-in).
     pub trajectory_at_bg: std::cell::Cell<bool>,
-    pub agents: Vec<AgentStatus>,
+    pub agents: crate::agent_message::PaneAgents,
     pub agent_directory: Option<String>,
     /// An opened artifact for inline review and annotation. Stub content; real
     /// wiring reads the file from disk.
