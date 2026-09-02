@@ -541,6 +541,14 @@ pub struct App {
     /// the wire when the user opens /skills. Empty until the first
     /// reply.
     pub skill_entries: Vec<houyicoder_protocol::frontend::skills::SkillEntry>,
+    /// The /skills pane drill-down level: 0 = list, 1 = selected skill
+    /// detail (body + usage + disable toggle). Mirrors the hooks pane pattern.
+    pub skill_level: std::cell::Cell<u8>,
+    /// The selected skill index in the /skills Level-0 list.
+    pub skill_sel: std::cell::Cell<usize>,
+    /// Session-scoped disabled skills (toggled via t in the detail view).
+    /// Persisted disable is a follow-up (settings wire).
+    pub skill_disabled: std::collections::HashSet<String>,
     /// The /hooks pane drill-down level: 0 = event list, 1 = selected event
     /// detail (registered hooks + description). A
     /// select-event → view-hook browse pattern.

@@ -256,7 +256,37 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.pane = Pane::Transcript;
         }
         KeyCode::Esc if app.pane == Pane::Skills => {
-            app.pane = Pane::Transcript;
+            if app.skill_level.get() > 0 {
+                app.skill_level.set(0);
+            } else {
+                app.pane = Pane::Transcript;
+            }
+        }
+        KeyCode::Up if app.pane == Pane::Skills && app.skill_level.get() == 0 => {
+            let cur = app.skill_sel.get();
+            app.skill_sel.set(cur.saturating_sub(1));
+        }
+        KeyCode::Down if app.pane == Pane::Skills && app.skill_level.get() == 0 => {
+            let len = crate::view::skills_pane::display_order(&app.skill_entries).len();
+            if len > 0 {
+                let next = app.skill_sel.get() + 1;
+                app.skill_sel.set(next.min(len.saturating_sub(1)));
+            }
+        }
+        KeyCode::Enter if app.pane == Pane::Skills && app.skill_level.get() == 0 => {
+            app.skill_level.set(1);
+        }
+        KeyCode::Char('t') if app.pane == Pane::Skills && app.skill_level.get() == 1 => {
+            let ordered = crate::view::skills_pane::display_order(&app.skill_entries);
+            let sel = app.skill_sel.get().min(ordered.len().saturating_sub(1));
+            if let Some(entry) = ordered.get(sel)
+                && entry.invocable
+            {
+                let name = entry.name.clone();
+                if !app.skill_disabled.insert(name.clone()) {
+                    app.skill_disabled.remove(&name);
+                }
+            }
         }
         // /agents pane: same close-to-transcript as the other slash panes.
         // Without this arm the key fell through to the recall/abort arms --

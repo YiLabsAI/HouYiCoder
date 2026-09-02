@@ -677,13 +677,9 @@ fn test_skills_pane_showcase() {
     println!("--- /skills pane showcase (80x24) ---\n{out}\n--- end ---");
     assert!(out.contains("Skills"), "pane title renders");
     assert!(out.contains("3 skills discovered"), "count line renders");
-    assert!(out.contains("Esc to close"), "close hint renders");
+    assert!(out.contains("Esc close"), "close hint renders");
 }
 
-/// The /tools pane renders the registered tool list sorted by name with each
-/// row's first description line. A populated list never shows the empty
-/// placeholder. Pins the render so a refactor that drops sorting or the row
-/// format fails here.
 #[test]
 fn test_tools_pane_renders_entries() {
     use houyicoder_protocol::frontend::tools::ToolEntry;

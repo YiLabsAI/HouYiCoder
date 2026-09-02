@@ -28,6 +28,8 @@ pub mod pane_select_tests;
 pub mod queue_overlay;
 pub mod resume_picker;
 pub mod skills_pane;
+#[cfg(test)]
+mod skills_pane_tests;
 pub mod spinner;
 pub mod status;
 pub mod teammate_view;

@@ -1,8 +1,6 @@
-//! /skills pane content: a read-only list of discovered skills, grouped by
-//! their discovery source so the user sees where each skill came from
-//! (managed policy, user, project, ecosystem compat, ...). Each group header
-//! carries the canonical scan path so the user knows where to drop a new
-//! skill to land in that group.
+//! /skills pane content: an interactive list of discovered skills with a
+//! detail drill-down. Grouped by discovery source; cursor selection via
+//! Up/Down; Enter opens the detail; t toggles session-scoped disable.
 
 use ratatui::{
     Frame,
@@ -79,6 +77,22 @@ const ORIGIN_ORDER: &[OriginGroup] = &[
     },
 ];
 
+/// The display order: entries grouped by origin (ORIGIN_ORDER), sorted by
+/// name within each group. Both render and key-dispatch resolve skill_sel
+/// through this so the highlighted row and the acted-on entry match.
+pub(crate) fn display_order(
+    entries: &[houyicoder_protocol::frontend::skills::SkillEntry],
+) -> Vec<&houyicoder_protocol::frontend::skills::SkillEntry> {
+    let mut out: Vec<&houyicoder_protocol::frontend::skills::SkillEntry> = Vec::new();
+    for group in ORIGIN_ORDER {
+        let mut members: Vec<&houyicoder_protocol::frontend::skills::SkillEntry> =
+            entries.iter().filter(|e| e.origin == group.key).collect();
+        members.sort_by(|a, b| a.name.cmp(&b.name));
+        out.extend(members);
+    }
+    out
+}
+
 pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -112,11 +126,29 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             chunks[2],
         );
     } else {
-        f.render_widget(Paragraph::new(grouped_lines(&app.skill_entries)), chunks[2]);
+        let ordered = display_order(&app.skill_entries);
+        let sel = app.skill_sel.get().min(ordered.len().saturating_sub(1));
+        if app.skill_level.get() == 1 {
+            if let Some(entry) = ordered.get(sel) {
+                let disabled = app.skill_disabled.contains(&entry.name);
+                let lines = detail_lines(entry, disabled);
+                f.render_widget(Paragraph::new(lines), chunks[2]);
+            }
+        } else {
+            f.render_widget(
+                Paragraph::new(grouped_lines(&ordered, sel, &app.skill_disabled)),
+                chunks[2],
+            );
+        }
     }
 
+    let footer = if app.skill_level.get() == 1 {
+        "t toggle · Esc back"
+    } else {
+        "Up/Down select · enter open · Esc close"
+    };
     f.render_widget(
-        Paragraph::new("Esc to close").style(Style::new().fg(Color::DarkGray)),
+        Paragraph::new(footer).style(Style::new().fg(Color::DarkGray)),
         chunks[3],
     );
 }
@@ -127,51 +159,94 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
 /// keeps the list scannable; the gate + token sit at the row tail and only
 /// clip for very long descriptions (the name always stays visible).
 fn grouped_lines(
-    entries: &[houyicoder_protocol::frontend::skills::SkillEntry],
+    ordered: &[&houyicoder_protocol::frontend::skills::SkillEntry],
+    cursor: usize,
+    disabled: &std::collections::HashSet<String>,
 ) -> Vec<Line<'static>> {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut lines: Vec<Line> = Vec::new();
-    for group in ORIGIN_ORDER {
-        let mut members: Vec<&SkillEntry> =
-            entries.iter().filter(|e| e.origin == group.key).collect();
-        if members.is_empty() {
-            continue;
+    let mut prev_origin: &str = "";
+    for (idx, s) in ordered.iter().enumerate() {
+        if s.origin != prev_origin {
+            if let Some(group) = ORIGIN_ORDER.iter().find(|g| g.key == s.origin) {
+                lines.push(Line::from(vec![
+                    Span::styled(group.label.to_string(), Style::new().fg(Color::Cyan)),
+                    Span::raw(" — "),
+                    Span::styled(group.path.to_string(), Style::new().fg(Color::DarkGray)),
+                ]));
+            }
+            prev_origin = &s.origin;
         }
-        // Stable sort by name within a group so the order does not flip on
-        // re-scan (precedence across groups is fixed by ORIGIN_ORDER).
-        members.sort_by(|a, b| a.name.cmp(&b.name));
+        let desc = truncate_desc(&s.description, DESC_BUDGET);
+        let is_selected = idx == cursor;
+        let prefix = if is_selected { "▶ " } else { "  " };
+        let user_disabled = disabled.contains(&s.name);
+        let (glyph, color) = if user_disabled {
+            ("○", Color::DarkGray)
+        } else if s.invocable {
+            ("✓", Color::Green)
+        } else {
+            ("✗", Color::Red)
+        };
         lines.push(Line::from(vec![
-            Span::styled(group.label.to_string(), Style::new().fg(Color::Cyan)),
-            Span::raw(" — "),
-            Span::styled(group.path.to_string(), Style::new().fg(Color::DarkGray)),
+            Span::raw(prefix),
+            Span::styled(format!("- {}: ", s.name), Style::new().fg(Color::Yellow)),
+            Span::raw(desc),
+            Span::raw("  "),
+            Span::styled(glyph, Style::new().fg(color)),
+            Span::styled(
+                format!(" ~{} tok", s.body_token_estimate),
+                Style::new().fg(Color::DarkGray),
+            ),
         ]));
-        for s in members {
-            // One line per skill so the list stays scannable for a real
-            // skill library. The description is pre-truncated (with an
-            // ellipsis) so the invocation gate + token cost at the tail
-            // never clip off the right edge for long descriptions — the
-            // cost is the commit-before-invoking signal, it must stay
-            // visible.
-            let desc = truncate_desc(&s.description, DESC_BUDGET);
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(format!("- {}: ", s.name), Style::new().fg(Color::Yellow)),
-                Span::raw(desc),
-                Span::raw("  "),
-                Span::styled(
-                    if s.invocable { "✓" } else { "✗" },
-                    Style::new().fg(if s.invocable {
-                        Color::Green
-                    } else {
-                        Color::Red
-                    }),
-                ),
-                Span::styled(
-                    format!(" ~{} tok", s.body_token_estimate),
-                    Style::new().fg(Color::DarkGray),
-                ),
-            ]));
-        }
     }
     lines
+}
+
+fn detail_lines(
+    entry: &houyicoder_protocol::frontend::skills::SkillEntry,
+    disabled: bool,
+) -> Vec<Line<'static>> {
+    let glyph = if disabled {
+        "○ disabled"
+    } else if entry.invocable {
+        "✓ invocable"
+    } else {
+        "✗ frontmatter-disabled"
+    };
+    let color = if disabled {
+        Color::DarkGray
+    } else {
+        Color::Green
+    };
+    vec![
+        Line::from(vec![
+            Span::styled(
+                entry.name.clone(),
+                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(glyph, Style::new().fg(color)),
+            Span::styled(
+                format!("  ~{} tok", entry.body_token_estimate),
+                Style::new().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::from(Span::styled(
+            entry.description.clone(),
+            Style::new().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            format!("origin: {}", entry.origin),
+            Style::new().fg(Color::DarkGray),
+        )),
+        Line::raw(""),
+        Line::from(Span::styled(
+            if disabled {
+                "t: enable   Esc: back"
+            } else {
+                "t: disable  Esc: back"
+            },
+            Style::new().fg(Color::DarkGray),
+        )),
+    ]
 }

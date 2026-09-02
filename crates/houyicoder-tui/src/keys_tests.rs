@@ -155,6 +155,77 @@ fn test_skills_pane_esc_closes() {
     );
 }
 
+/// Up/Down moves the skill cursor within the list bounds.
+#[test]
+fn test_skills_pane_nav() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.pane = Pane::Skills;
+    app.skill_entries = vec![
+        SkillEntry {
+            name: "alpha".into(),
+            description: "a".into(),
+            origin: "user".into(),
+            invocable: true,
+            body_token_estimate: 100,
+        },
+        SkillEntry {
+            name: "beta".into(),
+            description: "b".into(),
+            origin: "user".into(),
+            invocable: true,
+            body_token_estimate: 200,
+        },
+    ];
+    assert_eq!(app.skill_sel.get(), 0);
+    handle_working(&mut app, key(KeyCode::Down));
+    assert_eq!(app.skill_sel.get(), 1, "Down moves cursor to 1");
+    handle_working(&mut app, key(KeyCode::Up));
+    assert_eq!(app.skill_sel.get(), 0, "Up moves cursor back to 0");
+    handle_working(&mut app, key(KeyCode::Up));
+    assert_eq!(app.skill_sel.get(), 0, "Up saturates at 0");
+}
+
+/// Enter opens the detail view; Esc returns to the list.
+#[test]
+fn test_skills_pane_detail() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.pane = Pane::Skills;
+    app.skill_entries = vec![SkillEntry {
+        name: "alpha".into(),
+        description: "a".into(),
+        origin: "user".into(),
+        invocable: true,
+        body_token_estimate: 100,
+    }];
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.skill_level.get(), 1, "Enter opens detail");
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.skill_level.get(), 0, "Esc returns to list");
+}
+
+/// The t key toggles a skill disabled in the detail view.
+#[test]
+fn test_skills_pane_toggle() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.pane = Pane::Skills;
+    app.skill_entries = vec![SkillEntry {
+        name: "alpha".into(),
+        description: "a".into(),
+        origin: "user".into(),
+        invocable: true,
+        body_token_estimate: 100,
+    }];
+    app.skill_level.set(1);
+    assert!(app.skill_disabled.is_empty(), "starts clean");
+    handle_working(&mut app, key(KeyCode::Char('t')));
+    assert!(app.skill_disabled.contains("alpha"), "t disables alpha");
+    handle_working(&mut app, key(KeyCode::Char('t')));
+    assert!(!app.skill_disabled.contains("alpha"), "t re-enables alpha");
+}
+
 /// Typing keys do not reach the input box while a pane stands in for it. The
 /// box is off screen, so a character pushed into it is invisible -- and the
 /// resulting non-empty input silently disables the pane's own Enter, which
