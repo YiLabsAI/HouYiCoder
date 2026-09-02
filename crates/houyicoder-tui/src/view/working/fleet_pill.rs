@@ -266,10 +266,11 @@ mod tests {
 
     /// The sliding window follows the selection so the highlighted row
     /// stays on screen, and never spends a row on a "+N more" line — the
-    /// status bar's "N agents" count is the overflow indicator. With five
-    /// agents and three granted rows, an unset selection shows the head
-    /// (t0,t1,t2); a tail selection slides the window (t2,t3,t4); a head
-    /// selection shows the head again. No row is ever a "+N" indicator.
+    /// user discovers hidden rows by scrolling, and the strip sets no
+    /// overflow indicator. With five agents and three granted rows, an
+    /// unset selection shows the head (t0,t1,t2); a tail selection slides
+    /// the window (t2,t3,t4); a head selection shows the head again. No
+    /// row is ever a "+N" indicator.
     #[test]
     fn test_window_follows_selection() {
         let mut app = composition::app();
