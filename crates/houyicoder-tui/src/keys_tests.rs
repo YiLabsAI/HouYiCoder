@@ -932,6 +932,7 @@ fn fleet_app(n: usize) -> App {
             last_activity: None,
             completed: None,
             completed_at: None,
+            started_at: None,
         });
     }
     app
@@ -1060,6 +1061,7 @@ fn test_enter_fleet_drills_teammate() {
         last_activity: None,
         completed: None,
         completed_at: None,
+        started_at: None,
     });
     app.fleet.selected = Some(0);
     handle_working(&mut app, key(KeyCode::Enter));
@@ -1235,6 +1237,7 @@ fn test_agents_enter_follows_list() {
         last_activity: None,
         completed: None,
         completed_at: None,
+        started_at: None,
     });
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(

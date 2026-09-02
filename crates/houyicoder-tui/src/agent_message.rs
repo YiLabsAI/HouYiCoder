@@ -29,6 +29,10 @@ pub struct FleetEntry {
     /// from the footer so the input box rises back under the transcript. The
     /// result stays in the transcript fold-group; only the footer pill leaves.
     pub completed_at: Option<Instant>,
+    /// When the child spawned. Drives the live elapsed counter in the pill:
+    /// build_row renders started_at.elapsed() so the user sees how long
+    /// each child has been running.
+    pub started_at: Option<Instant>,
 }
 
 /// One returned delegation, for the /agents pane's session list: the child
@@ -111,6 +115,9 @@ pub struct FleetState {
     /// Where the strip was drawn this frame, for the mouse router. Zero when
     /// not drawn, so a stale rect cannot swallow clicks.
     pub rect: std::cell::Cell<ratatui::layout::Rect>,
+    /// When the pill last re-rendered for the elapsed counters. The poll
+    /// loop ticks this at most once per second when running children exist.
+    pub last_elapsed_tick: Option<Instant>,
 }
 
 impl FleetState {
@@ -159,6 +166,24 @@ impl FleetState {
             _ => {}
         }
         retired
+    }
+
+    /// Tick the live elapsed counters: return true when the pill should
+    /// re-render (at most once per second while running children exist).
+    /// Resets when no children run so the next spawn ticks immediately.
+    pub fn tick_elapsed(&mut self, now: Instant) -> bool {
+        let any_running = self.entries.iter().any(|e| e.completed.is_none());
+        if !any_running {
+            self.last_elapsed_tick = None;
+            return false;
+        }
+        match self.last_elapsed_tick {
+            Some(last) if now.duration_since(last) < Duration::from_secs(1) => false,
+            _ => {
+                self.last_elapsed_tick = Some(now);
+                true
+            }
+        }
     }
 }
 

@@ -26,6 +26,7 @@ fn test_abort_viewed_child_turn() {
         last_activity: None,
         completed: None,
         completed_at: None,
+        started_at: None,
     });
     app.abort_viewed_child_turn();
     assert!(
@@ -130,6 +131,7 @@ fn test_steer_completed_surfaces_notice() {
         last_activity: None,
         completed: Some("completed".into()),
         completed_at: None,
+        started_at: None,
     });
     app.spawn_run("steer this".into());
     // The completed child's inbox is closed, so the steer exits the teammate

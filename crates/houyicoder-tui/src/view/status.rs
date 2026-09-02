@@ -445,6 +445,7 @@ mod tests {
                 last_activity: None,
                 completed: None,
                 completed_at: None,
+                started_at: None,
             });
         }
         app.fleet.granted.set(granted);
@@ -489,6 +490,7 @@ mod tests {
             last_activity: None,
             completed: Some("completed".into()),
             completed_at: Some(std::time::Instant::now()),
+            started_at: None,
         };
         app.fleet.entries.push(done);
         let hint = agents_hint(&app).unwrap();

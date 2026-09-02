@@ -454,6 +454,7 @@ impl App {
                         tool_uses,
                         last_activity,
                         completed_at: completed.as_ref().map(|_| Instant::now()),
+                        started_at: Some(Instant::now()),
                         completed,
                     });
                 }

@@ -956,6 +956,7 @@ fn test_fleet_click_selects() {
             last_activity: None,
             completed: None,
             completed_at: None,
+            started_at: None,
         });
     }
     drop(crate::test_support::render_text(&app, 80, 24));

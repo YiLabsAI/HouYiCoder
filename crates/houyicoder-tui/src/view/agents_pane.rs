@@ -147,6 +147,7 @@ mod tests {
             last_activity: None,
             completed: None,
             completed_at: None,
+            started_at: None,
         });
         let content = render(&app, 40, 3);
         assert!(

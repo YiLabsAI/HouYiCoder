@@ -146,12 +146,17 @@ fn build_row(entry: &FleetEntry, selected: bool) -> Line<'_> {
     let body = if entry.completed.is_some() {
         format!("{} · done · {}", entry.subagent_type, tokens)
     } else {
+        let elapsed = entry
+            .started_at
+            .map(|t| format!(" · {}s", t.elapsed().as_secs()))
+            .unwrap_or_default();
         format!(
-            "{}: {} · {} · turn {}",
+            "{}: {} · {} · turn {}{}",
             entry.subagent_type,
             verb_for(entry.last_activity.as_deref()),
             tokens,
-            entry.turn
+            entry.turn,
+            elapsed
         )
     };
     Line::from(vec![
@@ -203,6 +208,7 @@ mod tests {
             last_activity: Some(tool.into()),
             completed: None,
             completed_at: None,
+            started_at: None,
         }
     }
 
@@ -369,6 +375,7 @@ mod tests {
             last_activity: Some("grep".into()),
             completed: Some("completed".into()),
             completed_at: None,
+            started_at: None,
         };
         let line = build_row(&e, false);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
@@ -397,6 +404,7 @@ mod tests {
             last_activity: None,
             completed: Some("completed".into()),
             completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
+            started_at: None,
         });
         assert!(fleet.retire_completed(None), "expired entry retired");
         assert!(fleet.entries.is_empty(), "footer emptied after retire");
@@ -420,6 +428,7 @@ mod tests {
             last_activity: None,
             completed: Some("completed".into()),
             completed_at: Some(Instant::now()),
+            started_at: None,
         });
         assert!(
             !fleet.retire_completed(None),
@@ -444,6 +453,7 @@ mod tests {
             last_activity: None,
             completed: Some("completed".into()),
             completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
+            started_at: None,
         });
         fleet.entries.push(entry("c2", "plan", 1, 10, "read"));
         fleet.selected = Some(0);
@@ -469,6 +479,7 @@ mod tests {
             last_activity: None,
             completed: Some("completed".into()),
             completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
+            started_at: None,
         });
         fleet.entries.push(FleetEntry {
             agent_id: "c2".into(),
@@ -479,6 +490,7 @@ mod tests {
             last_activity: None,
             completed: Some("completed".into()),
             completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
+            started_at: None,
         });
         assert!(
             fleet.retire_completed(Some("c1")),
@@ -486,5 +498,55 @@ mod tests {
         );
         assert_eq!(fleet.entries.len(), 1, "viewed child stays past grace");
         assert_eq!(fleet.entries[0].agent_id, "c1");
+    }
+
+    /// tick_elapsed dirties at most once per second while running children
+    /// exist; returns false when idle and resets so the next spawn ticks
+    /// immediately.
+    #[test]
+    fn test_tick_elapsed() {
+        use std::time::{Duration, Instant};
+        let mut fleet = FleetState::default();
+        let now = Instant::now();
+        assert!(!fleet.tick_elapsed(now), "no running children");
+        fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
+        assert!(fleet.tick_elapsed(now), "first tick after spawn");
+        assert!(!fleet.tick_elapsed(now), "same instant does not re-tick");
+        assert!(
+            fleet.tick_elapsed(now + Duration::from_secs(1)),
+            "1s later re-ticks"
+        );
+        fleet.entries[0].completed = Some("done".into());
+        assert!(
+            !fleet.tick_elapsed(now + Duration::from_secs(2)),
+            "no running children after completion"
+        );
+        fleet.entries[0].completed = None;
+        assert!(
+            fleet.tick_elapsed(now + Duration::from_millis(100)),
+            "reset ticks immediately on next spawn"
+        );
+    }
+
+    /// A running child with started_at renders the elapsed seconds so the
+    /// user sees how long it has been running.
+    #[test]
+    fn test_running_row_shows_elapsed() {
+        use std::time::{Duration, Instant};
+        let e = FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 2,
+            tokens: 100,
+            tool_uses: 0,
+            last_activity: Some("grep".into()),
+            completed: None,
+            completed_at: None,
+            started_at: Instant::now().checked_sub(Duration::from_secs(7)),
+        };
+        let line = build_row(&e, false);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("7s"), "running row shows elapsed: {text}");
+        assert!(!text.contains("done"), "running row is not terse: {text}");
     }
 }

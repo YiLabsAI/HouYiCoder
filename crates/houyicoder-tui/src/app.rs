@@ -96,6 +96,9 @@ pub fn run_with_runner(
         if app.fleet.retire_completed(retain_viewed) {
             dirty = true;
         }
+        if app.fleet.tick_elapsed(std::time::Instant::now()) {
+            dirty = true;
+        }
         if app.notifications.tick(std::time::Instant::now()) {
             dirty = true;
         }
