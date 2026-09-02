@@ -12,7 +12,6 @@ use houyicoder_api::skill::{
     HookSourceKind, SkillDescriptor, SkillError, SkillHookSpec, SkillRegistry, SkillScriptRef,
     SkillSnapshot,
 };
-use houyicoder_core::agent::HookSource;
 use houyicoder_skill::definition::{SkillDefinition, SkillSource};
 use houyicoder_skill::{discover, invoke};
 
@@ -31,34 +30,24 @@ fn source_label(source: &SkillSource) -> &'static str {
     }
 }
 
-/// Map a skill's discovery source to the hook-source level the hook
+/// Map a skill's discovery source to the port-level hook-source kind the
 /// registry gates by. MCP skills are remote and never register command
 /// hooks (None); the others map to the trust level they were discovered
 /// at. ClaudeEco and Agents are shared-repo paths, grouped with Project
 /// so they are skipped under an untrusted project like checked-in hooks.
-/// A skill hook built with this source flows through the registry's
-/// policy + trust gate the same as a persisted hook.
-pub(crate) fn skill_source_to_hook_source(s: &SkillSource) -> Option<HookSource> {
+/// A skill hook built with this kind flows through the registry's
+/// policy + trust gate the same as a persisted hook. Direct mapping: the
+/// engine-side registrar maps the kind onward itself, so no detour
+/// through the engine's own source enum is needed here.
+fn skill_source_to_kind(s: &SkillSource) -> Option<HookSourceKind> {
     match s {
-        SkillSource::Managed => Some(HookSource::Managed),
-        SkillSource::User => Some(HookSource::User),
+        SkillSource::Managed => Some(HookSourceKind::Managed),
+        SkillSource::User => Some(HookSourceKind::User),
         SkillSource::Project | SkillSource::ClaudeEco | SkillSource::Agents => {
-            Some(HookSource::Project)
+            Some(HookSourceKind::Project)
         }
-        SkillSource::Local => Some(HookSource::Local),
+        SkillSource::Local => Some(HookSourceKind::Local),
         SkillSource::Mcp => None,
-    }
-}
-
-/// Map the registry HookSource level to the port-level kind. The two
-/// enums mirror each other; the port kind carries no MCP variant (MCP
-/// skills produce no hook specs — filtered at parse).
-fn hook_source_to_kind(s: HookSource) -> HookSourceKind {
-    match s {
-        HookSource::Managed => HookSourceKind::Managed,
-        HookSource::User => HookSourceKind::User,
-        HookSource::Project => HookSourceKind::Project,
-        HookSource::Local => HookSourceKind::Local,
     }
 }
 
@@ -99,11 +88,10 @@ struct MatcherBucket {
 /// specs. Unsupported keys (per-hook timeout, non-command hook types)
 /// warn rather than silently ignore.
 fn parse_hooks(hooks_raw: Option<&serde_yaml::Value>, source: &SkillSource) -> Vec<SkillHookSpec> {
-    let Some(level) = skill_source_to_hook_source(source) else {
+    let Some(source_kind) = skill_source_to_kind(source) else {
         // MCP skills are remote; their command hooks never register.
         return Vec::new();
     };
-    let source_kind = hook_source_to_kind(level);
     let Some(raw) = hooks_raw else {
         return Vec::new();
     };
@@ -351,40 +339,41 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// A skill's discovery source maps to the hook-source level the
-    /// registry gates by. MCP never registers (remote, untrusted); the
-    /// others map to their trust level. ClaudeEco/Agents group with
-    /// Project (shared-repo, skipped under an untrusted project).
+    /// A skill's discovery source maps to the port-level hook-source
+    /// kind the registry gates by. MCP never registers (remote,
+    /// untrusted); the others map to their trust level. ClaudeEco/Agents
+    /// group with Project (shared-repo, skipped under an untrusted
+    /// project).
     #[test]
-    fn test_skill_source_hook_map() {
+    fn test_skill_source_kind_map() {
         assert_eq!(
-            skill_source_to_hook_source(&SkillSource::Managed),
-            Some(HookSource::Managed)
+            skill_source_to_kind(&SkillSource::Managed),
+            Some(HookSourceKind::Managed)
         );
         assert_eq!(
-            skill_source_to_hook_source(&SkillSource::User),
-            Some(HookSource::User)
+            skill_source_to_kind(&SkillSource::User),
+            Some(HookSourceKind::User)
         );
         assert_eq!(
-            skill_source_to_hook_source(&SkillSource::Project),
-            Some(HookSource::Project)
+            skill_source_to_kind(&SkillSource::Project),
+            Some(HookSourceKind::Project)
         );
         assert_eq!(
-            skill_source_to_hook_source(&SkillSource::ClaudeEco),
-            Some(HookSource::Project),
+            skill_source_to_kind(&SkillSource::ClaudeEco),
+            Some(HookSourceKind::Project),
             "ClaudeEco groups with Project"
         );
         assert_eq!(
-            skill_source_to_hook_source(&SkillSource::Agents),
-            Some(HookSource::Project),
+            skill_source_to_kind(&SkillSource::Agents),
+            Some(HookSourceKind::Project),
             "Agents groups with Project"
         );
         assert_eq!(
-            skill_source_to_hook_source(&SkillSource::Local),
-            Some(HookSource::Local)
+            skill_source_to_kind(&SkillSource::Local),
+            Some(HookSourceKind::Local)
         );
         assert_eq!(
-            skill_source_to_hook_source(&SkillSource::Mcp),
+            skill_source_to_kind(&SkillSource::Mcp),
             None,
             "MCP never registers command hooks"
         );
