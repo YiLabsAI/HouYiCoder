@@ -736,7 +736,12 @@ fn slugify(text: &str) -> String {
         out.pop();
     }
     if out.chars().count() > 40 {
-        out.chars().take(40).collect()
+        let mut truncated: String = out.chars().take(39).collect();
+        while truncated.ends_with('-') {
+            truncated.pop();
+        }
+        truncated.push('\u{2026}');
+        truncated
     } else {
         out
     }

@@ -97,7 +97,12 @@ fn test_slugify_compacts_prompt() {
         slugify("  Refactor  the  spec  strip  "),
         "refactor-the-spec-strip"
     );
-    assert_eq!(slugify("a".repeat(80).as_str()).chars().count(), 40);
+    let long = slugify("a".repeat(80).as_str());
+    assert_eq!(long.chars().count(), 40);
+    assert!(
+        long.ends_with('\u{2026}'),
+        "truncated slug ends with ellipsis: {long}"
+    );
 }
 
 #[tokio::test]

@@ -157,10 +157,21 @@ pub(crate) fn render_summary(stats: &ToolStats, git_ops: &[GitOp], active: bool)
         }
         first = false;
     }
-    let plain = plain_parts.join(", ");
+    // Empty stats produce an empty render (no glyph, no plain) so a blank
+    // fold slot stays invisible.
+    if total_parts == 0 {
+        return SummaryRender {
+            line: Line::default(),
+            plain: String::new(),
+        };
+    }
+    // Leading tool-call glyph so the summary text starts at col 2, aligning
+    // with the ⎿ hint/result rows below it (same as a single ⏺ Tool() call).
+    spans.insert(0, Span::styled("\u{23fa} ", dim));
+    let plain = format!("\u{23fa} {}", plain_parts.join(", "));
     // Completed (non-active) groups get the affordance suffix so the collapse
     // is discoverable; active groups stay bare (they read as "in progress").
-    if !active && total_parts > 0 {
+    if !active {
         spans.push(Span::styled(" (ctrl+o to expand)", dim));
     }
     SummaryRender {

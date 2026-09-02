@@ -172,11 +172,11 @@ fn trim_trailing(s: &str) -> String {
 }
 
 /// Width-wrap a plain-text block the way a single Ink Text node wraps a user
-/// prompt: prefix_first (the angle-bracket lead) is prepended once to the
-/// whole text, then the combined string is wrapped as one logical block —
-/// the first row carries the prefix, wrapped continuation rows line up at
-/// column 0 (no per-row prefix). Splitting on newlines first preserves
-/// explicit line breaks, then each logical line wraps to the pane width.
+/// prompt: prefix_first (the angle-bracket lead) is prepended to the first
+/// row only; wrapped continuation rows hang at the prefix width so they align
+/// with the text after the lead instead of jumping to column 0. Splitting on
+/// newlines first preserves explicit line breaks, then each logical line wraps
+/// to the pane width minus the prefix.
 ///
 /// The cap argument enables a head+tail display cap (a
 /// piped-in large prompt is capped at 10 000 chars — head 2 500 + tail 2 500 plus an
@@ -205,12 +205,19 @@ pub fn wrap_plain_block(
         }
         _ => text.into(),
     };
-    let full = format!("{prefix_first}{display}");
-    let avail = width as usize;
+    let prefix_w = UnicodeWidthStr::width(prefix_first);
+    let indent = " ".repeat(prefix_w);
+    let avail = (width as usize).saturating_sub(prefix_w).max(1);
     let mut out: Vec<String> = Vec::new();
-    for logical in full.split('\n') {
+    let mut first_row = true;
+    for logical in display.split('\n') {
         for wrapped in wrap_line(logical, avail) {
-            out.push(wrapped);
+            if first_row {
+                out.push(format!("{prefix_first}{wrapped}"));
+                first_row = false;
+            } else {
+                out.push(format!("{indent}{wrapped}"));
+            }
         }
     }
     if out.is_empty() {
@@ -616,15 +623,16 @@ mod tests {
     }
 
     /// A plain block under the char cap renders whole: the angle-bracket lead
-    /// on the first row, continuation rows at column 0, and a long line wraps
-    /// to the pane width.
+    /// on the first row, continuation rows hung at the prefix width, and a
+    /// long line wraps to the pane width minus the prefix.
     #[test]
     fn test_plain_block_wraps_narrow() {
         let rows = wrap_plain_block("alpha bravo charlie delta", "> ", 12, Some(10_000));
         // "> alpha bravo" is 13 wide > 12 → wraps after "alpha".
         assert_eq!(rows[0], "> alpha");
-        // Continuation rows line up at column 0 (no per-row prefix).
+        // Continuation rows hang at the prefix width (2 spaces for "> ").
         assert!(rows.len() > 1);
+        assert!(rows[1].starts_with("  "), "hang-indent: {}", rows[1]);
         assert!(!rows[1].starts_with('>'));
     }
 

@@ -758,3 +758,16 @@ fn test_verbose_count_matches() {
         );
     }
 }
+
+/// Continuation lines hang under the glyph (2-space indent), not at col 0.
+#[test]
+fn test_continuation_hangs_under_glyph() {
+    use crate::markdown::render_agent_text;
+    let (_, plain) = render_agent_text("●", "para one\n\npara two", 80);
+    assert!(plain[2].starts_with("  "), "hang-indent: {:?}", plain[2]);
+    assert!(
+        !plain[2].starts_with("● "),
+        "no glyph repeat: {:?}",
+        plain[2]
+    );
+}

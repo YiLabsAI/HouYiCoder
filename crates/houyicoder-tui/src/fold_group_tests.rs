@@ -270,7 +270,7 @@ fn test_save_memory_wrote_bucket() {
     assert_eq!(s.mem_write, 1);
     assert_eq!(s.edit, 0);
     let summary = render_summary(&s, &[], false);
-    assert_eq!(summary.plain, "Wrote 1 memory");
+    assert_eq!(summary.plain, "\u{23fa} Wrote 1 memory");
 }
 
 /// delete_memory lands in its own mem_delete bucket (no delete tool
@@ -284,7 +284,7 @@ fn test_delete_memory_deleted_bucket() {
     assert_eq!(s.mem_write, 0);
     assert_eq!(s.edit, 0);
     let summary = render_summary(&s, &[], false);
-    assert_eq!(summary.plain, "Deleted 1 memory");
+    assert_eq!(summary.plain, "\u{23fa} Deleted 1 memory");
 }
 
 /// Pluralization: two saves → "memories", and a save+delete in one group
@@ -297,7 +297,7 @@ fn test_memory_plural_and_order() {
     accumulate_brief(&mut s, "save_memory", "b");
     accumulate_brief(&mut s, "delete_memory", "c");
     let summary = render_summary(&s, &[], false);
-    assert_eq!(summary.plain, "Wrote 2 memories, deleted 1 memory");
+    assert_eq!(summary.plain, "\u{23fa} Wrote 2 memories, deleted 1 memory");
 }
 
 /// Memory ops lead the file-op counts: a turn that saves a memory AND
@@ -309,7 +309,7 @@ fn test_memory_leads_file_ops() {
     accumulate_brief(&mut s, "read", "src/foo.rs");
     accumulate_brief(&mut s, "save_memory", "note");
     let summary = render_summary(&s, &[], false);
-    assert_eq!(summary.plain, "Wrote 1 memory, read 1 file");
+    assert_eq!(summary.plain, "\u{23fa} Wrote 1 memory, read 1 file");
 }
 
 /// Active groups use present participle: "writing N memory" / "deleting
@@ -321,5 +321,8 @@ fn test_memory_active_tense() {
     accumulate_brief(&mut s, "save_memory", "note");
     accumulate_brief(&mut s, "delete_memory", "old");
     let summary = render_summary(&s, &[], true);
-    assert_eq!(summary.plain, "Writing 1 memory, deleting 1 memory");
+    assert_eq!(
+        summary.plain,
+        "\u{23fa} Writing 1 memory, deleting 1 memory"
+    );
 }

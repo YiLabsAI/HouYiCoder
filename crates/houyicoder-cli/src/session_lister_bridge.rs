@@ -159,7 +159,12 @@ fn slugify(text: &str) -> String {
         out.pop();
     }
     if out.chars().count() > 40 {
-        out.chars().take(40).collect()
+        let mut truncated: String = out.chars().take(39).collect();
+        while truncated.ends_with('-') {
+            truncated.pop();
+        }
+        truncated.push('\u{2026}');
+        truncated
     } else {
         out
     }
@@ -292,6 +297,44 @@ mod tests {
         assert_eq!(
             rows[1].title, "named session",
             "resolve_detail leaves a sidecar name untouched"
+        );
+        let _r = std::fs::remove_dir_all(&root);
+    }
+
+    /// A prompt longer than the slug cap produces an ellipsis-terminated slug
+    /// no wider than 40 display columns, with no trailing dash before the
+    /// ellipsis.
+    #[tokio::test]
+    async fn test_long_prompt_slug_ellipsis() {
+        let root = temp_root();
+        let sid = SessionId::new();
+        write_sidecar(&root, sid, &meta(None, "/repo", 1));
+        let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+        append_log(
+            &store,
+            sid,
+            "project context from the nearest agents memory hicoder today",
+        )
+        .await;
+        age(&root.join(sid.to_string()).join("log.jsonl"), 100);
+        let log: Arc<dyn SessionLog> = Arc::new(store);
+        let bridge = SessionListerBridge::new(log, root.clone());
+        let mut rows = bridge.list_sessions(&SessionId::new().to_string());
+        assert_eq!(rows.len(), 1);
+        bridge.resolve_detail(&mut rows[0]);
+        let title = &rows[0].title;
+        assert!(
+            title.ends_with('\u{2026}'),
+            "long slug should end with ellipsis: {title}"
+        );
+        assert!(
+            !title.ends_with("-\u{2026}"),
+            "no trailing dash before ellipsis: {title}"
+        );
+        assert!(
+            title.chars().count() <= 40,
+            "slug within 40 chars: {title} ({})",
+            title.chars().count()
         );
         let _r = std::fs::remove_dir_all(&root);
     }

@@ -81,30 +81,39 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     f.render_widget(footer, chunks[2]);
 }
 
-/// One row: compact time, title (truncated with ellipsis), cwd basename dim.
+/// One row: compact time, title (fixed-width column so the cwd column
+/// aligns across rows), cwd basename dim. The title is padded to its budget
+/// so the cwd starts at a stable column — a one-line layout that stays
+/// scannable where a two-line layout would spend the extra row.
 fn format_row(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> ListItem<'static> {
     ListItem::new(format_line(row, now, width))
 }
 
-/// The Line one row renders, extracted so a unit test can assert the time +
-/// title + cwd basename (and the sid's absence) without poking private
-/// widget fields.
 fn format_line(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> Line<'static> {
     let time = crate::resume_picker::relative_time(row.last_active, now);
-    let title_max = title_max(width);
-    let title = truncate_width(&row.title, title_max);
+    let budget = title_budget(width);
+    let title = truncate_width(&row.title, budget);
+    let pad = budget.saturating_sub(unicode_width::UnicodeWidthStr::width(title.as_str()));
     let cwd = truncate_width(&row.cwd_basename, 24);
     Line::from(vec![
-        Span::styled(format!("{time:>4} "), Style::new().fg(Color::DarkGray)),
+        Span::styled(format!("{time:>4}"), Style::new().fg(Color::DarkGray)),
+        Span::raw("  "),
         Span::styled(title, Style::new().fg(Color::White)),
+        Span::raw(" ".repeat(pad)),
         Span::raw("  "),
         Span::styled(cwd, Style::new().fg(Color::DarkGray)),
     ])
 }
 
-fn title_max(width: u16) -> usize {
-    // time(5) + cwd(24) + separators(4) + highlight symbol(2)
-    (width as usize).saturating_sub(5 + 24 + 4 + 2).max(8)
+/// The fixed title-column budget: terminal width minus the time column, the
+/// two 2-space gaps, and the 24-char cwd column, capped at 40 so a long slug
+/// does not eat the whole row. Floor 8 so a narrow terminal still shows a
+/// sliver of title.
+fn title_budget(width: u16) -> usize {
+    // time(4) + gap(2) + title + gap(2) + cwd(24) + highlight symbol(2)
+    (width as usize)
+        .saturating_sub(4 + 2 + 2 + 24 + 2)
+        .clamp(8, 40)
 }
 
 #[cfg(test)]

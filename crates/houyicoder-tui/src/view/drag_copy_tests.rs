@@ -84,12 +84,12 @@ fn test_drag_copies_second_line() {
         .last_all_rows
         .borrow()
         .iter()
-        .position(|(_, s)| s == "second line")
+        .position(|(_, s)| s == "  second line")
         .expect("second line is its own row");
     let total = app.transcript_scroll.total.get();
     let top = app.transcript_scroll.top_offset(total);
     let second_y = rect.y + (second_ri.saturating_sub(top)) as u16;
-    let line_end = rect.x + 11;
+    let line_end = rect.x + 13;
     for ev in [
         MouseEventKind::Down(MouseButton::Left),
         MouseEventKind::Drag(MouseButton::Left),
@@ -113,7 +113,7 @@ fn test_drag_copies_second_line() {
     let got = captured.lock().expect("captured").clone();
     assert_eq!(got.len(), 1, "one copy on mouse-up: {got:?}");
     assert_eq!(
-        got[0], "second line",
+        got[0], "  second line",
         "only the second line copied: {got:?}"
     );
 }

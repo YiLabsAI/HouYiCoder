@@ -135,7 +135,8 @@ pub fn render_agent_text(
                 let prefix = if first_line {
                     format!("{glyph} ")
                 } else {
-                    String::new()
+                    // Hanging indent: continuation aligns after the glyph.
+                    " ".repeat(UnicodeWidthStr::width(glyph) + 1)
                 };
                 if !prefix.is_empty() {
                     let pfx = prefix.clone();
@@ -157,10 +158,7 @@ pub fn render_agent_text(
     }
 
     /// Emit a blank-line separator before a top-level block when content
-    /// already exists and the prior block did not already leave a trailing
-    /// blank (a heading does). Stands in for a parser space
-    /// token between block siblings; skipped inside lists where tight/loose
-    /// spacing is governed by the item flush.
+    /// already exists and the prior block left no trailing blank.
     macro_rules! block_sep {
         () => {
             if started && list_stack.is_empty() && !trailing_blank {
@@ -569,9 +567,7 @@ mod tests {
         let md = "| a | b |\n|---|---|\n| 1 | 2 |";
         let (_, plain) = render_agent_text("●", md, 80);
         let joined = plain.join("\n");
-        // ENABLE_TABLES on: render_table fires, padding cells to the column
-        // width (min 3) + a width+2 dash separator. This asserts the table
-        // was parsed + rendered (not raw pipes as a paragraph).
+        // ENABLE_TABLES on: table parsed + rendered with padded cells.
         assert!(joined.contains("| a   | b   |"), "header padded: {joined}");
         assert!(
             joined.contains("|-----|-----|"),
@@ -590,9 +586,7 @@ mod tests {
 
     #[test]
     fn test_table_wide_glyph_width() {
-        // a display-width-2 glyph in a cell must count as 2 for column
-        // width + padding, not as 1 char, so the pipe separators still
-        // align. Guards the UnicodeWidthStr call in render_table.
+        // A display-width-2 glyph must count as 2 for column width.
         let md = "| z | 🌐 |\n|---|---|\n| 1 | 2 |";
         let (_, plain) = render_agent_text("●", md, 80);
         let joined = plain.join("\n");
@@ -601,8 +595,7 @@ mod tests {
 
     #[test]
     fn test_table_right_align() {
-        // right-aligned column: padding goes BEFORE the content so the
-        // right edge aligns. The header separator dashes-colon sets right.
+        // Right-aligned column: padding before content so the right edge aligns.
         let md = "| name | val |\n|:---|---:|\n| x | 1 |\n| abc | 22 |";
         let (_, plain) = render_agent_text("●", md, 80);
         let joined = plain.join("\n");
@@ -653,8 +646,8 @@ mod tests {
             plain
         );
         assert!(plain[0].ends_with("- first"), "row 0: {}", plain[0]);
-        assert_eq!(plain[1], "- second", "row 1: {}", plain[1]);
-        assert_eq!(plain[2], "- third", "row 2: {}", plain[2]);
+        assert_eq!(plain[1], "  - second", "row 1: {}", plain[1]);
+        assert_eq!(plain[2], "  - third", "row 2: {}", plain[2]);
     }
 
     #[test]
@@ -690,7 +683,7 @@ mod tests {
         assert_eq!(plain.len(), 3, "got {}: {:?}", plain.len(), plain);
         assert_eq!(plain[0], "\u{25cf} first para");
         assert_eq!(plain[1], "", "blank separator between paragraphs");
-        assert_eq!(plain[2], "second para");
+        assert_eq!(plain[2], "  second para");
     }
 
     #[test]
@@ -702,7 +695,7 @@ mod tests {
         let (_, plain) = render_agent_text("●", md, 80);
         assert_eq!(plain[0], "\u{25cf} Title");
         assert_eq!(plain[1], "", "single trailing blank after heading");
-        assert_eq!(plain[2], "body");
+        assert_eq!(plain[2], "  body");
         assert!(plain.len() <= 3, "no doubled blank: {:?}", plain);
     }
 }

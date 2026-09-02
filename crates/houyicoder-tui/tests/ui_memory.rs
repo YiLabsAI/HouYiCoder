@@ -21,24 +21,16 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, pty_session_isolated, run_slash_command};
+use common::{Key, RENDER_TIMEOUT, fresh_temp_dir, pty_session_isolated, run_slash_command};
 use std::path::PathBuf;
 
 /// A fresh temp HOME the test owns. The memory roots + the settings file land
 /// under the project-local state dir inside HOME, so assertions read there
 /// + cleanup nukes the whole tree.
+///
+/// Delegates to fresh_temp_dir so parallel nextest processes cannot mkdir-clash.
 fn fresh_home(slug: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!(
-        "houyi-ui-mem-{}-{}-{}",
-        slug,
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir(&p).expect("mkdir temp home");
-    p
+    fresh_temp_dir(&format!("mem-{slug}"))
 }
 
 /// Walk the state dir under HOME for a topic file named <key>.md. The /save

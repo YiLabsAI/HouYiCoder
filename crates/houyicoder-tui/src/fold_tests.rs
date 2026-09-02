@@ -78,13 +78,22 @@ fn test_render_summary_todo() {
         todo: 2,
         ..Default::default()
     };
-    assert_eq!(render_summary(&s, &[], false).plain, "Updated 2 checklists");
-    assert_eq!(render_summary(&s, &[], true).plain, "Updating 2 checklists");
+    assert_eq!(
+        render_summary(&s, &[], false).plain,
+        "\u{23fa} Updated 2 checklists"
+    );
+    assert_eq!(
+        render_summary(&s, &[], true).plain,
+        "\u{23fa} Updating 2 checklists"
+    );
     let s = ToolStats {
         todo: 1,
         ..Default::default()
     };
-    assert_eq!(render_summary(&s, &[], false).plain, "Updated 1 checklist");
+    assert_eq!(
+        render_summary(&s, &[], false).plain,
+        "\u{23fa} Updated 1 checklist"
+    );
 }
 
 #[test]
@@ -97,7 +106,7 @@ fn test_render_past_tense() {
     };
     let out = render_summary(&s, &[], false);
     assert!(
-        out.plain.starts_with("Searched for 2 patterns"),
+        out.plain.starts_with("\u{23fa} Searched for 2 patterns"),
         "{:?}",
         out
     );
@@ -132,7 +141,7 @@ fn test_render_summary_active_tense() {
         ..Default::default()
     };
     let out = render_summary(&s, &[], true);
-    assert_eq!(out.plain, "Running 1 shell command");
+    assert_eq!(out.plain, "\u{23fa} Running 1 shell command");
 }
 
 /// A Write call buckets separately from Edit so the turn summary reads
@@ -143,13 +152,22 @@ fn test_render_summary_write() {
         write: 1,
         ..Default::default()
     };
-    assert_eq!(render_summary(&s, &[], false).plain, "Wrote 1 file");
-    assert_eq!(render_summary(&s, &[], true).plain, "Writing 1 file");
+    assert_eq!(
+        render_summary(&s, &[], false).plain,
+        "\u{23fa} Wrote 1 file"
+    );
+    assert_eq!(
+        render_summary(&s, &[], true).plain,
+        "\u{23fa} Writing 1 file"
+    );
     let s = ToolStats {
         write: 2,
         ..Default::default()
     };
-    assert_eq!(render_summary(&s, &[], false).plain, "Wrote 2 files");
+    assert_eq!(
+        render_summary(&s, &[], false).plain,
+        "\u{23fa} Wrote 2 files"
+    );
 }
 
 #[test]
@@ -158,12 +176,18 @@ fn test_render_summary_pluralization() {
         list: 2,
         ..Default::default()
     };
-    assert_eq!(render_summary(&s, &[], false).plain, "Listed 2 directories");
+    assert_eq!(
+        render_summary(&s, &[], false).plain,
+        "\u{23fa} Listed 2 directories"
+    );
     let s = ToolStats {
         list: 1,
         ..Default::default()
     };
-    assert_eq!(render_summary(&s, &[], false).plain, "Listed 1 directory");
+    assert_eq!(
+        render_summary(&s, &[], false).plain,
+        "\u{23fa} Listed 1 directory"
+    );
 }
 
 #[test]
@@ -180,7 +204,7 @@ fn test_read_dedup_same_path() {
     accumulate_brief(&mut s, "read", "a.rs");
     accumulate_brief(&mut s, "read", "a.rs");
     assert_eq!(s.read_count(), 1);
-    assert_eq!(render_summary(&s, &[], false).plain, "Read 1 file");
+    assert_eq!(render_summary(&s, &[], false).plain, "\u{23fa} Read 1 file");
 }
 
 /// Distinct paths count each; mixed with pathless bash cat calls, the cats
