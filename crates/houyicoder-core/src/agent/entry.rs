@@ -58,6 +58,7 @@ impl Runner {
             hooks: None,
             registrar: None,
             conditional: None,
+            skill_reloader: None,
             cache_policy: Arc::new(houyicoder_api::cache_policy::AutoCachePolicy),
             cost_model: Arc::new(houyicoder_api::cost_model::AnthropicCostModel),
             recall_meter: Arc::new(std::sync::atomic::AtomicU32::new(0)),

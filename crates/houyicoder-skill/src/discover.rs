@@ -23,11 +23,14 @@ pub(crate) const PRUNED_DIRS: &[&str] = &[".git", "node_modules", ".svn", "targe
 
 /// Config directory families, in precedence order within the same level
 /// (highest first). Each is joined under a scan root to form the skills
-/// directory: root/family/skills.
-const CONFIG_DIR_FAMILIES: &[&str] = &[".houyicoder", ".claude", ".agents"];
+/// directory: root/family/skills. Shared with the hot-reload watch-roots
+/// enumeration so the watcher covers exactly the paths discovery scans.
+pub(crate) const CONFIG_DIR_FAMILIES: &[&str] = &[".houyicoder", ".claude", ".agents"];
 
-/// System-level managed skills directory (enterprise policy push).
-const MANAGED_DIR: &str = "/etc/houyicoder/skills";
+/// System-level managed skills directory (enterprise policy push). The
+/// managed path is itself the skills dir (no family segment), so the
+/// watcher treats it as a deep watch when it exists.
+pub(crate) const MANAGED_DIR: &str = "/etc/houyicoder/skills";
 
 /// Entry point: discover all skills from the filesystem.
 ///
@@ -208,8 +211,9 @@ fn walk_for_skill_md(dir: &Path, paths: &mut Vec<PathBuf>, depth: usize) {
 }
 
 /// Find the git repository root by walking up from start looking for a
-/// .git file or directory. Does not require the git2 crate.
-fn find_git_root(start: &Path) -> Option<PathBuf> {
+/// .git file or directory. Does not require the git2 crate. Shared with
+/// the hot-reload watch-roots enumeration.
+pub(crate) fn find_git_root(start: &Path) -> Option<PathBuf> {
     let canonical = dunce::canonicalize(start).ok()?;
     let mut current: Option<&Path> = Some(&canonical);
     while let Some(dir) = current {
@@ -222,8 +226,9 @@ fn find_git_root(start: &Path) -> Option<PathBuf> {
 }
 
 /// Collect directories from start up to root (inclusive), root-first
-/// (closer to cwd overrides parent dirs in project precedence).
-fn walk_up_to_root(start: &Path, root: Option<&Path>) -> Vec<PathBuf> {
+/// (closer to cwd overrides parent dirs in project precedence). Shared
+/// with the hot-reload watch-roots enumeration.
+pub(crate) fn walk_up_to_root(start: &Path, root: Option<&Path>) -> Vec<PathBuf> {
     let Some(root) = root else {
         return vec![start.to_path_buf()];
     };

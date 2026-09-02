@@ -12,4 +12,5 @@ pub mod definition;
 pub mod disclose;
 pub mod discover;
 pub mod invoke;
+pub mod lifecycle;
 pub mod parse;

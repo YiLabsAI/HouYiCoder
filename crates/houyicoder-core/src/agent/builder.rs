@@ -184,6 +184,17 @@ impl Runner {
         self
     }
 
+    /// Hold a hot-reload driver lifetime guard. The guard is never read;
+    /// dropping it (with the runner) stops the watcher + thread. None means
+    /// no hot-reload driver runs for this session.
+    pub fn with_skill_reloader(
+        mut self,
+        reloader: Arc<dyn crate::agent::skill_reload::SkillReloadGuard>,
+    ) -> Self {
+        self.skill_reloader = Some(reloader);
+        self
+    }
+
     /// Write the resolved workspace trust through the registrar. The server
     /// calls this once after the startup trust prompt so a Project or Local
     /// skill hook invoked later reads the resolved value, not the

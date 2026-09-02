@@ -6,13 +6,16 @@
 //! only resolves the name, checks the model-invocation gate, and threads
 //! the session id into the substitution context.
 
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use houyicoder_api::skill::{
     HookSourceKind, SkillDescriptor, SkillError, SkillHookSpec, SkillRegistry, SkillScriptRef,
     SkillSnapshot,
 };
 use houyicoder_skill::definition::{SkillDefinition, SkillSource};
+use houyicoder_skill::lifecycle::should_swap;
 use houyicoder_skill::{discover, invoke};
 
 /// The snake_case wire label for a discovery source, used for grouping in
@@ -167,13 +170,35 @@ fn to_descriptor(s: &SkillDefinition) -> SkillDescriptor {
 /// origin paths clone the cached value instead of re-reading every body
 /// file per call (the body token estimate is the only field that touches
 /// disk, so caching it once bounds the per-call cost to a clone).
-pub struct SkillRegistryImpl {
+/// The cached discovery set: three parallel vectors built together at
+/// discovery and swapped atomically on reload, so a reader never sees a
+/// torn mix where one skill's name resolves to another's hooks. The
+/// lockstep is structural — the vectors are born and replaced together —
+/// not a runtime invariant guarded by asserts.
+pub struct SkillSet {
     skills: Vec<SkillDefinition>,
     descriptors: Vec<SkillDescriptor>,
-    /// Parsed frontmatter hooks per skill (lockstep with skills/descriptors).
-    /// Cached at discovery so hooks_for does not re-parse per invoke. MCP
-    /// skills and skills with no/malformed hooks yield empty vectors.
     hooks: Vec<Vec<SkillHookSpec>>,
+}
+
+/// The result of a reload: whether the new set was swapped in and which
+/// skill names changed (added, removed, or hooks spec changed). The driver
+/// feeds changed to the hook registrar so only those skills' hooks are
+/// invalidated and re-registered. When swapped is false (the empty-set
+/// guard held), changed is empty — no swap means no change to act on.
+pub struct ReloadOutcome {
+    pub swapped: bool,
+    pub changed: Vec<String>,
+}
+
+/// A registry backed by filesystem discovery, cached behind a single
+/// RwLock so a hot reload can swap the whole set atomically without
+/// tearing a reader between the name index and the hooks/skills vectors it
+/// indexes into. Descriptors and hooks are materialized once at discovery
+/// (the body token estimate is the only field that touches disk, so caching
+/// it bounds the per-call cost to a clone).
+pub struct SkillRegistryImpl {
+    set: RwLock<SkillSet>,
 }
 
 impl SkillRegistryImpl {
@@ -194,43 +219,61 @@ impl SkillRegistryImpl {
     /// a builtin slash command is rejected at registration (warned, not
     /// silently dropped) so it cannot shadow the builtin at invoke.
     pub fn discover_with_home(cwd: Option<&Path>, home: Option<&Path>) -> Self {
-        let skills: Vec<SkillDefinition> = discover::discover_skills(cwd, home)
-            .into_iter()
-            .filter(|s| {
-                if houyicoder_protocol::frontend::SlashCommand::is_reserved_skill_name(&s.name) {
-                    tracing::warn!(
-                        name = %s.name,
-                        "skill rejected: name collides with a builtin slash command"
-                    );
-                    false
-                } else {
-                    true
-                }
-            })
-            .collect();
-        // Materialize descriptors once: to_descriptor reads each body file
-        // for the token estimate. Caching the results here bounds that to
-        // one read per skill for the registry's lifetime, so the listing +
-        // find paths do not re-read on every call.
-        let descriptors = skills.iter().map(to_descriptor).collect();
-        // Parse frontmatter hooks once at discovery and cache: hooks_for
-        // returns this without re-reading or re-parsing on each invoke.
-        // safeParse: malformed hooks yield empty (the skill still loads).
-        let hooks = skills
-            .iter()
-            .map(|s| parse_hooks(s.hooks_raw.as_ref(), &s.source))
-            .collect();
         Self {
-            skills,
-            descriptors,
-            hooks,
+            set: RwLock::new(build_skillset(cwd, home)),
         }
+    }
+
+    /// Re-discover and swap the cached set in if the result is sound. A
+    /// transient read failure (a watch root unreadable and the set
+    /// shrinking) keeps the old set rather than wiping armed skills; a
+    /// legitimate empty result (roots readable, user deleted the last skill)
+    /// swaps. Returns whether the swap happened and which skill names
+    /// changed, so the driver can invalidate and re-register only those
+    /// skills' hooks. Build runs without the lock (disk IO); only the diff
+    /// and swap take the write lock.
+    pub fn reload(&self, cwd: Option<&Path>, home: Option<&Path>) -> ReloadOutcome {
+        let new = build_skillset(cwd, home);
+        let roots_readable = houyicoder_skill::lifecycle::watch_roots(cwd, home)
+            .iter()
+            .all(|(p, _)| std::fs::read_dir(p).is_ok());
+        let mut set = self.write_set();
+        let old = &*set;
+        let old_len = old.descriptors.len();
+        let new_len = new.descriptors.len();
+        if !should_swap(old_len, new_len, roots_readable) {
+            tracing::warn!(
+                old_len,
+                new_len,
+                roots_readable,
+                "reload kept the old set: a watch root unreadable plus a shrink suggests a transient read failure"
+            );
+            return ReloadOutcome {
+                swapped: false,
+                changed: Vec::new(),
+            };
+        }
+        let changed = diff_changed(old, &new);
+        *set = new;
+        ReloadOutcome {
+            swapped: true,
+            changed,
+        }
+    }
+
+    fn read_set(&self) -> RwLockReadGuard<'_, SkillSet> {
+        self.set.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write_set(&self) -> RwLockWriteGuard<'_, SkillSet> {
+        self.set.write().unwrap_or_else(|e| e.into_inner())
     }
 }
 
 impl SkillRegistry for SkillRegistryImpl {
     fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
-        self.descriptors
+        let set = self.read_set();
+        set.descriptors
             .iter()
             .filter(|d| !d.disable_model_invocation)
             .cloned()
@@ -238,29 +281,30 @@ impl SkillRegistry for SkillRegistryImpl {
     }
 
     fn find(&self, name: &str) -> Option<SkillDescriptor> {
-        self.descriptors.iter().find(|d| d.name == name).cloned()
+        let set = self.read_set();
+        set.descriptors.iter().find(|d| d.name == name).cloned()
     }
 
     fn hooks_for(&self, name: &str) -> Vec<SkillHookSpec> {
-        // Return the discovery-cached parse (no re-parse per invoke). The
-        // lockstep invariant (skills/hooks same order, asserted in
-        // list_with_origin) lets a positional lookup mirror find's name
-        // resolve. Empty for an unknown skill, an MCP skill, or a skill
-        // with no/malformed hooks.
-        let Some(i) = self.descriptors.iter().position(|d| d.name == name) else {
+        // Discovery-cached parse (no re-parse per invoke). A positional
+        // lookup mirrors find's name resolve. Empty for an unknown skill,
+        // an MCP skill, or a skill with no/malformed hooks.
+        let set = self.read_set();
+        let Some(i) = set.descriptors.iter().position(|d| d.name == name) else {
             return Vec::new();
         };
-        self.hooks.get(i).cloned().unwrap_or_default()
+        set.hooks.get(i).cloned().unwrap_or_default()
     }
 
     fn paths_for(&self, name: &str) -> Vec<String> {
-        // The normalized globs live on the parsed definition (parse_skill_paths
-        // runs at load). A positional lookup mirrors hooks_for; empty for an
-        // unknown skill or one with no paths (unconditional = always visible).
-        let Some(i) = self.descriptors.iter().position(|d| d.name == name) else {
+        // The normalized globs live on the parsed definition. A positional
+        // lookup mirrors hooks_for; empty for an unknown skill or one with
+        // no paths (unconditional = always visible).
+        let set = self.read_set();
+        let Some(i) = set.descriptors.iter().position(|d| d.name == name) else {
             return Vec::new();
         };
-        self.skills
+        set.skills
             .get(i)
             .map(|s| s.paths.clone())
             .unwrap_or_default()
@@ -270,22 +314,10 @@ impl SkillRegistry for SkillRegistryImpl {
         // Not filtered by disable-model-invocation: this feeds the /skills
         // visibility surface, where a disabled skill must appear marked not
         // invocable. list_model_invocable filters for the model's listing.
-        // Descriptors cache parallel to skills (same order, same filter); the
-        // assert pins lockstep so a future single-vec mutation fails loudly,
-        // not as a silent zip truncation.
-        debug_assert_eq!(
-            self.skills.len(),
-            self.descriptors.len(),
-            "skills/descriptors must stay lockstep"
-        );
-        debug_assert_eq!(
-            self.skills.len(),
-            self.hooks.len(),
-            "skills/hooks must stay lockstep"
-        );
-        self.skills
+        let set = self.read_set();
+        set.skills
             .iter()
-            .zip(self.descriptors.iter())
+            .zip(set.descriptors.iter())
             .map(|(s, d)| SkillSnapshot {
                 descriptor: d.clone(),
                 origin: source_label(&s.source).into(),
@@ -297,7 +329,8 @@ impl SkillRegistry for SkillRegistryImpl {
         use houyicoder_skill::disclose::script_gate::detect_skill_scripts;
         // No file read: the card shows the verifiable path, not a first-line
         // summary (attacker-controlled text framed as authoritative).
-        let scan: Vec<(String, SkillSource, &Path)> = self
+        let set = self.read_set();
+        let scan: Vec<(String, SkillSource, &Path)> = set
             .skills
             .iter()
             .map(|s| (s.name.clone(), s.source.clone(), s.skill_dir.as_path()))
@@ -320,7 +353,8 @@ impl SkillRegistry for SkillRegistryImpl {
         // Ungated: the caller gates on the invocation flag via find before
         // calling. A model-disabled but user-invocable skill is reachable
         // here from the slash path.
-        let def = self
+        let set = self.read_set();
+        let def = set
             .skills
             .iter()
             .find(|s| s.name == name)
@@ -334,449 +368,75 @@ impl SkillRegistry for SkillRegistryImpl {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    /// A skill's discovery source maps to the port-level hook-source
-    /// kind the registry gates by. MCP never registers (remote,
-    /// untrusted); the others map to their trust level. ClaudeEco/Agents
-    /// group with Project (shared-repo, skipped under an untrusted
-    /// project).
-    #[test]
-    fn test_skill_source_kind_map() {
-        assert_eq!(
-            skill_source_to_kind(&SkillSource::Managed),
-            Some(HookSourceKind::Managed)
-        );
-        assert_eq!(
-            skill_source_to_kind(&SkillSource::User),
-            Some(HookSourceKind::User)
-        );
-        assert_eq!(
-            skill_source_to_kind(&SkillSource::Project),
-            Some(HookSourceKind::Project)
-        );
-        assert_eq!(
-            skill_source_to_kind(&SkillSource::ClaudeEco),
-            Some(HookSourceKind::Project),
-            "ClaudeEco groups with Project"
-        );
-        assert_eq!(
-            skill_source_to_kind(&SkillSource::Agents),
-            Some(HookSourceKind::Project),
-            "Agents groups with Project"
-        );
-        assert_eq!(
-            skill_source_to_kind(&SkillSource::Local),
-            Some(HookSourceKind::Local)
-        );
-        assert_eq!(
-            skill_source_to_kind(&SkillSource::Mcp),
-            None,
-            "MCP never registers command hooks"
-        );
-    }
-
-    fn write_skill(dir: &Path, name: &str, body: &str) {
-        let skill_dir = dir.join(".houyicoder").join("skills").join(name);
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: {name} skill\n---\n{body}\n"),
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn test_list_filters_disabled() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-list-{}", std::process::id()));
-        write_skill(&tmp, "on", "on body");
-        let off_dir = tmp.join(".houyicoder").join("skills").join("off");
-        fs::create_dir_all(&off_dir).unwrap();
-        fs::write(
-            off_dir.join("SKILL.md"),
-            "---\nname: off\ndescription: off skill\ndisable-model-invocation: true\n---\noff body\n",
-        )
-        .unwrap();
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let listing = reg.list_model_invocable();
-        let names: Vec<&str> = listing.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"on"), "model-invocable skill listed");
-        assert!(
-            !names.contains(&"off"),
-            "disable-model-invocation skill filtered out"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    /// list_with_origin pairs each model-invocable skill with its discovery
-    /// source so the skills pane can group by origin. A project-path skill
-    /// under the cwd reports origin "project" — the snake_case label the
-    /// pane groups on.
-    #[test]
-    fn test_list_origin_tags_project() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-origin-{}", std::process::id()));
-        write_skill(&tmp, "on", "on body");
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let snap = reg.list_with_origin();
-        assert_eq!(snap.len(), 1);
-        assert_eq!(snap[0].descriptor.name, "on");
-        assert_eq!(
-            snap[0].origin, "project",
-            "project-path skill tagged project"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    /// A disable-model-invocation skill must still appear in list_with_origin
-    /// (the /skills visibility surface shows it, marked not invocable by the
-    /// wire conversion), unlike list_model_invocable which filters it so the
-    /// model never sees it. Pins the regression where list_with_origin
-    /// filtered disabled skills, making the wire invocable flag always true.
-    #[test]
-    fn test_list_origin_keeps_disabled() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-dis-origin-{}", std::process::id()));
-        write_skill(&tmp, "on", "on body");
-        let off_dir = tmp.join(".houyicoder").join("skills").join("off");
-        fs::create_dir_all(&off_dir).unwrap();
-        fs::write(
-            off_dir.join("SKILL.md"),
-            "---\nname: off\ndescription: off skill\ndisable-model-invocation: true\n---\noff body\n",
-        )
-        .unwrap();
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let snap = reg.list_with_origin();
-        // Both skills present — the disabled one is NOT filtered out here
-        // (list_model_invocable would return only "on").
-        assert_eq!(snap.len(), 2, "disabled skill kept for visibility");
-        let off = snap
-            .iter()
-            .find(|s| s.descriptor.name == "off")
-            .expect("off present");
-        assert!(
-            off.descriptor.disable_model_invocation,
-            "disable flag preserved so the wire marks it not invocable"
-        );
-        assert_eq!(
-            reg.list_model_invocable().len(),
-            1,
-            "model listing filters disabled"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    /// A skill named after a builtin slash command is rejected at
-    /// registration so it cannot shadow the builtin at invoke. A project
-    /// skill named "compact" must not hijack /compact; the registry drops
-    /// it (warned, not silently) and find returns NotFound so the slash
-    /// dispatch falls back to the builtin.
-    #[test]
-    fn test_reserved_name_rejected() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-conflict-{}", std::process::id()));
-        write_skill(&tmp, "compact", "hijack body");
-        write_skill(&tmp, "commit", "legit body");
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        // The "compact" skill is rejected; "commit" is kept.
-        assert!(
-            reg.find("compact").is_none(),
-            "skill named after a builtin is rejected, not registered"
-        );
-        assert!(reg.find("commit").is_some(), "non-conflicting skill kept");
-        assert_eq!(
-            reg.list_model_invocable().len(),
-            1,
-            "only the non-conflicting skill listed"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    #[test]
-    fn test_prepare_body_returns_body() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-body-{}", std::process::id()));
-        write_skill(&tmp, "commit", "run git status");
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let body = reg.prepare_body("commit", None, None).unwrap();
-        assert!(body.contains("run git status"), "body present: {body}");
-        assert!(
-            body.contains("Base directory for this skill"),
-            "base-dir header prepended: {body}"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    #[test]
-    fn test_prepare_body_substitutes_args() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-args-{}", std::process::id()));
-        let skill_dir = tmp.join(".houyicoder").join("skills").join("echo");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: echo\ndescription: echo args\n---\nargs: $ARGUMENTS\n",
-        )
-        .unwrap();
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let body = reg.prepare_body("echo", Some("hello world"), None).unwrap();
-        assert!(
-            body.contains("args: hello world"),
-            "args substituted: {body}"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    #[test]
-    fn test_unknown_skill_not_found() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-nf-{}", std::process::id()));
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let err = reg.prepare_body("nope", None, None).unwrap_err();
-        match err {
-            SkillError::NotFound(n) => assert_eq!(n, "nope"),
-            other => panic!("expected NotFound, got {other:?}"),
-        }
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    #[test]
-    fn test_find_exposes_disable_flag() {
-        // Gating moved to callers: find returns the descriptor with its
-        // disable-model-invocation flag, and the caller (Skill tool) checks
-        // it. prepare_body is ungated, so a disabled skill's body is still
-        // loadable from the slash path when user-invocable is true.
-        let tmp = std::env::temp_dir().join(format!("skill-reg-dis-{}", std::process::id()));
-        let off_dir = tmp.join(".houyicoder").join("skills").join("off");
-        fs::create_dir_all(&off_dir).unwrap();
-        fs::write(
-            off_dir.join("SKILL.md"),
-            "---\nname: off\ndescription: off\ndisable-model-invocation: true\n---\nbody\n",
-        )
-        .unwrap();
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let desc = reg.find("off").expect("find returns the disabled skill");
-        assert!(
-            desc.disable_model_invocation,
-            "the flag the Skill tool gates on is exposed"
-        );
-        // prepare_body is ungated — the body loads regardless of the flag.
-        assert!(
-            reg.prepare_body("off", None, None).is_ok(),
-            "ungated body loads"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    /// The body token estimate is read once at construction and cached on
-    /// the registry. find/listing clone the cached descriptor instead of
-    /// re-reading the body file: after construction the body is rewritten
-    /// much larger, and the estimate stays at the construction-time value.
-    /// A re-reading impl would report the new size; the cache does not.
-    #[test]
-    fn test_token_estimate_cached() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-tok-{}", std::process::id()));
-        write_skill(&tmp, "commit", "run git status");
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let at_discovery = reg.find("commit").unwrap().body_token_estimate;
-        assert!(at_discovery > 0, "estimate computed at discovery");
-        let skill_dir = tmp.join(".houyicoder").join("skills").join("commit");
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            format!(
-                "---\nname: commit\ndescription: commit skill\n---\n{}\n",
-                "x".repeat(4000)
-            ),
-        )
-        .unwrap();
-        let after = reg.find("commit").unwrap().body_token_estimate;
-        assert_eq!(
-            after, at_discovery,
-            "cached estimate unchanged after body rewritten"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    #[test]
-    fn test_session_id_substituted() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-sid-{}", std::process::id()));
-        let skill_dir = tmp.join(".houyicoder").join("skills").join("sid");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: sid\ndescription: sid skill\n---\nsid: ${HOUYI_SESSION_ID}\n",
-        )
-        .unwrap();
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let body = reg.prepare_body("sid", None, Some("abc-123")).unwrap();
-        assert!(
-            body.contains("sid: abc-123"),
-            "session id substituted: {body}"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    /// detect_run_scripts returns the skill name + relative script path for a
-    /// Bash command that runs a script from a discovered skill's directory. No
-    /// file is read — the card shows the verifiable path, not a first-line
-    /// summary (attacker-controlled text).
-    #[test]
-    fn test_detect_run_scripts_summary() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-detect-{}", std::process::id()));
-        let skill_dir = tmp.join(".houyicoder").join("skills").join("deploy");
-        fs::create_dir_all(skill_dir.join("scripts")).unwrap();
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: deploy\ndescription: deploy skill\n---\nbody\n",
-        )
-        .unwrap();
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        // Discovery stores the canonical skill dir, so the command must name
-        // the canonical form for the detector's substring match to fire.
-        let canon_dir = dunce::canonicalize(&skill_dir).unwrap();
-        let cmd = format!("python {}/scripts/deploy.py", canon_dir.to_string_lossy());
-        let scripts = reg.detect_run_scripts(&cmd);
-        assert_eq!(scripts.len(), 1, "one skill script detected: {scripts:?}");
-        assert_eq!(scripts[0].skill_name, "deploy");
-        assert_eq!(scripts[0].script_rel_path, "scripts/deploy.py");
-        // A command that runs no skill script returns empty.
-        assert!(
-            reg.detect_run_scripts("echo hello && ls /tmp").is_empty(),
-            "non-skill command detected nothing"
-        );
-        drop(fs::remove_dir_all(&tmp));
-    }
-
-    /// A well-formed hooks block parses into flat specs carrying the event,
-    /// matcher, command, args, once, if-rule, and the source-mapped level.
-    #[test]
-    fn test_parse_hooks_well_formed() {
-        let yaml = r#"
-PreToolUse:
-  - matcher: "Write|Edit"
-    hooks:
-      - type: command
-        command: ./check.py
-        args: ["--strict"]
-        once: true
-        if: "Write(*)"
-  - matcher: "Bash"
-    hooks:
-      - command: ./audit.sh
-  - hooks:
-      - command: ./nomatch.sh
-"#;
-        let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-        let specs = parse_hooks(Some(&raw), &SkillSource::Project);
-        assert_eq!(specs.len(), 3, "three hook entries: {specs:?}");
-        let first = &specs[0];
-        assert_eq!(first.event, "PreToolUse");
-        assert_eq!(first.matcher.as_deref(), Some("Write|Edit"));
-        assert_eq!(first.command, "./check.py");
-        assert_eq!(first.args, &["--strict".to_string()]);
-        assert!(first.once);
-        assert_eq!(first.if_rule.as_deref(), Some("Write(*)"));
-        assert_eq!(first.source, HookSourceKind::Project);
-        let second = &specs[1];
-        assert_eq!(second.matcher.as_deref(), Some("Bash"));
-        assert!(!second.once);
-        assert_eq!(second.command, "./audit.sh");
-        // Third bucket has no matcher: None fires for every tool.
-        assert_eq!(specs[2].matcher, None);
-        assert_eq!(specs[2].command, "./nomatch.sh");
-    }
-
-    /// No hooks block yields no specs (the skill still loads, no hooks fire).
-    #[test]
-    fn test_parse_hooks_none_empty() {
-        assert!(parse_hooks(None, &SkillSource::Managed).is_empty());
-    }
-
-    /// MCP skills yield no specs regardless of their hooks block — remote
-    /// command hooks never register.
-    #[test]
-    fn test_parse_hooks_mcp_filtered() {
-        let yaml = "PreToolUse:\n  - hooks:\n      - command: ./evil.sh\n";
-        let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-        assert!(
-            parse_hooks(Some(&raw), &SkillSource::Mcp).is_empty(),
-            "MCP source produces no specs"
-        );
-    }
-
-    /// A malformed hooks block (not a mapping) is dropped: empty result,
-    /// no panic (safeParse — the skill still loads).
-    #[test]
-    fn test_parse_hooks_malformed_drops() {
-        let raw = serde_yaml::Value::String("not a mapping".into());
-        assert!(parse_hooks(Some(&raw), &SkillSource::Managed).is_empty());
-    }
-
-    /// A malformed event bucket is isolated: the bad event is skipped but a
-    /// well-formed event in the same block still parses (safeParse does not
-    /// poison siblings).
-    #[test]
-    fn test_parse_hooks_isolates_malformed() {
-        let yaml =
-            "PreToolUse:\n  - hooks:\n      - command: ./good.sh\nBroken:\n  - just a string\n";
-        let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-        let specs = parse_hooks(Some(&raw), &SkillSource::Managed);
-        assert_eq!(
-            specs.len(),
-            1,
-            "well-formed event survives, malformed event skipped"
-        );
-        assert_eq!(specs[0].event, "PreToolUse");
-    }
-
-    /// A hook entry without a command is skipped (no command to spawn); a
-    /// sibling entry with a command still parses.
-    #[test]
-    fn test_parse_hooks_missing_command() {
-        let yaml = "PreToolUse:\n  - hooks:\n      - command: ./good.sh\n      - type: command\n";
-        let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-        let specs = parse_hooks(Some(&raw), &SkillSource::Managed);
-        assert_eq!(specs.len(), 1, "entry without command skipped");
-        assert_eq!(specs[0].command, "./good.sh");
-    }
-
-    /// A per-hook timeout key does not panic and the spec is still produced;
-    /// the timeout is warned + dropped (not yet supported).
-    #[test]
-    fn test_parse_hooks_timeout_warns() {
-        let yaml = "PreToolUse:\n  - hooks:\n      - command: ./x.sh\n        timeout: 30\n";
-        let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-        let specs = parse_hooks(Some(&raw), &SkillSource::Managed);
-        assert_eq!(specs.len(), 1, "spec produced despite timeout key");
-        assert_eq!(specs[0].command, "./x.sh");
-    }
-
-    /// A non-command hook type is skipped (only command hooks supported);
-    /// honest skip, not a silent fire-as-command.
-    #[test]
-    fn test_parse_hooks_skips_noncommand() {
-        let yaml = "PreToolUse:\n  - hooks:\n      - type: prompt\n        command: ./p.sh\n";
-        let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-        assert!(
-            parse_hooks(Some(&raw), &SkillSource::Managed).is_empty(),
-            "non-command type skipped"
-        );
-    }
-
-    /// hooks_for returns the discovery-cached parse for a named skill, and
-    /// empty for an unknown name — no re-parse per invoke.
-    #[test]
-    fn test_hooks_for_named_skill() {
-        let tmp = std::env::temp_dir().join(format!("skill-reg-hooks-{}", std::process::id()));
-        let skill_dir = tmp.join(".houyicoder").join("skills").join("guarded");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: guarded\ndescription: guarded skill\nhooks:\n  PreToolUse:\n    - hooks:\n        - command: ./check.sh\n---\nbody\n",
-        )
-        .unwrap();
-        let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
-        let specs = reg.hooks_for("guarded");
-        assert_eq!(specs.len(), 1, "cached parse returned for named skill");
-        assert_eq!(specs[0].event, "PreToolUse");
-        assert!(reg.hooks_for("unknown").is_empty(), "unknown skill empty");
-        drop(fs::remove_dir_all(&tmp));
+/// Build a discovery set: scan, drop reserved-name collisions, materialize
+/// descriptors (one body read for the token estimate), and parse frontmatter
+/// hooks once (safeParse — malformed hooks yield empty, the skill still
+/// loads). Extracted so both initial discovery and reload build the same way.
+fn build_skillset(cwd: Option<&Path>, home: Option<&Path>) -> SkillSet {
+    let skills: Vec<SkillDefinition> = discover::discover_skills(cwd, home)
+        .into_iter()
+        .filter(|s| {
+            if houyicoder_protocol::frontend::SlashCommand::is_reserved_skill_name(&s.name) {
+                tracing::warn!(
+                    name = %s.name,
+                    "skill rejected: name collides with a builtin slash command"
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    let descriptors = skills.iter().map(to_descriptor).collect();
+    let hooks = skills
+        .iter()
+        .map(|s| parse_hooks(s.hooks_raw.as_ref(), &s.source))
+        .collect();
+    SkillSet {
+        skills,
+        descriptors,
+        hooks,
     }
 }
+
+/// Names whose hook status changed across a reload: added (new name),
+/// removed (gone name), and common names whose parsed hooks spec differs.
+/// The driver feeds this to the registrar so only those skills' hooks are
+/// invalidated and re-registered; unchanged skills are not touched (their
+/// once-flags and live trust re-evaluations stay intact).
+fn diff_changed(old: &SkillSet, new: &SkillSet) -> Vec<String> {
+    let old_names: HashSet<&str> = old.descriptors.iter().map(|d| d.name.as_str()).collect();
+    let new_names: HashSet<&str> = new.descriptors.iter().map(|d| d.name.as_str()).collect();
+    let mut changed: Vec<String> = Vec::new();
+    for d in &new.descriptors {
+        if !old_names.contains(d.name.as_str()) {
+            changed.push(d.name.clone());
+        }
+    }
+    for d in &old.descriptors {
+        if !new_names.contains(d.name.as_str()) {
+            changed.push(d.name.clone());
+        }
+    }
+    // common name with hooks spec changed
+    for (i, d) in old.descriptors.iter().enumerate() {
+        if !new_names.contains(d.name.as_str()) {
+            continue;
+        }
+        let old_hooks = old.hooks.get(i).map(|h| h.as_slice()).unwrap_or(&[]);
+        let Some(j) = new.descriptors.iter().position(|nd| nd.name == d.name) else {
+            continue;
+        };
+        let new_hooks = new.hooks.get(j).map(|h| h.as_slice()).unwrap_or(&[]);
+        if old_hooks != new_hooks {
+            changed.push(d.name.clone());
+        }
+    }
+    changed.sort();
+    changed.dedup();
+    changed
+}
+
+#[cfg(test)]
+#[path = "skill_tests.rs"]
+mod tests;

@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use houyicoder_api::skill::SkillRegistry;
 
@@ -20,43 +20,41 @@ pub trait ConditionalSkillActivator: Send + Sync {
 
     /// Whether a conditional skill is active this session.
     fn is_active(&self, name: &str) -> bool;
+
+    /// Re-derive the conditional set + origins from the registry after a
+    /// hot reload, without dropping the active set (a skill already
+    /// activated this session stays active). No-op default: a stub or test
+    /// activator that does not back its set with a registry keeps the
+    /// construction-time view.
+    fn refresh(&self) {}
 }
 
-/// Session-scoped activation state + matcher.
+/// Session-scoped activation state + matcher. The conditional set and
+/// origin map are re-derived from the registry on a hot reload (so a
+/// newly-added conditional skill is recognized) while the active set
+/// persists across the reload (an already-activated skill stays visible).
 pub struct ConditionalActivation {
     active: Arc<Mutex<HashSet<String>>>,
     cwd: PathBuf,
-    /// Skills with non-empty paths, read once at construction.
-    conditional: Vec<(String, Vec<String>)>,
-    /// name -> origin label, for the activation trace.
-    origins: HashMap<String, String>,
+    /// Backing registry, held so refresh can re-derive without the caller
+    /// passing it back in.
+    registry: Arc<dyn SkillRegistry>,
+    /// Skills with non-empty paths, re-derived on refresh.
+    conditional: RwLock<Vec<(String, Vec<String>)>>,
+    /// name -> origin label, for the activation trace. Re-derived on refresh.
+    origins: RwLock<HashMap<String, String>>,
 }
 
 impl ConditionalActivation {
     /// Read the conditional set + origin map once at construction.
     pub fn new(registry: Arc<dyn SkillRegistry>, cwd: PathBuf) -> Self {
-        let origins: HashMap<String, String> = registry
-            .list_with_origin()
-            .into_iter()
-            .map(|s| (s.descriptor.name, s.origin))
-            .collect();
-        let conditional: Vec<(String, Vec<String>)> = registry
-            .list_model_invocable()
-            .into_iter()
-            .filter_map(|d| {
-                let paths = registry.paths_for(&d.name);
-                if paths.is_empty() {
-                    None
-                } else {
-                    Some((d.name, paths))
-                }
-            })
-            .collect();
+        let (conditional, origins) = derive_conditional(&registry);
         Self {
             active: Arc::new(Mutex::new(HashSet::new())),
             cwd,
-            conditional,
-            origins,
+            registry,
+            conditional: RwLock::new(conditional),
+            origins: RwLock::new(origins),
         }
     }
 
@@ -64,15 +62,57 @@ impl ConditionalActivation {
     pub fn cwd(&self) -> &Path {
         &self.cwd
     }
+
+    /// Re-derive the conditional set + origins from the registry, leaving
+    /// the active set untouched. Called by the hot-reload driver after the
+    /// registry's own reload swapped in a fresh skill set.
+    pub fn refresh(&self) {
+        let (conditional, origins) = derive_conditional(&self.registry);
+        let mut c = self.conditional.write().unwrap_or_else(|e| e.into_inner());
+        let mut o = self.origins.write().unwrap_or_else(|e| e.into_inner());
+        *c = conditional;
+        *o = origins;
+    }
+}
+
+/// A conditional skill's name + its paths globs.
+type ConditionalSet = Vec<(String, Vec<String>)>;
+/// name -> origin label, for the activation trace.
+type OriginMap = HashMap<String, String>;
+
+/// Derive the conditional set (name, paths) and the name-to-origin map
+/// from the registry. Pure over the registry's current view, so the same
+/// call seeds construction and refreshes after a reload.
+fn derive_conditional(registry: &Arc<dyn SkillRegistry>) -> (ConditionalSet, OriginMap) {
+    let origins: HashMap<String, String> = registry
+        .list_with_origin()
+        .into_iter()
+        .map(|s| (s.descriptor.name, s.origin))
+        .collect();
+    let conditional: Vec<(String, Vec<String>)> = registry
+        .list_model_invocable()
+        .into_iter()
+        .filter_map(|d| {
+            let paths = registry.paths_for(&d.name);
+            if paths.is_empty() {
+                None
+            } else {
+                Some((d.name, paths))
+            }
+        })
+        .collect();
+    (conditional, origins)
 }
 
 impl ConditionalSkillActivator for ConditionalActivation {
     fn activate_for_paths(&self, file_paths: &[String]) -> Vec<String> {
-        if self.conditional.is_empty() {
+        let conditional = self.conditional.read().unwrap_or_else(|e| e.into_inner());
+        let origins = self.origins.read().unwrap_or_else(|e| e.into_inner());
+        if conditional.is_empty() {
             return Vec::new();
         }
         let mut newly_activated = Vec::new();
-        for (name, globs) in &self.conditional {
+        for (name, globs) in conditional.iter() {
             if self.is_active(name) {
                 continue;
             }
@@ -109,11 +149,7 @@ impl ConditionalSkillActivator for ConditionalActivation {
                 if matcher.matched_path_or_any_parents(&rel, false).is_ignore() {
                     let mut active = self.active.lock().expect("active set not poisoned");
                     if active.insert(name.clone()) {
-                        let origin = self
-                            .origins
-                            .get(name)
-                            .map(String::as_str)
-                            .unwrap_or("unknown");
+                        let origin = origins.get(name).map(String::as_str).unwrap_or("unknown");
                         tracing::info!(
                             skill = %name,
                             origin = %origin,
@@ -134,6 +170,10 @@ impl ConditionalSkillActivator for ConditionalActivation {
             .lock()
             .expect("active set not poisoned")
             .contains(name)
+    }
+
+    fn refresh(&self) {
+        ConditionalActivation::refresh(self);
     }
 }
 
@@ -313,7 +353,11 @@ mod tests {
         }
         let act = ConditionalActivation::new(Arc::new(OriginRegistry), tmp_cwd());
         assert_eq!(
-            act.origins.get("proj-skill").map(String::as_str),
+            act.origins
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .get("proj-skill")
+                .map(String::as_str),
             Some("project")
         );
     }
@@ -367,7 +411,12 @@ mod tests {
         // No skill carries paths; returns empty without touching the matcher.
         let reg = Arc::new(StubRegistry::new(&[("plain", &[])]));
         let act = ConditionalActivation::new(reg, tmp_cwd());
-        assert!(act.conditional.is_empty());
+        assert!(
+            act.conditional
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
         let a = act.activate_for_paths(&["src/foo.rs".to_string()]);
         assert!(a.is_empty());
     }
@@ -387,6 +436,11 @@ mod tests {
     fn test_origin_map_empty() {
         let reg = Arc::new(StubRegistry::new(&[("x", &["src"])]));
         let act = ConditionalActivation::new(reg, tmp_cwd());
-        assert!(act.origins.is_empty());
+        assert!(
+            act.origins
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
     }
 }

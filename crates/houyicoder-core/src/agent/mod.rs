@@ -47,6 +47,7 @@ pub(crate) mod reward_snapshot;
 mod skill_body;
 mod skill_hooks;
 mod skill_listing;
+mod skill_reload;
 mod skill_slash;
 mod status;
 mod step;
@@ -214,6 +215,11 @@ pub struct Runner {
     /// Paths-gated skill activator; file-touch tools activate, the listing
     /// filters by its active set. None when the feature is off.
     conditional: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
+    /// Hot-reload driver lifetime guard. Held (never read) so a watcher +
+    /// thread constructed at the composition root lives as long as the
+    /// runner and is torn down with it; dropping it stops the watcher. None
+    /// when no hot-reload driver is wired.
+    skill_reloader: Option<Arc<dyn crate::agent::skill_reload::SkillReloadGuard>>,
     /// Prompt-cache breakpoint policy. Decides where to carve a stable prefix
     /// for prompt-cache reuse (the wire kinds live in the wire crate;
     /// the provider lowers each kind to its own format). Defaults to the Auto
