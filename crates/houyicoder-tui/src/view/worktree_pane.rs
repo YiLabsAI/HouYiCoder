@@ -170,7 +170,13 @@ fn worktree_items(app: &App, filtered_idx: &[usize], cur: usize) -> Vec<ListItem
             ];
             if e.last_modified > 0 {
                 spans.push(Span::styled(
-                    format!(" {}", relative_time(e.last_modified)),
+                    format!(
+                        " {}",
+                        crate::view::relative_time::relative_time(
+                            crate::view::relative_time::now_epoch_secs(),
+                            e.last_modified
+                        )
+                    ),
                     Style::new().fg(Color::DarkGray),
                 ));
             }
@@ -180,25 +186,4 @@ fn worktree_items(app: &App, filtered_idx: &[usize], cur: usize) -> Vec<ListItem
             ListItem::new(Line::from(spans))
         })
         .collect()
-}
-
-/// Format a last-modified epoch timestamp as a short relative string ("just
-/// now", "5m ago", "3h ago", "2d ago", "1w ago").
-fn relative_time(epoch: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let elapsed = now.saturating_sub(epoch);
-    if elapsed < 60 {
-        "just now".to_string()
-    } else if elapsed < 3600 {
-        format!("{}m ago", elapsed / 60)
-    } else if elapsed < 86400 {
-        format!("{}h ago", elapsed / 3600)
-    } else if elapsed < 604800 {
-        format!("{}d ago", elapsed / 86400)
-    } else {
-        format!("{}w ago", elapsed / 604800)
-    }
 }

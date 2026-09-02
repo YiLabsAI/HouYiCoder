@@ -168,6 +168,7 @@ fn test_skills_pane_nav() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 100,
+            usage: None,
         },
         SkillEntry {
             name: "beta".into(),
@@ -175,6 +176,7 @@ fn test_skills_pane_nav() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 200,
+            usage: None,
         },
     ];
     assert_eq!(app.skill_sel.get(), 0);
@@ -198,6 +200,7 @@ fn test_skills_pane_detail() {
         origin: "user".into(),
         invocable: true,
         body_token_estimate: 100,
+        usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(app.skill_level.get(), 1, "Enter opens detail");
@@ -217,6 +220,7 @@ fn test_skills_pane_toggle() {
         origin: "user".into(),
         invocable: true,
         body_token_estimate: 100,
+        usage: None,
     }];
     app.skill_level.set(1);
     assert!(app.skill_disabled.is_empty(), "starts clean");
@@ -238,6 +242,7 @@ fn test_skill_picker_opens() {
         origin: "user".into(),
         invocable: true,
         body_token_estimate: 100,
+        usage: None,
     }];
     assert!(!app.skill_picker_open);
     handle_working(&mut app, key(KeyCode::Char('@')));
@@ -273,6 +278,7 @@ fn test_skill_picker_nav() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 100,
+            usage: None,
         },
         SkillEntry {
             name: "beta".into(),
@@ -280,6 +286,7 @@ fn test_skill_picker_nav() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 200,
+            usage: None,
         },
     ];
     handle_working(&mut app, key(KeyCode::Char('@')));
@@ -300,6 +307,7 @@ fn test_skill_picker_esc() {
         origin: "user".into(),
         invocable: true,
         body_token_estimate: 100,
+        usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
     assert!(app.skill_picker_open);
@@ -320,6 +328,7 @@ fn test_skill_picker_enter_submit() {
         origin: "user".into(),
         invocable: true,
         body_token_estimate: 100,
+        usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Enter));
@@ -356,6 +365,7 @@ fn test_skill_picker_char() {
         origin: "user".into(),
         invocable: true,
         body_token_estimate: 100,
+        usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
     assert!(app.skill_picker_open);

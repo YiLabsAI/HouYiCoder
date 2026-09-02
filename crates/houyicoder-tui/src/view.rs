@@ -26,6 +26,7 @@ pub mod pane;
 #[cfg(test)]
 pub mod pane_select_tests;
 pub mod queue_overlay;
+pub mod relative_time;
 pub mod resume_picker;
 pub mod skill_picker;
 pub mod skills_pane;

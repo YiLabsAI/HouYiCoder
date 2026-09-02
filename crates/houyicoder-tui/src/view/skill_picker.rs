@@ -155,6 +155,7 @@ mod tests {
             origin: "project".to_string(),
             invocable: true,
             body_token_estimate: 120,
+            usage: None,
         };
         let line = format_one(&entry, 40);
         assert!(line.spans.len() >= 4, "glyph + name + sep + desc");
@@ -170,6 +171,7 @@ mod tests {
             origin: "user".to_string(),
             invocable: true,
             body_token_estimate: 100,
+            usage: None,
         };
         let inner_w = 30u16;
         let line = format_one(&entry, inner_w);
@@ -198,6 +200,7 @@ mod tests {
             origin: "user".to_string(),
             invocable: true,
             body_token_estimate: 100,
+            usage: None,
         }];
         app.skill_picker_open = true;
         let out = crate::test_support::render_text(&app, 80, 24);
@@ -229,6 +232,7 @@ mod tests {
             origin: "user".to_string(),
             invocable: true,
             body_token_estimate: 100,
+            usage: None,
         }];
         let out = crate::test_support::render_text(&app, 80, 24);
         assert!(

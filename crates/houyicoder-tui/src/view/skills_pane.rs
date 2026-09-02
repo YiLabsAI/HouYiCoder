@@ -218,7 +218,7 @@ fn detail_lines(
     } else {
         Color::Green
     };
-    vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled(
                 entry.name.clone(),
@@ -239,14 +239,43 @@ fn detail_lines(
             format!("origin: {}", entry.origin),
             Style::new().fg(Color::DarkGray),
         )),
-        Line::raw(""),
-        Line::from(Span::styled(
-            if disabled {
-                "t: enable   Esc: back"
-            } else {
-                "t: disable  Esc: back"
-            },
-            Style::new().fg(Color::DarkGray),
-        )),
-    ]
+    ];
+    // Usage line: session-scoped invocation stats. Shows invocations,
+    // refusals, last-used relative time, and a token estimate
+    // (body_token_estimate × invocations). Labeled "this session" so the
+    // user knows the count is not all-time. Omitted when no usage data
+    // (registry does not track) or never invoked.
+    if let Some(usage) = &entry.usage {
+        if usage.invocations == 0 && usage.refusals == 0 {
+            lines.push(Line::from(Span::styled(
+                "never invoked this session".to_string(),
+                Style::new().fg(Color::DarkGray),
+            )));
+        } else {
+            let now = crate::view::relative_time::now_epoch_secs();
+            let last = crate::view::relative_time::relative_time(now, usage.last_used_secs);
+            let mut parts = format!(
+                "invoked {}× · {} refused · last {} (this session)",
+                usage.invocations, usage.refusals, last
+            );
+            if usage.invocations > 0 && entry.body_token_estimate > 0 {
+                let total = usage.invocations * entry.body_token_estimate as u64;
+                parts.push_str(&format!(" · ~{} tok est.", total));
+            }
+            lines.push(Line::from(Span::styled(
+                parts,
+                Style::new().fg(Color::DarkGray),
+            )));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        if disabled {
+            "t: enable   Esc: back"
+        } else {
+            "t: disable  Esc: back"
+        },
+        Style::new().fg(Color::DarkGray),
+    )));
+    lines
 }

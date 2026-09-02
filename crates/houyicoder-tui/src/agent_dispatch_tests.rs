@@ -592,6 +592,7 @@ fn test_skills_result_stored() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 320,
+            usage: None,
         }],
     });
     assert_eq!(app.skill_entries.len(), 1);
@@ -616,6 +617,7 @@ fn test_skills_pane_renders_entries() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 320,
+            usage: None,
         },
         SkillEntry {
             name: "internal-only".into(),
@@ -623,6 +625,7 @@ fn test_skills_pane_renders_entries() {
             origin: "project".into(),
             invocable: false,
             body_token_estimate: 80,
+            usage: None,
         },
     ];
     let out = crate::test_support::render_text(&app, 80, 24);
@@ -657,6 +660,7 @@ fn test_skills_pane_showcase() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 1_240,
+            usage: None,
         },
         SkillEntry {
             name: "commit".into(),
@@ -664,6 +668,7 @@ fn test_skills_pane_showcase() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 320,
+            usage: None,
         },
         SkillEntry {
             name: "internal-only".into(),
@@ -671,6 +676,7 @@ fn test_skills_pane_showcase() {
             origin: "project".into(),
             invocable: false,
             body_token_estimate: 80,
+            usage: None,
         },
     ];
     let out = crate::test_support::render_text(&app, 80, 24);
