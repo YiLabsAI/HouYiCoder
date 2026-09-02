@@ -549,6 +549,10 @@ pub struct App {
     /// Session-scoped disabled skills (toggled via t in the detail view).
     /// Persisted disable is a follow-up (settings wire).
     pub skill_disabled: std::collections::HashSet<String>,
+    /// Whether the @ skill-picker overlay is open (typing @ in the input).
+    pub skill_picker_open: bool,
+    /// Selected index in the @ skill-picker.
+    pub skill_picker_sel: std::cell::Cell<usize>,
     /// The /hooks pane drill-down level: 0 = event list, 1 = selected event
     /// detail (registered hooks + description). A
     /// select-event → view-hook browse pattern.

@@ -27,6 +27,7 @@ pub mod pane;
 pub mod pane_select_tests;
 pub mod queue_overlay;
 pub mod resume_picker;
+pub mod skill_picker;
 pub mod skills_pane;
 #[cfg(test)]
 mod skills_pane_tests;

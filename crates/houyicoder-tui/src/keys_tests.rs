@@ -226,6 +226,144 @@ fn test_skills_pane_toggle() {
     assert!(!app.skill_disabled.contains("alpha"), "t re-enables alpha");
 }
 
+/// The @ key opens the skill picker from an empty input box and resets the
+/// cursor to the top.
+#[test]
+fn test_skill_picker_opens() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.skill_entries = vec![SkillEntry {
+        name: "alpha".into(),
+        description: "a".into(),
+        origin: "user".into(),
+        invocable: true,
+        body_token_estimate: 100,
+    }];
+    assert!(!app.skill_picker_open);
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    assert!(app.skill_picker_open, "@ opens the picker");
+    assert_eq!(app.skill_picker_sel.get(), 0, "cursor resets to 0");
+}
+
+/// The @ key does nothing when the input box is not empty.
+#[test]
+fn test_skill_picker_blocked() {
+    let mut app = working_app();
+    app.input.push('x');
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    assert!(
+        !app.skill_picker_open,
+        "@ must not open when input non-empty"
+    );
+    assert!(
+        app.input.value().contains('@'),
+        "@ landed in the input box instead"
+    );
+}
+
+/// Up/Down navigate the picker list.
+#[test]
+fn test_skill_picker_nav() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.skill_entries = vec![
+        SkillEntry {
+            name: "alpha".into(),
+            description: "a".into(),
+            origin: "user".into(),
+            invocable: true,
+            body_token_estimate: 100,
+        },
+        SkillEntry {
+            name: "beta".into(),
+            description: "b".into(),
+            origin: "user".into(),
+            invocable: true,
+            body_token_estimate: 200,
+        },
+    ];
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    handle_working(&mut app, key(KeyCode::Down));
+    assert_eq!(app.skill_picker_sel.get(), 1, "Down moves picker cursor");
+    handle_working(&mut app, key(KeyCode::Up));
+    assert_eq!(app.skill_picker_sel.get(), 0, "Up moves back");
+}
+
+/// Esc closes the picker without inserting anything.
+#[test]
+fn test_skill_picker_esc() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.skill_entries = vec![SkillEntry {
+        name: "alpha".into(),
+        description: "a".into(),
+        origin: "user".into(),
+        invocable: true,
+        body_token_estimate: 100,
+    }];
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    assert!(app.skill_picker_open);
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert!(!app.skill_picker_open, "Esc closes the picker");
+    assert!(app.input.is_empty(), "no text inserted on Esc");
+}
+
+/// Enter inserts the selected skill into the input box (does not auto-submit,
+/// so the user can append args before pressing Enter again).
+#[test]
+fn test_skill_picker_enter_submit() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.skill_entries = vec![SkillEntry {
+        name: "alpha".into(),
+        description: "a".into(),
+        origin: "user".into(),
+        invocable: true,
+        body_token_estimate: 100,
+    }];
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(!app.skill_picker_open, "Enter closes the picker");
+    assert!(
+        app.input.value().contains("@skill:alpha"),
+        "@skill:alpha inserted into the input box"
+    );
+    assert!(
+        !app.input.value().is_empty(),
+        "input holds the text for a second Enter to submit"
+    );
+}
+
+/// Enter with no skills closes the picker without submitting (the else arm).
+#[test]
+fn test_skill_picker_enter_empty() {
+    let mut app = working_app();
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(!app.skill_picker_open, "Enter closes on empty list");
+    assert!(app.input.is_empty(), "no text inserted on empty Enter");
+}
+
+/// A typed char while the picker is open closes the picker and lands in the
+/// input box (no silent char loss). The modal falls through after closing.
+#[test]
+fn test_skill_picker_char() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.skill_entries = vec![SkillEntry {
+        name: "alpha".into(),
+        description: "a".into(),
+        origin: "user".into(),
+        invocable: true,
+        body_token_estimate: 100,
+    }];
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    assert!(app.skill_picker_open);
+    handle_working(&mut app, key(KeyCode::Char('x')));
+    assert!(!app.skill_picker_open, "char closes the picker");
+    assert!(app.input.value().contains('x'), "char lands in input");
+}
+
 /// Typing keys do not reach the input box while a pane stands in for it. The
 /// box is off screen, so a character pushed into it is invisible -- and the
 /// resulting non-empty input silently disables the pane's own Enter, which

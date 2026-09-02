@@ -387,6 +387,21 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         {
             app.open_palette()
         }
+        // '@' opens the skill picker when the input is empty and no
+        // sub-mode is active. The picker lists discovered skills; selecting
+        // one inserts @skill:name into the input box (the user presses Enter
+        // again to submit, allowing args to be appended). Navigation
+        // (Up/Down/Enter/Esc) is handled by the modal dispatcher in keys.rs
+        // before this function is reached.
+        KeyCode::Char('@')
+            if app.input.is_empty()
+                && !editing
+                && !app.permission_input.is_active()
+                && !pane_replaces_input(app.pane) =>
+        {
+            app.skill_picker_open = true;
+            app.skill_picker_sel.set(0);
+        }
         KeyCode::Enter if !pane_replaces_input(app.pane) => {
             // Empty-input Enter drills into a teammate view: the pill
             // selection takes priority, then the Subagent line at cursor.

@@ -175,6 +175,8 @@ pub fn app() -> App {
         skill_level: std::cell::Cell::new(0),
         skill_sel: std::cell::Cell::new(0),
         skill_disabled: std::collections::HashSet::new(),
+        skill_picker_open: false,
+        skill_picker_sel: std::cell::Cell::new(0),
         hooks_level: std::cell::Cell::new(0),
         hooks_sel: std::cell::Cell::new(0),
         projected_from_frame: std::cell::Cell::new(usize::MAX),

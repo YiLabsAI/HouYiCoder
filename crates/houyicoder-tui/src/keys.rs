@@ -4,6 +4,7 @@
 
 mod fleet;
 mod login;
+mod skill_picker;
 pub use login::{handle_console, handle_login};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -106,6 +107,14 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     if app.palette.open {
         palette::handle_palette(app, k);
         return;
+    }
+    if app.skill_picker_open {
+        if skill_picker::handle(app, k) {
+            return;
+        }
+        app.skill_picker_open = false;
+        // Fall through so the key (a typed char, Tab, etc.) reaches the input
+        // box after the picker closes — no silent char loss.
     }
     // Esc while viewing a teammate only interrupts the viewed child's
     // current turn; it never exits the view and never leaks to the parent

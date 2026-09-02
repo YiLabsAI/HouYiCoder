@@ -19,7 +19,7 @@ use ratatui::{
 use crate::state::{App, Pane, ViewportMode};
 use crate::view::{
     artifact, capability, hooks_pane, input_bar, memory_pane, model_pane, palette, queue_overlay,
-    resume_picker, skills_pane, status, toast, trajectory_pane, worktree_pane,
+    resume_picker, skill_picker, skills_pane, status, toast, trajectory_pane, worktree_pane,
 };
 
 mod flat_transcript;
@@ -126,6 +126,9 @@ fn draw_working(f: &mut Frame, app: &App) {
             height: overlay_h,
         };
         queue_overlay::draw_queue_overlay(f, overlay_area, app);
+    }
+    if app.skill_picker_open {
+        skill_picker::draw(f, app, f.area());
     }
     // The resume picker now renders as a Pane (draw_command_pane) routed in
     // draw_main when app.pane == Pane::Resume, not as a floating popover. The
