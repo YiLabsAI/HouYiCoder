@@ -5,8 +5,9 @@ use crate::agent_message::AgentMessage;
 
 /// Esc on a viewed child only interrupts its current turn; it never exits
 /// the view. A running child gets a per-turn cancel and the view stays; an
-/// idle or non-running child is a no-op (the view stays). Exit is on
-/// Shift+Up/Down, which ignores the running state — tested at the key layer.
+/// idle child is a no-op on the run that pops a toast reminding the exit
+/// gesture (shift+↑↓). Exit is on Shift+Up/Down, which ignores the running
+/// state — tested at the key layer.
 #[test]
 fn test_abort_viewed_child_turn() {
     use crate::agent_message::FleetEntry;
@@ -31,20 +32,21 @@ fn test_abort_viewed_child_turn() {
         app.teammate_view.is_some(),
         "Esc on a running child aborts the turn but keeps the view open"
     );
+    assert!(
+        app.notifications.current().is_none(),
+        "a running child sends a cancel, not the exit-hint toast"
+    );
     app.fleet.entries[0].completed = Some("completed".into());
     app.abort_viewed_child_turn();
     assert!(
         app.teammate_view.is_some(),
-        "Esc on an idle child is a no-op — exit is on Shift+Up/Down, not Esc"
+        "Esc on an idle child keeps the view — exit is on Shift+Up/Down"
     );
-    app.teammate_view = Some(TeammateView {
-        child_sid: "c2".into(),
-        ..Default::default()
-    });
-    app.abort_viewed_child_turn();
     assert!(
-        app.teammate_view.is_some(),
-        "Esc on a child with no fleet entry is a no-op"
+        app.notifications
+            .current()
+            .is_some_and(|n| n.key == "teammate-exit-hint"),
+        "an idle Esc pops the exit-gesture toast instead of staying silent"
     );
 }
 

@@ -81,9 +81,10 @@ impl App {
     /// current turn; it never exits the view. A running child gets a per-turn
     /// cancel (the drive loop cancels the in-flight model fetch, appends an
     /// interrupt marker, starts the next turn — non-terminal). A non-running
-    /// child is a no-op. Exit is on Shift+Up/Down, which ignores the running
-    /// state, so a child that never idles (a per-turn cancel does not stop the
-    /// run) cannot trap the user.
+    /// child is a no-op on the run; a transient toast reminds the exit
+    /// gesture (shift+↑↓) so a misguessed Esc is not silent. Exit is on
+    /// Shift+Up/Down, which ignores the running state, so a child that never
+    /// idles (a per-turn cancel does not stop the run) cannot trap the user.
     pub(crate) fn abort_viewed_child_turn(&mut self) {
         let Some(view) = self.teammate_view.as_ref() else {
             return;
@@ -98,6 +99,19 @@ impl App {
             .unwrap_or(false);
         if running {
             self.send_cmd(crate::run_control::ClientCommand::CancelChildTurn { child_sid });
+        } else {
+            // Idle: Esc is a no-op on the run, so teach the exit gesture
+            // instead of leaving the press silent. The banner advertises
+            // shift+↑↓, but a misguessed Esc is the moment to remind.
+            self.notifications
+                .add(crate::notifications::Notification::immediate(
+                    "teammate-exit-hint",
+                    crate::notifications::NotifKind::Text {
+                        text: "shift+↑↓ to exit".to_string(),
+                        color: None,
+                    },
+                    std::time::Duration::from_millis(2000),
+                ));
         }
     }
 }

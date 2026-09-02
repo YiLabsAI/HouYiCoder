@@ -992,6 +992,36 @@ fn test_shift_arrow_exits_teammate() {
     );
 }
 
+/// Esc in the teammate view never leaks to the parent, even with a draft
+/// in the input box and a parent run in flight. The old input.is_empty()
+/// guard let Esc fall through to abort_run on the parent; the teammate arm
+/// now consumes Esc unconditionally (interrupt the viewed child, or a
+/// no-op toast when idle) so the parent run is never interrupted.
+#[test]
+fn test_teammate_esc_no_leak() {
+    use crate::records::TeammateView;
+    let mut app = fleet_app(1);
+    app.agent_busy = true;
+    app.input.set("a draft steering note".into());
+    app.teammate_view = Some(TeammateView {
+        child_sid: "child-0".into(),
+        ..Default::default()
+    });
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert!(
+        !app.cancelling,
+        "Esc in the teammate view must not interrupt the parent run"
+    );
+    assert!(
+        app.teammate_view.is_some(),
+        "Esc keeps the view open (exit is on Shift+Up/Down)"
+    );
+    assert!(
+        !app.input.is_empty(),
+        "Esc does not clear the draft (Ctrl+U owns that)"
+    );
+}
+
 /// Rendering a populated fleet paints one pill row per child, each carrying
 /// the type + the verb inferred from its last tool.
 #[test]

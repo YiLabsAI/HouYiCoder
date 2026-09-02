@@ -108,9 +108,10 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         return;
     }
     // Esc while viewing a teammate only interrupts the viewed child's
-    // current turn (running only); it does not exit the view. Exit is on
-    // Shift+Up/Down. Empty input guard so a mid-type Esc does not fire.
-    if app.teammate_view.is_some() && k.code == KeyCode::Esc && app.input.is_empty() {
+    // current turn; it never exits the view and never leaks to the parent
+    // (an input draft does not redirect it to abort_run on the parent).
+    // Exit is on Shift+Up/Down.
+    if app.teammate_view.is_some() && k.code == KeyCode::Esc {
         app.abort_viewed_child_turn();
         return;
     }
