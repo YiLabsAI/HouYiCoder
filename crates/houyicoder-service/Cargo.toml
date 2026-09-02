@@ -43,6 +43,10 @@ serde_yaml = "0.9"
 agent-client-protocol = { version = "=2.0.0", optional = true }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "registry"] }
+# Cross-platform filesystem notification (inotify/FSEvents/kqueue). Used by
+# the skill hot-reload driver in composition/skill_reload.rs only. CC0-1.0
+# (more permissive than MIT; see design §1.5 for the deviation note).
+notify = "8"
 
 [features]
 # Gates the ACP cross-decode fidelity tests. The agent-client-protocol dep

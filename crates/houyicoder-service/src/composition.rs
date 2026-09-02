@@ -17,10 +17,12 @@ mod built_in_tools;
 mod hooks;
 mod memory;
 pub mod multi_agent;
+mod reloader;
 mod resume;
 mod retention_notice;
 mod session_meta;
 mod skill;
+pub use reloader::SkillReloader;
 pub use skill::SkillRegistryImpl;
 mod startup_warnings;
 mod worktree;
@@ -51,8 +53,8 @@ use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
     AgentTool, CommandHook, ConversationSearchTool, GitWorkspaceProbe, HookRegistry, HookSource,
-    HotPathReducer, LlmSummarizer, Runner, SkillHookRegistrar, SkillTool, TodoWriteTool,
-    ToolRegistry, parse_event,
+    HotPathReducer, LlmSummarizer, Runner, SkillHookRegistrar, TodoWriteTool, ToolRegistry,
+    parse_event,
 };
 use houyicoder_memory::{FileMetaStore, InMemoryBackend, InMemoryMetaStore, LocalFileBackend};
 use houyicoder_permission::{DefaultModeGate, ModeGate, RuleStore};
@@ -475,21 +477,14 @@ pub(crate) fn assemble(
         std::sync::Arc::clone(&trust_state),
         std::sync::Arc::clone(&hook_launcher),
     ));
-    // The skill tool resolves skill names through the skill registry, which
-    // discovers SKILL.md files across the scan paths at startup. Not
-    // sandbox-backed (it reads skill files directly), so registered directly
-    // like the recall tool. The workspace anchors the project-level skill
-    tools.register(Arc::new(
-        SkillTool::new(std::sync::Arc::clone(&skill_registry))
-            .with_registrar(std::sync::Arc::clone(&skill_registrar))
-            .with_activator(Some(std::sync::Arc::clone(&skill_conditional))),
-    ));
-    // The agent tool delegates a sub-task to a spawned child. Like the recall
-    // tool it is not sandbox-backed; it resolves the requested type against
-    // the agent registry (built-ins) and goes through the ToolCtx spawn port
-    // at call time. Registered unconditionally so the model can delegate even
-    // without a sandbox. The denied-agent set comes from the rule store here
-    // (the one place permission rules are readable) and rides the runner.
+    hooks::register_skill_tool(
+        &mut tools,
+        &skill_registry,
+        &skill_registrar,
+        &skill_conditional,
+    );
+    // Agent tool: delegate a sub-task to a spawned child (not sandbox-backed;
+    // resolves the requested type against the built-in agent registry).
     let denied_agents = Arc::new(match rule_store.as_ref() {
         Some(rules) => houyicoder_permission::denied_agent_types(&rules.load()),
         None => std::collections::HashSet::new(),
@@ -530,8 +525,15 @@ pub(crate) fn assemble(
         .with_effort_resolver(std::sync::Arc::new(effort_resolver))
         .with_denied_agents(std::sync::Arc::clone(&denied_agents))
         .with_spawn_handle(spawn_handle)
-        .with_skill_registry(std::sync::Arc::clone(&skill_registry))
+        .with_skill_registry(std::sync::Arc::clone(&skill_registry)
+            as std::sync::Arc<dyn houyicoder_api::skill::SkillRegistry>)
         .with_conditional(std::sync::Arc::clone(&skill_conditional));
+    runner.set_skill_reloader(hooks::build_skill_reloader(
+        &skill_registry,
+        &skill_conditional,
+        &skill_registrar,
+        workspace.clone(),
+    ));
     // Wire a workspace probe for the re-derivable compaction backbone's
     // derivation watermark. Shares the runner's cwd handle so a worktree
     // switch propagates to the next probe. Set after the builder chain (the

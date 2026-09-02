@@ -106,17 +106,58 @@ pub(super) fn build_conditional_activator(
 }
 
 /// Discover the skill registry + build its conditional activator in one
-/// step; the composition root registers the SkillTool separately.
+/// step; the composition root registers the SkillTool separately. Returns
+/// the concrete registry so the hot-reload driver can call reload on it;
+/// callers that need the engine-facing port coerce to Arc<dyn SkillRegistry>.
 pub(super) fn build_skill_registry_and_activator(
     workspace: Option<&std::path::Path>,
 ) -> (
-    Arc<dyn houyicoder_api::skill::SkillRegistry>,
+    Arc<super::skill::SkillRegistryImpl>,
     Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>,
 ) {
-    let registry: Arc<dyn houyicoder_api::skill::SkillRegistry> =
-        Arc::new(super::skill::SkillRegistryImpl::discover(workspace));
-    let activator = build_conditional_activator(std::sync::Arc::clone(&registry), workspace);
+    let registry = Arc::new(super::skill::SkillRegistryImpl::discover(workspace));
+    let activator = build_conditional_activator(
+        std::sync::Arc::clone(&registry) as Arc<dyn houyicoder_api::skill::SkillRegistry>,
+        workspace,
+    );
     (registry, activator)
+}
+
+/// Register the SkillTool: resolves skill names through the registry, gates
+/// invocation through the registrar + conditional activator. Not
+/// sandbox-backed (reads skill files directly), so registered directly.
+pub(super) fn register_skill_tool(
+    tools: &mut houyicoder_core::agent::ToolRegistry,
+    registry: &Arc<super::skill::SkillRegistryImpl>,
+    registrar: &Arc<houyicoder_core::agent::SkillHookRegistrar>,
+    conditional: &Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>,
+) {
+    tools.register(Arc::new(
+        houyicoder_core::agent::SkillTool::new(
+            std::sync::Arc::clone(registry) as Arc<dyn houyicoder_api::skill::SkillRegistry>
+        )
+        .with_registrar(std::sync::Arc::clone(registrar))
+        .with_activator(Some(std::sync::Arc::clone(conditional))),
+    ));
+}
+
+/// Build the hot-reload driver, returning the guard (None when no roots
+/// exist to watch). Kept here so the composition root's build_runner stays
+/// under the per-file size gate.
+pub(super) fn build_skill_reloader(
+    registry: &Arc<super::skill::SkillRegistryImpl>,
+    conditional: &Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>,
+    registrar: &Arc<houyicoder_core::agent::SkillHookRegistrar>,
+    workspace: Option<std::path::PathBuf>,
+) -> Option<Arc<dyn houyicoder_core::agent::SkillReloadGuard>> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    super::reloader::SkillReloader::start(
+        std::sync::Arc::clone(registry),
+        std::sync::Arc::clone(conditional),
+        std::sync::Arc::clone(registrar),
+        workspace,
+        home,
+    )
 }
 
 /// A built-in PostToolUse hook that reads the SkillTool result for

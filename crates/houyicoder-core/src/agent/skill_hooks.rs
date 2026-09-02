@@ -4,7 +4,7 @@
 //! a live workspace-trust ref fail-closes Project and Local sources before
 //! registration under an Untrusted workspace.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
@@ -20,13 +20,18 @@ use super::parse_event;
 
 /// Shared registration state for both skill-invocation paths: the session
 /// hook registry, a live trust ref the server writes after the startup
-/// trust prompt, and a dedup set so a re-invoke does not register a second
-/// firing copy.
+/// trust prompt, a dedup set so a re-invoke does not register a second
+/// firing copy, and a per-skill id ledger so a hot reload can invalidate
+/// and re-register only the skills whose hooks changed.
 pub struct SkillHookRegistrar {
     hook_reg: Arc<HookRegistry>,
     trust: Arc<RwLock<TrustState>>,
     launcher: Arc<dyn ProcessLauncher>,
     seen: Mutex<HashSet<DedupKey>>,
+    /// skill name -> ids this registrar registered. Drives per-skill
+    /// invalidation on reload; only skills invoked this session have an
+    /// entry, so a never-invoked skill's hooks are never armed by reload.
+    registered: Mutex<HashMap<String, Vec<HookId>>>,
 }
 
 /// Identity a registered skill hook is deduped by. Two specs that agree on
@@ -56,6 +61,7 @@ impl SkillHookRegistrar {
             trust,
             launcher,
             seen: Mutex::new(HashSet::new()),
+            registered: Mutex::new(HashMap::new()),
         }
     }
 
@@ -79,6 +85,7 @@ impl SkillHookRegistrar {
         let trust_now = self.trust.read().unwrap_or_else(|e| e.into_inner()).clone();
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
         let mut count = 0;
+        let mut fresh_ids: Vec<HookId> = Vec::new();
         for spec in specs {
             let gated = matches!(spec.source, HookSourceKind::Project | HookSourceKind::Local);
             if gated && trust_now == TrustState::Untrusted {
@@ -129,6 +136,7 @@ impl SkillHookRegistrar {
             let dyn_hook: Arc<dyn Hook> = concrete.clone();
             let id = self.hook_reg.register(dyn_hook);
             concrete.bind_hook_id(id);
+            fresh_ids.push(id);
             count += 1;
             tracing::info!(
                 skill = %skill_name,
@@ -138,7 +146,69 @@ impl SkillHookRegistrar {
                 "registered skill hook"
             );
         }
+        // Record the freshly registered ids under the skill so a reload can
+        // invalidate and re-register only this skill's hooks. The seen lock is
+        // held here; the registered lock is taken after, briefly, to avoid a
+        // second long-held lock through the spec loop.
+        if !fresh_ids.is_empty() {
+            let mut registered = self.registered.lock().unwrap_or_else(|e| e.into_inner());
+            registered
+                .entry(skill_name.to_string())
+                .or_default()
+                .extend(fresh_ids);
+        }
         count
+    }
+
+    /// Invalidate and re-register the hooks of skills whose hook status
+    /// changed across a reload. Only skills already in the registered ledger
+    /// (invoked this session) are touched: a never-invoked skill — including
+    /// one a hostile repository drops in mid-session — is skipped so its hooks
+    /// are not armed behind the invoke-time registration gate. For an invoked
+    /// skill, the old ids are unregistered, its dedup entries cleared, and the
+    /// fresh spec re-registered (which re-evaluates trust against the live
+    /// workspace state). A removed skill re-registers nothing (its fresh
+    /// hooks_for is empty). unchanged skills are not passed here.
+    ///
+    /// Lock order: register takes seen then registered. To avoid an AB-BA
+    /// deadlock, invalidate never holds registered across a seen acquisition:
+    /// the first pass drains the ledger under registered, the second pass
+    /// takes seen + re-registers with no registered held.
+    pub fn invalidate(&self, changed: &[String], registry: &dyn SkillRegistry) {
+        // Pass 1: under registered, pull each invoked skill's old ids out of
+        // the ledger. Never-invoked skills are skipped here (the invoke-time
+        // gate).
+        let to_invalidate: Vec<(String, Vec<HookId>)> = {
+            let mut registered = self.registered.lock().unwrap_or_else(|e| e.into_inner());
+            let mut out = Vec::new();
+            for name in changed {
+                if registered.contains_key(name) {
+                    let ids = registered.remove(name).unwrap_or_default();
+                    out.push((name.clone(), ids));
+                }
+            }
+            out
+        }; // registered released here
+
+        // Pass 2: clear dedup entries, unregister old ids, re-register fresh.
+        // seen is taken without registered held, matching register's order.
+        for (name, old_ids) in &to_invalidate {
+            {
+                let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+                seen.retain(|k| k.skill != *name);
+            }
+            for id in old_ids {
+                self.hook_reg.unregister(*id);
+            }
+            tracing::info!(
+                skill = %name,
+                invalidated = old_ids.len(),
+                "skill hooks invalidated for reload"
+            );
+            // Re-register with the fresh spec (re-evaluates trust). register
+            // takes seen then registered; neither is held here.
+            self.register(registry, name);
+        }
     }
 }
 

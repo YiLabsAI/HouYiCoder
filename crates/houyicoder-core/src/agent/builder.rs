@@ -187,12 +187,14 @@ impl Runner {
     /// Hold a hot-reload driver lifetime guard. The guard is never read;
     /// dropping it (with the runner) stops the watcher + thread. None means
     /// no hot-reload driver runs for this session.
-    pub fn with_skill_reloader(
-        mut self,
-        reloader: Arc<dyn crate::agent::skill_reload::SkillReloadGuard>,
-    ) -> Self {
-        self.skill_reloader = Some(reloader);
-        self
+    /// Set the hot-reload driver lifetime guard after construction (the
+    /// builder chain ends before the reloader can be built, so the
+    /// composition root sets it here). None when no driver was constructed.
+    pub fn set_skill_reloader(
+        &mut self,
+        reloader: Option<Arc<dyn crate::agent::skill_reload::SkillReloadGuard>>,
+    ) {
+        self.skill_reloader = reloader;
     }
 
     /// Write the resolved workspace trust through the registrar. The server

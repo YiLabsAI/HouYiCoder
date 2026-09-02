@@ -525,3 +525,118 @@ fn test_once_unregisters_after_fire() {
     reg.dispatch(&post_tool_ctx());
     assert_eq!(reg.len(), 0, "hook self-unregistered after firing");
 }
+
+/// A stub registry whose per-skill specs can be swapped between calls, so a
+/// test can simulate a reload that changed a skill's hooks.
+struct ReloadingSpecRegistry {
+    specs: std::sync::Mutex<HashMap<String, Vec<SkillHookSpec>>>,
+}
+impl SkillRegistry for ReloadingSpecRegistry {
+    fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+        Vec::new()
+    }
+    fn find(&self, _name: &str) -> Option<SkillDescriptor> {
+        None
+    }
+    fn prepare_body(
+        &self,
+        name: &str,
+        _args: Option<&str>,
+        _sid: Option<&str>,
+    ) -> Result<String, SkillError> {
+        Err(SkillError::NotFound(name.into()))
+    }
+    fn hooks_for(&self, name: &str) -> Vec<SkillHookSpec> {
+        self.specs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(name)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+fn spec_cmd(event: &str, source: HookSourceKind, command: &str) -> SkillHookSpec {
+    SkillHookSpec {
+        event: event.into(),
+        matcher: None,
+        command: command.into(),
+        args: vec![],
+        once: false,
+        if_rule: None,
+        source,
+    }
+}
+
+/// invalidate re-registers an invoked skill whose hooks changed: the old id
+/// is unregistered and the fresh spec registered, so the registry holds one
+/// hook (not the old plus the new). A once hook resets because the new spec
+/// is a fresh instance with a fresh flag (structural, not asserted here).
+#[test]
+fn test_invalidate_reregisters_changed() {
+    let (r, reg) = registrar(TrustState::Trusted);
+    let registry = ReloadingSpecRegistry {
+        specs: std::sync::Mutex::new(HashMap::from([(
+            "deploy".to_string(),
+            vec![spec_cmd("PostToolUse", HookSourceKind::Managed, "./a.sh")],
+        )])),
+    };
+    assert_eq!(r.register(&registry, "deploy"), 1);
+    assert_eq!(reg.len(), 1);
+    // Simulate a reload that changed the hook command (new dedup key).
+    registry.specs.lock().unwrap().insert(
+        "deploy".to_string(),
+        vec![spec_cmd("PostToolUse", HookSourceKind::Managed, "./b.sh")],
+    );
+    r.invalidate(&["deploy".to_string()], &registry);
+    assert_eq!(reg.len(), 1, "old unregistered, new registered: one hook");
+    // The fresh hook fires.
+    let outcomes = reg.dispatch(&post_tool_ctx());
+    assert_eq!(outcomes.len(), 1, "fresh hook fires after re-register");
+}
+
+/// invalidate skips a skill never invoked this session, so a hook dropped in
+/// mid-session (including by a hostile repository) is not armed behind the
+/// invoke-time registration gate.
+#[test]
+fn test_invalidate_skips_uninvoked() {
+    let (r, reg) = registrar(TrustState::Trusted);
+    let registry = ReloadingSpecRegistry {
+        specs: std::sync::Mutex::new(HashMap::from([(
+            "evil".to_string(),
+            vec![spec_cmd("PreToolUse", HookSourceKind::Project, "./evil.sh")],
+        )])),
+    };
+    // "evil" is in the registry but never registered (never invoked).
+    r.invalidate(&["evil".to_string()], &registry);
+    assert!(
+        reg.is_empty(),
+        "never-invoked skill's hooks not armed by reload"
+    );
+}
+
+/// invalidate unregisters a removed skill's hooks (in the ledger, fresh
+/// hooks_for empty) without leaving them firing.
+#[test]
+fn test_invalidate_removes_deleted() {
+    let (r, reg) = registrar(TrustState::Trusted);
+    let registry = ReloadingSpecRegistry {
+        specs: std::sync::Mutex::new(HashMap::from([(
+            "deploy".to_string(),
+            vec![spec_cmd("PostToolUse", HookSourceKind::Managed, "./a.sh")],
+        )])),
+    };
+    r.register(&registry, "deploy");
+    assert_eq!(reg.len(), 1);
+    // Reload removed the skill: hooks_for is now empty.
+    registry
+        .specs
+        .lock()
+        .unwrap()
+        .insert("deploy".to_string(), vec![]);
+    r.invalidate(&["deploy".to_string()], &registry);
+    assert!(
+        reg.is_empty(),
+        "deleted skill's hooks unregistered, none re-armed"
+    );
+}
