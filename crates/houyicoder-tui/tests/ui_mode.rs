@@ -16,14 +16,14 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working, session_on_working_slow};
+use common::{Key, RENDER_TIMEOUT, pty_session, pty_session_slow};
 
 /// At session start the status pill renders the default mode (Auto). Proves
 /// the status bar + the mode pill render through the real repaint path.
 #[test]
 #[ignore]
 fn test_default_mode_pill_renders() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     assert!(
         s.wait_for("auto mode on", RENDER_TIMEOUT),
         "default auto pill should render:\n{}",
@@ -40,7 +40,7 @@ fn test_default_mode_pill_renders() {
 #[test]
 #[ignore]
 fn test_shift_tab_cycles_mode() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     assert!(
         s.wait_for("auto mode on", RENDER_TIMEOUT),
         "default auto pill should render:\n{}",
@@ -70,7 +70,7 @@ fn test_shift_tab_cycles_mode() {
 #[test]
 #[ignore]
 fn test_shift_tab_cycles_run() {
-    let mut s = session_on_working_slow(50);
+    let mut s = pty_session_slow(50);
     assert!(
         s.wait_for("auto mode on", RENDER_TIMEOUT),
         "default auto pill should render:\n{}",

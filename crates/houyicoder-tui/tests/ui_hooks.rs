@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, run_slash_command, session_on_working};
+use common::{Key, RENDER_TIMEOUT, pty_session, run_slash_command};
 
 /// /hooks opens the pane and renders the "N hooks configured" subtitle +
 /// the "edit settings.json to configure" hint. Esc at the event-list level
@@ -25,7 +25,7 @@ use common::{Key, RENDER_TIMEOUT, run_slash_command, session_on_working};
 #[test]
 #[ignore]
 fn test_hooks_pane_subtitle_hint() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     run_slash_command(&mut s, "hooks");
     assert!(
         s.wait_for("hooks configured", RENDER_TIMEOUT),

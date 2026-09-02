@@ -15,19 +15,19 @@
 
 mod common;
 
-use common::{PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command, session_on_working};
+use common::{PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session, run_slash_command};
 
 /// /context renders every section on a fresh zero-turn session. The session is always Some in the real binary (composition wires
 /// app.session = Some(live_session)), so /context hits the server's real
 /// prospective breakdown — not the canned stub the no-session path would
 /// render. That stub path (100% full fake data) is unreachable in production
-/// and is not asserted here. session_on_working picks local mode (sends
+/// and is not asserted here. pty_session picks local mode (sends
 /// '3' on the login screen) to land on the working screen without a network
 /// call.
 #[test]
 #[ignore]
 fn test_context_renders_sections() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     s.clear_output();
     run_slash_command(&mut s, "context");
     assert!(

@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working_with_script};
+use common::{Key, RENDER_TIMEOUT, pty_session_scripted};
 
 /// A two-response script: the first carries a read ToolCall (so the runner
 /// executes the real read tool on the workspace manifest), the second is plain
@@ -41,7 +41,7 @@ const READ_CARGO_TOML_SCRIPT: &str = r#"[
 #[test]
 #[ignore]
 fn test_scripted_read_renders_chip() {
-    let mut s = session_on_working_with_script(READ_CARGO_TOML_SCRIPT);
+    let mut s = pty_session_scripted(READ_CARGO_TOML_SCRIPT);
     s.send_str("read the manifest");
     s.send_key(&Key::Enter);
     // The read tool ran (its result summary renders) + the run ended ("done").

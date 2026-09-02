@@ -17,7 +17,7 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working};
+use common::{Key, RENDER_TIMEOUT, pty_session};
 use std::time::Duration;
 
 /// After a gesture that leaves the palette / a pane open, sleep so crossterm
@@ -34,7 +34,7 @@ fn pause() {
 #[test]
 #[ignore]
 fn test_palette_select_runs_search() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     s.send_key(&Key::Char('/'));
     for c in "search".chars() {
         s.send_key(&Key::Char(c));
@@ -60,7 +60,7 @@ fn test_palette_select_runs_search() {
 #[test]
 #[ignore]
 fn test_palette_select_runs_debug() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     s.send_key(&Key::Char('/'));
     for c in "debug".chars() {
         s.send_key(&Key::Char(c));
@@ -89,7 +89,7 @@ fn test_palette_select_runs_export() {
     use common::fresh_temp_dir;
     let dir = fresh_temp_dir("export");
     let target = dir.join("session.json");
-    let mut s = session_on_working();
+    let mut s = pty_session();
     common::run_slash_command(&mut s, &format!("export {}", target.display()));
     assert!(
         s.wait_for(

@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working_with_script};
+use common::{Key, RENDER_TIMEOUT, pty_session_scripted};
 
 /// The reply carries "needle" so /search needle has a match in the agent
 /// line; the user prompt "find needle please" is a SECOND match (an older
@@ -28,7 +28,7 @@ const NEEDLE_SCRIPT: &str = r#"[
 #[test]
 #[ignore]
 fn test_search_view_highlights_walks() {
-    let mut s = session_on_working_with_script(NEEDLE_SCRIPT);
+    let mut s = pty_session_scripted(NEEDLE_SCRIPT);
     // The user prompt is the older match; the scripted reply is the newest.
     s.send_str("find needle please");
     s.send_key(&Key::Enter);
@@ -71,7 +71,7 @@ fn test_search_view_highlights_walks() {
 #[test]
 #[ignore]
 fn test_view_re_search_bar() {
-    let mut s = session_on_working_with_script(NEEDLE_SCRIPT);
+    let mut s = pty_session_scripted(NEEDLE_SCRIPT);
     s.send_str("find needle please");
     s.send_key(&Key::Enter);
     assert!(

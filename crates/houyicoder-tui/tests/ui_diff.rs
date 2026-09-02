@@ -17,7 +17,7 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working_in_repo};
+use common::{Key, RENDER_TIMEOUT, pty_session_in_repo};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -123,7 +123,7 @@ fn test_edit_diff_renders_structured() {
     let repo = make_temp_repo(1);
     let fixture = Fixture::new(&repo);
     let script = edit_script(&fixture.rel());
-    let mut s = session_on_working_in_repo(repo, &script);
+    let mut s = pty_session_in_repo(repo, &script);
     s.send_str("edit the file");
     s.send_key(&Key::Enter);
     // The structured-diff summary rendered. The full "Added 1 line, removed 1

@@ -15,9 +15,7 @@
 
 mod common;
 
-use common::{
-    Key, RENDER_TIMEOUT, run_slash_command, session_on_working, session_on_working_in_repo,
-};
+use common::{Key, RENDER_TIMEOUT, pty_session, pty_session_in_repo, run_slash_command};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -28,7 +26,7 @@ use std::time::Duration;
 #[test]
 #[ignore]
 fn test_pane_lists_worktrees() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     run_slash_command(&mut s, "worktree");
     assert!(
         s.wait_for("worktrees —", RENDER_TIMEOUT),
@@ -58,7 +56,7 @@ fn test_pane_lists_worktrees() {
 #[test]
 #[ignore]
 fn test_pane_search_esc_clears() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     run_slash_command(&mut s, "worktree");
     // Wait for the pane to render before typing into its search.
     assert!(
@@ -135,7 +133,7 @@ const EXIT_REMOVE_ASK_SCRIPT: &str = r#"[
 fn test_exit_remove_asks_deletes() {
     let repo = make_temp_repo(1);
     let wt_dir = repo.join(".houyicoder").join("worktrees").join("u8");
-    let mut s = session_on_working_in_repo(repo.clone(), EXIT_REMOVE_ASK_SCRIPT);
+    let mut s = pty_session_in_repo(repo.clone(), EXIT_REMOVE_ASK_SCRIPT);
     // Kick the run: a plain message + Enter ships the user turn.
     s.send_str("go");
     s.send_key(&Key::Enter);
@@ -223,7 +221,7 @@ const EXIT_REMOVE_REFUSE_SCRIPT: &str = r#"[
 fn test_remove_refuses_uncommitted_work() {
     let repo = make_temp_repo(2);
     let wt_dir = repo.join(".houyicoder").join("worktrees").join("u8d");
-    let mut s = session_on_working_in_repo(repo.clone(), EXIT_REMOVE_REFUSE_SCRIPT);
+    let mut s = pty_session_in_repo(repo.clone(), EXIT_REMOVE_REFUSE_SCRIPT);
     s.send_str("go");
     s.send_key(&Key::Enter);
     // enter runs, then bash touch dirties the worktree, then exit(remove)

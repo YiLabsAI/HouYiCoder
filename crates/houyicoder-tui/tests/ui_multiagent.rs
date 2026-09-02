@@ -7,9 +7,7 @@
 
 mod common;
 
-use common::{
-    Key, RENDER_TIMEOUT, session_on_working_slow_with_script, session_on_working_with_script,
-};
+use common::{Key, RENDER_TIMEOUT, pty_session_scripted, pty_session_slow_scripted};
 use std::time::Duration;
 
 /// A child text long enough that the collapsed fold summary truncates it.
@@ -35,7 +33,7 @@ fn test_multi_sync_delegation() {
         [{"type":"Text","text":"auth is in src/auth"}],
         [{"type":"Text","text":"the auth module is in src/auth"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(
         s.wait_for("let's build", RENDER_TIMEOUT),
         "working screen should render"
@@ -89,7 +87,7 @@ fn test_multi_expand_teammate() {
         [{"type":"Text","text":"auth is in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_slow_with_script(80, script);
+    let mut s = pty_session_slow_scripted(80, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -183,7 +181,7 @@ fn test_multi_ctrl_o_thought() {
         [{"type":"Text","text":"auth is in src/auth"}],
         [{"type":"Reasoning","text":"weighing the auth options"},{"type":"Text","text":"all done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -234,7 +232,7 @@ fn test_multi_large_child_summary() {
         [{"type":"Text","text":"done"}]
     ])
     .to_string();
-    let mut s = session_on_working_with_script(&script);
+    let mut s = pty_session_scripted(&script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -319,7 +317,7 @@ fn test_multi_async_delegation() {
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(
         s.wait_for("let's build", RENDER_TIMEOUT),
         "working screen renders"
@@ -376,7 +374,7 @@ fn test_teammate_pill_pins_view() {
         [{"type":"Text","text":"auth is in src/auth"}],
         [{"type":"Text","text":"the auth module is in src/auth"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -429,7 +427,7 @@ fn test_teammate_slash_routes_parent() {
         [{"type":"Text","text":"auth is in src/auth"}],
         [{"type":"Text","text":"the auth module is in src/auth"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -475,7 +473,7 @@ fn test_steer_completed_notice() {
         [{"type":"Text","text":"auth is in src/auth"}],
         [{"type":"Text","text":"the auth module is in src/auth"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -504,7 +502,7 @@ fn test_sync_child_summary_text() {
         [{"type":"Text","text":"the auth module lives in src/auth"}],
         [{"type":"Text","text":"parent resumed"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -533,7 +531,7 @@ fn test_sync_two_folds_render() {
         [{"type":"Text","text":"second-child-result"}],
         [{"type":"Text","text":"parent done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("delegate two");
     s.send_str("\r");
@@ -560,7 +558,7 @@ fn test_sync_reenter_teammate() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"parent resumed"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -588,7 +586,7 @@ fn test_sync_agent_call_row() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -616,7 +614,7 @@ fn test_fold_summary_truncates() {
         [{{"type":"Text","text":"done"}}]
     ]"#
     );
-    let mut s = session_on_working_with_script(&script);
+    let mut s = pty_session_scripted(&script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -645,7 +643,7 @@ fn test_teammate_view_child_content() {
         [{"type":"Text","text":"the auth boundary is src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -670,7 +668,7 @@ fn test_teammate_esc_single() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -697,7 +695,7 @@ fn test_sync_followup_persists() {
         [{"type":"Text","text":"parent first reply"}],
         [{"type":"Text","text":"parent second reply"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -727,7 +725,7 @@ fn test_sync_fold_shows_type() {
         [{"type":"Text","text":"plan made"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("plan the work");
     s.send_str("\r");
@@ -749,7 +747,7 @@ fn test_sync_empty_child_safe() {
         [{"type":"Text","text":""}],
         [{"type":"Text","text":"parent resumed"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -775,7 +773,7 @@ fn test_teammate_prompt_surfaces() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -799,7 +797,7 @@ fn test_teammate_banner_plan() {
         [{"type":"Text","text":"plan made"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("plan the work");
     s.send_str("\r");
@@ -822,7 +820,7 @@ fn test_teammate_banner_plan() {
 #[ignore]
 fn test_esc_busy_interrupts_run() {
     let script = r#"[[{"type":"Text","text":"should not finish"}]]"#;
-    let mut s = common::session_on_working_slow_with_script(3000, script);
+    let mut s = common::pty_session_slow_scripted(3000, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("go");
     s.send_str("\r");
@@ -846,7 +844,7 @@ fn test_esc_busy_interrupts_run() {
 #[ignore]
 fn test_esc_interrupt_then_edit() {
     let script = r#"[[{"type":"Text","text":"slow reply"}]]"#;
-    let mut s = common::session_on_working_slow_with_script(3000, script);
+    let mut s = common::pty_session_slow_scripted(3000, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("go");
     s.send_str("\r");
@@ -866,7 +864,7 @@ fn test_esc_interrupt_then_edit() {
 #[test]
 #[ignore]
 fn test_esc_idle_noop() {
-    let mut s = common::session_on_working_with_script(r#"[[{"type":"Text","text":"reply"}]]"#);
+    let mut s = common::pty_session_scripted(r#"[[{"type":"Text","text":"reply"}]]"#);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_key(&Key::Esc);
     s.send_key(&Key::Esc);
@@ -896,7 +894,7 @@ fn test_pill_done_after_completion() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -925,7 +923,7 @@ fn test_pill_two_children_rows() {
         [{"type":"Text","text":"second-child"}],
         [{"type":"Text","text":"parent done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("delegate two");
     s.send_str("\r");
@@ -954,7 +952,7 @@ fn test_pill_running_verb_inflight() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = common::session_on_working_slow_with_script(2000, script);
+    let mut s = common::pty_session_slow_scripted(2000, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -983,7 +981,7 @@ fn test_pill_shift_enter_teammate() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1011,7 +1009,7 @@ fn test_async_parent_unblocked() {
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1038,7 +1036,7 @@ fn test_async_child_text_drains() {
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1074,7 +1072,7 @@ fn test_async_then_sync_mix() {
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("mixed");
     s.send_str("\r");
@@ -1108,7 +1106,7 @@ fn test_two_folds_distinct_types() {
         [{"type":"Text","text":"second-child"}],
         [{"type":"Text","text":"parent done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("delegate two");
     s.send_str("\r");
@@ -1126,7 +1124,7 @@ fn test_two_folds_distinct_types() {
 #[test]
 #[ignore]
 fn test_slash_opens_palette() {
-    let mut s = common::session_on_working_with_script(r#"[[{"type":"Text","text":"reply"}]]"#);
+    let mut s = common::pty_session_scripted(r#"[[{"type":"Text","text":"reply"}]]"#);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_key(&Key::Char('/'));
     assert!(
@@ -1147,7 +1145,7 @@ fn test_sync_child_multiline_summary() {
         [{"type":"Text","text":"line one\nline two\nline three"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1175,7 +1173,7 @@ fn test_teammate_esc_fold_survives() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1202,7 +1200,7 @@ fn test_pill_running_glyph() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = common::session_on_working_slow_with_script(2000, script);
+    let mut s = common::pty_session_slow_scripted(2000, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1224,7 +1222,7 @@ fn test_sync_user_message_echo() {
         [{"type":"Text","text":"child result"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("delegatetheauth");
     s.send_str("\r");
@@ -1252,7 +1250,7 @@ fn test_pill_running_to_done() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = common::session_on_working_slow_with_script(2000, script);
+    let mut s = common::pty_session_slow_scripted(2000, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1277,7 +1275,7 @@ fn test_teammate_banner_hint() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1301,7 +1299,7 @@ fn test_pill_completed_check_glyph() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1317,7 +1315,7 @@ fn test_pill_completed_check_glyph() {
 #[test]
 #[ignore]
 fn test_slash_esc_closes_palette() {
-    let mut s = common::session_on_working_with_script(r#"[[{"type":"Text","text":"reply"}]]"#);
+    let mut s = common::pty_session_scripted(r#"[[{"type":"Text","text":"reply"}]]"#);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_key(&Key::Char('/'));
     assert!(s.wait_for_compact("commands", RENDER_TIMEOUT));
@@ -1340,7 +1338,7 @@ fn test_pill_shift_arrows_enter() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1365,7 +1363,7 @@ fn test_sync_child_unicode_summary() {
         [{"type":"Text","text":"héllo wörld café"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1387,7 +1385,7 @@ fn test_async_background_message() {
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1406,7 +1404,7 @@ fn test_sync_long_prompt_safe() {
     let script = format!(
         r#"[[{{"type":"ToolCall","id":"toolu_1","name":"agent","input":{{"subagent_type":"explore","prompt":"{prompt}","description":"long"}}}}],[{{"type":"Text","text":"child done"}}],[{{"type":"Text","text":"parent done"}}]]"#
     );
-    let mut s = session_on_working_with_script(&script);
+    let mut s = pty_session_scripted(&script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("go");
     s.send_str("\r");
@@ -1427,7 +1425,7 @@ fn test_sync_quotes_unescaped() {
         [{"type":"Text","text":"the \"auth\" is here"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1454,7 +1452,7 @@ fn test_sync_general_purpose_type() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1478,7 +1476,7 @@ fn test_teammate_chars_route_parent() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1499,7 +1497,7 @@ fn test_teammate_chars_route_parent() {
 #[ignore]
 fn test_esc_interrupt_clears_busy() {
     let script = r#"[[{"type":"Text","text":"slow reply"}]]"#;
-    let mut s = common::session_on_working_slow_with_script(3000, script);
+    let mut s = common::pty_session_slow_scripted(3000, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("go");
     s.send_str("\r");
@@ -1526,7 +1524,7 @@ fn test_fold_short_summary_full() {
         [{"type":"Text","text":"found it"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1554,7 +1552,7 @@ fn test_async_notification_drains_once() {
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -1581,7 +1579,7 @@ fn test_sync_parent_after_fold() {
         [{"type":"Text","text":"child found auth"}],
         [{"type":"Text","text":"parent final answer"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");

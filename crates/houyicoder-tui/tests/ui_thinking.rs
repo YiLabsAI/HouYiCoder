@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working_with_script};
+use common::{Key, RENDER_TIMEOUT, pty_session_scripted};
 
 /// A response that streams a reasoning item, then a bash ToolCall (the bash
 /// ASKs in Manual mode), then plain text to end the run after the approve.
@@ -31,7 +31,7 @@ const REASONING_THEN_BASH_SCRIPT: &str = r#"[
 #[test]
 #[ignore]
 fn test_no_live_thinking_block() {
-    let mut s = session_on_working_with_script(REASONING_THEN_BASH_SCRIPT);
+    let mut s = pty_session_scripted(REASONING_THEN_BASH_SCRIPT);
     // Auto mode auto-approves (no card, no pause); cycle to Manual so the bash
     // ASKs + the run pauses with the live state visible.
     s.send_key(&Key::Backtab);

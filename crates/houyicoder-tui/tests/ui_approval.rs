@@ -12,7 +12,7 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working_in_repo};
+use common::{Key, RENDER_TIMEOUT, pty_session_in_repo};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -66,7 +66,7 @@ fn make_temp_repo(slug: u64) -> PathBuf {
 #[test]
 #[ignore]
 fn test_approve_bash_no_error() {
-    let mut s = session_on_working_in_repo(make_temp_repo(1), BASH_ASK_SCRIPT);
+    let mut s = pty_session_in_repo(make_temp_repo(1), BASH_ASK_SCRIPT);
     // Local mode starts in Auto (auto-approve); cycle to Manual so guarded
     // tools ASK instead of auto-running.
     s.send_key(&Key::Backtab);
@@ -107,7 +107,7 @@ fn test_approve_bash_no_error() {
 #[test]
 #[ignore]
 fn test_deny_bash_clears_ends() {
-    let mut s = session_on_working_in_repo(make_temp_repo(2), BASH_ASK_SCRIPT);
+    let mut s = pty_session_in_repo(make_temp_repo(2), BASH_ASK_SCRIPT);
     s.send_key(&Key::Backtab);
     assert!(
         s.wait_for("manual mode on", RENDER_TIMEOUT),

@@ -17,7 +17,7 @@
 
 mod common;
 
-use common::{Key, session_on_working, session_on_working_in_repo};
+use common::{Key, pty_session, pty_session_in_repo};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -74,7 +74,7 @@ fn test_worktree_refuses_tree_write() {
         [{"type":"Text","text":"done"}]
     ])
     .to_string();
-    let mut s = session_on_working_in_repo(repo.clone(), &script);
+    let mut s = pty_session_in_repo(repo.clone(), &script);
     s.send_str("go");
     s.send_key(&Key::Enter);
     // enter runs, then the destructive append raises the approval card.
@@ -118,7 +118,7 @@ fn test_default_open_asks_egress() {
   [{"type":"ToolCall","id":"c1","name":"bash","input":{"command":"curl example.com"}}],
   [{"type":"Text","text":"done"}]
 ]"#;
-    let mut s = session_on_working_in_repo(make_temp_repo(3), script);
+    let mut s = pty_session_in_repo(make_temp_repo(3), script);
     s.send_str("go");
     s.send_key(&Key::Enter);
     // The egress card fires (gate asks) before curl runs. The command text
@@ -151,7 +151,7 @@ fn test_worktree_asks_egress() {
   [{"type":"ToolCall","id":"c2","name":"bash","input":{"command":"curl example.com"}}],
   [{"type":"Text","text":"done"}]
 ]"#;
-    let mut s = session_on_working_in_repo(repo.clone(), script);
+    let mut s = pty_session_in_repo(repo.clone(), script);
     s.send_str("go");
     s.send_key(&Key::Enter);
     let card = Duration::from_secs(20);
@@ -178,7 +178,7 @@ fn test_worktree_asks_egress() {
 #[test]
 #[ignore]
 fn test_trajectory_session_no_crash() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     s.send_str("/trajectory");
     s.send_key(&Key::Enter);
     let t = std::time::Duration::from_secs(5);
@@ -245,7 +245,7 @@ fn test_grep_outside_approves_resumes() {
         [{"type":"Text","text":"done"}]
     ])
     .to_string();
-    let mut s = session_on_working_in_repo(repo.clone(), &script);
+    let mut s = pty_session_in_repo(repo.clone(), &script);
     s.send_str("go");
     s.send_key(&Key::Enter);
     // The path-bounds Detection ask is mode-immune, so the card fires even

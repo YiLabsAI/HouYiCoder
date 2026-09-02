@@ -122,9 +122,8 @@ NEXTEST_IGNORED_REPORT := -E 'test(/bug_repro/) or binary(/live_agent/) or test(
 # Parallel-safety: fresh_temp_dir retries on AlreadyExists (nextest gives each
 # test its own process, so the per-process SEQ counter restarts at 0; an
 # OS-recycled pid could mint a path matching a leftover dir). No --retries
-# needed; a consistent failure still surfaces. -j 8 caps concurrent
-# houyi-binary spawns (each PTY test spawns the bin) -- -j 16 raced
-# intermittent wait_for timeouts on loaded hosts.
+# needed; a consistent failure still surfaces. -j 3 caps concurrent
+# houyi-binary spawns (each PTY test spawns the bin).
 verify: check-full
 	@./scripts/ensure_nextest.sh
 	@echo "▶ Building the houyi bin (the PTY tests spawn it via a hardcoded path;"
@@ -134,7 +133,7 @@ verify: check-full
 	@echo "  Real-infra (live_agent binary + live_mcp_real_server, need API key /"
 	@echo "  network) + pinned bug_repro are excluded here + run report-only below."
 	@start=$$(date +%s); \
-	$(CARGO) nextest run --workspace --run-ignored only -j 8 $(NEXTEST_IGNORED_BLOCKING); status=$$?; \
+	$(CARGO) nextest run --workspace --run-ignored only -j 3 $(NEXTEST_IGNORED_BLOCKING); status=$$?; \
 	end=$$(date +%s); total=$$((end - start)); \
 	warn_budget=$${VERIFY_BUDGET_WARN:-60}; \
 	if [ $$total -gt $$warn_budget ]; then \

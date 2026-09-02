@@ -12,8 +12,7 @@
 mod common;
 
 use common::{
-    Key, RENDER_TIMEOUT, session_on_working, session_on_working_slow_in_repo,
-    session_on_working_slow_with_script,
+    Key, RENDER_TIMEOUT, pty_session, pty_session_slow_in_repo, pty_session_slow_scripted,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -69,10 +68,8 @@ const QUEUED_TOKEN: &str = "zzqueuedpony";
 #[test]
 #[ignore]
 fn test_esc_draft_aborts_kept() {
-    let mut s = session_on_working_slow_with_script(
-        RUN_DELAY_MS,
-        r#"[[{"type":"Text","text":"slow reply"}]]"#,
-    );
+    let mut s =
+        pty_session_slow_scripted(RUN_DELAY_MS, r#"[[{"type":"Text","text":"slow reply"}]]"#);
     s.send_str("hi");
     s.send_key(&Key::Enter);
     // Type a draft while the run is in-flight (busy, not submitted).
@@ -105,7 +102,7 @@ fn test_esc_draft_aborts_kept() {
 #[test]
 #[ignore]
 fn test_ctrlu_clears_busy_draft() {
-    let mut s = session_on_working_slow_in_repo(make_temp_repo(3), RUN_DELAY_MS);
+    let mut s = pty_session_slow_in_repo(make_temp_repo(3), RUN_DELAY_MS);
     s.send_str("hi");
     s.send_key(&Key::Enter);
     s.send_str(UNIQUE_TOKEN);
@@ -152,7 +149,7 @@ fn test_ctrlu_clears_busy_draft() {
 #[test]
 #[ignore]
 fn test_busy_esc_pops_queue() {
-    let mut s = session_on_working_slow_in_repo(make_temp_repo(2), RUN_DELAY_MS);
+    let mut s = pty_session_slow_in_repo(make_temp_repo(2), RUN_DELAY_MS);
     // Start a run (the stub's 3s delay keeps it in-flight with no content).
     s.send_str("first task");
     s.send_key(&Key::Enter);
@@ -220,7 +217,7 @@ fn test_busy_esc_pops_queue() {
 #[test]
 #[ignore]
 fn test_ctrl_u_clears_input() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     s.send_str(UNIQUE_TOKEN);
     // Wipe the char-by-char typed render so the absence check reads only what
     // renders after the Ctrl+U + Enter.
@@ -241,7 +238,7 @@ fn test_ctrl_u_clears_input() {
 #[test]
 #[ignore]
 fn test_esc_clears_idle_input() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     s.send_str(UNIQUE_TOKEN);
     s.clear_output();
     s.send_key(&Key::Esc);

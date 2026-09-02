@@ -6,14 +6,14 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working};
+use common::{Key, RENDER_TIMEOUT, pty_session};
 
 /// A single ctrl+D shows the exit-confirm toast and does not quit (the
 /// toast rendering proves the app is alive + processed the key).
 #[test]
 #[ignore]
 fn test_ctrl_d_once_toast() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     s.send_key(&Key::Ctrl('d'));
     assert!(
         s.wait_for_compact("PressCtrl+Dagaintoexit", RENDER_TIMEOUT),
@@ -28,7 +28,7 @@ fn test_ctrl_d_once_toast() {
 #[test]
 #[ignore]
 fn test_ctrl_c_idle_noop() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     s.clear_output();
     s.send_key(&Key::Ctrl('c'));
     s.send_key(&Key::Ctrl('d'));
@@ -45,7 +45,7 @@ fn test_ctrl_c_idle_noop() {
 #[test]
 #[ignore]
 fn test_q_empty_types() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     s.clear_output();
     s.send_key(&Key::Char('q'));
     s.send_key(&Key::Backspace);

@@ -14,14 +14,14 @@
 mod common;
 
 use common::{
-    Key, RENDER_TIMEOUT, fresh_temp_dir, open_permissions, session_on_working,
-    session_on_working_in_dir, session_on_working_with_script, tab_to_workspace,
+    Key, RENDER_TIMEOUT, fresh_temp_dir, open_permissions, pty_session, pty_session_in_dir,
+    pty_session_scripted, tab_to_workspace,
 };
 
 #[test]
 #[ignore]
 fn test_pane_opens() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     open_permissions(&mut s);
     // The Pane primitive draws a full-width ─ Divider framing the region.
     s.assert_contains("─");
@@ -30,7 +30,7 @@ fn test_pane_opens() {
 #[test]
 #[ignore]
 fn test_workspace_add_dir() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     open_permissions(&mut s);
     tab_to_workspace(&mut s);
     // 'a' enters AddDir. A path typed here (leading '/') must land in the
@@ -59,7 +59,7 @@ fn test_add_dir_path_errors() {
     // Adding a path that is a FILE (not a directory) must surface an error,
     // not silently drop the keystroke. The server's add_working_dir rejects
     // non-directories; the test asserts the rejection reaches the screen.
-    let mut s = session_on_working();
+    let mut s = pty_session();
     open_permissions(&mut s);
     tab_to_workspace(&mut s);
     s.send_key(&Key::Char('a'));
@@ -92,7 +92,7 @@ fn test_add_dir_path_errors() {
 fn test_rule_add_flow() {
     // The rule Add flow: spec text → Enter → destination pick (←→) → Enter
     // ships → the rule appears in the Allow list.
-    let mut s = session_on_working();
+    let mut s = pty_session();
     open_permissions(&mut s);
     // Default tab is Allow; 'a' enters the rule Add sub-mode.
     s.send_key(&Key::Char('a'));
@@ -127,7 +127,7 @@ fn test_esc_exits_pane() {
     // Working screen + input box render after Esc. (wait_for on unchanged
     // content like the placeholder would be a false negative — the renderer
     // skips it — so we drive a change instead.)
-    let mut s = session_on_working();
+    let mut s = pty_session();
     open_permissions(&mut s);
     s.assert_contains("Permissions:");
     s.clear_output();
@@ -156,7 +156,7 @@ fn test_workspace_remove_dir() {
     // startup allow-back lists the main checkout's git dir, so the
     // post-removal empty-state assertion below would never hold there.
     let cwd = fresh_temp_dir("ws-rm");
-    let mut s = session_on_working_in_dir(cwd);
+    let mut s = pty_session_in_dir(cwd);
     open_permissions(&mut s);
     tab_to_workspace(&mut s);
     // Add a dir first (reuse the add flow).
@@ -211,7 +211,7 @@ fn test_add_dir_read_auto() {
   [{"type":"Text","text":"done"}]
 ]"#
     .replace("__PATH__", &abs);
-    let mut s = session_on_working_with_script(&script);
+    let mut s = pty_session_scripted(&script);
     // Grant the dir via the real /permissions -> Workspace -> Add flow.
     open_permissions(&mut s);
     tab_to_workspace(&mut s);

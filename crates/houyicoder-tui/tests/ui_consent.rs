@@ -21,7 +21,7 @@
 
 mod common;
 
-use common::{RENDER_TIMEOUT, run_slash_command, session_on_working};
+use common::{RENDER_TIMEOUT, pty_session, run_slash_command};
 
 /// /permissions git on|off toggles the checkpoint. The wire round-trip sets
 /// the gate flag; the system line reflects the new state. The toggle is
@@ -30,7 +30,7 @@ use common::{RENDER_TIMEOUT, run_slash_command, session_on_working};
 #[test]
 #[ignore]
 fn test_git_toggle_round_trips() {
-    let mut s = session_on_working();
+    let mut s = pty_session();
     run_slash_command(&mut s, "permissions git off");
     assert!(
         s.wait_for("ask before git operations: off", RENDER_TIMEOUT),

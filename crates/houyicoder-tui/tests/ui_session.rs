@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, session_on_working_with_script};
+use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session_scripted};
 use houyicoder_core::{EventId, SessionId, TurnEvent, TurnEventKind};
 
 /// A single-response script: one call whose only item is a plain-text reply,
@@ -33,7 +33,7 @@ const ONE_REPLY_SCRIPT: &str = r#"[[{"type":"Text","text":"logged"}]]"#;
 #[test]
 #[ignore]
 fn test_turn_writes_durable_log() {
-    let mut s = session_on_working_with_script(ONE_REPLY_SCRIPT);
+    let mut s = pty_session_scripted(ONE_REPLY_SCRIPT);
     s.send_str("say logged");
     s.send_key(&Key::Enter);
     s.wait_for("logged", RENDER_TIMEOUT);
@@ -627,7 +627,7 @@ fn test_resume_export_live_session() {
 #[test]
 #[ignore]
 fn test_status_version_before_turn() {
-    let mut s = common::session_on_working_with_script_rows(ONE_REPLY_SCRIPT, 40);
+    let mut s = common::pty_session_scripted_rows(ONE_REPLY_SCRIPT, 40);
     common::run_slash_command(&mut s, "status");
     assert!(
         s.wait_for_plain("Version:", RENDER_TIMEOUT),

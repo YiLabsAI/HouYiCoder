@@ -9,7 +9,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{Key, RENDER_TIMEOUT, run_slash_command, session_on_working_in_repo};
+use common::{Key, RENDER_TIMEOUT, pty_session_in_repo, run_slash_command};
 
 /// Throwaway git repo with a paths-gated skill plus a matching file under
 /// src/ and a non-matching one under other/.
@@ -61,7 +61,7 @@ const TOUCH_SRC_SCRIPT: &str = r#"[
 #[ignore]
 fn test_conditional_skill_activation_flow() {
     let repo = make_skill_repo(1);
-    let mut s = session_on_working_in_repo(repo.clone(), TOUCH_SRC_SCRIPT);
+    let mut s = pty_session_in_repo(repo.clone(), TOUCH_SRC_SCRIPT);
     run_slash_command(&mut s, "gated");
     assert!(
         s.wait_for_compact("touchamatchingfile", RENDER_TIMEOUT),
@@ -100,7 +100,7 @@ fn test_nonmatching_touch_keeps_refusal() {
   [{"type":"ToolCall","id":"c1","name":"read","input":{"path":"other/x.rs"}}],
   [{"type":"Text","text":"read-done"}]
 ]"#;
-    let mut s = session_on_working_in_repo(repo.clone(), script);
+    let mut s = pty_session_in_repo(repo.clone(), script);
     s.send_str("read the other file");
     s.send_key(&Key::Enter);
     assert!(

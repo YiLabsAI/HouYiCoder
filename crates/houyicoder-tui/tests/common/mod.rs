@@ -618,6 +618,33 @@ pub fn fresh_temp_dir(slug: &str) -> std::path::PathBuf {
     }
 }
 
+/// Seed a throwaway git repo the binary can run in (a workspace manifest so
+/// resolve_project_workspace pins the dir). Isolates the project-scope
+/// memory root from the developer's real workspace so list scans are not
+/// polluted by real entries the test did not save.
+#[allow(clippy::disallowed_methods)]
+pub fn make_temp_repo(slug: &str) -> PathBuf {
+    let dir = fresh_temp_dir(&format!("repo-{slug}"));
+    std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.email", "t@x"][..],
+        &["config", "user.name", "t"][..],
+        &["add", "Cargo.toml"][..],
+        &["commit", "-m", "init", "-q"][..],
+    ] {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "git {:?}", args);
+    }
+    dir
+}
+
 /// A one-response stub script: plain text only, so a run completes in one
 /// step (no tool call, no approval pause). Shared by the resume + status
 /// PTY tests. The outer array is the per-call list -- the provider parses
@@ -686,53 +713,62 @@ pub fn sid_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 
 /// Launch the binary + pick local mode (no login, no network ever) → land on
 /// the Working screen. Shared by every test.
-pub fn session_on_working() -> PtySession {
-    session_on_working_inner(PtySession::launch())
+pub fn pty_session() -> PtySession {
+    pty_session_inner(PtySession::launch())
 }
 
-/// Like session_on_working(), but runs the binary in the given dir instead
+/// Like pty_session(), but runs the binary in the given dir instead
 /// of the workspace root. For tests that assert on the workspace
 /// additional-dirs list's empty state: from a linked worktree the startup
 /// allow-back adds the main checkout's git dir, so the workspace root's list
 /// is never empty.
-pub fn session_on_working_in_dir(dir: std::path::PathBuf) -> PtySession {
-    session_on_working_inner(PtySession::launch_in_dir(dir))
+pub fn pty_session_in_dir(dir: std::path::PathBuf) -> PtySession {
+    pty_session_inner(PtySession::launch_in_dir(dir))
 }
 
-/// Like session_on_working, but the stub streams with an inter-chunk delay so
+/// Like pty_session, but the stub streams with an inter-chunk delay so
 /// a run stays in-flight long enough to drive mid-run keys (dynamic mode
 /// switch, mid-run abort, etc.).
-pub fn session_on_working_slow(ms: u64) -> PtySession {
-    session_on_working_inner(PtySession::launch_with_stub_delay(ms))
+pub fn pty_session_slow(ms: u64) -> PtySession {
+    pty_session_inner(PtySession::launch_with_stub_delay(ms))
 }
 
-/// Like session_on_working_slow, but in an isolated temp repo (avoids the
+/// Like pty_session_slow, but in an isolated temp repo (avoids the
 /// workspace root's project state delaying stub delivery past the timeout).
-pub fn session_on_working_slow_in_repo(repo: std::path::PathBuf, ms: u64) -> PtySession {
-    session_on_working_inner(PtySession::launch_in_repo_with_delay(repo, ms))
+pub fn pty_session_slow_in_repo(repo: std::path::PathBuf, ms: u64) -> PtySession {
+    pty_session_inner(PtySession::launch_in_repo_with_delay(repo, ms))
 }
 
-/// Like session_on_working, but overrides HOME so the memory roots + settings
-/// file land in a temp dir the test owns. Used by the /memory smoke tests so
-/// /save + /memory toggle never touch the developer's real home.
-pub fn session_on_working_with_home(home: std::path::PathBuf) -> PtySession {
-    session_on_working_inner(PtySession::launch_with_home(home))
+/// Like pty_session, but overrides HOME so the memory roots + settings
+/// file land in a temp dir the test owns, AND seeds a throwaway git repo as
+/// the working directory so the project-scope memory root (the workspace
+/// cwd's memory dir) is also temp — not the developer's real workspace, whose
+/// entries would leak into the test's list_memories scan.
+pub fn pty_session_isolated(home: std::path::PathBuf) -> PtySession {
+    let repo = make_temp_repo("home");
+    pty_session_inner(PtySession::launch_with_args(
+        None,
+        None,
+        Some(home),
+        Some(repo),
+        &[],
+    ))
 }
 
-/// Like session_on_working, but the stub emits a scripted response sequence
+/// Like pty_session, but the stub emits a scripted response sequence
 /// (HOUYICODER_STUB_SCRIPT) so the run drives real tool calls. Used by the
 /// tool-call + permission-flow tests.
-pub fn session_on_working_with_script(script_json: &str) -> PtySession {
-    session_on_working_inner(PtySession::launch_with_stub_script(script_json))
+pub fn pty_session_scripted(script_json: &str) -> PtySession {
+    pty_session_inner(PtySession::launch_with_stub_script(script_json))
 }
 
-/// Like session_on_working_with_script, but with a custom PTY row count. The
+/// Like pty_session_scripted, but with a custom PTY row count. The
 /// /status pane caps at area/2; a 24-row terminal clips the lower fields, so
 /// tests that assert on breaker / provenance / tokens / tasks need a taller
 /// terminal to admit the full field set.
-pub fn session_on_working_with_script_rows(script_json: &str, rows: u16) -> PtySession {
+pub fn pty_session_scripted_rows(script_json: &str, rows: u16) -> PtySession {
     let sessions_dir = fresh_temp_dir("sessions");
-    session_on_working_inner(PtySession::launch_with_sessions_dir_rows(
+    pty_session_inner(PtySession::launch_with_sessions_dir_rows(
         Some(script_json.to_string()),
         None,
         None,
@@ -743,21 +779,21 @@ pub fn session_on_working_with_script_rows(script_json: &str, rows: u16) -> PtyS
     ))
 }
 
-/// Like session_on_working_with_script, but the binary runs in the given repo
+/// Like pty_session_scripted, but the binary runs in the given repo
 /// dir (a throwaway git repo) instead of the workspace root. Used by the
 /// worktree PTY tests so a real linked worktree is created + removed under the
 /// temp repo, never the developer workspace. The caller seeds the repo (init +
 /// one commit + a workspace manifest) before launching.
-pub fn session_on_working_in_repo(repo: std::path::PathBuf, script_json: &str) -> PtySession {
-    session_on_working_inner(PtySession::launch_in_repo_with_script(repo, script_json))
+pub fn pty_session_in_repo(repo: std::path::PathBuf, script_json: &str) -> PtySession {
+    pty_session_inner(PtySession::launch_in_repo_with_script(repo, script_json))
 }
 
-/// Like session_on_working_with_script, but the stub streams with an
+/// Like pty_session_scripted, but the stub streams with an
 /// inter-chunk delay so a run stays in-flight long enough to drive mid-run
 /// keys (Esc interrupt, recall). Used by the multi-agent Esc tests.
-pub fn session_on_working_slow_with_script(ms: u64, script_json: &str) -> PtySession {
+pub fn pty_session_slow_scripted(ms: u64, script_json: &str) -> PtySession {
     let sessions_dir = fresh_temp_dir("sessions");
-    session_on_working_inner(PtySession::launch_with_sessions_dir(
+    pty_session_inner(PtySession::launch_with_sessions_dir(
         Some(script_json.to_string()),
         Some(ms),
         None,
@@ -767,7 +803,7 @@ pub fn session_on_working_slow_with_script(ms: u64, script_json: &str) -> PtySes
     ))
 }
 
-fn session_on_working_inner(mut s: PtySession) -> PtySession {
+fn pty_session_inner(mut s: PtySession) -> PtySession {
     assert!(
         s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
         "login screen should render; raw output: {:?}",
