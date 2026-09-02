@@ -163,6 +163,16 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         app.abort_run();
         return;
     }
+    // The @ trigger opens the skill picker when the input is empty. Unlike
+    // the palette (which consumes /), @ falls through to the input box so
+    // free-form @skill:name typing works: @ opens the picker + lands in
+    // the input, the next char closes the picker (modal returns false) and
+    // appends. Selecting from the picker overwrites the input with the
+    // full @skill:name. Esc clears the lone @ if the picker was a mistake.
+    if k.code == KeyCode::Char('@') && app.input.is_empty() && !pane_replaces_input(app.pane) {
+        app.skill_picker_open = true;
+        app.skill_picker_sel.set(0);
+    }
     input::handle_input(app, k);
 }
 

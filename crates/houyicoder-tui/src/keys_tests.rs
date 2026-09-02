@@ -248,6 +248,10 @@ fn test_skill_picker_opens() {
     handle_working(&mut app, key(KeyCode::Char('@')));
     assert!(app.skill_picker_open, "@ opens the picker");
     assert_eq!(app.skill_picker_sel.get(), 0, "cursor resets to 0");
+    assert!(
+        app.input.value().contains('@'),
+        "@ pushed into input so free-form typing survives"
+    );
 }
 
 /// The @ key does nothing when the input box is not empty.
@@ -343,14 +347,18 @@ fn test_skill_picker_enter_submit() {
     );
 }
 
-/// Enter with no skills closes the picker without submitting (the else arm).
+/// Enter with no skills closes the picker. The lone @ from the trigger
+/// stays in the input (no skill text to replace it with).
 #[test]
 fn test_skill_picker_enter_empty() {
     let mut app = working_app();
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(!app.skill_picker_open, "Enter closes on empty list");
-    assert!(app.input.is_empty(), "no text inserted on empty Enter");
+    assert!(
+        app.input.value().contains('@'),
+        "lone @ stays in input when no skill selected"
+    );
 }
 
 /// A typed char while the picker is open closes the picker and lands in the

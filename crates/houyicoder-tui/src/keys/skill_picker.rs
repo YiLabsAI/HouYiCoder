@@ -39,6 +39,11 @@ pub(super) fn handle(app: &mut App, k: KeyEvent) -> bool {
             true
         }
         KeyCode::Esc => {
+            // If the input holds only the lone @ from the trigger, clear it
+            // so Esc restores the pre-picker empty state.
+            if app.input.value() == "@" {
+                app.input.clear();
+            }
             app.skill_picker_open = false;
             true
         }
