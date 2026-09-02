@@ -110,7 +110,7 @@ impl Runner {
         // Appending user input first would interpose role:"user" and still 400.
         // resume() does not reconcile — pending approvals are re-raised, not voided.
         self.reconcile_tool_results(session).await?;
-        // Slash skill dispatch: resolve /skill-name args BEFORE appending
+        // Slash skill dispatch: resolve @skill:name args BEFORE appending
         // so the raw text stays as the UserInput and the prepared body lands
         // as a durable SkillBody. SkillBody (not MetaUser) so the directive
         // survives a compaction boundary — compaction folds a MetaUser.
@@ -138,7 +138,7 @@ impl Runner {
             crate::agent::skill_slash::SkillSlashOutcome::Refused(notice) => {
                 // Surface the refusal to the user + end the turn without a
                 // model call (the model has nothing to do for a refused
-                // skill). The raw /-text stays as the UserInput so the
+                // skill). The raw @skill: text stays as the UserInput so the
                 // transcript shows what the user typed; the system line
                 // explains the refusal.
                 self.emit_system_line(notice);

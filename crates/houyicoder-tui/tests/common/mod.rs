@@ -830,6 +830,13 @@ pub fn run_slash_command(s: &mut PtySession, cmd: &str) {
     s.send_key(&Key::Enter);
 }
 
+/// Invoke a skill by typing @skill:name + Enter (the skill activation prefix).
+pub fn run_skill_command(s: &mut PtySession, name: &str) {
+    s.send_str("@skill:");
+    s.send_str(name);
+    s.send_key(&Key::Enter);
+}
+
 /// Open the /permissions pane via the slash palette (the real path).
 pub fn open_permissions(s: &mut PtySession) {
     s.send_key(&Key::Char('/'));

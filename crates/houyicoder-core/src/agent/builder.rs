@@ -163,7 +163,7 @@ impl Runner {
         self
     }
 
-    /// Wire the skill-hook registrar shared by the Skill tool and the slash
+    /// Wire the skill-hook registrar shared by the Skill tool and the @skill: activation
     /// dispatch. The registrar holds a live workspace-trust ref the server
     /// writes after the startup trust prompt resolves; both invocation paths
     /// call its register method after a skill body prepares. Unwired in tests

@@ -9,7 +9,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{Key, RENDER_TIMEOUT, pty_session_in_repo, run_slash_command};
+use common::{Key, RENDER_TIMEOUT, pty_session_in_repo, run_skill_command};
 
 /// Throwaway git repo with a paths-gated skill plus a matching file under
 /// src/ and a non-matching one under other/.
@@ -62,7 +62,7 @@ const TOUCH_SRC_SCRIPT: &str = r#"[
 fn test_conditional_skill_activation_flow() {
     let repo = make_skill_repo(1);
     let mut s = pty_session_in_repo(repo.clone(), TOUCH_SRC_SCRIPT);
-    run_slash_command(&mut s, "gated");
+    run_skill_command(&mut s, "gated");
     assert!(
         s.wait_for_compact("touchamatchingfile", RENDER_TIMEOUT),
         "refuse before touch should name the paths:\n{}",
@@ -77,7 +77,7 @@ fn test_conditional_skill_activation_flow() {
         s.output()
     );
     s.clear_output();
-    run_slash_command(&mut s, "gated");
+    run_skill_command(&mut s, "gated");
     // After a matching touch the skill runs: a run starts and the stub's
     // third reply lands. A still-refused skill makes no model call, so the
     // reply never arrives -- that is the discriminator. Absence of the
@@ -109,7 +109,7 @@ fn test_nonmatching_touch_keeps_refusal() {
         s.output()
     );
     s.clear_output();
-    run_slash_command(&mut s, "gated");
+    run_skill_command(&mut s, "gated");
     assert!(
         s.wait_for_compact("touchamatchingfile", RENDER_TIMEOUT),
         "a non-matching touch must not activate:\n{}",

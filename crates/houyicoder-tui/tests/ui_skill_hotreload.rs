@@ -8,7 +8,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{RENDER_TIMEOUT, run_slash_command, session_on_working_in_repo};
+use common::{RENDER_TIMEOUT, run_skill_command, pty_session_in_repo};
 
 /// Throwaway git repo with one seed skill (alpha) so the hot-reload driver
 /// has a real skills directory to watch deeply. newskill is NOT present at
@@ -62,7 +62,7 @@ const HOTRELOAD_SCRIPT: &str = r#"[
 #[ignore]
 fn test_hotreload_picks_new_skill() {
     let repo = make_hotreload_repo(1);
-    let mut s = session_on_working_in_repo(repo.clone(), HOTRELOAD_SCRIPT);
+    let mut s = pty_session_in_repo(repo.clone(), HOTRELOAD_SCRIPT);
     // Write a new skill mid-session. The driver watches the skills directory
     // deeply; the new SKILL.md fires a reload after debounce + stability.
     let newskill_dir = repo.join(".houyicoder").join("skills").join("newskill");
@@ -75,7 +75,7 @@ fn test_hotreload_picks_new_skill() {
     // Wait for the reload to settle: debounce (300ms) + write-stability (1s)
     // + re-discover. 3s is a safe bound for a ~1.4s deterministic reload.
     std::thread::sleep(std::time::Duration::from_secs(3));
-    run_slash_command(&mut s, "newskill");
+    run_skill_command(&mut s, "newskill");
     assert!(
         s.wait_for_compact("newskillpassed", RENDER_TIMEOUT),
         "newskill written mid-session should be invocable after hot-reload:\n{}",
