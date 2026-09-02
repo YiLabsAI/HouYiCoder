@@ -136,6 +136,22 @@ pub trait SkillRegistry: Send + Sync {
     fn paths_for(&self, _name: &str) -> Vec<String> {
         Vec::new()
     }
+
+    /// Record a skill invocation attempt. refused=true for a gate refusal
+    /// (user-invocable, conditional, disable-model-invocation, load error);
+    /// refused=false for a successful body preparation. NotASkill and
+    /// NotFound are not recorded (an unknown skill is not an invocation
+    /// of a known one). The default is no-op: a registry that does not
+    /// track usage silently drops the record, so tests must exercise the
+    /// concrete impl to verify recording.
+    fn record_invocation(&self, _name: &str, _refused: bool) {}
+
+    /// The per-skill usage stats accumulated this session. Default empty
+    /// when the registry does not track usage. Used by list_with_origin
+    /// to pair each snapshot with its usage.
+    fn usage_for(&self, _name: &str) -> SkillUsage {
+        SkillUsage::default()
+    }
 }
 
 /// A model-invocable descriptor paired with where it was discovered, for
@@ -146,6 +162,23 @@ pub struct SkillSnapshot {
     /// snake_case discovery source (managed/user/project/claude_eco/agents/
     /// mcp/local). Empty when the registry does not track origin.
     pub origin: String,
+    /// Session-scoped invocation stats for this skill. Default (zeros)
+    /// when the registry does not track usage.
+    pub usage: SkillUsage,
+}
+
+/// Per-skill invocation stats accumulated within a session. invocations
+/// counts successful body preparations; refusals counts gate refusals
+/// (user-invocable, conditional, disable-model-invocation, load error).
+/// last_used_secs is the epoch-seconds timestamp of the most recent
+/// invocation (0 when never invoked). These are NOT ok/fail metrics for
+/// skill quality — the true outcome lives downstream in the turn that
+/// consumed the body, which this layer cannot see.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SkillUsage {
+    pub invocations: u64,
+    pub refusals: u64,
+    pub last_used_secs: u64,
 }
 
 /// A skill-directory script a Bash command runs, surfaced for the per-script

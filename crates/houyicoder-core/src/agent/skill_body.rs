@@ -573,6 +573,7 @@ mod tests {
                             allowed_tools: Vec::new(),
                         },
                         origin: origin.clone(),
+                        usage: Default::default(),
                     })
                     .collect()
             }

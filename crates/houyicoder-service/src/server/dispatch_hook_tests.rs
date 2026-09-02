@@ -39,6 +39,7 @@ fn test_skills_wire_invocation_tag() {
                 allowed_tools: Vec::new(),
             },
             origin: "user".into(),
+            usage: Default::default(),
         },
         SkillSnapshot {
             descriptor: SkillDescriptor {
@@ -52,6 +53,7 @@ fn test_skills_wire_invocation_tag() {
                 allowed_tools: Vec::new(),
             },
             origin: "project".into(),
+            usage: Default::default(),
         },
     ];
     let wire = skills_to_wire(entries);

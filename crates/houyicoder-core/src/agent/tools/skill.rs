@@ -118,6 +118,7 @@ impl Tool for SkillTool {
                 .find(&params.skill)
                 .ok_or_else(|| ToolError::Failed(format!("skill not found: {}", params.skill)))?;
             if desc.disable_model_invocation {
+                registry.record_invocation(&params.skill, true);
                 return Err(ToolError::Failed(format!(
                     "skill {} is disabled for model invocation",
                     params.skill
@@ -133,15 +134,27 @@ impl Tool for SkillTool {
                     .map(|a| a.is_active(&params.skill))
                     .unwrap_or(true)
             {
+                registry.record_invocation(&params.skill, true);
                 return Err(ToolError::Failed(format!(
                     "skill {} is conditional; touch a matching file to activate: {}",
                     params.skill,
                     paths.join(", ")
                 )));
             }
-            let body = registry
-                .prepare_body(&params.skill, params.args.as_deref(), sid.as_deref())
-                .map_err(skill_error_to_tool_error)?;
+            let body = match registry.prepare_body(
+                &params.skill,
+                params.args.as_deref(),
+                sid.as_deref(),
+            ) {
+                Ok(b) => {
+                    registry.record_invocation(&params.skill, false);
+                    b
+                }
+                Err(e) => {
+                    registry.record_invocation(&params.skill, true);
+                    return Err(skill_error_to_tool_error(e));
+                }
+            };
             // Register the skill's frontmatter hooks into the session hook
             // registry (invoke-time, session-scoped). The registrar dedups
             // across both invocation paths so a slash dispatch followed by a
@@ -337,6 +350,7 @@ mod tests {
                         .get(n)
                         .cloned()
                         .unwrap_or_else(|| "managed".into()),
+                    usage: Default::default(),
                 })
                 .collect()
         }

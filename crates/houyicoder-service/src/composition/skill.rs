@@ -199,6 +199,12 @@ pub struct ReloadOutcome {
 /// it bounds the per-call cost to a clone).
 pub struct SkillRegistryImpl {
     set: RwLock<SkillSet>,
+    /// Session-scoped per-skill invocation stats. Sibling of set: reload
+    /// swaps set only, so usage survives a hot reload (a body edit does
+    /// not erase the session's invocation history). Name-keyed: a deleted
+    /// skill's stats linger (prune is a follow-up); a same-name rebuild
+    /// inherits the prior stats (aligns global-config behavior).
+    usage: std::sync::Mutex<std::collections::HashMap<String, houyicoder_api::skill::SkillUsage>>,
 }
 
 impl SkillRegistryImpl {
@@ -221,6 +227,7 @@ impl SkillRegistryImpl {
     pub fn discover_with_home(cwd: Option<&Path>, home: Option<&Path>) -> Self {
         Self {
             set: RwLock::new(build_skillset(cwd, home)),
+            usage: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -310,17 +317,42 @@ impl SkillRegistry for SkillRegistryImpl {
             .unwrap_or_default()
     }
 
+    fn record_invocation(&self, name: &str, refused: bool) {
+        let mut usage = self.usage.lock().expect("usage lock poisoned");
+        let entry = usage.entry(name.to_string()).or_default();
+        if refused {
+            entry.refusals += 1;
+        } else {
+            entry.invocations += 1;
+            entry.last_used_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+        }
+    }
+
+    fn usage_for(&self, name: &str) -> houyicoder_api::skill::SkillUsage {
+        self.usage
+            .lock()
+            .expect("usage lock poisoned")
+            .get(name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn list_with_origin(&self) -> Vec<SkillSnapshot> {
         // Not filtered by disable-model-invocation: this feeds the /skills
         // visibility surface, where a disabled skill must appear marked not
         // invocable. list_model_invocable filters for the model's listing.
         let set = self.read_set();
+        let usage = self.usage.lock().expect("usage lock poisoned");
         set.skills
             .iter()
             .zip(set.descriptors.iter())
             .map(|(s, d)| SkillSnapshot {
                 descriptor: d.clone(),
                 origin: source_label(&s.source).into(),
+                usage: usage.get(&s.name).cloned().unwrap_or_default(),
             })
             .collect()
     }

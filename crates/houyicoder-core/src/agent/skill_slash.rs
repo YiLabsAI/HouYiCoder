@@ -83,6 +83,7 @@ impl Runner {
             Some(d) => d,
         };
         if !desc.user_invocable {
+            registry.record_invocation(&name, true);
             return SkillSlashOutcome::Refused(format!(
                 "The skill \"{name}\" cannot be invoked directly by the user. \
                  Ask the assistant to use the {name} skill for you."
@@ -98,6 +99,7 @@ impl Runner {
                 .map(|a| a.is_active(&name))
                 .unwrap_or(true)
         {
+            registry.record_invocation(&name, true);
             return SkillSlashOutcome::Refused(format!(
                 "skill {name} is conditional; touch a matching file to activate: {}",
                 paths.join(", ")
@@ -111,6 +113,7 @@ impl Runner {
         let untrusted = super::skill_body::origin_untrusted(&**registry, &name);
         match registry.prepare_body(&name, args, Some(&sid)) {
             Ok(body) => {
+                registry.record_invocation(&name, false);
                 // Register the skill's frontmatter hooks (invoke-time,
                 // session-scoped). The registrar dedups across both
                 // invocation paths so a @skill: dispatch followed by a Skill-tool
@@ -125,7 +128,10 @@ impl Runner {
                 }
             }
             Err(SkillError::NotFound(_)) => SkillSlashOutcome::NotASkill,
-            Err(other) => SkillSlashOutcome::Refused(format!("skill invocation failed: {other}")),
+            Err(other) => {
+                registry.record_invocation(&name, true);
+                SkillSlashOutcome::Refused(format!("skill invocation failed: {other}"))
+            }
         }
     }
 }
@@ -615,5 +621,75 @@ mod tests {
             }
             other => panic!("expected Prepared, got {other:?}"),
         }
+    }
+
+    /// A prepare_body error (BodyLoad) records a refusal via
+    /// record_invocation. The stub tracks the call so the test proves
+    /// the error path is wired, not silently skipped.
+    #[tokio::test]
+    async fn test_slash_load_error_refusal() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct LoadFailRegistry {
+            refused: AtomicU64,
+        }
+        impl SkillRegistry for LoadFailRegistry {
+            fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+                Vec::new()
+            }
+            fn find(&self, name: &str) -> Option<SkillDescriptor> {
+                (name == "broken").then(|| SkillDescriptor {
+                    name: "broken".into(),
+                    description: "d".into(),
+                    when_to_use: None,
+                    argument_hint: None,
+                    disable_model_invocation: false,
+                    user_invocable: true,
+                    body_token_estimate: 0,
+                    allowed_tools: Vec::new(),
+                })
+            }
+            fn prepare_body(
+                &self,
+                _name: &str,
+                _args: Option<&str>,
+                _sid: Option<&str>,
+            ) -> Result<String, SkillError> {
+                Err(SkillError::BodyLoad("disk gone".into()))
+            }
+            fn record_invocation(&self, _name: &str, refused: bool) {
+                if refused {
+                    self.refused.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let reg = Arc::new(LoadFailRegistry {
+            refused: AtomicU64::new(0),
+        });
+        let store: Arc<dyn houyicoder_api::session::SessionLog> =
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        let runner = Runner::with_shared_store(
+            store,
+            Arc::new(crate::provider::test_support::FakeProvider::text("done")),
+            crate::agent::ToolRegistry::new(),
+            crate::agent::runner_config::RunnerConfig {
+                model: "test".into(),
+                instructions: String::new(),
+                max_turns: 5,
+                max_output_tokens: 8_000,
+                retry: Retry::default(),
+            },
+        )
+        .with_skill_registry(reg.clone());
+        let outcome = runner
+            .resolve_skill_slash(SessionId::new(), "@skill:broken")
+            .await;
+        assert!(matches!(outcome, SkillSlashOutcome::Refused(_)));
+        assert_eq!(
+            reg.refused.load(Ordering::Relaxed),
+            1,
+            "load error records a refusal"
+        );
     }
 }

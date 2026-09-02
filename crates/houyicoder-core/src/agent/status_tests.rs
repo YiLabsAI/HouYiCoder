@@ -276,6 +276,7 @@ fn test_skills_snapshot_lists_registry() {
                         allowed_tools: Vec::new(),
                     },
                     origin: "user".into(),
+                    usage: Default::default(),
                 },
                 houyicoder_api::skill::SkillSnapshot {
                     descriptor: houyicoder_api::skill::SkillDescriptor {
@@ -289,6 +290,7 @@ fn test_skills_snapshot_lists_registry() {
                         allowed_tools: Vec::new(),
                     },
                     origin: "project".into(),
+                    usage: Default::default(),
                 },
             ]
         }

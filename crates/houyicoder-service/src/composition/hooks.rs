@@ -526,6 +526,7 @@ mod hook_tests {
             vec![houyicoder_api::skill::SkillSnapshot {
                 descriptor: self.find("s").unwrap(),
                 origin: self.origin.into(),
+                usage: Default::default(),
             }]
         }
         fn detect_run_scripts(&self, _command: &str) -> Vec<houyicoder_api::skill::SkillScriptRef> {

@@ -348,6 +348,7 @@ mod tests {
                 vec![SkillSnapshot {
                     descriptor: descriptor("proj-skill"),
                     origin: "project".to_string(),
+                    usage: Default::default(),
                 }]
             }
         }

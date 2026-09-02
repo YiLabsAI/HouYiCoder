@@ -363,6 +363,80 @@ fn test_parse_hooks_mcp_filtered() {
     );
 }
 
+/// record_invocation increments invocations + stamps last_used on a
+/// successful body preparation (refused=false). Exercised through the
+/// real SkillRegistryImpl, not a stub, so the default no-op trait path
+/// is not the one tested.
+#[test]
+fn test_usage_records_invocation() {
+    let tmp = std::env::temp_dir().join(format!("skill-usage-inv-{}", std::process::id()));
+    write_skill(&tmp, "alpha", "alpha body");
+    let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
+    assert_eq!(reg.usage_for("alpha").invocations, 0, "starts at zero");
+    reg.record_invocation("alpha", false);
+    let usage = reg.usage_for("alpha");
+    assert_eq!(usage.invocations, 1, "invocation counted");
+    assert_eq!(usage.refusals, 0, "no refusal");
+    assert!(usage.last_used_secs > 0, "last_used stamped");
+    drop(fs::remove_dir_all(&tmp));
+}
+
+/// record_invocation increments refusals on a gate refusal (refused=true)
+/// and does not stamp last_used (no successful invocation happened).
+#[test]
+fn test_usage_records_refusal() {
+    let tmp = std::env::temp_dir().join(format!("skill-usage-ref-{}", std::process::id()));
+    write_skill(&tmp, "beta", "beta body");
+    let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
+    reg.record_invocation("beta", true);
+    let usage = reg.usage_for("beta");
+    assert_eq!(usage.invocations, 0, "no invocation");
+    assert_eq!(usage.refusals, 1, "refusal counted");
+    assert_eq!(usage.last_used_secs, 0, "last_used not stamped on refusal");
+    drop(fs::remove_dir_all(&tmp));
+}
+
+/// list_with_origin pairs each skill with its accumulated usage stats.
+/// An uninvoked skill has default (zero) usage; an invoked skill carries
+/// its count.
+#[test]
+fn test_list_origin_pairs_usage() {
+    let tmp = std::env::temp_dir().join(format!("skill-usage-pair-{}", std::process::id()));
+    write_skill(&tmp, "alpha", "alpha body");
+    let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
+    reg.record_invocation("alpha", false);
+    reg.record_invocation("alpha", false);
+    reg.record_invocation("alpha", true);
+    let listing = reg.list_with_origin();
+    let alpha = listing
+        .iter()
+        .find(|s| s.descriptor.name == "alpha")
+        .expect("alpha listed");
+    assert_eq!(alpha.usage.invocations, 2, "paired invocations");
+    assert_eq!(alpha.usage.refusals, 1, "paired refusals");
+    drop(fs::remove_dir_all(&tmp));
+}
+
+/// Usage survives a reload: editing a skill body does not erase the
+/// session's invocation history. The usage field is a sibling of the
+/// cached set, not inside it.
+#[test]
+fn test_usage_survives_reload() {
+    let tmp = std::env::temp_dir().join(format!("skill-usage-reload-{}", std::process::id()));
+    write_skill(&tmp, "alpha", "alpha body");
+    let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
+    reg.record_invocation("alpha", false);
+    assert_eq!(reg.usage_for("alpha").invocations, 1);
+    // Reload: re-discover the same skills. Usage must survive.
+    reg.reload(Some(&tmp), None);
+    assert_eq!(
+        reg.usage_for("alpha").invocations,
+        1,
+        "usage survives reload"
+    );
+    drop(fs::remove_dir_all(&tmp));
+}
+
 /// A malformed hooks block (not a mapping) is dropped: empty result,
 /// no panic (safeParse — the skill still loads).
 #[test]
