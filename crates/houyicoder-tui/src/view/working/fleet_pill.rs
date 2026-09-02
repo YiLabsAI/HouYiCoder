@@ -5,6 +5,8 @@
 //! and Enter drills into its teammate view. The pill caps at three rows
 //! and scrolls toward the selection when the fleet is longer.
 
+use std::time::Duration;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -148,7 +150,7 @@ fn build_row(entry: &FleetEntry, selected: bool) -> Line<'_> {
     } else {
         let elapsed = entry
             .started_at
-            .map(|t| format!(" · {}s", t.elapsed().as_secs()))
+            .map(|t| format!(" · {}", format_elapsed(t.elapsed())))
             .unwrap_or_default();
         format!(
             "{}: {} · {} · turn {}{}",
@@ -190,6 +192,17 @@ fn format_tokens(tokens: u64) -> String {
         format!("{:.1}k tok", tokens as f64 / 1000.0)
     } else {
         format!("{:.1}m tok", tokens as f64 / 1_000_000.0)
+    }
+}
+
+/// Compact elapsed: under 60s as "Ns", otherwise "Nm" so a long-running
+/// child does not show "312s".
+fn format_elapsed(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{}s", secs)
+    } else {
+        format!("{}m", secs / 60)
     }
 }
 
@@ -548,5 +561,13 @@ mod tests {
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("7s"), "running row shows elapsed: {text}");
         assert!(!text.contains("done"), "running row is not terse: {text}");
+    }
+
+    #[test]
+    fn test_format_elapsed_compact() {
+        assert_eq!(format_elapsed(Duration::from_secs(0)), "0s");
+        assert_eq!(format_elapsed(Duration::from_secs(59)), "59s");
+        assert_eq!(format_elapsed(Duration::from_secs(60)), "1m");
+        assert_eq!(format_elapsed(Duration::from_secs(312)), "5m");
     }
 }

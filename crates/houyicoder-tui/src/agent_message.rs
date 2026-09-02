@@ -29,9 +29,10 @@ pub struct FleetEntry {
     /// from the footer so the input box rises back under the transcript. The
     /// result stays in the transcript fold-group; only the footer pill leaves.
     pub completed_at: Option<Instant>,
-    /// When the child spawned. Drives the live elapsed counter in the pill:
-    /// build_row renders started_at.elapsed() so the user sees how long
-    /// each child has been running.
+    /// When the child was first observed by the TUI (the FleetEntry was
+    /// created from an AgentStatus). Always Some in production; None only in
+    /// tests that do not exercise the elapsed counter. Drives the live
+    /// elapsed in the pill: build_row renders started_at.elapsed().
     pub started_at: Option<Instant>,
 }
 

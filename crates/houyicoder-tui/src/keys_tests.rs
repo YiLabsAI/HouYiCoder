@@ -1023,6 +1023,24 @@ fn test_teammate_esc_no_leak() {
     );
 }
 
+/// A pane that owns Esc closes before the teammate Esc arm fires, so the
+/// child is not interrupted while the user manages a pane.
+#[test]
+fn test_teammate_esc_pane_first() {
+    use crate::records::TeammateView;
+    let mut app = fleet_app(1);
+    app.agent_busy = true;
+    app.pane = Pane::Agents;
+    app.teammate_view = Some(TeammateView {
+        child_sid: "child-0".into(),
+        ..Default::default()
+    });
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.pane, Pane::Transcript, "pane closes first");
+    assert!(app.teammate_view.is_some(), "view stays open");
+    assert!(!app.cancelling, "child not interrupted");
+}
+
 /// Rendering a populated fleet paints one pill row per child, each carrying
 /// the type + the verb inferred from its last tool.
 #[test]

@@ -110,8 +110,8 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // Esc while viewing a teammate only interrupts the viewed child's
     // current turn; it never exits the view and never leaks to the parent
     // (an input draft does not redirect it to abort_run on the parent).
-    // Exit is on Shift+Up/Down.
-    if app.teammate_view.is_some() && k.code == KeyCode::Esc {
+    // Exit is on Shift+Up/Down. A pane that owns Esc closes first.
+    if app.teammate_view.is_some() && k.code == KeyCode::Esc && !pane_owns_esc(app.pane) {
         app.abort_viewed_child_turn();
         return;
     }
