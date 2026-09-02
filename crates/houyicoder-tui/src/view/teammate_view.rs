@@ -1,7 +1,7 @@
-//! Teammate-view banner: the 1-line header naming the viewed agent plus an
-//! esc-return hint, drawn above the swapped transcript. The banner is a
-//! plain "Viewing" label, the agent name in a distinct style, a dim
-//! separator, and the esc-return hint. A second dim line carries the
+//! Teammate-view banner: the 1-line header naming the viewed agent plus a
+//! shift-arrow return hint, drawn above the swapped transcript. The banner
+//! is a plain "Viewing" label, the agent name in a distinct style, a dim
+//! separator, and the return hint. A second dim line carries the
 //! delegation summary.
 
 use ratatui::{
@@ -16,8 +16,8 @@ use crate::state::App;
 use crate::view::badge_color;
 
 /// Draw the teammate-view banner. No-op when no teammate is in view. The
-/// banner is two lines: the title "Viewing @type · esc return" with the
-/// agent name bold and tinted by its badge color, then a dim line
+/// banner is two lines: the title "Viewing @type · shift+↑↓ return" with
+/// the agent name bold and tinted by its badge color, then a dim line
 /// carrying the delegation summary. A blank margin follows, reserved by
 /// the layout so the title sits clear of the transcript.
 pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
@@ -37,7 +37,7 @@ pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
         Span::raw("Viewing "),
         Span::styled(format!("@{name}"), name_style),
         Span::styled(
-            " · esc return",
+            " · shift+↑↓ return",
             Style::default().add_modifier(Modifier::DIM),
         ),
     ]);
@@ -91,8 +91,8 @@ mod tests {
     }
 
     /// The banner renders above the transcript when a teammate is in view,
-    /// naming the agent plus the esc-return hint. Pins draw_banner against a
-    /// refactor that drops the line or the hint.
+    /// naming the agent plus the shift-arrow return hint. Pins draw_banner
+    /// against a refactor that drops the line or the hint.
     #[test]
     fn test_banner_renders_name_hint() {
         use crate::records::TranscriptLine;
@@ -113,8 +113,8 @@ mod tests {
             "banner names the agent, got:\n{out}"
         );
         assert!(
-            out.contains("esc return"),
-            "banner carries the esc-return hint, got:\n{out}"
+            out.contains("shift+↑↓ return"),
+            "banner carries the shift-arrow return hint, got:\n{out}"
         );
         assert!(
             out.contains("find auth"),

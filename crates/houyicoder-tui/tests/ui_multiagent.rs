@@ -7,7 +7,9 @@
 
 mod common;
 
-use common::{Key, RENDER_TIMEOUT, session_on_working_with_script};
+use common::{
+    Key, RENDER_TIMEOUT, session_on_working_slow_with_script, session_on_working_with_script,
+};
 use std::time::Duration;
 
 /// A child text long enough that the collapsed fold summary truncates it.
@@ -23,7 +25,8 @@ const FLEET_GRACE: Duration = Duration::from_secs(5);
 /// PTY real-binary sync delegation full chain. Send a message, the stub
 /// returns an agent-tool call, the sync spawn runs the child, the parent
 /// resumes, the Subagent fold-group appears, Enter opens the teammate
-/// view banner, Esc returns to the parent transcript.
+/// view banner, Shift+Down returns to the parent transcript (Esc only
+/// interrupts the viewed child's turn).
 #[test]
 #[ignore]
 fn test_multi_sync_delegation() {
@@ -60,16 +63,17 @@ fn test_multi_sync_delegation() {
         s.output()
     );
     assert!(
-        s.output_plain().contains("esc"),
-        "banner should carry the esc-return hint:\n{}",
+        s.output_plain().contains("shift"),
+        "banner should carry the shift-arrow return hint:\n{}",
         s.output()
     );
-    // Esc exits back to the parent transcript. The working-screen
-    // placeholder returning confirms the banner is gone.
-    s.send_key(&Key::Esc);
+    // Shift+Down exits back to the parent transcript (Esc only interrupts
+    // the viewed child's turn). The working-screen placeholder returning
+    // confirms the banner is gone.
+    s.send_key(&Key::ShiftDown);
     assert!(
         s.wait_for("let's build", RENDER_TIMEOUT),
-        "after Esc, should return to parent transcript:\n{}",
+        "after Shift+Down, should return to parent transcript:\n{}",
         s.output()
     );
 }
@@ -85,7 +89,7 @@ fn test_multi_expand_teammate() {
         [{"type":"Text","text":"auth is in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = session_on_working_with_script(script);
+    let mut s = session_on_working_slow_with_script(80, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
@@ -144,15 +148,16 @@ fn test_multi_expand_teammate() {
         "teammate view should open after Enter:\n{}",
         s.output()
     );
-    // Esc returns to the parent flow. Assert the parent's delegation row is
+    // Shift+Down returns to the parent flow (Esc only interrupts the viewed
+    // child's turn; it never exits). Assert the parent's delegation row is
     // repainted and the banner is gone; the input row is identical in both
     // views, so a marker from it is never re-emitted and would only ever
     // match bytes from before the view opened.
     s.clear_output();
-    s.send_key(&Key::Esc);
+    s.send_key(&Key::ShiftDown);
     assert!(
         s.wait_for_compact("explore:authisin", RENDER_TIMEOUT),
-        "Esc should repaint the parent transcript:\n{}",
+        "Shift+Down should repaint the parent transcript:\n{}",
         s.output()
     );
     assert!(
@@ -399,13 +404,13 @@ fn test_teammate_pill_pins_view() {
     // The view stays on normal completion — no auto-dismiss fires for a
     // completed (non-killed, non-failed) child. Wait past the grace window
     // to prove the stay is not a transient render: the banner is still the
-    // active state (Esc exits, which only happens from inside the view).
+    // active state (Shift+Down exits; Esc is a no-op on a completed child).
     std::thread::sleep(FLEET_GRACE + Duration::from_secs(2));
-    s.send_key(&Key::Esc);
+    s.send_key(&Key::ShiftDown);
     assert!(
         s.wait_for("let's build", RENDER_TIMEOUT),
-        "Esc should exit the teammate view (the view stayed until Esc, not \
-         auto-dismissed on completion):\n{}",
+        "Shift+Down should exit the teammate view (the view stayed until \
+         Shift+Down, not auto-dismissed on completion):\n{}",
         s.output()
     );
 }
@@ -414,7 +419,8 @@ fn test_teammate_pill_pins_view() {
 /// palette, not the child's inbox: typing "/" while viewing a child opens
 /// the parent slash palette (the command list), proving the slash did not
 /// route as a steering message to the child. Esc closes the palette, then
-/// Esc exits the teammate view. Slow, ignored by default.
+/// Shift+Down exits the teammate view (Esc only interrupts the child).
+/// Slow, ignored by default.
 #[test]
 #[ignore]
 fn test_teammate_slash_routes_parent() {
@@ -445,12 +451,13 @@ fn test_teammate_slash_routes_parent() {
          child:\n{}",
         s.output()
     );
-    // Esc closes the palette; a second Esc exits the teammate view.
+    // Esc closes the palette; Shift+Down exits the teammate view (Esc only
+    // interrupts the viewed child's turn, it never exits).
     s.send_key(&Key::Esc);
-    s.send_key(&Key::Esc);
+    s.send_key(&Key::ShiftDown);
     assert!(
         s.wait_for("let's build", RENDER_TIMEOUT),
-        "Esc should close the palette + exit the teammate view:\n{}",
+        "Esc closes the palette, Shift+Down exits the teammate view:\n{}",
         s.output()
     );
 }
@@ -1260,11 +1267,11 @@ fn test_pill_running_to_done() {
 
 // ---- batch 6: banner, palette, edge, unicode ----
 
-/// The teammate-view banner carries the esc-return hint, so the user knows
-/// how to exit the view without guessing.
+/// The teammate-view banner carries the shift-arrow return hint, so the
+/// user knows how to exit the view without guessing.
 #[test]
 #[ignore]
-fn test_teammate_banner_esc_hint() {
+fn test_teammate_banner_hint() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -1278,8 +1285,8 @@ fn test_teammate_banner_esc_hint() {
     s.send_str("\r");
     assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
     assert!(
-        s.output_compact().contains("escreturn"),
-        "banner should carry the esc-return hint:\n{}",
+        s.output_compact().contains("shift+↑↓return"),
+        "banner should carry the shift-arrow return hint:\n{}",
         s.output()
     );
 }

@@ -3,16 +3,14 @@
 
 use crate::agent_message::AgentMessage;
 
-/// Esc on a viewed running child sends an abort (the view stays); Esc on
-/// a completed/non-running child exits the view. The running check reads
-/// the fleet entry's completion flag. A child with no fleet entry (running
-/// defaults false) exits cleanly.
+/// Esc on a viewed child only interrupts its current turn; it never exits
+/// the view. A running child gets a per-turn cancel and the view stays; an
+/// idle or non-running child is a no-op (the view stays). Exit is on
+/// Shift+Up/Down, which ignores the running state — tested at the key layer.
 #[test]
-fn test_teammate_esc_abort() {
+fn test_abort_viewed_child_turn() {
     use crate::agent_message::FleetEntry;
     use crate::records::TeammateView;
-    // Running child: Esc aborts the turn (send_cmd is a no-op without a
-    // session, but the decision keeps the view open).
     let mut app = crate::composition::app();
     app.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
@@ -28,27 +26,25 @@ fn test_teammate_esc_abort() {
         completed: None,
         completed_at: None,
     });
-    app.esc_teammate_view_or_abort();
+    app.abort_viewed_child_turn();
     assert!(
         app.teammate_view.is_some(),
-        "a running child keeps the view open for the abort"
+        "Esc on a running child aborts the turn but keeps the view open"
     );
-    // Completed child: Esc exits the view.
     app.fleet.entries[0].completed = Some("completed".into());
-    app.esc_teammate_view_or_abort();
+    app.abort_viewed_child_turn();
     assert!(
-        app.teammate_view.is_none(),
-        "a completed child exits the view on Esc"
+        app.teammate_view.is_some(),
+        "Esc on an idle child is a no-op — exit is on Shift+Up/Down, not Esc"
     );
-    // No fleet entry (running defaults false): Esc exits.
     app.teammate_view = Some(TeammateView {
         child_sid: "c2".into(),
         ..Default::default()
     });
-    app.esc_teammate_view_or_abort();
+    app.abort_viewed_child_turn();
     assert!(
-        app.teammate_view.is_none(),
-        "a child with no fleet entry exits the view on Esc"
+        app.teammate_view.is_some(),
+        "Esc on a child with no fleet entry is a no-op"
     );
 }
 

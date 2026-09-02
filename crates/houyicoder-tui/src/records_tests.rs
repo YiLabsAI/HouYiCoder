@@ -1,7 +1,7 @@
 //! Peer tests for records.rs — the semantic-error-judgment tests split out
 //! so records.rs stays under the file-size gate.
 
-use crate::records::ToolOutcome;
+use crate::records::{ToolOutcome, TranscriptLine};
 
 // A non-zero exit is not always an error. grep exits 1 when no matches are
 // found; diff exits 1 when files differ. Both are the command succeeding at
@@ -173,4 +173,100 @@ fn test_subagent_line_field_marker() {
         }
         other => panic!("expected Subagent line, got {other:?}"),
     }
+}
+
+#[test]
+fn test_transcript_render_glyphs() {
+    assert!(TranscriptLine::User("x".into()).render().starts_with(">"));
+    assert!(TranscriptLine::Agent("hi".into()).render().starts_with("●"));
+    assert!(
+        TranscriptLine::System("note".into())
+            .render()
+            .starts_with("✻")
+    );
+    assert!(
+        TranscriptLine::Read { path: "p".into() }
+            .render()
+            .contains("read")
+    );
+}
+
+// I2 (call-chip slice): verbose render uses the untruncated invocation
+// while folded render uses the truncated status. A search hit on a long
+// command lands on the text the verbose view shows — index-equals-render
+// for the call chip.
+#[test]
+fn test_verbose_render_uses_invocation() {
+    let long = "x".repeat(300);
+    let call = TranscriptLine::Tool {
+        name: "bash".into(),
+        tool: "bash".into(),
+        status: "x".repeat(160),  // truncated chip form
+        invocation: long.clone(), // untruncated
+        outcome: ToolOutcome::Success,
+        call_id: "c1".into(),
+        body: String::new(),
+        is_diff: false,
+    };
+    let folded = call.render();
+    let verbose = call.render_verbose();
+    // Folded chip carries the truncated status, not the 300-char tail.
+    assert!(folded.contains(&"x".repeat(160)));
+    assert!(!folded.contains(&long));
+    // Verbose chip carries the full invocation.
+    assert!(verbose.contains(&long));
+}
+
+#[test]
+fn test_result_body_only_result() {
+    let call = TranscriptLine::Tool {
+        name: "bash".into(),
+        tool: "bash".into(),
+        status: "ls".into(),
+        invocation: "ls".into(),
+        outcome: ToolOutcome::Running,
+        call_id: "c1".into(),
+        body: String::new(),
+        is_diff: false,
+    };
+    assert_eq!(call.result_body(), (String::new(), false));
+    let result = TranscriptLine::Tool {
+        name: "result".into(),
+        tool: "bash".into(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: ToolOutcome::Success,
+        call_id: "c1".into(),
+        body: "ok".into(),
+        is_diff: false,
+    };
+    assert_eq!(result.result_body(), ("ok".to_string(), false));
+    // render() of a result shows the first body line under the gutter.
+    assert_eq!(result.render(), "  ⎿  ok");
+}
+
+#[test]
+fn test_thinking_collapses_multiline() {
+    let line = TranscriptLine::Thinking {
+        text: "first line\nsecond\nthird".into(),
+    };
+    let r = line.render();
+    // Collapsed marker only (no content); the full text stays for search.
+    assert!(r.contains("thinking"), "got {r}");
+    assert!(r.contains("+3 lines"), "should hint 3 lines, got {r}");
+    assert!(!r.contains("first line"), "content must not show, got {r}");
+    // search_text returns the full text (not the collapsed render).
+    assert_eq!(line.search_text(), "first line\nsecond\nthird");
+}
+
+#[test]
+fn test_thinking_line_no_plus() {
+    let line = TranscriptLine::Thinking {
+        text: "only line".into(),
+    };
+    let r = line.render();
+    // Collapsed marker only (no content); no +N hint for a single line.
+    assert!(r.contains("thinking"));
+    assert!(!r.contains("only line"), "content must not show, got {r}");
+    assert!(!r.contains("+"));
 }

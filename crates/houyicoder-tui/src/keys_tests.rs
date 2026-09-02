@@ -960,6 +960,38 @@ fn test_shift_arrow_moves_fleet() {
     assert_eq!(app.fleet.selected, Some(0));
 }
 
+/// Shift+Up/Down exits a drilled-in teammate view back to the fleet,
+/// regardless of whether the viewed child is still running. A per-turn Esc
+/// cancel does not stop the run, so a child that never idles cannot trap the
+/// user behind the view. Both arrow directions exit.
+#[test]
+fn test_shift_arrow_exits_teammate() {
+    use crate::records::TeammateView;
+    let mut app = fleet_app(1);
+    app.teammate_view = Some(TeammateView {
+        child_sid: "child-0".into(),
+        ..Default::default()
+    });
+    handle_working(&mut app, shift_key(KeyCode::Down));
+    assert!(
+        app.teammate_view.is_none(),
+        "Shift+Down exits the teammate view even while the child runs"
+    );
+    app.teammate_view = Some(TeammateView {
+        child_sid: "child-0".into(),
+        ..Default::default()
+    });
+    handle_working(&mut app, shift_key(KeyCode::Up));
+    assert!(
+        app.teammate_view.is_none(),
+        "Shift+Up also exits the teammate view"
+    );
+    assert!(
+        app.fleet.entries[0].completed.is_none(),
+        "the child keeps running after the view exits"
+    );
+}
+
 /// Rendering a populated fleet paints one pill row per child, each carrying
 /// the type + the verb inferred from its last tool.
 #[test]

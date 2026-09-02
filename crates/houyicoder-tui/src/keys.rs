@@ -69,6 +69,18 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         }
         return;
     }
+    // Shift+Up/Down exits a drilled-in teammate view back to the fleet,
+    // ignoring whether the viewed child is still running. A per-turn Esc
+    // cancel does not stop the run, so an Esc-based exit could trap the
+    // user behind a child that never idles. Outside a teammate view the
+    // same keys move the fleet selection.
+    if app.teammate_view.is_some()
+        && k.modifiers.contains(KeyModifiers::SHIFT)
+        && matches!(k.code, KeyCode::Up | KeyCode::Down)
+    {
+        app.exit_teammate_view();
+        return;
+    }
     // Shift+Up/Down move the footer-pill fleet selection before input
     // handling so it works even while the input box has focus.
     if fleet::fleet_shift_selected(&mut app.fleet, app.viewport, k) {
@@ -95,11 +107,11 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         palette::handle_palette(app, k);
         return;
     }
-    // Esc while viewing a teammate: a running child aborts its current
-    // turn (non-terminal); a completed/non-running child exits the view.
-    // Requires an empty input box so a mid-type Esc does not yank the view.
+    // Esc while viewing a teammate only interrupts the viewed child's
+    // current turn (running only); it does not exit the view. Exit is on
+    // Shift+Up/Down. Empty input guard so a mid-type Esc does not fire.
     if app.teammate_view.is_some() && k.code == KeyCode::Esc && app.input.is_empty() {
-        app.esc_teammate_view_or_abort();
+        app.abort_viewed_child_turn();
         return;
     }
     // Approval pending: handled inline at the top of handle_input so scroll,

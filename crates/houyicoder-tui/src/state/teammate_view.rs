@@ -1,14 +1,6 @@
 //! Teammate (child agent) transcript view: enter/exit and the active
-//! swap. The view is opened by Enter on a Subagent fold-group line and
-//! closed by Esc. While open, active_transcript returns the child's
-//! projected turns so the working surface renders them with a banner.
-//!
-//! The child transcript reuses the same on-demand fetch the inline
-//! fold-group fills, so the drilled-in view is isomorphic with the
-//! expanded fold, not a simplified list. The teammate view swaps the
-//! message list to the child's and shows a header naming the agent plus
-//! an esc-return hint. The sync path always views a completed child, so
-//! Esc always exits.
+//! swap. Opened by Enter on a Subagent fold-group line; closed by
+//! Shift+Up/Down. Esc only interrupts the viewed child's current turn.
 
 use super::App;
 use crate::records::{TeammateView, TranscriptLine};
@@ -85,32 +77,27 @@ impl App {
         self.transcript_scroll.follow_tail = true;
     }
 
-    /// Esc while viewing a teammate: a running child aborts its current
-    /// turn (the drive loop cancels the in-flight model fetch, appends an
-    /// interrupt marker, starts the next turn — non-terminal); a
-    /// completed or non-running child exits the view back to the parent.
-    /// The running check reads the fleet entry's completion flag so a
-    /// child that finished mid-view still exits cleanly on Esc.
-    pub(crate) fn esc_teammate_view_or_abort(&mut self) {
+    /// Esc while viewing a teammate only interrupts the viewed child's
+    /// current turn; it never exits the view. A running child gets a per-turn
+    /// cancel (the drive loop cancels the in-flight model fetch, appends an
+    /// interrupt marker, starts the next turn — non-terminal). A non-running
+    /// child is a no-op. Exit is on Shift+Up/Down, which ignores the running
+    /// state, so a child that never idles (a per-turn cancel does not stop the
+    /// run) cannot trap the user.
+    pub(crate) fn abort_viewed_child_turn(&mut self) {
+        let Some(view) = self.teammate_view.as_ref() else {
+            return;
+        };
+        let child_sid = view.child_sid.clone();
         let running = self
-            .teammate_view
-            .as_ref()
-            .and_then(|v| {
-                self.fleet
-                    .entries
-                    .iter()
-                    .find(|e| e.agent_id == v.child_sid)
-                    .map(|e| e.completed.is_none())
-            })
+            .fleet
+            .entries
+            .iter()
+            .find(|e| e.agent_id == child_sid)
+            .map(|e| e.completed.is_none())
             .unwrap_or(false);
         if running {
-            if let Some(view) = self.teammate_view.as_ref() {
-                self.send_cmd(crate::run_control::ClientCommand::CancelChildTurn {
-                    child_sid: view.child_sid.clone(),
-                });
-            }
-        } else {
-            self.exit_teammate_view();
+            self.send_cmd(crate::run_control::ClientCommand::CancelChildTurn { child_sid });
         }
     }
 }

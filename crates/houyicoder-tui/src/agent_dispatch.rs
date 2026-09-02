@@ -416,7 +416,8 @@ impl App {
                 // Auto-exit the teammate view only when the viewed child is
                 // gone or broken (killed/failed). A turn-limit, budget, or
                 // normal completion leaves partial output worth reading, so
-                // the view stays — the user exits with Esc.
+                // the view stays — the user exits with Shift+Up/Down (Esc
+                // only interrupts the viewed child's current turn).
                 if self
                     .teammate_view
                     .as_ref()
