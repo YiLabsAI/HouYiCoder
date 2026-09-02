@@ -8,7 +8,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{RENDER_TIMEOUT, run_skill_command, pty_session_in_repo};
+use common::{RENDER_TIMEOUT, pty_session_in_repo, run_skill_command};
 
 /// Throwaway git repo with one seed skill (alpha) so the hot-reload driver
 /// has a real skills directory to watch deeply. newskill is NOT present at

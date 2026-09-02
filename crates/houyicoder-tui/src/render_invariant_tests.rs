@@ -771,3 +771,21 @@ fn test_continuation_hangs_under_glyph() {
         plain[2]
     );
 }
+
+/// A long paragraph wraps: first row carries the glyph, continuation rows
+/// hang at col 2 (glyph width + 1), never flush-left.
+#[test]
+fn test_long_para_hang_indent() {
+    use crate::markdown::render_agent_text;
+    let long = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra";
+    let (_, plain) = render_agent_text("●", long, 40);
+    assert!(plain.len() > 1, "should wrap: {:?}", plain);
+    assert!(
+        plain[0].starts_with("● "),
+        "first row has glyph: {:?}",
+        plain[0]
+    );
+    for row in &plain[1..] {
+        assert!(row.starts_with("  "), "continuation at col 2: {:?}", row);
+    }
+}

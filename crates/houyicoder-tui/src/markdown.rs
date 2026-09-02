@@ -99,17 +99,9 @@ pub fn render_agent_text(
     let mut plain_acc = String::new();
     let mut style = InlineStyle::default();
     let mut first_line = true;
-    // Have we emitted any block content yet? pulldown-cmark, unlike a
-    // whitespace-tokenizing parser, yields no space tokens between block siblings, so
-    // without a synthesized separator every paragraph/list/code block
-    // would render flush against the next (the cramped look). The
-    // inter-block blank line comes from a synthesized separator
-    // plus each heading's own trailing double-newline; we synthesize the
-    // equivalent here.
+    // pulldown-cmark yields no space tokens between block siblings, so a
+    // synthesized separator prevents paragraphs from rendering flush.
     let mut started = false;
-    // True when the previous block already emitted a trailing blank line
-    // (a heading does, so the next block must not add another — that
-    // would produce two blank lines, which the renderer avoids).
     let mut trailing_blank = false;
     let mut in_code_block = false;
     // Stateful per-line syntax highlighter for the current fenced code block.
@@ -132,16 +124,19 @@ pub fn render_agent_text(
     macro_rules! flush {
         () => {
             if !spans.is_empty() || !plain_acc.is_empty() {
-                let prefix = if first_line {
+                let plain_prefix = if first_line {
                     format!("{glyph} ")
                 } else {
-                    // Hanging indent: continuation aligns after the glyph.
                     " ".repeat(UnicodeWidthStr::width(glyph) + 1)
                 };
-                if !prefix.is_empty() {
-                    let pfx = prefix.clone();
-                    spans.insert(0, Span::raw(pfx));
-                    plain_acc = format!("{prefix}{plain_acc}");
+                if !plain_prefix.is_empty() {
+                    let display_prefix = if first_line {
+                        format!("{glyph}\u{a0}")
+                    } else {
+                        plain_prefix.clone()
+                    };
+                    spans.insert(0, Span::raw(display_prefix));
+                    plain_acc = format!("{plain_prefix}{plain_acc}");
                 }
                 if in_blockquote {
                     let bar = Span::styled("| ", Style::new().fg(Color::DarkGray));
@@ -311,7 +306,7 @@ pub fn render_agent_text(
                             first_line = false;
                             format!("{glyph} {line}")
                         } else {
-                            line
+                            format!("{}{line}", " ".repeat(UnicodeWidthStr::width(glyph) + 1))
                         };
                         styled.push(Line::from(Span::raw(display.clone())));
                         plain.push(display);
@@ -390,32 +385,44 @@ pub fn render_agent_text(
         }
     }
     flush!();
-    wrap_markdown(styled, plain, avail)
+    wrap_markdown(styled, plain, avail, glyph)
 }
 
-/// Soft-wrap each emitted markdown line to the available pane width, mirroring
-/// the count path (line_display_rows) to the render path so a long agent line
-/// wraps on both — no count/render drift. The plain vec stays parallel: each
-/// wrapped row's plain is the joined text of its styled spans. avail 0
-/// (unknown width, e.g. before the first render) leaves lines whole so the
-/// caller falls back to the terminal's truncation, never panics.
+/// Soft-wrap markdown lines. Continuation rows hang at glyph width + 1.
+/// The non-breaking display prefix prevents splitting the glyph onto its
+/// own row. avail 0 leaves lines whole.
 fn wrap_markdown(
     styled: Vec<Line<'static>>,
     plain: Vec<String>,
     avail: usize,
+    glyph: &str,
 ) -> (Vec<Line<'static>>, Vec<String>) {
     if avail == 0 || styled.len() != plain.len() {
         return (styled, plain);
     }
+    let indent_w = UnicodeWidthStr::width(glyph) + 1;
+    let indent = " ".repeat(indent_w);
+    let wrap_width = avail.saturating_sub(indent_w).max(indent_w);
     let mut out_s: Vec<Line<'static>> = Vec::with_capacity(styled.len());
     let mut out_p: Vec<String> = Vec::with_capacity(styled.len());
     for (line, _orig_plain) in styled.into_iter().zip(plain) {
-        let rows = crate::view::line_wrap::wrap_styled_line(line, avail);
-        for row in rows {
-            // The plain for a wrapped row is the joined span content.
-            let p: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
-            out_s.push(row);
-            out_p.push(p);
+        let rows = crate::view::line_wrap::wrap_styled_line(line, wrap_width);
+        for (i, row) in rows.into_iter().enumerate() {
+            let p: String = row
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+                .replace('\u{a0}', " ");
+            if i > 0 {
+                let mut spans = vec![Span::raw(indent.clone())];
+                spans.extend(row.spans);
+                out_s.push(Line::from(spans));
+                out_p.push(format!("{indent}{p}"));
+            } else {
+                out_s.push(row);
+                out_p.push(p);
+            }
         }
     }
     (out_s, out_p)

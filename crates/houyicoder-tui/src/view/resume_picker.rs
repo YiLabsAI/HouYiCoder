@@ -91,13 +91,16 @@ fn format_row(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> L
 
 fn format_line(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> Line<'static> {
     let time = crate::resume_picker::relative_time(row.last_active, now);
+    let size = crate::resume_picker::format_size(row.log_size);
     let budget = title_budget(width);
     let title = truncate_width(&row.title, budget);
     let pad = budget.saturating_sub(unicode_width::UnicodeWidthStr::width(title.as_str()));
     let cwd = truncate_width(&row.cwd_basename, 24);
     Line::from(vec![
         Span::styled(format!("{time:>4}"), Style::new().fg(Color::DarkGray)),
-        Span::raw("  "),
+        Span::raw(" "),
+        Span::styled(format!("{size:>5}"), Style::new().fg(Color::DarkGray)),
+        Span::raw(" "),
         Span::styled(title, Style::new().fg(Color::White)),
         Span::raw(" ".repeat(pad)),
         Span::raw("  "),
@@ -106,13 +109,13 @@ fn format_line(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> 
 }
 
 /// The fixed title-column budget: terminal width minus the time column, the
-/// two 2-space gaps, and the 24-char cwd column, capped at 40 so a long slug
-/// does not eat the whole row. Floor 8 so a narrow terminal still shows a
-/// sliver of title.
+/// size column, the gaps, and the 24-char cwd column, capped at 40 so a long
+/// slug does not eat the whole row. Floor 8 so a narrow terminal still shows
+/// a sliver of title.
 fn title_budget(width: u16) -> usize {
-    // time(4) + gap(2) + title + gap(2) + cwd(24) + highlight symbol(2)
+    // time(4) + gap(1) + size(5) + gap(1) + title + gap(2) + cwd(24) + highlight(2)
     (width as usize)
-        .saturating_sub(4 + 2 + 2 + 24 + 2)
+        .saturating_sub(4 + 1 + 5 + 1 + 2 + 24 + 2)
         .clamp(8, 40)
 }
 

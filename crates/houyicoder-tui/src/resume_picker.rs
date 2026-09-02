@@ -17,6 +17,8 @@ pub struct SessionRow {
     pub cwd_basename: String,
     /// Unix-epoch seconds of the session last update.
     pub last_active: u64,
+    /// Log file size in bytes (log.jsonl), for a compact size column.
+    pub log_size: u64,
     /// True when this row is a duplicate of a newer row (same resolved
     /// title) and should not render. Set lazily by the poll-loop dedup
     /// pass as resolve_detail fills real titles; the render + the query
@@ -157,6 +159,18 @@ pub fn relative_time(last_active: u64, now_secs: u64) -> String {
         format!("{}h", delta / 3600)
     } else {
         format!("{}d", delta / 86_400)
+    }
+}
+
+/// Compact log-size string: 12B, 4K, 1M. Right-aligned to 5 cols so the
+/// column stays narrow and the title start position is stable.
+pub fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{}B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{}K", bytes / 1024)
+    } else {
+        format!("{}M", bytes / (1024 * 1024))
     }
 }
 

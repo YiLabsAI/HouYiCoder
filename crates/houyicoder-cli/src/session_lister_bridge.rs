@@ -68,11 +68,16 @@ impl SessionLister for SessionListerBridge {
                     .filter(|n| !n.trim().is_empty())
                     .cloned()
                     .unwrap_or_else(|| format!("(session) {}", short_sid(sid)));
+                let log_size =
+                    std::fs::metadata(self.sessions_root.join(sid.to_string()).join("log.jsonl"))
+                        .map(|m| m.len())
+                        .unwrap_or(0);
                 Some(SessionRow {
                     sid_str: sid.to_string(),
                     title,
                     cwd_basename,
                     last_active,
+                    log_size,
                     ..Default::default()
                 })
             })
