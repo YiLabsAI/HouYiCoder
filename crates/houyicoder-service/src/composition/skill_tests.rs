@@ -437,6 +437,32 @@ fn test_usage_survives_reload() {
     drop(fs::remove_dir_all(&tmp));
 }
 
+/// A session-disabled skill is excluded from the model listing but stays
+/// in list_with_origin (visible in /skills, marked disabled). The disabled
+/// set is a sibling of the cached set — reload does not clear it.
+#[test]
+fn test_disabled_excluded_from_listing() {
+    let tmp = std::env::temp_dir().join(format!("skill-disabled-{}", std::process::id()));
+    write_skill(&tmp, "alpha", "alpha body");
+    write_skill(&tmp, "beta", "beta body");
+    let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
+    // Both visible before disable
+    assert_eq!(reg.list_model_invocable().len(), 2);
+    // Disable alpha
+    reg.set_session_disabled(["alpha".to_string()].into_iter().collect());
+    // alpha excluded from model listing; beta still present
+    let names: Vec<String> = reg
+        .list_model_invocable()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+    assert!(!names.contains(&"alpha".to_string()), "disabled excluded");
+    assert!(names.contains(&"beta".to_string()), "non-disabled kept");
+    // list_with_origin still shows both (visibility surface)
+    assert_eq!(reg.list_with_origin().len(), 2);
+    drop(fs::remove_dir_all(&tmp));
+}
+
 /// A malformed hooks block (not a mapping) is dropped: empty result,
 /// no panic (safeParse — the skill still loads).
 #[test]

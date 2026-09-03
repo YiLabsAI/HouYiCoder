@@ -206,6 +206,7 @@ async fn test_switch_shrunk_window_compacts() {
             content: vec![ContentBlock::Text {
                 text: "and then?".into(),
             }],
+            disabled_skills: Default::default(),
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(run_wide)).await;
@@ -249,6 +250,7 @@ async fn test_switch_shrunk_window_compacts() {
             content: vec![ContentBlock::Text {
                 text: "where are we?".into(),
             }],
+            disabled_skills: Default::default(),
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(run_narrow)).await;

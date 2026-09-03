@@ -322,6 +322,7 @@ async fn test_child_fetch_during_run() {
         FrontendRequest::MessageSend {
             session_id: wire_session,
             content: vec![ContentBlock::Text { text: "go".into() }],
+            disabled_skills: Default::default(),
         },
     )))
     .unwrap();

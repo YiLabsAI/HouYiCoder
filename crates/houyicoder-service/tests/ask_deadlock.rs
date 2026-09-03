@@ -171,6 +171,7 @@ async fn test_reverse_request_permission_flow() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -296,6 +297,7 @@ async fn test_mid_ask_survives_status() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -431,6 +433,7 @@ async fn test_mid_ask_cancel_exits() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -561,6 +564,7 @@ async fn test_mid_cancel_multi_approval() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await

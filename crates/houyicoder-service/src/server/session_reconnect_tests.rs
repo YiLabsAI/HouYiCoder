@@ -102,6 +102,7 @@ async fn test_reconnect_resumes_after_interruption() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -266,6 +267,7 @@ async fn test_deny_verdict_completes_run() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -387,6 +389,7 @@ async fn test_mid_reemit_disconnect_errors() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -481,6 +484,7 @@ async fn test_reconnect_mismatched_response_dropped() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -620,6 +624,7 @@ async fn test_reattach_occupied_session_errors() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await

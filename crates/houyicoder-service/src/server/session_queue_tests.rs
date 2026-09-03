@@ -137,6 +137,7 @@ async fn test_inject_cancel_run_clear() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -188,6 +189,7 @@ async fn test_inject_cancel_run_clear() {
                 content: vec![ContentBlock::Text {
                     text: "again".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -285,6 +287,7 @@ async fn test_inject_reset_run_clear() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await

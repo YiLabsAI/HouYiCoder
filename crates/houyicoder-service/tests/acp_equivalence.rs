@@ -74,6 +74,7 @@ async fn frontend_turn_stop_reason(runner: Arc<Runner>, session: SessionId) -> S
         FrontendRequest::MessageSend {
             session_id: WireSessionId::new(session.to_string()),
             content: vec![ContentBlock::Text { text: "hi".into() }],
+            disabled_skills: Default::default(),
         },
     );
     send(&mut tx, &ClientFrame::Request(req)).await;

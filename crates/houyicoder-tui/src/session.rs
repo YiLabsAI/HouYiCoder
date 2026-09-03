@@ -179,10 +179,10 @@ async fn drive_client(
         }
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
-                Some(ClientCommand::SendMessage { req_id, session_id, content }) => {
+                Some(ClientCommand::SendMessage { req_id, session_id, content, disabled_skills }) => {
                     outbound.push_back(Outbound::Request {
                         req_id,
-                        payload: FrontendRequest::MessageSend { session_id, content },
+                        payload: FrontendRequest::MessageSend { session_id, content, disabled_skills },
                     });
                 }
                 Some(ClientCommand::Verdict { req_id, decision }) => {

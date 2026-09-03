@@ -183,6 +183,7 @@ async fn spawn_server_with(
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await

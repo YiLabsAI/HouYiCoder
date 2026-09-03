@@ -148,10 +148,12 @@ impl App {
         self.live_block = crate::state::enums::LiveBlock::None;
         let session_id = self.session_id.clone();
         let content = vec![ContentBlock::Text { text: input }];
+        let disabled_skills = self.skill_disabled.clone();
         self.send_cmd(ClientCommand::SendMessage {
             req_id,
             session_id,
             content,
+            disabled_skills,
         });
     }
 

@@ -277,6 +277,7 @@ async fn test_message_wrong_session_rejects() {
             content: vec![houyicoder_protocol::frontend::run::ContentBlock::Text {
                 text: "hi".into(),
             }],
+            disabled_skills: Default::default(),
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(req)).await;

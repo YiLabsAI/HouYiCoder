@@ -166,6 +166,7 @@ async fn test_serve_drives_parked_turn() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -265,6 +266,7 @@ async fn test_reconnect_replays_pending_ask() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -418,6 +420,7 @@ async fn test_reconnect_batch_preserves_decided() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -624,6 +627,7 @@ async fn test_between_runs_inject_drains() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -749,6 +753,7 @@ async fn test_during_run_inject_caught() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await

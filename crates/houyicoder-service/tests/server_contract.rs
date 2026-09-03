@@ -80,6 +80,7 @@ async fn test_message_send_returns_outcome() {
             content: vec![ContentBlock::Text {
                 text: "hi".to_string(),
             }],
+            disabled_skills: Default::default(),
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(req)).await;
@@ -273,6 +274,7 @@ async fn test_wrong_session_fails_closed() {
             content: vec![ContentBlock::Text {
                 text: "hi".to_string(),
             }],
+            disabled_skills: Default::default(),
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(req)).await;

@@ -71,6 +71,7 @@ async fn test_drives_turn_over_wire() {
                 content: vec![ContentBlock::Text {
                     text: "hello".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -141,6 +142,7 @@ async fn test_resume_cursor_advances_events() {
                 content: vec![ContentBlock::Text {
                     text: "hi".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await

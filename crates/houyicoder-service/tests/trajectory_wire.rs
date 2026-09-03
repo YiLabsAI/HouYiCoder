@@ -89,6 +89,7 @@ async fn test_returns_wire_session_updates() {
         FrontendRequest::MessageSend {
             session_id: WireSessionId::new(session_str.clone()),
             content: vec![ContentBlock::Text { text: "hi".into() }],
+            disabled_skills: Default::default(),
         },
     );
     send(&mut client_tx, &ClientFrame::Request(req)).await;

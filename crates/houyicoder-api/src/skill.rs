@@ -152,6 +152,14 @@ pub trait SkillRegistry: Send + Sync {
     fn usage_for(&self, _name: &str) -> SkillUsage {
         SkillUsage::default()
     }
+
+    /// Set the session-scoped disabled skill names. A disabled skill is
+    /// excluded from the model listing (the model cannot see or invoke it)
+    /// but stays visible in the /skills pane (marked disabled). The default
+    /// is no-op: a registry that does not track session state silently
+    /// drops the set. Called by the server before a run starts, from the
+    /// TUI's skill_disabled state.
+    fn set_session_disabled(&self, _disabled: std::collections::HashSet<String>) {}
 }
 
 /// A model-invocable descriptor paired with where it was discovered, for

@@ -26,6 +26,7 @@ impl Server {
             houyicoder_protocol::frontend::FrontendRequest::MessageSend {
                 session_id,
                 content,
+                disabled_skills,
             } => {
                 if !self.session_matches(&session_id) {
                     return self
@@ -39,6 +40,11 @@ impl Server {
                             )),
                         )
                         .await;
+                }
+                // Push the session-scoped disabled skill set to the registry
+                // before the run so the model listing excludes them.
+                if let Some(reg) = self.runner.skill_registry() {
+                    reg.set_session_disabled(disabled_skills);
                 }
                 self.handle_message_send(io, req_id, content).await
             }

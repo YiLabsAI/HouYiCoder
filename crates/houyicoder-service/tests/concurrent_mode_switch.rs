@@ -241,6 +241,7 @@ async fn test_cycle_during_run() {
         FrontendRequest::MessageSend {
             session_id: wire_session_id,
             content: vec![ContentBlock::Text { text: "go".into() }],
+            disabled_skills: Default::default(),
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(req)).await;
@@ -308,6 +309,7 @@ async fn test_cycle_during_resume() {
         FrontendRequest::MessageSend {
             session_id: wire_session_id,
             content: vec![ContentBlock::Text { text: "go".into() }],
+            disabled_skills: Default::default(),
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(req)).await;
@@ -394,6 +396,7 @@ async fn test_non_mode_request_dropped() {
         FrontendRequest::MessageSend {
             session_id: wire_session_id,
             content: vec![ContentBlock::Text { text: "go".into() }],
+            disabled_skills: Default::default(),
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(req)).await;
@@ -454,6 +457,7 @@ async fn test_active_run_drops_compact() {
         FrontendRequest::MessageSend {
             session_id: wire_session_id,
             content: vec![ContentBlock::Text { text: "go".into() }],
+            disabled_skills: Default::default(),
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(req)).await;

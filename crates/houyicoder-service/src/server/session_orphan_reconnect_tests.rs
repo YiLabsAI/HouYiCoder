@@ -132,6 +132,7 @@ async fn test_disconnect_orphan_repaired() {
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await
@@ -204,6 +205,7 @@ async fn test_disconnect_orphan_repaired() {
                 content: vec![ContentBlock::Text {
                     text: "follow-up".to_string(),
                 }],
+                disabled_skills: Default::default(),
             },
         )
         .await

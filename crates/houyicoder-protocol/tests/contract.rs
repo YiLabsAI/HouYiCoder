@@ -102,6 +102,7 @@ fn test_request_envelope_round_trips() {
             content: vec![ContentBlock::Text {
                 text: "hello world".to_string(),
             }],
+            disabled_skills: Default::default(),
         },
     );
     round_trip("request-message", &with_text);

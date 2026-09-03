@@ -380,10 +380,13 @@ pub enum AgentMessage {
 /// results back as AgentMessage on the agent channel.
 pub enum ClientCommand {
     /// Send a MessageSend request (a new user turn). req_id is App-minted.
+    /// disabled_skills carries the session-scoped disabled skill names so the
+    /// server can exclude them from the model listing before the run starts.
     SendMessage {
         req_id: RequestId,
         session_id: WireSessionId,
         content: Vec<ContentBlock>,
+        disabled_skills: std::collections::HashSet<String>,
     },
     /// Answer a pending reverse permission ask with the human verdict.
     Verdict {

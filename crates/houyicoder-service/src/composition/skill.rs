@@ -199,12 +199,12 @@ pub struct ReloadOutcome {
 /// it bounds the per-call cost to a clone).
 pub struct SkillRegistryImpl {
     set: RwLock<SkillSet>,
-    /// Session-scoped per-skill invocation stats. Sibling of set: reload
-    /// swaps set only, so usage survives a hot reload (a body edit does
-    /// not erase the session's invocation history). Name-keyed: a deleted
-    /// skill's stats linger (prune is a follow-up); a same-name rebuild
-    /// inherits the prior stats (aligns global-config behavior).
     usage: std::sync::Mutex<std::collections::HashMap<String, houyicoder_api::skill::SkillUsage>>,
+    /// Session-scoped disabled skill names. Sibling of set: a disabled skill
+    /// is filtered from the model listing but stays in list_with_origin
+    /// (visible in /skills, marked disabled). Survives reload (reload swaps
+    /// set only).
+    disabled: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl SkillRegistryImpl {
@@ -228,6 +228,7 @@ impl SkillRegistryImpl {
         Self {
             set: RwLock::new(build_skillset(cwd, home)),
             usage: std::sync::Mutex::new(std::collections::HashMap::new()),
+            disabled: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -280,9 +281,10 @@ impl SkillRegistryImpl {
 impl SkillRegistry for SkillRegistryImpl {
     fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
         let set = self.read_set();
+        let disabled = self.disabled.lock().expect("disabled lock poisoned");
         set.descriptors
             .iter()
-            .filter(|d| !d.disable_model_invocation)
+            .filter(|d| !d.disable_model_invocation && !disabled.contains(&d.name))
             .cloned()
             .collect()
     }
@@ -338,6 +340,12 @@ impl SkillRegistry for SkillRegistryImpl {
             .get(name)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn set_session_disabled(&self, disabled: std::collections::HashSet<String>) {
+        let count = disabled.len();
+        *self.disabled.lock().expect("disabled lock poisoned") = disabled;
+        tracing::debug!(count, "session disabled skills set");
     }
 
     fn list_with_origin(&self) -> Vec<SkillSnapshot> {

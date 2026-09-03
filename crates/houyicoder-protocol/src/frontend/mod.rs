@@ -584,6 +584,8 @@ pub enum FrontendRequest {
     MessageSend {
         session_id: SessionId,
         content: Vec<crate::frontend::run::ContentBlock>,
+        #[serde(default)]
+        disabled_skills: std::collections::HashSet<String>,
     },
     /// Abort the in-flight run. The service cancels the loop, flushes partial
     /// text, and the next outcome returns Interrupted. Fire-and-forget; the
