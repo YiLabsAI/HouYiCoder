@@ -141,6 +141,71 @@ async fn test_drive_kill_child_forwards() {
     );
 }
 
+/// A CancelChildTurn command drains through the driver as a
+/// session/cancel_child_turn notification on the wire. Pins the driver
+/// dispatch for the per-turn interrupt path that Esc fires when viewing a
+/// running child (the key handler calls send_cmd; this proves the driver
+/// half forwards it). Mirrors the kill-child forwarding test.
+#[tokio::test]
+async fn test_drive_cancel_child_forwards() {
+    use houyicoder_async::PFut;
+    use houyicoder_client::Transport;
+    use houyicoder_protocol::handshake::Hello;
+    use houyicoder_protocol::wire::WireError;
+    use std::sync::{Arc, Mutex};
+
+    struct CaptureTransport {
+        served: bool,
+        sent: Arc<Mutex<Vec<String>>>,
+    }
+    impl Transport for CaptureTransport {
+        fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), WireError>> {
+            self.sent.lock().unwrap().push(frame.to_string());
+            Box::pin(async { Ok(()) })
+        }
+        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+            if !self.served {
+                self.served = true;
+                let mut h = houyicoder_protocol::framing::encode(&Hello::local()).expect("encode");
+                if !h.ends_with('\n') {
+                    h.push('\n');
+                }
+                return Box::pin(async move { Ok(Some(h)) });
+            }
+            Box::pin(async {
+                std::future::pending::<()>().await;
+                Ok(None)
+            })
+        }
+    }
+
+    let sent = Arc::new(Mutex::new(Vec::<String>::new()));
+    let client = houyicoder_client::Client::new(Box::new(CaptureTransport {
+        served: false,
+        sent: sent.clone(),
+    }));
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
+    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<AgentMessage>();
+    cmd_tx
+        .send(ClientCommand::CancelChildTurn {
+            child_sid: "c1".into(),
+        })
+        .ok();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        drive_client(client, cmd_rx, agent_tx),
+    )
+    .await;
+    drop(agent_rx);
+    let frames = sent.lock().unwrap().clone();
+    assert!(
+        frames
+            .iter()
+            .any(|f| f.contains("session/cancel_child_turn") && f.contains("c1")),
+        "the CancelChildTurn command forwarded a session/cancel_child_turn notification: {frames:?}"
+    );
+}
+
 /// A read failure (the server closed or a wire error mid-stream) must
 /// surface as Done{Err} so the App clears agent_busy. The prior silent
 /// return wedged the TUI on any server-side fatal. Pins the fix at the

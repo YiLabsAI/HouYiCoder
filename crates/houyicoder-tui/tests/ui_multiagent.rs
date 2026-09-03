@@ -66,12 +66,19 @@ fn test_multi_sync_delegation() {
         s.output()
     );
     // Shift+Down exits back to the parent transcript (Esc only interrupts
-    // the viewed child's turn). The working-screen placeholder returning
-    // confirms the banner is gone.
+    // the viewed child's turn). The empty-input placeholder is identical in
+    // both views, so assert the state-specific banner is gone + the parent's
+    // delegation row repaints — not the placeholder.
+    s.clear_output();
     s.send_key(&Key::ShiftDown);
     assert!(
-        s.wait_for("let's build", RENDER_TIMEOUT),
-        "after Shift+Down, should return to parent transcript:\n{}",
+        !s.output_plain().contains("Viewing"),
+        "after Shift+Down the teammate banner must be gone:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for_compact("ctrl+o", RENDER_TIMEOUT),
+        "after exit the parent delegation fold-group should repaint:\n{}",
         s.output()
     );
 }
@@ -404,11 +411,19 @@ fn test_teammate_pill_pins_view() {
     // to prove the stay is not a transient render: the banner is still the
     // active state (Shift+Down exits; Esc is a no-op on a completed child).
     std::thread::sleep(FLEET_GRACE + Duration::from_secs(2));
+    // clear the buffer so the post-exit frame is what we assert on, not the
+    // pre-exit banner bytes still in the scrollback.
+    s.clear_output();
     s.send_key(&Key::ShiftDown);
     assert!(
-        s.wait_for("let's build", RENDER_TIMEOUT),
-        "Shift+Down should exit the teammate view (the view stayed until \
-         Shift+Down, not auto-dismissed on completion):\n{}",
+        s.wait_for_compact("explore:authisinsrc/auth", RENDER_TIMEOUT),
+        "after Shift+Down the parent delegation fold-group should repaint:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("Viewing@explore"),
+        "Shift+Down should exit the teammate view (banner gone), the view \
+         stayed until Shift+Down not auto-dismissed on completion:\n{}",
         s.output()
     );
 }
@@ -657,12 +672,16 @@ fn test_teammate_view_child_content() {
     );
 }
 
-/// A single Esc exits the teammate view back to the parent transcript.
-/// Proves the exit is one press (not two), distinct from the slash-palette
-/// path which needs a second Esc.
+/// Esc inside a teammate view does NOT exit it. Esc only interrupts the
+/// viewed child's current turn; exit is Shift+Up/Down, never Esc, so a
+/// misguessed Esc does not drop the user out of the view. On a completed
+/// child Esc is a no-op on the run, so the banner must stay. The old
+/// version asserted the empty-input placeholder, rendered in both the
+/// parent and the view, a false green that passed whether or not the exit
+/// happened. The real assertion is the state-specific banner.
 #[test]
 #[ignore]
-fn test_teammate_esc_single() {
+fn test_teammate_esc_keeps_view() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -676,9 +695,11 @@ fn test_teammate_esc_single() {
     s.send_str("\r");
     assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
     s.send_key(&Key::Esc);
+    // Esc never exits the view; the banner must still render a frame later.
+    std::thread::sleep(std::time::Duration::from_millis(300));
     assert!(
-        s.wait_for("let's build", RENDER_TIMEOUT),
-        "single Esc should exit the teammate view:\n{}",
+        s.output_plain().contains("Viewing"),
+        "Esc must not exit the teammate view (banner should stay):\n{}",
         s.output()
     );
 }
@@ -1663,4 +1684,130 @@ fn test_agents_pane_cursor_walks() {
     assert_eq!(app.agents.sel, 1, "clamped at the last row");
     app.agents.move_selection(-1);
     assert_eq!(app.agents.sel, 0, "clamped at the first row");
+}
+
+/// Enter a teammate view on a RUNNING child via the footer pill (Shift+Down
+/// selects the pill row, empty-input Enter drills). This is the
+/// click-pill-on-running-child path that the cache-stale bug hit: a running
+/// child has no fold anchor row, so the view opens empty and fills on fetch.
+/// The unit test pins the fill-bump logic; this journey pins the real-binary
+/// key path + that the parent transcript does not bleed through. Slow,
+/// ignored by default.
+#[test]
+#[ignore]
+fn test_pill_enter_running_child() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"delegated async, continuing"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"ok"}]
+    ]"#;
+    let mut s = pty_session_scripted(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find the auth module");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("delegated async", RENDER_TIMEOUT * 2),
+        "parent should continue past an async delegation:\n{}",
+        s.output()
+    );
+    // Clear so the post-drill frame is what we assert on, then select the
+    // pill + drill.
+    s.clear_output();
+    s.send_key(&Key::ShiftDown);
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        "pill drill should open the teammate view on the running child:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_plain().contains("delegated async"),
+        "parent transcript must not render inside the child view:\n{}",
+        s.output()
+    );
+}
+
+/// Exit a teammate view and drill into a DIFFERENT completed child. Proves
+/// the view swaps to the second child's rows, not a stale first-child or
+/// parent snapshot. Slow, ignored by default.
+#[test]
+#[ignore]
+fn test_exit_enter_another_child() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"first","description":"first"}},
+         {"type":"ToolCall","id":"toolu_2","name":"agent","input":{"subagent_type":"plan","prompt":"second","description":"second"}}],
+        [{"type":"Text","text":"first-child-result"}],
+        [{"type":"Text","text":"second-child-result"}],
+        [{"type":"Text","text":"parent done"}]
+    ]"#;
+    let mut s = pty_session_scripted(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("delegate two");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("second-child-result", RENDER_TIMEOUT * 2),
+        "both delegations should complete:\n{}",
+        s.output()
+    );
+    // Drill into the most recent (second) delegation.
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        "teammate view should open:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output_compact().contains("second-child-result"),
+        "view should show the second child's content:\n{}",
+        s.output()
+    );
+    // Exit back to the parent; both fold-groups repaint + banner gone.
+    s.clear_output();
+    s.send_key(&Key::ShiftDown);
+    assert!(
+        s.wait_for_compact("first-child-result", RENDER_TIMEOUT),
+        "exit should restore the parent with both fold-groups:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("Viewing"),
+        "exit should clear the banner:\n{}",
+        s.output()
+    );
+}
+
+/// Exit the teammate view back to the parent and confirm the parent
+/// transcript content (not the empty-input placeholder) repaints. The old
+/// exit assertions used the placeholder, rendered in both views, a false
+/// green. Slow, ignored by default.
+#[test]
+#[ignore]
+fn test_exit_to_parent_repaints() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth is in src/auth"}],
+        [{"type":"Text","text":"the auth module is in src/auth"}]
+    ]"#;
+    let mut s = pty_session_scripted(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find the auth module");
+    s.send_str("\r");
+    assert!(s.wait_for_compact("ctrl+o", RENDER_TIMEOUT * 2));
+    s.send_str("\r");
+    assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    s.clear_output();
+    s.send_key(&Key::ShiftDown);
+    assert!(
+        s.wait_for_compact("authmoduleisinsrc/auth", RENDER_TIMEOUT),
+        "exit should repaint the parent's delegation row:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("Viewing"),
+        "exit should clear the teammate banner:\n{}",
+        s.output()
+    );
 }
