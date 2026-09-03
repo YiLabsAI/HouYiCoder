@@ -408,6 +408,21 @@ async fn drive_client(
                         cancel_child_turn_notification(&child_sid),
                     ));
                 }
+                Some(ClientCommand::KillChild { child_sid }) => {
+                    // Lifecycle kill of one child (the 'k' on a selected
+                    // pill). The server cancels the child's lifecycle token
+                    // so its drive loop returns terminal; the completion
+                    // publishes + retires the pill row. No reply.
+                    outbound.push_back(Outbound::Notification(
+                        kill_child_notification(&child_sid),
+                    ));
+                }
+                Some(ClientCommand::KillAllChildren) => {
+                    // The fleet kill-all path ('K' two-press). The server
+                    // kills every live background child; each completion
+                    // publishes and retires its pill row. No reply.
+                    outbound.push_back(Outbound::Notification(kill_all_notification()));
+                }
                 Some(ClientCommand::QueueRemove { session_id, text }) => {
                     // A session/queue_remove notification: the server drops
                     // the first queued message whose text matches. No reply.
@@ -713,6 +728,22 @@ fn queue_remove_notification(
     houyicoder_protocol::acp_wire::AcpNotification::new(
         "session/queue_remove",
         serde_json::json!({ "sessionId": session_id.0, "text": text }),
+    )
+}
+
+/// Build a session/kill_all notification. Pure so the wire method name
+/// matches what the server's handle_session_notification routes to
+/// kill_all_children; a typo would make the kill silently no-op.
+fn kill_all_notification() -> houyicoder_protocol::acp_wire::AcpNotification {
+    houyicoder_protocol::acp_wire::AcpNotification::new("session/kill_all", serde_json::json!({}))
+}
+
+/// Build a session/kill_child notification. Pure so the method + childSid
+/// match what the server's handle_session_notification routes to kill_child.
+fn kill_child_notification(child_sid: &str) -> houyicoder_protocol::acp_wire::AcpNotification {
+    houyicoder_protocol::acp_wire::AcpNotification::new(
+        "session/kill_child",
+        serde_json::json!({ "childSid": child_sid }),
     )
 }
 

@@ -145,6 +145,12 @@ impl Server {
                 };
                 self.runner.kill_child(child_sid);
             }
+            "session/kill_all" => {
+                // Kill every live background child: the fleet kill-all path.
+                // Each killed child's completion publishes and retires the
+                // pill row; a no-op when no runtime or no live children.
+                self.runner.kill_all_children();
+            }
             _ => {}
         }
     }
@@ -227,6 +233,17 @@ mod tests {
         let server = server_no_runtime();
         server.handle_session_notification(&AcpNotification::new(
             "session/kill_child",
+            serde_json::json!({}),
+        ));
+    }
+
+    /// session/kill_all routes to the runner's kill_all_children. With no
+    /// runtime attached it is a silent no-op (returns 0).
+    #[tokio::test]
+    async fn test_kill_all_routes() {
+        let server = server_no_runtime();
+        server.handle_session_notification(&AcpNotification::new(
+            "session/kill_all",
             serde_json::json!({}),
         ));
     }

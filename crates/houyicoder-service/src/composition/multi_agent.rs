@@ -270,6 +270,21 @@ impl SpawnHandle for MultiAgentRuntime {
         }
     }
 
+    fn kill_all_children(&self) -> usize {
+        let registry = match self.children.lock() {
+            Ok(g) => g,
+            Err(_) => return 0,
+        };
+        let mut killed = 0;
+        for weak in registry.values() {
+            if let Some(runner) = weak.upgrade() {
+                runner.abort();
+                killed += 1;
+            }
+        }
+        killed
+    }
+
     /// First-party spawn from a service/hook caller: same spawn pipeline as
     /// the model path, but the trigger is System{hook} so the durable
     /// boundary records a flow-driven origin. A system trigger introduces no

@@ -334,3 +334,88 @@ fn test_login_sso_via_dispatch() {
     assert_eq!(app.screen, Screen::Working);
     assert_eq!(app.login_mode, Some(LoginMode::Sso));
 }
+
+/// A fleet with one running child, selected, for the kill tests.
+fn running_fleet_app() -> App {
+    let mut app = working_app();
+    app.fleet.entries.push(crate::agent_message::FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 1,
+        tokens: 50,
+        tool_uses: 0,
+        last_activity: None,
+        completed: None,
+        completed_at: None,
+        started_at: None,
+    });
+    app.fleet.selected = Some(0);
+    app
+}
+
+/// 'K' (shift+k) two-press kills all running children: first press shows a
+/// confirm toast, second within the window sends KillAllChildren.
+#[test]
+fn test_kill_all_two_press() {
+    let mut app = running_fleet_app();
+    let big_k = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
+    handle_key(&mut app, big_k);
+    assert!(
+        app.notifications
+            .current()
+            .is_some_and(|n| n.key == "kill-agents-confirm"),
+        "first K shows the confirm toast"
+    );
+    handle_key(&mut app, big_k);
+    assert!(
+        app.notifications
+            .current()
+            .is_none_or(|n| n.key != "kill-agents-confirm"),
+        "second K clears the toast and sends the kill"
+    );
+}
+
+/// 'k' (lowercase) on a selected running child is a single kill, not the
+/// two-press kill-all path (no confirm toast).
+#[test]
+fn test_single_kill_selected() {
+    let mut app = running_fleet_app();
+    handle_key(&mut app, key(KeyCode::Char('k')));
+    assert!(
+        app.notifications
+            .current()
+            .is_none_or(|n| n.key != "kill-agents-confirm"),
+        "lowercase k is single kill, not kill-all"
+    );
+}
+
+/// A single-kill keypress with running children but no selection falls
+/// through to typing — the key must not be swallowed when no valid pill is
+/// selected. This is the boundary the swallow bug hit (return outside the
+/// selection check).
+#[test]
+fn test_single_kill_without_selection() {
+    let mut app = running_fleet_app();
+    app.fleet.selected = None;
+    handle_key(&mut app, key(KeyCode::Char('k')));
+    assert!(
+        !app.input.is_empty(),
+        "k with no selection types, not swallowed"
+    );
+    assert!(
+        app.notifications.current().is_none(),
+        "no toast when no selection"
+    );
+}
+
+/// 'K' with no running children is a no-op.
+#[test]
+fn test_kill_all_no_running() {
+    let mut app = working_app();
+    let big_k = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
+    handle_key(&mut app, big_k);
+    assert!(
+        app.notifications.current().is_none(),
+        "K with no running children shows no toast"
+    );
+}

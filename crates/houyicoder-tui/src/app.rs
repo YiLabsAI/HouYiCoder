@@ -543,6 +543,58 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         }
         return;
     }
+    // 'k' on a selected pill kills that one child; 'K' (shift+k) two-press
+    // within 2s kills every running child. The k/K family pairs single +
+    // all; the two-press window mirrors ctrl+D exit. The pill keeps a
+    // selected cursor so no separate selection mode is needed. Esc stays on
+    // abort+restore, never kills.
+    if app.pane == crate::state::Pane::Transcript
+        && app.viewport == crate::state::ViewportMode::Working
+        && app.input.is_empty()
+        && app.teammate_view.is_none()
+    {
+        let running = app
+            .fleet
+            .entries
+            .iter()
+            .filter(|e| e.completed.is_none())
+            .count();
+        if k.code == KeyCode::Char('K') && running > 0 {
+            let pending = app
+                .notifications
+                .current()
+                .is_some_and(|n| n.key == "kill-agents-confirm");
+            if pending {
+                app.notifications.remove("kill-agents-confirm");
+                app.send_cmd(crate::run_control::ClientCommand::KillAllChildren);
+            } else {
+                app.notifications
+                    .add(crate::notifications::Notification::immediate(
+                        "kill-agents-confirm",
+                        crate::notifications::NotifKind::Text {
+                            text: format!(
+                                "Press K again to stop {running} background agent{}",
+                                if running == 1 { "" } else { "s" }
+                            ),
+                            color: None,
+                        },
+                        Duration::from_millis(2000),
+                    ));
+            }
+            return;
+        }
+        if k.code == KeyCode::Char('k')
+            && running > 0
+            && let Some(i) = app.fleet.selected
+            && let Some(e) = app.fleet.entries.get(i).filter(|e| e.completed.is_none())
+        {
+            app.send_cmd(crate::run_control::ClientCommand::KillChild {
+                child_sid: e.agent_id.clone(),
+            });
+            return;
+        }
+        // No valid running selection: fall through so 'k' types.
+    }
     match app.screen {
         Screen::Login => keys::handle_login(app, k),
         Screen::Console => keys::handle_console(app, k),

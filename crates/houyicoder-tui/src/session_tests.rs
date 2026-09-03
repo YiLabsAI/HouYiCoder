@@ -55,6 +55,92 @@ fn test_cancel_child_notif_shape() {
     assert_eq!(p.get("childSid").and_then(|v| v.as_str()), Some("c1"));
 }
 
+/// The kill-all notification carries the method name the server's
+/// handle_session_notification routes to kill_all_children. A typo would
+/// make the fleet kill-all silently no-op.
+#[test]
+fn test_kill_all_notif_shape() {
+    let n = kill_all_notification();
+    assert_eq!(n.method, "session/kill_all");
+}
+
+/// The kill-child notification carries the method + childSid the server's
+/// handle_session_notification routes to kill_child. A typo in either would
+/// make a single-kill silently no-op.
+#[test]
+fn test_kill_child_notif_shape() {
+    let n = kill_child_notification("c1");
+    assert_eq!(n.method, "session/kill_child");
+    let p = n.params.expect("params present");
+    assert_eq!(p.get("childSid").and_then(|v| v.as_str()), Some("c1"));
+}
+
+/// A KillChild command drains through the driver as a session/kill_child
+/// notification on the wire. Pins the driver dispatch mapping the pure
+/// shape test cannot reach.
+#[tokio::test]
+async fn test_drive_kill_child_forwards() {
+    use houyicoder_async::PFut;
+    use houyicoder_client::Transport;
+    use houyicoder_protocol::handshake::Hello;
+    use houyicoder_protocol::wire::WireError;
+    use std::sync::{Arc, Mutex};
+
+    struct CaptureTransport {
+        served: bool,
+        sent: Arc<Mutex<Vec<String>>>,
+    }
+    impl Transport for CaptureTransport {
+        fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), WireError>> {
+            self.sent.lock().unwrap().push(frame.to_string());
+            Box::pin(async { Ok(()) })
+        }
+        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+            if !self.served {
+                self.served = true;
+                let mut h = houyicoder_protocol::framing::encode(&Hello::local()).expect("encode");
+                if !h.ends_with('\n') {
+                    h.push('\n');
+                }
+                return Box::pin(async move { Ok(Some(h)) });
+            }
+            // Block so the select waits on recv and the KillChild command
+            // wins the cmd_rx branch.
+            Box::pin(async {
+                std::future::pending::<()>().await;
+                Ok(None)
+            })
+        }
+    }
+
+    let sent = Arc::new(Mutex::new(Vec::<String>::new()));
+    let client = houyicoder_client::Client::new(Box::new(CaptureTransport {
+        served: false,
+        sent: sent.clone(),
+    }));
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
+    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<AgentMessage>();
+    cmd_tx
+        .send(ClientCommand::KillChild {
+            child_sid: "c1".into(),
+        })
+        .ok();
+    // Drive until the command drains (recv blocks forever, so cap the wait).
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        drive_client(client, cmd_rx, agent_tx),
+    )
+    .await;
+    drop(agent_rx);
+    let frames = sent.lock().unwrap().clone();
+    assert!(
+        frames
+            .iter()
+            .any(|f| f.contains("session/kill_child") && f.contains("c1")),
+        "the KillChild command forwarded a session/kill_child notification: {frames:?}"
+    );
+}
+
 /// A read failure (the server closed or a wire error mid-stream) must
 /// surface as Done{Err} so the App clears agent_busy. The prior silent
 /// return wedged the TUI on any server-side fatal. Pins the fix at the

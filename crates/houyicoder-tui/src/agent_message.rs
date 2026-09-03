@@ -595,6 +595,16 @@ pub enum ClientCommand {
     CancelChildTurn {
         child_sid: String,
     },
+    /// Kill every live background child at once (the 'K' two-press fleet
+    /// kill-all path). Each killed child's completion publishes and retires
+    /// its pill row. Fire-and-forget; a no-op when no children are live.
+    KillAllChildren,
+    /// Kill a single selected child (the 'k' on a selected pill path).
+    /// Cancels the child's lifecycle token so its drive loop returns
+    /// terminal. Fire-and-forget; a no-op when the child is no longer live.
+    KillChild {
+        child_sid: String,
+    },
     /// Remove a queued message by text (the overlay-delete path, or popping
     /// the head to start a follow-up run so the new run does not re-inject
     /// it). The server drops the first queue entry whose text matches;

@@ -66,6 +66,15 @@ impl Runner {
         }
     }
 
+    /// Kill every live background child at once (the fleet kill-all path).
+    /// Returns the count killed; 0 when no runtime is attached.
+    pub fn kill_all_children(&self) -> usize {
+        match self.spawn_handle.as_ref() {
+            Some(h) => h.kill_all_children(),
+            None => 0,
+        }
+    }
+
     /// Install the agent directory section the system prompt carries so the
     /// model can discover sub-agent types. Set once at the composition root.
     pub fn set_agent_directory(&self, section: String) {

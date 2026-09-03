@@ -881,3 +881,30 @@ fn test_kill_child_registry() {
         "a dropped child's stale Weak returns false"
     );
 }
+
+/// kill_all_children aborts every registered live child + returns the count.
+/// Dropped (stale Weak) children are skipped, not counted.
+#[test]
+fn test_kill_all_children_registry() {
+    use houyicoder_core::agent::Runner;
+    let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
+    let r1 = Arc::new(Runner::with_shared_store(
+        runtime.store.clone(),
+        Arc::new(FakeProvider::text("ok")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    ));
+    let r2 = Arc::new(r1.clone());
+    runtime.register_child("c1", &r1);
+    runtime.register_child("c2", &r2);
+    let killed = runtime.kill_all_children();
+    assert_eq!(killed, 2, "two live children aborted + counted");
+    // A second sweep re-aborts already-cancelled tokens (idempotent) while
+    // the Arcs are still held, so the count stays the same.
+    let again = runtime.kill_all_children();
+    assert_eq!(again, 2, "re-abort is idempotent while the Arcs live");
+    drop(r1);
+    drop(r2);
+    let none = runtime.kill_all_children();
+    assert_eq!(none, 0, "dropped children are skipped, not counted");
+}
