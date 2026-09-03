@@ -127,15 +127,15 @@ fn draw_working(f: &mut Frame, app: &App) {
         };
         queue_overlay::draw_queue_overlay(f, overlay_area, app);
     }
-    if app.skill_picker_open {
-        skill_picker::draw(f, app, f.area());
-    }
-    // The resume picker now renders as a Pane (draw_command_pane) routed in
-    // draw_main when app.pane == Pane::Resume, not as a floating popover. The
-    // shared template keeps the transcript tail visible above the list.
+    // The @ skill picker and the / palette share the overlay slot —
+    // mutually exclusive (can't have both open). The picker is inline
+    // (pushes transcript up) rather than floating over it, matching the
+    // palette's layout. The resume picker renders as a Pane instead.
     if let Some(i) = layout.slots.overlay {
         if app.palette.open {
             palette::draw(f, app, outer[i]);
+        } else if app.skill_picker_open {
+            skill_picker::draw(f, app, outer[i]);
         } else {
             input_bar::draw_inline_search(f, outer[i], app);
         }
@@ -247,7 +247,7 @@ fn build_working_layout(app: &App, input_h: u16, queue_h: u16, fleet_h: u16) -> 
         None
     };
     let mut overlay: Option<usize> = None;
-    if app.palette.open {
+    if app.palette.open || app.skill_picker_open {
         constraints.push(Constraint::Length(10));
         overlay = Some(constraints.len() - 1);
     }

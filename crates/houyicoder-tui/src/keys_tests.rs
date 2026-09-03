@@ -378,8 +378,90 @@ fn test_skill_picker_char() {
     handle_working(&mut app, key(KeyCode::Char('@')));
     assert!(app.skill_picker_open);
     handle_working(&mut app, key(KeyCode::Char('x')));
-    assert!(!app.skill_picker_open, "char closes the picker");
-    assert!(app.input.value().contains('x'), "char lands in input");
+    assert!(app.skill_picker_open, "picker stays open for filter typing");
+    assert!(
+        app.input.value().contains('x'),
+        "char lands in input as filter"
+    );
+}
+
+/// Backspace on a lone @ closes the picker + clears the input.
+#[test]
+fn test_skill_picker_backspace_close() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.skill_entries = vec![SkillEntry {
+        name: "alpha".into(),
+        description: "a".into(),
+        origin: "user".into(),
+        invocable: true,
+        body_token_estimate: 100,
+        usage: None,
+    }];
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    handle_working(&mut app, key(KeyCode::Backspace));
+    assert!(!app.skill_picker_open, "backspace on lone @ closes picker");
+    assert!(app.input.is_empty(), "input cleared");
+}
+
+/// A colon signals a namespace prefix — closes the picker for free-form.
+#[test]
+fn test_skill_picker_colon_closes() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.skill_entries = vec![SkillEntry {
+        name: "alpha".into(),
+        description: "a".into(),
+        origin: "user".into(),
+        invocable: true,
+        body_token_estimate: 100,
+        usage: None,
+    }];
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    handle_working(&mut app, key(KeyCode::Char('s')));
+    handle_working(&mut app, key(KeyCode::Char(':')));
+    assert!(!app.skill_picker_open, "colon closes picker for free-form");
+}
+
+/// Filter narrows the list; Down+Enter selects from the filtered list
+/// (not the unfiltered list — prevents cursor/index desync).
+#[test]
+fn test_skill_picker_filter_select() {
+    use houyicoder_protocol::frontend::skills::SkillEntry;
+    let mut app = working_app();
+    app.skill_entries = vec![
+        SkillEntry {
+            name: "alpha".into(),
+            description: "a".into(),
+            origin: "user".into(),
+            invocable: true,
+            body_token_estimate: 100,
+            usage: None,
+        },
+        SkillEntry {
+            name: "beta".into(),
+            description: "b".into(),
+            origin: "user".into(),
+            invocable: true,
+            body_token_estimate: 200,
+            usage: None,
+        },
+    ];
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    handle_working(&mut app, key(KeyCode::Char('b')));
+    // Filter narrows to just "beta". Enter should select beta.
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(!app.skill_picker_open, "Enter closes picker");
+    assert!(
+        app.input.value().contains("@skill:beta"),
+        "filtered selection inserts beta: {}",
+        app.input.value()
+    );
+    assert!(
+        !app.input.value().contains("alpha"),
+        "alpha not selected: {}",
+        app.input.value()
+    );
 }
 
 /// Typing keys do not reach the input box while a pane stands in for it. The

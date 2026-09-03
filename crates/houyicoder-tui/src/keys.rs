@@ -108,13 +108,8 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         palette::handle_palette(app, k);
         return;
     }
-    if app.skill_picker_open {
-        if skill_picker::handle(app, k) {
-            return;
-        }
-        app.skill_picker_open = false;
-        // Fall through so the key (a typed char, Tab, etc.) reaches the input
-        // box after the picker closes — no silent char loss.
+    if app.skill_picker_open && skill_picker::handle(app, k) {
+        return; // consumed by picker (Up/Down/Enter/Esc/Backspace)
     }
     // Esc while viewing a teammate only interrupts the viewed child's
     // current turn; it never exits the view and never leaks to the parent
@@ -163,12 +158,11 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         app.abort_run();
         return;
     }
-    // The @ trigger opens the skill picker when the input is empty. Unlike
-    // the palette (which consumes /), @ falls through to the input box so
-    // free-form @skill:name typing works: @ opens the picker + lands in
-    // the input, the next char closes the picker (modal returns false) and
-    // appends. Selecting from the picker overwrites the input with the
-    // full @skill:name. Esc clears the lone @ if the picker was a mistake.
+    // The @ trigger opens the skill picker when the input is empty. @ also
+    // lands in the input box, and subsequent chars act as a filter query
+    // (the picker stays open and narrows the list). A colon closes the
+    // picker for free-form @skill:name input. Selecting from the picker
+    // overwrites the input with the full @skill:name.
     if k.code == KeyCode::Char('@') && app.input.is_empty() && !pane_replaces_input(app.pane) {
         app.skill_picker_open = true;
         app.skill_picker_sel.set(0);
