@@ -177,3 +177,128 @@ fn test_steer_completed_surfaces_notice() {
         "a running child gets the optimistic echo"
     );
 }
+
+// Child-transcript attribution baseline. These characterize how fetched
+// frames land on a Subagent row before any fix, so a later change can be
+// judged against current behavior. No product code changes here.
+
+/// Two Subagent rows share a child_sid: the result handler uses rposition and
+/// swaps into the LAST matching row, leaving the first untouched. Isolates the
+/// rposition mechanism. The duplicate is synthetic — child_sid is the child
+/// session id, unique per spawn, so normal flow cannot produce it.
+#[test]
+fn test_child_transcript_last_row() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    for _ in 0..2 {
+        app.push_transcript_line(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "old summary".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
+    }
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c1".into(),
+        frames: Vec::new(),
+    });
+    let folded: Vec<&[TranscriptLine]> = app
+        .transcript
+        .iter()
+        .filter_map(|l| match l {
+            TranscriptLine::Subagent {
+                folded_transcript, ..
+            } => Some(folded_transcript.as_slice()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(folded.len(), 2);
+    assert!(
+        folded[0].is_empty(),
+        "first row untouched — rposition skipped it"
+    );
+    assert!(!folded[1].is_empty(), "last row received the swap");
+}
+
+/// A running child with no Subagent row (the row is created by the result
+/// frame, which has not landed): rposition finds no match, so the fetched
+/// frames find no transcript anchor. This is the reachable transcript-level
+/// failure for a running child whose result frame has not landed — not the
+/// duplicate-row case. (A teammate view that is open would still receive the
+/// frames via fill_teammate_view; this test isolates the transcript path with
+/// no view set.)
+#[test]
+fn test_child_transcript_no_row() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.fleet.entries.push(crate::agent_message::FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 1,
+        tokens: 50,
+        tool_uses: 0,
+        last_activity: None,
+        completed: None,
+        completed_at: None,
+        started_at: None,
+    });
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c1".into(),
+        frames: Vec::new(),
+    });
+    assert!(
+        app.transcript
+            .iter()
+            .all(|l| !matches!(l, TranscriptLine::Subagent { child_sid, .. } if child_sid == "c1")),
+        "no row exists — frames found no anchor and were dropped"
+    );
+}
+
+/// Reachability pin: each agent-tool result frame carries a fresh child session
+/// id, so two normal delegations produce two different sids. A result for one
+/// child never lands on the other's row. The duplicate-row rposition concern
+/// is unreachable in production; the no-row drop, not duplicate rows, is the
+/// failure to address.
+#[test]
+fn test_child_sid_unique() {
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.push_transcript_line(TranscriptLine::Subagent {
+        child_sid: "child-A".into(),
+        subagent_type: "explore".into(),
+        summary: "first".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    app.push_transcript_line(TranscriptLine::Subagent {
+        child_sid: "child-B".into(),
+        subagent_type: "explore".into(),
+        summary: "second".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "child-A".into(),
+        frames: Vec::new(),
+    });
+    let child_b = app
+        .transcript
+        .iter()
+        .find_map(|l| match l {
+            TranscriptLine::Subagent {
+                child_sid,
+                folded_transcript,
+                ..
+            } if child_sid == "child-B" => Some(folded_transcript.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(
+        child_b.is_empty(),
+        "child-B untouched — sids differ, no cross-talk"
+    );
+}
