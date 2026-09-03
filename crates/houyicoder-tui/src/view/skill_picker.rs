@@ -36,7 +36,7 @@ pub fn draw(f: &mut Frame, app: &App, screen: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(Color::Cyan))
         .title(format!(
-            " @ skills | {count} found | Up/Down=move Enter=insert Esc=close "
+            " @ skills | {count} found | Up/Down to select \u{00b7} Enter to insert \u{00b7} Esc to close "
         ));
     f.render_widget(block, area);
 
@@ -205,7 +205,7 @@ mod tests {
         app.skill_picker_open = true;
         let out = crate::test_support::render_text(&app, 80, 24);
         assert!(out.contains("alpha"), "skill name in picker: {out}");
-        assert!(out.contains("Enter=insert"), "nav hint in picker: {out}");
+        assert!(out.contains("Enter to insert"), "nav hint in picker: {out}");
     }
 
     /// The picker shows the empty-state line when no skills are discovered.
@@ -236,7 +236,7 @@ mod tests {
         }];
         let out = crate::test_support::render_text(&app, 80, 24);
         assert!(
-            !out.contains("Enter=insert"),
+            !out.contains("Enter to insert"),
             "picker title must not render when closed: {out}"
         );
     }

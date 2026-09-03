@@ -76,8 +76,12 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         f.render_stateful_widget(list, chunks[1], &mut state);
     }
     // Footer: the key hints.
-    let footer = Paragraph::new("Up/Down=move Enter=resume Esc=close")
-        .style(Style::new().fg(Color::DarkGray));
+    let footer = Paragraph::new(crate::view::hint::key_hint(&[
+        ("Up/Down", "select"),
+        ("Enter", "resume"),
+        ("Esc", "close"),
+    ]))
+    .style(Style::new().fg(Color::DarkGray));
     f.render_widget(footer, chunks[2]);
 }
 

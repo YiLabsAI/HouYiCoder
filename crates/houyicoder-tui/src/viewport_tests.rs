@@ -220,7 +220,7 @@ fn test_pane_hides_status_bar() {
     );
     let last = out.lines().last().unwrap_or("");
     assert!(
-        last.contains("Esc=close"),
+        last.contains("Esc to close"),
         "the hooks pane footer should be the last row: [{last}]"
     );
 }
@@ -566,7 +566,7 @@ fn test_worktree_pane_detail() {
     assert!(out.contains("Branch:"), "branch label: {out}");
     assert!(out.contains("HEAD:"), "HEAD label: {out}");
     assert!(
-        out.contains("e=enter"),
+        out.contains("e to enter"),
         "enter hint in detail footer: {out}"
     );
 }

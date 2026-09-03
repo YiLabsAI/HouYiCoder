@@ -27,7 +27,7 @@ fn test_skills_pane_detail_renders() {
     assert!(out.contains("deep-review"), "name in detail: {out}");
     assert!(out.contains("the review standard"), "desc in detail: {out}");
     assert!(out.contains("origin: project"), "origin in detail: {out}");
-    assert!(out.contains("Esc back"), "back hint in detail: {out}");
+    assert!(out.contains("Esc to back"), "back hint in detail: {out}");
 }
 
 #[test]

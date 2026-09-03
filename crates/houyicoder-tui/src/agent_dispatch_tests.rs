@@ -631,10 +631,9 @@ fn test_skills_pane_renders_entries() {
     let out = crate::test_support::render_text(&app, 80, 24);
     assert!(out.contains("pdf-export"), "name row renders: {out}");
     assert!(out.contains("internal-only"), "second name renders: {out}");
-    assert!(out.contains("User —"), "user group header renders: {out}");
     assert!(
-        out.contains("Project —"),
-        "project group header renders: {out}"
+        out.matches("Native —").count() >= 2,
+        "both native groups (user + project) render: {out}"
     );
     assert!(out.contains("320"), "token estimate renders: {out}");
     assert!(
@@ -683,7 +682,7 @@ fn test_skills_pane_showcase() {
     println!("--- /skills pane showcase (80x24) ---\n{out}\n--- end ---");
     assert!(out.contains("Skills"), "pane title renders");
     assert!(out.contains("3 skills discovered"), "count line renders");
-    assert!(out.contains("Esc close"), "close hint renders");
+    assert!(out.contains("Esc to close"), "close hint renders");
 }
 
 #[test]

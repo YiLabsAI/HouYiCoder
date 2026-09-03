@@ -163,8 +163,11 @@ fn draw_review(f: &mut Frame, area: Rect, app: &App) {
                 .style(dim),
             );
         }
-        lines.push(Line::from(" c=replace o=insert d=delete i=nl").style(dim));
-        lines.push(Line::from(" Up/Down = line  PgUp/Dn = page").style(dim));
+        lines.push(
+            Line::from(" c to replace \u{00b7} o to insert \u{00b7} d to delete \u{00b7} i to nl")
+                .style(dim),
+        );
+        lines.push(Line::from(" Up/Down to line  \u{00b7} PgUp/Dn to page").style(dim));
         lines.push(Line::from(" /artifact-save [path] = write to disk").style(dim));
     }
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);

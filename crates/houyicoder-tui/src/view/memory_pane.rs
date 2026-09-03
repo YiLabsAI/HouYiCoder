@@ -83,7 +83,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled(ad, Style::new().fg(Color::White)),
             ]),
             Line::from(
-                "  /memory <key> show · /memory toggle auto|dream · Left/Right scope · Esc close",
+                "  /memory <key> show \u{00b7} /memory toggle auto|dream \u{00b7} Left/Right to scope \u{00b7} Esc to close",
             )
             .style(Style::new().fg(Color::DarkGray)),
         ]),

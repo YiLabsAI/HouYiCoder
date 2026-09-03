@@ -31,8 +31,15 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_topbar(f, outer[0], app);
     draw_columns(f, outer[1], app);
     f.render_widget(
-        Paragraph::new(" Enter: start a coding task | Up/Down: finding | a: approve | r: reject | p: replay | Esc: quit ")
-            .style(Style::new().fg(Color::DarkGray)),
+        Paragraph::new(crate::view::hint::key_hint(&[
+            ("Enter", "start"),
+            ("Up/Down", "find"),
+            ("a", "approve"),
+            ("r", "reject"),
+            ("p", "replay"),
+            ("Esc", "quit"),
+        ]))
+        .style(Style::new().fg(Color::DarkGray)),
         outer[2],
     );
 }

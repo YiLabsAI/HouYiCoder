@@ -93,9 +93,13 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             &mut state,
         );
     }
+    let footer = if app.worktree_level.get() == 1 {
+        crate::view::hint::key_hint(&[("e", "enter"), ("Esc", "back")])
+    } else {
+        crate::view::hint::key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
+    };
     f.render_widget(
-        Paragraph::new("  Up/Down=move Enter=detail e=enter Esc=close")
-            .style(Style::new().fg(Color::DarkGray)),
+        Paragraph::new(footer).style(Style::new().fg(Color::DarkGray)),
         chunks[3],
     );
 }
@@ -128,7 +132,10 @@ fn draw_detail(f: &mut Frame, area: Rect, e: &WorktreeEntry) {
     };
     lines.push(Line::from(format!("Changes:  {changes}")));
     lines.push(Line::from(""));
-    lines.push(Line::from("  e=enter Esc=back to list").style(Style::new().fg(Color::DarkGray)));
+    lines.push(crate::view::hint::key_hint(&[
+        ("e", "enter"),
+        ("Esc", "back"),
+    ]));
     f.render_widget(Paragraph::new(lines), area);
 }
 

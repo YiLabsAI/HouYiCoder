@@ -47,22 +47,22 @@ const ORIGIN_ORDER: &[OriginGroup] = &[
     },
     OriginGroup {
         key: "user",
-        label: "User",
+        label: "Native",
         path: "~/.houyicoder/skills/",
     },
     OriginGroup {
         key: "project",
-        label: "Project",
+        label: "Native",
         path: ".houyicoder/skills/",
     },
     OriginGroup {
         key: "claude_eco",
-        label: "Claude eco",
+        label: "Ecosystem",
         path: ".claude/skills/",
     },
     OriginGroup {
         key: "agents",
-        label: "Agents",
+        label: "Spec",
         path: ".agents/skills/",
     },
     OriginGroup {
@@ -143,9 +143,9 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     }
 
     let footer = if app.skill_level.get() == 1 {
-        "t toggle · Esc back"
+        crate::view::hint::key_hint(&[("t", "toggle"), ("Esc", "back")])
     } else {
-        "Up/Down select · enter open · Esc close"
+        crate::view::hint::key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
     };
     f.render_widget(
         Paragraph::new(footer).style(Style::new().fg(Color::DarkGray)),
@@ -207,16 +207,18 @@ fn detail_lines(
     disabled: bool,
 ) -> Vec<Line<'static>> {
     let glyph = if disabled {
-        "○ disabled"
+        "\u{25cb}"
     } else if entry.invocable {
-        "✓ invocable"
+        "\u{2713}"
     } else {
-        "✗ frontmatter-disabled"
+        "\u{2717}"
     };
     let color = if disabled {
         Color::DarkGray
-    } else {
+    } else if entry.invocable {
         Color::Green
+    } else {
+        Color::Red
     };
     let mut lines = vec![
         Line::from(vec![
@@ -268,14 +270,5 @@ fn detail_lines(
             )));
         }
     }
-    lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled(
-        if disabled {
-            "t: enable   Esc: back"
-        } else {
-            "t: disable  Esc: back"
-        },
-        Style::new().fg(Color::DarkGray),
-    )));
     lines
 }

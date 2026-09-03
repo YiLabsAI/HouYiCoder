@@ -49,9 +49,9 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         draw_event_detail(f, chunks[3], app);
     }
     let hint = if level == 0 {
-        "Up/Down=move Enter=detail Esc=close"
+        crate::view::hint::key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
     } else {
-        "Esc=back"
+        crate::view::hint::key_hint(&[("Esc", "back")])
     };
     f.render_widget(
         Paragraph::new(hint).style(Style::new().fg(Color::DarkGray)),

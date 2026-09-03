@@ -103,9 +103,9 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     let effort_line = effort_selector_line(&focused_id, app);
     f.render_widget(Paragraph::new(effort_line), chunks[2]);
     let footer_text = if app.model_catalog.catalog.is_empty() {
-        "no catalog configured; add model.catalog entries to settings.json · Esc=close"
+        "no catalog configured; add model.catalog entries to settings.json \u{00b7} Esc to close"
     } else {
-        "Enter=save · Esc=close"
+        "Enter to save \u{00b7} Esc to close"
     };
     let footer = Paragraph::new(footer_text).style(Style::new().fg(Color::DarkGray));
     f.render_widget(footer, chunks[3]);

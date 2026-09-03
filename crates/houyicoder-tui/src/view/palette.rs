@@ -37,7 +37,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(Color::Cyan))
         .title(format!(
-            " / commands | filter: {} | Up/Down=move Enter=run Esc=close ",
+            " / commands | filter: {} | Up/Down to select \u{00b7} Enter to run \u{00b7} Esc to close ",
             app.palette.query,
         ));
     f.render_widget(block, area);

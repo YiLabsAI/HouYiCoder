@@ -14,6 +14,7 @@ pub mod drag_copy_tests;
 #[cfg(test)]
 pub mod drag_select_bug_tests;
 pub mod export_log;
+pub mod hint;
 pub mod hooks_pane;
 pub mod input_bar;
 pub mod login;
@@ -161,8 +162,8 @@ mod tests {
             .copied()
             .expect("popover title row present");
         assert!(
-            title_row.contains("Esc=close"),
-            "title must keep Esc=close intact (no overlap), got [{title_row}]"
+            title_row.contains("Esc to close"),
+            "title must keep Esc to close intact (no overlap), got [{title_row}]"
         );
 
         // 2. The first list row shows /login and its help must not run past
