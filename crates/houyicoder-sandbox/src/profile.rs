@@ -22,7 +22,11 @@ mod network;
 use self::deny::{deny_snapshot_store, mandatory_deny};
 use self::network::network_rules;
 
-/// mach services dyld/launchd look up during process start (srt's set).
+/// mach services dyld/launchd look up during process start (srt's set),
+/// plus com.apple.hiservices-xpcservice for macOS UI automation. Native
+/// app automation tools connect to this XPC service to drive browser
+/// windows via the HIServices framework (Apple Events, Finder, app
+/// policy). Apple-signed system process, user-level UI ops only.
 const MACH_SERVICES: &[&str] = &[
     "com.apple.audio.systemsoundserver",
     "com.apple.distributed_notifications@Uv3",
@@ -39,6 +43,7 @@ const MACH_SERVICES: &[&str] = &[
     "com.apple.securityd.xpc",
     "com.apple.coreservices.launchservicesd",
     "com.apple.SecurityServer",
+    "com.apple.hiservices-xpcservice",
 ];
 
 /// /dev devices sh/dyld opens with ioctl.
@@ -128,6 +133,12 @@ pub struct ProfileSpec<'a> {
     /// writes pass, while the mandatory exfiltration denies that follow still
     /// hold inside them.
     pub additional: &'a [&'a str],
+    /// Extra mach services (XPC service names) a skill or tool declares it
+    /// needs beyond the base set. Each emits an extra allow mach-lookup
+    /// global-name line after the base allow_set. The base set covers
+    /// process-start services; this is the extension point for skills that
+    /// talk to macOS system services the base set does not include.
+    pub extra_mach_services: &'a [&'a str],
     /// How wide the network fence is opened. Defaults to fully contained.
     pub network: NetworkPolicy,
 }
@@ -143,6 +154,7 @@ impl<'a> ProfileSpec<'a> {
             home,
             tag,
             additional: &[],
+            extra_mach_services: &[],
             network: NetworkPolicy::contained(),
         }
     }
@@ -151,6 +163,14 @@ impl<'a> ProfileSpec<'a> {
     #[must_use]
     pub fn with_additional(mut self, additional: &'a [&'a str]) -> Self {
         self.additional = additional;
+        self
+    }
+
+    /// Set extra mach services for skills/tools that need XPC services
+    /// beyond the base process-start set.
+    #[must_use]
+    pub fn with_mach_services(mut self, services: &'a [&'a str]) -> Self {
+        self.extra_mach_services = services;
         self
     }
 
@@ -170,6 +190,7 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
         home,
         tag,
         additional,
+        extra_mach_services,
         network,
     } = spec;
     let (tmpdir, home, tag) = (*tmpdir, *home, *tag);
@@ -177,6 +198,21 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     s.push_str("(version 1)\n");
     s.push_str(&deny_default(tag));
     s.push_str(&allow_set(tag));
+    // Extra mach services declared by a skill or tool. Validated
+    // alphanumeric+dot+dash so a frontmatter value cannot inject
+    // seatbelt directives via the interpolated name.
+    for name in extra_mach_services.iter() {
+        if name.is_empty() {
+            continue;
+        }
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+        {
+            continue;
+        }
+        s.push_str(&format!("(allow mach-lookup (global-name \"{name}\"))\n"));
+    }
     s.push_str(&filesystem_rules(workspace, tmpdir, tag, additional));
     // Deny writes to the snapshot store inside the workspace so a destructive
     // command (rm -rf, git clean -fdx) cannot destroy its own undo data.
@@ -278,7 +314,7 @@ pub fn deny_default(tag: &str) -> String {
 
 /// The allow-set: everything sh/dyld needs to start a process under
 /// sandbox-exec — process exec/fork/info/signal, mach-priv-task-port,
-/// mach-lookup of 15 system services, ipc-posix-shm/sem, iokit,
+/// mach-lookup of 16 system services, ipc-posix-shm/sem, iokit,
 /// system-socket AF_SYSTEM proto 2, sysctl-read, distributed-notification,
 /// file-ioctl on /dev/null|zero|random|urandom|dtracehelper|tty, and
 /// read-write on /dev/null character device. Without this set sh aborts
@@ -384,12 +420,40 @@ mod tests {
         assert!(p.contains("(allow mach-lookup"));
         assert!(p.contains("com.apple.system.logger"));
         assert!(p.contains("com.apple.SecurityServer"));
+        assert!(p.contains("com.apple.hiservices-xpcservice"));
         assert!(p.contains("(allow ipc-posix-shm)"));
         assert!(p.contains("(allow ipc-posix-sem)"));
         assert!(p.contains("(allow iokit-get-properties)"));
         assert!(p.contains("(allow file-ioctl"));
         assert!(p.contains("(literal \"/dev/null\")"));
         assert!(p.contains("(literal \"/dev/tty\")"));
+    }
+
+    /// Extra mach services declared via ProfileSpec are emitted as
+    /// standalone allow mach-lookup global-name lines after the base
+    /// allow_set block. Uses a name not in the base list so the test
+    /// is independent of which services the base set includes.
+    #[test]
+    fn test_extra_mach_services_rendered() {
+        let spec = ProfileSpec::new(Path::new("/tmp/ws"), "/tmp", "/Users/test", "tag-x")
+            .with_mach_services(&["test.dummy.xpc"]);
+        let p = render(&spec);
+        assert!(
+            p.contains("(allow mach-lookup (global-name \"test.dummy.xpc\"))"),
+            "extra mach service emitted: {p}"
+        );
+    }
+
+    /// No extra mach services means no standalone allow mach-lookup
+    /// line for a name outside the base set.
+    #[test]
+    fn test_no_extra_mach_services() {
+        let spec = ProfileSpec::new(Path::new("/tmp/ws"), "/tmp", "/Users/test", "tag-x");
+        let p = render(&spec);
+        assert!(
+            !p.contains("test.dummy.xpc"),
+            "no extra mach service when none declared: {p}"
+        );
     }
 
     #[test]

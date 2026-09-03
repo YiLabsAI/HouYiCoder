@@ -633,6 +633,10 @@ pub trait SandboxSession: Send + Sync {
     fn working_dirs(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Declare extra mach services a skill needs; clear reverts to base.
+    fn set_extra_mach_services(&self, _services: &[String]) {}
+    fn clear_extra_mach_services(&self) {}
 }
 
 #[cfg(test)]
@@ -657,6 +661,14 @@ mod tests {
         ));
         s.remove_working_dir("/tmp"); // no-op, no panic
         assert!(s.working_dirs().is_empty());
+    }
+
+    /// Default mach-services no-op: set/clear do not panic.
+    #[test]
+    fn test_default_mach_services_noop() {
+        let s = Stub;
+        s.set_extra_mach_services(&["test.dummy.xpc".to_string()]);
+        s.clear_extra_mach_services();
     }
 
     /// The fence guard runs the restore closure on explicit restore(), and

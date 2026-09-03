@@ -63,6 +63,9 @@ pub fn parse_skill(
     let allowed_tools = field_string_list(&frontmatter, "allowed-tools")
         .or_else(|| field_string_list(&frontmatter, "allowed_tools"))
         .unwrap_or_default();
+    let allowed_mach_services = field_string_list(&frontmatter, "allowed-mach-services")
+        .or_else(|| field_string_list(&frontmatter, "allowed_mach_services"))
+        .unwrap_or_default();
     let argument_hint = field_string(&frontmatter, "argument-hint")
         .or_else(|| field_string(&frontmatter, "argumentHint"));
     let version = field_string(&frontmatter, "version");
@@ -107,6 +110,8 @@ pub fn parse_skill(
         "whenToUse",
         "allowed-tools",
         "allowed_tools",
+        "allowed-mach-services",
+        "allowed_mach_services",
         "argument-hint",
         "argumentHint",
         "version",
@@ -146,6 +151,7 @@ pub fn parse_skill(
         description,
         when_to_use,
         allowed_tools,
+        allowed_mach_services,
         argument_hint,
         version,
         model,

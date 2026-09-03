@@ -237,6 +237,7 @@ mod tests {
             user_invocable: true,
             body_token_estimate: 0,
             allowed_tools: Vec::new(),
+            allowed_mach_services: Vec::new(),
         }
     }
 
@@ -274,6 +275,7 @@ mod tests {
             user_invocable: true,
             body_token_estimate: 4200,
             allowed_tools: Vec::new(),
+            allowed_mach_services: Vec::new(),
         };
         let out = format_skill_listing(&[d], 200_000);
         assert!(

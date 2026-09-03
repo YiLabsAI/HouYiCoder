@@ -389,6 +389,7 @@ mod tests {
             description: "d".into(),
             when_to_use: None,
             allowed_tools: Vec::new(),
+            allowed_mach_services: Vec::new(),
             argument_hint: None,
             version: None,
             model: None,

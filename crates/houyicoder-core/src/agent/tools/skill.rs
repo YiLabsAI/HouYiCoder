@@ -310,6 +310,7 @@ mod tests {
                     user_invocable: true,
                     body_token_estimate: 0,
                     allowed_tools: self.allowed_tools.get(n).cloned().unwrap_or_default(),
+                    allowed_mach_services: Vec::new(),
                 })
                 .collect()
         }
@@ -324,6 +325,7 @@ mod tests {
                 user_invocable: true,
                 body_token_estimate: 0,
                 allowed_tools: self.allowed_tools.get(name).cloned().unwrap_or_default(),
+                allowed_mach_services: Vec::new(),
             })
         }
 
@@ -552,6 +554,7 @@ mod tests {
                 user_invocable: true,
                 body_token_estimate: 0,
                 allowed_tools: Vec::new(),
+                allowed_mach_services: Vec::new(),
             }]
         }
         fn find(&self, name: &str) -> Option<SkillDescriptor> {
@@ -564,6 +567,7 @@ mod tests {
                 user_invocable: true,
                 body_token_estimate: 0,
                 allowed_tools: Vec::new(),
+                allowed_mach_services: Vec::new(),
             })
         }
         fn prepare_body(

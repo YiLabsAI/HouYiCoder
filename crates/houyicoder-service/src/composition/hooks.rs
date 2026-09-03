@@ -512,6 +512,7 @@ mod hook_tests {
                 user_invocable: true,
                 body_token_estimate: 4,
                 allowed_tools: self.allowed.clone(),
+                allowed_mach_services: Vec::new(),
             })
         }
         fn prepare_body(

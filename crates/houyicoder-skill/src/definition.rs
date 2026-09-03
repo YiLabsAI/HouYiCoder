@@ -54,6 +54,9 @@ pub struct SkillDefinition {
     /// Additive grant: adds always-allow rules for the skill duration.
     /// Session-scoped, not persistent (inline has no end event).
     pub allowed_tools: Vec<String>,
+    /// macOS XPC service names the skill needs the sandbox to allow.
+    /// Emitted as extra allow mach-lookup lines in the seatbelt profile.
+    pub allowed_mach_services: Vec<String>,
     pub argument_hint: Option<String>,
     pub version: Option<String>,
     pub model: Option<String>,

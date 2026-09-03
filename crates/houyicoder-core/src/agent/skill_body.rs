@@ -571,6 +571,7 @@ mod tests {
                             user_invocable: true,
                             body_token_estimate: 0,
                             allowed_tools: Vec::new(),
+                            allowed_mach_services: Vec::new(),
                         },
                         origin: origin.clone(),
                         usage: Default::default(),

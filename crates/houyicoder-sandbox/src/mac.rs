@@ -57,6 +57,12 @@ pub struct MacSeatbeltSession {
     /// sandbox — but each sandbox-exec is a fresh process with the current
     /// profile string, so mutation between execs is honored).
     additional_dirs: Arc<Mutex<Vec<PathBuf>>>,
+    /// Extra mach services (XPC names) a skill declared, consulted by
+    /// current_profile to emit allow mach-lookup lines beyond the base set.
+    /// Set by set_extra_mach_services, cleared by clear_extra_mach_services.
+    /// Same Arc-Mutex pattern as additional_dirs so a guard closure can clear
+    /// through a clone.
+    extra_mach_services: Arc<Mutex<Vec<String>>>,
     /// When a worktree session narrows the fence, this holds the worktree path
     /// that current_profile + exec use as the workspace + cwd (None = the
     /// original workspace, the default guarded mode). Set by narrow_to_worktree,
@@ -127,6 +133,7 @@ impl MacSeatbeltSession {
             profile,
             tag,
             additional_dirs: Arc::new(Mutex::new(Vec::new())),
+            extra_mach_services: Arc::new(Mutex::new(Vec::new())),
             narrow_workspace: Arc::new(Mutex::new(None)),
             narrow_git_common: Arc::new(Mutex::new(None)),
             exec_count: Arc::new(AtomicU64::new(0)),
@@ -166,6 +173,7 @@ impl MacSeatbeltSession {
             profile,
             tag,
             additional_dirs: Arc::new(Mutex::new(Vec::new())),
+            extra_mach_services: Arc::new(Mutex::new(Vec::new())),
             narrow_workspace: Arc::new(Mutex::new(None)),
             narrow_git_common: Arc::new(Mutex::new(None)),
             exec_count: Arc::new(AtomicU64::new(0)),
@@ -225,6 +233,11 @@ impl MacSeatbeltSession {
     /// running between execs).
     fn current_profile(&self) -> String {
         let additional = self.additional_dirs.lock().expect("additional dirs lock");
+        let mach = self
+            .extra_mach_services
+            .lock()
+            .expect("extra mach services lock")
+            .clone();
         let narrow_ws = self
             .narrow_workspace
             .lock()
@@ -235,7 +248,7 @@ impl MacSeatbeltSession {
             .lock()
             .expect("narrow git common lock")
             .clone();
-        if additional.is_empty() && narrow_ws.is_none() {
+        if additional.is_empty() && narrow_ws.is_none() && mach.is_empty() {
             return self.profile.clone();
         }
         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
@@ -243,11 +256,13 @@ impl MacSeatbeltSession {
             .iter()
             .map(|p| p.to_str().unwrap_or(""))
             .collect();
+        let mach_refs: Vec<&str> = mach.iter().map(String::as_str).collect();
         // When narrowed, the profile binds the worktree; else the workspace.
         let ws = narrow_ws.as_ref().unwrap_or(&self.workspace);
         let mut p = render(
             &ProfileSpec::new(ws, &self.tmpdir.to_string_lossy(), &home, &self.tag)
                 .with_additional(&add_refs)
+                .with_mach_services(&mach_refs)
                 .with_network(self.network.clone()),
         );
         if let Some(git_common) = narrow_git.as_ref() {
@@ -638,6 +653,22 @@ impl SandboxSession for MacSeatbeltSession {
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect()
+    }
+
+    fn set_extra_mach_services(&self, services: &[String]) {
+        let mut mach = self
+            .extra_mach_services
+            .lock()
+            .expect("extra mach services lock");
+        mach.clear();
+        mach.extend_from_slice(services);
+    }
+
+    fn clear_extra_mach_services(&self) {
+        self.extra_mach_services
+            .lock()
+            .expect("extra mach services lock")
+            .clear();
     }
 }
 

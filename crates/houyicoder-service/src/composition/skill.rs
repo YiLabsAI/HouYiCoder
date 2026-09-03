@@ -158,6 +158,7 @@ fn to_descriptor(s: &SkillDefinition) -> SkillDescriptor {
         user_invocable: s.user_invocable,
         body_token_estimate: s.body_token_estimate(),
         allowed_tools: s.allowed_tools.clone(),
+        allowed_mach_services: s.allowed_mach_services.clone(),
     }
 }
 

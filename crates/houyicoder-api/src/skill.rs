@@ -39,6 +39,12 @@ pub struct SkillDescriptor {
     /// the skill requests permission-bearing properties, so the Skill tool
     /// asks before executing (the safe-property allowlist gate).
     pub allowed_tools: Vec<String>,
+    /// macOS XPC service names the skill needs the sandbox to allow
+    /// (frontmatter allowed-mach-services). Emitted as extra
+    /// allow mach-lookup lines in the seatbelt profile so the sandboxed
+    /// process can talk to macOS system services the base set excludes.
+    /// Empty on non-macOS or when the skill declares none.
+    pub allowed_mach_services: Vec<String>,
 }
 
 /// Errors a skill registry can return when preparing a body.

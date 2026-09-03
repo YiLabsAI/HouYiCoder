@@ -822,3 +822,34 @@ fn test_fence_status_reports_enforced() {
     );
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// set_extra_mach_services adds an allow mach-lookup line, and clear
+/// removes it. The profile is re-derived, so set takes effect on the
+/// next profile query.
+#[test]
+fn test_mach_services_lifecycle() {
+    use houyicoder_api::sandbox::SandboxSession;
+    let root = std::env::temp_dir().join(format!(
+        "houyi-mach-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&root).expect("mkdir root");
+    let s = MacSeatbeltSession::new_in_cwd(&root).expect("session");
+    assert!(
+        !s.current_profile().contains("test.dummy.xpc"),
+        "base profile has no extra service"
+    );
+    s.set_extra_mach_services(&["test.dummy.xpc".to_string()]);
+    assert!(
+        s.current_profile()
+            .contains("(allow mach-lookup (global-name \"test.dummy.xpc\"))"),
+        "set adds the mach-lookup line"
+    );
+    s.clear_extra_mach_services();
+    assert!(
+        !s.current_profile().contains("test.dummy.xpc"),
+        "clear removes the service"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
