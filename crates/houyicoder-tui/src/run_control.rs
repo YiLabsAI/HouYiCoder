@@ -92,6 +92,10 @@ impl App {
                     view.pending_echo = Some(input.clone());
                     self.transcript_scroll.follow_tail = true;
                 }
+                // The optimistic echo mutates the viewed transcript, so bump
+                // or the render cache holds the pre-echo rows and the line
+                // stays invisible until the next turn-boundary refetch lands.
+                self.bump_transcript_version();
                 self.send_cmd(ClientCommand::InjectToChild {
                     child_sid,
                     text: input,

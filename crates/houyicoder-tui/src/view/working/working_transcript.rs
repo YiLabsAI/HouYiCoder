@@ -682,50 +682,5 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::state::TranscriptLine;
-    use crate::test_support::render_text;
-    use crate::test_support::working_app;
-
-    #[test]
-    fn test_cache_version_stable_idle() {
-        let mut app = working_app();
-        app.transcript.push(TranscriptLine::User("hello".into()));
-        let v = app.transcript_version.get().wrapping_add(1);
-        app.transcript_version.set(v);
-        let out1 = render_text(&app, 80, 24);
-        assert!(
-            app.display_rows_version.get() != u64::MAX,
-            "version should be set after first render"
-        );
-        let out2 = render_text(&app, 80, 24);
-        assert_eq!(out1, out2, "second render should match (cache hit)");
-    }
-
-    /// The spinner is separated from the transcript above it by a blank row.
-    /// The cached transcript rows and the per-frame live rows are built by two
-    /// different functions, so the live builder has to be told the transcript
-    /// is non-empty; when it is not, the blank row silently disappears and the
-    /// spinner butts up against the last user line.
-    #[test]
-    fn test_spinner_keeps_blank_above() {
-        let mut app = working_app();
-        app.transcript.push(TranscriptLine::User("hello".into()));
-        app.agent_busy = true;
-        app.run_started = Some(std::time::Instant::now());
-        let out = render_text(&app, 80, 24);
-        let rows: Vec<&str> = out.lines().collect();
-        let spinner = rows
-            .iter()
-            .position(|r| r.contains("Working…"))
-            .expect("the spinner row should render while the agent is busy");
-        assert!(
-            rows[spinner - 1].trim().is_empty(),
-            "a blank row should separate the transcript from the spinner, got:\n{out}"
-        );
-        assert!(
-            rows[spinner - 2].contains("hello"),
-            "the user line should sit directly above that blank row, got:\n{out}"
-        );
-    }
-}
+#[path = "working_transcript_tests.rs"]
+mod tests;

@@ -76,6 +76,11 @@ impl App {
         self.teammate_view = Some(view);
         self.transcript_scroll = crate::scroll::TranscriptScroll::default();
         self.transcript_scroll.follow_tail = true;
+        // The render cache keys on transcript_version, which is the
+        // invalidation signal for whatever active_transcript returns. Entering
+        // the view swaps that source, so bump here or the cache holds the
+        // parent rows and the child transcript never renders.
+        self.bump_transcript_version();
         if fire_fetch && let Some(req_id) = self.mint_request_id() {
             self.send_cmd(crate::run_control::ClientCommand::ChildTranscriptQuery {
                 req_id,
@@ -92,6 +97,9 @@ impl App {
     pub(crate) fn exit_teammate_view(&mut self) {
         self.teammate_view = None;
         self.transcript_scroll.follow_tail = true;
+        // Exiting swaps active_transcript back to the parent, so the render
+        // cache must drop the child rows and rebuild from the parent.
+        self.bump_transcript_version();
     }
 
     /// Esc while viewing a teammate only interrupts the viewed child's

@@ -70,6 +70,10 @@ impl App {
             view.pending_echo = None;
         }
         view.transcript = folded;
+        // The render cache keys on transcript_version; the fill swapped the
+        // child rows, so bump or the cache holds the prior child snapshot
+        // (or the parent rows when this is the first fill after entering).
+        self.bump_transcript_version();
     }
 
     /// The placeholder line shown when a child transcript fetch returns no
