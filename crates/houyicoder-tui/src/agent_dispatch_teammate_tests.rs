@@ -302,3 +302,82 @@ fn test_child_sid_unique() {
         "child-B untouched — sids differ, no cross-talk"
     );
 }
+
+/// A running child has no fold-group row yet (the row is created when the
+/// result lands). Entering its view must still name the agent type in the
+/// banner, falling back to the live agent list entry which knows the type
+/// from spawn. prompt stays empty (the live entry does not carry it); color
+/// stays None (only the result sets it).
+#[test]
+fn test_view_fleet_type_fallback() {
+    use crate::agent_message::FleetEntry;
+    let mut app = crate::composition::app();
+    app.fleet.entries.push(FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 1,
+        tokens: 50,
+        tool_uses: 0,
+        last_activity: None,
+        completed: None,
+        completed_at: None,
+        started_at: None,
+    });
+    app.enter_teammate_view_for_sid("c1", true);
+    let view = app
+        .teammate_view
+        .as_ref()
+        .expect("view opens for a running child even with no fold-group row");
+    assert_eq!(
+        view.subagent_type, "explore",
+        "banner takes the agent type from the live entry when no fold row exists"
+    );
+    assert!(
+        view.prompt.is_empty(),
+        "prompt stays empty — the live entry does not carry it"
+    );
+    assert!(
+        view.color.is_none(),
+        "color stays None — only the result frame sets it"
+    );
+}
+
+/// When a fold-group row already exists (completed child), the fleet fallback
+/// must not overwrite its subagent_type. The guard checks is_empty first.
+#[test]
+fn test_view_fold_row_wins() {
+    use crate::agent_message::FleetEntry;
+    use crate::records::TranscriptLine;
+    let mut app = crate::composition::app();
+    app.push_transcript_line(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "plan".into(),
+        summary: "done".into(),
+        prompt: "do the thing".into(),
+        folded_transcript: Vec::new(),
+        color: Some("blue".into()),
+    });
+    app.fleet.entries.push(FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 2,
+        tokens: 100,
+        tool_uses: 0,
+        last_activity: None,
+        completed: Some("completed".into()),
+        completed_at: None,
+        started_at: None,
+    });
+    app.enter_teammate_view_for_sid("c1", true);
+    let view = app.teammate_view.as_ref().expect("view opens");
+    assert_eq!(
+        view.subagent_type, "plan",
+        "fold-row value wins — fleet fallback did not overwrite"
+    );
+    assert_eq!(view.prompt, "do the thing", "fold-row prompt preserved");
+    assert_eq!(
+        view.color.as_deref(),
+        Some("blue"),
+        "fold-row color preserved"
+    );
+}

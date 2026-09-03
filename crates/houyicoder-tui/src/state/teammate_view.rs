@@ -56,6 +56,16 @@ impl App {
                 break;
             }
         }
+        // A running child has no fold-group row yet (the row is created
+        // when the result lands). Fall back to the live agent entry for
+        // the agent type, which is known at spawn. prompt is not on the
+        // live entry (left empty); color is only set by the result frame
+        // (left None).
+        if view.subagent_type.is_empty()
+            && let Some(e) = self.fleet.entries.iter().find(|e| e.agent_id == child_sid)
+        {
+            view.subagent_type = e.subagent_type.clone();
+        }
         self.teammate_view = Some(view);
         self.transcript_scroll = crate::scroll::TranscriptScroll::default();
         self.transcript_scroll.follow_tail = true;
