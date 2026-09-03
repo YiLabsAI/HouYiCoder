@@ -71,6 +71,16 @@ def main() -> int:
     if _lint("feat(S26): do the thing\n\nbody\n") == 0:
         failures.append("codename S26 in subject should block, did not")
 
+    # CJK in the body is blocked (English-only commit log). The body ban
+    # reuses has_cjk so it catches Han/Hangul/Kana/full-width punctuation.
+    if _lint("feat(x): do the thing\n\n这是中文翻译 body\n") == 0:
+        failures.append("CJK in body should block, did not")
+
+    # Non-CJK non-ASCII punctuation in the body is allowed (em-dash, curly
+    # quotes) so legit English prose is not a false positive.
+    if _lint("feat(x): do the thing\n\nThe body uses an em-dash — here.\n") != 0:
+        failures.append("em-dash in body was blocked (false positive)")
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)

@@ -35,7 +35,7 @@ from pathlib import Path
 # wordlist. write-time hook (hook_rust.py) + check-time gate + commit-time all
 # share one source.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rules.comments import CODENAME, COMPARISON, product_pattern  # noqa: E402
+from rules.comments import CODENAME, COMPARISON, has_cjk, product_pattern  # noqa: E402
 
 # Acceptance/charter internal tracking codes the shared CODENAME misses:
 # letter+digit phase-gate / journey / hazard ids and dotted version stamps.
@@ -106,6 +106,20 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    # 1b. No CJK in the body. The subject ban above is broader (all
+    # non-ASCII); the body allows non-CJK punctuation (em-dash, curly
+    # quotes) that legit English prose carries, but CJK has no place in a
+    # commit log. Reuses the shared has_cjk detector so the write-time
+    # (.rs comment) and commit-time gates stay at one definition.
+    for lineno, line in lines[1:]:
+        if has_cjk(line):
+            print(
+                f"ERROR: commit body must be English (no CJK). "
+                f"Found CJK on body line {lineno}: {line}",
+                file=sys.stderr,
+            )
+            return 1
 
     # 2. Internal codenames: task/sprint tags + acceptance/charter codes.
     for lineno, line in lines:
