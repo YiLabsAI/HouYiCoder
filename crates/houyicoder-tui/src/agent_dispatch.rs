@@ -72,6 +72,23 @@ impl App {
         view.transcript = folded;
     }
 
+    /// The placeholder line shown when a child transcript fetch returns no
+    /// frames. A running child with no log yet reads "starting" (the first
+    /// turn has not landed); anything else reads as a real fetch failure, so
+    /// the error is not hidden behind a "starting" label.
+    fn empty_child_transcript_line(&self, child_sid: &str) -> TranscriptLine {
+        let starting = self
+            .fleet_entry(child_sid)
+            .map(|e| e.completed.is_none())
+            .unwrap_or(false);
+        let msg = if starting {
+            "child starting"
+        } else {
+            "child transcript unavailable"
+        };
+        TranscriptLine::System(msg.into())
+    }
+
     #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
     fn handle_agent_message_inner(&mut self, msg: AgentMessage) {
         match msg {
@@ -261,12 +278,11 @@ impl App {
             AgentMessage::ChildTranscriptResult { child_sid, frames } => {
                 // Project fetched child frames through the same pipeline as the
                 // parent flow. Empty frames mean the child log is missing or
-                // produced no durable events; surface an explicit line so the
-                // fold-group is non-empty and a re-expand does not refetch.
+                // produced no durable events; the placeholder helper tells a
+                // running child (log not yet landed) from a real fetch failure
+                // so the error is not hidden behind a "starting" label.
                 let folded = if frames.is_empty() {
-                    vec![TranscriptLine::System(
-                        "child transcript unavailable".into(),
-                    )]
+                    vec![self.empty_child_transcript_line(&child_sid)]
                 } else {
                     crate::transcript::transcript_from_frames(&frames)
                 };

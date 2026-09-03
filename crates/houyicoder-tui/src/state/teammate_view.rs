@@ -6,6 +6,13 @@ use super::App;
 use crate::records::{TeammateView, TranscriptLine};
 
 impl App {
+    /// Look up a child's live fleet entry by session id. Shared by the
+    /// view-enter fallback, the Esc abort check, and the empty-frames
+    /// placeholder so the three never drift apart on the find shape.
+    pub(crate) fn fleet_entry(&self, sid: &str) -> Option<&crate::agent_message::FleetEntry> {
+        self.fleet.entries.iter().find(|e| e.agent_id == sid)
+    }
+
     /// Enter the teammate view for the Subagent line at the cursor, or the
     /// most recent Subagent line when no cursor is set. Reuses the cursor
     /// walk shared with toggle_subagent_expand so the line targeted for
@@ -62,7 +69,7 @@ impl App {
         // live entry (left empty); color is only set by the result frame
         // (left None).
         if view.subagent_type.is_empty()
-            && let Some(e) = self.fleet.entries.iter().find(|e| e.agent_id == child_sid)
+            && let Some(e) = self.fleet_entry(child_sid)
         {
             view.subagent_type = e.subagent_type.clone();
         }
@@ -101,10 +108,7 @@ impl App {
         };
         let child_sid = view.child_sid.clone();
         let running = self
-            .fleet
-            .entries
-            .iter()
-            .find(|e| e.agent_id == child_sid)
+            .fleet_entry(&child_sid)
             .map(|e| e.completed.is_none())
             .unwrap_or(false);
         if running {

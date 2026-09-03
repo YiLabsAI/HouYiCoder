@@ -381,3 +381,82 @@ fn test_view_fold_row_wins() {
         "fold-row color preserved"
     );
 }
+
+/// A running child whose sidechain log is still empty (just spawned, first
+/// turn not landed) must surface a "starting" hint, not "unavailable" — the
+/// latter implies a fetch failure. The empty-frames branch checks the live
+/// agent list to tell the two apart.
+#[test]
+fn test_running_child_starting() {
+    use crate::agent_message::FleetEntry;
+    use crate::records::{TeammateView, TranscriptLine};
+    let mut app = crate::composition::app();
+    app.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    app.fleet.entries.push(FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 0,
+        tokens: 0,
+        tool_uses: 0,
+        last_activity: None,
+        completed: None,
+        completed_at: None,
+        started_at: None,
+    });
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c1".into(),
+        frames: Vec::new(),
+    });
+    let view = app.teammate_view.as_ref().expect("view stays");
+    assert!(
+        view.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("starting"))),
+        "a running child with no log yet shows a starting hint, not unavailable"
+    );
+    assert!(
+        !view
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("unavailable"))),
+        "a running child must not read as a fetch failure"
+    );
+}
+
+/// A completed child whose fetch returns empty frames is a real failure (the
+/// log should exist), so it stays "unavailable" — not relabeled "starting".
+#[test]
+fn test_completed_child_unavailable() {
+    use crate::agent_message::FleetEntry;
+    use crate::records::{TeammateView, TranscriptLine};
+    let mut app = crate::composition::app();
+    app.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    app.fleet.entries.push(FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        turn: 3,
+        tokens: 100,
+        tool_uses: 1,
+        last_activity: None,
+        completed: Some("completed".into()),
+        completed_at: None,
+        started_at: None,
+    });
+    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
+        child_sid: "c1".into(),
+        frames: Vec::new(),
+    });
+    let view = app.teammate_view.as_ref().expect("view stays");
+    assert!(
+        view.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("unavailable"))),
+        "a completed child with empty frames reads as a real fetch failure"
+    );
+}
