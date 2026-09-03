@@ -383,6 +383,7 @@ impl Server {
             let client_frame: ClientFrame = match serde_json::from_str(&frame) {
                 Ok(cf) => cf,
                 Err(e) => {
+                    log_bad_frame(&frame, &e);
                     self.send_wire_error(
                         &mut io,
                         WireError::new(WireErrorKind::InvalidFrame, e.to_string(), false),
@@ -712,6 +713,13 @@ fn now_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Log the raw wire line that failed ClientFrame parsing so a debug-on
+/// repro captures the offending JSON. The diagnostic sink writes only while
+/// the level is raised; with debug off the call is a no-op.
+pub(crate) fn log_bad_frame(frame: &str, e: &serde_json::Error) {
+    tracing::warn!(raw = frame, error = %e, "client frame parse failed");
 }
 
 #[cfg(test)]

@@ -317,4 +317,29 @@ mod tests {
         assert!(h1.path().is_some(), "the first handle is still valid");
         drop(std::fs::remove_dir_all(&dir));
     }
+
+    /// The InvalidFrame diagnostic lands the raw failing wire line + the
+    /// parse error in the log when the sink is on. Pins that a future field
+    /// rename, level mismatch, or unwired sink does not silently break
+    /// emission.
+    #[test]
+    fn test_log_bad_frame_writes() {
+        let dir = temp_dir("badframe");
+        let path = dir.join("debug.log");
+        let (subscriber, handle) = build(open_log_file(&path).expect("open"), path.clone());
+        let bad = "not-a-client-frame";
+        let e =
+            serde_json::from_str::<houyicoder_protocol::envelope::ClientFrame>(bad).unwrap_err();
+        tracing::subscriber::with_default(subscriber, || {
+            handle.set_level(LevelFilter::WARN).expect("raise");
+            crate::server::log_bad_frame(bad, &e);
+        });
+        let body = std::fs::read_to_string(&path).expect("read the log");
+        assert!(body.contains(bad), "raw line not logged: {body}");
+        assert!(
+            body.contains("client frame parse failed"),
+            "message not logged: {body}"
+        );
+        drop(std::fs::remove_dir_all(&dir));
+    }
 }
