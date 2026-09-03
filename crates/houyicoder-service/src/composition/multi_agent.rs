@@ -13,7 +13,10 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::PFut;
-use houyicoder_context::{HookEventKind, HookFirePayload, SessionId};
+use houyicoder_context::{
+    HookEventKind, HookFirePayload, MetaUpdate, NameSource, SessionId, SessionMeta,
+    SessionMetaStore, SessionProvenance,
+};
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
 use houyicoder_core::agent::multi_agent::concurrency_gate::{AcquireResult, ConcurrencyGate};
@@ -50,6 +53,10 @@ pub struct MultiAgentDeps {
     /// bus routes parent→child inbox messages. None when async is
     /// not yet wired (sync-only mode).
     pub bus: Option<Arc<AgentBus>>,
+    /// Sidecar store for writing child session meta. When present, the
+    /// spawn path stamps SpawnedBy provenance so the resume picker can
+    /// filter subagent sessions out.
+    pub meta_store: Option<Arc<dyn SessionMetaStore>>,
 }
 
 pub struct MultiAgentRuntime {
@@ -72,6 +79,8 @@ pub struct MultiAgentRuntime {
     /// task; a Weak upgrades only while the child is still running). Stale
     /// entries (child completed + dropped) are pruned on a failed upgrade.
     children: Arc<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<Runner>>>>,
+    /// Sidecar store for stamping SpawnedBy provenance on child sessions.
+    meta_store: Option<Arc<dyn SessionMetaStore>>,
 }
 
 impl MultiAgentRuntime {
@@ -92,6 +101,7 @@ impl MultiAgentRuntime {
                 ConcurrencyGate::DEFAULT_QUEUE_CAP,
             )),
             children: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            meta_store: deps.meta_store,
         }
     }
 
@@ -180,6 +190,7 @@ impl SpawnHandle for MultiAgentRuntime {
             bus: self.bus.clone(),
             gate: Arc::clone(&self.gate),
             children: Arc::clone(&self.children),
+            meta_store: self.meta_store.clone(),
         };
         let trigger = TriggerSource::ModelTool {
             tool_call_id: ctx.call_id.clone(),
@@ -288,6 +299,7 @@ impl SpawnHandle for MultiAgentRuntime {
             bus: self.bus.clone(),
             gate: Arc::clone(&self.gate),
             children: Arc::clone(&self.children),
+            meta_store: self.meta_store.clone(),
         };
         let trigger = TriggerSource::System {
             hook: hook.to_string(),
@@ -477,6 +489,16 @@ async fn run_sync_spawn(
         task,
     )
     .await;
+    // Stamp SpawnedBy provenance after the child's first durable append has
+    // fired the materialize hook (which writes Fresh). update_meta edits the
+    // now-materialized sidecar so the resume picker can filter it out.
+    stamp_spawned_by(
+        &this.meta_store,
+        child_sid,
+        parent_sid,
+        &args.subagent_type,
+        &child_str,
+    );
     Ok(SpawnOutcome::sync(child_str, status, summary, usage))
 }
 
@@ -486,6 +508,58 @@ fn map_spawn_err(e: SpawnError) -> SpawnFailure {
         SpawnError::CapabilityDenied => SpawnFailure::CapabilityDenied,
         SpawnError::SpawnRecursive => SpawnFailure::Recursive,
         SpawnError::WorktreeFenceNarrowFail => SpawnFailure::FenceFail,
+    }
+}
+
+/// Stamp SpawnedBy provenance on a child session's sidecar. Called after
+/// finalize_child so the materialize hook has already written Fresh; this
+/// edits the existing sidecar via update_meta rather than overwriting it.
+/// Best-effort: a stamp failure logs and continues (the child still ran).
+fn stamp_spawned_by(
+    meta_store: &Option<Arc<dyn SessionMetaStore>>,
+    child_sid: SessionId,
+    parent_sid: SessionId,
+    subagent_type: &str,
+    task_id: &str,
+) {
+    if let Some(store) = meta_store {
+        let parent_str = parent_sid.to_string();
+        let prov = SessionProvenance::SpawnedBy {
+            parent_session_id: parent_str,
+            subagent_type: subagent_type.to_string(),
+            task_id: task_id.to_string(),
+        };
+        // Prefer update_meta (edits an existing sidecar written by the
+        // materialize hook). Fall back to write_meta when no sidecar
+        // exists yet (child crashed before first durable, or test tier
+        // without a materialize hook).
+        let outcome = store.update_meta(child_sid, &mut |m| {
+            m.provenance = prov.clone();
+        });
+        // update_meta returns Ok(Absent) when the sidecar does not exist
+        // (child crashed before first durable, or test tier without a
+        // materialize hook). Fall back to write_meta in that case.
+        if !matches!(outcome, Ok(MetaUpdate::Written)) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if let Err(e) = store.write_meta(
+                child_sid,
+                &SessionMeta {
+                    name: None,
+                    name_source: NameSource::Auto,
+                    cwd: String::new(),
+                    model: String::new(),
+                    provenance: prov,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    created_at: now,
+                    child_session_ids: Vec::new(),
+                },
+            ) {
+                tracing::warn!("child provenance write failed: {e}");
+            }
+        }
     }
 }
 

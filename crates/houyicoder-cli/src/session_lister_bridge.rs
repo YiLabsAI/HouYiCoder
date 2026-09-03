@@ -9,7 +9,9 @@
 use std::sync::Arc;
 
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{SessionId, SessionMetaStore, TurnEvent, TurnEventKind};
+use houyicoder_context::{
+    SessionId, SessionMetaStore, SessionProvenance, TurnEvent, TurnEventKind,
+};
 use houyicoder_tui::resume_picker::{SessionLister, SessionRow};
 
 pub struct SessionListerBridge {
@@ -55,6 +57,11 @@ impl SessionLister for SessionListerBridge {
             .filter(|(sid, _)| *sid != current)
             .filter_map(|(sid, last_active)| {
                 let meta = self.meta_store.read_meta(sid)?;
+                // Subagent sessions are not independently resumable — they
+                // are sidechains of a parent session. Filter them out.
+                if matches!(meta.provenance, SessionProvenance::SpawnedBy { .. }) {
+                    return None;
+                }
                 let cwd_basename = meta
                     .cwd
                     .rsplit('/')

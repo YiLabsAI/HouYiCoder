@@ -27,7 +27,7 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 542
+STRUCT_FIELD_BASELINE = 552
 
 
 def evaluate(total, baseline=STRUCT_FIELD_BASELINE) -> int:

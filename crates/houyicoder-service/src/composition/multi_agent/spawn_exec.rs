@@ -186,6 +186,9 @@ pub(super) async fn run_async_spawn(
     let hook_fire_f = hook_fire.clone();
     let parent_sid_f = parent_sid;
     let child_str_f = child_str.clone();
+    let child_str_stamp = child_str.clone();
+    let meta_store_f = this.meta_store.clone();
+    let subagent_type_f = args.subagent_type.clone();
     tokio::spawn(async move {
         // The permit releases here (end of the driver) so the slot frees when
         // the child completes — the async run cannot outlive the cap. The
@@ -205,6 +208,13 @@ pub(super) async fn run_async_spawn(
             task,
         )
         .await;
+        super::stamp_spawned_by(
+            &meta_store_f,
+            child_sid,
+            parent_sid_f,
+            &subagent_type_f,
+            &child_str_stamp,
+        );
     });
     Ok(SpawnOutcome::async_launched(child_str))
 }

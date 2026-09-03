@@ -154,6 +154,7 @@ pub fn build_runner_for_resume_export(
         rule_store,
         append_notify,
         resolved,
+        meta_store.clone(),
     );
     Ok(ResumedRunner {
         assembled,
@@ -243,6 +244,7 @@ pub fn build_runner_for_resume_sid(
         rule_store,
         append_notify,
         resolved,
+        meta_store.clone(),
     );
     Ok(ResumedRunner {
         assembled,
@@ -352,6 +354,7 @@ pub fn build_runner_for_fork(
         rule_store,
         append_notify,
         resolved,
+        meta_store.clone(),
     );
     Ok(ResumedRunner {
         assembled,

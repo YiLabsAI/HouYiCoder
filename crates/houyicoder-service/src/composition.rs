@@ -67,15 +67,9 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 
 /// Give up on a capability, and say so, returning the absence as None.
-///
-/// Every point where the composition root can lose a capability has the same
-/// three parts: an attempt that may fail, a consequence the user cannot infer
-/// from the symptom, and a decision to carry on in a reduced form. Routing them
-/// through one function keeps the decision and the disclosure inseparable, so a
-/// new degradation cannot be introduced without naming what it costs. Both
-/// arguments are required for that reason: the failure alone does not tell the
-/// user what stopped working, which is the difference between a diagnosable
-/// startup and an agent that just appears not to work.
+/// Every degradation point routes through one function so the decision
+/// and the disclosure stay inseparable — both args required so the
+/// failure alone does not tell the user what stopped working.
 pub use paths::{
     resolve_project_workspace, session_log_root, walk_to_workspace_root, workspace_cwd,
 };
@@ -240,6 +234,7 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
         options.rule_store,
         append_notify,
         resolved,
+        meta_store,
     )
 }
 
@@ -251,6 +246,7 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
 ///
 /// The provider arrives resolved: assemble runs once per session, including
 /// every swap, so resolving here would re-run the key helper each time.
+#[expect(clippy::too_many_arguments, reason = "composition DI site")]
 pub(crate) fn assemble(
     store: Arc<SessionStore>,
     session: SessionId,
@@ -259,6 +255,7 @@ pub(crate) fn assemble(
     rule_store: Option<Arc<dyn RuleStore>>,
     append_notify: Arc<Notify>,
     resolved: ResolvedProvider,
+    meta_store: Arc<dyn SessionMetaStore>,
 ) -> AssembledRunner {
     let model_for_extractor = model.clone();
     let ResolvedProvider {
@@ -502,6 +499,7 @@ pub(crate) fn assemble(
         worktree_controller: worktree_controller.clone(),
         workspace: workspace.clone(),
         bus: Some(Arc::clone(&bus)),
+        meta_store: Some(Arc::clone(&meta_store)),
     });
     // LlmSummarizer shares the main provider + model so compress produces
     // real summaries; the self-overflow guard + heuristic fallback are in
