@@ -167,7 +167,7 @@ fn confirm_apply(n: usize) -> bool {
         println!("--apply needs --yes when stdin is not a terminal (non-interactive).");
         return false;
     }
-    print!("About to remove {n} entries. Type 'yes' to proceed: ");
+    print!("About to remove {n} entries. Type y or yes to proceed: ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
@@ -176,11 +176,11 @@ fn confirm_apply(n: usize) -> bool {
     confirm_granted(&line)
 }
 
-/// Only the full word "yes" grants. A backlog in the tens of thousands is an
-/// irreversible delete a hand-slip away from "y", so the abbreviation is
-/// rejected on purpose; "no" and a blank line refuse.
+/// Accepts "y" or "yes" (case-insensitive). The --yes flag covers
+/// non-interactive use; the interactive gate matches apt, npm, docker,
+/// and git clean -i — all accept "y".
 pub(crate) fn confirm_granted(answer: &str) -> bool {
-    answer.trim() == "yes"
+    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
 #[cfg(test)]
@@ -188,21 +188,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_confirm_granted_full_yes() {
+    fn test_confirm_granted_yes() {
         assert!(confirm_granted("yes"));
+        assert!(confirm_granted("y"));
         assert!(confirm_granted("  yes  \n"));
+        assert!(confirm_granted("Y"));
+        assert!(confirm_granted("YES"));
     }
 
     #[test]
     fn test_confirm_refuses_non_yes() {
-        assert!(!confirm_granted("Yes"), "case-sensitive: literal yes only");
-        assert!(
-            !confirm_granted("y"),
-            "abbreviation is a hand-slip distance from a 46k delete"
-        );
         assert!(!confirm_granted(""));
         assert!(!confirm_granted("no"));
         assert!(!confirm_granted("yes please"));
+        assert!(!confirm_granted("n"));
     }
 
     /// The summary and the verbose list must read human-readable kind + cause

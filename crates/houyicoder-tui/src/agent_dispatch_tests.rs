@@ -592,6 +592,7 @@ fn test_skills_result_stored() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 320,
+            user_invocable: true,
             usage: None,
         }],
     });
@@ -617,6 +618,7 @@ fn test_skills_pane_renders_entries() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 320,
+            user_invocable: true,
             usage: None,
         },
         SkillEntry {
@@ -625,6 +627,7 @@ fn test_skills_pane_renders_entries() {
             origin: "project".into(),
             invocable: false,
             body_token_estimate: 80,
+            user_invocable: true,
             usage: None,
         },
     ];
@@ -659,6 +662,7 @@ fn test_skills_pane_showcase() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 1_240,
+            user_invocable: true,
             usage: None,
         },
         SkillEntry {
@@ -667,6 +671,7 @@ fn test_skills_pane_showcase() {
             origin: "user".into(),
             invocable: true,
             body_token_estimate: 320,
+            user_invocable: true,
             usage: None,
         },
         SkillEntry {
@@ -675,6 +680,7 @@ fn test_skills_pane_showcase() {
             origin: "project".into(),
             invocable: false,
             body_token_estimate: 80,
+            user_invocable: true,
             usage: None,
         },
     ];

@@ -166,6 +166,13 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     if k.code == KeyCode::Char('@') && app.input.is_empty() && !pane_replaces_input(app.pane) {
         app.skill_picker_open = true;
         app.skill_picker_sel.set(0);
+        // If skills haven't been queried yet (the user hasn't opened
+        // /skills), fetch them now so the picker isn't empty.
+        if app.skill_entries.is_empty()
+            && let Some(req_id) = app.mint_request_id()
+        {
+            app.send_cmd(crate::run_control::ClientCommand::SkillsQuery { req_id });
+        }
     }
     input::handle_input(app, k);
 }

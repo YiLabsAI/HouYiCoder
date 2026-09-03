@@ -669,6 +669,7 @@ pub(crate) fn skills_to_wire(
             description: snap.descriptor.description,
             origin: snap.origin,
             invocable: !snap.descriptor.disable_model_invocation,
+            user_invocable: snap.descriptor.user_invocable,
             body_token_estimate: snap.descriptor.body_token_estimate,
             usage: Some(houyicoder_protocol::frontend::skills::SkillUsage {
                 invocations: snap.usage.invocations,

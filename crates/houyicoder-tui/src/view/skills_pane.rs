@@ -39,6 +39,16 @@ struct OriginGroup {
     path: &'static str,
 }
 
+/// Map a raw origin key (snake_case) to its display label. Returns the
+/// key as-is if no matching group is found (defensive).
+fn origin_label(origin: &str) -> &str {
+    ORIGIN_ORDER
+        .iter()
+        .find(|g| g.key == origin)
+        .map(|g| g.label)
+        .unwrap_or(origin)
+}
+
 const ORIGIN_ORDER: &[OriginGroup] = &[
     OriginGroup {
         key: "managed",
@@ -182,7 +192,7 @@ fn grouped_lines(
         let user_disabled = disabled.contains(&s.name);
         let (glyph, color) = if user_disabled {
             ("○", Color::DarkGray)
-        } else if s.invocable {
+        } else if s.user_invocable || s.invocable {
             ("✓", Color::Green)
         } else {
             ("✗", Color::Red)
@@ -206,16 +216,21 @@ fn detail_lines(
     entry: &houyicoder_protocol::frontend::skills::SkillEntry,
     disabled: bool,
 ) -> Vec<Line<'static>> {
+    // A skill is usable if the user can invoke it (user_invocable) OR the
+    // model can auto-invoke it (invocable). A managed skill may have
+    // model-invocation disabled (invocable=false) but user-invocation
+    // enabled (user_invocable=true), so it is still usable via @skill:.
+    let usable = entry.user_invocable || entry.invocable;
     let glyph = if disabled {
         "\u{25cb}"
-    } else if entry.invocable {
+    } else if usable {
         "\u{2713}"
     } else {
         "\u{2717}"
     };
     let color = if disabled {
         Color::DarkGray
-    } else if entry.invocable {
+    } else if usable {
         Color::Green
     } else {
         Color::Red
@@ -238,7 +253,7 @@ fn detail_lines(
             Style::new().fg(Color::White),
         )),
         Line::from(Span::styled(
-            format!("origin: {}", entry.origin),
+            format!("origin: {}", origin_label(&entry.origin)),
             Style::new().fg(Color::DarkGray),
         )),
     ];

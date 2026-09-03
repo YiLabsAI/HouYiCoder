@@ -279,8 +279,10 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Char('t') if app.pane == Pane::Skills && app.skill_level.get() == 1 => {
             let ordered = crate::view::skills_pane::display_order(&app.skill_entries);
             let sel = app.skill_sel.get().min(ordered.len().saturating_sub(1));
+            // Toggle only if the skill is usable (user-invocable or
+            // model-invocable). A skill that is neither cannot be toggled.
             if let Some(entry) = ordered.get(sel)
-                && entry.invocable
+                && (entry.user_invocable || entry.invocable)
             {
                 let name = entry.name.clone();
                 if !app.skill_disabled.insert(name.clone()) {

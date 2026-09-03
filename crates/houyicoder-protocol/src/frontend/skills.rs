@@ -20,6 +20,11 @@ pub struct SkillEntry {
     /// False when frontmatter disable-model-invocation hides the skill from
     /// the model; the pane flags it so the user knows it is not callable.
     pub invocable: bool,
+    /// True when the user can invoke the skill via @skill:name (frontmatter
+    /// user-invocable). A skill can be !invocable (model can't auto-call)
+    /// but user_invocable=true (user can still @skill: it).
+    #[serde(default)]
+    pub user_invocable: bool,
     pub body_token_estimate: u32,
     /// Session-scoped invocation stats. None when the registry does not track
     /// usage (old payloads deserialize to None via serde default).
@@ -51,6 +56,7 @@ mod tests {
             description: "commit changes".into(),
             origin: "user".into(),
             invocable: true,
+            user_invocable: true,
             body_token_estimate: 120,
             usage: Some(SkillUsage {
                 invocations: 3,

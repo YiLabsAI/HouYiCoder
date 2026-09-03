@@ -99,8 +99,9 @@ fn format_one(
     s: &houyicoder_protocol::frontend::skills::SkillEntry,
     inner_width: u16,
 ) -> Line<'static> {
-    let glyph = if s.invocable { "✓" } else { "✗" };
-    let glyph_color = if s.invocable {
+    let usable = s.user_invocable || s.invocable;
+    let glyph = if usable { "✓" } else { "✗" };
+    let glyph_color = if usable {
         Color::Green
     } else {
         Color::DarkGray
@@ -136,10 +137,33 @@ mod tests {
             origin: "project".to_string(),
             invocable: true,
             body_token_estimate: 120,
+            user_invocable: true,
             usage: None,
         };
         let line = format_one(&entry, 40);
         assert!(line.spans.len() >= 4, "glyph + name + sep + desc");
+    }
+
+    /// A skill with model-invocation disabled but user-invocation enabled
+    /// shows the usable glyph (checkmark), not the disabled glyph (cross).
+    /// This is the mixed case the user_invocable field exists to handle.
+    #[test]
+    fn test_user_only_glyph() {
+        let entry = houyicoder_protocol::frontend::skills::SkillEntry {
+            name: "managed".to_string(),
+            description: "user-only".to_string(),
+            origin: "managed".to_string(),
+            invocable: false,
+            body_token_estimate: 50,
+            user_invocable: true,
+            usage: None,
+        };
+        let line = format_one(&entry, 40);
+        let glyph = &line.spans[0].content;
+        assert!(
+            glyph.contains("✓"),
+            "usable glyph for user-only skill: {glyph}"
+        );
     }
 
     /// A long name + long description must not overflow a narrow inner width:
@@ -152,6 +176,7 @@ mod tests {
             origin: "user".to_string(),
             invocable: true,
             body_token_estimate: 100,
+            user_invocable: true,
             usage: None,
         };
         let inner_w = 30u16;
@@ -181,6 +206,7 @@ mod tests {
             origin: "user".to_string(),
             invocable: true,
             body_token_estimate: 100,
+            user_invocable: true,
             usage: None,
         }];
         app.skill_picker_open = true;
@@ -214,6 +240,7 @@ mod tests {
                 origin: "user".to_string(),
                 invocable: true,
                 body_token_estimate: 100,
+                user_invocable: true,
                 usage: None,
             },
             houyicoder_protocol::frontend::skills::SkillEntry {
@@ -222,6 +249,7 @@ mod tests {
                 origin: "user".to_string(),
                 invocable: true,
                 body_token_estimate: 200,
+                user_invocable: true,
                 usage: None,
             },
         ];
@@ -244,6 +272,7 @@ mod tests {
             origin: "user".to_string(),
             invocable: true,
             body_token_estimate: 100,
+            user_invocable: true,
             usage: None,
         }];
         let out = crate::test_support::render_text(&app, 80, 24);
