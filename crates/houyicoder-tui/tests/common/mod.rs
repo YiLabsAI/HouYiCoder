@@ -788,6 +788,22 @@ pub fn pty_session_in_repo(repo: std::path::PathBuf, script_json: &str) -> PtySe
     pty_session_inner(PtySession::launch_in_repo_with_script(repo, script_json))
 }
 
+/// Like pty_session_in_repo, but with a custom HOME so the test can
+/// populate .claude/skills/ (ecosystem path) before launch.
+pub fn pty_session_with_home(
+    repo: std::path::PathBuf,
+    home: std::path::PathBuf,
+    script_json: &str,
+) -> PtySession {
+    pty_session_inner(PtySession::launch_with_args(
+        Some(script_json.to_string()),
+        None,
+        Some(home),
+        Some(repo),
+        &[],
+    ))
+}
+
 /// Like pty_session_scripted, but the stub streams with an
 /// inter-chunk delay so a run stays in-flight long enough to drive mid-run
 /// keys (Esc interrupt, recall). Used by the multi-agent Esc tests.
