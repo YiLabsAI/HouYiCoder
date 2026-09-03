@@ -530,10 +530,13 @@ fn test_backlog_gap_ttl_backlog() {
 #[test]
 fn test_backlog_gap_above_ceiling() {
     let root = temp_root();
-    // Just past the ceiling; names are SessionId-shaped so the filter counts
-    // them. No per-dir files: count_session_dirs only checks is_dir + name.
+    // Just past the ceiling; names are SessionId-shaped and each carries a
+    // log.jsonl so count_session_dirs counts them (a no-log dir is not a
+    // resumable session and is excluded from the count).
     for i in 0..(crate::session_prune::GAP_PRECISE_MAX_DIRS + 1) as u64 {
-        fs::create_dir_all(root.join(format!("00000000-0000-0000-0000-{i:012x}"))).unwrap();
+        let d = root.join(format!("00000000-0000-0000-0000-{i:012x}"));
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("log.jsonl"), "[]").unwrap();
     }
     let cap = crate::session_prune::GAP_PRECISE_MAX_DIRS * 2; // cap above the ceiling
     assert!(
@@ -560,6 +563,51 @@ fn test_backlog_skips_non_session() {
     assert!(
         notice.contains("3 sessions"),
         "non-session dirs excluded from the count: {notice}"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
+
+/// A no-log session is a crash orphan, not a resumable session. It must not
+/// inflate the count the startup notice names — otherwise the notice fires
+/// over the cap while the resume picker (which requires a log) shows far
+/// fewer, and the two disagree.
+#[test]
+fn test_backlog_excludes_logless() {
+    let root = temp_root();
+    session(&root, &fresh_sid(), true);
+    session(&root, &fresh_sid(), true);
+    let d_empty = session(&root, &fresh_sid(), false); // no log
+    age(&d_empty, 1800); // recent, within empty_ttl
+    // 2 logged sessions, 1 logless; cap=2. The logless one does not count.
+    assert!(
+        store_backlog_notice(&root, 2, 100, &default_policy()).is_none(),
+        "no-log session must not inflate the count past the cap"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
+
+/// A no-log session that survives empty_ttl does not trigger cap overflow:
+/// the cap bounds resumable (logged) sessions, and the empty_ttl net alone
+/// bounds crash-orphans. Without this, a handful of crash-orphans under the
+/// empty_ttl window would push logged sessions out of the store via cap
+/// overflow — deleting sessions the user can resume to keep ones they cannot.
+#[test]
+fn test_plan_cap_excludes_logless() {
+    let root = temp_root();
+    let d1 = session(&root, &fresh_sid(), true);
+    age(&d1.join("log.jsonl"), 3600);
+    let d2 = session(&root, &fresh_sid(), true);
+    age(&d2.join("log.jsonl"), 1800);
+    let d3 = session(&root, &fresh_sid(), false); // no log, within empty_ttl
+    age(&d3, 900);
+    let policy = PrunePolicy {
+        max_count: 2,
+        ..default_policy()
+    };
+    let plan = plan_prune(&root, &policy);
+    assert!(
+        plan.entries.is_empty(),
+        "no-log session does not count toward cap; 2 logged <= cap 2"
     );
     let _r = fs::remove_dir_all(&root);
 }

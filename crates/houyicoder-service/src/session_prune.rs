@@ -172,7 +172,13 @@ pub fn plan_prune(root: &Path, policy: &PrunePolicy) -> PrunePlan {
                 last_active,
                 action: PruneAction::RemoveDir,
             });
-        } else {
+        } else if has_log {
+            // Only sessions with a log count toward the cap — they are the
+            // resumable sessions the cap bounds. A no-log session that
+            // survives empty_ttl is neither pruned nor cap-counted; empty_ttl
+            // alone bounds it. Counting it here would trigger cap overflow on
+            // crash-orphans the user cannot resume, disagreeing with the
+            // resume picker (which also skips no-log sessions).
             kept.push((path, last_active));
         }
     }
@@ -473,10 +479,14 @@ pub fn store_backlog_notice(
     None
 }
 
-/// One readdir over the sessions root, no per-entry metadata: the count of
-/// session directories (a SessionId-shaped name + a directory). Non-session
-/// entries (an index/ subdirectory, a stray file) are excluded so the count
-/// the notice names is honest.
+/// One readdir + one stat per entry over the sessions root: the count of
+/// session directories that carry a log (a SessionId-shaped name + a
+/// directory + log.jsonl). A session without a log is a crash-orphan the
+/// empty_ttl net reaps, not a resumable session — counting it here would
+/// inflate the notice above the cap while the resume picker (which also
+/// requires a log) shows far fewer, so the two disagree. Non-session
+/// entries (an index/ subdirectory, a stray file) are excluded for the
+/// same reason.
 fn count_session_dirs(root: &Path) -> Option<usize> {
     let entries = std::fs::read_dir(root).ok()?;
     Some(
@@ -488,6 +498,7 @@ fn count_session_dirs(root: &Path) -> Option<usize> {
                     .to_str()
                     .is_some_and(|s| SessionId::from_display_string(s).is_some())
             })
+            .filter(|e| e.path().join("log.jsonl").is_file())
             .count(),
     )
 }
