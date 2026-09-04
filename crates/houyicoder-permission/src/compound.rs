@@ -11,14 +11,61 @@
 
 /// Split a compound command into its top-level segments on and/or, semicolon,
 /// and pipe. A bare pipe counts as a segment boundary (each stage of a pipeline
-/// is a separate attestable unit). Empty segments are dropped.
+/// is a separate attestable unit). Empty segments are dropped. Quote- and
+/// paren-aware: a separator inside quotes or inside a command substitution
+/// $(...) or group (...) is not a boundary, so a pipe inside a substitution
+/// stays in one segment. A full grammar is out of scope; the gate escalates
+/// anything ambiguous to Ask.
 pub fn split_compound(cmd: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let chars: Vec<char> = cmd.chars().collect();
     let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut depth = 0i32;
     while i < chars.len() {
         let c = chars[i];
+        match c {
+            '\'' if !in_double => {
+                in_single = !in_single;
+                cur.push(c);
+                i += 1;
+                continue;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                cur.push(c);
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        if in_single || in_double {
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        // Track parens so a separator inside $(...) or (...) does not split.
+        if c == '(' {
+            depth += 1;
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if c == ')' {
+            if depth > 0 {
+                depth -= 1;
+            }
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if depth > 0 {
+            cur.push(c);
+            i += 1;
+            continue;
+        }
         // and/or operators: double ampersand or double pipe.
         if (c == '&' || c == '|') && i + 1 < chars.len() && chars[i + 1] == c {
             push_seg(&mut out, &cur);
@@ -198,6 +245,154 @@ pub fn compound_safe(segments: &[&str]) -> bool {
     segments.iter().all(|s| is_attestable(s))
 }
 
+/// Commands whose effect is reading or printing, never writing or executing.
+/// A segment whose first command token is in this set and whose only shell
+/// constructs are safe redirects (stripped) and command substitution (whose
+/// contents are themselves read-only) is read-only, so a pipe chain of
+/// read-only commands with command substitution auto-allows in Auto. Absent
+/// are passthrough builtins (command, env, exec, xargs) that run a wrapped
+/// command, and commands with dangerous positional forms (date sets the
+/// clock, hostname sets the host, printenv leaks secrets); the conditional
+/// ones need per-flag validation a follow-up ports. They still ask, which
+/// is safe.
+const READONLY_COMMANDS: &[&str] = &[
+    "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "strings", "ls", "wc", "file", "which",
+    "whereis", "basename", "dirname", "realpath", "stat", "du", "df", "pwd", "uname", "whoami",
+    "id", "groups", "echo", "printf", "seq", "test", "true", "false",
+];
+
+/// Whether a compound command is entirely read-only: every segment's first
+/// command token is in the read-only set, no segment writes a file (safe
+/// /dev/null and stderr-to-stdout redirects are stripped first), and every
+/// command substitution nests read-only commands (depth-limited,
+/// fail-closed). The destructive validator's word scan catches destructive
+/// verbs anywhere in the content, and the egress validator catches network
+/// tools at the top level, so a read-only shell around a destructive
+/// substitution still asks via the inner scan.
+pub fn is_readonly_compound(segments: &[&str]) -> bool {
+    is_readonly_compound_depth(segments, 3)
+}
+
+fn is_readonly_compound_depth(segments: &[&str], depth: u8) -> bool {
+    if segments.is_empty() || depth == 0 {
+        return false;
+    }
+    segments.iter().all(|s| is_readonly_segment(s, depth))
+}
+
+/// Whether one segment is read-only at the given recursion depth. Strips
+/// safe redirects, rejects unquoted file redirects and process substitution,
+/// extracts command-substitution and backtick bodies for recursive read-only
+/// checks, and requires the first non-assignment token to be a read-only
+/// command.
+fn is_readonly_segment(seg: &str, depth: u8) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    let stripped = strip_safe_redirects(seg);
+    let chars: Vec<char> = stripped.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut substs: Vec<String> = Vec::new();
+    while i < n {
+        let c = chars[i];
+        match c {
+            '\'' if !in_double => {
+                in_single = !in_single;
+                i += 1;
+                continue;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        if in_single || in_double {
+            i += 1;
+            continue;
+        }
+        // Unquoted file redirect or process substitution writes or talks;
+        // not read-only. Safe redirects were already stripped.
+        if c == '>' || c == '<' {
+            return false;
+        }
+        // Command substitution: dollar plus open paren. Extract the body for
+        // a recursive read-only check.
+        if c == '$' && i + 1 < n && chars[i + 1] == '(' {
+            let Some(end) = find_matching_paren(&chars, i + 1) else {
+                return false;
+            };
+            substs.push(chars[i + 2..end].iter().collect());
+            i = end + 1;
+            continue;
+        }
+        // Backtick substitution. Extract the body for a recursive check.
+        if c == '`' {
+            let Some(rel) = chars[i + 1..].iter().position(|&ch| ch == '`') else {
+                return false;
+            };
+            let end = i + 1 + rel;
+            substs.push(chars[i + 1..end].iter().collect());
+            i = end + 1;
+            continue;
+        }
+        i += 1;
+    }
+    // First non-assignment command token must be a read-only command. Skip
+    // leading env assignments (FOO=bar) the way the egress scan does.
+    let first = stripped.split_whitespace().find(|t| !t.contains('='));
+    let Some(cmd) = first else { return false };
+    let cmd = crate::pipeline::detection::strip_quotes(cmd);
+    if !READONLY_COMMANDS.contains(&cmd) {
+        return false;
+    }
+    // Every substitution body is itself a read-only compound (split on pipes,
+    // and-or, and semicolon so each stage is checked, depth-limited).
+    for s in &substs {
+        let segs = split_compound(s);
+        let refs: Vec<&str> = segs.iter().map(|x| x.as_str()).collect();
+        if !is_readonly_compound_depth(&refs, depth - 1) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Find the index of the close paren matching the open paren at the given
+/// position, quote-aware so a paren inside quotes is not counted. Returns
+/// None when unbalanced (the caller fails closed).
+fn find_matching_paren(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = open;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            _ => {
+                if !in_single && !in_double {
+                    if c == '(' {
+                        depth += 1;
+                    } else if c == ')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(i);
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// A quote-aware char scanner. Tracks single and double quote state so
 /// operators inside quotes are not mistaken for shell operators. Ambiguous
 /// quoting (a single quote inside double quotes and vice versa) is handled by
@@ -354,9 +549,106 @@ mod tests {
     }
 
     #[test]
-    fn test_compound_safe_mixed_chain() {
-        let segs = split_compound("ls && rm -rf /tmp/x > /tmp/log");
+    fn test_readonly_pipe_chain_subst() {
+        // The user-reported case: a pipe chain of read-only commands with a
+        // which-substitution and a stderr-to-dev-null redirect auto-allows.
+        let cmd = "strings $(which ego-browser) 2>/dev/null | grep -i 'ego' | head -40";
+        let segs = split_compound(cmd);
         let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
-        assert!(!compound_safe(&refs));
+        assert!(is_readonly_compound(&refs), "read-only chain should allow");
+    }
+
+    #[test]
+    fn test_readonly_single_subst() {
+        // A single read-only command with a read-only substitution.
+        let segs = split_compound("echo $(whoami)");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(is_readonly_compound(&refs));
+    }
+
+    #[test]
+    fn test_readonly_nested_subst() {
+        // Substitution whose body is itself a compound of read-only commands.
+        let segs = split_compound("head -5 $(grep foo bar | head -3)");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(is_readonly_compound(&refs));
+    }
+
+    #[test]
+    fn test_not_readonly_file_redirect() {
+        // A file redirect to a real path writes; not read-only.
+        let segs = split_compound("echo hi > /tmp/x");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs));
+    }
+
+    #[test]
+    fn test_not_readonly_destructive_subst() {
+        // A substitution body whose command is not in the read-only set
+        // (rm here) is not read-only.
+        let segs = split_compound("strings $(rm -rf /tmp)");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs));
+    }
+
+    #[test]
+    fn test_not_readonly_network_subst() {
+        // A network tool in a substitution is not read-only.
+        let segs = split_compound("strings $(curl http://evil.com)");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs));
+    }
+
+    #[test]
+    fn test_not_readonly_write_command() {
+        // A write/exec command as the first token is not read-only.
+        let segs = split_compound("sed -i 's/x/y/' file | grep y");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs));
+    }
+
+    #[test]
+    fn test_unbalanced_paren_fails_closed() {
+        // An unbalanced command substitution must not be treated as read-only.
+        let segs = split_compound("echo $(whoami");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs));
+    }
+
+    #[test]
+    fn test_split_quoted_pipe_nosplit() {
+        // A pipe inside quotes is data, not a segment boundary.
+        let segs = split_compound("echo 'a|b' | cat");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert_eq!(refs.len(), 2, "quoted pipe must not split: {refs:?}");
+        assert!(
+            refs.iter()
+                .all(|s| !s.contains("'a|b'") || s.contains("echo"))
+        );
+    }
+
+    #[test]
+    fn test_not_readonly_passthrough_command() {
+        // command is a passthrough builtin: it runs the wrapped command, so
+        // it is not in the read-only set (would let command-curl through).
+        let segs = split_compound("command whoami");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs));
+    }
+
+    #[test]
+    fn test_not_readonly_date_positional() {
+        // date has a dangerous positional form (sets the clock); excluded.
+        let segs = split_compound("date 01010000");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs));
+    }
+
+    #[test]
+    fn test_not_readonly_hostname_positional() {
+        // hostname has a dangerous positional form (sets the host); excluded.
+        let segs = split_compound("hostname foo");
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs));
     }
 }

@@ -14,9 +14,10 @@ use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
 use crate::rule::Effect;
 
-/// rm / sudo / un-attestable redirects and substitution escalate to Ask even
-/// when the mode default would Allow. Consent-overridable for an exact
-/// pre-approved call.
+/// Destructive verbs (rm, sudo, dd, …) escalate to Ask even when the mode
+/// default would Allow. Consent-overridable for an exact pre-approved call.
+/// Un-attestable constructs (redirect, substitution) are escalated by the
+/// compound validator, not here: destructive means a destructive verb.
 fn should_ask_destructive(tool_name: &str, content: &str) -> bool {
     let lower = tool_name.to_ascii_lowercase();
     if !matches!(lower.as_str(), "bash" | "sh" | "exec" | "shell") {
@@ -25,35 +26,22 @@ fn should_ask_destructive(tool_name: &str, content: &str) -> bool {
     if content.is_empty() {
         return false;
     }
-    // Scan interpreter inline code (bash -c "rm -rf x") like a direct command.
     let scan = interpreter_inline_code(content).unwrap_or(content);
-    // Strip quoted heredoc bodies first: a cat <<'EOF' body is literal text
-    // for cat, not a command, so a rm line inside it must not trip the
-    // destructive-command scan. Unquoted heredoc bodies stay (bash expands
-    // them, so a real command could hide there).
+    // Strip quoted heredoc bodies first: a cat <<'EOF' body is literal text,
+    // so a rm line inside it must not trip the scan. Unquoted heredoc bodies
+    // stay (bash expands them, so a real command could hide there).
     let scan = crate::heredoc::strip_quoted_heredoc_bodies(scan);
     let lower_content = scan.to_ascii_lowercase();
     for word in lower_content.split(|c: char| !c.is_alphanumeric()) {
-        // Deletion, privilege escalation, and content-overwrite commands. mv,
-        // chmod -R, chown -R are deferred (broad false-positive risk; a
-        // recursive/mass-change refinement lands separately).
-        //
-        // kill/pkill are intentionally NOT here: their effect (signaling
-        // processes) is not a filesystem path operation, so the sandbox
-        // fence cannot catch it. The destructive-command list here is a
-        // permission gate, not informational, so adding process-signal
-        // commands to it would gate them without a sandbox backstop. In
-        // Auto mode kill/pkill fall through to the mode default (Allow) by
-        // the user's explicit "don't ask" choice; in Manual/default they
-        // Ask via bash's Execute side effect. This is a recorded decision,
-        // not a gap — adding them here would ask for every backgrounded
-        // process the agent spawns (high false-positive cost; the fence
-        // cannot mitigate a signal anyway).
+        // kill/pkill are intentionally absent: signaling is not a filesystem
+        // op the fence can catch, and gating it would ask for every spawned
+        // background process. mv/chmod -R/chown -R are deferred (false-positive
+        // risk); a recursive refinement lands separately.
         if matches!(word, "rm" | "rmdir" | "unlink" | "sudo" | "dd" | "truncate") {
             return true;
         }
     }
-    !crate::compound::is_attestable(content)
+    false
 }
 
 /// Detect network-egress commands in bash: curl, wget, git push, package
@@ -302,9 +290,14 @@ impl Validator for NetworkEgressValidator {
 
 /// A compound shell command that is not statically attestable. Any
 /// un-attestable segment (redirect, command substitution, heredoc) escalates
-/// the whole command to Ask. Consent-overridable for an exact pre-approved
+/// the whole command to Ask unless every segment is read-only (a pipe chain
+/// of read-only commands with substitution auto-allows, mirroring the
+/// read-only short-circuit). Consent-overridable for an exact pre-approved
 /// call. Uses the pre-tokenized segments from the shared context so the
-/// ladder tokenizes the command once.
+/// ladder tokenizes the command once. Also gates a single un-attestable
+/// segment (a command with substitution but no pipe): the destructive
+/// validator catches destructive verbs anywhere, so a read-only shell around
+/// a destructive or network substitution still asks via the inner scan.
 pub struct CompoundCommandValidator;
 
 impl Validator for CompoundCommandValidator {
@@ -325,11 +318,13 @@ impl Validator for CompoundCommandValidator {
         if !matches!(lower.as_str(), "bash" | "sh" | "exec" | "shell") {
             return None;
         }
-        if ctx.segments.len() <= 1 {
+        let refs: Vec<&str> = ctx.segments.iter().map(|s| s.as_str()).collect();
+        // No command text (a bash request without input) has nothing to gate;
+        // let the mode default decide. An empty segment list must not escalate.
+        if refs.is_empty() {
             return None;
         }
-        let refs: Vec<&str> = ctx.segments.iter().map(|s| s.as_str()).collect();
-        if compound_safe(&refs) {
+        if compound_safe(&refs) || crate::compound::is_readonly_compound(&refs) {
             return None;
         }
         if consent_allows(req, ctx) {
