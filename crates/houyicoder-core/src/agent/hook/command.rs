@@ -20,13 +20,15 @@
 //! verdict the command returns is a small tagged JSON.
 
 use std::io::{Read, Write};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
 use houyicoder_api::launcher::{ProcessLauncher, SpawnPolicy, SpawnRequest};
 
 use super::filter;
+use super::registry::{HookId, HookRegistry};
 use super::{Hook, HookContext, HookError, HookEvent, HookSource, HookVerdict};
 /// An external-process hook. Spawns the configured program per evaluate,
 /// pipes the hook context JSON to stdin, parses the verdict JSON from
@@ -42,8 +44,14 @@ pub struct CommandHook {
     launcher: Arc<dyn ProcessLauncher>,
     source: HookSource,
     matcher: Option<String>,
+    matcher_regex: Option<regex::Regex>,
     if_condition: Option<String>,
+    if_regex: Option<regex::Regex>,
     timeout: Option<std::time::Duration>,
+    once: bool,
+    fired: AtomicBool,
+    hook_reg: Option<Arc<HookRegistry>>,
+    hook_id: OnceLock<HookId>,
 }
 
 impl CommandHook {
@@ -66,24 +74,36 @@ impl CommandHook {
             launcher,
             source,
             matcher: None,
+            matcher_regex: None,
             if_condition: None,
+            if_regex: None,
             timeout: None,
+            once: false,
+            fired: AtomicBool::new(false),
+            hook_reg: None,
+            hook_id: OnceLock::new(),
         }
     }
 
     /// Attach a matcher pattern. The hook is skipped (returns Allow)
-    /// when the event's query string does not match. Returns self for
-    /// chaining.
+    /// when the event's query string does not match. The pattern is
+    /// compiled to a regex once at build time so the hot path does not
+    /// recompile per fire. Returns self for chaining.
     pub fn with_matcher(mut self, matcher: impl Into<String>) -> Self {
-        self.matcher = Some(matcher.into());
+        let m = matcher.into();
+        self.matcher_regex = filter::compile_matcher(&m);
+        self.matcher = Some(m);
         self
     }
 
     /// Attach an if condition (permission-rule syntax). The hook is
     /// skipped when the tool name and input do not satisfy the rule.
+    /// The glob pattern is compiled to a regex once at build time.
     /// Returns self for chaining.
     pub fn with_if_condition(mut self, condition: impl Into<String>) -> Self {
-        self.if_condition = Some(condition.into());
+        let c = condition.into();
+        self.if_regex = filter::compile_if_pattern(&c);
+        self.if_condition = Some(c);
         self
     }
 
@@ -93,36 +113,38 @@ impl CommandHook {
         self.timeout = Some(timeout);
         self
     }
-}
 
-impl Hook for CommandHook {
-    fn name(&self) -> &str {
-        &self.name
+    /// Mark this hook as fire-once. The registry unregisters it after
+    /// its first successful fire. Returns self for chaining.
+    pub fn with_once(mut self) -> Self {
+        self.once = true;
+        self
     }
-    fn events(&self) -> &[HookEvent] {
-        &self.events
+
+    /// Bind the registry so a once hook can self-unregister after its
+    /// first fire. Must be called before registration when once is set,
+    /// and bind_hook_id must be called right after register — if the
+    /// id is never bound, the hook cannot self-unregister and the
+    /// Arc cycle (Registry holds Arc<Hook>, Hook holds Arc<Registry>)
+    /// leaks for the process lifetime.
+    pub fn with_registry(mut self, reg: Arc<HookRegistry>) -> Self {
+        self.hook_reg = Some(reg);
+        self
     }
-    fn source(&self) -> HookSource {
-        self.source.clone()
+
+    /// Bind the registry-assigned id so the hook can self-unregister
+    /// after a once fire. Called by the registrar right after
+    /// registration; a concurrent dispatch that fires before this is
+    /// set skips the unregister (the AtomicBool still blocks a second
+    /// spawn).
+    pub fn bind_hook_id(&self, id: HookId) {
+        let _ = self.hook_id.set(id);
     }
-    fn timeout(&self) -> Option<std::time::Duration> {
-        self.timeout
-    }
-    fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
-        if self
-            .matcher
-            .as_ref()
-            .is_some_and(|m| !filter::matcher_passes(ctx, m))
-        {
-            return Ok(HookVerdict::Allow);
-        }
-        if self
-            .if_condition
-            .as_ref()
-            .is_some_and(|rule| !filter::if_rule_passes(ctx, rule))
-        {
-            return Ok(HookVerdict::Allow);
-        }
+
+    /// Spawn the command, pipe the context JSON, parse the verdict. Split
+    /// from evaluate so the once gate and self-unregister wrap it without
+    /// duplicating the spawn logic.
+    fn evaluate_inner(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
         let payload = HookContextJson::from_context(ctx);
         let payload_json = serde_json::to_string(&payload).map_err(|e| HookError::ConfigError {
             detail: format!("hook context encode: {e}"),
@@ -130,10 +152,11 @@ impl Hook for CommandHook {
         let req = SpawnRequest::new(&self.program)
             .with_args(&self.args)
             .interactive();
-        // A user-configured hook command is a trusted spawn (no kernel fence:
-        // the hook is a program the operator chose to wire). Every hook spawn
-        // is audited through the launcher chokepoint so an external command the
-        // engine executes leaves a structured trace, regardless of source.
+        // A user-configured hook command is a trusted spawn (no kernel
+        // fence: the hook is a program the operator chose to wire). Every
+        // hook spawn is audited through the launcher chokepoint so an
+        // external command the engine executes leaves a structured trace,
+        // regardless of source.
         let policy = SpawnPolicy::default().audited();
         let mut child = self
             .launcher
@@ -175,11 +198,12 @@ impl Hook for CommandHook {
         if let Some(stderr) = pipes.stderr.as_mut() {
             drop(stderr.read_to_string(&mut stderr_buf));
         }
-        // Wait for the child so its exit code is available. The stdout read
-        // already blocked to EOF so the child has exited; wait() resolves
-        // immediately. pollster::block_on is fine in this sync evaluate
-        // (the dispatch path runs evaluate on a dedicated thread when a
-        // timeout is set; the fast path is in-process and equally sync).
+        // Wait for the child so its exit code is available. The stdout
+        // read already blocked to EOF so the child has exited; wait()
+        // resolves immediately. pollster::block_on is fine in this sync
+        // evaluate (the dispatch path runs evaluate on a dedicated thread
+        // when a timeout is set; the fast path is in-process and equally
+        // sync).
         let exit_code = pollster::block_on(child.wait())
             .ok()
             .and_then(|e| e.exit_code);
@@ -206,6 +230,69 @@ impl Hook for CommandHook {
                 &self.name,
             ))
         }
+    }
+}
+
+impl Hook for CommandHook {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn events(&self) -> &[HookEvent] {
+        &self.events
+    }
+    fn source(&self) -> HookSource {
+        self.source.clone()
+    }
+    fn timeout(&self) -> Option<std::time::Duration> {
+        self.timeout
+    }
+    fn once(&self) -> bool {
+        self.once
+    }
+    fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
+        if let Some(m) = &self.matcher
+            && !filter::matcher_passes_compiled(ctx, m, self.matcher_regex.as_ref())
+        {
+            return Ok(HookVerdict::Allow);
+        }
+        if let Some(rule) = &self.if_condition
+            && !filter::if_rule_passes_compiled(ctx, rule, self.if_regex.as_ref())
+        {
+            return Ok(HookVerdict::Allow);
+        }
+        // once: only the dispatch that wins the compare_exchange spawns.
+        // A lost race returns Allow without spawning, so two concurrent
+        // dispatches never both run the command.
+        if self.once
+            && self
+                .fired
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return Ok(HookVerdict::Allow);
+        }
+        let result = self.evaluate_inner(ctx);
+        if self.once {
+            if result.is_ok() {
+                // The one shot was spent. Unregister so later dispatches
+                // skip the hook entirely; the flag stays set so an
+                // in-flight dispatch racing the removal still declines.
+                // Dispatch releases the read lock before evaluate, so
+                // taking the write lock here cannot deadlock.
+                if let Some(&id) = self.hook_id.get()
+                    && let Some(reg) = &self.hook_reg
+                {
+                    reg.unregister(id);
+                }
+            } else {
+                // The attempt never produced a verdict, so it did not
+                // consume the one shot. Release the gate for the next
+                // event rather than silently retiring a hook the user
+                // asked to run once and which has not yet run.
+                self.fired.store(false, Ordering::Release);
+            }
+        }
+        result
     }
 }
 
@@ -388,337 +475,5 @@ pub fn parse_event(s: &str) -> Option<HookEvent> {
 mod exit_code_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use houyicoder_api::launcher::{LauncherChild, LauncherExit, SpawnError, StdioPipes};
-    use houyicoder_context::SessionId;
-
-    /// A stub launcher whose command returns a canned verdict JSON on
-    /// stdout. The pipes are in-memory handles so the CommandHook
-    /// write-stdin / read-stdout path exercises end-to-end.
-    struct StubLauncher {
-        stdout: String,
-    }
-    impl ProcessLauncher for StubLauncher {
-        fn spawn(
-            &self,
-            _req: SpawnRequest,
-            _policy: SpawnPolicy,
-        ) -> Result<LauncherChild, SpawnError> {
-            let stdout_buf = self.stdout.clone().into_bytes();
-            let stdout: Box<dyn std::io::Read + Send> = Box::new(std::io::Cursor::new(stdout_buf));
-            let stdin: Box<dyn std::io::Write + Send> = Box::new(std::io::sink());
-            let pipes = StdioPipes {
-                stdin: Some(stdin),
-                stdout: Some(stdout),
-                stderr: None,
-            };
-            Ok(LauncherChild::with_pipes(
-                None,
-                pipes,
-                Box::pin(async move {
-                    Ok(LauncherExit {
-                        exit_code: Some(0),
-                        stdout: None,
-                        stderr: None,
-                    })
-                }),
-            ))
-        }
-    }
-
-    pub(crate) fn ctx_pre_tool_use() -> HookContext {
-        HookContext {
-            event: HookEvent::PreToolUse,
-            payload: super::super::HookPayload::PreToolUse {
-                tool_name: "recordable".into(),
-                input: serde_json::json!({}),
-                backfilled_input: None,
-            },
-            session: SessionId::new(),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_deny_verdict_round_trips() {
-        let launcher = Arc::new(StubLauncher {
-            stdout: r#"{"verdict":"deny","reason":"blocked by command hook"}"#.into(),
-        }) as Arc<dyn ProcessLauncher>;
-        let hook = CommandHook::new(
-            "cmd-deny",
-            vec![HookEvent::PreToolUse],
-            "echo",
-            vec![],
-            launcher,
-            HookSource::Project,
-        );
-        let v = hook.evaluate(&ctx_pre_tool_use()).expect("evaluate");
-        match v {
-            HookVerdict::Deny(r) => assert_eq!(r, "blocked by command hook"),
-            other => panic!("expected Deny, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_allow_verdict_round_trips() {
-        let launcher = Arc::new(StubLauncher {
-            stdout: r#"{"verdict":"allow"}"#.into(),
-        }) as Arc<dyn ProcessLauncher>;
-        let hook = CommandHook::new(
-            "cmd-allow",
-            vec![HookEvent::PreToolUse],
-            "echo",
-            vec![],
-            launcher,
-            HookSource::Project,
-        );
-        let v = hook.evaluate(&ctx_pre_tool_use()).expect("evaluate");
-        assert!(matches!(v, HookVerdict::Allow));
-    }
-
-    #[tokio::test]
-    async fn test_unknown_verdict_not_allowed() {
-        let launcher = Arc::new(StubLauncher {
-            stdout: r#"{"verdict":"bogus"}"#.into(),
-        }) as Arc<dyn ProcessLauncher>;
-        let hook = CommandHook::new(
-            "cmd-bogus",
-            vec![HookEvent::PreToolUse],
-            "echo",
-            vec![],
-            launcher,
-            HookSource::Project,
-        );
-        let v = hook.evaluate(&ctx_pre_tool_use()).expect("evaluate");
-        match v {
-            HookVerdict::Observe(note) => assert!(
-                note.contains("unknown verdict"),
-                "observe names the misconfiguration: {note}"
-            ),
-            other => panic!("expected Observe, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_malformed_json_hook_error() {
-        // stdout that starts with { but fails to parse is a malformed
-        // verdict object, not the exit-code contract. The hook tried to
-        // speak JSON and got it wrong, so an InvalidVerdict error surfaces
-        // (the model can see which hook misconfigured itself). Plain
-        // non-JSON stdout (no leading {) falls through to the exit-code
-        // contract instead.
-        let launcher = Arc::new(StubLauncher {
-            stdout: "{not valid json".into(),
-        }) as Arc<dyn ProcessLauncher>;
-        let hook = CommandHook::new(
-            "cmd-bad",
-            vec![HookEvent::PreToolUse],
-            "echo",
-            vec![],
-            launcher,
-            HookSource::Project,
-        );
-        let err = hook
-            .evaluate(&ctx_pre_tool_use())
-            .expect_err("malformed json");
-        assert!(matches!(err, HookError::InvalidVerdict { .. }));
-        // Trait accessors (cover the name/events/source surface).
-        assert_eq!(hook.name(), "cmd-bad");
-        assert_eq!(hook.events(), &[HookEvent::PreToolUse]);
-        assert_eq!(hook.source(), HookSource::Project);
-    }
-
-    fn ctx_post_tool_use() -> HookContext {
-        HookContext {
-            event: HookEvent::PostToolUse,
-            payload: super::super::HookPayload::PostToolUse {
-                tool_name: "recordable".into(),
-                input: serde_json::json!({"x": 1}),
-                result: super::super::ToolResult {
-                    output: "ok".into(),
-                },
-            },
-            session: SessionId::new(),
-        }
-    }
-
-    fn ctx_post_tool_use_failure() -> HookContext {
-        HookContext {
-            event: HookEvent::PostToolUseFailure,
-            payload: super::super::HookPayload::PostToolUseFailure {
-                tool_name: "recordable".into(),
-                error: "boom".into(),
-            },
-            session: SessionId::new(),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_post_tool_use_payload() {
-        // The PostToolUse branch of from_context carries the result field.
-        let launcher = Arc::new(StubLauncher {
-            stdout: r#"{"verdict":"allow"}"#.into(),
-        }) as Arc<dyn ProcessLauncher>;
-        let hook = CommandHook::new(
-            "cmd-post",
-            vec![HookEvent::PostToolUse],
-            "echo",
-            vec![],
-            launcher,
-            HookSource::Project,
-        );
-        let v = hook.evaluate(&ctx_post_tool_use()).expect("evaluate");
-        assert!(matches!(v, HookVerdict::Allow));
-    }
-
-    #[tokio::test]
-    async fn test_post_tool_use_failure() {
-        // The PostToolUseFailure branch of from_context carries the error.
-        let launcher = Arc::new(StubLauncher {
-            stdout: r#"{"verdict":"allow"}"#.into(),
-        }) as Arc<dyn ProcessLauncher>;
-        let hook = CommandHook::new(
-            "cmd-fail",
-            vec![HookEvent::PostToolUseFailure],
-            "echo",
-            vec![],
-            launcher,
-            HookSource::Project,
-        );
-        let v = hook
-            .evaluate(&ctx_post_tool_use_failure())
-            .expect("evaluate");
-        assert!(matches!(v, HookVerdict::Allow));
-    }
-
-    #[tokio::test]
-    async fn test_trigger_verdict_round_trips() {
-        // A Trigger verdict with a known event maps to HookVerdict::Trigger.
-        let launcher = Arc::new(StubLauncher {
-            stdout: r#"{"verdict":"trigger","event":"PreCompact"}"#.into(),
-        }) as Arc<dyn ProcessLauncher>;
-        let hook = CommandHook::new(
-            "cmd-trigger",
-            vec![HookEvent::PreToolUse],
-            "echo",
-            vec![],
-            launcher,
-            HookSource::Project,
-        );
-        let v = hook.evaluate(&ctx_pre_tool_use()).expect("evaluate");
-        assert!(matches!(v, HookVerdict::Trigger(HookEvent::PreCompact)));
-    }
-
-    #[tokio::test]
-    async fn test_trigger_unknown_event_observed() {
-        let launcher = Arc::new(StubLauncher {
-            stdout: r#"{"verdict":"trigger","event":"NotAnEvent"}"#.into(),
-        }) as Arc<dyn ProcessLauncher>;
-        let hook = CommandHook::new(
-            "cmd-trigger-bad",
-            vec![HookEvent::PreToolUse],
-            "echo",
-            vec![],
-            launcher,
-            HookSource::Project,
-        );
-        let v = hook.evaluate(&ctx_pre_tool_use()).expect("evaluate");
-        match v {
-            HookVerdict::Observe(note) => assert!(
-                note.contains("unknown event"),
-                "observe names the misconfiguration: {note}"
-            ),
-            other => panic!("expected Observe, got {other:?}"),
-        }
-    }
-
-    /// A launcher that refuses to spawn, so the spawn-error arm runs.
-    struct FailingLauncher;
-    impl ProcessLauncher for FailingLauncher {
-        fn spawn(
-            &self,
-            _req: SpawnRequest,
-            _policy: SpawnPolicy,
-        ) -> Result<LauncherChild, SpawnError> {
-            Err(SpawnError::Io("stub refuses spawn".into()))
-        }
-    }
-
-    /// A launcher that records the policy it was handed and returns a canned
-    /// allow verdict, so a test can assert the spawn policy the hook built.
-    struct PolicyRecordingLauncher {
-        policy: std::sync::Mutex<Option<SpawnPolicy>>,
-        stdout: String,
-    }
-    impl ProcessLauncher for PolicyRecordingLauncher {
-        fn spawn(
-            &self,
-            _req: SpawnRequest,
-            policy: SpawnPolicy,
-        ) -> Result<LauncherChild, SpawnError> {
-            *self.policy.lock().unwrap() = Some(policy);
-            let stdout: Box<dyn std::io::Read + Send> =
-                Box::new(std::io::Cursor::new(self.stdout.clone().into_bytes()));
-            let stdin: Box<dyn std::io::Write + Send> = Box::new(std::io::sink());
-            let pipes = StdioPipes {
-                stdin: Some(stdin),
-                stdout: Some(stdout),
-                stderr: None,
-            };
-            Ok(LauncherChild::with_pipes(
-                None,
-                pipes,
-                Box::pin(async move {
-                    Ok(LauncherExit {
-                        exit_code: Some(0),
-                        stdout: None,
-                        stderr: None,
-                    })
-                }),
-            ))
-        }
-    }
-
-    #[tokio::test]
-    async fn test_hook_spawn_policy_audited() {
-        // Every hook-command spawn must carry audit=true so an external command
-        // the engine executes leaves a structured trace through the launcher
-        // chokepoint, regardless of the hook's source.
-        let launcher = Arc::new(PolicyRecordingLauncher {
-            policy: std::sync::Mutex::new(None),
-            stdout: r#"{"verdict":"allow"}"#.into(),
-        });
-        let policy_slot = Arc::clone(&launcher);
-        let hook = CommandHook::new(
-            "cmd-audit",
-            vec![HookEvent::PreToolUse],
-            "echo",
-            vec![],
-            launcher as Arc<dyn ProcessLauncher>,
-            HookSource::User,
-        );
-        drop(hook.evaluate(&ctx_pre_tool_use()).expect("evaluate"));
-        let captured = policy_slot
-            .policy
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("spawn ran");
-        assert!(captured.audit, "hook spawn must be audited");
-    }
-
-    #[tokio::test]
-    async fn test_spawn_failure_hook_error() {
-        let launcher = Arc::new(FailingLauncher) as Arc<dyn ProcessLauncher>;
-        let hook = CommandHook::new(
-            "cmd-nospawn",
-            vec![HookEvent::PreToolUse],
-            "echo",
-            vec![],
-            launcher,
-            HookSource::Project,
-        );
-        let err = hook.evaluate(&ctx_pre_tool_use()).expect_err("spawn fails");
-        assert!(matches!(err, HookError::ProcessError { .. }));
-    }
-}
+#[path = "command_tests.rs"]
+mod command_tests;

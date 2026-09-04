@@ -13,11 +13,15 @@ use houyicoder_permission::{Effect, ModeGate, Rule, RuleContent, Scope};
 use std::sync::Arc;
 
 /// Dedup key for command hooks. Two hooks with the same program, args,
-/// shell, if condition, events, AND matcher are the same hook. The
-/// matcher is part of the key so the same command registered for
-/// different matchers (e.g. Bash and Edit) are distinct hooks — each
-/// fires only when its own matcher passes. Events are part of the key
-/// so PreToolUse and PostToolUse are distinct. When the same key
+/// if condition, events, AND matcher are the same hook. The matcher is
+/// part of the key so the same command registered for different
+/// matchers (e.g. Bash and Edit) are distinct hooks — each fires only
+/// when its own matcher passes. Events are part of the key so
+/// PreToolUse and PostToolUse are distinct. The shell is deliberately
+/// absent: it is already fully encoded in program and args, so keying
+/// on it as well would split an omitted shell from an explicitly
+/// spelled-out default that spawns the identical process, registering
+/// the same hook twice and running the command twice. When the same key
 /// appears across sources, the last-seen source wins (project overrides
 /// user, local overrides project), matching the merge semantics of the
 /// reference implementation.
@@ -25,7 +29,6 @@ use std::sync::Arc;
 struct HookDedupKey {
     program: String,
     args: Vec<String>,
-    shell: Option<String>,
     if_condition: Option<String>,
     events: Vec<String>,
     matcher: Option<String>,
@@ -52,11 +55,11 @@ pub(crate) fn build_hook_registry(
     specs: &[(houyicoder_config::HookSpec, HookSource)],
     launcher: Arc<dyn ProcessLauncher>,
     policy: HookPolicy,
-) -> Option<HookRegistry> {
+) -> Option<Arc<HookRegistry>> {
     if specs.is_empty() {
         return None;
     }
-    let registry = HookRegistry::with_policy(policy);
+    let registry = Arc::new(HookRegistry::with_policy(policy));
     // Last-wins dedup: a later source (project over user, local over
     // project) with the same key replaces the earlier entry. The map
     // stores the index into specs so we can resolve the winner after
@@ -85,7 +88,6 @@ pub(crate) fn build_hook_registry(
         let dedup_key = HookDedupKey {
             program: spec.program.clone(),
             args: spec.args.clone(),
-            shell: spec.shell.clone(),
             if_condition: spec.if_condition.clone(),
             events: spec.events.clone(),
             matcher: spec.matcher.clone(),
@@ -133,7 +135,14 @@ pub(crate) fn build_hook_registry(
                 hook = hook.with_timeout(std::time::Duration::from_secs(secs));
             }
         }
-        registry.register(Arc::new(hook));
+        if spec.once {
+            hook = hook.with_once().with_registry(Arc::clone(&registry));
+        }
+        let hook = Arc::new(hook);
+        let id = registry.register(hook.clone());
+        if hook.once() {
+            hook.bind_hook_id(id);
+        }
     }
     if registry.is_empty() {
         None
@@ -201,7 +210,7 @@ pub(crate) fn build_session_registry(
         HookPolicy::AllEnabled
     };
     let reg: Arc<HookRegistry> = match build_hook_registry(&all_specs, launcher, policy.clone()) {
-        Some(r) => Arc::new(r),
+        Some(r) => r,
         None => Arc::new(HookRegistry::with_policy(policy)),
     };
     reg.register(Arc::new(SkillGrantHook::new(gate)));

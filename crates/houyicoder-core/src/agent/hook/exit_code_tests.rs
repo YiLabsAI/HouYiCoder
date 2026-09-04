@@ -44,7 +44,7 @@ impl ProcessLauncher for ExitCodeLauncher {
 /// Re-use the pre-tool-use context the parent test module builds, so the
 /// exit-code tests run against the same payload shape the runner fires.
 fn ctx_pre_tool_use() -> HookContext {
-    super::tests::ctx_pre_tool_use()
+    super::command_tests::ctx_pre_tool_use()
 }
 
 /// The exit-code contract: a shell-style hook that writes no JSON and

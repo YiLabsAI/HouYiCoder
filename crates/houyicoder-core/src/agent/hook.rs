@@ -581,6 +581,19 @@ pub trait Hook: Send + Sync {
     fn timeout(&self) -> Option<std::time::Duration> {
         None
     }
+
+    /// Whether this hook fires only once. When true, the hook
+    /// self-unregisters after the first attempt that actually produced
+    /// a verdict. An attempt that failed (HookError) does not consume
+    /// the one shot: the hook stays registered so a transient spawn
+    /// failure can retry on the next event, since a hook the user asked
+    /// to run once has not yet run. Concurrency is gated by a
+    /// compare_exchange taken before the attempt, so at most one
+    /// dispatch runs the hook at a time and the losers return Allow
+    /// without running it; a failed attempt releases that gate again.
+    fn once(&self) -> bool {
+        false
+    }
 }
 
 // HookExecutor — future WASM sandbox seam.

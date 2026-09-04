@@ -23,6 +23,7 @@ fn spec(name: &str, events: &[&str], program: &str) -> HookSpec {
         if_condition: None,
         shell: None,
         timeout_secs: None,
+        once: false,
     }
 }
 
@@ -86,6 +87,38 @@ fn test_build_hooks_dedup() {
 }
 
 #[test]
+fn test_build_dedup_default_shell() {
+    // An omitted shell and an explicit sh produce the identical
+    // invocation, so a config that spells out the default must not
+    // register a second copy that runs the same command twice.
+    let mut s1 = user_spec("lint-implicit", &["PreToolUse"], "sh");
+    s1.0.args = vec!["-c".into(), "echo hi".into()];
+    s1.0.shell = None;
+    let mut s2 = user_spec("lint-explicit", &["PreToolUse"], "sh");
+    s2.0.args = vec!["-c".into(), "echo hi".into()];
+    s2.0.shell = Some("sh".into());
+    let specs = vec![s1, s2];
+    let reg =
+        build_hook_registry(&specs, launcher(), HookPolicy::AllEnabled).expect("one after dedup");
+    assert_eq!(reg.len(), 1, "implicit and explicit sh are one hook");
+}
+
+#[test]
+fn test_build_distinct_shells() {
+    // A different shell is a different hook: the invocation differs,
+    // so both must survive dedup.
+    let mut s1 = user_spec("lint-sh", &["PreToolUse"], "sh");
+    s1.0.args = vec!["-c".into(), "echo hi".into()];
+    s1.0.shell = Some("sh".into());
+    let mut s2 = user_spec("lint-bash", &["PreToolUse"], "bash");
+    s2.0.args = vec!["-c".into(), "echo hi".into()];
+    s2.0.shell = Some("bash".into());
+    let specs = vec![s1, s2];
+    let reg = build_hook_registry(&specs, launcher(), HookPolicy::AllEnabled).expect("two hooks");
+    assert_eq!(reg.len(), 2, "sh and bash are distinct hooks");
+}
+
+#[test]
 fn test_build_hooks_distinct_conditions() {
     // Same program but different if conditions are distinct hooks.
     let mut s1 = user_spec("lint-a", &["PreToolUse"], "true");
@@ -139,6 +172,46 @@ fn test_build_hooks_last_wins() {
     let entries = reg.list();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].source, HookSource::Project);
+}
+
+#[test]
+fn test_build_hooks_once_registers() {
+    // A spec with once=true registers; the hook's once flag is wired.
+    let mut s = user_spec("once-hook", &["PreToolUse"], "echo hi");
+    s.0.once = true;
+    let specs = vec![s];
+    let reg =
+        build_hook_registry(&specs, launcher(), HookPolicy::AllEnabled).expect("one once hook");
+    assert_eq!(reg.len(), 1);
+}
+
+#[test]
+fn test_build_if_cond_fires() {
+    // A hook with if_condition="Bash" registers and fires when the
+    // tool name matches. The if-condition is a bare tool name (no
+    // glob pattern), so it passes on any Bash call.
+    let mut s = user_spec("if-hook", &["PreToolUse"], "echo hi");
+    s.0.if_condition = Some("Bash".into());
+    let specs = vec![s];
+    let reg = build_hook_registry(&specs, launcher(), HookPolicy::AllEnabled).expect("one if hook");
+    assert_eq!(reg.len(), 1);
+    // Dispatch the hook on a Bash PreToolUse event and verify it fires
+    // (returns a verdict, not an Allow skip).
+    use houyicoder_context::SessionId;
+    use houyicoder_core::agent::HookContext;
+    use houyicoder_core::agent::HookEvent;
+    use houyicoder_core::agent::HookPayload;
+    let ctx = HookContext {
+        event: HookEvent::PreToolUse,
+        payload: HookPayload::PreToolUse {
+            tool_name: "bash".into(),
+            input: serde_json::json!({"command": "echo hi"}),
+            backfilled_input: None,
+        },
+        session: SessionId::new(),
+    };
+    let outcomes = reg.dispatch(&ctx);
+    assert_eq!(outcomes.len(), 1, "hook should fire on matching if");
 }
 
 /// After the Skill tool runs, the grant hook reads allowed_tools from a

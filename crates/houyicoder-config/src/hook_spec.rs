@@ -44,16 +44,24 @@ pub struct HookSpec {
     /// no pre-filter.
     #[serde(default, rename = "if")]
     pub if_condition: Option<String>,
-    /// The shell interpreter to run the command through. When set, the
-    /// composition root maps the command string to a shell invocation
-    /// (program becomes the shell, args become -c plus the command). None
-    /// means the program and args fields are used directly (the legacy
-    /// env-var format).
+    /// The shell interpreter the hook declared, retained as written.
+    /// This is a record of the declaration, not a control input: the
+    /// settings parser has already folded it into program and args
+    /// (program becomes the shell, args become -c plus the command), and
+    /// those are what actually spawn. Editing this field alone changes
+    /// nothing. None means program and args stand on their own, which is
+    /// how the environment-variable format supplies a hook.
     #[serde(default)]
     pub shell: Option<String>,
     /// Per-hook timeout in seconds. None means the registry default applies.
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// Whether this hook fires only once. When true, the hook removes
+    /// itself from the registry after the first attempt that produced a
+    /// verdict, so it never runs again in this session. An attempt that
+    /// failed to run does not count, leaving the hook in place to retry.
+    #[serde(default)]
+    pub once: bool,
 }
 
 /// The list of external command hooks configured via env. An empty or unset
@@ -150,6 +158,7 @@ pub fn parse_hooks_from_settings(value: &serde_json::Value) -> Vec<HookSpec> {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 let timeout_secs = hook.get("timeout").and_then(|v| v.as_u64());
+                let once = hook.get("once").and_then(|v| v.as_bool()).unwrap_or(false);
                 let (program, args) = shell_invocation(shell.as_deref(), command);
                 let name = format!("{event_name}:{command}");
                 specs.push(HookSpec {
@@ -161,6 +170,7 @@ pub fn parse_hooks_from_settings(value: &serde_json::Value) -> Vec<HookSpec> {
                     if_condition,
                     shell,
                     timeout_secs,
+                    once,
                 });
             }
         }
@@ -175,8 +185,12 @@ pub fn parse_hooks_from_settings(value: &serde_json::Value) -> Vec<HookSpec> {
 /// argument so the shell interprets it (pipes, redirects, variable
 /// expansion all work without the caller building a script file).
 fn shell_invocation(shell: Option<&str>, command: &str) -> (String, Vec<String>) {
+    // None defaults to sh (the legacy env-var format). bash stays bash
+    // (mapping bash to sh is unsafe: sh may be dash on Linux, and bash
+    // scripts can use features dash lacks).
     let program = match shell {
-        Some("bash") | Some("sh") | None => "sh",
+        Some("bash") => "bash",
+        Some("sh") | None => "sh",
         Some(other) => other,
     };
     (
@@ -268,6 +282,7 @@ mod tests {
             if_condition: None,
             shell: None,
             timeout_secs: None,
+            once: false,
         };
         let s = serde_json::to_string(&spec).unwrap();
         let back: HookSpec = serde_json::from_str(&s).unwrap();
@@ -289,7 +304,7 @@ mod tests {
                     {
                         "matcher": "Bash|Edit",
                         "hooks": [
-                            {"type": "command", "command": "echo lint", "timeout": 30}
+                            {"type": "command", "command": "echo lint", "timeout": 30, "once": true}
                         ]
                     }
                 ],
@@ -307,8 +322,19 @@ mod tests {
         let pre = specs.iter().find(|s| s.events[0] == "PreToolUse").unwrap();
         assert_eq!(pre.matcher.as_deref(), Some("Bash|Edit"));
         assert_eq!(pre.timeout_secs, Some(30));
+        assert!(pre.once, "once field parsed from settings");
         assert_eq!(pre.program, "sh");
         assert_eq!(pre.args, vec!["-c", "echo lint"]);
+        // bash shell stays bash (not mapped to sh).
+        let bash_val = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {"hooks": [{"type": "command", "command": "echo hi", "shell": "bash"}]}
+                ]
+            }
+        });
+        let bash_specs = parse_hooks_from_settings(&bash_val);
+        assert_eq!(bash_specs[0].program, "bash");
         let post = specs.iter().find(|s| s.events[0] == "PostToolUse").unwrap();
         assert_eq!(post.if_condition.as_deref(), Some("Bash(git *)"));
         assert!(post.matcher.is_none());

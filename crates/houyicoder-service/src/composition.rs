@@ -786,15 +786,14 @@ impl SessionHost {
 }
 
 /// A cloned snapshot of a session's live handle. pub(crate) so the
-/// serve_session entry point re-hydrates a Server from it without the host
-/// exposing its internal LiveRunnerHandle.
+/// serve_session entry point re-hydrates a Server from it without the
+/// host exposing its internal LiveRunnerHandle.
 pub(crate) struct RunnerHandleClone {
     pub(crate) runner: Arc<Runner>,
     pub(crate) next_seq: Arc<AtomicU64>,
     pub(crate) pushed_count: usize,
     pub(crate) gate: Arc<dyn ModeGate>,
 }
-
 #[cfg(test)]
 #[path = "composition_tests.rs"]
 mod tests;
