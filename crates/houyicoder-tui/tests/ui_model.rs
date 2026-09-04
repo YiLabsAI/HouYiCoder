@@ -247,3 +247,65 @@ fn test_model_flag_overrides_settings() {
         s.output_plain()
     );
 }
+
+/// Switching to Default from a concrete model + reopening /model: the
+/// cursor lands on the Default row without a visible slide, and the
+/// Default row carries the check mark. This is the 3x-recurring bug
+/// (#113/#177/#178): cursor followed active_id (which flips between
+/// Some(resolved) and None) instead of model_tier (stable). The unit
+/// test test_open_default_stale_id is the mutation discriminator; this
+/// PTY journey exercises the real binary key sequence end-to-end.
+#[test]
+#[ignore]
+fn test_model_switch_to_default() {
+    let home = fresh_temp_dir("model-default-switch-home");
+    std::fs::create_dir_all(home.join(".houyicoder")).unwrap();
+    let settings = home.join(".houyicoder").join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"model":{"id":"qwen3-coder","catalog":[{"id":"qwen3-coder"}]}}"#,
+    )
+    .unwrap();
+    let mut s = PtySession::launch_with_home(home.clone());
+    assert!(s.wait_for("sign in to houyicoder", RENDER_TIMEOUT), "login");
+    s.send_key(&Key::Char('3'));
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen"
+    );
+    // Open /model, navigate to Default (row 0), Enter.
+    run_slash_command(&mut s, "model");
+    assert!(
+        s.wait_for_plain("Select a model", RENDER_TIMEOUT),
+        "model pane opens: {}",
+        s.output_plain()
+    );
+    // Wait for the catalog to arrive so the cursor jumps to the active
+    // row before navigating up to Default. The footer changes from the
+    // empty-state guide to the save hint once the catalog loads.
+    assert!(
+        s.wait_for_plain("Enter to save", RENDER_TIMEOUT),
+        "catalog arrives (footer flips to the save hint): {}",
+        s.output_plain()
+    );
+    // Up to row 0 (Default), Enter.
+    s.send_key(&Key::Up);
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_plain("model: Default", RENDER_TIMEOUT),
+        "selecting Default fires the model system line: {}",
+        s.output_plain()
+    );
+    // Reopen /model: cursor on Default (row 0) + Default checked.
+    run_slash_command(&mut s, "model");
+    assert!(
+        s.wait_for_plain("Select a model", RENDER_TIMEOUT),
+        "model pane reopens: {}",
+        s.output_plain()
+    );
+    let out = s.output_plain();
+    assert!(
+        out.contains("Default"),
+        "Default row visible on reopen: {out}"
+    );
+}

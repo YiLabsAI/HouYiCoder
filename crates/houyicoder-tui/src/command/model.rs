@@ -52,19 +52,18 @@ impl App {
     pub(crate) fn set_model_at_cursor(&mut self) {
         let idx = self.model_sel;
         let id = crate::view::model_pane::model_id_at(self, idx);
-        // For the Default sentinel (id=None), do not set status.model here —
-        // the server resolves Default to DEFAULT_MODEL and the ModelResult
-        // reply carries the resolved id. Setting it to "Default" here causes
-        // a visible flicker (Default → resolved model). For a concrete id,
-        // set it immediately (the reply echoes the same id, no flicker).
-        if let Some(ref concrete) = id {
-            self.status.model = concrete.clone();
-        }
         let tier = id
             .clone()
             .or_else(|| Some("Default".into()))
             .unwrap_or_else(|| "Default".into());
         self.model_tier = tier.clone();
+        // status.model holds the resolved concrete (for the status pane +
+        // snapshot, which show what is running). Set it for a concrete pick;
+        // for Default the ModelResult reply fills the resolved value. The
+        // status BAR reads model_tier via status_bar_model(), not this.
+        if let Some(ref concrete) = id {
+            self.status.model = concrete.clone();
+        }
         if let Some(req_id) = self.mint_request_id() {
             self.send_cmd(crate::run_control::ClientCommand::ModelSwitch {
                 req_id,

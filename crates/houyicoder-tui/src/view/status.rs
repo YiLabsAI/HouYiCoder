@@ -112,7 +112,7 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let (mode_label, mode_style) = mode_pill(mode);
     let mut left: Vec<Span<'static>> = vec![
         Span::raw(" "),
-        Span::styled(app.status.model.clone(), dim),
+        Span::styled(app.status_bar_model().to_string(), dim),
         Span::styled(" · ", dim),
         Span::styled(mode_label, mode_style),
     ];
@@ -546,7 +546,7 @@ mod tests {
         use houyicoder_protocol::llm::EffortLevel;
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
-        app.status.model = "qwen3.7-max".into();
+        app.model_tier = "qwen3.7-max".into();
         app.applied_effort = Some(EffortLevel::High);
         let backend = TestBackend::new(80, 3);
         let mut term = Terminal::new(backend).unwrap();
@@ -574,7 +574,7 @@ mod tests {
         use houyicoder_protocol::llm::Usage;
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
-        app.status.model = "test-model".into();
+        app.model_tier = "test-model".into();
         app.status_cache = Some(StatusSnapshot {
             model: "test-model".into(),
             breaker_state: None,

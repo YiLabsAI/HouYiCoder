@@ -149,7 +149,8 @@ pub fn build_app(bundle: RunnerBundle) -> App {
         app.screen = crate::state::Screen::Working;
         app.login_mode = Some(houyicoder_protocol::frontend::LoginMode::Local);
     }
-    app.status.model = model;
+    app.status.model = model.clone();
+    app.model_tier = model;
     app.status.sandbox = "mac-seatbelt".to_string();
     app.session_id = session_id;
     app.runtime = Some(runtime);

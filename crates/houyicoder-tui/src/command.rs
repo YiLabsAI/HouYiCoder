@@ -238,6 +238,14 @@ impl App {
     /// so /context /status /sandbox still render a real-shaped layout with
     /// zeroed usage instead of a canned string that hides which fields are
     /// live.
+    /// The model label the status bar shows: the user's mode choice (tier),
+    /// not the resolved concrete (status.model, which the status pane +
+    /// snapshot read). Assembled here so the view depends on this seam, not
+    /// on the model_tier field scattered across callers.
+    pub(crate) fn status_bar_model(&self) -> &str {
+        &self.model_tier
+    }
+
     pub(crate) fn snapshot_or_stub(&self) -> StatusSnapshot {
         self.status_cache.clone().unwrap_or_else(|| StatusSnapshot {
             model: self.status.model.clone(),

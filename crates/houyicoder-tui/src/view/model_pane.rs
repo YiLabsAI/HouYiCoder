@@ -450,4 +450,81 @@ mod tests {
             "catalog refresh in Default mode jumped the cursor to row 0"
         );
     }
+
+    /// The slide bug (#178): after switching to Default, active_id still
+    /// holds the stale concrete (until the catalog refresh clears it), but
+    /// the user's tier is already Default. The cursor must land on row 0
+    /// (Default) on open, not on the stale concrete row. This staging
+    /// distinguishes the tier-driven fix from the prior active_id-driven
+    /// code: revert the fix and this test fails (cursor follows the stale
+    /// Some to the concrete row), while the active_id=None tests pass
+    /// either way.
+    #[test]
+    fn test_open_default_stale_id() {
+        use houyicoder_protocol::frontend::SlashCommand;
+        let mut app = crate::composition::app();
+        app.pane = crate::state::Pane::Transcript;
+        app.model_catalog = houyicoder_protocol::frontend::model::ModelCatalog {
+            active_id: Some("stale".into()),
+            effort_level: None,
+            catalog: vec![
+                houyicoder_protocol::frontend::model::ModelCatalogEntry {
+                    id: "stale".into(),
+                    display_name: None,
+                    description: None,
+                    effort: None,
+                },
+                houyicoder_protocol::frontend::model::ModelCatalogEntry {
+                    id: "other".into(),
+                    display_name: None,
+                    description: None,
+                    effort: None,
+                },
+            ],
+        };
+        app.model_tier = "Default".to_string();
+        app.model_sel = 1;
+        app.run_command(SlashCommand::Model);
+        assert_eq!(
+            app.model_sel, 0,
+            "cursor on Default despite a stale concrete active_id, \
+             not slid to the stale row"
+        );
+    }
+
+    /// Selecting Default sets status.model to "Default" (the tier), not the
+    /// resolved concrete, so the status bar updates immediately on select
+    /// without waiting for the ModelResult reply. The reply leaves
+    /// status.model alone in Default mode. Revert the set_model_at_cursor
+    /// change (status.model = tier) and this fails — status.model stays at
+    /// the prior concrete.
+    #[test]
+    fn test_select_default_sets_status() {
+        use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
+        let mut app = crate::composition::app();
+        app.pane = crate::state::Pane::Model;
+        app.status.model = "qwen3.6-flash".into();
+        app.model_catalog = ModelCatalog {
+            active_id: Some("qwen3.6-flash".into()),
+            effort_level: None,
+            catalog: vec![ModelCatalogEntry {
+                id: "qwen3.6-flash".into(),
+                display_name: None,
+                description: None,
+                effort: None,
+            }],
+        };
+        // Cursor on row 0 (the Default sentinel).
+        app.model_sel = 0;
+        app.set_model_at_cursor();
+        assert_eq!(
+            app.model_tier, "Default",
+            "selecting Default sets the tier the status bar reads via status_bar_model"
+        );
+        assert_eq!(
+            app.status_bar_model(),
+            "Default",
+            "the status bar seam returns the Default mode, not the resolved concrete"
+        );
+    }
 }
