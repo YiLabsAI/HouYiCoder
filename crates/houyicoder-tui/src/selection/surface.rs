@@ -286,42 +286,11 @@ impl Surface for TranscriptSurface<'_> {
         self.app.selection.is_dragging
     }
 
-    /// Fold/thought click intercepts first (a click on a fold summary or
-    /// "Thought for" row toggles instead of starting a selection), then the
-    /// shared down body. The order: intercept, then
-    /// recovery, then on_click.
+    /// Press always starts a selection (the shared down body): a fold,
+    /// subagent, or thought toggle is decided on release, not here, so a drag
+    /// can select the summary text instead of being swallowed by the toggle.
+    /// The clean-click toggle dispatch lives in handle_up.
     fn handle_down(&mut self, x: u16, y: u16) {
-        let rect = self.app.transcript_rect.get();
-        let ri = (y.saturating_sub(rect.y)) as usize;
-        let (tag, text) = self
-            .app
-            .last_transcript_rows
-            .borrow()
-            .get(ri)
-            .cloned()
-            .unwrap_or((selection::TAG_PLAIN, String::new()));
-        if tag == selection::TAG_FOLD {
-            self.app.toggle_fold_at_row(ri);
-            return;
-        }
-        // A non-fold row carrying a fold key is a Subagent delegation head:
-        // only Subagent heads and TAG_FOLD rows publish a fold key, and the
-        // TAG_FOLD case already returned. Click toggles inline expansion
-        // instead of starting a drag-select.
-        if self
-            .app
-            .last_row_fold_keys
-            .borrow()
-            .get(ri)
-            .is_some_and(|k| k.is_some())
-        {
-            self.app.toggle_subagent_expand_at_row(ri);
-            return;
-        }
-        if text.contains("Thought for") {
-            self.app.toggle_thinking_expand_at_row(ri);
-            return;
-        }
         down_body(self, x, y);
     }
 
@@ -344,17 +313,61 @@ impl Surface for TranscriptSurface<'_> {
         drag_body(self, x, y);
     }
 
-    /// A clean click (no drag motion) inside an expanded fold block collapses
-    /// it; a real drag copies (drag wins over collapse). The guard runs before
-    /// parts because collapse_expanded_under_anchor needs &mut App
-    /// wholesale; parts would split-borrow the App fields.
+    /// A clean click (no drag motion) toggles a fold/subagent/thought row, or
+    /// collapses an expanded block when the click lands on its content; a real
+    /// drag copies (drag wins over toggle). Reads the anchor row's tag to
+    /// decide, the way collapse_expanded_under_anchor does. The guard runs
+    /// before parts because the toggles need &mut App wholesale; parts would
+    /// split-borrow the App fields.
     fn handle_up(&mut self) {
-        if !self.app.selection.drag_moved
+        let clean = !self.app.selection.drag_moved
             && self.app.selection.is_click_only()
-            && self.app.selection.span_origin.is_none()
-            && self.app.collapse_expanded_under_anchor()
-        {
-            return;
+            && self.app.selection.span_origin.is_none();
+        if clean {
+            // Read the anchor row's tag/text/fold-key, then drop the borrows
+            // before the &mut App toggle calls.
+            let target = (|| {
+                let ri = self.app.anchor_visible_row()?;
+                let (tag, text) = self
+                    .app
+                    .last_transcript_rows
+                    .borrow()
+                    .get(ri)
+                    .cloned()
+                    .unwrap_or((selection::TAG_PLAIN, String::new()));
+                let fold_key = self
+                    .app
+                    .last_row_fold_keys
+                    .borrow()
+                    .get(ri)
+                    .cloned()
+                    .flatten();
+                Some((ri, tag, text, fold_key))
+            })();
+            if let Some((ri, tag, text, fold_key)) = target {
+                if tag == selection::TAG_FOLD {
+                    self.app.toggle_fold_at_row(ri);
+                    self.app.selection.last_click = None;
+                    self.app.selection.clear();
+                    return;
+                }
+                if fold_key.is_some() {
+                    self.app.toggle_subagent_expand_at_row(ri);
+                    self.app.selection.last_click = None;
+                    self.app.selection.clear();
+                    return;
+                }
+                if text.contains("Thought for") {
+                    self.app.toggle_thinking_expand_at_row(ri);
+                    self.app.selection.last_click = None;
+                    self.app.selection.clear();
+                    return;
+                }
+            }
+            if self.app.collapse_expanded_under_anchor() {
+                self.app.selection.last_click = None;
+                return;
+            }
         }
         // Scope p so its split-borrows of app fields (selection, clipboard,
         // rows) release before we touch app.notifications (a different field).

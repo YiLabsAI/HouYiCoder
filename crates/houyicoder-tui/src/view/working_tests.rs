@@ -225,6 +225,15 @@ fn test_fold_collapse_expand_toggle() {
             modifiers: KeyModifiers::NONE,
         },
     );
+    app::handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: fold_y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
     assert!(
         app.expanded_fold_groups.contains("c1#0"),
         "click on summary should expand"
@@ -244,6 +253,15 @@ fn test_fold_collapse_expand_toggle() {
         &mut app,
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: fold_y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    app::handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
             column: 0,
             row: fold_y,
             modifiers: KeyModifiers::NONE,
@@ -453,6 +471,15 @@ fn test_fold_expand_one_only() {
         &mut app,
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y + fold_ri as u16,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    crate::app::handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
             column: rect.x,
             row: rect.y + fold_ri as u16,
             modifiers: KeyModifiers::NONE,

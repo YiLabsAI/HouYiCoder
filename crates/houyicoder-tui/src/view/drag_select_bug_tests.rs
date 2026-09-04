@@ -534,6 +534,9 @@ fn app_with_fold_group() -> crate::state::App {
 
 /// Expand the first fold group by clicking its collapsed summary row.
 /// Returns the group key ("c1#0") and re-renders so body rows are published.
+/// A clean click is Down + Up at the same cell: the toggle is dispatched on
+/// release, so a press alone no longer expands (a press always starts a
+/// selection now, so the summary text is drag-selectable).
 fn expand_first_group(app: &mut crate::state::App) -> String {
     let fold_ri = app
         .last_row_fold_keys
@@ -547,6 +550,7 @@ fn expand_first_group(app: &mut crate::state::App) -> String {
         app,
         mouse(MouseEventKind::Down(MouseButton::Left), rect.x, y),
     );
+    crate::app::handle_mouse(app, mouse(MouseEventKind::Up(MouseButton::Left), rect.x, y));
     let _out = render_text(app, 80, 24);
     "c1#0".to_string()
 }
@@ -665,6 +669,50 @@ fn test_drag_return_keeps_group() {
     assert!(
         app.expanded_fold_groups.contains(&key),
         "a drag that returned to its start must not collapse the group"
+    );
+}
+
+/// A drag on a collapsed fold summary row selects + copies its text instead
+/// of toggling the group: the press always starts a selection, the toggle
+/// fires only on a clean release. The summary text is selectable/copyable.
+#[test]
+fn test_drag_fold_summary_copies() {
+    let mut app = app_with_fold_group();
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    app.clipboard = Arc::new(RecordingClipboard {
+        captured: captured.clone(),
+    });
+    let _out = render_text(&app, 80, 24);
+    let fold_ri = app
+        .last_row_fold_keys
+        .borrow()
+        .iter()
+        .position(|k| k.is_some())
+        .expect("a fold summary row exists");
+    let rect = app.transcript_rect.get();
+    let y = screen_y(&app, fold_ri_to_all_rows_index(&app, fold_ri));
+    let x0 = rect.x;
+    // A real drag: press on the summary, move right, release.
+    crate::app::handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x0, y),
+    );
+    crate::app::handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Drag(MouseButton::Left), x0 + 6, y),
+    );
+    crate::app::handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Up(MouseButton::Left), x0 + 6, y),
+    );
+    let copied = captured.lock().expect("captured").clone();
+    assert!(
+        !copied.is_empty(),
+        "drag on the fold summary must copy its text, not toggle: {copied:?}"
+    );
+    assert!(
+        !app.expanded_fold_groups.contains("c1#0"),
+        "a drag must not expand the group"
     );
 }
 

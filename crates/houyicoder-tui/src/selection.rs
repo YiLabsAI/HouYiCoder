@@ -38,9 +38,11 @@ pub const TAG_DIFF_HUNK: u8 = 6;
 /// excluded from the clipboard — a no-select bitmap over the glyph cols.
 /// The glyph is still rendered on screen, just not copied.
 pub const TAG_AGENT_FIRST: u8 = 7;
-/// A collapsed-fold-group summary row or an expanded-group collapse hint.
-/// Not real content — copy/selection skips it, and a click toggles the fold
-/// group instead of starting a selection.
+/// A collapsed-fold-group summary row or an expanded-group collapse hint. The
+/// summary text is selectable and copyable (a user can drag-select the chip
+/// text); a clean click (press + release with no drag) toggles the group, a
+/// real drag selects the text — decided on release, not press, so a press
+/// always starts a selection like any content row.
 pub const TAG_FOLD: u8 = 8;
 /// Rows painted by an inline widget (the /context usage block): the row
 /// string carries no text, the pixels come from a direct widget draw. Not
@@ -58,15 +60,13 @@ pub const TAG_DIFF_CTX: u8 = 10;
 /// dim dashed line.
 pub const TAG_DIFF_BORDER: u8 = 11;
 
-/// True when the row tag marks a non-content row (spinner, fold summary,
-/// widget-painted, the inter-hunk "..." gap, or a diff border):
-/// excluded from selection, overlay paint, and copy.
+/// True when the row tag marks a non-content row (spinner, widget-painted,
+/// the inter-hunk "..." gap, or a diff border): excluded from selection,
+/// overlay paint, and copy. A fold summary (TAG_FOLD) is NOT here: its text
+/// is selectable so a user can copy the chip summary, and the toggle is
+/// dispatched on a clean release instead of swallowing the press.
 pub fn is_non_selectable(tag: u8) -> bool {
-    tag == TAG_SPINNER
-        || tag == TAG_FOLD
-        || tag == TAG_WIDGET
-        || tag == TAG_DIFF_HUNK
-        || tag == TAG_DIFF_BORDER
+    tag == TAG_SPINNER || tag == TAG_WIDGET || tag == TAG_DIFF_HUNK || tag == TAG_DIFF_BORDER
 }
 
 /// The number of leading display columns to skip when copying a structured-

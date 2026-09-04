@@ -1299,6 +1299,7 @@ fn test_click_subagent_head_expands() {
     {
         let mut surface = TranscriptSurface { app: &mut app };
         surface.handle_down(rect.x, rect.y);
+        surface.handle_up();
     }
     assert!(
         app.expanded_subagents.contains("c1"),
@@ -1311,6 +1312,7 @@ fn test_click_subagent_head_expands() {
     {
         let mut surface = TranscriptSurface { app: &mut app };
         surface.handle_down(rect.x, rect.y);
+        surface.handle_up();
     }
     assert!(
         !app.expanded_subagents.contains("c1"),
