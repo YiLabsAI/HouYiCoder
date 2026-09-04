@@ -1,9 +1,10 @@
 //! BashTool: run a shell command in the sandbox. Destructive commands
 //! snapshot the writable roots first (so /undo can revert); the output is
 //! bounded so a runaway command cannot overflow the model context (the
-//! full output spills to a temp file past the cap). Split from tools.rs so
+//! full output spills to a workspace file past the cap). Split from tools.rs so
 //! that file stays under the file-size gate.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use houyicoder_api::sandbox::SandboxSession;
@@ -146,7 +147,8 @@ impl Tool for BashTool {
             // full output is re-readable via the spill path in the marker.
             let exit_code = result.exit_code;
             let success = result.is_success();
-            let (stdout, stderr) = bound_bash_output(result.stdout, result.stderr);
+            let (stdout, stderr) =
+                bound_bash_output(result.stdout, result.stderr, &self.session.workspace_root());
             // Fold a snapshot-decline notice into stderr so the user sees it
             // inline with the command's own output (it is a per-command
             // notice about undo, not the command's own error, but stderr is
@@ -176,7 +178,7 @@ impl Tool for BashTool {
 }
 
 /// Max chars a bash result may enter the model context before it spills to a
-/// temp file. A runaway command (find on a huge tree, a verbose build) can
+/// workspace file. A runaway command (find on a huge tree, a verbose build) can
 /// emit megabytes; without a bound the next turn overflows the context
 /// window and the provider rejects with HTTP 400, bricking the session.
 ///
@@ -194,15 +196,15 @@ const BASH_STUB_CHARS: usize = 5_000;
 
 /// Bound a bash result before it enters the model context. Under the cap the
 /// output passes through verbatim. Over the cap the full stdout + stderr
-/// spill to a temp file (stderr lines tagged) and the model gets the tail
+/// spill to a workspace file (stderr lines tagged) and the model gets the tail
 /// plus a marker naming the spill path so it can re-read the full output.
-fn bound_bash_output(stdout: String, stderr: String) -> (String, String) {
+fn bound_bash_output(stdout: String, stderr: String, spill_dir: &Path) -> (String, String) {
     let combined = stdout.len() + stderr.len();
     if combined <= BASH_MAX_OUTPUT_CHARS {
         return (stdout, stderr);
     }
     let kb = combined / 1024;
-    match spill_bash_output(&stdout, &stderr) {
+    match spill_bash_output(&stdout, &stderr, spill_dir) {
         Ok(path) => {
             let tail = tail_chars(&stdout, BASH_STUB_CHARS);
             let stub = format!(
@@ -214,7 +216,7 @@ fn bound_bash_output(stdout: String, stderr: String) -> (String, String) {
             (stub, String::new())
         }
         Err(_) => {
-            // Spill failed (temp dir unwritable): fall back to a head+tail
+            // Spill failed (workspace dir unwritable): fall back to a head+tail
             // in-memory stub so the result still fits the context budget.
             let half = BASH_MAX_OUTPUT_CHARS / 2;
             let head: String = stdout.chars().take(half).collect();
@@ -228,15 +230,21 @@ fn bound_bash_output(stdout: String, stderr: String) -> (String, String) {
     }
 }
 
-/// Write the full stdout + stderr to a temp file, stderr lines prefixed so
+/// Write the full stdout + stderr to a workspace file, stderr lines prefixed so
 /// the spill is self-describing. Returns the spill path for the marker.
-fn spill_bash_output(stdout: &str, stderr: &str) -> std::io::Result<std::path::PathBuf> {
+fn spill_bash_output(
+    stdout: &str,
+    stderr: &str,
+    spill_dir: &Path,
+) -> std::io::Result<std::path::PathBuf> {
     use std::io::Write;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("houyi-bash-{nanos}.log"));
+    let dir = spill_dir.join(".houyicoder").join("bash-output");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("houyi-bash-{nanos}.log"));
     let mut f = std::fs::File::create(&path)?;
     f.write_all(stdout.as_bytes())?;
     if !stderr.is_empty() {
@@ -263,15 +271,17 @@ mod bash_bound_tests {
 
     #[test]
     fn test_bound_under_cap_passes() {
-        let (o, e) = bound_bash_output("hello".into(), "world".into());
+        let dir = std::env::temp_dir();
+        let (o, e) = bound_bash_output("hello".into(), "world".into(), &dir);
         assert_eq!(o, "hello");
         assert_eq!(e, "world");
     }
 
     #[test]
     fn test_bound_over_cap_spills() {
+        let dir = std::env::temp_dir();
         let big = "a".repeat(BASH_MAX_OUTPUT_CHARS + 1);
-        let (o, e) = bound_bash_output(big.clone(), String::new());
+        let (o, e) = bound_bash_output(big.clone(), String::new(), &dir);
         assert!(o.contains("Output truncated"), "marker missing: {o}");
         assert!(
             o.contains("Full output saved to"),
