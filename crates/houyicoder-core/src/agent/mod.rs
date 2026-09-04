@@ -200,6 +200,10 @@ pub struct Runner {
     /// tool loads bodies on demand). None in tests and the pure-stub path
     /// (no skill discovery).
     skill_registry: Option<Arc<dyn houyicoder_api::skill::SkillRegistry>>,
+    /// Optional sandbox session, shared with the BashTool so the @skill:
+    /// path (skill_slash) can grant the same entitlements the Skill tool
+    /// grants (app-launch + extra mach services). None in tests / no-sandbox.
+    sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
     /// Optional hook registry. When wired, the runner fires PreToolUse
     /// before each tool execution and PostToolUse / PostToolUseFailure
     /// after, arbitrating verdicts (Deny blocks, Feedback surfaces a
@@ -356,6 +360,16 @@ impl Runner {
     /// show what would execute. None on the pure-stub path (no discovery).
     pub fn skill_registry(&self) -> Option<&Arc<dyn houyicoder_api::skill::SkillRegistry>> {
         self.skill_registry.as_ref()
+    }
+
+    /// Wire the shared sandbox session so the @skill: slash path can
+    /// grant entitlements the Skill tool grants. None in tests.
+    pub fn with_sandbox_session(
+        mut self,
+        session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
+    ) -> Self {
+        self.sandbox_session = session;
+        self
     }
 
     /// The dream's cross-session scan root, or None when in-memory.

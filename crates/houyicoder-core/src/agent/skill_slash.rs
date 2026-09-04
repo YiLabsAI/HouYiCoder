@@ -115,6 +115,14 @@ impl Runner {
         match registry.prepare_body(&name, args, Some(&sid)) {
             Ok(body) => {
                 registry.record_invocation(&name, false);
+                // Grant the sandbox entitlements the skill's frontmatter
+                // declares (same as the Skill tool path), so the @skill:
+                // dispatch makes app-launch + mach services available to
+                // the bash commands the model runs next.
+                if let Some(session) = self.sandbox_session.as_ref() {
+                    session.set_allow_app_launch(desc.allow_app_launch);
+                    session.set_extra_mach_services(&desc.allowed_mach_services);
+                }
                 // Inject session context into the body (dynamic template
                 // placeholders {{userMessages}} + {{sessionMemory}} +
                 // {{userDescription}}). Only fires when the body contains

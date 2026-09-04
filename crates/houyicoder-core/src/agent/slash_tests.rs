@@ -74,6 +74,7 @@ impl SkillRegistry for SlashStubRegistry {
         let user_invocable = match name {
             "commit" => true,
             "secret" => false,
+            "launcher" => true,
             _ => return None,
         };
         Some(SkillDescriptor {
@@ -85,8 +86,12 @@ impl SkillRegistry for SlashStubRegistry {
             user_invocable,
             body_token_estimate: 0,
             allowed_tools: Vec::new(),
-            allowed_mach_services: Vec::new(),
-            allow_app_launch: false,
+            allowed_mach_services: if name == "launcher" {
+                vec!["ego.mojom.EgoCliBootstrap".into()]
+            } else {
+                Vec::new()
+            },
+            allow_app_launch: name == "launcher",
         })
     }
     fn prepare_body(
@@ -100,6 +105,7 @@ impl SkillRegistry for SlashStubRegistry {
         match name {
             "commit" => Ok(format!("commit body: {}", args.unwrap_or(""))),
             "secret" => Ok("secret body".into()),
+            "launcher" => Ok("launcher body".into()),
             _ => Err(SkillError::NotFound(name.into())),
         }
     }
@@ -644,4 +650,77 @@ async fn test_session_context_injection() {
         }
         other => panic!("expected Prepared, got {other:?}"),
     }
+}
+
+/// A sandbox session that records the entitlement grants so the slash
+/// path's grant wiring can be asserted.
+struct SlashRecordingSession {
+    app_launch: std::sync::Mutex<Option<bool>>,
+    mach: std::sync::Mutex<Vec<String>>,
+}
+impl houyicoder_api::sandbox::SandboxSession for SlashRecordingSession {
+    fn exec_with_config(
+        &self,
+        _: &str,
+        _: houyicoder_context::ExecConfig,
+    ) -> houyicoder_async::PFut<
+        '_,
+        Result<houyicoder_context::ExecResult, houyicoder_context::SandboxError>,
+    > {
+        Box::pin(async { Err(houyicoder_context::SandboxError::Unsupported("test".into())) })
+    }
+    fn read_file(
+        &self,
+        _: &str,
+        _: usize,
+    ) -> houyicoder_async::PFut<'_, Result<Vec<u8>, houyicoder_context::SandboxError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn write_file(
+        &self,
+        _: &str,
+        _: Vec<u8>,
+    ) -> houyicoder_async::PFut<'_, Result<(), houyicoder_context::SandboxError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn workspace_root(&self) -> Arc<std::path::Path> {
+        Arc::from(std::path::PathBuf::from("/"))
+    }
+    fn set_allow_app_launch(&self, allow: bool) {
+        *self.app_launch.lock().unwrap() = Some(allow);
+    }
+    fn set_extra_mach_services(&self, services: &[String]) {
+        let mut m = self.mach.lock().unwrap();
+        m.clear();
+        m.extend_from_slice(services);
+    }
+}
+
+/// The @skill: slash path must grant the sandbox entitlements a skill
+/// declares, same as the Skill tool path. Prevents the divergence that
+/// let the slash path ship without the grant.
+#[tokio::test]
+async fn test_slash_grants() {
+    let session = Arc::new(SlashRecordingSession {
+        app_launch: std::sync::Mutex::new(None),
+        mach: std::sync::Mutex::new(Vec::new()),
+    });
+    let runner = runner_with_slash().with_sandbox_session(Some(session.clone()));
+    let outcome = runner
+        .resolve_skill_slash(SessionId::new(), "@skill:launcher")
+        .await;
+    assert!(
+        matches!(outcome, super::SkillSlashOutcome::Prepared { .. }),
+        "launcher skill should resolve: {outcome:?}"
+    );
+    assert_eq!(
+        *session.app_launch.lock().unwrap(),
+        Some(true),
+        "slash path grants app-launch"
+    );
+    assert_eq!(
+        session.mach.lock().unwrap().clone(),
+        vec!["ego.mojom.EgoCliBootstrap".to_string()],
+        "slash path grants mach services"
+    );
 }

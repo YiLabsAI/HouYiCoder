@@ -525,6 +525,7 @@ pub(crate) fn assemble(
         .with_spawn_handle(spawn_handle)
         .with_skill_registry(std::sync::Arc::clone(&skill_registry)
             as std::sync::Arc<dyn houyicoder_api::skill::SkillRegistry>)
+        .with_sandbox_session(sandbox_session.clone())
         .with_conditional(std::sync::Arc::clone(&skill_conditional));
     runner.set_skill_reloader(hooks::build_skill_reloader(
         &skill_registry,

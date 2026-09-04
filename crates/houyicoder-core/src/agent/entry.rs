@@ -55,6 +55,7 @@ impl Runner {
             summarizer: Box::new(manifest::HeuristicSummarizer),
             memory: None,
             skill_registry: None,
+            sandbox_session: None,
             hooks: None,
             registrar: None,
             conditional: None,
