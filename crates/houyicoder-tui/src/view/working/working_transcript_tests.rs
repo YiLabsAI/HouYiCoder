@@ -173,3 +173,36 @@ fn test_spinner_keeps_blank_above() {
         "the user line should sit directly above that blank row, got:\n{out}"
     );
 }
+
+/// While a teammate view is open, the parent's live streaming text must not
+/// leak into the child's view. build_live_rows suppresses all live rows
+/// when teammate_view is Some, so even with live_active + non-empty
+/// live_assistant_text the result is zero rows.
+#[test]
+fn test_view_hides_live_rows() {
+    use crate::records::TeammateView;
+    let mut app = crate::test_support::working_app();
+    app.live_active = true;
+    app.live_assistant_text = "parent streaming text".into();
+    app.agent_busy = true;
+    app.run_started = Some(std::time::Instant::now());
+    app.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    let live = super::super::live_rows::build_live_rows(
+        ratatui::layout::Rect::new(0, 0, 80, 24),
+        &app,
+        false,
+    );
+    assert!(
+        live.rows.is_empty(),
+        "live rows must be empty in teammate view, got {} rows: {:?}",
+        live.rows.len(),
+        live.rows
+    );
+    assert!(
+        live.all_rows.is_empty(),
+        "all_rows must be empty too (stash for selection/copy)"
+    );
+}

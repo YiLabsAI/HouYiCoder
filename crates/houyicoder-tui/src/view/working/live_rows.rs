@@ -10,6 +10,7 @@ use super::row_sink::{Row, RowSink};
 use crate::records::ToolOutcome;
 use crate::state::App;
 
+#[derive(Default)]
 pub(super) struct LiveRows {
     pub rows: Vec<(u8, String, Option<ToolOutcome>)>,
     pub callids: Vec<Option<String>>,
@@ -38,6 +39,14 @@ pub(super) fn build_live_rows(area: Rect, app: &App, has_slots: bool) -> LiveRow
             sink.push(Row::spacer());
         }
     };
+
+    // The parent's live streaming text + spinner belong to the parent
+    // view. Suppress them while a teammate view is open so the child's
+    // transcript renders alone — the parent is not talking to the user
+    // while they are viewing a child.
+    if app.teammate_view.is_some() {
+        return LiveRows::default();
+    }
 
     if app.live_active && !app.live_assistant_text.is_empty() {
         spacer_if_needed(&mut sink);

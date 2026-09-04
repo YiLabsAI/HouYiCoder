@@ -95,6 +95,15 @@ impl App {
     /// first trailing block skips its leading spacer (matching the render
     /// guard that only adds a spacer when something precedes it).
     pub(crate) fn live_trailing_row_count(&self, prefix_empty: bool) -> usize {
+        // The parent's live rows (streaming text + spinner + todos) belong
+        // to the parent view. Suppress them while a teammate view is open so
+        // the count matches the render path (build_live_rows early-returns
+        // empty on the same guard). Without this, count == render breaks
+        // — the count path inflates by the parent's live rows while the
+        // render path shows zero, desyncing scroll + fold-aware offsets.
+        if self.teammate_view.is_some() {
+            return 0;
+        }
         let mut n = 0;
         let w = self.last_transcript_width.get();
         // No live thinking block during the turn (the live ∴ Thinking block
