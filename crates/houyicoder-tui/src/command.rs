@@ -68,15 +68,11 @@ impl App {
             }
             C::Model => {
                 self.pane = Pane::Model;
-                // Position the cursor on the active model's row immediately
-                // (from the cached catalog) so the first render shows the
-                // correct row — no flicker from the old position waiting
-                // for the ModelInfoResult reply. If the catalog is empty
-                // (first open), the reply will position it; if stale, the
-                // reply corrects it.
-                if let Some(ref active) = self.model_catalog.active_id {
-                    self.model_sel = row_for_model_id(self, Some(active));
-                }
+                // Jump the cursor to the active row from the cached catalog
+                // so the first render is correct. None maps to row 0 (the
+                // Default sentinel) — the prior code skipped the jump when
+                // no concrete id was set, leaving the cursor stale.
+                self.model_sel = row_for_model_id(self, self.model_catalog.active_id.as_deref());
                 if let Some(req_id) = self.mint_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::ModelInfoQuery { req_id });
                 }

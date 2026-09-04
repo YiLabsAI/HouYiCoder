@@ -361,4 +361,82 @@ mod tests {
             "cursor row resolves to the active model"
         );
     }
+
+    /// Opening /model with no concrete active id (Default sentinel active)
+    /// must jump the cursor to row 0. The prior code only jumped when
+    /// active_id was Some, so the cursor stayed stale on the last concrete
+    /// row whenever the user was in Default mode.
+    #[test]
+    fn test_open_default_cursor() {
+        use houyicoder_protocol::frontend::SlashCommand;
+        let mut app = crate::composition::app();
+        app.pane = crate::state::Pane::Transcript;
+        app.model_catalog = houyicoder_protocol::frontend::model::ModelCatalog {
+            active_id: None,
+            effort_level: None,
+            catalog: vec![
+                houyicoder_protocol::frontend::model::ModelCatalogEntry {
+                    id: "a".into(),
+                    display_name: None,
+                    description: None,
+                    effort: None,
+                },
+                houyicoder_protocol::frontend::model::ModelCatalogEntry {
+                    id: "b".into(),
+                    display_name: None,
+                    description: None,
+                    effort: None,
+                },
+            ],
+        };
+        // Stale cursor on a concrete row, as if the user last selected row 2.
+        app.model_sel = 2;
+        app.run_command(SlashCommand::Model);
+        assert_eq!(
+            app.pane,
+            crate::state::Pane::Model,
+            "open puts the model pane on top"
+        );
+        assert_eq!(
+            app.model_sel, 0,
+            "cursor jumped to row 0 (Default) when no concrete id is active"
+        );
+    }
+
+    /// A ModelInfoResult catalog refresh while in Default mode (active_id
+    /// None) must also jump the cursor to row 0, mirroring the /model open
+    /// path. The prior handler only jumped on Some, so a refresh left the
+    /// cursor stale on the last concrete row.
+    #[test]
+    fn test_refresh_default_cursor() {
+        use crate::run_control::AgentMessage;
+        use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
+        let mut app = crate::composition::app();
+        app.pane = crate::state::Pane::Model;
+        app.model_sel = 2;
+        app.handle_agent_message(AgentMessage::ModelInfoResult {
+            catalog: ModelCatalog {
+                active_id: None,
+                effort_level: None,
+                catalog: vec![
+                    ModelCatalogEntry {
+                        id: "a".into(),
+                        display_name: None,
+                        description: None,
+                        effort: None,
+                    },
+                    ModelCatalogEntry {
+                        id: "b".into(),
+                        display_name: None,
+                        description: None,
+                        effort: None,
+                    },
+                ],
+            },
+        });
+        assert_eq!(
+            app.model_sel, 0,
+            "catalog refresh in Default mode jumped the cursor to row 0"
+        );
+    }
 }

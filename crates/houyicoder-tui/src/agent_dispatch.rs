@@ -344,12 +344,12 @@ impl App {
                 self.model_catalog = catalog;
                 // Jump the cursor to the active model's row so opening the
                 // pane after a switch does not flash from the old position.
-                // row_for_model_id owns the +1 for the Default sentinel row;
-                // max_sel is catalog.len() (Default + catalog rows - 1).
+                // Unconditional — None (Default sentinel) maps to row 0 via
+                // row_for_model_id, the same path as the /model open command,
+                // so a catalog refresh while in Default mode does not leave
+                // the cursor stale on the last concrete row.
+                self.model_sel = row_for_model_id(self, self.model_catalog.active_id.as_deref());
                 let max_sel = self.model_catalog.catalog.len();
-                if let Some(ref active) = self.model_catalog.active_id {
-                    self.model_sel = row_for_model_id(self, Some(active));
-                }
                 if self.model_sel > max_sel {
                     self.model_sel = 0;
                 }
