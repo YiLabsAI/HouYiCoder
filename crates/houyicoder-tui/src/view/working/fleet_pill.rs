@@ -195,14 +195,20 @@ fn format_tokens(tokens: u64) -> String {
     }
 }
 
-/// Compact elapsed: under 60s as "Ns", otherwise "Nm" so a long-running
-/// child does not show "312s".
+/// Compact elapsed: under 60s as "Ns", under 1h as "Nm Ms", otherwise
+/// "Nh Nm Ns" so a long-running child does not show "312s" and retains
+/// the finer unit at each scale.
 fn format_elapsed(d: Duration) -> String {
     let secs = d.as_secs();
     if secs < 60 {
         format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
     } else {
-        format!("{}m", secs / 60)
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        let s = secs % 60;
+        format!("{}h {}m {}s", h, m, s)
     }
 }
 
@@ -567,7 +573,9 @@ mod tests {
     fn test_format_elapsed_compact() {
         assert_eq!(format_elapsed(Duration::from_secs(0)), "0s");
         assert_eq!(format_elapsed(Duration::from_secs(59)), "59s");
-        assert_eq!(format_elapsed(Duration::from_secs(60)), "1m");
-        assert_eq!(format_elapsed(Duration::from_secs(312)), "5m");
+        assert_eq!(format_elapsed(Duration::from_secs(60)), "1m 0s");
+        assert_eq!(format_elapsed(Duration::from_secs(312)), "5m 12s");
+        assert_eq!(format_elapsed(Duration::from_secs(3600)), "1h 0m 0s");
+        assert_eq!(format_elapsed(Duration::from_secs(3725)), "1h 2m 5s");
     }
 }
