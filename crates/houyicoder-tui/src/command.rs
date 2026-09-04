@@ -11,7 +11,6 @@ use houyicoder_protocol::frontend::status::StatusSnapshot;
 use crate::composition;
 use crate::pending_queue::{PendingItem, is_state_changing};
 use crate::state::{App, ArtifactSession, Pane, Screen, Stage, TranscriptLine, pane_for_stage};
-use crate::view::model_pane::row_for_model_id;
 
 /// /memory sub-command + pane-action methods (toggle / forget / cursor),
 /// split out so this file stays under the file-size gate.
@@ -68,11 +67,11 @@ impl App {
             }
             C::Model => {
                 self.pane = Pane::Model;
-                // Jump the cursor to the active row from the cached catalog
-                // so the first render is correct. None maps to row 0 (the
-                // Default sentinel) — the prior code skipped the jump when
-                // no concrete id was set, leaving the cursor stale.
-                self.model_sel = row_for_model_id(self, self.model_catalog.active_id.as_deref());
+                // Position by the user's mode choice (tier), not active_id.
+                // Tier is stable across catalog refreshes; active_id flips
+                // between Some(resolved) and None across the two reply
+                // paths, which produced a two-frame cursor slide.
+                self.model_sel = crate::view::model_pane::row_for_tier(self, &self.model_tier);
                 if let Some(req_id) = self.mint_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::ModelInfoQuery { req_id });
                 }

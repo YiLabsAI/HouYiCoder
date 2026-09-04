@@ -12,7 +12,6 @@ use crate::agent_message::AgentMessage;
 use crate::pending_queue::PendingItem;
 use crate::records::TranscriptLine;
 use crate::state::{App, Pane};
-use crate::view::model_pane::row_for_model_id;
 
 impl App {
     /// Apply one inbound agent message: stream a delta, raise a permission ask,
@@ -342,13 +341,18 @@ impl App {
             }
             AgentMessage::ModelInfoResult { catalog } => {
                 self.model_catalog = catalog;
-                // Jump the cursor to the active model's row so opening the
-                // pane after a switch does not flash from the old position.
-                // Unconditional — None (Default sentinel) maps to row 0 via
-                // row_for_model_id, the same path as the /model open command,
-                // so a catalog refresh while in Default mode does not leave
-                // the cursor stale on the last concrete row.
-                self.model_sel = row_for_model_id(self, self.model_catalog.active_id.as_deref());
+                // Sync the tier from the server's active_id so a resumed
+                // session (tier defaults to Default) picks up the real
+                // mode. None = Default mode, Some = that concrete id.
+                self.model_tier = self
+                    .model_catalog
+                    .active_id
+                    .as_deref()
+                    .unwrap_or("Default")
+                    .to_string();
+                // Position by tier (stable) so a refresh does not slide
+                // the cursor when active_id flips between the two paths.
+                self.model_sel = crate::view::model_pane::row_for_tier(self, &self.model_tier);
                 let max_sel = self.model_catalog.catalog.len();
                 if self.model_sel > max_sel {
                     self.model_sel = 0;

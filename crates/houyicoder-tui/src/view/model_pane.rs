@@ -75,13 +75,14 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         chunks[0],
     );
     let active_id = app.model_catalog.active_id.as_deref();
-    let items: Vec<ListItem> = std::iter::once(default_row(active_id))
+    let tier = app.model_tier.as_str();
+    let items: Vec<ListItem> = std::iter::once(default_row(active_id, tier))
         .chain(
             app.model_catalog
                 .catalog
                 .iter()
                 .enumerate()
-                .map(|(i, e)| catalog_row(i, e, active_id)),
+                .map(|(i, e)| catalog_row(i, e, tier)),
         )
         .collect();
     let mut state = ListState::default();
@@ -163,25 +164,35 @@ pub fn supports_effort(model: &str) -> bool {
     m.contains("qwen3") || m.contains("o1") || m.contains("o3") || m.contains("gpt-5")
 }
 
-/// The Default sentinel row. Marked active when no concrete id is set.
-fn default_row(active_id: Option<&str>) -> ListItem<'static> {
-    let is_active = active_id.is_none();
+/// The Default sentinel row. Active when the user's tier is Default. The
+/// resolved concrete id (active_id) only feeds the description line.
+fn default_row(active_id: Option<&str>, tier: &str) -> ListItem<'static> {
+    let is_active = tier == "Default";
     let desc = active_id
         .map(|id| format!("use the default model (currently {id})"))
         .unwrap_or_else(|| "use the default model".to_string());
     ListItem::new(format_row_line(0, "Default", &desc, is_active))
 }
 
-/// One catalog row. Marked active when its id matches the active id.
-fn catalog_row(
-    idx: usize,
-    entry: &ModelCatalogEntry,
-    active_id: Option<&str>,
-) -> ListItem<'static> {
+/// One catalog row. Active when its id matches the user's tier.
+fn catalog_row(idx: usize, entry: &ModelCatalogEntry, tier: &str) -> ListItem<'static> {
     let name = entry.display_name.as_deref().unwrap_or(&entry.id);
     let desc = entry.description.as_deref().unwrap_or("");
-    let is_active = active_id == Some(entry.id.as_str());
+    let is_active = tier == entry.id.as_str();
     ListItem::new(format_row_line(idx + 1, name, desc, is_active))
+}
+
+/// The row index for a tier string: 0 for the Default sentinel, else the
+/// catalog row for that id (+1). Drives cursor positioning from the
+/// user's mode choice (tier), which is stable across catalog refreshes —
+/// unlike active_id, which flips between Some(resolved) and None across
+/// the two reply paths and caused a two-frame cursor slide.
+pub(crate) fn row_for_tier(app: &App, tier: &str) -> usize {
+    if tier == "Default" {
+        0
+    } else {
+        row_for_model_id(app, Some(tier))
+    }
 }
 
 /// One row's Line: number + name (+ ✔ when active) + a dim description.
