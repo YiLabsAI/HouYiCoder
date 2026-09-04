@@ -29,6 +29,7 @@ pub struct SkillTool {
     registry: Arc<dyn SkillRegistry>,
     registrar: Option<Arc<super::super::SkillHookRegistrar>>,
     activator: Option<Arc<dyn super::super::conditional_activation::ConditionalSkillActivator>>,
+    sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
 }
 
 impl SkillTool {
@@ -37,6 +38,7 @@ impl SkillTool {
             registry,
             registrar: None,
             activator: None,
+            sandbox: None,
         }
     }
 
@@ -45,6 +47,17 @@ impl SkillTool {
     /// that do not exercise hooks; the execute path skips registration.
     pub fn with_registrar(mut self, registrar: Arc<super::super::SkillHookRegistrar>) -> Self {
         self.registrar = Some(registrar);
+        self
+    }
+
+    /// Wire the sandbox session so invoking a skill grants the entitlements
+    /// its frontmatter declares (app-launch, extra mach services) to the
+    /// session fence. Unwired in tests; the execute path skips the grant.
+    pub fn with_sandbox(
+        mut self,
+        sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
+    ) -> Self {
+        self.sandbox = sandbox;
         self
     }
 
@@ -155,6 +168,15 @@ impl Tool for SkillTool {
                     return Err(skill_error_to_tool_error(e));
                 }
             };
+            // Grant the sandbox entitlements the skill's frontmatter
+            // declares: app-launch + extra mach services. The session fence
+            // is re-derived per exec, so the next bash command the model runs
+            // after this invocation carries the grant. Idempotent overwrite
+            // (a second skill re-grants to its own set).
+            if let Some(session) = self.sandbox.as_ref() {
+                session.set_allow_app_launch(desc.allow_app_launch);
+                session.set_extra_mach_services(&desc.allowed_mach_services);
+            }
             // Register the skill's frontmatter hooks into the session hook
             // registry (invoke-time, session-scoped). The registrar dedups
             // across both invocation paths so a slash dispatch followed by a
@@ -231,6 +253,7 @@ fn skill_error_to_tool_error(e: SkillError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use houyicoder_api::sandbox::SandboxSession;
     use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry, SkillSnapshot};
     use std::collections::HashMap;
 
@@ -311,6 +334,7 @@ mod tests {
                     body_token_estimate: 0,
                     allowed_tools: self.allowed_tools.get(n).cloned().unwrap_or_default(),
                     allowed_mach_services: Vec::new(),
+                    allow_app_launch: false,
                 })
                 .collect()
         }
@@ -326,6 +350,7 @@ mod tests {
                 body_token_estimate: 0,
                 allowed_tools: self.allowed_tools.get(name).cloned().unwrap_or_default(),
                 allowed_mach_services: Vec::new(),
+                allow_app_launch: false,
             })
         }
 
@@ -555,6 +580,7 @@ mod tests {
                 body_token_estimate: 0,
                 allowed_tools: Vec::new(),
                 allowed_mach_services: Vec::new(),
+                allow_app_launch: false,
             }]
         }
         fn find(&self, name: &str) -> Option<SkillDescriptor> {
@@ -568,6 +594,7 @@ mod tests {
                 body_token_estimate: 0,
                 allowed_tools: Vec::new(),
                 allowed_mach_services: Vec::new(),
+                allow_app_launch: false,
             })
         }
         fn prepare_body(
@@ -641,5 +668,118 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out["skill"], "gated");
+    }
+
+    /// A sandbox session that records the entitlement grants a skill makes.
+    struct RecordingSession {
+        app_launch: std::sync::Mutex<Option<bool>>,
+        mach: std::sync::Mutex<Vec<String>>,
+    }
+    impl houyicoder_api::sandbox::SandboxSession for RecordingSession {
+        fn exec_with_config(
+            &self,
+            _: &str,
+            _: houyicoder_context::ExecConfig,
+        ) -> PFut<'_, Result<houyicoder_context::ExecResult, houyicoder_context::SandboxError>>
+        {
+            Box::pin(async { Err(houyicoder_context::SandboxError::Unsupported("test".into())) })
+        }
+        fn read_file(
+            &self,
+            _: &str,
+            _: usize,
+        ) -> PFut<'_, Result<Vec<u8>, houyicoder_context::SandboxError>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn write_file(
+            &self,
+            _: &str,
+            _: Vec<u8>,
+        ) -> PFut<'_, Result<(), houyicoder_context::SandboxError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn workspace_root(&self) -> Arc<std::path::Path> {
+            Arc::from(std::path::PathBuf::from("/"))
+        }
+        fn set_allow_app_launch(&self, allow: bool) {
+            *self.app_launch.lock().unwrap() = Some(allow);
+        }
+        fn set_extra_mach_services(&self, services: &[String]) {
+            let mut m = self.mach.lock().unwrap();
+            m.clear();
+            m.extend_from_slice(services);
+        }
+    }
+
+    /// A registry whose skill declares app-launch + a mach service, so the
+    /// grant wiring is exercised end-to-end through SkillTool::execute.
+    struct AppLaunchRegistry;
+    impl SkillRegistry for AppLaunchRegistry {
+        fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+            Vec::new()
+        }
+        fn find(&self, name: &str) -> Option<SkillDescriptor> {
+            (name == "launcher").then(|| SkillDescriptor {
+                name: "launcher".to_string(),
+                description: "d".into(),
+                when_to_use: None,
+                argument_hint: None,
+                disable_model_invocation: false,
+                user_invocable: true,
+                body_token_estimate: 0,
+                allowed_tools: Vec::new(),
+                allowed_mach_services: vec!["ego.mojom.EgoCliBootstrap".into()],
+                allow_app_launch: true,
+            })
+        }
+        fn prepare_body(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<String, SkillError> {
+            Ok("body".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_skill_grants_sandbox_entitlements() {
+        let session = Arc::new(RecordingSession {
+            app_launch: std::sync::Mutex::new(None),
+            mach: std::sync::Mutex::new(Vec::new()),
+        });
+        let tool = SkillTool::new(Arc::new(AppLaunchRegistry)).with_sandbox(Some(session.clone()));
+        tool.execute(ctx(), json!({"skill": "launcher"}))
+            .await
+            .expect("execute");
+        let app_launch = *session.app_launch.lock().unwrap();
+        assert_eq!(
+            app_launch,
+            Some(true),
+            "app-launch grant wired through execute"
+        );
+        let mach = session.mach.lock().unwrap().clone();
+        assert_eq!(
+            mach,
+            vec!["ego.mojom.EgoCliBootstrap".to_string()],
+            "extra mach services wired through execute"
+        );
+        // The trait's other methods are stubs; exercise them so the mock's
+        // full surface is covered (the grant path does not call them).
+        let _r = session
+            .exec_with_config("x", houyicoder_context::ExecConfig::default())
+            .await;
+        let _r = session.read_file("x", 1).await;
+        let _r = session.write_file("x", Vec::new()).await;
+        assert_eq!(session.workspace_root().as_os_str(), "/");
+    }
+
+    #[test]
+    fn test_inmemory_list_shape() {
+        let reg = InMemoryRegistry::new().insert("commit", "body", true);
+        let list = reg.list_model_invocable();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "commit");
+        assert!(!list[0].allow_app_launch);
     }
 }

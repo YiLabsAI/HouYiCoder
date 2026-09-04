@@ -63,6 +63,9 @@ pub struct MacSeatbeltSession {
     /// Same Arc-Mutex pattern as additional_dirs so a guard closure can clear
     /// through a clone.
     extra_mach_services: Arc<Mutex<Vec<String>>>,
+    /// Whether the LaunchServices app-launch entitlement is granted so a
+    /// sandboxed process can open -a an app. Set by set_allow_app_launch.
+    allow_app_launch: Arc<Mutex<bool>>,
     /// When a worktree session narrows the fence, this holds the worktree path
     /// that current_profile + exec use as the workspace + cwd (None = the
     /// original workspace, the default guarded mode). Set by narrow_to_worktree,
@@ -134,6 +137,7 @@ impl MacSeatbeltSession {
             tag,
             additional_dirs: Arc::new(Mutex::new(Vec::new())),
             extra_mach_services: Arc::new(Mutex::new(Vec::new())),
+            allow_app_launch: Arc::new(Mutex::new(false)),
             narrow_workspace: Arc::new(Mutex::new(None)),
             narrow_git_common: Arc::new(Mutex::new(None)),
             exec_count: Arc::new(AtomicU64::new(0)),
@@ -174,6 +178,7 @@ impl MacSeatbeltSession {
             tag,
             additional_dirs: Arc::new(Mutex::new(Vec::new())),
             extra_mach_services: Arc::new(Mutex::new(Vec::new())),
+            allow_app_launch: Arc::new(Mutex::new(false)),
             narrow_workspace: Arc::new(Mutex::new(None)),
             narrow_git_common: Arc::new(Mutex::new(None)),
             exec_count: Arc::new(AtomicU64::new(0)),
@@ -238,6 +243,7 @@ impl MacSeatbeltSession {
             .lock()
             .expect("extra mach services lock")
             .clone();
+        let allow_app_launch = *self.allow_app_launch.lock().expect("allow app launch lock");
         let narrow_ws = self
             .narrow_workspace
             .lock()
@@ -248,7 +254,7 @@ impl MacSeatbeltSession {
             .lock()
             .expect("narrow git common lock")
             .clone();
-        if additional.is_empty() && narrow_ws.is_none() && mach.is_empty() {
+        if additional.is_empty() && narrow_ws.is_none() && mach.is_empty() && !allow_app_launch {
             return self.profile.clone();
         }
         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
@@ -263,6 +269,7 @@ impl MacSeatbeltSession {
             &ProfileSpec::new(ws, &self.tmpdir.to_string_lossy(), &home, &self.tag)
                 .with_additional(&add_refs)
                 .with_mach_services(&mach_refs)
+                .with_app_launch(allow_app_launch)
                 .with_network(self.network.clone()),
         );
         if let Some(git_common) = narrow_git.as_ref() {
@@ -669,6 +676,10 @@ impl SandboxSession for MacSeatbeltSession {
             .lock()
             .expect("extra mach services lock")
             .clear();
+    }
+
+    fn set_allow_app_launch(&self, allow: bool) {
+        *self.allow_app_launch.lock().expect("allow app launch lock") = allow;
     }
 }
 

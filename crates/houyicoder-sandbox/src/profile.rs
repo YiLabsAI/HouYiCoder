@@ -139,6 +139,12 @@ pub struct ProfileSpec<'a> {
     /// process-start services; this is the extension point for skills that
     /// talk to macOS system services the base set does not include.
     pub extra_mach_services: &'a [&'a str],
+    /// Whether to grant LaunchServices app-launch (lsopen) plus the
+    /// coreservicesd and quarantine-resolver mach lookups, so a sandboxed
+    /// process can launch an app via open -a. Off by default so a sandboxed
+    /// command cannot launch arbitrary apps unless a skill declares the
+    /// need; a follow-up wires the opt-in from skill frontmatter.
+    pub allow_app_launch: bool,
     /// How wide the network fence is opened. Defaults to fully contained.
     pub network: NetworkPolicy,
 }
@@ -155,6 +161,7 @@ impl<'a> ProfileSpec<'a> {
             tag,
             additional: &[],
             extra_mach_services: &[],
+            allow_app_launch: false,
             network: NetworkPolicy::contained(),
         }
     }
@@ -171,6 +178,15 @@ impl<'a> ProfileSpec<'a> {
     #[must_use]
     pub fn with_mach_services(mut self, services: &'a [&'a str]) -> Self {
         self.extra_mach_services = services;
+        self
+    }
+
+    /// Grant the LaunchServices app-launch entitlement (lsopen + the
+    /// coreservicesd and quarantine-resolver mach lookups) so a sandboxed
+    /// process can launch an app via open -a.
+    #[must_use]
+    pub fn with_app_launch(mut self, allow: bool) -> Self {
+        self.allow_app_launch = allow;
         self
     }
 
@@ -191,13 +207,17 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
         tag,
         additional,
         extra_mach_services,
+        allow_app_launch,
         network,
     } = spec;
-    let (tmpdir, home, tag) = (*tmpdir, *home, *tag);
+    let (tmpdir, home, tag, allow_app_launch) = (*tmpdir, *home, *tag, *allow_app_launch);
     let mut s = String::new();
     s.push_str("(version 1)\n");
     s.push_str(&deny_default(tag));
     s.push_str(&allow_set(tag));
+    if allow_app_launch {
+        s.push_str(&allow_app_launch_segment());
+    }
     // Extra mach services declared by a skill or tool. Validated
     // alphanumeric+dot+dash so a frontmatter value cannot inject
     // seatbelt directives via the interpolated name.
@@ -348,6 +368,18 @@ pub fn allow_set(tag: &str) -> String {
          (allow file-ioctl {dev_ioctl})\n\
          (allow file-read-data file-write-data (require-all (literal \"/dev/null\") (vnode-type CHARACTER-DEVICE)))\n"
     )
+}
+
+/// The app-launch entitlement: lsopen plus the LaunchServices mach lookups
+/// a process needs to resolve and launch an app via open -a. Without these
+/// open fails with procNotFound (-600) on macOS 14/15. Emitted only when
+/// the spec opts in (a skill declares the need), so a default sandboxed
+/// command cannot launch arbitrary apps.
+pub fn allow_app_launch_segment() -> String {
+    "(allow lsopen)\n\
+     (allow mach-lookup (global-name \"com.apple.CoreServices.coreservicesd\"))\n\
+     (allow mach-lookup (global-name \"com.apple.coreservices.quarantine-resolver\"))\n"
+        .to_string()
 }
 
 /// Filesystem three-stage (srt macos-sandbox-utils:225-308): allow-all read

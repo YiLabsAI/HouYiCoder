@@ -26,7 +26,7 @@ from rules.paths import is_test_file
 
 WARN_LINES = 12  # a consecutive in-function // block this long is a
 # verbose-comment candidate (warn band; >=20 would be the error band).
-COMMENT_BLOCK_BASELINE = 9  # measured 2026-08-17, indented plain //
+COMMENT_BLOCK_BASELINE = 9
 
 
 def ratchet_status(total, baseline=COMMENT_BLOCK_BASELINE) -> int:

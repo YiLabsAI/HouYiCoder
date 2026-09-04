@@ -390,6 +390,7 @@ mod tests {
             when_to_use: None,
             allowed_tools: Vec::new(),
             allowed_mach_services: Vec::new(),
+            allow_app_launch: false,
             argument_hint: None,
             version: None,
             model: None,

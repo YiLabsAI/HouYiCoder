@@ -86,6 +86,7 @@ impl SkillRegistry for SlashStubRegistry {
             body_token_estimate: 0,
             allowed_tools: Vec::new(),
             allowed_mach_services: Vec::new(),
+            allow_app_launch: false,
         })
     }
     fn prepare_body(
@@ -302,6 +303,7 @@ impl SkillRegistry for HookStubRegistry {
                 body_token_estimate: 0,
                 allowed_tools: Vec::new(),
                 allowed_mach_services: Vec::new(),
+                allow_app_launch: false,
             })
         } else {
             None
@@ -424,6 +426,7 @@ fn paths_descriptor(name: &str) -> SkillDescriptor {
         body_token_estimate: 0,
         allowed_tools: Vec::new(),
         allowed_mach_services: Vec::new(),
+        allow_app_launch: false,
     }
 }
 
@@ -511,6 +514,7 @@ async fn test_slash_load_error_refusal() {
                 body_token_estimate: 0,
                 allowed_tools: Vec::new(),
                 allowed_mach_services: Vec::new(),
+                allow_app_launch: false,
             })
         }
         fn prepare_body(
@@ -579,6 +583,7 @@ async fn test_session_context_injection() {
                 body_token_estimate: 0,
                 allowed_tools: Vec::new(),
                 allowed_mach_services: Vec::new(),
+                allow_app_launch: false,
             })
         }
         fn prepare_body(

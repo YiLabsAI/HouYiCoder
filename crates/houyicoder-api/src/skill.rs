@@ -45,6 +45,10 @@ pub struct SkillDescriptor {
     /// process can talk to macOS system services the base set excludes.
     /// Empty on non-macOS or when the skill declares none.
     pub allowed_mach_services: Vec<String>,
+    /// Whether the skill needs to launch apps via open -a (frontmatter
+    /// allow-app-launch). Grants the LaunchServices entitlement so a
+    /// sandboxed command can start an app; false by default.
+    pub allow_app_launch: bool,
 }
 
 /// Errors a skill registry can return when preparing a body.

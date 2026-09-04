@@ -131,13 +131,15 @@ pub(super) fn register_skill_tool(
     registry: &Arc<super::skill::SkillRegistryImpl>,
     registrar: &Arc<houyicoder_core::agent::SkillHookRegistrar>,
     conditional: &Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>,
+    sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
 ) {
     tools.register(Arc::new(
         houyicoder_core::agent::SkillTool::new(
             std::sync::Arc::clone(registry) as Arc<dyn houyicoder_api::skill::SkillRegistry>
         )
         .with_registrar(std::sync::Arc::clone(registrar))
-        .with_activator(Some(std::sync::Arc::clone(conditional))),
+        .with_activator(Some(std::sync::Arc::clone(conditional)))
+        .with_sandbox(sandbox),
     ));
 }
 
@@ -513,6 +515,7 @@ mod hook_tests {
                 body_token_estimate: 4,
                 allowed_tools: self.allowed.clone(),
                 allowed_mach_services: Vec::new(),
+                allow_app_launch: false,
             })
         }
         fn prepare_body(

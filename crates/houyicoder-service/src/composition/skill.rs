@@ -159,6 +159,7 @@ fn to_descriptor(s: &SkillDefinition) -> SkillDescriptor {
         body_token_estimate: s.body_token_estimate(),
         allowed_tools: s.allowed_tools.clone(),
         allowed_mach_services: s.allowed_mach_services.clone(),
+        allow_app_launch: s.allow_app_launch,
     }
 }
 

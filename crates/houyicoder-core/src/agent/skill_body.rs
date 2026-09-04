@@ -572,6 +572,7 @@ mod tests {
                             body_token_estimate: 0,
                             allowed_tools: Vec::new(),
                             allowed_mach_services: Vec::new(),
+                            allow_app_launch: false,
                         },
                         origin: origin.clone(),
                         usage: Default::default(),

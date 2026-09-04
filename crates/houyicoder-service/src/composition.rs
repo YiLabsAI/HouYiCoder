@@ -478,6 +478,7 @@ pub(crate) fn assemble(
         &skill_registry,
         &skill_registrar,
         &skill_conditional,
+        sandbox_session.clone(),
     );
     // Agent tool: delegate a sub-task to a spawned child (not sandbox-backed;
     // resolves the requested type against the built-in agent registry).

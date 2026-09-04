@@ -853,3 +853,35 @@ fn test_mach_services_lifecycle() {
     );
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn test_app_launch_default_off() {
+    let root = mkdtemp("sb-app").unwrap();
+    let s = MacSeatbeltSession::new_in_cwd(&root).unwrap();
+    let p = s.current_profile();
+    assert!(!p.contains("(allow lsopen)"), "base has no lsopen: {p}");
+    assert!(
+        !p.contains("coreservicesd"),
+        "base has no coreservicesd: {p}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn test_app_launch_grant_revokes() {
+    let root = mkdtemp("sb-app2").unwrap();
+    let s = MacSeatbeltSession::new_in_cwd(&root).unwrap();
+    s.set_allow_app_launch(true);
+    let p = s.current_profile();
+    assert!(p.contains("(allow lsopen)"), "lsopen granted: {p}");
+    assert!(
+        p.contains("(allow mach-lookup (global-name \"com.apple.CoreServices.coreservicesd\"))"),
+        "coreservicesd granted: {p}"
+    );
+    s.set_allow_app_launch(false);
+    assert!(
+        !s.current_profile().contains("(allow lsopen)"),
+        "revoking drops lsopen"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}

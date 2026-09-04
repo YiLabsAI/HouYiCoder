@@ -57,6 +57,9 @@ pub struct SkillDefinition {
     /// macOS XPC service names the skill needs the sandbox to allow.
     /// Emitted as extra allow mach-lookup lines in the seatbelt profile.
     pub allowed_mach_services: Vec<String>,
+    /// Whether the skill needs to launch apps via open -a. Grants the
+    /// LaunchServices entitlement in the seatbelt profile.
+    pub allow_app_launch: bool,
     pub argument_hint: Option<String>,
     pub version: Option<String>,
     pub model: Option<String>,

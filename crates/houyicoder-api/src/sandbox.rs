@@ -637,6 +637,10 @@ pub trait SandboxSession: Send + Sync {
     /// Declare extra mach services a skill needs; clear reverts to base.
     fn set_extra_mach_services(&self, _services: &[String]) {}
     fn clear_extra_mach_services(&self) {}
+
+    /// Grant or revoke the LaunchServices app-launch entitlement so a
+    /// sandboxed process can open -a an app. No-op without a mutable fence.
+    fn set_allow_app_launch(&self, _allow: bool) {}
 }
 
 #[cfg(test)]

@@ -66,6 +66,9 @@ pub fn parse_skill(
     let allowed_mach_services = field_string_list(&frontmatter, "allowed-mach-services")
         .or_else(|| field_string_list(&frontmatter, "allowed_mach_services"))
         .unwrap_or_default();
+    let allow_app_launch = field_bool(&frontmatter, "allow-app-launch")
+        .or_else(|| field_bool(&frontmatter, "allowAppLaunch"))
+        .unwrap_or(false);
     let argument_hint = field_string(&frontmatter, "argument-hint")
         .or_else(|| field_string(&frontmatter, "argumentHint"));
     let version = field_string(&frontmatter, "version");
@@ -112,6 +115,8 @@ pub fn parse_skill(
         "allowed_tools",
         "allowed-mach-services",
         "allowed_mach_services",
+        "allow-app-launch",
+        "allowAppLaunch",
         "argument-hint",
         "argumentHint",
         "version",
@@ -152,6 +157,7 @@ pub fn parse_skill(
         when_to_use,
         allowed_tools,
         allowed_mach_services,
+        allow_app_launch,
         argument_hint,
         version,
         model,
@@ -392,6 +398,40 @@ mod tests {
         assert_eq!(def.name, "my-skill");
         assert_eq!(def.description, "Does a thing");
         assert!(def.user_invocable);
+    }
+
+    #[test]
+    fn test_parse_allow_app_launch() {
+        let text = "---\nname: launcher\ndescription: test\nallow-app-launch: true\n---\nbody";
+        let def = parse_skill(
+            text,
+            "launcher",
+            Path::new("/tmp/launcher"),
+            Path::new("/tmp/launcher/SKILL.md"),
+            SkillSource::User,
+        )
+        .expect("parse");
+        assert!(
+            def.allow_app_launch,
+            "allow-app-launch frontmatter reaches the definition"
+        );
+    }
+
+    #[test]
+    fn test_parse_app_launch_absent() {
+        let text = "---\nname: plain\ndescription: test\n---\nbody";
+        let def = parse_skill(
+            text,
+            "plain",
+            Path::new("/tmp/plain"),
+            Path::new("/tmp/plain/SKILL.md"),
+            SkillSource::User,
+        )
+        .expect("parse");
+        assert!(
+            !def.allow_app_launch,
+            "allow-app-launch defaults to false when absent"
+        );
     }
 
     #[test]
