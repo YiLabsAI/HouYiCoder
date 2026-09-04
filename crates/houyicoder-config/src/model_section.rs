@@ -16,7 +16,7 @@ use crate::json_type_name;
 pub const DEFAULT_CATALOG: &[(&str, &str)] = &[
     ("qwen3.7-max", "Max"),
     ("glm-5.2", "Fable"),
-    ("glm-5.1", "Pro"),
+    ("qwen3.8-max", "Pro"),
     ("qwen3.6-flash", "Flash"),
 ];
 
