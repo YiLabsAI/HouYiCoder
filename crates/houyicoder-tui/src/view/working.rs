@@ -63,6 +63,7 @@ fn pane_hides_status(app: &App) -> bool {
 fn draw_working(f: &mut Frame, app: &App) {
     app.queue_rect.set(Rect::new(0, 0, 0, 0));
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
+    app.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.last_terminal_rows.set(f.area().height);
     // Wrap columns for the input content: terminal width minus the top/bottom
     // border (2) and the "❯ " prompt (2). Stored on App so the key handlers
@@ -105,6 +106,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     }
     if let Some(i) = layout.slots.approval {
         super::approval::draw(f, app, outer[i]);
+        stash_approval_rows(f, outer[i], app);
     }
     if let Some(i) = layout.slots.ask {
         super::ask_question::draw(f, app, outer[i]);
@@ -291,6 +293,7 @@ fn build_working_layout(app: &App, input_h: u16, queue_h: u16, fleet_h: u16) -> 
 fn draw_focus(f: &mut Frame, app: &App) {
     app.queue_rect.set(Rect::new(0, 0, 0, 0));
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
+    app.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.last_terminal_rows.set(f.area().height);
     let total_h = f.area().height;
     let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
@@ -321,6 +324,7 @@ fn draw_focus(f: &mut Frame, app: &App) {
 fn draw_scroll(f: &mut Frame, app: &App) {
     app.queue_rect.set(Rect::new(0, 0, 0, 0));
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
+    app.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.last_terminal_rows.set(f.area().height);
     let total_h = f.area().height;
     let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
@@ -529,6 +533,29 @@ fn stash_pane_rows(f: &mut Frame, inner: Rect, app: &App) {
         let mut row = String::with_capacity(inner.width as usize);
         for rx in 0..inner.width {
             let x = inner.x + rx;
+            if let Some(cell) = buf.cell((x, y)) {
+                row.push_str(cell.symbol());
+            }
+        }
+        rows.push((crate::selection::TAG_PLAIN, row.trim_end().to_string()));
+    }
+}
+
+/// Stash the rendered approval card rows + rect so the in-app selection
+/// path can reach the text the approval card drew. Mirrors stash_pane_rows.
+fn stash_approval_rows(f: &mut Frame, area: Rect, app: &App) {
+    app.approval_rect.set(area);
+    let mut rows = app.last_approval_rows.borrow_mut();
+    rows.clear();
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let buf = f.buffer_mut();
+    for ry in 0..area.height {
+        let y = area.y + ry;
+        let mut row = String::with_capacity(area.width as usize);
+        for rx in 0..area.width {
+            let x = area.x + rx;
             if let Some(cell) = buf.cell((x, y)) {
                 row.push_str(cell.symbol());
             }

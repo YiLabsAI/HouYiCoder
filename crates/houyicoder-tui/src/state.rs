@@ -428,6 +428,15 @@ pub struct App {
     /// the range, since pane content rebuilds each frame and a persistent
     /// highlight would not track the rows.
     pub pane_selection: Selection,
+    /// The approval card's screen rect (zero when no approval is shown),
+    /// stashed by the draw pass so the mouse handler routes a drag in the
+    /// card to a card-local selection.
+    pub approval_rect: Cell<Rect>,
+    /// Last-rendered approval card rows, read from the frame buffer like
+    /// last_pane_rows so copy extracts the text the user sees.
+    pub last_approval_rows: RefCell<Vec<(u8, String)>>,
+    /// Selection for the approval card surface (separate coordinate space).
+    pub approval_selection: Selection,
     /// Per-line render cache (content hash + width + expand key; indices are
     /// unstable — transcript rebuilds each batch). Count + render share it.
     pub render_cache: RefCell<crate::render_cache::RenderCache>,

@@ -753,3 +753,72 @@ fn test_expanded_block_paints_gray() {
         "expanded-block body row must carry the gray bg"
     );
 }
+
+/// The approval card carries its own selection handler (the 4th, after
+/// transcript/pane/status). A drag in the card starts a card-local
+/// selection; release copies the card text. After dismissal the rect
+/// resets to zero so clicks route to the transcript, not stale rows.
+#[test]
+fn test_approval_drag_resets() {
+    use crate::records::Approval;
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.approval = Some(Approval {
+        tool: "bash".into(),
+        args: "rm -rf /tmp/x".into(),
+        reason: "destructive".into(),
+        source: None,
+        delegation: None,
+        containment_note: None,
+        selected: 0,
+        call_id: "c1".into(),
+        options: Vec::new(),
+    });
+    let _out = render_text(&app, 80, 24);
+    let arect = app.approval_rect.get();
+    assert!(
+        arect.width > 0 && arect.height > 0,
+        "approval card rect published: {arect:?}"
+    );
+    assert!(
+        !app.last_approval_rows.borrow().is_empty(),
+        "approval rows stashed"
+    );
+
+    // Drag in the card starts an approval selection.
+    crate::app::handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), arect.x, arect.y),
+    );
+    assert!(
+        app.approval_selection.is_dragging,
+        "down in card starts approval drag"
+    );
+    crate::app::handle_mouse(
+        &mut app,
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            arect.x + 5,
+            arect.y,
+        ),
+    );
+    crate::app::handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Up(MouseButton::Left), arect.x + 5, arect.y),
+    );
+    assert!(
+        !app.approval_selection.is_dragging,
+        "up ends the approval drag"
+    );
+
+    // After dismissal the rect resets to zero so clicks route to
+    // transcript, not stale approval rows.
+    app.approval = None;
+    let _out = render_text(&app, 80, 24);
+    let stale = app.approval_rect.get();
+    assert_eq!(
+        (stale.width, stale.height),
+        (0, 0),
+        "approval rect zeroed after dismissal: {stale:?}"
+    );
+}

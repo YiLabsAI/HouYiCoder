@@ -340,6 +340,15 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     .handle_down(m.column, m.row);
                 return;
             }
+            // The approval card is a transient layout slot above the
+            // transcript; route a drag here to a card-local selection so
+            // the user can copy the command text shown in the prompt.
+            let arect = app.approval_rect.get();
+            if arect.width > 0 && arect.height > 0 && in_rect(arect, m.column, m.row) {
+                crate::selection::surface::ApprovalSelection { app: &mut *app }
+                    .handle_down(m.column, m.row);
+                return;
+            }
             // Fleet strip: the routing is pure (click_route); applying it
             // rides the two existing broad-access points, run_command and
             // enter_teammate_view_for_sid, so no new &mut App fn is born.
@@ -378,6 +387,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 app.selection.clear();
                 app.pane_selection.clear();
                 app.status_selection.clear();
+                app.approval_selection.clear();
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
@@ -386,6 +396,9 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     .handle_drag(m.column, m.row);
             } else if app.status_selection.is_dragging {
                 crate::selection::surface::StatusSurface { app: &mut *app }
+                    .handle_drag(m.column, m.row);
+            } else if app.approval_selection.is_dragging {
+                crate::selection::surface::ApprovalSelection { app: &mut *app }
                     .handle_drag(m.column, m.row);
             } else if app.selection.is_dragging {
                 crate::selection::surface::TranscriptSurface { app: &mut *app }
@@ -407,6 +420,9 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             if app.status_selection.is_dragging {
                 crate::selection::surface::StatusSurface { app: &mut *app }.handle_moved();
             }
+            if app.approval_selection.is_dragging {
+                crate::selection::surface::ApprovalSelection { app: &mut *app }.handle_moved();
+            }
             if app.selection.is_dragging {
                 crate::selection::surface::TranscriptSurface { app: &mut *app }.handle_moved();
             }
@@ -418,6 +434,10 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             }
             if app.status_selection.is_dragging {
                 crate::selection::surface::StatusSurface { app: &mut *app }.handle_up();
+                return;
+            }
+            if app.approval_selection.is_dragging {
+                crate::selection::surface::ApprovalSelection { app: &mut *app }.handle_up();
                 return;
             }
             if app.selection.is_dragging {
@@ -490,6 +510,16 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             app.status_rect.get(),
             &rows,
             &app.status_selection,
+            0,
+        );
+    }
+    {
+        let rows = app.last_approval_rows.borrow();
+        crate::selection::surface::paint_overlay(
+            buf,
+            app.approval_rect.get(),
+            &rows,
+            &app.approval_selection,
             0,
         );
     }

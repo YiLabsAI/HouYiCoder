@@ -412,6 +412,33 @@ impl Surface for PaneSurface<'_> {
     }
 }
 
+/// The approval card selection handler: screen-space (no independent
+/// scroll), pure selection — the card is a transient layout slot, so it
+/// uses persist=false (the card rebuilds each frame; a stale highlight
+/// would not track the rows). Mirrors PaneSurface; the only difference is
+/// which rect/rows/selection it binds.
+pub struct ApprovalSelection<'a> {
+    pub app: &'a mut App,
+}
+
+impl Surface for ApprovalSelection<'_> {
+    fn parts(&mut self) -> SurfaceParts<'_> {
+        let rows = self.app.last_approval_rows.borrow();
+        SurfaceParts {
+            sel: &mut self.app.approval_selection,
+            rows,
+            rect: self.app.approval_rect.get(),
+            clipboard: self.app.clipboard.as_ref(),
+        }
+    }
+    fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
+        pane_mouse_to_content(self.app.approval_rect.get(), x, y)
+    }
+    fn is_dragging(&self) -> bool {
+        self.app.approval_selection.is_dragging
+    }
+}
+
 /// The status bar selection surface: a single chrome row (model + mode +
 /// context gauge) that the user can drag-select + copy so bug reports can
 /// quote the status text verbatim. Pure selection — no fold or click
