@@ -13,9 +13,10 @@ use houyicoder_api::skill::{HookSourceKind, SkillHookSpec, SkillRegistry};
 use houyicoder_api::trust::TrustState;
 
 use super::exports::{
-    CommandHook, Hook, HookContext, HookError, HookEvent, HookId, HookPayload, HookRegistry,
-    HookSource, HookVerdict,
+    CommandHook, Hook, HookContext, HookError, HookEvent, HookId, HookRegistry, HookSource,
+    HookVerdict,
 };
+use super::hook::filter;
 use super::parse_event;
 
 /// Shared registration state for both skill-invocation paths: the session
@@ -298,14 +299,14 @@ impl Hook for SkillCommandHook {
         if self
             .matcher
             .as_ref()
-            .is_some_and(|m| !matcher_passes(ctx, m))
+            .is_some_and(|m| !filter::matcher_passes(ctx, m))
         {
             return Ok(HookVerdict::Allow);
         }
         if self
             .if_rule
             .as_ref()
-            .is_some_and(|rule| !if_rule_passes(ctx, rule))
+            .is_some_and(|rule| !filter::if_rule_passes(ctx, rule))
         {
             return Ok(HookVerdict::Allow);
         }
@@ -332,137 +333,6 @@ impl Hook for SkillCommandHook {
         }
         let verdict = result?;
         Ok(narrow_by_source(verdict, self.source.clone(), &self.name))
-    }
-}
-
-/// Whether the context's tool name satisfies a matcher pattern. Empty or
-/// "*" matches all. A pattern of ascii letters, digits, underscores, and
-/// pipes is an exact or pipe-separated list. Anything else is a regex. A
-/// non-tool event (no tool name in the payload) never matches.
-fn matcher_passes(ctx: &HookContext, matcher: &str) -> bool {
-    if matcher.is_empty() || matcher == "*" {
-        return true;
-    }
-    let Some(tool) = tool_name(ctx) else {
-        return false;
-    };
-    if matcher
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '|')
-    {
-        if matcher.contains('|') {
-            return matcher.split('|').any(|p| p.trim() == tool);
-        }
-        return matcher == tool;
-    }
-    match regex::Regex::new(matcher) {
-        Ok(re) => re.is_match(tool),
-        Err(_) => {
-            tracing::warn!(matcher = %matcher, "skill hook matcher is not valid regex");
-            false
-        }
-    }
-}
-
-/// Whether the context satisfies a Tool(pattern) if-rule. The tool name
-/// must match; a bare Tool (no parens) passes on tool match. A pattern is
-/// glob-matched (* and ?) against the tool input's string values as an
-/// over-approximation — precise per-field matching is not wired here. A
-/// non-tool event never passes.
-fn if_rule_passes(ctx: &HookContext, rule: &str) -> bool {
-    let (rule_tool, pattern) = parse_if_rule(rule);
-    let Some(tool) = tool_name(ctx) else {
-        return false;
-    };
-    if tool != rule_tool {
-        return false;
-    }
-    let Some(pattern) = pattern else {
-        return true;
-    };
-    glob_matches_any(&tool_input(ctx), pattern)
-}
-
-/// Split a Tool(pattern) rule into (tool, optional pattern). A bare Tool
-/// has no parens.
-fn parse_if_rule(rule: &str) -> (&str, Option<&str>) {
-    if let Some(open) = rule.find('(') {
-        let tool = rule[..open].trim();
-        let inner = rule[open + 1..].trim_end_matches(')').trim();
-        (tool, Some(inner))
-    } else {
-        (rule.trim(), None)
-    }
-}
-
-fn tool_name(ctx: &HookContext) -> Option<&str> {
-    match &ctx.payload {
-        HookPayload::PreToolUse { tool_name, .. }
-        | HookPayload::PostToolUse { tool_name, .. }
-        | HookPayload::PostToolUseFailure { tool_name, .. } => Some(tool_name),
-        _ => None,
-    }
-}
-
-fn tool_input(ctx: &HookContext) -> serde_json::Value {
-    match &ctx.payload {
-        HookPayload::PreToolUse { input, .. } | HookPayload::PostToolUse { input, .. } => {
-            input.clone()
-        }
-        _ => serde_json::Value::Null,
-    }
-}
-
-/// Glob-match a pattern against any string value in the input JSON. The
-/// pattern supports * and ? (translated to regex); other characters are
-/// literal. Anchored as a full match.
-fn glob_matches_any(input: &serde_json::Value, pattern: &str) -> bool {
-    let Some(re) = glob_to_regex(pattern) else {
-        return false;
-    };
-    for s in collect_strings(input) {
-        if re.is_match(&s) {
-            return true;
-        }
-    }
-    false
-}
-
-fn glob_to_regex(pattern: &str) -> Option<regex::Regex> {
-    let mut out = String::from("^");
-    for c in pattern.chars() {
-        match c {
-            '*' => out.push_str(".*"),
-            '?' => out.push('.'),
-            _ => out.push_str(&regex::escape(&c.to_string())),
-        }
-    }
-    out.push('$');
-    regex::Regex::new(&out).ok()
-}
-
-/// Collect every string value reachable in the JSON (object values, array
-/// elements, nested). Non-string leaves are ignored.
-fn collect_strings(value: &serde_json::Value) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_strings_into(value, &mut out);
-    out
-}
-
-fn collect_strings_into(value: &serde_json::Value, out: &mut Vec<String>) {
-    match value {
-        serde_json::Value::String(s) => out.push(s.clone()),
-        serde_json::Value::Array(a) => {
-            for v in a {
-                collect_strings_into(v, out);
-            }
-        }
-        serde_json::Value::Object(o) => {
-            for (_, v) in o {
-                collect_strings_into(v, out);
-            }
-        }
-        _ => {}
     }
 }
 

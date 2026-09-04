@@ -23,6 +23,7 @@
 #![allow(dead_code)] // stub hook types and reserved traits pending owner-crate wiring; locally unused
 
 pub(crate) mod command;
+pub(crate) mod filter;
 pub(crate) mod fire;
 pub(crate) mod metadata;
 pub(crate) mod pipeline;
@@ -120,6 +121,10 @@ pub enum HookPolicy {
     PluginOnly,
     /// All hooks disabled.
     Disabled,
+    /// Non-managed hooks disabled (user, project, local); managed hooks
+    /// still run. This mirrors a managed setting that turns off all
+    /// user-configured hooks while keeping policy-deployed hooks active.
+    NonManagedDisabled,
 }
 
 /// Which configuration level a hook was registered from. The registry
@@ -569,6 +574,13 @@ pub trait Hook: Send + Sync {
     /// Which configuration level this hook was registered from. The
     /// registry uses this to filter hooks by policy at dispatch time.
     fn source(&self) -> HookSource;
+
+    /// Per-hook timeout. None means the registry default applies. The
+    /// registry uses this to set a per-hook deadline during dispatch so
+    /// a slow hook does not block the whole dispatch budget.
+    fn timeout(&self) -> Option<std::time::Duration> {
+        None
+    }
 }
 
 // HookExecutor — future WASM sandbox seam.
@@ -604,15 +616,18 @@ pub(crate) use registry::HookRegistry;
 /// Managed-source hooks. PluginOnly keeps only Project-source hooks — this
 /// is a simplification: the plugin system will introduce a dedicated
 /// Plugin source variant, but until it lands, Project is the closest
-/// analog (plugins ship with the project). AllEnabled passes everything;
-/// Disabled blocks everything (but dispatch short-circuits before reaching
-/// here).
+/// analog (plugins ship with the project). NonManagedDisabled blocks
+/// User, Project, and Local but keeps Managed (a managed setting that
+/// turns off user-configured hooks while keeping policy-deployed ones).
+/// AllEnabled passes everything; Disabled blocks everything (but dispatch
+/// short-circuits before reaching here).
 fn policy_allows(source: &HookSource, policy: &HookPolicy) -> bool {
     match policy {
         HookPolicy::AllEnabled => true,
         HookPolicy::Disabled => false,
         HookPolicy::ManagedOnly => *source == HookSource::Managed,
         HookPolicy::PluginOnly => *source == HookSource::Project,
+        HookPolicy::NonManagedDisabled => *source == HookSource::Managed,
     }
 }
 

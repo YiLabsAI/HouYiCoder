@@ -12,6 +12,16 @@ use std::sync::RwLock;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HookId(u64);
 
+/// A hook awaiting its result during parallel dispatch. Carries the
+/// receiver channel, the hook name, the per-hook timeout duration, and
+/// the configured limit in milliseconds (for the Timeout error report).
+struct PendingHook {
+    rx: std::sync::mpsc::Receiver<Result<HookVerdict, HookError>>,
+    name: String,
+    hook_timeout: std::time::Duration,
+    configured_limit_ms: u64,
+}
+
 /// Mutable inner state. The hook map is keyed by HookId so removal is O(1)
 /// and a stale id never dereferences a moved-aside slot; order preserves
 /// registration order for dispatch + list; by_event indexes events to
@@ -76,8 +86,9 @@ impl HookRegistry {
         }
     }
 
-    /// Set the registry-wide evaluate timeout (applies to all hooks at
-    /// dispatch; per-hook timeout is not supported yet). 0 disables
+    /// Set the registry-wide evaluate timeout. This is the default for
+    /// hooks without their own timeout (Hook::timeout returns None); a
+    /// hook with its own timeout gets the earlier of the two. 0 disables
     /// timeout (sequential dispatch). Returns self for chaining.
     pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
         self.timeout_ms = timeout_ms;
@@ -132,7 +143,8 @@ impl HookRegistry {
     /// (verdict + hook_name) in registration order. Filters by policy and
     /// trust (Disabled empty; ManagedOnly/PluginOnly restrict source;
     /// Untrusted skips Project/Local). timeout_ms > 0 runs hooks in parallel
-    /// under a single wall-clock deadline — an unfinished hook is abandoned
+    /// under per-hook deadlines (a hook's own timeout or the registry
+    /// default, whichever is earlier) — an unfinished hook is abandoned
     /// (thread leaks, acceptable for misconfigured hooks; true interruption
     /// needs WASM fuel, future work). timeout_ms == 0 is sequential.
     pub fn dispatch(&self, ctx: &HookContext) -> Vec<HookOutcome> {
@@ -199,24 +211,26 @@ impl HookRegistry {
                 .collect();
         }
 
-        // Parallel dispatch with a single wall-clock deadline.
+        // Parallel dispatch with a per-hook deadline.
         //
         // Each hook runs in a detached thread. We collect results via
-        // mpsc::recv_timeout, passing the REMAINING time to each receiver
-        // (not a fresh timeout). This prevents N hooks from compounding
-        // to N*timeout: the total dispatch wall-clock is bounded by
-        // timeout_ms regardless of how many hooks hang.
+        // mpsc::recv_timeout, passing the REMAINING time to each receiver.
+        // A hook with its own timeout (Hook::timeout) gets that deadline;
+        // otherwise the registry default applies. The total dispatch
+        // wall-clock is bounded by the registry timeout regardless of how
+        // many hooks hang, so N hooks cannot compound to N times the
+        // per-hook budget.
         //
-        // A hook that exceeds the deadline is abandoned. Its thread is
-        // detached and leaks — the data it references is owned (Arc), so
-        // no dangling references. The leaked thread will eventually finish
-        // or run forever; for a misconfigured infinite hook this is
-        // acceptable because dispatch already returned to the caller.
+        // A hook that exceeds its deadline is abandoned. Its thread is
+        // detached and leaks; the data it references is owned (Arc), so no
+        // dangling references. The leaked thread will eventually finish or
+        // run forever; for a misconfigured infinite hook this is acceptable
+        // because dispatch already returned to the caller.
         let ctx = Arc::new(ctx.clone());
-        let deadline = Instant::now() + Duration::from_millis(self.timeout_ms);
-        let timeout_ms = self.timeout_ms;
+        let dispatch_deadline = Instant::now() + Duration::from_millis(self.timeout_ms);
+        let registry_timeout_ms = self.timeout_ms;
 
-        let receivers: Vec<(mpsc::Receiver<Result<HookVerdict, HookError>>, String)> = cloned
+        let receivers: Vec<PendingHook> = cloned
             .iter()
             .map(|hook| {
                 let (tx, rx) = mpsc::channel();
@@ -224,30 +238,52 @@ impl HookRegistry {
                 let ctx = Arc::clone(&ctx);
                 let name = hook.name().to_string();
                 let thread_name = name.clone();
+                let hook_timeout = hook
+                    .timeout()
+                    .unwrap_or_else(|| Duration::from_millis(registry_timeout_ms));
+                let configured_limit_ms = hook_timeout.as_millis() as u64;
                 std::thread::spawn(move || {
                     let result = catch_panic(|| hook.evaluate(&ctx), &thread_name);
                     drop(tx.send(result));
                 });
-                (rx, name)
+                PendingHook {
+                    rx,
+                    name,
+                    hook_timeout,
+                    configured_limit_ms,
+                }
             })
             .collect();
 
         receivers
             .into_iter()
-            .map(|(rx, name)| {
+            .map(|pending| {
+                // The per-hook deadline is the earlier of the hook's own
+                // timeout and the remaining dispatch budget. This bounds
+                // the total dispatch while respecting a tighter per-hook
+                // limit.
+                let per_hook_deadline = Instant::now() + pending.hook_timeout;
+                let deadline = if per_hook_deadline < dispatch_deadline {
+                    per_hook_deadline
+                } else {
+                    dispatch_deadline
+                };
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                let result = match rx.recv_timeout(remaining) {
+                let result = match pending.rx.recv_timeout(remaining) {
                     Ok(result) => result,
                     // The Timeout error flows to the durable HookSignal and
                     // a system line at the append layer, so the user sees
-                    // which hook was abandoned.
+                    // which hook was abandoned. The reported limit is the
+                    // configured per-hook timeout, not the remaining time
+                    // at the moment of timeout, so the user sees the
+                    // configured value they can adjust.
                     Err(_) => Err(HookError::Timeout {
-                        hook_name: name.clone(),
-                        limit_ms: timeout_ms,
+                        hook_name: pending.name.clone(),
+                        limit_ms: pending.configured_limit_ms,
                     }),
                 };
                 HookOutcome {
-                    hook_name: name,
+                    hook_name: pending.name,
                     result,
                 }
             })

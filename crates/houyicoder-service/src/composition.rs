@@ -14,7 +14,7 @@ pub mod fleet_projector;
 pub mod notification_drain;
 pub use effort_resolver::{effort_to_persist, persist_model_pick};
 mod built_in_tools;
-mod hooks;
+mod hook_compose;
 mod memory;
 pub mod multi_agent;
 mod reloader;
@@ -51,9 +51,9 @@ use houyicoder_core::agent::extractor::MemoryExtractor;
 use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
-    AgentTool, CommandHook, ConversationSearchTool, GitWorkspaceProbe, HookRegistry, HookSource,
-    HotPathReducer, LlmSummarizer, Runner, SkillHookRegistrar, TodoWriteTool, ToolRegistry,
-    parse_event,
+    AgentTool, CommandHook, ConversationSearchTool, GitWorkspaceProbe, HookPolicy, HookRegistry,
+    HookSource, HotPathReducer, LlmSummarizer, Runner, SkillHookRegistrar, TodoWriteTool,
+    ToolRegistry, parse_event,
 };
 use houyicoder_memory::{FileMetaStore, InMemoryBackend, InMemoryMetaStore, LocalFileBackend};
 use houyicoder_permission::{DefaultModeGate, ModeGate, RuleStore};
@@ -397,7 +397,7 @@ pub(crate) fn assemble(
     // Assemble tools from providers (built-in here; an external crate adds
     // its own). TodoWriteTool is registered above; the rest come from here.
     let (skill_registry, skill_conditional) =
-        hooks::build_skill_registry_and_activator(workspace.as_deref());
+        hook_compose::build_skill_registry_and_activator(workspace.as_deref());
     let builtin =
         built_in_tools::BuiltInToolProvider::new(sandbox_session.clone(), gate_dyn.clone())
             .with_activator(Some(std::sync::Arc::clone(&skill_conditional)));
@@ -463,8 +463,11 @@ pub(crate) fn assemble(
     // shared between the command hooks and the skill-hook registrar.
     let hook_launcher: Arc<dyn houyicoder_api::launcher::ProcessLauncher> =
         Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
-    let hook_registry =
-        hooks::build_session_registry(gate_dyn.clone(), std::sync::Arc::clone(&hook_launcher));
+    let hook_registry = hook_compose::build_session_registry(
+        gate_dyn.clone(),
+        std::sync::Arc::clone(&hook_launcher),
+        workspace.as_deref(),
+    );
     // Live workspace-trust ref: fail-closed (Untrusted) until the server
     // writes the resolved state back after the startup trust prompt.
     let trust_state = Arc::new(RwLock::new(TrustState::Untrusted));
@@ -473,7 +476,7 @@ pub(crate) fn assemble(
         std::sync::Arc::clone(&trust_state),
         std::sync::Arc::clone(&hook_launcher),
     ));
-    hooks::register_skill_tool(
+    hook_compose::register_skill_tool(
         &mut tools,
         &skill_registry,
         &skill_registrar,
@@ -527,7 +530,7 @@ pub(crate) fn assemble(
             as std::sync::Arc<dyn houyicoder_api::skill::SkillRegistry>)
         .with_sandbox_session(sandbox_session.clone())
         .with_conditional(std::sync::Arc::clone(&skill_conditional));
-    runner.set_skill_reloader(hooks::build_skill_reloader(
+    runner.set_skill_reloader(hook_compose::build_skill_reloader(
         &skill_registry,
         &skill_conditional,
         &skill_registrar,

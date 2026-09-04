@@ -26,10 +26,14 @@ use serde::{Deserialize, Serialize};
 
 use houyicoder_api::launcher::{ProcessLauncher, SpawnPolicy, SpawnRequest};
 
+use super::filter;
 use super::{Hook, HookContext, HookError, HookEvent, HookSource, HookVerdict};
 /// An external-process hook. Spawns the configured program per evaluate,
 /// pipes the hook context JSON to stdin, parses the verdict JSON from
-/// stdout.
+/// stdout. The optional matcher and if_condition fields filter before
+/// spawn: a hook whose matcher does not match the event's query string, or
+/// whose if condition does not match the tool name and input, returns
+/// Allow without spawning (the hook is skipped, not failed).
 pub struct CommandHook {
     name: String,
     events: Vec<HookEvent>,
@@ -37,6 +41,9 @@ pub struct CommandHook {
     args: Vec<String>,
     launcher: Arc<dyn ProcessLauncher>,
     source: HookSource,
+    matcher: Option<String>,
+    if_condition: Option<String>,
+    timeout: Option<std::time::Duration>,
 }
 
 impl CommandHook {
@@ -58,7 +65,33 @@ impl CommandHook {
             args,
             launcher,
             source,
+            matcher: None,
+            if_condition: None,
+            timeout: None,
         }
+    }
+
+    /// Attach a matcher pattern. The hook is skipped (returns Allow)
+    /// when the event's query string does not match. Returns self for
+    /// chaining.
+    pub fn with_matcher(mut self, matcher: impl Into<String>) -> Self {
+        self.matcher = Some(matcher.into());
+        self
+    }
+
+    /// Attach an if condition (permission-rule syntax). The hook is
+    /// skipped when the tool name and input do not satisfy the rule.
+    /// Returns self for chaining.
+    pub fn with_if_condition(mut self, condition: impl Into<String>) -> Self {
+        self.if_condition = Some(condition.into());
+        self
+    }
+
+    /// Attach a per-hook timeout. None means the registry default
+    /// applies. Returns self for chaining.
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
     }
 }
 
@@ -72,7 +105,24 @@ impl Hook for CommandHook {
     fn source(&self) -> HookSource {
         self.source.clone()
     }
+    fn timeout(&self) -> Option<std::time::Duration> {
+        self.timeout
+    }
     fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
+        if self
+            .matcher
+            .as_ref()
+            .is_some_and(|m| !filter::matcher_passes(ctx, m))
+        {
+            return Ok(HookVerdict::Allow);
+        }
+        if self
+            .if_condition
+            .as_ref()
+            .is_some_and(|rule| !filter::if_rule_passes(ctx, rule))
+        {
+            return Ok(HookVerdict::Allow);
+        }
         let payload = HookContextJson::from_context(ctx);
         let payload_json = serde_json::to_string(&payload).map_err(|e| HookError::ConfigError {
             detail: format!("hook context encode: {e}"),

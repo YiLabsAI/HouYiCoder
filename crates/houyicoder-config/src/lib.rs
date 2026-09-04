@@ -35,6 +35,11 @@ mod api_key;
 pub use api_key::ApiKeySource;
 pub mod settings_merge;
 pub use settings_merge::{merge_json, read_settings_value};
+pub mod hook_spec;
+pub use hook_spec::{
+    HookPolicySettings, HookSpec, parse_hooks_from_settings, resolve_hook_policy_settings,
+    resolve_hooks,
+};
 pub mod trust;
 pub use trust::{is_path_trusted, persist_project_trust};
 
@@ -153,27 +158,6 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
 }
 
-/// One external command hook. The composition root spawns the program per
-/// fire, pipes the hook context as JSON to stdin, and parses the verdict JSON
-/// from stdout. Events are strings resolved against the runtime HookEvent
-/// enum at the composition root, so this leaf crate stays free of any
-/// dependency on the agent layer. A spec with an empty name or program is
-/// dropped by the parser, mirroring the tool-server config: a typo must not
-/// silently register a no-op hook.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct HookSpec {
-    /// A stable label the hook identifies itself by in verdicts and logs.
-    pub name: String,
-    /// Event names (PreToolUse, PostToolUse, PostToolUseFailure, ...). An
-    /// unknown name skips this hook at registration, not at fire time.
-    pub events: Vec<String>,
-    /// The program to run (a binary name or path).
-    pub program: String,
-    /// Argv after the program.
-    #[serde(default)]
-    pub args: Vec<String>,
-}
-
 // ---- pure helpers (logic under test, no env mutation) ---------------------
 
 /// The first non-empty value in priority order, or None. Empty strings are
@@ -266,40 +250,6 @@ fn parse_mcp_servers(raw: Option<&str>) -> Result<Vec<McpServerConfig>, String> 
     Ok(parsed
         .into_iter()
         .filter(|c| !c.program.is_empty())
-        .collect())
-}
-
-/// The list of external command hooks configured via env. An empty or unset
-/// var yields an empty Vec so the composition root wires no command hook (the
-/// engine still runs, the built-in fire points still fire, just no external
-/// verdict source). A malformed value is also an empty Vec with a stderr
-/// warning — the engine must not brick on a config typo.
-pub fn resolve_hooks() -> Vec<HookSpec> {
-    let raw = std::env::var(ENV_HOUYICODER_HOOKS).ok();
-    match parse_hooks(raw.as_deref()) {
-        Ok(list) => list,
-        Err(msg) => {
-            tracing::warn!("{ENV_HOUYICODER_HOOKS} ignored ({msg}); no command hooks wired");
-            Vec::new()
-        }
-    }
-}
-
-/// Pure parser for the command hook list; testable without env mutation.
-/// Accepts a JSON array of objects with name, events, program, and args
-/// fields. An empty or unset value yields an empty list. A non-array value
-/// is an error. Entries with an empty name or program are dropped: a hook
-/// with no command cannot spawn, and silently registering a no-op hook
-/// would mask the config typo.
-fn parse_hooks(raw: Option<&str>) -> Result<Vec<HookSpec>, String> {
-    let Some(body) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(Vec::new());
-    };
-    let parsed: Vec<HookSpec> =
-        serde_json::from_str(body).map_err(|e| format!("invalid json: {e}"))?;
-    Ok(parsed
-        .into_iter()
-        .filter(|s| !s.name.is_empty() && !s.program.is_empty())
         .collect())
 }
 
@@ -593,52 +543,6 @@ mod tests {
     fn test_parse_servers_drops_empty() {
         let raw = r#"[{"program":"","args":[]}]"#;
         let list = parse_mcp_servers(Some(raw)).unwrap();
-        assert!(list.is_empty());
-    }
-
-    #[test]
-    fn test_parse_hooks_empty() {
-        assert!(parse_hooks(None).unwrap().is_empty());
-        assert!(parse_hooks(Some("")).unwrap().is_empty());
-        assert!(parse_hooks(Some("   ")).unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_parse_hooks_array() {
-        let raw = r#"[{"name":"lint","events":["PreToolUse"],"program":"sh","args":["-c","echo"]},{"name":"log","events":["PostToolUse"],"program":"cat"}]"#;
-        let list = parse_hooks(Some(raw)).unwrap();
-        assert_eq!(list.len(), 2);
-        assert_eq!(list[0].name, "lint");
-        assert_eq!(list[0].events, vec!["PreToolUse"]);
-        assert_eq!(list[0].args, vec!["-c", "echo"]);
-        assert_eq!(list[1].name, "log");
-        assert!(list[1].args.is_empty());
-    }
-
-    #[test]
-    fn test_parse_hooks_invalid() {
-        assert!(parse_hooks(Some("not json")).is_err());
-        // A hook missing the required name field fails to deserialize.
-        assert!(parse_hooks(Some(r#"[{"events":[],"program":"sh"}]"#)).is_err());
-    }
-
-    #[test]
-    fn test_parse_hooks_round_trips() {
-        let spec = HookSpec {
-            name: "lint".into(),
-            events: vec!["PreToolUse".into()],
-            program: "sh".into(),
-            args: vec!["-c".into(), "echo hi".into()],
-        };
-        let s = serde_json::to_string(&spec).unwrap();
-        let back: HookSpec = serde_json::from_str(&s).unwrap();
-        assert_eq!(spec, back);
-    }
-
-    #[test]
-    fn test_parse_hooks_drops_empty() {
-        let raw = r#"[{"name":"","events":["PreToolUse"],"program":"sh"},{"name":"x","events":[],"program":""}]"#;
-        let list = parse_hooks(Some(raw)).unwrap();
         assert!(list.is_empty());
     }
 
