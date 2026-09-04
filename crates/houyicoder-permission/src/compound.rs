@@ -209,17 +209,34 @@ fn is_boundary(next: Option<char>) -> bool {
 }
 
 /// Whether a single command segment is structurally attestable: free of file
-/// redirects, command substitution, heredoc, and process substitution outside
-/// quotes. A redirect or substitution inside quotes is data, not an operator.
+/// redirects, command substitution, unquoted heredoc, and process
+/// substitution outside quotes. A redirect or substitution inside quotes
+/// is data, not an operator.
 ///
 /// Safe redirect forms (2>&1, > /dev/null, < /dev/null) are stripped first so
 /// cargo test 2>&1 reads as attestable while cargo test > log.txt escalates.
+/// Quoted heredoc bodies (<<'DELIM') are stripped to a placeholder so body
+/// content does not affect attestability; unquoted heredoc (<<DELIM) keeps
+/// bash expansion and stays un-attestable. The << operator itself is not a
+/// file redirect, so the quoted form does not escalate; the unquoted form
+/// does because the body may hide expansion.
 pub fn is_attestable(segment: &str) -> bool {
-    let stripped = strip_safe_redirects(segment);
+    let stripped = crate::heredoc::strip_quoted_heredoc_bodies(&strip_safe_redirects(segment));
     let mut scan = QuoteScan::new(&stripped);
     while let Some(c) = scan.next() {
         if scan.in_quote() {
             continue;
+        }
+        // Quoted heredoc (<< with quote, dash, or backslash after) feeds
+        // literal text; body already stripped. Skip so only single <
+        // (file input redirect) escalates.
+        if c == '<' && scan.peek_next() == Some('<') {
+            let after = scan.chars.get(scan.pos + 1).copied();
+            if matches!(after, Some('\'') | Some('"') | Some('-') | Some('\\')) {
+                scan.next();
+                continue;
+            }
+            return false;
         }
         if c == '>' || c == '<' {
             return false;
@@ -438,6 +455,7 @@ impl QuoteScan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bash_always_allow_prefix;
 
     #[test]
     fn test_split_simple_segments() {
@@ -521,6 +539,44 @@ mod tests {
     #[test]
     fn test_unattestable_heredoc() {
         assert!(!is_attestable("cat <<EOF"));
+    }
+
+    #[test]
+    fn test_attestable_quoted_heredoc() {
+        // A quoted heredoc <<'DELIM' feeds literal text (no expansion);
+        // the body is stripped by strip_quoted_heredoc_bodies. The <<
+        // operator is not a file redirect, so the segment is attestable.
+        assert!(is_attestable("ego-browser nodejs <<'EOF'"));
+        assert!(is_attestable("cat <<\"EOF\""));
+    }
+
+    #[test]
+    fn test_quoted_heredoc_body_chars() {
+        // A quoted heredoc with a body containing > or < chars: the body
+        // is stripped to _HEREDOC_BODY_ so those chars do not affect
+        // attestability.
+        assert!(is_attestable(
+            "ego-browser nodejs <<'EOF'\nconst x = a > b;\nEOF"
+        ));
+        assert!(is_attestable("cat <<'MARK'\nline with < and > chars\nMARK"));
+    }
+
+    #[test]
+    fn test_unquoted_heredoc_stays_unsafe() {
+        assert!(!is_attestable("cat <<EOF\nbody\nEOF"));
+    }
+
+    #[test]
+    fn test_dash_heredoc_attestable() {
+        assert!(is_attestable("cat <<-'EOF'\nbody\nEOF"));
+    }
+
+    #[test]
+    fn test_bash_prefix_heredoc() {
+        assert_eq!(
+            bash_always_allow_prefix("ego-browser nodejs <<'EOF'\nbody\nEOF"),
+            Some("ego-browser".to_string())
+        );
     }
 
     #[test]

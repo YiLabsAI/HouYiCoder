@@ -48,7 +48,7 @@ pub(crate) fn strip_quoted_heredoc_bodies(content: &str) -> String {
                     out.push('\n');
                     break;
                 }
-                out.push_str("<heredoc-body>");
+                out.push_str("_HEREDOC_BODY_");
                 out.push('\n');
             }
         }
@@ -150,7 +150,7 @@ mod tests {
             !out.contains("rm -rf"),
             "body literal must not reach the scan: {out}"
         );
-        assert!(out.contains("<heredoc-body>"), "body replaced: {out}");
+        assert!(out.contains("_HEREDOC_BODY_"), "body replaced: {out}");
     }
 
     /// An unquoted heredoc keeps its body — bash expands it, so a real command

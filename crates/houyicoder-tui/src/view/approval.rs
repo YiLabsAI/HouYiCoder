@@ -151,11 +151,22 @@ fn render_options(f: &mut Frame, a: &crate::state::Approval, chunks: &[Rect]) {
         return;
     }
     let dont_ask_focused = a.selected == 2;
+    let dont_ask_label = match a.tool.to_ascii_lowercase().as_str() {
+        "bash" | "sh" | "exec" | "shell" => {
+            let val = serde_json::from_str::<Value>(&a.args).ok();
+            let cmd = args_command(&a.tool, val.as_ref(), &a.args);
+            cmd.split_whitespace()
+                .next()
+                .map(|t| format!("{t} *"))
+                .unwrap_or_else(|| a.tool.clone())
+        }
+        _ => a.tool.clone(),
+    };
     f.render_widget(
         Paragraph::new(format!(
             " {} 2. Yes, and don't ask again for {}",
             if dont_ask_focused { "❯" } else { " " },
-            a.tool,
+            dont_ask_label,
         ))
         .style(if dont_ask_focused {
             Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
