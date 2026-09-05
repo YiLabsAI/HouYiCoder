@@ -122,6 +122,39 @@ fn test_esc_recall_keeps_command() {
     );
 }
 
+/// Esc recall is destructive: once recalled to the input box, clearing the
+/// input (Ctrl+U) permanently drops the message -- it is no longer in the
+/// queue. This is by design (recall is an explicit user action). Pin it so a
+/// future change that adds undo to recall does not silently weaken the
+/// contract. The batch version (N messages) is N-wide; this test uses one
+/// message since Ctrl+U kills one line at a time.
+#[test]
+fn test_recall_then_clear_loses() {
+    let mut app = working();
+    app.pending
+        .push(PendingItem::Message("important task".into()));
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(
+        app.input.value(),
+        "important task",
+        "message recalled to input"
+    );
+    assert!(app.pending.is_empty(), "queue drained on recall");
+    // Clear the recalled input.
+    crate::keys::handle_working(&mut app, ctrl('u'));
+    assert!(app.input.is_empty(), "Ctrl+U clears the recalled text");
+    assert!(
+        app.pending.is_empty(),
+        "message is gone (remove-on-recall is by design)"
+    );
+    // Submitting empty no-ops.
+    app.submit_input();
+    assert!(
+        app.transcript.is_empty(),
+        "empty submit no-ops (no User turn recorded)"
+    );
+}
+
 #[test]
 fn test_auto_start_task_enters() {
     let mut app = working();

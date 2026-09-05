@@ -7,6 +7,9 @@
 //! enqueue promotes only when the queue was empty; QueueConsumed or spawn_run
 //! promotes the next, so an Esc recall races at most one server copy.
 
+use crate::run_control::ClientCommand;
+use crate::state::App;
+
 /// One queued item. The host pending queue is the single truth source for
 /// ordering; the server runner queue is only the current run's injection
 /// buffer. A Message holds the single live server copy (InjectUser'd,
@@ -18,9 +21,6 @@
 /// -- a /clear reset, or a swap clears the server queue, so an InjectUser'd
 /// message loses its copy). A slash command is purely local (drained to
 /// local dispatch, never sent to the model).
-use crate::run_control::ClientCommand;
-use crate::state::App;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum PendingItem {
     /// A user message with a live server copy (InjectUser'd to the server

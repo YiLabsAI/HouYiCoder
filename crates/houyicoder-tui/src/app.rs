@@ -294,7 +294,20 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 }
                 let shown = if n > 2 { 1 } else { std::cmp::min(n, 2) } as usize;
                 if row < shown {
-                    let item = app.pending.remove(row);
+                    // Map the filtered row back to the pending index:
+                    // draw_strip skips items with an empty display, so row N
+                    // in the strip is not necessarily pending[N].
+                    let Some(idx) = app
+                        .pending
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| !s.display().is_empty())
+                        .nth(row)
+                        .map(|(i, _)| i)
+                    else {
+                        return;
+                    };
+                    let item = app.pending.remove(idx);
                     // A recalled Message has a live server copy: drop it over the
                     // wire so a follow-up run does not re-inject it. Parked and
                     // Command have no server copy.
@@ -304,7 +317,9 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                             text: text.clone(),
                         });
                     }
-                    app.input.set(item.display().to_string());
+                    // Merge with any in-progress draft (same as Esc recall)
+                    // rather than overwriting it.
+                    app.merge_recalled_text(item.display().to_string());
                 } else {
                     app.pop_queued_to_input();
                 }

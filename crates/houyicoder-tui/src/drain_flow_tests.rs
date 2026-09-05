@@ -246,6 +246,52 @@ fn test_command_drain_promotes() {
     );
 }
 
+/// An orphaned message (demoted to Parked by a prior interrupt) is promoted
+/// into the next run when a subsequent enqueue fires promote_next_pending.
+/// This is intended: the strip shows the orphan as queued (it will auto-run),
+/// and FIFO places it ahead of the newcomer. The orphan gets the single live
+/// copy; the newcomer parks. Without this test, a future change that gates
+/// promote on last_run_final (stranding orphans until manual recall) would
+/// silently pass -- pinning the behavior makes the design choice explicit.
+#[test]
+fn test_orphan_promoted_on_enqueue() {
+    let mut app = working();
+    // Simulate a prior interrupt that orphaned a queued message.
+    app.pending
+        .push(PendingItem::ParkedMessage("orphan".into()));
+    app.status.last_run_final = false;
+    // User submits a new message -> real-spawn path (agent_busy was false).
+    // The test harness has no session, so spawn_run returns early without
+    // setting agent_busy; simulate the post-spawn state manually.
+    app.agent_busy = true;
+    assert_eq!(
+        app.pending[0],
+        PendingItem::ParkedMessage("orphan".into()),
+        "real-spawn path does not promote; orphan stays parked"
+    );
+    // User submits another message while the new run is busy -> queue path
+    // fires promote_next_pending, which promotes the orphaned head.
+    app.spawn_run("another".into());
+    assert_eq!(
+        app.pending[0],
+        PendingItem::Message("orphan".into()),
+        "enqueue-time promote fires for the orphaned head (FIFO: it runs first)"
+    );
+    assert_eq!(
+        app.pending[1],
+        PendingItem::ParkedMessage("another".into()),
+        "the newcomer parks behind the promoted orphan"
+    );
+    assert_eq!(
+        app.pending
+            .iter()
+            .filter(|it| matches!(it, PendingItem::Message(_)))
+            .count(),
+        1,
+        "exactly one live copy (the orphan); the newcomer has none"
+    );
+}
+
 /// /clear resets the server session, so a queued Message with a live server copy
 /// is orphaned and must be demoted to ParkedMessage. With strict FIFO the
 /// /clear Command sits at the head (ahead of the Message) so it drains first

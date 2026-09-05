@@ -492,11 +492,16 @@ impl App {
         // text (which is already removed from the queue).
         self.last_run_input = None;
         let text = messages.join("\n");
-        // Merge the recalled text with any in-progress draft rather than
-        // overwriting it: queued messages prepend, a newline separates, and
-        // the cursor parks at the draft start so the user resumes typing
-        // where they were. An empty draft just takes the queued text (cursor
-        // at the end). Overwriting would destroy the user's half-typed draft.
+        self.merge_recalled_text(text);
+    }
+
+    /// Merge recalled text ahead of any in-progress draft: queued messages
+    /// prepend, a newline separates, and the cursor parks at the draft start
+    /// so the user resumes typing where they were. An empty draft just takes
+    /// the recalled text (cursor at the end). Overwriting would destroy the
+    /// user's half-typed draft. Shared by Esc batch recall (pop_queued_to_input)
+    /// and mouse single-row recall (handle_mouse) so both preserve the draft.
+    pub(crate) fn merge_recalled_text(&mut self, text: String) {
         let draft = self.input.value().to_string();
         if draft.is_empty() {
             self.input.set(text);
