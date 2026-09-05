@@ -33,6 +33,8 @@ mod mac;
 #[cfg(target_os = "macos")]
 pub use mac::MacSeatbeltSession;
 
+pub mod deny_log;
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]

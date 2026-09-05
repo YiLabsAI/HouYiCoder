@@ -14,6 +14,12 @@ pub const DENIED_MACH_SERVICES: &[&str] = &[
     "com.apple.coreservices.appleevents",
 ];
 
+/// Whether a mach service name is on the Apple deny-list and must never
+/// be granted through any path.
+pub fn is_denied(service: &str) -> bool {
+    DENIED_MACH_SERVICES.contains(&service)
+}
+
 /// A compiled-in mapping of known community skills to the entitlements they
 /// need, so a skill works without the user hand-editing the grant store or
 /// the vendor adding houyi-specific frontmatter. Parsed from the embedded
@@ -76,15 +82,12 @@ impl SkillGrantStore {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .filter(|s| !DENIED_MACH_SERVICES.contains(&s.as_str()))
+            .filter(|s| !is_denied(s))
             .collect()
     }
 
     pub fn set_grant(&self, skill: &str, services: Vec<String>) {
-        let filtered: Vec<String> = services
-            .into_iter()
-            .filter(|s| !DENIED_MACH_SERVICES.contains(&s.as_str()))
-            .collect();
+        let filtered: Vec<String> = services.into_iter().filter(|s| !is_denied(s)).collect();
         let mut grants = self.grants.lock().expect("grant lock poisoned");
         grants.insert(skill.to_string(), filtered);
         save_grants(&self.path, &grants);
@@ -103,12 +106,12 @@ impl SkillGrantStore {
         let cap = capability_for(skill);
         let mut mach: Vec<String> = frontmatter
             .iter()
-            .filter(|s| !DENIED_MACH_SERVICES.contains(&s.as_str()))
+            .filter(|s| !is_denied(s))
             .cloned()
             .collect();
         if let Some((cap_mach, _)) = &cap {
             for s in cap_mach {
-                if !DENIED_MACH_SERVICES.contains(&s.as_str()) && !mach.contains(s) {
+                if !is_denied(s) && !mach.contains(s) {
                     mach.push(s.clone());
                 }
             }
@@ -145,7 +148,7 @@ pub fn resolve_entitlements(
         None => {
             let mach: Vec<String> = frontmatter
                 .iter()
-                .filter(|s| !DENIED_MACH_SERVICES.contains(&s.as_str()))
+                .filter(|s| !is_denied(s))
                 .cloned()
                 .collect();
             (mach, fm_allow_launch)
