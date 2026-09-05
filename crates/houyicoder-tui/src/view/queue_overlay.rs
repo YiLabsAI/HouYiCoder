@@ -10,6 +10,7 @@ use ratatui::{
     widgets::{Clear, Paragraph},
 };
 
+use crate::pending_queue::PendingItem;
 use crate::state::App;
 use crate::view::line_wrap::truncate_width;
 
@@ -71,10 +72,12 @@ pub(super) fn strip_want(app: &App) -> u16 {
     std::cmp::min(n, 2) as u16
 }
 
-/// Render the read-only ambient queued-input strip above the input box: the
-/// most recent pending items as dim single-line previews plus a +N more
-/// overflow, or a one-line summary when the window is too small. Per-item
-/// edit/delete is the Ctrl+G overlay (not this strip).
+/// Render the read-only ambient queued-input strip above the input box. Each
+/// pending item carries a state glyph: arrow-next for the head (next to
+/// act — run for a message, drain for a command), middle-dot n. for a parked
+/// message with no server copy (blocked behind a barrier or orphaned). A
+/// "+N more" overflow row caps the strip at two rows; a one-line count
+/// summary is used when the window is too small.
 pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<_> = app
         .pending
@@ -89,28 +92,22 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     app.queue_rect.set(area);
     let dim = Style::new().fg(Color::DarkGray);
     let mut lines: Vec<Line> = Vec::new();
-    // One row (small window OR budget-constrained): the summary form, EXCEPT
-    // when there is exactly one item — a single preview fits one row and is
-    // more useful than +1 queued. More rows: cap at two — with overflow,
-    // show one real item (the head, next to run) plus a "+N more" summary so
-    // the count stays visible without a third row. The first row always
-    // carries the Ctrl+G manager hint so a 1- or 2-item queue still surfaces
-    // the edit/delete entry.
     let one_row_summary = area.height <= 1 && items.len() > 1;
     if one_row_summary {
-        lines.push(Line::from(Span::styled(
-            format!("⏵ +{} queued (Ctrl+G to manage)", items.len()),
-            dim,
-        )));
+        lines.push(Line::from(Span::styled(format!("→ +{}", items.len()), dim)));
     } else {
         let cap = if area.height <= 1 { 1 } else { 2 };
         // With overflow, drop to one real row so the "+N more" summary fits
         // within the cap; the count conveys scale a second preview cannot.
         let shown = if items.len() > cap { 1 } else { items.len() };
         for (i, item) in items.iter().take(shown).enumerate() {
-            let hint = if i == 0 { " (Ctrl+G to manage)" } else { "" };
+            let (glyph, label) = match item {
+                PendingItem::ParkedMessage(_) => ("⏸", "held".to_string()),
+                _ if i == 0 => ("→", "next".to_string()),
+                _ => ("·", format!("{}.", i + 1)),
+            };
             lines.push(Line::from(Span::styled(
-                format!("⏵ queued: {}{}", item.display(), hint),
+                format!("{glyph} {label}  {}", item.display()),
                 dim,
             )));
         }

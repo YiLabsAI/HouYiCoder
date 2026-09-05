@@ -5,7 +5,6 @@
 
 #![cfg(test)]
 
-use crate::pending_queue::PendingItem;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::SlashCommand;
 
@@ -602,29 +601,6 @@ fn test_thought_expand_wraps_narrow() {
     assert!(
         rendered > 3,
         "expanded long reasoning must wrap to >3 rows at 30 cols, got {rendered}"
-    );
-}
-
-// The queue strip surfaces the Ctrl+G manager hint whenever the queue is
-// non-empty — not only on the "+N more" overflow line. A 1- or 2-item queue
-// must still show the entry so the user can edit/delete without discovering
-// the key by accident.
-#[test]
-fn test_queue_strip_hint() {
-    let mut app = working();
-    app.pending
-        .push(PendingItem::Message("first queued".into()));
-    let out = render_text(&app, 80, 24);
-    assert!(
-        out.contains("Ctrl+G to manage"),
-        "1-item queue must hint Ctrl+G: {out}"
-    );
-    app.pending
-        .push(PendingItem::Message("second queued".into()));
-    let out = render_text(&app, 80, 24);
-    assert!(
-        out.contains("Ctrl+G to manage"),
-        "2-item queue must hint Ctrl+G: {out}"
     );
 }
 

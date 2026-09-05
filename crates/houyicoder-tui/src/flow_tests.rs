@@ -273,8 +273,12 @@ fn test_queue_strip_renders() {
     app.pending.push(PendingItem::Message("run tests".into()));
     let out = render(&app);
     assert!(
-        out.contains("queued:"),
+        out.contains("→ next"),
         "queue strip must render, got:\n{out}"
+    );
+    assert!(
+        out.contains("· 2."),
+        "second item shows position glyph, got:\n{out}"
     );
     assert!(
         out.contains("fix the bug") && out.contains("run tests"),
@@ -314,7 +318,7 @@ fn test_queue_strip_in_focus() {
     app.viewport = crate::state::ViewportMode::Focus;
     let out = render(&app);
     assert!(
-        out.contains("queued:"),
+        out.contains("→ next"),
         "queue strip renders in Focus, got:\n{out}"
     );
 }
@@ -589,7 +593,7 @@ fn test_click_second_row_recalls() {
 }
 
 /// The queue strip renders above the input box. Guards the layout move by
-/// scanning the rendered text: the ⏵ queue row must sit above the ❯ input
+/// scanning the rendered text: the → queue row must sit above the ❯ input
 /// prompt row.
 #[test]
 fn test_queue_row_above_input() {
@@ -600,7 +604,7 @@ fn test_queue_row_above_input() {
     let mut q = None;
     let mut p = None;
     for (i, line) in text.lines().enumerate() {
-        if q.is_none() && line.contains('⏵') {
+        if q.is_none() && line.contains('→') {
             q = Some(i);
         }
         if p.is_none() && line.contains('❯') {
@@ -610,6 +614,30 @@ fn test_queue_row_above_input() {
     let q = q.expect("queue strip row rendered");
     let p = p.expect("input prompt row rendered");
     assert!(q < p, "queue row {} must sit above input row {}", q, p);
+}
+
+/// A small window collapses the strip to a one-line count: the head glyph
+/// plus the total, no per-item rows.
+#[test]
+fn test_queue_summary_one_row() {
+    let mut app = working();
+    app.pending.push(PendingItem::Message("a".into()));
+    app.pending.push(PendingItem::Message("b".into()));
+    app.pending.push(PendingItem::Message("c".into()));
+    let out = render_text(&app, 80, 18);
+    assert!(out.contains("→ +3"), "small window count summary: {out}");
+}
+
+/// A parked message (no server copy, blocked behind a barrier or orphaned)
+/// shows the held glyph rather than next/n.
+#[test]
+fn test_queue_held_row() {
+    let mut app = working();
+    app.pending
+        .push(PendingItem::ParkedMessage("blocked msg".into()));
+    let out = render_text(&app, 100, 28);
+    assert!(out.contains("⏸ held"), "parked shows held glyph: {out}");
+    assert!(out.contains("blocked msg"), "parked body shown: {out}");
 }
 
 /// A click on the +N more row (or the one-line summary on small windows) opens
