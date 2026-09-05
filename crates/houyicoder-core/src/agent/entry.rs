@@ -96,6 +96,13 @@ impl Runner {
         // Skips snapshots still referenced by the undo stack.
         self.prune_snapshots();
         self.reset_run_state();
+        // Clear skill grants from the previous agent work period so the
+        // mach-lookup allow list does not leak across turns. A skill invoked
+        // in the prior run no longer needs its entitlements; the next @skill:
+        // or Skill-tool call pushes fresh grants for this period.
+        if let Some(session) = self.sandbox_session.as_ref() {
+            session.clear_skill_grants();
+        }
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
         // Deterministic fact extraction: scan the user input for explicit

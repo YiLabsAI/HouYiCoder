@@ -868,7 +868,7 @@ fn test_app_launch_default_off() {
 }
 
 #[test]
-fn test_app_launch_grant_revokes() {
+fn test_clear_skill_grants_resets() {
     let root = mkdtemp("sb-app2").unwrap();
     let s = MacSeatbeltSession::new_in_cwd(&root).unwrap();
     s.set_allow_app_launch(true);
@@ -878,10 +878,41 @@ fn test_app_launch_grant_revokes() {
         p.contains("(allow mach-lookup (global-name \"com.apple.CoreServices.coreservicesd\"))"),
         "coreservicesd granted: {p}"
     );
-    s.set_allow_app_launch(false);
+    s.clear_skill_grants();
     assert!(
         !s.current_profile().contains("(allow lsopen)"),
-        "revoking drops lsopen"
+        "clear_skill_grants drops lsopen"
     );
+    assert!(
+        !s.current_profile().contains("coreservicesd"),
+        "clear_skill_grants drops mach services"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn test_mach_services_union_dedup() {
+    let root = mkdtemp("sb-union").unwrap();
+    let s = MacSeatbeltSession::new_in_cwd(&root).unwrap();
+    s.set_extra_mach_services(&["a.b.c".into(), "d.e.f".into()]);
+    s.set_extra_mach_services(&["d.e.f".into(), "g.h.i".into()]);
+    let p = s.current_profile();
+    assert!(p.contains("a.b.c"), "first service present: {p}");
+    assert_eq!(p.matches("d.e.f").count(), 1, "dedup: {p}");
+    assert!(p.contains("g.h.i"), "second-push service present: {p}");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn test_app_launch_or_accumulate() {
+    let root = mkdtemp("sb-or").unwrap();
+    let s = MacSeatbeltSession::new_in_cwd(&root).unwrap();
+    s.set_allow_app_launch(true);
+    s.set_allow_app_launch(false);
+    let p = s.current_profile();
+    assert!(p.contains("(allow lsopen)"), "OR-accumulate: {p}");
+    s.clear_skill_grants();
+    let p2 = s.current_profile();
+    assert!(!p2.contains("(allow lsopen)"), "reset after clear: {p2}");
     std::fs::remove_dir_all(&root).ok();
 }

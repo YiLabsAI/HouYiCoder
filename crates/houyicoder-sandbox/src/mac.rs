@@ -667,8 +667,11 @@ impl SandboxSession for MacSeatbeltSession {
             .extra_mach_services
             .lock()
             .expect("extra mach services lock");
-        mach.clear();
-        mach.extend_from_slice(services);
+        for s in services {
+            if !mach.contains(s) {
+                mach.push(s.clone());
+            }
+        }
     }
 
     fn clear_extra_mach_services(&self) {
@@ -679,7 +682,15 @@ impl SandboxSession for MacSeatbeltSession {
     }
 
     fn set_allow_app_launch(&self, allow: bool) {
-        *self.allow_app_launch.lock().expect("allow app launch lock") = allow;
+        *self.allow_app_launch.lock().expect("allow app launch lock") |= allow;
+    }
+
+    fn clear_skill_grants(&self) {
+        self.extra_mach_services
+            .lock()
+            .expect("extra mach services lock")
+            .clear();
+        *self.allow_app_launch.lock().expect("allow app launch lock") = false;
     }
 }
 

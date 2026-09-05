@@ -641,6 +641,9 @@ pub trait SandboxSession: Send + Sync {
     /// Grant or revoke the LaunchServices app-launch entitlement so a
     /// sandboxed process can open -a an app. No-op without a mutable fence.
     fn set_allow_app_launch(&self, _allow: bool) {}
+    /// Reset all skill-granted entitlements (mach services + app-launch) at
+    /// the start of a new agent work period. Default no-op.
+    fn clear_skill_grants(&self) {}
 }
 
 #[cfg(test)]
