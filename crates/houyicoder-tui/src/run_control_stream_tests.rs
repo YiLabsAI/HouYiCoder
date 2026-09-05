@@ -296,12 +296,12 @@ impl Tool for EchoTool {
     }
 }
 
-/// The batch's server delivery: InjectUser the rest into the new run, the
-/// drive_loop drains them at the turn boundary (after the auto-run echo), +
-/// QueueConsumed removes them from pending. Verifies the full wire path
-/// (host InjectUser -> server drive_loop drain -> QueueConsumed -> host
-/// remove), not just the host-side bookkeeping (the layer-axis gap the
-/// batch test had).
+/// Fast provider, race lost: idle_drain spawns the first message and
+/// promotes exactly one parked head, but a fast provider returns before
+/// the injected head reaches the server, so the run ends without consuming
+/// it. The tail must not be lost -- it stays pending for the next
+/// idle_drain. Drives the real wire path (InjectUser -> drive_loop drain
+/// -> QueueConsumed -> host remove -> promote next), not just host state.
 #[test]
 fn test_batch_consumes_via_drain() {
     let provider = Arc::new(FakeProvider::new(vec![
@@ -326,21 +326,24 @@ fn test_batch_consumes_via_drain() {
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
     app.status.last_run_final = true;
-    app.pending.push(PendingItem::Message("m1".into()));
-    app.pending.push(PendingItem::Message("m2".into()));
-    app.pending.push(PendingItem::Message("m3".into()));
+    app.pending.push(PendingItem::Message("first".into()));
+    app.pending
+        .push(PendingItem::ParkedMessage("second".into()));
+    app.pending.push(PendingItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
-    assert!(app.agent_busy, "m1 spawned a run");
-    assert_eq!(app.pending.len(), 2, "m2/m3 stay in pending (InjectUser'd)");
-    // Poll to Done — the drive_loop runs (echo turn 1, done turn 2). The
-    // InjectUser'd m2/m3 race the turn-1 boundary: with a fast FakeProvider
-    // the model call returns before the InjectUser wire lands in the
-    // input_queue, so m2/m3 are NOT consumed (no QueueConsumed) + stay in
-    // pending. This is the timing race (doc'd in the queue-divergence notes):
-    // same-run guaranteed (they'll drain on the next idle_drain), same-call
-    // not. A real (slow) model wins the race -> QueueConsumed fires + removes
-    // them; verifying that needs a delayed provider (follow-up).
+    assert!(app.agent_busy, "first spawned a run");
+    assert_eq!(app.pending.len(), 2, "second/third stay pending");
+    assert_eq!(
+        app.pending[0],
+        PendingItem::Message("second".into()),
+        "second holds the copy; third parked behind it"
+    );
+    assert_eq!(
+        app.pending[1],
+        PendingItem::ParkedMessage("third".into()),
+        "third has no copy (single-copy invariant)"
+    );
     let mut tries = 0;
     while app.agent_busy && tries < 1000 {
         app.poll_agent();
@@ -349,66 +352,57 @@ fn test_batch_consumes_via_drain() {
         }
         tries += 1;
     }
-    assert!(!app.agent_busy, "run reached Done (echo + done)");
-    // No loss: m2/m3 are either consumed (pending empty, race won) or still in
-    // pending (race lost, drained next idle_drain). With the fast provider the
-    // race is lost, so they stay — the invariant is "not lost", not "consumed".
+    assert!(!app.agent_busy, "run reached Done");
+    let texts: Vec<&str> = app.pending.iter().map(|it| it.display()).collect();
     assert!(
-        app.pending
-            .iter()
-            .all(|it| matches!(it, PendingItem::Message(_))),
-        "m2/m3 not lost (still Message in pending, drained next idle_drain):\
-         \n{:?}",
+        texts.contains(&"second") && texts.contains(&"third"),
+        "tail not lost (race lost, drained next idle_drain):\n{:?}",
         app.pending
     );
 }
 
-/// The batch's race-WIN delivery path: with a delayed provider, the
-/// InjectUser'd rest land in the input_queue before the first model call
-/// returns, the drive_loop's turn-boundary drain consumes them, +
-/// QueueConsumed removes them from pending. This is the distinguishing
-/// assertion (pending.is_empty()) the non-delayed test can't make — there
-/// the race is lost (rest stay), so it can only assert no-loss. Here the
-/// race is forced-won (delay), so pending MUST be empty (QueueConsumed
-/// fired).
+/// Delayed provider, race won: each InjectUser lands before the next turn
+/// boundary, so one run drains the whole queue one boundary at a time and
+/// nothing is left pending. The assertion (pending.is_empty()) the
+/// race-lost test above cannot make.
 #[test]
 fn test_batch_delivers_via_drain() {
+    let tool_call = |id: &str| CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: id.into(),
+            name: "echo".into(),
+            input: serde_json::json!({}),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let done = CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
     let provider = Arc::new(FakeProvider::new_with_delay(
-        vec![
-            CompletionResponse {
-                output: vec![OutputItem::ToolCall {
-                    id: "c1".into(),
-                    name: "echo".into(),
-                    input: serde_json::json!({}),
-                }],
-                usage: Usage::default(),
-                model: "test".into(),
-            },
-            CompletionResponse {
-                output: vec![OutputItem::Text {
-                    text: "done".into(),
-                }],
-                usage: Usage::default(),
-                model: "test".into(),
-            },
-        ],
-        200,
+        vec![tool_call("c1"), tool_call("c2"), done],
+        100,
     ));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
     app.status.last_run_final = true;
-    app.pending.push(PendingItem::Message("m1".into()));
-    app.pending.push(PendingItem::Message("m2".into()));
-    app.pending.push(PendingItem::Message("m3".into()));
+    app.pending.push(PendingItem::Message("first".into()));
+    app.pending
+        .push(PendingItem::ParkedMessage("second".into()));
+    app.pending.push(PendingItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
-    assert!(app.agent_busy, "m1 spawned a run");
-    assert_eq!(app.pending.len(), 2, "m2/m3 stay in pending (InjectUser'd)");
-    // The delayed provider (200ms) lets the InjectUser wire land in the
-    // input_queue before the first model call returns. drive_loop: call 1
-    // -> echo -> turn boundary -> drain input_queue (m2, m3) -> QueueConsumed
-    // -> call 2 -> done -> Final. m2/m3 consumed + removed.
+    assert!(app.agent_busy, "first spawned a run");
+    assert_eq!(
+        app.pending[0],
+        PendingItem::Message("second".into()),
+        "second holds the copy; third parked"
+    );
     let mut tries = 0;
     while app.agent_busy && tries < 1000 {
         app.poll_agent();
@@ -417,11 +411,10 @@ fn test_batch_delivers_via_drain() {
         }
         tries += 1;
     }
-    assert!(!app.agent_busy, "run reached Done (echo + done)");
+    assert!(!app.agent_busy, "run reached Done");
     assert!(
         app.pending.is_empty(),
-        "race-WIN: QueueConsumed removed m2/m3 (drive_loop drained at turn \
-         boundary, delay let InjectUser land first):\n{:?}",
+        "race won: one run drained the chain one boundary at a time:\n{:?}",
         app.pending
     );
 }

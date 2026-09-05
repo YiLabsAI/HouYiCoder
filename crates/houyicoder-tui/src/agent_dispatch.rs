@@ -144,11 +144,12 @@ impl App {
                 }
             }
             AgentMessage::QueueConsumed { texts } => {
-                // Drop consumed messages from the pending-input copy (FIFO +
-                // text match). A consumed message is no longer pending, so the
-                // queue view + the run-boundary drain stay accurate — without
-                // this, a message injected mid-run would still sit in the
-                // pending copy + be spawned again as a follow-up at run end (double).
+                // Drop consumed messages from the pending copy (FIFO + text
+                // match), then promote the next parked head: the
+                // single-copy invariant frees the slot the consumed item
+                // held, so the next queued message gets its single live
+                // copy + the run keeps draining the queue one turn
+                // boundary at a time.
                 for text in texts {
                     if let Some(pos) = self
                         .pending
@@ -158,6 +159,7 @@ impl App {
                         self.pending.remove(pos);
                     }
                 }
+                self.promote_next_pending();
             }
             AgentMessage::PermissionAsk { req_id, ask } => {
                 // Rebuild the transcript from the wire stream so the assistant

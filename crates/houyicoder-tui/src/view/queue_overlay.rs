@@ -30,12 +30,12 @@ pub(super) fn strip_want(app: &App) -> u16 {
     std::cmp::min(n, 2) as u16
 }
 
-/// Render the read-only ambient queued-input strip above the input box. Each
-/// pending item carries a state glyph: arrow-next for the head (next to
-/// act — run for a message, drain for a command), middle-dot n. for a parked
-/// message with no server copy (blocked behind a barrier or orphaned). A
-/// "+N more" overflow row caps the strip at two rows; a one-line count
-/// summary is used when the window is too small.
+/// Render the read-only queued-input strip above the input box. The glyph
+/// keys on position + the drain gate, not the item's type: a non-head
+/// ParkedMessage may still auto-run (queued behind the live head) or not
+/// (orphaned by an interrupt), and the type cannot tell those apart.
+/// Gate open (busy or clean idle): head Message -> "→ next", non-head ->
+/// "· n.". Gate closed (idle after a non-final end): all -> "⏸ held".
 pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<_> = app
         .pending
@@ -49,20 +49,29 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     // Stash the strip rect so mouse clicks can map to a queued item.
     app.queue_rect.set(area);
     let dim = Style::new().fg(Color::DarkGray);
+    // Drain gate: open while busy or after a clean run end; closed when idle
+    // after a non-final end (interrupt/error), so the queue parks.
+    let gate_closed = !app.agent_busy && !app.status.last_run_final;
     let mut lines: Vec<Line> = Vec::new();
     let one_row_summary = area.height <= 1 && items.len() > 1;
     if one_row_summary {
-        lines.push(Line::from(Span::styled(format!("→ +{}", items.len()), dim)));
+        let head = if gate_closed { "⏸" } else { "→" };
+        lines.push(Line::from(Span::styled(
+            format!("{head} +{}", items.len()),
+            dim,
+        )));
     } else {
         let cap = if area.height <= 1 { 1 } else { 2 };
         // With overflow, drop to one real row so the "+N more" summary fits
         // within the cap; the count conveys scale a second preview cannot.
         let shown = if items.len() > cap { 1 } else { items.len() };
         for (i, item) in items.iter().take(shown).enumerate() {
-            let (glyph, label) = match item {
-                PendingItem::ParkedMessage(_) => ("⏸", "held".to_string()),
-                _ if i == 0 => ("→", "next".to_string()),
-                _ => ("·", format!("{}.", i + 1)),
+            let (glyph, label) = if gate_closed {
+                ("⏸", "held".to_string())
+            } else if i == 0 && matches!(item, PendingItem::Message(_)) {
+                ("→", "next".to_string())
+            } else {
+                ("·", format!("{}.", i + 1))
             };
             lines.push(Line::from(Span::styled(
                 format!("{glyph} {label}  {}", item.display()),

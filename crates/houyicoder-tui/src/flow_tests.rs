@@ -197,6 +197,7 @@ fn test_input_stable_while_busy() {
 #[test]
 fn test_queue_strip_renders() {
     let mut app = working();
+    app.agent_busy = true;
     app.pending.push(PendingItem::Message("fix the bug".into()));
     app.pending.push(PendingItem::Message("run tests".into()));
     let out = render(&app);
@@ -221,6 +222,7 @@ fn test_queue_strip_renders() {
 #[test]
 fn test_queue_strip_in_focus() {
     let mut app = working();
+    app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
     app.stage = Stage::Implementing;
@@ -393,6 +395,7 @@ fn test_click_second_row_recalls() {
 #[test]
 fn test_queue_row_above_input() {
     let mut app = working();
+    app.agent_busy = true;
     app.pending.push(PendingItem::Message("one".into()));
     app.pending.push(PendingItem::Message("two".into()));
     let text = render_text(&app, 100, 28);
@@ -416,6 +419,7 @@ fn test_queue_row_above_input() {
 #[test]
 fn test_queue_summary_one_row() {
     let mut app = working();
+    app.agent_busy = true;
     app.pending.push(PendingItem::Message("a".into()));
     app.pending.push(PendingItem::Message("b".into()));
     app.pending.push(PendingItem::Message("c".into()));
@@ -423,16 +427,55 @@ fn test_queue_summary_one_row() {
     assert!(out.contains("→ +3"), "small window count summary: {out}");
 }
 
-/// A parked message (no server copy, blocked behind a barrier or orphaned)
-/// shows the held glyph rather than next/n.
+/// Gate closed (idle after a non-final run end -- interrupt, max-turns,
+/// error): every queued item shows held, because nothing will auto-run
+/// until the user recalls (Esc) or re-sends. The strip must not claim
+/// "next" -- no item holds a live copy or is about to spawn.
 #[test]
 fn test_queue_held_row() {
     let mut app = working();
+    // working() defaults to idle + last_run_final=false (gate closed).
     app.pending
-        .push(PendingItem::ParkedMessage("blocked msg".into()));
+        .push(PendingItem::ParkedMessage("orphan a".into()));
+    app.pending
+        .push(PendingItem::ParkedMessage("orphan b".into()));
     let out = render_text(&app, 100, 28);
-    assert!(out.contains("⏸ held"), "parked shows held glyph: {out}");
-    assert!(out.contains("blocked msg"), "parked body shown: {out}");
+    assert!(
+        out.contains("⏸ held"),
+        "gate closed: items show held: {out}"
+    );
+    assert!(
+        !out.contains("→ next"),
+        "no live head when the gate is closed: {out}"
+    );
+    assert!(
+        out.contains("orphan a"),
+        "held items still render their body text: {out}"
+    );
+}
+
+/// Gate open (a run is in flight): the live head Message is the one item
+/// with a server copy -> "→ next"; a parked non-head has no copy but WILL
+/// auto-run when the head's run hits a turn boundary, so it shows its
+/// queue position, not "held" (held promises it will NOT auto-run).
+#[test]
+fn test_queue_next_row() {
+    let mut app = working();
+    app.agent_busy = true;
+    app.pending.push(PendingItem::Message("live".into()));
+    app.pending
+        .push(PendingItem::ParkedMessage("queued".into()));
+    let out = render_text(&app, 100, 28);
+    assert!(out.contains("→ next"), "busy head shows next: {out}");
+    assert!(
+        out.contains("· 2."),
+        "non-head shows its position (will auto-run): {out}"
+    );
+    assert!(
+        !out.contains("⏸ held"),
+        "non-head is NOT held (gate open, will auto-run): {out}"
+    );
+    assert!(out.contains("queued"), "queued body shown: {out}");
 }
 
 /// A click on the +N more row (or the one-line summary on small windows)

@@ -1,28 +1,26 @@
-//! The unified pending queue: typed entries for user messages (copied +
-//! InjectUser'd to the server runner queue) and slash commands (local-only,
-//! never InjectUser'd -- the model must not read a literal "/resume"). A
-//! state-changing command submitted while a run is in flight is enqueued
-//! here + drained FIFO at idle so it neither fights the in-flight run's
-//! writes nor leapfrogs ahead of it. Of the deferred set, resume and clear
-//! invalidate the server injection buffer (a swap or reset discards it);
-//! rewind and undo do not -- they are deferred for FIFO, not because they
-//! orphan the buffer. Assert only the buffer-invalidation dimension here;
-//! whether a command goes on the wire is a brittle side-branch.
+//! The unified pending queue: user messages and slash commands (local-only,
+//! never sent to the model). A state-changing command submitted mid-run is
+//! enqueued + drained FIFO at idle. Resume/clear invalidate the server
+//! injection buffer; rewind/undo are deferred for FIFO only.
+//! Single-copy invariant: at most one item holds a live server copy.
+//! promote_next_pending swaps the head ParkedMessage to Message + InjectUser;
+//! enqueue promotes only when the queue was empty; QueueConsumed or spawn_run
+//! promotes the next, so an Esc recall races at most one server copy.
 
 /// One queued item. The host pending queue is the single truth source for
 /// ordering; the server runner queue is only the current run's injection
-/// buffer. A Message holds a live server copy (InjectUser'd, consumed
-/// mid-turn via QueueConsumed or drained as a follow-up run); a ParkedMessage
-/// has NO server copy -- it was either enqueued behind a barrier (a
-/// command ahead, which blocks InjectUser) or orphaned by a
-/// copy-invalidating event (any non-final run end -- interrupt,
-/// max-turns, verify-failed, handoff, error -- a /clear reset, or a swap
-/// clears the server queue, so an InjectUser'd message loses its copy).
-/// The barrier treats a parked message ahead as a stop: a new message must not
-/// InjectUser past a parked one, or the new message would leapfrog it (server
-/// consumes the new one mid-turn while the parked one waits for a follow-up
-/// run). A slash command is purely local (drained to local dispatch, never
-/// sent to the model).
+/// buffer. A Message holds the single live server copy (InjectUser'd,
+/// consumed mid-turn via QueueConsumed or drained as a follow-up run); a
+/// ParkedMessage has NO server copy -- enqueued behind a non-empty queue
+/// (the single-copy invariant parks every item past the live head), enqueued
+/// behind a Command barrier, or orphaned by a copy-invalidating event (any
+/// non-final run end -- interrupt, max-turns, verify-failed, handoff, error
+/// -- a /clear reset, or a swap clears the server queue, so an InjectUser'd
+/// message loses its copy). A slash command is purely local (drained to
+/// local dispatch, never sent to the model).
+use crate::run_control::ClientCommand;
+use crate::state::App;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PendingItem {
     /// A user message with a live server copy (InjectUser'd to the server
@@ -30,12 +28,13 @@ pub enum PendingItem {
     /// copy) or drained as a follow-up run (QueueRemove + spawn_run) on a
     /// clean run end (FinalOutput) — the user got their answer, so drain FIFO.
     Message(String),
-    /// A user message with NO server copy. Either enqueued behind a
-    /// barrier (so InjectUser was skipped) or a former Message whose copy
-    /// a non-final run end, /clear, or swap invalidated. Drained as a
-    /// follow-up run (spawn_run only -- no QueueRemove, there is no copy
-    /// to drop) on a clean run end. Recall/delete send no wire QueueRemove
-    /// for it.
+    /// A user message with NO server copy. Enqueued behind a non-empty
+    /// queue (the single-copy invariant parks every item past the live
+    /// head), enqueued behind a Command barrier, or a former Message
+    /// whose copy a non-final run end, /clear, or swap invalidated.
+    /// Drained as a follow-up run (spawn_run only -- no QueueRemove, there
+    /// is no copy to drop) on a clean run end. Recall/delete send no wire
+    /// QueueRemove for it.
     ParkedMessage(String),
     /// A slash command's raw text, including the leading slash (e.g.
     /// "/resume <sid>", "/clear"). Stored verbatim so recall
@@ -45,7 +44,7 @@ pub enum PendingItem {
 }
 
 impl PendingItem {
-    /// The text to show in the Ctrl+G queue panel: the message body, or the
+    /// The text to show in the queue strip: the message body, or the
     /// command text (with the slash the user typed).
     pub fn display(&self) -> &str {
         match self {
@@ -93,25 +92,28 @@ pub fn command_first_token_is(raw: &str, token: &str) -> bool {
         .unwrap_or(false)
 }
 
-use crate::state::App;
-
 impl App {
-    /// Whether a pending item ahead blocks InjectUser of a newly enqueued
-    /// message -- a barrier. (1) A Command ahead: resume/clear invalidate
-    /// the server injection buffer (a message InjectUser'd past them would
-    /// orphan on a server the command throws away); rewind/undo do not,
-    /// but a message past them would be consumed mid-run before the command
-    /// drains -- a FIFO leapfrog. (2) A ParkedMessage ahead has no copy,
-    /// so a message past it would be consumed mid-turn before the parked
-    /// one runs -- a FIFO reversal. A Message (live copy) ahead is not a
-    /// barrier: the new message joins the server queue behind it. Lifts
-    /// once the blocking item drains.
-    pub(crate) fn barrier_active(&self) -> bool {
-        self.pending.iter().any(|it| match it {
-            PendingItem::Command(_) => true,
-            PendingItem::ParkedMessage(_) => true,
-            PendingItem::Message(_) => false,
-        })
+    /// Promote a parked head into the live-copy slot: swap to Message +
+    /// InjectUser. A Message head already holds the copy; a Command head
+    /// is a barrier (never promote past it). No-op when idle -- idle_drain
+    /// spawns the head as a fresh run instead. One live copy at a time so
+    /// an Esc recall races at most one server copy.
+    pub(crate) fn promote_next_pending(&mut self) {
+        if !self.agent_busy {
+            return;
+        }
+        let Some(text) = self.pending.first_mut().and_then(|slot| match slot {
+            PendingItem::ParkedMessage(t) => {
+                let text = t.clone();
+                *slot = PendingItem::Message(text.clone());
+                Some(text)
+            }
+            _ => None,
+        }) else {
+            return;
+        };
+        let session_id = self.session_id.clone();
+        self.send_cmd(ClientCommand::InjectUser { session_id, text });
     }
 
     /// Dispatch a slash command's raw text (with the leading slash) without
@@ -138,11 +140,11 @@ impl App {
     /// server's injection buffer is invalidated -- any non-final run end
     /// (interrupt, max-turns, verify-failed, handoff, error), a /clear
     /// reset, or a swap -- because a Message still in the host queue has
-    /// lost its server copy. Leaving it as a Message would let a newly
-    /// enqueued message InjectUser past it (the barrier only blocks on
-    /// Command and ParkedMessage), leapfrogging the orphan. The host queue
-    /// is the single truth source; the server queue is only the current
-    /// run's buffer.
+    /// lost its server copy. Leaving it as a Message would break the
+    /// single-copy invariant (a stale-live item the run no longer backs),
+    /// and let promote_next_pending promote a different head, stranding the
+    /// orphan. The host queue is the single truth source; the server
+    /// queue is only the current run's buffer.
     pub(crate) fn demote_pending_to_parked(&mut self) {
         for it in self.pending.iter_mut() {
             if let PendingItem::Message(t) = it {

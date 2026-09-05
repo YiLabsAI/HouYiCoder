@@ -3,6 +3,7 @@
 //! for the spawn_run queue path (a second Enter while agent_busy).
 
 use super::run_control_tests::app_with_provider;
+use crate::agent_message::AgentMessage;
 use crate::pending_queue::PendingItem;
 use houyicoder_core::agent::ToolRegistry;
 use houyicoder_provider::FakeProvider;
@@ -34,47 +35,67 @@ fn test_busy_queue_keeps_reqid() {
     assert_eq!(app.pending[0], PendingItem::Message("second".into()));
 }
 
-/// Cross-swap / cross-interrupt FIFO invariant: a ParkedMessage ahead in the
-/// queue (a message carried across a swap, or one orphaned by an interrupt
-/// or /clear -- both demoted to ParkedMessage because the server queue is
-/// empty) must BLOCK InjectUser of a message enqueued after it. Without the
-/// barrier, the new message would get a server copy + be consumed mid-turn
-/// (QueueConsumed) BEFORE the parked one runs -- a FIFO reversal across the
-/// host/server split. The barrier treats a ParkedMessage ahead like a
-/// Command: the new message parks too (no InjectUser), so both drain in host
-/// FIFO order as follow-up runs.
+/// Single-copy invariant on enqueue: a message enqueued while busy parks
+/// whenever the queue is non-empty, regardless of the head's type. A
+/// ParkedMessage head (carried across a swap, or orphaned by an interrupt
+/// or /clear) gets promoted (promote_next promotes it), and the newcomer
+/// parks behind it; a Message head already holds the copy, and the
+/// newcomer parks too. Either way at most one live copy exists, so a
+/// mid-turn QueueConsumed cannot leapfrog a parked item (FIFO across the
+/// host/server split).
 #[test]
-fn test_parked_message_blocks_inject() {
+fn test_parked_head_promotes() {
     let p = Arc::new(FakeProvider::text("ok"));
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.agent_busy = true;
-    // A message already parked ahead (e.g. carried across a swap, demoted
-    // because the new runner's server queue is empty).
+    // A parked head (e.g. carried across a swap, demoted because the old
+    // server queue was empty). promote_next re-promotes it in the current run.
     app.pending
         .push(PendingItem::ParkedMessage("carried".into()));
-    // A second Enter while busy: must NOT InjectUser past the parked head.
     app.spawn_run("newcomer".into());
     assert_eq!(
-        app.pending.len(),
-        2,
-        "second input queued behind the parked head"
+        app.pending[0],
+        PendingItem::Message("carried".into()),
+        "the parked head is promoted when a run is in flight"
     );
     assert_eq!(
         app.pending[1],
         PendingItem::ParkedMessage("newcomer".into()),
-        "new message parks (no InjectUser) so it cannot leapfrog the parked \
-         head mid-turn; both drain in host FIFO order"
+        "the newcomer parks behind the live head; one live copy"
     );
-    // Contrast: once the head is a Message (live server copy, in-server), a new
-    // message InjectUser's behind it -- FIFO preserved in the server queue.
+    // A Message head already holds the copy; the newcomer still parks.
     let mut app2 = app_with_provider(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
     app2.agent_busy = true;
     app2.pending.push(PendingItem::Message("injected".into()));
     app2.spawn_run("newcomer".into());
     assert_eq!(
         app2.pending[1],
-        PendingItem::Message("newcomer".into()),
-        "a Message head (live copy) is not a barrier; the new message joins \
-         the server queue behind it (FIFO)"
+        PendingItem::ParkedMessage("newcomer".into()),
+        "a Message head holds the copy; the newcomer parks so only one races"
     );
+}
+
+/// Single-copy chain on consume: when the drive_loop drains the live head,
+/// QueueConsumed removes it + promote_next promotes the next parked head
+/// into the live-copy slot (Message + InjectUser). So the run keeps
+/// draining the queue one turn boundary at a time, with exactly one live
+/// copy at any instant. Red without promote_next in the QueueConsumed
+/// handler (the next item stays Parked, the run starves after the head is
+/// consumed).
+#[test]
+fn test_consumed_promotes_next() {
+    let p = Arc::new(FakeProvider::text("ok"));
+    let mut app = app_with_provider(p, ToolRegistry::new());
+    app.agent_busy = true;
+    app.pending.push(PendingItem::Message("a".into()));
+    app.pending.push(PendingItem::ParkedMessage("b".into()));
+    app.handle_agent_message(AgentMessage::QueueConsumed {
+        texts: vec!["a".into()],
+    });
+    assert_eq!(
+        app.pending,
+        vec![PendingItem::Message("b".into())],
+        "b promoted into the live-copy slot after a was consumed"
+    );
+    assert_eq!(app.pending.len(), 1, "only b remains, live");
 }

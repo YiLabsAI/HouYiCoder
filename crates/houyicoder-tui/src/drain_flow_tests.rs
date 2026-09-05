@@ -30,7 +30,7 @@ fn test_final_output_defers_drain() {
     let mut app = working();
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("head".into()));
-    app.pending.push(PendingItem::Message("tail".into()));
+    app.pending.push(PendingItem::ParkedMessage("tail".into()));
     app.handle_agent_message(AgentMessage::Done {
         result: Ok(RunResult {
             outcome: RunOutcome::FinalOutput {
@@ -46,13 +46,13 @@ fn test_final_output_defers_drain() {
         app.pending,
         vec![
             PendingItem::Message("head".into()),
-            PendingItem::Message("tail".into())
+            PendingItem::ParkedMessage("tail".into())
         ],
         "queue intact after Done (drain moved to idle_drain)"
     );
-    // The idle drain: head leaves, tail stays.
+    // The idle drain: head leaves, tail stays parked (no live copy while idle).
     assert!(app.drain_pending_head(), "head drained by the idle drain");
-    assert_eq!(app.pending, vec![PendingItem::Message("tail".into())]);
+    assert_eq!(app.pending, vec![PendingItem::ParkedMessage("tail".into())]);
 }
 
 /// An Interrupted run clears busy + demotes the queued Message to
@@ -169,45 +169,80 @@ fn test_drain_command_dispatches_clear() {
     assert!(app.pending.is_empty(), "Command consumed");
 }
 
-/// barrier_active is true when a Command sits ahead in the queue (any
-/// position), false when only messages or nothing is queued. A pending
-/// command will swap or reset the session, discarding the server-side
-/// queue, so subsequent message enqueues must skip InjectUser.
+/// Single-copy invariant: a second message enqueued while busy parks (no
+/// server copy), so at most one item holds a live copy. The head holds it
+/// (Message); every item past it parks. An Esc recall then races a single
+/// copy, and the strip's "-> next" marks the sole live item.
 #[test]
-fn test_barrier_active_command_ahead() {
+fn test_second_enqueue_parks() {
     let mut app = working();
-    assert!(!app.barrier_active(), "empty queue = no barrier");
-    app.pending.push(PendingItem::Message("task a".into()));
-    assert!(!app.barrier_active(), "messages only = no barrier");
-    app.pending
-        .push(PendingItem::Command("/resume sid-b".into()));
-    assert!(app.barrier_active(), "command ahead = barrier");
-    // A message enqueued AFTER the command still sees the barrier.
-    app.pending.push(PendingItem::Message("task c".into()));
-    assert!(
-        app.barrier_active(),
-        "barrier holds for messages enqueued after the command"
+    app.agent_busy = true;
+    app.spawn_run("task a".into());
+    assert_eq!(
+        app.pending,
+        vec![PendingItem::Message("task a".into())],
+        "empty queue gives the head the copy"
+    );
+    app.spawn_run("task b".into());
+    assert_eq!(
+        app.pending,
+        vec![
+            PendingItem::Message("task a".into()),
+            PendingItem::ParkedMessage("task b".into()),
+        ],
+        "non-empty queue parks the newcomer; one live copy"
+    );
+    assert_eq!(
+        app.pending
+            .iter()
+            .filter(|it| matches!(it, PendingItem::Message(_)))
+            .count(),
+        1,
+        "exactly one live item"
     );
 }
 
-/// The barrier lifts once the command drains (is consumed): a message
-/// enqueued after the command ran InjectUser normally. Uses /rewind (a
-/// local stage command with no server effect) so the message keeps its
-/// server copy -- /clear would orphan the server copy (see clear_orphans_pending_mirror).
-/// Pins the "lifts on consume" contract so a future change does not make
-/// the barrier sticky.
+/// promote_next_pending contract: a Command head is a barrier -- it does not
+/// promote, and nothing past it promotes either, because promoting past a
+/// state-changing command would let the model consume a message before the
+/// command resets or swaps the session. So with a Command at the head and a
+/// ParkedMessage behind it, promote_next leaves both untouched.
 #[test]
-fn test_barrier_lifts_command_drains() {
+fn test_command_head_blocks() {
     let mut app = working();
+    app.agent_busy = true;
     app.pending.push(PendingItem::Command("/rewind".into()));
-    app.pending
-        .push(PendingItem::Message("after rewind".into()));
-    assert!(app.barrier_active(), "barrier before the command drains");
-    // Drain the command. The message becomes head; barrier lifts.
-    assert!(app.drain_pending_head(), "command drained");
-    assert!(
-        !app.barrier_active(),
-        "barrier lifts once the command is consumed"
+    app.pending.push(PendingItem::ParkedMessage("after".into()));
+    app.promote_next_pending();
+    assert_eq!(
+        app.pending[0],
+        PendingItem::Command("/rewind".into()),
+        "Command head is a barrier; promote_next leaves it"
+    );
+    assert_eq!(
+        app.pending[1],
+        PendingItem::ParkedMessage("after".into()),
+        "promote_next does not promote past a Command head"
+    );
+}
+
+/// promote_next_pending contract: once the Command barrier drains (removed
+/// from the head), the next ParkedMessage promotes into the live-copy
+/// slot -- the queue re-promotes the next head once the state-changing
+/// command has cleared the way.
+#[test]
+fn test_command_drain_promotes() {
+    let mut app = working();
+    app.agent_busy = true;
+    app.pending.push(PendingItem::Command("/rewind".into()));
+    app.pending.push(PendingItem::ParkedMessage("after".into()));
+    // The Command drains (local dispatch removes it from the head).
+    app.pending.remove(0);
+    app.promote_next_pending();
+    assert_eq!(
+        app.pending[0],
+        PendingItem::Message("after".into()),
+        "after the Command barrier drains, promote_next promotes the next head"
     );
 }
 
@@ -216,16 +251,15 @@ fn test_barrier_lifts_command_drains() {
 /// /clear Command sits at the head (ahead of the Message) so it drains first
 /// and orphans the Message behind it. The host state invalidation runs even
 /// when no req_id is minted (no client wired in the test harness) -- it is
-/// decoupled from id-minting. Without this, a Message with a stale server copy
-/// would let a newly enqueued message InjectUser past it (the barrier only
-/// blocks on Command and ParkedMessage), leapfrogging.
+/// decoupled from id-minting. Without demotion the single-copy invariant
+/// breaks: a stale-live item the run no longer backs would strand.
 #[test]
 fn test_clear_orphans_pending_mirror() {
     let mut app = working();
     app.pending.push(PendingItem::Command("/clear".into()));
     app.pending
         .push(PendingItem::Message("queued after clear".into()));
-    assert!(app.barrier_active(), "command ahead is a barrier");
+    assert!(!app.pending.is_empty(), "command ahead blocks promoting");
     assert!(app.drain_pending_head(), "clear drained");
     assert!(
         app.pending
@@ -234,8 +268,10 @@ fn test_clear_orphans_pending_mirror() {
         "a /clear orphans every queued Message to ParkedMessage"
     );
     assert!(
-        app.barrier_active(),
-        "a ParkedMessage head still blocks InjectUser (no copy to leapfrog)"
+        app.pending
+            .iter()
+            .all(|it| !matches!(it, PendingItem::Message(_))),
+        "no item holds a live server copy after /clear orphans the queue"
     );
 }
 

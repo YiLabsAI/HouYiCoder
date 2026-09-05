@@ -40,7 +40,15 @@ fn agent_msg(text: &str) -> TranscriptFrame {
 /// production composition root: the runner is shared (Arc) between the server
 /// task and the TUI, and the driver task owns the client.
 pub(super) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> App {
-    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    // Attach the append-notify to the store (production wiring): without it
+    // the store never wakes the server's mid-run drain, so every event
+    // (frames + QueueConsumed) would land only post-resolve and a mid-run
+    // chain test would see the whole run as one end-of-run batch.
+    let append_notify = Arc::new(tokio::sync::Notify::new());
+    let store = Arc::new(
+        SessionStore::new(Box::new(InMemoryBackend::new()))
+            .with_append_notify(append_notify.clone()),
+    );
     let session = SessionId::new();
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
     let runner = Runner::with_shared_store(
@@ -56,9 +64,8 @@ pub(super) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolReg
     );
     let (tx, rx) = mpsc::channel::<AgentMessage>();
     let gate = Arc::new(houyicoder_permission::DefaultModeGate::new());
-    let notify = std::sync::Arc::new(tokio::sync::Notify::new());
     let (runner, client, startup_warnings) =
-        composition::pair_inproc_server(runner, session, gate, notify, None);
+        composition::pair_inproc_server(runner, session, gate, append_notify, None);
     drop(runner); // server owns the runner; the TUI holds no engine handle.
     composition::build_app(composition::RunnerBundle {
         client,

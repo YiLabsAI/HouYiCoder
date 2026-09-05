@@ -103,30 +103,17 @@ impl App {
             }
             return;
         }
-        // Queue path: when a run is in flight, the new input is mirrored to
-        // pending (the queue view) + shipped as a session/inject
-        // notification so the server enqueues it for mid-turn injection at
-        // the next turn boundary. The drive loop drains it + the model sees
-        // it on its next call (Path A); if the run ends first, the run-end
-        // drain spawns it as a follow-up run (Path B). The active_run_req_id
-        // stays set so a wire Error for IT still routes as a run failure.
+        // Queue path: a run is in flight, so the new input joins pending.
+        // Push parked (no server copy), then promote the head only if the
+        // queue was empty -- the single-copy invariant keeps at most one
+        // live copy, so an Esc recall races at most one injection. A
+        // non-empty queue already holds the live head or a Command
+        // barrier; the newcomer waits its turn. active_run_req_id stays
+        // set so a wire Error for the in-flight run still routes as a run
+        // failure.
         if self.agent_busy {
-            // Barrier: a pending Command or ParkedMessage ahead will swap/reset
-            // the session or has no server copy. A message enqueued after it
-            // stays host-side only (no InjectUser) so it neither outlives a
-            // swap/reset nor leapfrogs a parked message mid-turn. Lifts when
-            // the blocking item drains.
-            let barrier = self.barrier_active();
-            if barrier {
-                self.pending.push(PendingItem::ParkedMessage(input.clone()));
-            } else {
-                self.pending.push(PendingItem::Message(input.clone()));
-                let session_id = self.session_id.clone();
-                self.send_cmd(ClientCommand::InjectUser {
-                    session_id,
-                    text: input,
-                });
-            }
+            self.pending.push(PendingItem::ParkedMessage(input.clone()));
+            self.promote_next_pending();
             return;
         }
         // Mint the request id only on the real-spawn path (the queue path
@@ -174,56 +161,37 @@ impl App {
     /// a Command behind a parked message waits its turn (no starvation, but
     /// also no head-of-line skip).
     ///
-    /// Batch: when the head is a Message, consecutive Messages behind it are
-    /// InjectUser'd into the new run's input_queue (not spawned as separate
-    /// runs). The drive_loop drains them at the next turn boundary (appends as
-    /// user messages -- model sees them on call 2+), so N queued messages send
-    /// as ONE run, not N runs. The rest stay in pending (Message); QueueConsumed
-    /// removes them when the drive_loop drains them. A 1-turn run (no turn
-    /// boundary) leaves them un-consumed -> idle_drain drains them next
-    /// (one-by-one, same as the no-batch path). Stops at the first non-Message
-    /// (Command/ParkedMessage) -- those drain singly (slash needs per-command
-    /// error isolation; a ParkedMessage has no server copy to InjectUser).
+    /// Single-copy: after spawning the head's run, promote_next_pending
+    /// promotes exactly one parked head into the new run's input_queue
+    /// (not the whole tail). The drive_loop drains it at the next turn
+    /// boundary, QueueConsumed removes it, and the next promote fires --
+    /// so N queued messages still share one run, but at most one live
+    /// copy exists at a time. A 1-turn run leaves the rest parked for
+    /// the next idle_drain.
     pub fn drain_pending_head(&mut self) -> bool {
         let Some(item) = self.pending.first().cloned() else {
             return false;
         };
-        // Remove the head only; the batch loop below leaves consecutive
-        // Messages in pending (removed by QueueConsumed when consumed).
         self.pending.remove(0);
         match item {
             PendingItem::Command(text) => self.run_slash_text(&text),
             PendingItem::Message(head) => {
-                // Drop the head's stale server copy (the prior run's input_queue
-                // was cleared at finalize) + start a fresh run with it.
+                // Drop the head's stale server copy (the prior run's
+                // input_queue was cleared at finalize) + start a fresh run.
                 let session_id = self.session_id.clone();
                 self.send_cmd(ClientCommand::QueueRemove {
-                    session_id: session_id.clone(),
+                    session_id,
                     text: head.clone(),
                 });
                 self.spawn_run(head);
-                // Batch consecutive Messages behind the head into the new run.
-                // Index-iterate (do not remove) so QueueConsumed can drop them
-                // when the drive_loop drains; a 1-turn run leaves them for the
-                // next idle_drain (one-by-one).
-                let mut i = 0;
-                while i < self.pending.len() {
-                    if let PendingItem::Message(t) = &self.pending[i] {
-                        self.send_cmd(ClientCommand::InjectUser {
-                            session_id: session_id.clone(),
-                            text: t.clone(),
-                        });
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
+                self.promote_next_pending();
                 true
             }
             PendingItem::ParkedMessage(text) => {
-                // No server copy (barrier'd or orphaned): spawn a fresh
-                // run directly. No QueueRemove -- there is no server copy.
+                // No server copy: spawn a fresh run directly, then promote
+                // the next parked head into it (one copy).
                 self.spawn_run(text);
+                self.promote_next_pending();
                 true
             }
         }

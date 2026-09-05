@@ -1,11 +1,11 @@
 //! Real-binary PTY tests for the run-lifecycle interactions: Esc abort +
-//! rewind/restore (#12), and the Ctrl+G queue-manager hint (#13). The unit
-//! layer covers the state-machine decisions; this layer drives the real houyi
-//! binary through a real terminal so the run chain (driver -> wire -> server ->
-//! runner -> cancel token) + the transcript rebuild on Interrupted are pinned
-//! end-to-end. These are the bugs the unit layer let through because the
-//! breakage only surfaces when the real crossterm loop + the wire + the
-//! repaint all chain together.
+//! rewind/restore, and the ambient queue strip render while a run is
+//! in-flight. The unit layer covers the state-machine decisions; this
+//! layer drives the real houyi binary through a real terminal so the run
+//! chain (driver -> wire -> server -> runner -> cancel token) + the
+//! transcript rebuild on Interrupted are pinned end-to-end. These are the
+//! bugs the unit layer let through because the breakage only surfaces when
+//! the real crossterm loop + the wire + the repaint all chain together.
 //!
 //! Run via make test ui (builds the bin first) or
 //! cargo test --test ui_run -- --ignored after cargo build --bin houyi.
@@ -28,7 +28,7 @@ use common::{Key, RENDER_TIMEOUT, pty_session_slow};
 /// pre-content abort.
 const RUN_DELAY_MS: u64 = 3000;
 
-/// #12: Esc on an in-flight run that has streamed no real content aborts it,
+/// Esc on an in-flight run that has streamed no real content aborts it,
 /// rewinds the user echo + any partial, and restores the input so the user can
 /// edit and resend. The unit layer cannot reach this — it needs the real run
 /// chain + the transcript rebuild on the Interrupted outcome. The large stub
@@ -58,13 +58,14 @@ fn test_esc_aborts_restores_input() {
     );
 }
 
-/// #13: a second Enter while a run is in-flight queues the input and the
-/// ambient queue strip renders the Ctrl+G manager hint. The unit layer asserts
-/// the strip's content; this pins the real repaint path (the strip appears
-/// through the working-surface render, not a TestBackend dump).
+/// A second Enter while a run is in-flight queues the input and the
+/// ambient queue strip renders it above the input box. The unit layer
+/// asserts the strip's content; this pins the real repaint path (the
+/// strip appears through the working-surface render, not a TestBackend
+/// dump).
 #[test]
 #[ignore]
-fn test_ctrl_g_hint_queued() {
+fn test_queue_strip_while_busy() {
     let mut s = pty_session_slow(RUN_DELAY_MS);
     s.send_str("first");
     s.send_key(&Key::Enter);
@@ -72,8 +73,13 @@ fn test_ctrl_g_hint_queued() {
     s.send_str("second");
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for("Ctrl+G to manage", RENDER_TIMEOUT),
-        "a non-empty queue should show the Ctrl+G hint:\n{}",
+        s.wait_for("→ next", RENDER_TIMEOUT),
+        "a non-empty queue should render the strip head:\n{}",
+        s.output()
+    );
+    assert!(
+        s.output().contains("second"),
+        "the queued message should appear in the strip:\n{}",
         s.output()
     );
 }
