@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rules.paths import is_test_file
 
-MUT_APP_BASELINE = 44
+MUT_APP_BASELINE = 43
 
 
 def evaluate(total, baseline=MUT_APP_BASELINE) -> int:

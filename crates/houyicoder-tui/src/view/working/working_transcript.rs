@@ -289,8 +289,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // surface (start a drag-select), not get swallowed into a jump.
     let pill_visible = app.viewport != ViewportMode::Scroll
         && !app.transcript_scroll.follow_tail
-        && !app.search.active
-        && !app.queue_view_open;
+        && !app.search.active;
     if pill_visible {
         let count = app.jump_pill_new_count();
         let label = if count > 0 {

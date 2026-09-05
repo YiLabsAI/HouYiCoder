@@ -30,10 +30,6 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         pager::handle_scroll(app, k);
         return;
     }
-    // Self-heal stale queue_view_open so it never captures keys off-render.
-    if app.viewport != ViewportMode::Working {
-        app.queue_view_open = false;
-    }
     // Clear a lingering name editor when focus leaves the Status pane (an
     // approval/Focus takeover or a /command that switches pane would otherwise
     // leave an invisible Some, so the next 'e' inserts into the stale buffer
@@ -50,24 +46,6 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('o') {
         handle_ctrl_o(app);
-        return;
-    }
-    // Ctrl+G toggles the queue overlay (per-item edit/del/recall), replacing
-    // the old Esc-pops-queue gesture. Working-only; suppressed while palette/
-    // search open so two overlays cannot stack. Opens only on a non-empty
-    // queue; closes on a second press.
-    if app.viewport == ViewportMode::Working
-        && !app.palette.open
-        && !app.search.active
-        && k.modifiers.contains(KeyModifiers::CONTROL)
-        && k.code == KeyCode::Char('g')
-    {
-        if app.queue_view_open {
-            app.queue_view_open = false;
-        } else if !app.pending.is_empty() {
-            app.queue_focus = 0;
-            app.queue_view_open = true;
-        }
         return;
     }
     // Shift+Up/Down exits a drilled-in teammate view back to the fleet,
@@ -87,12 +65,6 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     if fleet::fleet_shift_selected(&mut app.fleet, app.viewport, k) {
         return;
     }
-    if app.viewport == ViewportMode::Working && app.queue_view_open && handle_queue_overlay(app, k)
-    {
-        return;
-    }
-    // Overlay not consumed: fall through so input-edit keys and Enter (submit)
-    // work while the overlay is open.
     // Status-name edit: a focused input mode on the /status Status tab. Takes
     // priority so typed chars edit the buffer instead of cycling tabs or
     // hitting the generic pane arms.
@@ -136,8 +108,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // second Esc recalls instead of re-aborting. Panes that own Esc (Memory,
     // Artifact, /trajectory, ...) are gated out via pane_owns_esc so Esc
     // closes or backs the pane first. Suppressed outside Working so a
-    // scroll/search Esc is not stolen; Ctrl+G's per-item recall (e) picks a
-    // non-head item.
+    // scroll/search Esc is not stolen.
     if (app.cancelling || !app.agent_busy)
         && app.viewport == ViewportMode::Working
         && !app.pending.is_empty()
@@ -242,14 +213,7 @@ use status_name_edit::handle_status_name_edit;
 mod resume_picker;
 use resume_picker::handle_resume_picker;
 
-/// Queue overlay keys (Ctrl+G opened it). Up/Down move cursor; e recalls
-/// focused (removed, overlay closes); d deletes; a recalls all; Esc/Ctrl+G
-/// closes. Returns true when consumed; false falls through so Ctrl+A/E/U,
-/// arrows, Backspace, and Enter (submit) work while open. Enter is NOT
-/// recall; recall is e only.
-mod overlay;
 mod pager;
-use overlay::handle_queue_overlay;
 
 /// Approval prompt and cursor-navigation keys live in keys::approval.
 mod approval;

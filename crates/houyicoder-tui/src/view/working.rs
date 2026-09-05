@@ -84,11 +84,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     // box, and the dim status row at the bottom.
     // Both pinned strips draw from one budget, in priority order, so their
     // sum cannot starve the transcript.
-    let queue_want = if app.queue_view_open {
-        0
-    } else {
-        queue_overlay::strip_want(app)
-    };
+    let queue_want = queue_overlay::strip_want(app);
     let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_pill::want(app));
     app.fleet.granted.set(footer.fleet);
     app.fleet.rect.set(Rect::new(0, 0, 0, 0));
@@ -110,24 +106,6 @@ fn draw_working(f: &mut Frame, app: &App) {
     }
     if let Some(i) = layout.slots.ask {
         super::ask_question::draw(f, app, outer[i]);
-    }
-    // The overlay covers the transcript while open; the footer strip is hidden
-    // (queue_h=0). Skip when the queue drained so no stale empty list flashes.
-    // Bottom-align the overlay so it sits near the input box (not at the top of
-    // the transcript which is the screen top in Working mode — that collided with
-    // the terminal chrome / flow-light border).
-    if app.queue_view_open && !app.pending.is_empty() {
-        let n = app.pending.len() as u16;
-        let overlay_h = n + 4; // header + blank + items + blank + footer
-        let t = outer[layout.transcript_idx];
-        let y = t.bottom().saturating_sub(overlay_h);
-        let overlay_area = Rect {
-            x: t.x,
-            y,
-            width: t.width,
-            height: overlay_h,
-        };
-        queue_overlay::draw_queue_overlay(f, overlay_area, app);
     }
     // The @ skill picker and the / palette share the overlay slot —
     // mutually exclusive (can't have both open). The picker is inline

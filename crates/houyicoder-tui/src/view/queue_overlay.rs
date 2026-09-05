@@ -1,59 +1,17 @@
-//! Queue overlay render (Ctrl+G). Extracted from working.rs to keep it under
-//! the file-size gate. See keys::handle_working for the dispatch + overlay_keys
-//! for the key handler.
+//! Ambient queued-input strip render. Sits above the input box, read-only,
+//! showing pending items with state glyphs. See keys::handle_working for the
+//! dispatch and run_control::pop_queued_to_input for the Esc recall path.
 
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::Paragraph,
 };
 
 use crate::pending_queue::PendingItem;
 use crate::state::App;
-use crate::view::line_wrap::truncate_width;
-
-/// Full queue overlay (Ctrl+G). Covers the transcript: every pending item as
-/// a numbered row with a cursor, plus the action footer. e recalls, d deletes,
-/// a recalls all. The per-item replacement for the old all-or-nothing pop.
-pub fn draw_queue_overlay(f: &mut Frame, area: Rect, app: &App) {
-    // Clear the transcript beneath so the overlay reads as a popup, not inline
-    // text bleeding through the rows (same pattern as the approval card).
-    f.render_widget(Clear, area);
-    let dim = Style::new().fg(Color::DarkGray);
-    let cursor = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-    let n = app.pending.len();
-    let focus = if n == 0 {
-        0
-    } else {
-        app.queue_focus.min(n - 1)
-    };
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(Span::styled(
-        " queue  (e edit \u{00b7} d del \u{00b7} a all \u{00b7} Ctrl+G/Esc close)",
-        dim,
-    )));
-    lines.push(Line::raw(""));
-    for (i, item) in app.pending.iter().enumerate() {
-        let is_focus = i == focus;
-        let style = if is_focus { cursor } else { dim };
-        let marker = if is_focus { "\u{276f} " } else { "  " };
-        let prefix = format!("{marker}{} ", i + 1);
-        let avail = (area.width as usize).saturating_sub(prefix.chars().count());
-        let body = truncate_width(item.display(), avail);
-        lines.push(Line::from(vec![
-            Span::styled(prefix, style),
-            Span::styled(body, style),
-        ]));
-    }
-    lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled(
-        " \u{2191}\u{2193} move \u{00b7} e recall \u{00b7} d del \u{00b7} a recall all \u{00b7} Ctrl+G/Esc close",
-        dim,
-    )));
-    f.render_widget(Paragraph::new(lines), area);
-}
 
 /// Rows the ambient queued-input strip would like, capped at two: the head
 /// item plus, on overflow, a "+N more" summary row. Zero when the queue is

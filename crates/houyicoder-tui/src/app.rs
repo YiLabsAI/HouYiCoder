@@ -271,25 +271,9 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 app.scroll_transcript_follow_tail();
                 return;
             }
-            // When the queue overlay is open it covers the transcript; clicks
-            // inside it focus the clicked item (no recall — the user decides
-            // with e/d/a). Intercept before the transcript selection path so a
-            // click does not start a drag-selection under the overlay.
-            if app.queue_view_open && !app.pending.is_empty() {
-                let rect = app.transcript_rect.get();
-                if in_rect(rect, m.column, m.row) {
-                    let row = (m.row - rect.y) as usize;
-                    let n = app.pending.len();
-                    // Layout: row 0 header, row 1 blank, rows 2..2+n items.
-                    if row >= 2 && row < 2 + n {
-                        app.queue_focus = row - 2;
-                    }
-                    return;
-                }
-            }
             // Footer queue strip: click a previewed item to recall it into
-            // the input box (same as e on that item), or click the +N row /
-            // the one-line summary to open the full overlay.
+            // the input box, or click the +N / summary row to pull the whole
+            // queue back in order (same as Esc recall).
             let qrect = app.queue_rect.get();
             if qrect.width > 0 && qrect.height > 0 && in_rect(qrect, m.column, m.row) {
                 // Match draw_strip's filtered count: items with an empty
@@ -305,20 +289,24 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 }
                 let row = (m.row - qrect.y) as usize;
                 if qrect.height <= 1 {
-                    app.queue_focus = 0;
-                    app.queue_view_open = true;
+                    app.pop_queued_to_input();
                     return;
                 }
                 let shown = if n > 2 { 1 } else { std::cmp::min(n, 2) } as usize;
                 if row < shown {
                     let item = app.pending.remove(row);
-                    app.input.set(item.display().to_string());
-                    if app.pending.is_empty() {
-                        app.queue_view_open = false;
+                    // A recalled Message has a live server copy: drop it over the
+                    // wire so a follow-up run does not re-inject it. Parked and
+                    // Command have no server copy.
+                    if let crate::pending_queue::PendingItem::Message(text) = &item {
+                        app.send_cmd(crate::run_control::ClientCommand::QueueRemove {
+                            session_id: app.session_id.clone(),
+                            text: text.clone(),
+                        });
                     }
+                    app.input.set(item.display().to_string());
                 } else {
-                    app.queue_focus = 0;
-                    app.queue_view_open = true;
+                    app.pop_queued_to_input();
                 }
                 return;
             }

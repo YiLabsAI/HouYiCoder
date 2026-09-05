@@ -32,107 +32,28 @@ fn key(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
 }
 
+/// Idle (not busy) with queued inputs: Esc pulls the whole queue back into
+/// the input box in order (joined by newlines), so the user can edit the
+/// batch and resubmit. Commands stay queued. No running task to abort, so
+/// the cancel-when-idle priority does not apply.
 #[test]
-fn test_queue_overlay_toggle() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.pending.push(PendingItem::Message("task b".into()));
-    assert!(!app.queue_view_open);
-    crate::keys::handle_working(&mut app, ctrl('g'));
-    assert!(app.queue_view_open, "Ctrl+G opens the queue overlay");
-    assert_eq!(app.queue_focus, 0, "focus resets to first on open");
-    crate::keys::handle_working(&mut app, ctrl('g'));
-    assert!(!app.queue_view_open, "second Ctrl+G closes");
-}
-
-#[test]
-fn test_empty_queue_no_overlay() {
-    let mut app = working();
-    crate::keys::handle_working(&mut app, ctrl('g'));
-    assert!(
-        !app.queue_view_open,
-        "Ctrl+G must not open on an empty queue"
-    );
-}
-
-#[test]
-fn test_queue_overlay_recall_focused() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.pending.push(PendingItem::Message("task b".into()));
-    app.queue_view_open = true;
-    app.queue_focus = 1;
-    crate::keys::handle_working(&mut app, key('e'));
-    assert!(!app.queue_view_open, "e closes the overlay");
-    assert_eq!(
-        app.pending,
-        vec![PendingItem::Message("task a".into())],
-        "focused item removed"
-    );
-    assert_eq!(app.input.value(), "task b", "focused item loaded to input");
-}
-
-#[test]
-fn test_queue_overlay_delete_stays() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.pending.push(PendingItem::Message("task b".into()));
-    app.pending.push(PendingItem::Message("task c".into()));
-    app.queue_view_open = true;
-    app.queue_focus = 1;
-    crate::keys::handle_working(&mut app, key('d'));
-    assert!(app.queue_view_open, "d stays open when items remain");
-    assert_eq!(
-        app.pending,
-        vec![
-            PendingItem::Message("task a".into()),
-            PendingItem::Message("task c".into())
-        ],
-        "focused deleted"
-    );
-    assert_eq!(app.input.value(), "", "d does not load the input box");
-}
-
-#[test]
-fn test_queue_overlay_recall_all() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.pending.push(PendingItem::Message("task b".into()));
-    app.queue_view_open = true;
-    crate::keys::handle_working(&mut app, key('a'));
-    assert!(!app.queue_view_open, "a closes the overlay");
-    assert!(app.pending.is_empty(), "a clears the queue");
-    assert!(app.input.value().contains("task a"));
-    assert!(app.input.value().contains("task b"));
-}
-
-/// Idle (not busy) with a queued input: Esc recalls the queue HEAD into the
-/// input box for editing — the cancel-when-idle priority (there is no
-/// running task to abort). The head leaves the queue; the tail stays. This
-/// is the Esc-at-idle path; the Ctrl+G overlay's 'e' stays the path for a
-/// non-head (focused) item.
-#[test]
-fn test_idle_esc_recalls_head() {
+fn test_idle_esc_recalls_all() {
     let mut app = working();
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
         app.input.value(),
-        "task a",
-        "Esc should recall the queue head"
+        "task a\ntask b",
+        "Esc recalls all in order"
     );
-    assert_eq!(
-        app.pending,
-        vec![PendingItem::Message("task b".into())],
-        "head leaves, tail stays"
-    );
+    assert!(app.pending.is_empty(), "queue drained to input");
 }
 
-/// While a run is in flight with a queued input, the first Esc interrupts
-/// (the queue stays intact, the draft untouched); the second Esc recalls
-/// the head into the input box. Splitting interrupt from recall stops a
-/// panic double-press from destroying the just-recalled message: the old
+/// While a run is in flight with queued inputs, the first Esc interrupts
+/// (the queue stays intact, the draft untouched); the second Esc pulls the
+/// whole queue back in order. Splitting interrupt from recall stops a
+/// panic double-press from destroying the just-recalled text: the old
 /// combined abort+pop left agent_busy true after the abort, so the second
 /// Esc fell through to clear-input and wiped the popped text.
 #[test]
@@ -157,41 +78,48 @@ fn test_busy_esc_recall() {
         "the queue stays intact after the interrupt"
     );
     crate::keys::handle_working(&mut app, esc);
-    assert_eq!(app.input.value(), "task a", "second Esc recalls the head");
+    assert_eq!(
+        app.input.value(),
+        "task a\ntask b",
+        "second Esc recalls all in order"
+    );
+    assert!(app.pending.is_empty(), "tail drained to input");
+}
+
+/// Parked messages (no server copy, blocked behind a barrier or orphaned by
+/// an interrupt) are recalled alongside live messages — joined in queue
+/// order, no QueueRemove fired (there is no server copy to drop).
+#[test]
+fn test_esc_recalls_parked() {
+    let mut app = working();
+    app.pending
+        .push(PendingItem::ParkedMessage("held a".into()));
+    app.pending
+        .push(PendingItem::ParkedMessage("held b".into()));
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(
+        app.input.value(),
+        "held a\nheld b",
+        "parked messages recalled in order"
+    );
+    assert!(app.pending.is_empty(), "queue drained");
+}
+
+/// Slash commands stay queued when messages are recalled — joining them
+/// would let a leading slash reparse the batch as a command and lose the
+/// messages. The command surfaces as the strip head after the messages leave.
+#[test]
+fn test_esc_recall_keeps_command() {
+    let mut app = working();
+    app.pending.push(PendingItem::Message("do work".into()));
+    app.pending.push(PendingItem::Command("/clear".into()));
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.input.value(), "do work", "only the message is recalled");
     assert_eq!(
         app.pending,
-        vec![PendingItem::Message("task b".into())],
-        "tail stays queued (head recalled to input)"
+        vec![PendingItem::Command("/clear".into())],
+        "command stays queued"
     );
-}
-
-#[test]
-fn test_focus_clears_queue_overlay() {
-    // Regression: a stale queue_view_open flag (opened in Working, then the
-    // stage advanced into Focus) used to silently capture keys in Focus while
-    // the overlay was not rendered. The flag must self-heal on the first
-    // non-Working key so no invisible capture happens.
-    let mut app = working();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.queue_view_open = true;
-    app.viewport = crate::state::ViewportMode::Focus;
-    crate::keys::handle_working(&mut app, key('a'));
-    assert!(
-        !app.queue_view_open,
-        "stale overlay flag self-heals in Focus (no invisible capture)"
-    );
-}
-
-#[test]
-fn test_palette_blocks_queue_overlay() {
-    // Ctrl+G must not open the queue overlay while the palette is open, or
-    // two overlays would stack and steal each other's keys.
-    let mut app = working();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.open_palette();
-    crate::keys::handle_working(&mut app, ctrl('g'));
-    assert!(!app.queue_view_open, "Ctrl+G suppressed while palette open");
-    assert!(app.palette.open, "palette stays open");
 }
 
 #[test]
@@ -283,24 +211,6 @@ fn test_queue_strip_renders() {
     assert!(
         out.contains("fix the bug") && out.contains("run tests"),
         "both queued items previewed, got:\n{out}"
-    );
-}
-
-/// The Ctrl+G queue overlay covers the transcript with the full list + the
-/// action footer — per-item edit/del lives here.
-#[test]
-fn test_queue_overlay_covers_transcript() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("fix the bug".into()));
-    app.queue_view_open = true;
-    let out = render(&app);
-    assert!(
-        out.contains("queue  (e edit"),
-        "overlay header renders, got:\n{out}"
-    );
-    assert!(
-        out.contains("fix the bug"),
-        "overlay lists the item, got:\n{out}"
     );
 }
 
@@ -426,123 +336,8 @@ fn test_verify_fail_rework() {
     println!("--- after verify rework ---\n{out}\n--- end ---");
 }
 
-// --- queue overlay combo-operation tests ---
-
-/// Ctrl+U (clear-to-line-start) must pass through the overlay to the input
-/// handler so the user can clear the input box without closing the overlay.
-/// Regression: the overlay used to swallow every non-command key via its
-/// catch-all match arm, leaving Ctrl+U dead while the overlay was open.
-#[test]
-fn test_overlay_ctrl_u_passes() {
-    let mut app = working();
-    app.input.set("old text".to_string());
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.queue_view_open = true;
-    crate::keys::handle_working(&mut app, ctrl('u'));
-    assert!(
-        app.input.is_empty(),
-        "Ctrl+U must clear the input while the overlay is open"
-    );
-    assert!(
-        app.queue_view_open,
-        "overlay must stay open after Ctrl+U (pass-through, not close)"
-    );
-}
-
-/// Ctrl+A / Ctrl+E / Left / Right / Backspace also pass through the overlay so
-/// the user can position the cursor and delete chars while managing the queue.
-#[test]
-fn test_overlay_edit_keys_pass() {
-    let mut app = working();
-    app.input.set("hello".to_string());
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.queue_view_open = true;
-    // Backspace deletes a char.
-    crate::keys::handle_working(
-        &mut app,
-        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-    );
-    assert_eq!(app.input.value(), "hell", "Backspace passes through");
-    // Left moves the cursor (no exception, no swallow).
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-    // Right moves back.
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-    assert!(app.queue_view_open, "overlay stays open after nav keys");
-}
-
-/// Ctrl+G closes the overlay when it is already open (same gesture toggles).
-/// Regression: Ctrl+G was swallowed by the overlay catch-all arm because the
-/// overlay-capture block ran before the Ctrl+G toggle check.
-#[test]
-fn test_overlay_ctrl_g_closes() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.queue_view_open = true;
-    crate::keys::handle_working(&mut app, ctrl('g'));
-    assert!(!app.queue_view_open, "Ctrl+G must close the open overlay");
-}
-
-/// Enter in the overlay closes it and falls through to submit — it does NOT
-/// recall the focused item. Recall is the e key alone. This preserves the
-/// muscle memory that Enter = send.
-#[test]
-fn test_overlay_enter_submits() {
-    let mut app = working();
-    app.input.set("typed task".to_string());
-    app.pending.push(PendingItem::Message("queued a".into()));
-    app.pending.push(PendingItem::Message("queued b".into()));
-    app.queue_view_open = true;
-    app.queue_focus = 1;
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(!app.queue_view_open, "Enter closes the overlay");
-    assert_eq!(
-        app.pending.len(),
-        2,
-        "Enter must not recall (queue untouched)"
-    );
-    // The typed input was submitted: stub path echoes a User turn.
-    assert!(
-        app.transcript
-            .iter()
-            .any(|l| matches!(l, TranscriptLine::User(s) if s == "typed task")),
-        "Enter fell through to submit the typed input"
-    );
-}
-
-/// Enter in the overlay with an empty input closes the overlay and no-ops
-/// (empty-submit guard), so the user is not stuck.
-#[test]
-fn test_overlay_enter_empty_noops() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.queue_view_open = true;
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(!app.queue_view_open, "Enter closes the overlay");
-    assert_eq!(
-        app.pending,
-        vec![PendingItem::Message("task a".into())],
-        "queue untouched on empty submit"
-    );
-}
-
-/// Bare printable chars that are not overlay commands (e/d/a) are swallowed so
-/// the user does not accidentally type into the input while managing the queue.
-#[test]
-fn test_overlay_bare_chars_swallowed() {
-    let mut app = working();
-    app.input.clear();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.queue_view_open = true;
-    crate::keys::handle_working(&mut app, key('x'));
-    assert!(
-        app.input.is_empty(),
-        "bare x must not type into the input while overlay open"
-    );
-    assert!(app.queue_view_open, "overlay stays open");
-}
-
-/// A click on a footer-strip preview item recalls that item into the input
-/// (same as e on it): removed from the queue, loaded to the input.
+/// A click on a footer-strip preview item recalls that item into the input:
+/// removed from the queue, loaded to the input.
 #[test]
 fn test_click_footer_recalls_item() {
     let mut app = working();
@@ -640,10 +435,11 @@ fn test_queue_held_row() {
     assert!(out.contains("blocked msg"), "parked body shown: {out}");
 }
 
-/// A click on the +N more row (or the one-line summary on small windows) opens
-/// the full overlay instead of recalling an item.
+/// A click on the +N more row (or the one-line summary on small windows)
+/// pulls the whole queue back into the input box in order — same as Esc
+/// recall, not a single-item recall.
 #[test]
-fn test_click_more_row_opens() {
+fn test_click_more_recalls_all() {
     let mut app = working();
     app.pending.push(PendingItem::Message("a".into()));
     app.pending.push(PendingItem::Message("b".into()));
@@ -652,107 +448,11 @@ fn test_click_more_row_opens() {
     render_buffer(&app, 100, 28);
     let qrect = app.queue_rect.get();
     assert!(qrect.height >= 2, "strip has the head row + a +N row");
-    // The strip caps at two rows: the head item, then the +N more summary.
     let more_row = qrect.y + 1;
     let click = mouse_at(qrect.x + 2, more_row);
     crate::app::handle_mouse(&mut app, click);
-    assert!(app.queue_view_open, "click on +N row opens the overlay");
-    assert_eq!(app.queue_focus, 0, "focus starts at the top");
-    assert!(app.input.is_empty(), "no item recalled on +N click");
-}
-
-/// A click inside the open overlay focuses the clicked item (no recall — the
-/// user decides with e/d/a). The click must not start a transcript selection.
-#[test]
-fn test_click_overlay_focuses_item() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("task a".into()));
-    app.pending.push(PendingItem::Message("task b".into()));
-    app.pending.push(PendingItem::Message("task c".into()));
-    app.queue_view_open = true;
-    render_buffer(&app, 100, 28);
-    let rect = app.transcript_rect.get();
-    // Overlay layout: row 0 header, row 1 blank, row 2 = item 0, row 3 = item 1.
-    let item1_row = rect.y + 3;
-    let click = mouse_at(rect.x + 2, item1_row);
-    crate::app::handle_mouse(&mut app, click);
-    assert_eq!(app.queue_focus, 1, "click focuses the clicked item");
-    assert!(app.queue_view_open, "overlay stays open after focus click");
-    assert!(
-        !app.selection.has_selection(),
-        "overlay click must not start a transcript selection"
-    );
-}
-
-/// When the queue drains to empty while the overlay flag is still open, the
-/// overlay must not render an empty list (no stale empty overlay flash).
-#[test]
-fn test_empty_queue_hides_overlay() {
-    let mut app = working();
-    app.pending.clear();
-    app.queue_view_open = true;
-    let out = render(&app);
-    assert!(
-        !out.contains("queue  (e edit"),
-        "no overlay header when queue is empty, got:\n{out}"
-    );
-}
-
-/// Recalling an item (e) removes it from the queue and loads it to the input.
-/// Clearing the recalled input (Ctrl+U) loses the item — this is expected
-/// (remove-on-recall, matching a typical editor). Submitting empty no-ops.
-/// Documented here as a behavior contract, not a bug.
-#[test]
-fn test_recall_then_clear_loses() {
-    let mut app = working();
-    app.pending
-        .push(PendingItem::Message("important task".into()));
-    app.queue_view_open = true;
-    crate::keys::handle_working(&mut app, key('e'));
-    assert_eq!(app.input.value(), "important task");
-    assert!(app.pending.is_empty(), "item removed on recall");
-    // Clear the recalled input.
-    crate::keys::handle_working(&mut app, ctrl('u'));
-    assert!(app.input.is_empty(), "Ctrl+U clears the recalled text");
-    assert!(
-        app.pending.is_empty(),
-        "item is gone (remove-on-recall is by design)"
-    );
-    // Submitting empty no-ops.
-    app.submit_input();
-    assert!(
-        app.transcript.is_empty(),
-        "empty submit no-ops (no User turn recorded)"
-    );
-}
-
-/// Deleting the last remaining item closes the overlay and resets focus.
-#[test]
-fn test_delete_last_item_closes() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("only task".into()));
-    app.queue_view_open = true;
-    app.queue_focus = 0;
-    crate::keys::handle_working(&mut app, key('d'));
-    assert!(!app.queue_view_open, "overlay closes when queue empties");
-    assert!(app.pending.is_empty());
-}
-
-/// queue_focus never points past the end after a delete in the middle: it
-/// clamps to the new last index so the next e/d acts on a valid item.
-#[test]
-fn test_delete_middle_clamps_focus() {
-    let mut app = working();
-    for s in ["a", "b", "c"] {
-        app.pending.push(PendingItem::Message(s.into()));
-    }
-    app.queue_view_open = true;
-    app.queue_focus = 2; // last item
-    crate::keys::handle_working(&mut app, key('d')); // delete "c"
-    assert_eq!(app.queue_focus, 1, "focus clamps to new last index");
-    // Next e recalls "b" (the now-last item).
-    crate::keys::handle_working(&mut app, key('e'));
-    assert_eq!(app.input.value(), "b");
+    assert_eq!(app.input.value(), "a\nb\nc\nd", "+N row pulls all in order");
+    assert!(app.pending.is_empty(), "queue drained on +N click");
 }
 
 fn mouse_at(x: u16, y: u16) -> MouseEvent {
@@ -770,7 +470,7 @@ use crate::agent_message::AgentMessage;
 
 /// While a run is busy, a submit copies the input to pending (the
 /// queue view) + ships a session/inject so the host enqueues it for mid-turn
-/// injection. The pending copy is what Ctrl+G renders + what the run-end
+/// injection. The pending copy is what the strip renders + what the run-end
 /// drain spawns if the run ends before the next turn boundary consumes it.
 #[test]
 fn test_busy_submit_mirrors_queue() {
@@ -828,38 +528,4 @@ fn test_consumed_removes_from_mirror() {
         vec![PendingItem::Message("beta".into())],
         "consumed entry removed from the copy",
     );
-}
-
-/// Overlay delete ships session/queue_remove (so the host drops it too) +
-/// removes the item from the pending copy. The wire construction line executes even
-/// with no backend wired (send_cmd is a no-op then); the pending copy is the
-/// observable effect.
-#[test]
-fn test_overlay_delete_wires_remove() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("item a".into()));
-    app.pending.push(PendingItem::Message("item b".into()));
-    app.queue_view_open = true;
-    crate::keys::handle_working(&mut app, key('d'));
-    assert!(
-        !app.pending.contains(&PendingItem::Message("item a".into())),
-        "deleted focused item removed from the copy",
-    );
-    assert_eq!(app.pending, vec![PendingItem::Message("item b".into())]);
-}
-
-/// Overlay recall (e) ships session/queue_remove (the user pulled the item
-/// back to the input box, so it is no longer queued) + removes it from the
-/// pending copy.
-#[test]
-fn test_overlay_recall_wires_remove() {
-    let mut app = working();
-    app.pending.push(PendingItem::Message("item a".into()));
-    app.queue_view_open = true;
-    crate::keys::handle_working(&mut app, key('e'));
-    assert!(
-        app.pending.is_empty(),
-        "recalled item removed from the copy"
-    );
-    assert!(!app.queue_view_open, "overlay closed on recall");
 }

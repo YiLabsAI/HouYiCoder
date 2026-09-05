@@ -482,48 +482,56 @@ impl App {
         });
     }
 
-    /// Pop the queue head back to the input box for editing. When no run is
-    /// in flight and the queue holds pending inputs (parked from a prior
-    /// interrupt/error), Esc pops the head into the input box instead of
-    /// doing nothing (no running task to abort). Also pops it from the host
-    /// queue (wire QueueRemove for a Message with a live server copy) so a
-    /// follow-up run does
-    /// not re-inject it. No-op when the queue is empty.
+    /// Recall every queued message into the input box in queue order,
+    /// merging ahead of any draft (cursor parks at the draft start). Slash
+    /// commands stay queued — joining them would reparse the batch as a
+    /// command and lose the messages. Each recalled Message fires
+    /// QueueRemove so a follow-up run does not re-inject it; ParkedMessage
+    /// and Command have no server copy to drop. No-op when only commands
+    /// (or nothing) is queued.
     pub fn pop_queued_to_input(&mut self) {
-        let Some(item) = self.pending.first().cloned() else {
+        let messages: Vec<String> = self
+            .pending
+            .iter()
+            .filter_map(|it| match it {
+                PendingItem::Message(t) | PendingItem::ParkedMessage(t) => Some(t.clone()),
+                PendingItem::Command(_) => None,
+            })
+            .collect();
+        if messages.is_empty() {
             return;
-        };
-        self.pending.remove(0);
+        }
+        // Drain only message items; keep commands in place so they stay queued.
+        let mut keep: Vec<PendingItem> = Vec::new();
+        for it in std::mem::take(&mut self.pending) {
+            match &it {
+                PendingItem::Message(text) => {
+                    self.send_cmd(ClientCommand::QueueRemove {
+                        session_id: self.session_id.clone(),
+                        text: text.clone(),
+                    });
+                }
+                PendingItem::ParkedMessage(_) => {}
+                PendingItem::Command(_) => {
+                    keep.push(it);
+                }
+            }
+        }
+        self.pending = keep;
         // The pop is the user's explicit recall: it supersedes the aborted
-        // run's origin stash, so the Done(Interrupted) no-content restore must
+        // run's origin stash, so Done(Interrupted) no-content restore must
         // not re-fill the input box with the old origin and lose the popped
         // text (which is already removed from the queue).
         self.last_run_input = None;
-        let (text, drop_from_wire): (&str, bool) = match &item {
-            // A message with a live server copy (InjectUser'd): recall drops
-            // it from the wire queue too so a follow-up run does not re-inject.
-            PendingItem::Message(text) => (text.as_str(), true),
-            // A parked message has no server copy: recall just re-fills the
-            // input box (no QueueRemove -- nothing to drop on the wire).
-            PendingItem::ParkedMessage(text) => (text.as_str(), false),
-            // A command is local-only (never InjectUser'd), so recall just
-            // re-fills the input box with the raw text (incl. the slash).
-            PendingItem::Command(text) => (text.as_str(), false),
-        };
-        if drop_from_wire {
-            self.send_cmd(ClientCommand::QueueRemove {
-                session_id: self.session_id.clone(),
-                text: text.to_string(),
-            });
-        }
+        let text = messages.join("\n");
         // Merge the recalled text with any in-progress draft rather than
-        // overwriting it: the queued text prepends, a newline separates, and
+        // overwriting it: queued messages prepend, a newline separates, and
         // the cursor parks at the draft start so the user resumes typing
         // where they were. An empty draft just takes the queued text (cursor
         // at the end). Overwriting would destroy the user's half-typed draft.
         let draft = self.input.value().to_string();
         if draft.is_empty() {
-            self.input.set(text.to_string());
+            self.input.set(text);
         } else {
             let merged = format!("{text}\n{draft}");
             let draft_start = text.len() + 1; // past the text + newline

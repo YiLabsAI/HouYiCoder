@@ -375,12 +375,6 @@ pub struct App {
     /// Queued user inputs submitted while a run was in flight (FIFO). A
     /// Typed queue (messages + slash commands); drained FIFO at idle.
     pub pending: Vec<crate::pending_queue::PendingItem>,
-    /// Whether the queue-management overlay (Ctrl+G) is open over the
-    /// transcript, listing every queued item with per-item edit/delete.
-    pub queue_view_open: bool,
-    /// Cursor index into pending while the queue-management overlay is
-    /// open (0 = first queued item). Wraps on navigation.
-    pub queue_focus: usize,
     /// In-app text selection (drag-select in the transcript, copy on release).
     pub selection: Selection,
     /// Last-rendered transcript rect (screen coords), stashed by the draw

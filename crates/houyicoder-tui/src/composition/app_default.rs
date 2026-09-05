@@ -123,8 +123,6 @@ pub fn app() -> App {
         pending_trust_req_id: None,
         last_run_input: None,
         pending: Vec::new(),
-        queue_view_open: false,
-        queue_focus: 0,
         selection: Selection::default(),
         transcript_rect: Cell::new(Rect::new(0, 0, 0, 0)),
         queue_rect: Cell::new(Rect::new(0, 0, 0, 0)),
