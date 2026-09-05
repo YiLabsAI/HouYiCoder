@@ -20,6 +20,7 @@ pub mod provider;
 pub mod sandbox;
 pub mod session;
 pub mod skill;
+pub mod skill_grant;
 pub mod spawn;
 pub mod tool;
 pub mod trust;

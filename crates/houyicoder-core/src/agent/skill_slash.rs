@@ -120,8 +120,13 @@ impl Runner {
                 // dispatch makes app-launch + mach services available to
                 // the bash commands the model runs next.
                 if let Some(session) = self.sandbox_session.as_ref() {
+                    let mach = self
+                        .skill_grants
+                        .as_ref()
+                        .map(|g| g.merged_services(&name, &desc.allowed_mach_services))
+                        .unwrap_or_else(|| desc.allowed_mach_services.clone());
                     session.set_allow_app_launch(desc.allow_app_launch);
-                    session.set_extra_mach_services(&desc.allowed_mach_services);
+                    session.set_extra_mach_services(&mach);
                 }
                 // Inject session context into the body (dynamic template
                 // placeholders {{userMessages}} + {{sessionMemory}} +

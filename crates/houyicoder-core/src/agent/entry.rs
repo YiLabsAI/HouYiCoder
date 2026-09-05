@@ -56,6 +56,7 @@ impl Runner {
             memory: None,
             skill_registry: None,
             sandbox_session: None,
+            skill_grants: None,
             hooks: None,
             registrar: None,
             conditional: None,

@@ -30,6 +30,7 @@ pub struct SkillTool {
     registrar: Option<Arc<super::super::SkillHookRegistrar>>,
     activator: Option<Arc<dyn super::super::conditional_activation::ConditionalSkillActivator>>,
     sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
+    skill_grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
 }
 
 impl SkillTool {
@@ -39,6 +40,7 @@ impl SkillTool {
             registrar: None,
             activator: None,
             sandbox: None,
+            skill_grants: None,
         }
     }
 
@@ -50,14 +52,21 @@ impl SkillTool {
         self
     }
 
-    /// Wire the sandbox session so invoking a skill grants the entitlements
-    /// its frontmatter declares (app-launch, extra mach services) to the
-    /// session fence. Unwired in tests; the execute path skips the grant.
+    /// Wire the sandbox session so invoking a skill grants entitlements.
     pub fn with_sandbox(
         mut self,
         sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
     ) -> Self {
         self.sandbox = sandbox;
+        self
+    }
+
+    /// Wire the skill grant store so invocation merges granted mach services.
+    pub fn with_skill_grants(
+        mut self,
+        grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
+    ) -> Self {
+        self.skill_grants = grants;
         self
     }
 
@@ -169,13 +178,17 @@ impl Tool for SkillTool {
                 }
             };
             // Grant the sandbox entitlements the skill's frontmatter
-            // declares: app-launch + extra mach services. The session fence
-            // is re-derived per exec, so the next bash command the model runs
-            // after this invocation carries the grant. Idempotent overwrite
-            // (a second skill re-grants to its own set).
+            // declares, merged with any user-granted mach services. The
+            // session fence is re-derived per exec, so the next bash command
+            // the model runs after this invocation carries the grant.
             if let Some(session) = self.sandbox.as_ref() {
+                let mach = self
+                    .skill_grants
+                    .as_ref()
+                    .map(|g| g.merged_services(&params.skill, &desc.allowed_mach_services))
+                    .unwrap_or_else(|| desc.allowed_mach_services.clone());
                 session.set_allow_app_launch(desc.allow_app_launch);
-                session.set_extra_mach_services(&desc.allowed_mach_services);
+                session.set_extra_mach_services(&mach);
             }
             // Register the skill's frontmatter hooks into the session hook
             // registry (invoke-time, session-scoped). The registrar dedups

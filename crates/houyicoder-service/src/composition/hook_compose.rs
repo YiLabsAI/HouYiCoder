@@ -258,6 +258,7 @@ pub(super) fn register_skill_tool(
     registrar: &Arc<houyicoder_core::agent::SkillHookRegistrar>,
     conditional: &Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>,
     sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
+    skill_grants: Arc<houyicoder_api::skill_grant::SkillGrantStore>,
 ) {
     tools.register(Arc::new(
         houyicoder_core::agent::SkillTool::new(
@@ -265,7 +266,8 @@ pub(super) fn register_skill_tool(
         )
         .with_registrar(std::sync::Arc::clone(registrar))
         .with_activator(Some(std::sync::Arc::clone(conditional)))
-        .with_sandbox(sandbox),
+        .with_sandbox(sandbox)
+        .with_skill_grants(Some(std::sync::Arc::clone(&skill_grants))),
     ));
 }
 

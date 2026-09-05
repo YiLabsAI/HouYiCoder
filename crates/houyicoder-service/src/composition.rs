@@ -463,6 +463,8 @@ pub(crate) fn assemble(
     // shared between the command hooks and the skill-hook registrar.
     let hook_launcher: Arc<dyn houyicoder_api::launcher::ProcessLauncher> =
         Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
+    let skill_grants: Arc<houyicoder_api::skill_grant::SkillGrantStore> =
+        Arc::new(houyicoder_api::skill_grant::SkillGrantStore::new());
     let hook_registry = hook_compose::build_session_registry(
         gate_dyn.clone(),
         std::sync::Arc::clone(&hook_launcher),
@@ -482,6 +484,7 @@ pub(crate) fn assemble(
         &skill_registrar,
         &skill_conditional,
         sandbox_session.clone(),
+        std::sync::Arc::clone(&skill_grants),
     );
     // Agent tool: delegate a sub-task to a spawned child (not sandbox-backed;
     // resolves the requested type against the built-in agent registry).
@@ -529,6 +532,7 @@ pub(crate) fn assemble(
         .with_skill_registry(std::sync::Arc::clone(&skill_registry)
             as std::sync::Arc<dyn houyicoder_api::skill::SkillRegistry>)
         .with_sandbox_session(sandbox_session.clone())
+        .with_skill_grants(Some(std::sync::Arc::clone(&skill_grants)))
         .with_conditional(std::sync::Arc::clone(&skill_conditional));
     runner.set_skill_reloader(hook_compose::build_skill_reloader(
         &skill_registry,
@@ -536,12 +540,8 @@ pub(crate) fn assemble(
         &skill_registrar,
         workspace.clone(),
     ));
-    // Wire a workspace probe for the re-derivable compaction backbone's
-    // derivation watermark. Shares the runner's cwd handle so a worktree
-    // switch propagates to the next probe. Set after the builder chain (the
-    // cwd handle exists on the built runner); mirrors set_live_sink's pre-Arc
-    // mutation. Best-effort: the probe returns None when the cwd is not a git
-    // repo, so a probe failure never fails a compaction.
+    // Workspace probe for the compaction watermark. Shares the runner cwd
+    // handle; returns None when not a git repo so never fails a compaction.
     runner.set_workspace_probe(std::sync::Arc::new(GitWorkspaceProbe::new(
         runner.cwd_handle(),
     )));
