@@ -110,6 +110,16 @@ impl Runner {
             g.record_tool_batch(counts.calls, counts.ok, counts.err);
         }
         obs_wire::record_tool_outcomes(&self.observability, &results, &call_names);
+        if let Some(skill) = self.active_skill()
+            && let Some(req) = scan_for_authorizable(&results, &call_names, &skill)
+        {
+            // Append the synthetic ToolCall so the pending-approval scan on
+            // resume finds it (the decision routes by log call_id) and the
+            // model sees a coherent ToolCall + ToolResult pair.
+            self.append_tool_call(session, &req.call_id, &req.tool_name, req.input.clone())
+                .await?;
+            approvals.push(req);
+        }
         if !approvals.is_empty() {
             return Ok(NextStep::Interruption(approvals));
         }
@@ -125,5 +135,105 @@ impl Runner {
             Some(text) => Ok(NextStep::FinalOutput(text)),
             None => Ok(NextStep::RunAgain),
         }
+    }
+}
+
+/// Scan executed bash results for authorizable_services (mach services
+/// the sandbox blocked during a failed command). Only bash results are
+/// considered — another tool echoing the field must not mint an
+/// approval. Returns an entitlement approval request when a result
+/// carries a non-empty set, with a per-raise unique call_id (the
+/// answered-set keys on call_id; a repeated raise after a decline must
+/// not collide with the first).
+fn scan_for_authorizable(
+    results: &[(String, serde_json::Value)],
+    call_names: &std::collections::HashMap<String, String>,
+    skill: &str,
+) -> Option<ApprovalRequest> {
+    static RAISE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    for (id, output) in results {
+        let is_bash = call_names
+            .get(id)
+            .is_some_and(|n| n.eq_ignore_ascii_case("bash"));
+        if !is_bash {
+            continue;
+        }
+        if let Some(services) = output.get("authorizable_services")
+            && services.is_array()
+            && !services.as_array().unwrap().is_empty()
+        {
+            let seq = RAISE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Some(ApprovalRequest::new(
+                format!("entitlement-{seq}-{skill}"),
+                "entitlement".to_string(),
+                serde_json::json!({ "skill": skill, "services": services }),
+            ));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bash_names(ids: &[&str]) -> std::collections::HashMap<String, String> {
+        ids.iter()
+            .map(|i| (i.to_string(), "bash".to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn test_scan_finds_services() {
+        let results = vec![
+            ("call-1".into(), serde_json::json!({"success": true})),
+            (
+                "call-2".into(),
+                serde_json::json!({"success": false, "authorizable_services": ["x.y.z"]}),
+            ),
+        ];
+        let req =
+            scan_for_authorizable(&results, &bash_names(&["call-1", "call-2"]), "ego-browser");
+        let req = req.expect("bash result with services raises");
+        assert_eq!(req.tool_name, "entitlement");
+        assert!(req.call_id.starts_with("entitlement-"));
+        assert!(req.call_id.ends_with("-ego-browser"));
+        assert_eq!(req.input["skill"], "ego-browser");
+    }
+
+    #[test]
+    fn test_scan_ids_unique() {
+        let results = vec![(
+            "call-1".into(),
+            serde_json::json!({"authorizable_services": ["a.b"]}),
+        )];
+        let a = scan_for_authorizable(&results, &bash_names(&["call-1"]), "s").unwrap();
+        let b = scan_for_authorizable(&results, &bash_names(&["call-1"]), "s").unwrap();
+        assert_ne!(a.call_id, b.call_id, "repeated raises must not collide");
+    }
+
+    #[test]
+    fn test_scan_ignores_non_bash() {
+        let results = vec![(
+            "call-1".into(),
+            serde_json::json!({"authorizable_services": ["x.y.z"]}),
+        )];
+        let names = std::collections::HashMap::from([("call-1".to_string(), "grep".to_string())]);
+        assert!(scan_for_authorizable(&results, &names, "ego-browser").is_none());
+    }
+
+    #[test]
+    fn test_scan_empty_services() {
+        let results = vec![(
+            "call-1".into(),
+            serde_json::json!({"authorizable_services": []}),
+        )];
+        assert!(scan_for_authorizable(&results, &bash_names(&["call-1"]), "ego-browser").is_none());
+    }
+
+    #[test]
+    fn test_scan_no_field() {
+        let results = vec![("call-1".into(), serde_json::json!({"success": false}))];
+        assert!(scan_for_authorizable(&results, &bash_names(&["call-1"]), "ego-browser").is_none());
     }
 }

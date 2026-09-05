@@ -216,11 +216,13 @@ pub(crate) async fn resume_pending(
             if let Err(e) = server.runner.store().append(audit).await {
                 tracing::warn!("permission-decision audit append failed: {e}");
             }
-            if decision.approved {
+            if decision.approved && ask_perm.tool != "entitlement" {
                 // Route by reason, not tool name: re-decide reconstructs the
                 // Ask reason (same display-only reconstruction as
                 // handle_approval), then route_consent sends a path-bounds ask
                 // to the directory grant and everything else to the rule path.
+                // Entitlement consent skips: the grant-store write in the
+                // engine's apply path is the persistence.
                 let reason = server.reconstruct_reason(&ask_perm.tool, &ask_perm.input);
                 server.route_consent(
                     &ask_perm.tool,

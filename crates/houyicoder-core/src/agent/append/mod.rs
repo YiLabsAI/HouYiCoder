@@ -341,6 +341,30 @@ impl Runner {
     /// raw content. The raw stays in the CAS for on-demand materialize; the
     /// served view carries a small pointer. Fail-closed: on no backend or
     /// block_put failure, append the raw output (no content loss).
+    /// Append a synthetic tool-call event: one minted by the loop rather
+    /// than carried by a model response (the entitlement ask raised after
+    /// a failed command). Pending-approval scans read it, and the model
+    /// sees a coherent ToolCall + ToolResult pair in the transcript.
+    pub(crate) async fn append_tool_call(
+        &self,
+        session: SessionId,
+        call_id: &str,
+        tool: &str,
+        input: serde_json::Value,
+    ) -> Result<(), RunError> {
+        self.store
+            .append(new_event(
+                session,
+                TurnEventKind::ToolCall {
+                    call_id: call_id.to_string(),
+                    tool: tool.to_string(),
+                    input,
+                },
+            ))
+            .await?;
+        Ok(())
+    }
+
     pub(crate) async fn append_tool_result(
         &self,
         session: SessionId,

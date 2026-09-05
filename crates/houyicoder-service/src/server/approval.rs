@@ -31,7 +31,15 @@ impl Server {
         approval: &houyicoder_core::agent::ApprovalRequest,
         delegation: Option<houyicoder_protocol::frontend::run::DelegationSource>,
     ) -> Result<houyicoder_core::agent::ApprovalDecision, WireError> {
-        let mut reason = self.reconstruct_reason(&approval.tool_name, &approval.input);
+        let is_entitlement = approval.tool_name == "entitlement";
+        let mut reason = if is_entitlement {
+            // The entitlement ask is not a gate decision — reconstructing a
+            // ladder reason for a synthetic tool would mislead the card.
+            // The deny-log scan is the reason.
+            None
+        } else {
+            self.reconstruct_reason(&approval.tool_name, &approval.input)
+        };
         // Enrich the wire-display detail with the skill script path so the
         // card shows what would run. Only this path pays the detection IO;
         // resume_pending calls reconstruct_reason to route consent and
@@ -146,7 +154,11 @@ impl Server {
         // approval grants the directory (apply_consent_directory); anything
         // else takes the rule path on scope "always". Shared with resume_pending
         // via route_consent so the two consent sites cannot drift.
-        if decision.approved {
+        if decision.approved && !is_entitlement {
+            // Entitlement consent skips the rule/directory paths: the
+            // grant-store write in the engine's apply path IS the
+            // persistence. Persisting a rule for the synthetic tool would
+            // pollute the store with a rule nothing reads.
             self.route_consent(
                 &approval.tool_name,
                 &approval.input,

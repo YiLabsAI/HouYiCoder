@@ -53,10 +53,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     // Header: "<Tool> command", prefixed with the child agent type when the
     // ask was routed up from a delegation so the user can tell a child's ask
-    // from the parent's own tool call.
-    let header = match &a.delegation {
-        Some(d) => format!(" {} · {} command", d.subagent_type, cap_first(&a.tool)),
-        None => format!(" {} command", cap_first(&a.tool)),
+    // from the parent's own tool call. An entitlement ask renders its own
+    // title — it is not a tool call but a deny-log discovery.
+    let header = if a.is_entitlement() {
+        " Sandbox entitlement".to_string()
+    } else {
+        match &a.delegation {
+            Some(d) => format!(" {} · {} command", d.subagent_type, cap_first(&a.tool)),
+            None => format!(" {} command", cap_first(&a.tool)),
+        }
     };
     f.render_widget(
         Paragraph::new(header).style(Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
@@ -67,19 +72,38 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // old→new diff preview; other tools show the extracted command or raw
     // args.
     let args_value = serde_json::from_str::<Value>(&a.args).ok();
-    let diff_lines = args_value.as_ref().and_then(|v| diff_preview(&a.tool, v));
-    match diff_lines {
-        Some(lines) => {
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), chunks[3]);
+    if a.is_entitlement() {
+        // Entitlement card: the skill that was blocked and each service the
+        // deny-log scan found, one per line, instead of the raw input JSON.
+        let mut lines = vec![Line::from(format!(
+            " Skill {} was blocked from",
+            entitlement_skill(&a.args).unwrap_or_default()
+        ))];
+        if let Some(services) = args_value.as_ref().and_then(|v| v.get("services"))
+            && let Some(arr) = services.as_array()
+        {
+            for s in arr {
+                if let Some(name) = s.as_str() {
+                    lines.push(Line::from(format!(" {name}")));
+                }
+            }
         }
-        None => {
-            let cmd = args_command(&a.tool, args_value.as_ref(), &a.args);
-            f.render_widget(
-                Paragraph::new(format!("   {cmd}"))
-                    .style(Style::new().fg(Color::White))
-                    .wrap(Wrap { trim: false }),
-                chunks[3],
-            );
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), chunks[3]);
+    } else {
+        let diff_lines = args_value.as_ref().and_then(|v| diff_preview(&a.tool, v));
+        match diff_lines {
+            Some(lines) => {
+                f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), chunks[3]);
+            }
+            None => {
+                let cmd = args_command(&a.tool, args_value.as_ref(), &a.args);
+                f.render_widget(
+                    Paragraph::new(format!("   {cmd}"))
+                        .style(Style::new().fg(Color::White))
+                        .wrap(Wrap { trim: false }),
+                    chunks[3],
+                );
+            }
         }
     }
 
@@ -100,15 +124,24 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     );
 
     // Question
-    f.render_widget(Paragraph::new(" Do you want to proceed?"), chunks[6]);
+    let question = if a.is_entitlement() {
+        format!(
+            " Do you want to authorize this service for {}?",
+            entitlement_skill(&a.args).unwrap_or_default()
+        )
+    } else {
+        " Do you want to proceed?".to_string()
+    };
+    f.render_widget(Paragraph::new(question), chunks[6]);
 
     // Numbered options with a cursor marker on the focused one. A protected-
     // path ask hides Yes-don't-ask (consent cannot override it) and renumbers
-    // No to 2; otherwise the built-in three-option set applies.
+    // No to 2; an entitlement ask is two-option too (authorization is
+    // inherently persistent — the grant store IS the always).
     render_options(f, a, &chunks);
 
     // Bottom hint
-    let hint = if a.remember_hidden() {
+    let hint = if a.two_option_card() {
         " ↑↓ navigate · 1/2 select · Enter confirm · Esc cancel"
     } else {
         " ↑↓ navigate · 1/2/3 select · Enter confirm · Esc cancel"
@@ -119,10 +152,16 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// Parse the skill name from an entitlement ask's input JSON.
+fn entitlement_skill(args: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(args).ok()?;
+    v.get("skill").and_then(|s| s.as_str()).map(String::from)
+}
+
 /// Render the verdict options into the three option slots. Display order is
 /// Yes then Yes-don't-ask then No; the selected index keeps its internal
-/// mapping (0=Yes, 1=No, 2=Yes-don't-ask). A protected-path ask hides
-/// Yes-don't-ask and renumbers No to 2.
+/// mapping (0=Yes, 1=No, 2=Yes-don't-ask). A two-option card (protected-path
+/// or entitlement) hides Yes-don't-ask and renumbers No to 2.
 fn render_options(f: &mut Frame, a: &crate::state::Approval, chunks: &[Rect]) {
     let yes_focused = a.selected == 0;
     f.render_widget(
@@ -135,7 +174,7 @@ fn render_options(f: &mut Frame, a: &crate::state::Approval, chunks: &[Rect]) {
         ),
         chunks[7],
     );
-    if a.remember_hidden() {
+    if a.two_option_card() {
         let no_focused = a.selected == 1;
         f.render_widget(
             Paragraph::new(format!(" {} 2. No", if no_focused { "❯" } else { " " })).style(
@@ -193,6 +232,9 @@ fn render_options(f: &mut Frame, a: &crate::state::Approval, chunks: &[Rect]) {
 /// when no source traveled the wire (the generic-prompt path).
 fn source_label(a: &crate::state::Approval) -> &'static str {
     use houyicoder_protocol::frontend::permission::AskSource;
+    if a.is_entitlement() {
+        return "Deny-log discovery";
+    }
     match a.source {
         Some(AskSource::SystemSafety) => "Protected path",
         Some(AskSource::Detection) => "Detection",
@@ -558,6 +600,59 @@ mod tests {
         assert!(
             out.contains("3. No"),
             "No must stay 3 when remember shows: {out}"
+        );
+    }
+
+    /// The entitlement card: its own title, the skill + blocked services
+    /// rendered as lines, the authorize question, and the two-option
+    /// (Yes / No) layout — no don't-ask-again.
+    #[test]
+    fn test_entitlement_card_two_option() {
+        let mut app = composition::app();
+        app.screen = crate::state::Screen::Working;
+        app.approval = Some(crate::state::Approval {
+            tool: "entitlement".into(),
+            args: r#"{"skill":"ego-browser","services":["com.citrolabs.ego.lite.ego-browser"]}"#
+                .into(),
+            reason: "deny-log discovery".into(),
+            source: None,
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        });
+        let out = render_text(&app, 80, 24);
+        assert!(
+            out.contains("Sandbox entitlement"),
+            "entitlement title missing: {out}"
+        );
+        assert!(
+            out.contains("Skill ego-browser was blocked from"),
+            "skill line missing: {out}"
+        );
+        assert!(
+            out.contains("com.citrolabs.ego.lite.ego-browser"),
+            "service line missing: {out}"
+        );
+        assert!(
+            out.contains("Do you want to authorize this service for ego-browser?"),
+            "authorize question missing: {out}"
+        );
+        assert!(
+            !out.contains("don't ask again"),
+            "remember option must be hidden for entitlement: {out}"
+        );
+        assert!(
+            out.contains("2. No"),
+            "No must be renumbered to 2 for entitlement: {out}"
+        );
+        assert!(
+            out.contains("1/2 select"),
+            "two-option hint missing for entitlement: {out}"
+        );
+        assert!(
+            !out.contains("Entitlement command"),
+            "generic tool-command title must not show for entitlement: {out}"
         );
     }
 }

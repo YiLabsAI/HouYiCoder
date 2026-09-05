@@ -127,6 +127,7 @@ impl Runner {
                     session.set_allow_app_launch(allow_launch);
                     session.set_extra_mach_services(&mach);
                 }
+                self.set_active_skill(&name);
                 // Inject session context into the body (dynamic template
                 // placeholders {{userMessages}} + {{sessionMemory}} +
                 // {{userDescription}}). Only fires when the body contains

@@ -1,16 +1,8 @@
-//! The Skill tool: the model-invocable entry point for loading a skill
-//! body on demand. The model calls this tool with a skill name (and
-//! optional args) when it decides a skill applies; the tool resolves the
-//! name through the SkillRegistry port, prepares the body (argument and
-//! variable substitution done by the registry impl), and returns it as
-//! the tool result. Progressive disclosure: the listing attachment the
-//! model sees each turn carries only descriptions; the full body is
-//! loaded here, only when invoked.
-//!
-//! A large body past the isolation threshold is externalized to the CAS
-//! by the agent loop's large-output isolation, so the model sees a
-//! preview and can materialize on demand rather than re-reading the
-//! whole body each turn.
+//! The Skill tool: model-invocable entry point for loading a skill body
+//! on demand. Resolves the name through the SkillRegistry port, prepares
+//! the body, returns it as the tool result. Progressive disclosure: the
+//! listing carries only descriptions; the full body loads here.
+//! A large body past the isolation threshold is externalized to the CAS.
 
 use std::sync::Arc;
 
@@ -31,6 +23,7 @@ pub struct SkillTool {
     activator: Option<Arc<dyn super::super::conditional_activation::ConditionalSkillActivator>>,
     sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
     skill_grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
+    active_skill: Option<Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 impl SkillTool {
@@ -41,6 +34,7 @@ impl SkillTool {
             activator: None,
             sandbox: None,
             skill_grants: None,
+            active_skill: None,
         }
     }
 
@@ -67,6 +61,15 @@ impl SkillTool {
         grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
     ) -> Self {
         self.skill_grants = grants;
+        self
+    }
+
+    /// Wire the shared active-skill cell for post-bash-failure attribution.
+    pub fn with_active_skill(
+        mut self,
+        cell: Option<Arc<std::sync::Mutex<Option<String>>>>,
+    ) -> Self {
+        self.active_skill = cell;
         self
     }
 
@@ -189,6 +192,9 @@ impl Tool for SkillTool {
                 session.set_allow_app_launch(allow_launch);
                 session.set_extra_mach_services(&mach);
             }
+            if let Some(cell) = &self.active_skill {
+                *cell.lock().expect("active_skill lock") = Some(params.skill.clone());
+            }
             // Register the skill's frontmatter hooks into the session hook
             // registry (invoke-time, session-scoped). The registrar dedups
             // across both invocation paths so a slash dispatch followed by a
@@ -228,15 +234,8 @@ impl Tool for SkillTool {
     fn is_destructive(&self) -> bool {
         false
     }
-    /// Safe-property allowlist gate: a skill with non-empty allowed_tools
-    /// requests permission-bearing properties (tools the skill grants to
-    /// the session), so the loop asks before executing. A skill with only
-    /// safe properties (name, description, when-to-use, etc.) is
-    /// auto-allowed — no Ask. Input-aware: parses the skill name from the
-    /// call input, resolves it via the registry, and checks its
-    /// allowed_tools. An unknown skill or missing name does not Ask (the
-    /// execute will fail with NotFound, a clearer signal than an approval
-    /// gate).
+    /// A skill with non-empty allowed_tools requests permission before
+    /// executing; safe-only skills auto-allow.
     fn requires_approval_for(&self, input: &Value) -> bool {
         let Some(name) = input.get("skill").and_then(|v| v.as_str()) else {
             return false;

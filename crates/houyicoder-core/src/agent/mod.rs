@@ -207,6 +207,10 @@ pub struct Runner {
     /// Per-skill sandbox grant store (user-scope, not in repo). When wired,
     /// grants for a skill merge with its frontmatter declaration on invoke.
     skill_grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
+    /// The skill whose entitlements are active for the current run. Shared
+    /// with the SkillTool so both invocation paths can set it. Read by the
+    /// post-bash-failure approval to attribute discovered services.
+    active_skill: Arc<std::sync::Mutex<Option<String>>>,
     /// Optional hook registry. When wired, the runner fires PreToolUse
     /// before each tool execution and PostToolUse / PostToolUseFailure
     /// after, arbitrating verdicts (Deny blocks, Feedback surfaces a
@@ -381,6 +385,26 @@ impl Runner {
         grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
     ) -> Self {
         self.skill_grants = grants;
+        self
+    }
+
+    /// Record the skill whose entitlements are active. Each invocation
+    /// overwrites the previous one.
+    pub(crate) fn set_active_skill(&self, name: &str) {
+        *self.active_skill.lock().expect("active_skill lock") = Some(name.to_string());
+    }
+
+    /// The active skill name, if any. Peek, not take: the cell must survive
+    /// across turns so a later failing bash attributes to the skill that
+    /// was invoked (the model may run several turns of commands after the
+    /// skill body loads). The next skill invocation overwrites it.
+    pub(crate) fn active_skill(&self) -> Option<String> {
+        self.active_skill.lock().expect("active_skill lock").clone()
+    }
+
+    /// Override the active-skill cell with one shared with the SkillTool.
+    pub fn with_active_skill(mut self, cell: Arc<std::sync::Mutex<Option<String>>>) -> Self {
+        self.active_skill = cell;
         self
     }
 

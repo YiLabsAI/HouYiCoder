@@ -268,17 +268,25 @@ impl App {
         // (consent cannot override it).
         let args = ask.input.to_string();
         let mut selected = self.initial_cursor(&tool);
-        let (reason, source, containment_note) = match ask.reason {
-            Some(r) => (r.detail.clone(), Some(r.source), r.containment_note.clone()),
-            None => ("agent wants to run this tool".to_string(), None, None),
+        let (reason, source, containment_note) = if tool == "entitlement" {
+            // The entitlement ask carries no gate reason — the deny-log
+            // scan is why the card is up.
+            ("denied during the last command".to_string(), None, None)
+        } else {
+            match ask.reason {
+                Some(r) => (r.detail.clone(), Some(r.source), r.containment_note.clone()),
+                None => ("agent wants to run this tool".to_string(), None, None),
+            }
         };
-        let remember_hidden = matches!(
-            source,
-            Some(houyicoder_protocol::frontend::permission::AskSource::SystemSafety)
-        );
-        // A protected-path ask hides Yes-don't-ask; clamp a sticky AllowAlways
-        // preselect down to Yes so the cursor never lands on a hidden option.
-        if remember_hidden && selected == 2 {
+        let two_option = tool == "entitlement"
+            || matches!(
+                source,
+                Some(houyicoder_protocol::frontend::permission::AskSource::SystemSafety)
+            );
+        // A two-option card (protected-path or entitlement) hides
+        // Yes-don't-ask; clamp a sticky AllowAlways preselect down to Yes so
+        // the cursor never lands on a hidden option.
+        if two_option && selected == 2 {
             selected = 0;
         }
         self.approval = Some(Approval {

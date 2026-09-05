@@ -57,6 +57,7 @@ impl Runner {
             skill_registry: None,
             sandbox_session: None,
             skill_grants: None,
+            active_skill: std::sync::Arc::new(std::sync::Mutex::new(None)),
             hooks: None,
             registrar: None,
             conditional: None,

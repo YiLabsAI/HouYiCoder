@@ -68,16 +68,17 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
         return;
     };
     match k.code {
-        // 1=Yes, 2=Yes-don't-ask, 3=No. a/r pin approve/reject. When remember
-        // is hidden (a protected-path ask), '2' selects No and '3' is a no-op
-        // so the user cannot reach a choice the gate will ignore.
+        // 1=Yes, 2=Yes-don't-ask, 3=No. a/r pin approve/reject. When the
+        // card is two-option (protected-path or entitlement), '2' selects
+        // No and '3' is a no-op so the user cannot reach a hidden choice.
         KeyCode::Char('1') | KeyCode::Char('a') => a.selected = 0,
-        KeyCode::Char('2') => a.selected = if a.remember_hidden() { 1 } else { 2 },
-        KeyCode::Char('3') | KeyCode::Char('r') => {
-            if !a.remember_hidden() {
+        KeyCode::Char('2') => a.selected = if a.two_option_card() { 1 } else { 2 },
+        KeyCode::Char('3') => {
+            if !a.two_option_card() {
                 a.selected = 1;
             }
         }
+        KeyCode::Char('r') => a.selected = 1,
         // Cyclic navigation through display order (Yes -> don't-ask -> No).
         KeyCode::Up | KeyCode::Left | KeyCode::Char('h') => {
             a.selected = approval_prev(a.selected, option_count(a));

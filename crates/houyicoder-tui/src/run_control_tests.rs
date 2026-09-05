@@ -424,6 +424,39 @@ fn test_permission_ask_raises_popup() {
     assert_eq!(a.call_id, "c1");
 }
 
+/// An entitlement ask (deny-log discovery) populates the card with the
+/// discovery reason and the two-option layout, not the generic
+/// "agent wants to run this tool" prompt.
+#[test]
+fn test_entitlement_ask_two_option() {
+    let mut app = composition::app();
+    let ask = ApprovalRequest {
+        call_id: "entitlement-ego-browser".into(),
+        tool_name: "entitlement".into(),
+        input: serde_json::json!({
+            "skill": "ego-browser",
+            "services": ["com.citrolabs.ego.lite.ego-browser"],
+        }),
+        options: Vec::new(),
+        reason: None,
+        delegation: None,
+    };
+    app.handle_agent_message(AgentMessage::PermissionAsk {
+        req_id: houyicoder_protocol::envelope::RequestId(3),
+        ask,
+    });
+    let a = app.approval.as_ref().expect("approval raised");
+    assert_eq!(a.tool, "entitlement");
+    assert!(
+        a.reason.contains("denied during the last command"),
+        "entitlement reason must name the discovery, got: {}",
+        a.reason
+    );
+    assert_eq!(a.visible_option_count(), 2);
+    assert!(a.two_option_card());
+    assert!(!a.remember_hidden());
+}
+
 /// A permission ask routed up from a spawned child carries its delegation
 /// origin onto the approval card so the user can tell a child's ask from the
 /// parent's own tool call. Pins the wire→TUI source-label path: the

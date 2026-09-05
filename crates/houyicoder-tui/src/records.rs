@@ -603,10 +603,25 @@ impl Approval {
         )
     }
 
-    /// The count of visible options: two (Yes / No) when remember is hidden,
+    /// Whether this is an entitlement ask (a deny-log discovery offering
+    /// to authorize blocked mach services for a skill). Authorization is
+    /// inherently persistent — the grant store IS the always — so the
+    /// card renders two options, not three.
+    pub fn is_entitlement(&self) -> bool {
+        self.tool == "entitlement"
+    }
+
+    /// Whether the card renders the two-option (Yes / No) form: a
+    /// protected-path ask (consent cannot override) or an entitlement
+    /// ask (no once/always distinction exists).
+    pub fn two_option_card(&self) -> bool {
+        self.remember_hidden() || self.is_entitlement()
+    }
+
+    /// The count of visible options: two (Yes / No) on a two-option card,
     /// otherwise the built-in three.
     pub fn visible_option_count(&self) -> usize {
-        if self.remember_hidden() {
+        if self.two_option_card() {
             2
         } else {
             crate::records::APPROVAL_OPTIONS

@@ -39,6 +39,21 @@ impl Runner {
                 continue;
             };
             if decision.approved {
+                // Entitlement approval: write services to the grant store
+                // instead of executing a tool. The services were discovered
+                // by the deny-log scan after a failed bash command.
+                if req.tool_name == "entitlement" {
+                    let output = self.apply_entitlement_grant(&req.input);
+                    self.append_tool_result(
+                        session,
+                        req.call_id.clone(),
+                        &req.tool_name,
+                        output,
+                        0,
+                    )
+                    .await?;
+                    continue;
+                }
                 if let Some(tool) = self.tools.get(&req.tool_name).cloned() {
                     // execute_authorized honors a Yes (guarded tools proceed past
                     // Ask) and still blocks a tightened Deny at enforcement. A
@@ -89,6 +104,12 @@ impl Runner {
             }
         }
         Ok(remaining)
+    }
+
+    /// Write discovered mach services to the grant store so the next skill
+    /// invocation includes them. Returns a JSON result the model sees.
+    fn apply_entitlement_grant(&self, input: &serde_json::Value) -> serde_json::Value {
+        apply_entitlement(input, self.skill_grants.as_deref())
     }
 
     /// Reconcile: append an interrupted-by-user result for every ToolCall with
@@ -145,5 +166,83 @@ impl Runner {
             }
         }
         Ok(pending)
+    }
+}
+
+/// Merge discovered services into the grant store and return a JSON
+/// result the model sees. Pure of runner state — takes the store by ref.
+fn apply_entitlement(
+    input: &serde_json::Value,
+    store: Option<&houyicoder_api::skill_grant::SkillGrantStore>,
+) -> serde_json::Value {
+    let skill = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
+    if skill.is_empty() {
+        return serde_json::json!({ "error": "no skill named", "granted": [] });
+    }
+    let services: Vec<String> = input
+        .get("services")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(store) = store {
+        let existing = store.grant_for(skill);
+        let mut merged = existing;
+        for s in &services {
+            if !merged.contains(s) {
+                merged.push(s.clone());
+            }
+        }
+        store.set_grant(skill, merged);
+        serde_json::json!({
+            "granted": services,
+            "skill": skill,
+            "message": format!("Authorized {} service(s) for {skill}.", services.len()),
+        })
+    } else {
+        serde_json::json!({ "error": "grant store not wired", "skill": skill })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_entitlement_grants_services() {
+        let store = houyicoder_api::skill_grant::SkillGrantStore::new();
+        let input = serde_json::json!({
+            "skill": "ego-browser",
+            "services": ["com.citrolabs.ego.lite.ego-browser"],
+        });
+        let result = apply_entitlement(&input, Some(&store));
+        assert_eq!(result["granted"][0], "com.citrolabs.ego.lite.ego-browser");
+        assert!(
+            store
+                .grant_for("ego-browser")
+                .contains(&"com.citrolabs.ego.lite.ego-browser".to_string())
+        );
+    }
+
+    #[test]
+    fn test_entitlement_no_store() {
+        let input = serde_json::json!({ "skill": "x", "services": ["a.b.c"] });
+        let result = apply_entitlement(&input, None);
+        assert_eq!(result["error"], "grant store not wired");
+    }
+
+    #[test]
+    fn test_entitlement_empty_skill_refused() {
+        let store = houyicoder_api::skill_grant::SkillGrantStore::new();
+        let input = serde_json::json!({ "skill": "", "services": ["a.b.c"] });
+        let result = apply_entitlement(&input, Some(&store));
+        assert_eq!(result["error"], "no skill named");
+        assert!(
+            store.grant_for("").is_empty(),
+            "empty-name grant must not be written"
+        );
     }
 }
