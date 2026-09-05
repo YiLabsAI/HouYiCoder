@@ -13,8 +13,11 @@ use std::sync::{Mutex, OnceLock};
 
 /// Apple system services never authorizable through any grant path.
 /// Matched by prefix so suffixed runtime variants (e.g.
-/// com.apple.pasteboard.1) are also denied. Intentionally short — the
-/// hard floor, not the only screening layer.
+/// com.apple.pasteboard.1) are also denied. The app-launch entitlement
+/// grants its own LaunchServices lookups (coreservicesd,
+/// quarantine-resolver) directly in the profile, bypassing this list, so
+/// listing them here blocks a skill from declaring them per-skill without
+/// blocking the structured app-launch path.
 pub const DENIED_MACH_SERVICES: &[&str] = &[
     "com.apple.pasteboard",
     "com.apple.cfprefsd",
@@ -31,6 +34,10 @@ pub const DENIED_MACH_SERVICES: &[&str] = &[
     "com.apple.system.opendirectoryd",
     "com.apple.windowserver.active",
     "com.apple.distributed_notifications",
+    "com.apple.analyticsd",
+    "com.apple.dock.server",
+    "com.apple.CoreServices.coreservicesd",
+    "com.apple.coreservices.quarantine-resolver",
 ];
 
 /// Whether a mach service name is on the Apple deny-list and must never
@@ -44,10 +51,6 @@ pub fn is_denied(service: &str) -> bool {
         .any(|root| service == *root || service.starts_with(&format!("{root}.")))
 }
 
-/// Discovery origins whose frontmatter and compiled-profile entitlements
-/// are trusted to install sandbox capabilities directly. Managed and
-/// user-level sources (user, agents, claude_eco, local) are machine-local
-/// and user-installed — the user chose to put them there. Project and
 /// Whether a skill origin may install entitlements directly from
 /// frontmatter or the compiled profile. Converged to the same set as
 /// body trust (managed + user): every other origin — including
@@ -444,6 +447,19 @@ mod tests {
         // A non-Apple service is never denied.
         assert!(!is_denied("com.citrolabs.ego.lite.ego-browser"));
         assert!(!is_denied("com.houyi.test.entitlement"));
+    }
+
+    /// System services a sandboxed helper probes but does not need (observed
+    /// surfacing on an ego-browser run) are denied so the approval card
+    /// never offers them. The app-launch entitlement grants its own
+    /// LaunchServices lookups directly, so denying them here blocks only
+    /// the per-skill grant path.
+    #[test]
+    fn test_is_denied_system_probes() {
+        assert!(is_denied("com.apple.analyticsd"));
+        assert!(is_denied("com.apple.dock.server"));
+        assert!(is_denied("com.apple.CoreServices.coreservicesd"));
+        assert!(is_denied("com.apple.coreservices.quarantine-resolver"));
     }
 
     #[test]

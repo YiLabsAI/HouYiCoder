@@ -4,13 +4,36 @@
 //! strips the Apple deny-list so only authorizable services surface.
 //! On non-macOS hosts the reader returns empty.
 
-/// Parse denied mach-lookup service names from macOS log text. Each
-/// line containing "mach-lookup <name>" yields one service. Dedup. The
-/// trailing (PID) sandboxd appends is stripped.
+/// A mach service name is alphanumeric plus dot, dash, underscore — the
+/// same charset the seatbelt profile renderer accepts when emitting an
+/// allow mach-lookup line. The unified log sometimes appends a metadata
+/// blob to the service token with no whitespace separator (quoted JSON
+/// like com.apple.x","global-name":...); a raw whitespace split keeps
+/// the whole blob as the service. Truncating at the first char outside
+/// the charset recovers the real service name and drops the blob tail.
+fn truncate_service_name(name: &str) -> String {
+    name.chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect()
+}
+
+/// Parse denied mach-lookup service names from macOS log text. Only lines
+/// that are actual sandbox denials are read — the kernel format is
+/// Sandbox: proc(pid) deny(n) mach-lookup service, so a line must
+/// contain deny( to count. This excludes unrelated log lines that merely
+/// mention mach-lookup (an AppIntents message like
+/// mach-lookup entitlement, will NOT register is not a denial and must
+/// not surface a service named entitlement,). The service name is
+/// truncated to the mach-name charset so a metadata blob cannot pose as
+/// a service. Dedup.
 pub fn parse_denied_services(log_text: &str) -> Vec<String> {
     let mut services = Vec::new();
     for line in log_text.lines() {
+        if !line.contains("deny(") {
+            continue;
+        }
         if let Some(name) = extract_mach_service(line)
+            && !name.is_empty()
             && !services.contains(&name)
         {
             services.push(name);
@@ -74,19 +97,18 @@ fn extract_mach_service_and_pid(line: &str) -> Option<(String, Option<u32>)> {
     let pos = line.find("mach-lookup ")?;
     let rest = &line[pos + "mach-lookup ".len()..];
     let token = rest.split_whitespace().next()?;
-    if let Some(paren) = token.find('(') {
+    let (raw_name, pid) = if let Some(paren) = token.find('(') {
         let name = &token[..paren];
-        if name.is_empty() {
-            return None;
-        }
         let pid_str = token[paren + 1..].trim_end_matches(')');
-        let pid = pid_str.parse::<u32>().ok();
-        Some((name.to_string(), pid))
-    } else if token.is_empty() {
-        None
+        (name, pid_str.parse::<u32>().ok())
     } else {
-        Some((token.to_string(), None))
+        (token, None)
+    };
+    let name = truncate_service_name(raw_name);
+    if name.is_empty() {
+        return None;
     }
+    Some((name, pid))
 }
 
 fn run_query(cmd: &str, args: &[&str]) -> String {
@@ -116,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_parse_dedup() {
-        let log = "line1 mach-lookup com.apple.system.logger(1)\nline2 mach-lookup com.apple.system.logger(2)";
+        let log = "line1 deny(1) mach-lookup com.apple.system.logger(1)\nline2 deny(1) mach-lookup com.apple.system.logger(2)";
         let services = parse_denied_services(log);
         assert_eq!(services.len(), 1);
         assert_eq!(services[0], "com.apple.system.logger");
@@ -130,8 +152,34 @@ mod tests {
 
     #[test]
     fn test_parse_empty_name() {
-        let log = "mach-lookup (123)";
+        let log = "deny(1) mach-lookup (123)";
         assert!(parse_denied_services(log).is_empty());
+    }
+
+    /// A line that mentions mach-lookup but is not a sandbox denial (an
+    /// AppIntents complaint) must not surface a service. Without the
+    /// deny-line filter this parsed a service named entitlement,.
+    #[test]
+    fn test_parse_skips_non_denial() {
+        let log = "ego-browser[123]: Missing com.apple.linkd.application-service / com.apple.linkd.autoShortcut mach-lookup entitlement, will NOT register the process";
+        assert!(parse_denied_services(log).is_empty());
+    }
+
+    /// A denial line whose service token carries a metadata blob with no
+    /// whitespace separator must yield just the bare service name, then be
+    /// dropped by the deny-list filter as a system service.
+    #[test]
+    fn test_parse_truncates_blob() {
+        let log = "Sandbox: ego-browser(1) deny(1) mach-lookup com.apple.DiskArbitration.diskarbitrationd\",\"global-name\":\"com.apple.DiskArbitration.diskarbitrationd\",\"primary-filter-value\":\"com.apple.DiskArbitration.diskarbitrationd\"}";
+        let parsed = parse_denied_services(log);
+        assert_eq!(
+            parsed,
+            vec!["com.apple.DiskArbitration.diskarbitrationd".to_string()]
+        );
+        assert!(
+            authorizable_services(parsed).is_empty(),
+            "a deny-listed service extracted from a blob must not be offered"
+        );
     }
 
     #[test]
