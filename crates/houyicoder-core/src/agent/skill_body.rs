@@ -66,7 +66,9 @@ pub(crate) fn skill_origin(registry: &dyn SkillRegistry, name: &str) -> Option<S
 /// skill up by name in the origin snapshot; fails closed (untrusted) when
 /// the skill is absent from the snapshot, so a body from a source the
 /// registry does not track origin for is never served as trusted
-/// instruction.
+/// instruction. Test-only now: production callers derive untrusted from
+/// the origin they already fetched (one scan instead of two).
+#[cfg(test)]
 pub(crate) fn origin_untrusted(registry: &dyn SkillRegistry, name: &str) -> bool {
     skill_origin(registry, name)
         .as_deref()

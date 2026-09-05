@@ -182,8 +182,7 @@ impl Tool for SkillTool {
             // both body-trust and entitlement-trust decisions.
             let origin = super::super::skill_body::skill_origin(&*registry, &params.skill)
                 .unwrap_or_else(|| "unknown".to_string());
-            let ent_untrusted =
-                !houyicoder_api::skill_grant::is_entitlement_trusted_origin(&origin);
+            let untrusted = !super::super::skill_body::is_trusted_origin(&origin);
             if let Some(session) = self.sandbox.as_ref() {
                 let (mach, allow_launch) = houyicoder_api::skill_grant::resolve_entitlements(
                     self.skill_grants.as_deref(),
@@ -191,7 +190,7 @@ impl Tool for SkillTool {
                     &origin,
                     &desc.allowed_mach_services,
                     desc.allow_app_launch,
-                    !ent_untrusted,
+                    !untrusted,
                 );
                 if allow_launch {
                     session.grant_app_launch();
@@ -211,7 +210,6 @@ impl Tool for SkillTool {
             }
             // Frame an untrusted body as data so the model treats its
             // directives as unverified. Shared with the slash path.
-            let untrusted = super::super::skill_body::origin_untrusted(&*registry, &params.skill);
             let body =
                 super::super::skill_body::frame_untrusted_body(&params.skill, &body, untrusted);
             // The grant hook gates session-scoped allowed-tools grants by

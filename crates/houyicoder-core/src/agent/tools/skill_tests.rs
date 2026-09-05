@@ -496,6 +496,35 @@ impl SkillRegistry for AppLaunchRegistry {
     }
 }
 
+/// Same descriptor as AppLaunchRegistry but discovered at a project origin
+/// (a SKILL.md checked into a repo). Frontmatter entitlements and the
+/// compiled profile must be skipped for an untrusted origin, so execute
+/// grants neither app launch nor mach services.
+struct ProjectOriginRegistry;
+impl SkillRegistry for ProjectOriginRegistry {
+    fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+        Vec::new()
+    }
+    fn find(&self, name: &str) -> Option<SkillDescriptor> {
+        AppLaunchRegistry.find(name)
+    }
+    fn list_with_origin(&self) -> Vec<houyicoder_api::skill::SkillSnapshot> {
+        vec![houyicoder_api::skill::SkillSnapshot {
+            descriptor: self.find("launcher").unwrap(),
+            origin: "project".into(),
+            usage: Default::default(),
+        }]
+    }
+    fn prepare_body(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<String, SkillError> {
+        Ok("body".into())
+    }
+}
+
 #[tokio::test]
 async fn test_skill_grants_sandbox_entitlements() {
     let session = Arc::new(RecordingSession {
@@ -526,6 +555,31 @@ async fn test_skill_grants_sandbox_entitlements() {
     let _r = session.read_file("x", 1).await;
     let _r = session.write_file("x", Vec::new()).await;
     assert_eq!(session.workspace_root().as_os_str(), "/");
+}
+
+/// A project-origin skill declaring app launch + a mach service must
+/// receive neither: the trust gate skips frontmatter and the compiled
+/// profile, and the grant store is empty, so resolve returns nothing.
+/// Pins the wiring at the call site so an untrusted-origin skill cannot
+/// install entitlements by declaring them.
+#[tokio::test]
+async fn test_untrusted_origin_grants_nothing() {
+    let session = Arc::new(RecordingSession {
+        app_launch: Mutex::new(None),
+        mach: Mutex::new(Vec::new()),
+    });
+    let tool = SkillTool::new(Arc::new(ProjectOriginRegistry)).with_sandbox(Some(session.clone()));
+    tool.execute(ctx(), json!({"skill": "launcher"}))
+        .await
+        .expect("execute");
+    assert!(
+        session.app_launch.lock().unwrap().is_none(),
+        "untrusted origin must not grant app launch"
+    );
+    assert!(
+        session.mach.lock().unwrap().is_empty(),
+        "untrusted origin must not set extra mach services"
+    );
 }
 
 #[test]
