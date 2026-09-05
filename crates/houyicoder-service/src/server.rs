@@ -316,6 +316,19 @@ impl Server {
             .await
     }
 
+    /// Drain consumed input texts and send QueueConsumed to the frontend.
+    /// Called from both the store-notify branch (mid-run) and the outer
+    /// loop (post-resolve) so the frontend mirror drops consumed texts
+    /// without waiting for the run to resolve.
+    async fn flush_consumed_input(&mut self, io: &mut ServerIo) -> Result<(), WireError> {
+        let consumed = self.runner.take_consumed_input();
+        if !consumed.is_empty() {
+            self.send_event(io, FrontendEventKind::QueueConsumed { texts: consumed })
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Run the connection: handshake, then receive request frames until the
     /// client closes. Each request is dispatched; events the run produces are
     /// pushed on the seq stream and the run outcome returns as a response on
@@ -573,6 +586,14 @@ impl Server {
                         // new to skip — no correctness impact, never assert
                         // "new events must exist" here.
                         self.push_new_events(io).await?;
+                        // A turn-boundary drain just consumed queued input
+                        // (append_mid_turn_input wakes this branch on its
+                        // store write). Flush the consumed texts now so the
+                        // frontend mirror drops them at the next poll, not
+                        // at run end — a long auto-approve run would
+                        // otherwise hold the queue strip stale for its
+                        // entire duration.
+                        self.flush_consumed_input(io).await?;
                         tokio::task::yield_now().await;
                     },
                     req = perm_fut => {
@@ -599,11 +620,7 @@ impl Server {
             // pending). Sent at every outer-loop iteration — Interruption +
             // terminal — so the mirror reconciles incrementally, never
             // stranding a consumed item or double-spawning it at run end.
-            let consumed = self.runner.take_consumed_input();
-            if !consumed.is_empty() {
-                self.send_event(io, FrontendEventKind::QueueConsumed { texts: consumed })
-                    .await?;
-            }
+            self.flush_consumed_input(io).await?;
             match result {
                 Ok(run) => match run.outcome {
                     houyicoder_core::agent::RunOutcome::Interruption(approvals) => {
