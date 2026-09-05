@@ -16,6 +16,34 @@ use houyicoder_protocol::extension::ToolError;
 
 use super::bash_snapshot;
 
+/// After a failed sandboxed command, scan the session's deny log for
+/// authorizable mach-service candidates so the caller can surface or
+/// grant them. Skipped on success or when stderr lacks a heuristic
+/// sandbox-denial signature (not permitted / denied / sandbox). The
+/// heuristic has false negatives (some mach-lookup failures surface as
+/// "Connection invalid") and false positives (ordinary file Permission
+/// denied); both are acceptable — a missed scan only means missed
+/// discovery, and a wasted scan costs one subprocess. Dispatched via
+/// spawn_blocking because the scan runs a synchronous subprocess.
+async fn discover_authorizable_if_failed(
+    success: bool,
+    stderr: &str,
+    session: Arc<dyn SandboxSession>,
+) -> Vec<String> {
+    if success || !looks_like_sandbox_denial(stderr) {
+        Vec::new()
+    } else {
+        tokio::task::spawn_blocking(move || session.discover_authorizable())
+            .await
+            .unwrap_or_default()
+    }
+}
+
+fn looks_like_sandbox_denial(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("not permitted") || s.contains("denied") || s.contains("sandbox")
+}
+
 /// Run a shell command in the sandbox. When wired with undo, destructive
 /// commands snapshot the workspace before executing so /undo can revert.
 pub struct BashTool {
@@ -158,11 +186,14 @@ impl Tool for BashTool {
                 Some(n) => format!("{n}\n{stderr}"),
                 None => stderr,
             };
+            let authorizable =
+                discover_authorizable_if_failed(success, &stderr, self.session.clone()).await;
             Ok(json!({
                 "stdout": stdout,
                 "stderr": stderr,
                 "exit_code": exit_code,
                 "success": success,
+                "authorizable_services": authorizable,
             }))
         })
     }
@@ -298,5 +329,49 @@ mod bash_bound_tests {
         assert_eq!(tail_chars(&big, 100).len(), 100);
         assert_eq!(tail_chars(&big, 20_000).len(), 10_000);
         assert_eq!(tail_chars(&big, 100).chars().next(), Some('a'));
+    }
+
+    use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+
+    struct DiscoverStub(Vec<String>);
+    impl SandboxSession for DiscoverStub {
+        fn exec_with_config(
+            &self,
+            _c: &str,
+            _cfg: ExecConfig,
+        ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+            unreachable!()
+        }
+        fn workspace_root(&self) -> Arc<Path> {
+            Arc::from(std::env::temp_dir())
+        }
+        fn discover_authorizable(&self) -> Vec<String> {
+            self.0.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_discover_on_denial() {
+        let s = DiscoverStub(vec!["com.citrolabs.x".into()]);
+        assert!(s.workspace_root().to_path_buf().exists());
+        let session: Arc<dyn SandboxSession> = Arc::new(s);
+        let r = discover_authorizable_if_failed(false, "Operation not permitted", session).await;
+        assert_eq!(r, vec!["com.citrolabs.x".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_discover_skips_plain_fail() {
+        let session: Arc<dyn SandboxSession> =
+            Arc::new(DiscoverStub(vec!["com.citrolabs.x".into()]));
+        let r = discover_authorizable_if_failed(false, "command not found", session).await;
+        assert!(r.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_discover_skips_success() {
+        let session: Arc<dyn SandboxSession> =
+            Arc::new(DiscoverStub(vec!["com.citrolabs.x".into()]));
+        let r = discover_authorizable_if_failed(true, "", session).await;
+        assert!(r.is_empty());
     }
 }

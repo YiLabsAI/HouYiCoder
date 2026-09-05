@@ -637,13 +637,15 @@ pub trait SandboxSession: Send + Sync {
     /// Declare extra mach services a skill needs; clear reverts to base.
     fn set_extra_mach_services(&self, _services: &[String]) {}
     fn clear_extra_mach_services(&self) {}
-
-    /// Grant or revoke the LaunchServices app-launch entitlement so a
-    /// sandboxed process can open -a an app. No-op without a mutable fence.
+    /// Grant the app-launch entitlement so a sandboxed process can open -a.
     fn set_allow_app_launch(&self, _allow: bool) {}
-    /// Reset all skill-granted entitlements (mach services + app-launch) at
-    /// the start of a new agent work period. Default no-op.
+    /// Reset all skill-granted entitlements at the start of a new work period.
     fn clear_skill_grants(&self) {}
+
+    /// Scan OS deny log for authorizable mach-service candidates. Blocks.
+    fn discover_authorizable(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]

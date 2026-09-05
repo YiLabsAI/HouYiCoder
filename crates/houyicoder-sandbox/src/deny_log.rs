@@ -39,9 +39,10 @@ pub fn authorizable_services(discovered: Vec<String>) -> Vec<String> {
 ///
 /// The scan is window-scoped, not pid-scoped: it surfaces every
 /// mach-lookup denial in the window, including denials from unrelated
-/// sandboxed processes on the host. The caller must post-filter by the
-/// target exec pid before offering to authorize — otherwise a denial
-/// from another process may be mis-attributed to this skill.
+/// sandboxed processes on the host. When the caller holds the denied
+/// process pid, prefer discover_for_pid. When it does not (the seatbelt
+/// case: the pid in the log is a grandchild the session never tracked),
+/// a short window bounds the cross-process noise risk.
 ///
 /// Blocks: runs a synchronous subprocess (log show, ~0.7s for a 1s
 /// window). Call from spawn_blocking, never on a tokio worker.

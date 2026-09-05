@@ -156,6 +156,19 @@ fn test_sandbox_session_is_object() {
 }
 
 #[test]
+fn test_discover_authorizable_ok() {
+    let s = MacSeatbeltSession::new().unwrap();
+    // Result is host-dependent (log content varies); verify the deny-list
+    // is applied so no Apple system service ever surfaces.
+    let authorizable = s.discover_authorizable();
+    assert!(
+        authorizable
+            .iter()
+            .all(|s| !houyicoder_api::skill_grant::is_denied(s))
+    );
+}
+
+#[test]
 fn test_sandbox_error_variants_display() {
     let cases = [
         (SandboxError::Io("x".into()), "io", "sandbox io error: x"),

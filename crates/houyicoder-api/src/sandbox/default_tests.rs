@@ -113,3 +113,10 @@ async fn test_resolve_rejects_traversal() {
     );
     std::fs::remove_dir_all(&ws).ok();
 }
+
+#[test]
+fn test_discover_default_empty() {
+    let stub = fs_stub();
+    assert!(stub.discover_authorizable().is_empty());
+    std::fs::remove_dir_all(&stub.ws).ok();
+}

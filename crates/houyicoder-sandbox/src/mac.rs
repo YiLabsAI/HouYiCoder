@@ -692,6 +692,13 @@ impl SandboxSession for MacSeatbeltSession {
             .clear();
         *self.allow_app_launch.lock().expect("allow app launch lock") = false;
     }
+
+    // Window-scoped, not pid-scoped: the deny log records the command
+    // process pid (a grandchild of sandbox-exec), which the session does
+    // not hold. A short window (5s) bounds the cross-process noise risk.
+    fn discover_authorizable(&self) -> Vec<String> {
+        crate::deny_log::discover_authorizable(5)
+    }
 }
 
 /// RAII tree-kill guard. On Drop, killpg the whole process group. Instantiated
