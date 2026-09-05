@@ -35,7 +35,7 @@ impl Runner {
                 // Entitlement approval: write services to the grant store
                 // instead of executing a tool. The services were discovered
                 // by the deny-log scan after a failed bash command.
-                if req.tool_name == houyicoder_api::skill_grant::ENTITLEMENT_TOOL {
+                if req.tool_name == houyicoder_protocol::extension::ENTITLEMENT_TOOL {
                     let output = self.apply_entitlement_grant(&req.input);
                     self.append_tool_result(
                         session,
@@ -172,6 +172,10 @@ fn apply_entitlement(
     if skill.is_empty() {
         return serde_json::json!({ "error": "no skill named", "granted": [] });
     }
+    let origin = input
+        .get("origin")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     let services: Vec<String> = input
         .get("services")
         .and_then(|v| v.as_array())
@@ -182,7 +186,7 @@ fn apply_entitlement(
         })
         .unwrap_or_default();
     if let Some(store) = store {
-        store.add_grants(skill, services.clone());
+        store.add_grants(skill, origin, services.clone());
         serde_json::json!({
             "granted": services,
             "skill": skill,
@@ -209,13 +213,14 @@ mod tests {
         let store = houyicoder_api::skill_grant::SkillGrantStore::with_path(path);
         let input = serde_json::json!({
             "skill": "ego-browser",
+            "origin": "user",
             "services": ["com.houyi.test.entitlement"],
         });
         let result = apply_entitlement(&input, Some(&store));
         assert_eq!(result["granted"][0], "com.houyi.test.entitlement");
         assert!(
             store
-                .grant_for("ego-browser")
+                .grant_for("ego-browser", "user")
                 .contains(&"com.houyi.test.entitlement".to_string())
         );
         let _ = fs::remove_dir_all(&dir).is_ok();
@@ -239,7 +244,7 @@ mod tests {
         let result = apply_entitlement(&input, Some(&store));
         assert_eq!(result["error"], "no skill named");
         assert!(
-            store.grant_for("").is_empty(),
+            store.grant_for("", "unknown").is_empty(),
             "empty-name grant must not be written"
         );
         let _ = fs::remove_dir_all(&dir).is_ok();

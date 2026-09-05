@@ -246,8 +246,10 @@ fn test_approval_char_keys_select() {
     assert_eq!(app.approval.as_ref().unwrap().selected, 0, "a pins Yes");
     assert!(app.approval.is_some(), "card stays open after a");
 
-    // 'r' (or '3') pins No when remember is shown (default approval, not a
-    // protected path, so the arm fires).
+    // 'r' pins No. The internal selected index is fixed: 0=Yes,
+    // 1=No, 2=Yes-don't-ask. No is always index 1 regardless of
+    // card layout (the display order array reorders presentation,
+    // not the index meaning).
     app.approval = Some(mk());
     crate::keys::handle_working(&mut app, key(KeyCode::Char('r')));
     assert_eq!(app.approval.as_ref().unwrap().selected, 1, "r pins No");

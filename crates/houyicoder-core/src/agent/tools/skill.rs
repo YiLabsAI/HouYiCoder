@@ -176,13 +176,19 @@ impl Tool for SkillTool {
                 }
             };
             // Untrusted sources skip frontmatter + profile; only grant
-            // store entries feed in.
+            // store entries feed in. The origin scopes the grant-store
+            // key so a same-named project skill cannot consume grants
+            // approved for a user-level copy. One origin scan feeds
+            // both body-trust and entitlement-trust decisions.
+            let origin = super::super::skill_body::skill_origin(&*registry, &params.skill)
+                .unwrap_or_else(|| "unknown".to_string());
             let ent_untrusted =
-                super::super::skill_body::entitlement_untrusted(&*registry, &params.skill);
+                !houyicoder_api::skill_grant::is_entitlement_trusted_origin(&origin);
             if let Some(session) = self.sandbox.as_ref() {
                 let (mach, allow_launch) = houyicoder_api::skill_grant::resolve_entitlements(
                     self.skill_grants.as_deref(),
                     &params.skill,
+                    &origin,
                     &desc.allowed_mach_services,
                     desc.allow_app_launch,
                     !ent_untrusted,
@@ -203,22 +209,14 @@ impl Tool for SkillTool {
             if let Some(r) = registrar.as_ref() {
                 r.register(&*registry, &params.skill);
             }
-            // Frame an untrusted body (a non-managed/user source) as data
-            // so the model treats its directives as unverified and confirms
-            // before state-changing steps. A tool result is already data,
-            // but a tool-result role alone does not tell the model to
-            // confirm before acting; the framing note does. Shared with
-            // the slash path so framing does not differ by invocation path.
+            // Frame an untrusted body as data so the model treats its
+            // directives as unverified. Shared with the slash path.
             let untrusted = super::super::skill_body::origin_untrusted(&*registry, &params.skill);
             let body =
                 super::super::skill_body::frame_untrusted_body(&params.skill, &body, untrusted);
-            // Carry the trust decision so the grant hook gates the
-            // session-scoped allowed-tools grant by source: only a managed
-            // or user source may install an always-allow for its tools, so a
-            // project or ecosystem skill's tools re-ask on each call. This
-            // field is engine-internal metadata the grant hook reads; the
-            // model cannot forge it (derived from the registry's origin
-            // snapshot, independent of the body it dresses).
+            // The grant hook gates session-scoped allowed-tools grants by
+            // this trust flag; the model cannot forge it (derived from the
+            // registry's origin snapshot, not the body it dresses).
             Ok(json!({
                 "skill": params.skill,
                 "result": body,

@@ -1,6 +1,6 @@
 {
   "ego-browser": {
-    "mach_services": [],
+    "mach_services": ["com.citrolabs.ego.lite.ego-browser"],
     "allow_app_launch": true
   }
 }

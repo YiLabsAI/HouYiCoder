@@ -55,3 +55,9 @@ impl std::fmt::Display for ToolError {
 }
 
 impl std::error::Error for ToolError {}
+
+/// The synthetic tool name for a sandbox-entitlement approval request.
+/// Used by the runner (which creates the approval), the service layer
+/// (which routes the decision), and the TUI (which renders the card),
+/// so the single source lives in the protocol crate they all depend on.
+pub const ENTITLEMENT_TOOL: &str = "entitlement";

@@ -435,6 +435,7 @@ fn test_entitlement_ask_two_option() {
         tool_name: crate::records::ENTITLEMENT_TOOL.into(),
         input: serde_json::json!({
             "skill": "ego-browser",
+            "origin": "user",
             "services": ["com.citrolabs.ego.lite.ego-browser"],
         }),
         options: Vec::new(),

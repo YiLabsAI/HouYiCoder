@@ -153,9 +153,13 @@ fn entitlement_skill(args: &str) -> Option<String> {
 /// is legitimate — a service name alone does not tell the user what the
 /// skill was trying to do.
 fn entitlement_detail(args: &str, parsed: Option<&Value>) -> Vec<Line<'static>> {
+    let skill = entitlement_skill(args).unwrap_or_default();
+    let origin = parsed
+        .and_then(|v| v.get("origin"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     let mut lines = vec![Line::from(format!(
-        " Skill {} was blocked from",
-        entitlement_skill(args).unwrap_or_default()
+        " Skill {skill} ({origin}) was blocked from"
     ))];
     if let Some(services) = parsed.and_then(|v| v.get("services"))
         && let Some(arr) = services.as_array()
@@ -172,9 +176,12 @@ fn entitlement_detail(args: &str, parsed: Option<&Value>) -> Vec<Line<'static>> 
     {
         // Truncate long commands (temp paths are very long) so the
         // service names above stay visible in the card's bounded area.
+        // floor_char_boundary avoids splitting a multi-byte character
+        // at the byte offset, which would panic on CJK/emoji commands.
         let max = 60;
         let display = if cmd_str.len() > max {
-            format!("…{}", &cmd_str[cmd_str.len() - max..])
+            let start = cmd_str.floor_char_boundary(cmd_str.len() - max);
+            format!("…{}", &cmd_str[start..])
         } else {
             cmd_str.to_string()
         };
@@ -638,7 +645,7 @@ mod tests {
         app.screen = crate::state::Screen::Working;
         app.approval = Some(crate::state::Approval {
             tool: ENTITLEMENT_TOOL.into(),
-            args: r#"{"skill":"ego-browser","services":["com.citrolabs.ego.lite.ego-browser"]}"#
+            args: r#"{"skill":"ego-browser","origin":"user","services":["com.citrolabs.ego.lite.ego-browser"]}"#
                 .into(),
             reason: "deny-log discovery".into(),
             source: None,
@@ -653,8 +660,8 @@ mod tests {
             "entitlement title missing: {out}"
         );
         assert!(
-            out.contains("Skill ego-browser was blocked from"),
-            "skill line missing: {out}"
+            out.contains("Skill ego-browser (user) was blocked from"),
+            "skill + origin line missing: {out}"
         );
         assert!(
             out.contains("com.citrolabs.ego.lite.ego-browser"),
@@ -680,5 +687,49 @@ mod tests {
             !out.contains("Entitlement command"),
             "generic tool-command title must not show for entitlement: {out}"
         );
+    }
+
+    /// The entitlement detail includes the triggering command, truncated
+    /// when the path is long (temp paths are very long).
+    #[test]
+    fn test_entitlement_detail_command_line() {
+        let long_cmd = format!("/tmp/houyi-entitlement-repo-123456/{}", "x".repeat(80));
+        let args = serde_json::json!({
+            "skill": "ego-browser",
+            "origin": "user",
+            "services": ["com.citrolabs.ego.lite.ego-browser"],
+            "command": long_cmd,
+        })
+        .to_string();
+        let lines = super::entitlement_detail(&args, serde_json::from_str(&args).ok().as_ref());
+        let text: String = lines.iter().map(|l| l.to_string()).collect();
+        assert!(
+            text.contains("Command:"),
+            "command line must be in detail: {text}"
+        );
+        assert!(
+            text.contains('…'),
+            "long command must be truncated with ellipsis: {text}"
+        );
+    }
+
+    /// A multi-byte command at the 60-byte boundary must not panic.
+    /// Without floor_char_boundary, slicing at a byte offset that lands
+    /// inside a multi-byte character would panic.
+    #[test]
+    fn test_entitlement_detail_multibyte_safe() {
+        // Emoji are 4 bytes each in UTF-8. 15 emoji = 60 bytes, so the
+        // 60-byte boundary lands exactly at a char boundary. Add one
+        // more byte's worth to force a mid-character split.
+        let cmd = "\u{1F600}".repeat(15) + "x";
+        let args = serde_json::json!({
+            "skill": "ego-browser",
+            "origin": "user",
+            "services": ["x.y.z"],
+            "command": cmd,
+        })
+        .to_string();
+        // Must not panic — that is the entire assertion.
+        let _lines = super::entitlement_detail(&args, serde_json::from_str(&args).ok().as_ref());
     }
 }

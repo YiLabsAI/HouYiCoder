@@ -78,6 +78,10 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                 a.selected = 1;
             }
         }
+        // 'r' selects the reject option. The internal selected index
+        // is fixed regardless of card layout: 0=Yes, 1=No, 2=Yes-don't-
+        // ask. No is always index 1 — the display order array reorders
+        // how options are shown, but does not change the index meaning.
         KeyCode::Char('r') => a.selected = 1,
         // Cyclic navigation through display order (Yes -> don't-ask -> No).
         KeyCode::Up | KeyCode::Left | KeyCode::Char('h') => {

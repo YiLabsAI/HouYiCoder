@@ -64,7 +64,7 @@ pub struct MacSeatbeltSession {
     /// through a clone.
     extra_mach_services: Arc<Mutex<Vec<String>>>,
     /// Whether the LaunchServices app-launch entitlement is granted so a
-    /// sandboxed process can open -a an app. Set by set_allow_app_launch.
+    /// sandboxed process can open -a an app. Set by grant_app_launch.
     allow_app_launch: Arc<Mutex<bool>>,
     /// When a worktree session narrows the fence, this holds the worktree path
     /// that current_profile + exec use as the workspace + cwd (None = the

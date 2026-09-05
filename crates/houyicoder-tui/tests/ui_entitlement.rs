@@ -127,6 +127,11 @@ fn test_entitlement_yes_grants() {
         s.output_plain()
     );
     assert!(
+        s.output_plain().contains("Command:"),
+        "the card must show the triggering command:\n{}",
+        s.output_plain()
+    );
+    assert!(
         s.output_plain().contains(SERVICE),
         "the card must name the blocked service:\n{}",
         s.output_plain()

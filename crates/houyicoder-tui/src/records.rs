@@ -5,11 +5,9 @@
 
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 
-/// The synthetic tool name for an entitlement approval request. The TUI
-/// crate cannot depend on the API crate (dep-graph layering), so the
-/// token is duplicated here as a private constant. The two must stay in
-/// sync.
-pub(crate) const ENTITLEMENT_TOOL: &str = "entitlement";
+/// Re-exported from the protocol crate — the single source for the
+/// entitlement tool name shared by runner, service, and TUI.
+pub(crate) use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 /// Drill-down rows under the /context grid: per-file memory and per-skill
 /// footprints. These drill-down rows list in two sections below the grid;

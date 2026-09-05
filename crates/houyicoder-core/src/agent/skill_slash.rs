@@ -106,24 +106,32 @@ impl Runner {
                 paths.join(", ")
             ));
         }
-        // Determine trust: a body from a non-managed/user source is
-        // untrusted so the projection frames it as data, not trusted
-        // instruction. Shared with the Skill tool path so framing does
-        // not differ by invocation path. Fails closed (untrusted) when
-        // the skill is absent from the origin snapshot.
-        let untrusted = super::skill_body::origin_untrusted(&**registry, &name);
+        // Determine trust from a single origin lookup: body trust and
+        // entitlement trust both derive from the same origin string, so
+        // one scan suffices. Fails closed (untrusted) when the skill is
+        // absent from the origin snapshot.
+        let origin = super::skill_body::skill_origin(&**registry, &name);
+        let untrusted = origin
+            .as_deref()
+            .map(|o| !super::skill_body::is_trusted_origin(o))
+            .unwrap_or(true);
         match registry.prepare_body(&name, args, Some(&sid)) {
             Ok(body) => {
                 registry.record_invocation(&name, false);
                 // Resolve entitlements from frontmatter + profile + grant
-                // store (same as the Skill tool path). A project or mcp
+                // store (same as the Skill tool path). A non-managed/user
                 // source is not trusted for entitlements — frontmatter and
                 // the compiled profile are skipped.
-                let ent_untrusted = super::skill_body::entitlement_untrusted(&**registry, &name);
+                let ent_untrusted = origin
+                    .as_deref()
+                    .map(|o| !houyicoder_api::skill_grant::is_entitlement_trusted_origin(o))
+                    .unwrap_or(true);
+                let origin_str = origin.as_deref().unwrap_or("unknown");
                 if let Some(session) = self.sandbox_session.as_ref() {
                     let (mach, allow_launch) = houyicoder_api::skill_grant::resolve_entitlements(
                         self.skill_grants.as_deref(),
                         &name,
+                        origin_str,
                         &desc.allowed_mach_services,
                         desc.allow_app_launch,
                         !ent_untrusted,

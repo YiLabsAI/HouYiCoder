@@ -112,7 +112,14 @@ impl Runner {
         }
         obs_wire::record_tool_outcomes(&self.observability, &results, &call_names);
         if let Some(skill) = self.active_skill()
-            && let Some(req) = scan_for_authorizable(&results, &call_names, &skill, &exec)
+            && let Some(req) = {
+                let origin = self
+                    .skill_registry
+                    .as_ref()
+                    .and_then(|r| super::skill_body::skill_origin(&**r, &skill))
+                    .unwrap_or_else(|| "unknown".to_string());
+                scan_for_authorizable(&results, &call_names, &skill, &origin, &exec)
+            }
         {
             // Append the synthetic ToolCall so the pending-approval scan on
             // resume finds it (the decision routes by log call_id) and the
@@ -153,6 +160,7 @@ fn scan_for_authorizable(
     results: &[(String, serde_json::Value)],
     call_names: &HashMap<String, String>,
     skill: &str,
+    origin: &str,
     exec: &[(String, Arc<dyn Tool>, serde_json::Value, bool)],
 ) -> Option<ApprovalRequest> {
     static RAISE_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -182,9 +190,10 @@ fn scan_for_authorizable(
             let command = commands.get(id.as_str()).copied().unwrap_or("");
             return Some(ApprovalRequest::new(
                 format!("entitlement-{seq}-{skill}"),
-                houyicoder_api::skill_grant::ENTITLEMENT_TOOL.to_string(),
+                houyicoder_protocol::extension::ENTITLEMENT_TOOL.to_string(),
                 serde_json::json!({
                     "skill": skill,
+                    "origin": origin,
                     "services": services,
                     "command": command,
                 }),
@@ -222,13 +231,18 @@ mod tests {
             &results,
             &bash_names(&["call-1", "call-2"]),
             "ego-browser",
+            "user",
             &empty_exec(),
         );
         let req = req.expect("bash result with services raises");
-        assert_eq!(req.tool_name, houyicoder_api::skill_grant::ENTITLEMENT_TOOL);
+        assert_eq!(
+            req.tool_name,
+            houyicoder_protocol::extension::ENTITLEMENT_TOOL
+        );
         assert!(req.call_id.starts_with("entitlement-"));
         assert!(req.call_id.ends_with("-ego-browser"));
         assert_eq!(req.input["skill"], "ego-browser");
+        assert_eq!(req.input["origin"], "user");
     }
 
     #[test]
@@ -237,10 +251,22 @@ mod tests {
             "call-1".into(),
             serde_json::json!({"authorizable_services": ["a.b"]}),
         )];
-        let a =
-            scan_for_authorizable(&results, &bash_names(&["call-1"]), "s", &empty_exec()).unwrap();
-        let b =
-            scan_for_authorizable(&results, &bash_names(&["call-1"]), "s", &empty_exec()).unwrap();
+        let a = scan_for_authorizable(
+            &results,
+            &bash_names(&["call-1"]),
+            "s",
+            "user",
+            &empty_exec(),
+        )
+        .unwrap();
+        let b = scan_for_authorizable(
+            &results,
+            &bash_names(&["call-1"]),
+            "s",
+            "user",
+            &empty_exec(),
+        )
+        .unwrap();
         assert_ne!(a.call_id, b.call_id, "repeated raises must not collide");
     }
 
@@ -251,7 +277,9 @@ mod tests {
             serde_json::json!({"authorizable_services": ["x.y.z"]}),
         )];
         let names = HashMap::from([("call-1".to_string(), "grep".to_string())]);
-        assert!(scan_for_authorizable(&results, &names, "ego-browser", &empty_exec()).is_none());
+        assert!(
+            scan_for_authorizable(&results, &names, "ego-browser", "user", &empty_exec()).is_none()
+        );
     }
 
     #[test]
@@ -265,6 +293,7 @@ mod tests {
                 &results,
                 &bash_names(&["call-1"]),
                 "ego-browser",
+                "user",
                 &empty_exec()
             )
             .is_none()
@@ -279,6 +308,7 @@ mod tests {
                 &results,
                 &bash_names(&["call-1"]),
                 "ego-browser",
+                "user",
                 &empty_exec()
             )
             .is_none()

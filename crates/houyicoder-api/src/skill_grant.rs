@@ -11,10 +11,6 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-/// Synthetic tool name for an entitlement approval request — the runner
-/// uses it when the deny-log scan finds authorizable mach services.
-pub const ENTITLEMENT_TOOL: &str = "entitlement";
-
 /// Apple system services never authorizable through any grant path.
 /// Matched by prefix so suffixed runtime variants (e.g.
 /// com.apple.pasteboard.1) are also denied. Intentionally short — the
@@ -52,15 +48,17 @@ pub fn is_denied(service: &str) -> bool {
 /// are trusted to install sandbox capabilities directly. Managed and
 /// user-level sources (user, agents, claude_eco, local) are machine-local
 /// and user-installed — the user chose to put them there. Project and
-/// mcp origins are not: a project skill is checked into a repo and cloned
-/// with it, so its frontmatter is attacker-controlled; an mcp prompt
-/// comes from an external server. Untrusted sources must go through
-/// deny-log discovery and explicit user approval instead.
+/// Whether a skill origin may install entitlements directly from
+/// frontmatter or the compiled profile. Converged to the same set as
+/// body trust (managed + user): every other origin — including
+/// agents, claude_eco, local, project, and mcp — must go through
+/// deny-log discovery and explicit approval. A repo that ships
+/// .claude/skills or .agents/skills gets claude_eco/agents origin,
+/// which is untrusted for entitlements even though the body may be
+/// served; the capability direction is the more dangerous one, so
+/// it gets the stricter gate.
 pub fn is_entitlement_trusted_origin(origin: &str) -> bool {
-    matches!(
-        origin,
-        "managed" | "user" | "agents" | "claude_eco" | "local"
-    )
+    origin == "managed" || origin == "user"
 }
 
 /// A compiled-in mapping of known community skills to the entitlements they
@@ -126,11 +124,20 @@ impl SkillGrantStore {
         home.join(".houyicoder").join("skill-grants.json")
     }
 
-    pub fn grant_for(&self, skill: &str) -> Vec<String> {
+    /// Format the composite grant-store key. The key is scoped by both
+    /// skill name and origin so a project-level skill with the same name
+    /// as a user-level skill cannot consume grants the user approved for
+    /// the user-level copy.
+    fn grant_key(skill: &str, origin: &str) -> String {
+        format!("{skill}\x00{origin}")
+    }
+
+    pub fn grant_for(&self, skill: &str, origin: &str) -> Vec<String> {
+        let key = Self::grant_key(skill, origin);
         self.grants
             .lock()
             .expect("grant lock poisoned")
-            .get(skill)
+            .get(&key)
             .cloned()
             .unwrap_or_default()
             .into_iter()
@@ -138,24 +145,24 @@ impl SkillGrantStore {
             .collect()
     }
 
-    pub fn set_grant(&self, skill: &str, services: Vec<String>) {
+    pub fn set_grant(&self, skill: &str, origin: &str, services: Vec<String>) {
         let filtered: Vec<String> = services.into_iter().filter(|s| !is_denied(s)).collect();
+        let key = Self::grant_key(skill, origin);
         let mut grants = self.grants.lock().expect("grant lock poisoned");
-        grants.insert(skill.to_string(), filtered);
+        grants.insert(key, filtered);
         save_grants(&self.path, &grants);
     }
 
-    /// Merge new services into an existing skill's grant atomically: the
-    /// read and the write are serialized inside one lock hold so two
-    /// concurrent approvals for the same skill cannot lose an update (one
-    /// reads, the other reads the same stale set, both write, the later
-    /// write silently reverts the earlier one's services). Deny-listed
-    /// services are filtered before merge. Returns the merged set so the
-    /// caller can report what was granted.
-    pub fn add_grants(&self, skill: &str, new_services: Vec<String>) -> Vec<String> {
+    /// Merge new services into an existing skill+origin grant atomically:
+    /// the read and the write are serialized inside one lock hold so two
+    /// concurrent approvals for the same skill cannot lose an update.
+    /// Deny-listed services are filtered before merge. Returns the
+    /// merged set so the caller can report what was granted.
+    pub fn add_grants(&self, skill: &str, origin: &str, new_services: Vec<String>) -> Vec<String> {
         let filtered: Vec<String> = new_services.into_iter().filter(|s| !is_denied(s)).collect();
+        let key = Self::grant_key(skill, origin);
         let mut grants = self.grants.lock().expect("grant lock poisoned");
-        let existing = grants.entry(skill.to_string()).or_default();
+        let existing = grants.entry(key).or_default();
         for s in &filtered {
             if !existing.contains(s) {
                 existing.push(s.clone());
@@ -171,17 +178,17 @@ impl SkillGrantStore {
     /// store. Returns the deny-filtered mach-service union and the OR of
     /// every feeder's allow_app_launch flag.
     ///
-    /// When trusted is false (project or mcp origin), frontmatter and the
-    /// compiled capability profile are skipped — a repo-checked-in or
+    /// When trusted is false (non-managed/user origin), frontmatter and
+    /// the compiled capability profile are skipped — a repo-checked-in or
     /// server-sourced skill cannot install sandbox capabilities by
     /// declaring them in its own frontmatter or by matching a known
-    /// skill's name. Only the user grant store feeds in, and only with
-    /// services the user explicitly approved through the entitlement
-    /// card. The skill must go through deny-log discovery and approval
-    /// instead.
+    /// skill's name. The grant store is keyed by (skill, origin) so a
+    /// project-level skill with the same name as a user-level skill
+    /// cannot consume grants the user approved for the user-level copy.
     pub fn resolve(
         &self,
         skill: &str,
+        origin: &str,
         frontmatter: &[String],
         fm_allow_launch: bool,
         trusted: bool,
@@ -205,7 +212,7 @@ impl SkillGrantStore {
                 }
             }
         }
-        for s in self.grant_for(skill) {
+        for s in self.grant_for(skill, origin) {
             if !mach.contains(&s) {
                 mach.push(s);
             }
@@ -232,12 +239,13 @@ impl Default for SkillGrantStore {
 pub fn resolve_entitlements(
     grants: Option<&SkillGrantStore>,
     skill: &str,
+    origin: &str,
     frontmatter: &[String],
     fm_allow_launch: bool,
     trusted: bool,
 ) -> (Vec<String>, bool) {
     match grants {
-        Some(g) => g.resolve(skill, frontmatter, fm_allow_launch, trusted),
+        Some(g) => g.resolve(skill, origin, frontmatter, fm_allow_launch, trusted),
         None => {
             if !trusted {
                 return (Vec::new(), false);
@@ -338,7 +346,7 @@ mod tests {
     #[test]
     fn test_grant_unknown_empty() {
         let store = fresh_store();
-        assert!(store.grant_for("nope").is_empty());
+        assert!(store.grant_for("nope", "user").is_empty());
     }
 
     #[test]
@@ -346,18 +354,48 @@ mod tests {
         let path = fresh_grant_path();
         {
             let store = SkillGrantStore::with_path(path.clone());
-            store.set_grant("ego-browser", vec!["a.b.c".into()]);
+            store.set_grant("ego-browser", "user", vec!["a.b.c".into()]);
         }
         let reloaded = SkillGrantStore::with_path(path.clone());
-        assert_eq!(reloaded.grant_for("ego-browser"), vec!["a.b.c".to_string()]);
+        assert_eq!(
+            reloaded.grant_for("ego-browser", "user"),
+            vec!["a.b.c".to_string()]
+        );
         let _ = fs::remove_dir_all(path.parent().unwrap()).is_ok();
     }
 
     #[test]
     fn test_set_and_read() {
         let store = fresh_store();
-        store.set_grant("ego-browser", vec!["a.b.c".into()]);
-        assert_eq!(store.grant_for("ego-browser"), vec!["a.b.c".to_string()]);
+        store.set_grant("ego-browser", "user", vec!["a.b.c".into()]);
+        assert_eq!(
+            store.grant_for("ego-browser", "user"),
+            vec!["a.b.c".to_string()]
+        );
+    }
+
+    /// The composite (skill, origin) key prevents a same-name untrusted
+    /// skill from consuming grants approved for a trusted/user copy.
+    /// A grant set under origin "user" must not be readable under
+    /// origin "project" — the central security property of origin-aware
+    /// grant keying.
+    #[test]
+    fn test_cross_origin_grant_isolation() {
+        let store = fresh_store();
+        store.set_grant("ego-browser", "user", vec!["a.b.c".into()]);
+        assert!(
+            store.grant_for("ego-browser", "project").is_empty(),
+            "project origin must not see user-origin grants"
+        );
+        assert!(
+            store.grant_for("ego-browser", "agents").is_empty(),
+            "agents origin must not see user-origin grants"
+        );
+        assert_eq!(
+            store.grant_for("ego-browser", "user"),
+            vec!["a.b.c".to_string()],
+            "user origin must still see its own grants"
+        );
     }
 
     #[test]
@@ -369,13 +407,14 @@ mod tests {
         // would ride through to the approval card.
         store.set_grant(
             "s1",
+            "user",
             vec![
                 "com.apple.pasteboard.1".into(),
                 "com.apple.cfprefsd.daemon".into(),
                 "a.b.c".into(),
             ],
         );
-        let granted = store.grant_for("s1");
+        let granted = store.grant_for("s1", "user");
         assert!(!granted.contains(&"com.apple.pasteboard.1".to_string()));
         assert!(!granted.contains(&"com.apple.cfprefsd.daemon".to_string()));
         assert!(granted.contains(&"a.b.c".to_string()));
@@ -410,7 +449,7 @@ mod tests {
     #[test]
     fn test_corrupt_file_returns_empty() {
         let store = fresh_store_with_content("not valid json {{{");
-        assert!(store.grant_for("any").is_empty());
+        assert!(store.grant_for("any", "user").is_empty());
     }
 
     #[test]
@@ -418,14 +457,18 @@ mod tests {
         let store = fresh_store();
         // Grant store side filtered (pasteboard.1 is a suffixed variant of
         // a denied root; the filter must drop it, not just the bare root).
-        store.set_grant("s1", vec!["com.apple.pasteboard.1".into(), "x.y.z".into()]);
+        store.set_grant(
+            "s1",
+            "user",
+            vec!["com.apple.pasteboard.1".into(), "x.y.z".into()],
+        );
         // Frontmatter side with a deny-listed service + an overlap entry.
         let frontmatter = vec![
             "com.apple.cfprefsd.daemon".into(),
             "x.y.z".into(),
             "a.b.c".into(),
         ];
-        let (mach, allow_launch) = store.resolve("s1", &frontmatter, false, true);
+        let (mach, allow_launch) = store.resolve("s1", "user", &frontmatter, false, true);
         // Deny-list entries from all feeders gone, including suffixed.
         assert!(!mach.contains(&"com.apple.pasteboard.1".to_string()));
         assert!(!mach.contains(&"com.apple.cfprefsd.daemon".to_string()));
@@ -439,7 +482,7 @@ mod tests {
         let store = fresh_store();
         // Suffixed variant of a denied root must be filtered here too.
         let frontmatter = vec!["a.b.c".into(), "com.apple.pasteboard.1".into()];
-        let (mach, allow_launch) = store.resolve("unknown", &frontmatter, false, true);
+        let (mach, allow_launch) = store.resolve("unknown", "user", &frontmatter, false, true);
         assert_eq!(mach, vec!["a.b.c".to_string()]);
         assert!(!allow_launch);
     }
@@ -449,13 +492,13 @@ mod tests {
         let store = fresh_store();
         // ego-browser is in the compiled profile; no frontmatter or grant
         // store entry needed. The profile grants app launch (ego-browser
-        // starts the ego lite app via LaunchServices) but no mach services
-        // — ego-browser communicates with the app via Unix domain sockets,
-        // not mach lookups.
-        let (mach, allow_launch) = store.resolve("ego-browser", &[], false, true);
-        assert!(
-            mach.is_empty(),
-            "ego-browser profile declares no mach services"
+        // starts the ego lite app via LaunchServices) and the bootstrap
+        // mach service the ego lite process connects to.
+        let (mach, allow_launch) = store.resolve("ego-browser", "user", &[], false, true);
+        assert_eq!(
+            mach,
+            vec!["com.citrolabs.ego.lite.ego-browser".to_string()],
+            "ego-browser profile declares its bootstrap mach service"
         );
         assert!(allow_launch, "ego-browser profile grants app launch");
     }
@@ -465,7 +508,8 @@ mod tests {
         // None store: frontmatter alone, deny-list still applies to
         // suffixed variants.
         let frontmatter = vec!["a.b.c".into(), "com.apple.pasteboard.1".into()];
-        let (mach, allow_launch) = resolve_entitlements(None, "any", &frontmatter, true, true);
+        let (mach, allow_launch) =
+            resolve_entitlements(None, "any", "user", &frontmatter, true, true);
         assert_eq!(mach, vec!["a.b.c".to_string()]);
         assert!(allow_launch);
     }
@@ -480,14 +524,14 @@ mod tests {
         let store = fresh_store();
         // Pre-seed the grant store as if the user had approved one service
         // for this skill through the entitlement card.
-        store.set_grant("ego-browser", vec!["user.approved.svc".into()]);
+        store.set_grant("ego-browser", "user", vec!["user.approved.svc".into()]);
         // Frontmatter declares a system service + a regular service, and
         // requests app launch. All of these must be ignored.
         let frontmatter = vec![
             "com.apple.pasteboard.1".into(),
             "attacker.declared.svc".into(),
         ];
-        let (mach, allow_launch) = store.resolve("ego-browser", &frontmatter, true, false);
+        let (mach, allow_launch) = store.resolve("ego-browser", "user", &frontmatter, true, false);
         // Only the user-approved grant store service survives.
         assert_eq!(mach, vec!["user.approved.svc".to_string()]);
         assert!(!allow_launch, "untrusted source must not get app launch");
@@ -498,20 +542,23 @@ mod tests {
         // Untrusted + no store: nothing at all, even with frontmatter
         // declaring services and app launch.
         let frontmatter = vec!["a.b.c".into(), "d.e.f".into()];
-        let (mach, allow_launch) = resolve_entitlements(None, "any", &frontmatter, true, false);
+        let (mach, allow_launch) =
+            resolve_entitlements(None, "any", "user", &frontmatter, true, false);
         assert!(mach.is_empty());
         assert!(!allow_launch);
     }
 
     #[test]
     fn test_entitlement_trust_boundary() {
-        // User-installed sources are trusted for entitlements.
+        // Only managed and user origins are trusted for entitlements.
         assert!(is_entitlement_trusted_origin("managed"));
         assert!(is_entitlement_trusted_origin("user"));
-        assert!(is_entitlement_trusted_origin("agents"));
-        assert!(is_entitlement_trusted_origin("claude_eco"));
-        assert!(is_entitlement_trusted_origin("local"));
-        // Repo-checked-in and server-sourced are not.
+        // All other origins — including agents, claude_eco, local —
+        // are untrusted: a repo can ship .claude/skills or
+        // .agents/skills, so these must go through deny-log discovery.
+        assert!(!is_entitlement_trusted_origin("agents"));
+        assert!(!is_entitlement_trusted_origin("claude_eco"));
+        assert!(!is_entitlement_trusted_origin("local"));
         assert!(!is_entitlement_trusted_origin("project"));
         assert!(!is_entitlement_trusted_origin("mcp"));
         // Unknown origin fails closed.

@@ -177,9 +177,11 @@ fn test_approval_popup_no_placeholder() {
 
 #[test]
 fn test_approval_r_binds_reject() {
-    // Safety: the hint says r=reject. Pressing r must focus reject (selected=1),
-    // not fall through and leave selected=0 (approve) — else r+Enter silently
-    // approves. Regression guard for the r-key binding.
+    // Safety: the hint says r=reject. Pressing r must focus No
+    // (internal index 1), not fall through and leave selected=0
+    // (approve) — else r+Enter silently approves. The internal index
+    // is fixed: 0=Yes, 1=No, 2=Yes-don't-ask. No is always 1
+    // regardless of card layout.
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
@@ -198,7 +200,31 @@ fn test_approval_r_binds_reject() {
     assert_eq!(
         app.approval.as_ref().expect("approval").selected,
         1,
-        "r must focus reject, not leave approve selected"
+        "r must focus No (internal index 1)"
+    );
+}
+
+/// On a two-option entitlement card, 'r' must select No (index 1).
+#[test]
+fn test_approval_r_rejects_twoopt() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = crate::composition::build_app_for_test(None);
+    app.screen = crate::state::Screen::Working;
+    app.approval = Some(crate::state::Approval {
+        tool: crate::records::ENTITLEMENT_TOOL.into(),
+        args: r#"{"skill":"ego-browser","origin":"user","services":["x.y.z"]}"#.into(),
+        reason: "deny-log discovery".into(),
+        selected: 0,
+        call_id: "c1".into(),
+        options: Vec::new(),
+        ..Default::default()
+    });
+    let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+    crate::keys::handle_working(&mut app, key);
+    assert_eq!(
+        app.approval.as_ref().expect("approval").selected,
+        1,
+        "r must focus No (index 1 on a two-option card)"
     );
 }
 
@@ -265,11 +291,11 @@ fn test_permission_pane_esc_exits() {
     // Esc exits back to the transcript.
     crate::keys::handle_working(
         &mut app,
-        ratatui::crossterm::event::KeyEvent {
-            code: ratatui::crossterm::event::KeyCode::Esc,
-            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
-            kind: ratatui::crossterm::event::KeyEventKind::Press,
-            state: ratatui::crossterm::event::KeyEventState::NONE,
+        crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Esc,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
         },
     );
     assert_eq!(app.pane, Pane::Transcript, "Esc exits the permission pane");
@@ -332,24 +358,24 @@ fn test_pane_tab_cycle_wraps() {
     use crate::state::PermissionTab;
     let mut app = app();
     app.pane = Pane::Permission;
-    let key = |code: ratatui::crossterm::event::KeyCode| ratatui::crossterm::event::KeyEvent {
+    let key = |code: crossterm::event::KeyCode| crossterm::event::KeyEvent {
         code,
-        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
-        kind: ratatui::crossterm::event::KeyEventKind::Press,
-        state: ratatui::crossterm::event::KeyEventState::NONE,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+        kind: crossterm::event::KeyEventKind::Press,
+        state: crossterm::event::KeyEventState::NONE,
     };
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Right));
+    crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
     assert_eq!(app.permission_tab, PermissionTab::Ask);
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Right));
+    crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
     assert_eq!(app.permission_tab, PermissionTab::Deny);
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Right));
+    crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
     assert_eq!(app.permission_tab, PermissionTab::Workspace);
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Right));
+    crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
     assert_eq!(app.permission_tab, PermissionTab::Recent);
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Right));
+    crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
     assert_eq!(app.permission_tab, PermissionTab::Allow, "wraps to Allow");
     // Left goes the other way: Allow -> Recently denied.
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Left));
+    crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Left));
     assert_eq!(app.permission_tab, PermissionTab::Recent);
 }
 
@@ -362,11 +388,11 @@ fn permission_ignores_unknown_key() {
     let before_cursor = app.permission_cursor;
     crate::keys::handle_working(
         &mut app,
-        ratatui::crossterm::event::KeyEvent {
-            code: ratatui::crossterm::event::KeyCode::Char('z'),
-            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
-            kind: ratatui::crossterm::event::KeyEventKind::Press,
-            state: ratatui::crossterm::event::KeyEventState::NONE,
+        crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('z'),
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
         },
     );
     assert_eq!(app.pane, Pane::Permission, "pane unchanged");
@@ -384,10 +410,7 @@ fn test_permission_slash_blocked_browsing() {
     let mut app = app();
     app.pane = Pane::Permission;
     app.permission_input = crate::state::PermissionInput::None;
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Char('/')),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('/')));
     assert_eq!(
         app.permission_input,
         crate::state::PermissionInput::None,
@@ -399,12 +422,12 @@ fn test_permission_slash_blocked_browsing() {
     );
 }
 
-fn key_press(code: ratatui::crossterm::event::KeyCode) -> ratatui::crossterm::event::KeyEvent {
-    ratatui::crossterm::event::KeyEvent {
+fn key_press(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+    crossterm::event::KeyEvent {
         code,
-        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
-        kind: ratatui::crossterm::event::KeyEventKind::Press,
-        state: ratatui::crossterm::event::KeyEventState::NONE,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+        kind: crossterm::event::KeyEventKind::Press,
+        state: crossterm::event::KeyEventState::NONE,
     }
 }
 
@@ -416,22 +439,13 @@ fn test_permission_add_submode_flow() {
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
     app.pane = Pane::Permission;
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Char('a')),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('a')));
     assert_eq!(app.permission_input, PermissionInput::Add);
     for c in "bash npm:allow".chars() {
-        crate::keys::handle_working(
-            &mut app,
-            key_press(ratatui::crossterm::event::KeyCode::Char(c)),
-        );
+        crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
     }
     assert_eq!(app.input.value(), "bash npm:allow");
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Enter),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     // Enter on the spec advances to the destination pick (default project),
     // not a ship — the Add flow is two steps now.
     use houyicoder_protocol::frontend::permission::RuleDestination;
@@ -446,10 +460,7 @@ fn test_permission_add_submode_flow() {
         "Add spec Enter advances to destination pick: {:?}",
         app.permission_input
     );
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Enter),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
         app.permission_input,
         PermissionInput::None,
@@ -506,27 +517,18 @@ fn test_permission_remove_submode_deletes() {
     pump_rules(&mut app);
     assert!(!app.rules_cache.is_empty());
     // Cursor sits on the only rule; 'd' enters Remove (No preselected).
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Char('d')),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     assert!(matches!(
         app.permission_input,
         PermissionInput::Remove { confirm: false, .. }
     ));
     // Right moves to Yes; Enter confirms + ships.
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Right),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Right));
     assert!(matches!(
         app.permission_input,
         PermissionInput::Remove { confirm: true, .. }
     ));
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Enter),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
         app.permission_input,
         PermissionInput::None,
@@ -550,26 +552,17 @@ fn test_permission_workspace_add_flow() {
     app.screen = crate::state::Screen::Working;
     app.pane = Pane::Permission;
     app.permission_tab = PermissionTab::Workspace;
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Char('a')),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('a')));
     assert_eq!(
         app.permission_input,
         PermissionInput::AddDir,
         "'a' on Workspace enters AddDir"
     );
     for c in "/tmp/extra".chars() {
-        crate::keys::handle_working(
-            &mut app,
-            key_press(ratatui::crossterm::event::KeyCode::Char(c)),
-        );
+        crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
     }
     assert_eq!(app.input.value(), "/tmp/extra");
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Enter),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
         app.permission_input,
         PermissionInput::None,
@@ -592,10 +585,7 @@ fn test_permission_workspace_remove_flow() {
     app.pane = Pane::Permission;
     app.permission_tab = PermissionTab::Workspace;
     app.dirs_cache = vec!["/tmp/extra".into()];
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Char('d')),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     assert!(
         matches!(
             app.permission_input,
@@ -603,14 +593,8 @@ fn test_permission_workspace_remove_flow() {
         ),
         "'d' on a dir enters RemoveDir (No preselected)"
     );
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Right),
-    );
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Enter),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Right));
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
         app.permission_input,
         PermissionInput::None,
@@ -618,11 +602,8 @@ fn test_permission_workspace_remove_flow() {
     );
     // Esc path: 'd' then Esc cancels without shipping.
     app.dirs_cache = vec!["/tmp/extra".into()];
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Char('d')),
-    );
-    crate::keys::handle_working(&mut app, key_press(ratatui::crossterm::event::KeyCode::Esc));
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Esc));
     assert_eq!(
         app.permission_input,
         PermissionInput::None,
@@ -642,20 +623,11 @@ fn test_permission_add_bad_effect() {
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
     app.pane = Pane::Permission;
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Char('a')),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('a')));
     for c in "bash bodge".chars() {
-        crate::keys::handle_working(
-            &mut app,
-            key_press(ratatui::crossterm::event::KeyCode::Char(c)),
-        );
+        crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
     }
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Enter),
-    );
+    crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(app.permission_input, PermissionInput::None);
     let out = last_system(&app);
     assert!(out.contains("unknown effect"), "error surfaced: {out}");
