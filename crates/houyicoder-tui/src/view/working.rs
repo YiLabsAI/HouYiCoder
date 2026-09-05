@@ -78,10 +78,10 @@ fn draw_working(f: &mut Frame, app: &App) {
     };
     let total_h = f.area().height;
     // Layout top-to-bottom: transcript (fills the remainder), an optional
-    // palette/search cell, the input box, an optional queued-input strip
-    // (bounded, only while items are pending — moved out of the transcript
-    // so a long queue never eats the interaction view), and the dim status
-    // row at the bottom.
+    // palette/search cell, the queued-input strip (bounded, only while items
+    // are pending — sits above the input box so it reads as context for what
+    // the user is about to type, not as a footer afterthought), the input
+    // box, and the dim status row at the bottom.
     // Both pinned strips draw from one budget, in priority order, so their
     // sum cannot starve the transcript.
     let queue_want = if app.queue_view_open {
@@ -259,14 +259,14 @@ fn build_working_layout(app: &App, input_h: u16, queue_h: u16, fleet_h: u16) -> 
     } else {
         None
     };
-    constraints.push(Constraint::Length(input_h));
-    let input_idx = constraints.len() - 1;
     let queue = if queue_h > 0 {
         constraints.push(Constraint::Length(queue_h));
         Some(constraints.len() - 1)
     } else {
         None
     };
+    constraints.push(Constraint::Length(input_h));
+    let input_idx = constraints.len() - 1;
     let status_h = if pane_hides_status(app) { 0 } else { 1 };
     constraints.push(Constraint::Length(status_h));
     let status_idx = constraints.len() - 1;

@@ -54,10 +54,11 @@ pub fn draw_queue_overlay(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
-/// Rows the ambient queued-input strip would like: two previews plus a
-/// "+N more" line. Zero when the queue is empty. What it actually gets comes
-/// from the shared footer budget, which weighs it against the other strips;
-/// with one row the strip draws its one-line summary.
+/// Rows the ambient queued-input strip would like, capped at two: the head
+/// item plus, on overflow, a "+N more" summary row. Zero when the queue is
+/// empty. What it actually gets comes from the shared footer budget, which
+/// weighs it against the other strips; with one row the strip draws its
+/// one-line summary.
 pub(super) fn strip_want(app: &App) -> u16 {
     let n = app
         .pending
@@ -67,10 +68,10 @@ pub(super) fn strip_want(app: &App) -> u16 {
     if n == 0 {
         return 0;
     }
-    std::cmp::min(n, 2) as u16 + u16::from(n > 2)
+    std::cmp::min(n, 2) as u16
 }
 
-/// Render the read-only ambient queued-input strip below the input box: the
+/// Render the read-only ambient queued-input strip above the input box: the
 /// most recent pending items as dim single-line previews plus a +N more
 /// overflow, or a one-line summary when the window is too small. Per-item
 /// edit/delete is the Ctrl+G overlay (not this strip).
@@ -90,10 +91,11 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
     // One row (small window OR budget-constrained): the summary form, EXCEPT
     // when there is exactly one item — a single preview fits one row and is
-    // more useful than +1 queued. More rows: up to two item previews, the
-    // first carrying the Ctrl+G manager hint (always on while the queue is
-    // non-empty, so a 1- or 2-item queue still surfaces the edit/delete entry),
-    // plus a +N more overflow line when it overflows.
+    // more useful than +1 queued. More rows: cap at two — with overflow,
+    // show one real item (the head, next to run) plus a "+N more" summary so
+    // the count stays visible without a third row. The first row always
+    // carries the Ctrl+G manager hint so a 1- or 2-item queue still surfaces
+    // the edit/delete entry.
     let one_row_summary = area.height <= 1 && items.len() > 1;
     if one_row_summary {
         lines.push(Line::from(Span::styled(
@@ -102,7 +104,9 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
         )));
     } else {
         let cap = if area.height <= 1 { 1 } else { 2 };
-        let shown = std::cmp::min(items.len(), cap);
+        // With overflow, drop to one real row so the "+N more" summary fits
+        // within the cap; the count conveys scale a second preview cannot.
+        let shown = if items.len() > cap { 1 } else { items.len() };
         for (i, item) in items.iter().take(shown).enumerate() {
             let hint = if i == 0 { " (Ctrl+G to manage)" } else { "" };
             lines.push(Line::from(Span::styled(

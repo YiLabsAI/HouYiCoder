@@ -233,7 +233,7 @@ fn test_command_echoes_user_turn() {
     );
 }
 
-/// Queued inputs render in the bounded footer strip below the input box (not
+/// Queued inputs render in the bounded footer strip above the input box (not
 /// as transcript tail rows), so a long queue never eats the interaction view.
 /// Regression guard for the strip going invisible (budget=0 or wrong mode).
 /// Regression: the input border + prompt glyph used to dim to DarkGray while
@@ -563,6 +563,55 @@ fn test_click_footer_recalls_item() {
     );
 }
 
+/// A click on the second item row (n=2, no overflow) recalls that item,
+/// exercising the shown=2 branch of the click handler — distinct from the
+/// n>2 path where row 1 is the "+N more" summary.
+#[test]
+fn test_click_second_row_recalls() {
+    let mut app = working();
+    app.pending.push(PendingItem::Message("first task".into()));
+    app.pending.push(PendingItem::Message("second task".into()));
+    render_buffer(&app, 100, 28);
+    let qrect = app.queue_rect.get();
+    assert!(qrect.height >= 2, "two-item queue gets two rows");
+    let click = mouse_at(qrect.x + 2, qrect.y + 1);
+    crate::app::handle_mouse(&mut app, click);
+    assert_eq!(
+        app.input.value(),
+        "second task",
+        "click on the second row recalls the second item"
+    );
+    assert_eq!(
+        app.pending,
+        vec![PendingItem::Message("first task".into())],
+        "recalled item removed, first stays"
+    );
+}
+
+/// The queue strip renders above the input box. Guards the layout move by
+/// scanning the rendered text: the ⏵ queue row must sit above the ❯ input
+/// prompt row.
+#[test]
+fn test_queue_row_above_input() {
+    let mut app = working();
+    app.pending.push(PendingItem::Message("one".into()));
+    app.pending.push(PendingItem::Message("two".into()));
+    let text = render_text(&app, 100, 28);
+    let mut q = None;
+    let mut p = None;
+    for (i, line) in text.lines().enumerate() {
+        if q.is_none() && line.contains('⏵') {
+            q = Some(i);
+        }
+        if p.is_none() && line.contains('❯') {
+            p = Some(i);
+        }
+    }
+    let q = q.expect("queue strip row rendered");
+    let p = p.expect("input prompt row rendered");
+    assert!(q < p, "queue row {} must sit above input row {}", q, p);
+}
+
 /// A click on the +N more row (or the one-line summary on small windows) opens
 /// the full overlay instead of recalling an item.
 #[test]
@@ -574,9 +623,9 @@ fn test_click_more_row_opens() {
     app.pending.push(PendingItem::Message("d".into()));
     render_buffer(&app, 100, 28);
     let qrect = app.queue_rect.get();
-    assert!(qrect.height >= 2, "strip has item rows + a +N row");
-    // The +N more row is the row after the two preview items.
-    let more_row = qrect.y + 2;
+    assert!(qrect.height >= 2, "strip has the head row + a +N row");
+    // The strip caps at two rows: the head item, then the +N more summary.
+    let more_row = qrect.y + 1;
     let click = mouse_at(qrect.x + 2, more_row);
     crate::app::handle_mouse(&mut app, click);
     assert!(app.queue_view_open, "click on +N row opens the overlay");

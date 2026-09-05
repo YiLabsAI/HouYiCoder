@@ -292,7 +292,14 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             // the one-line summary to open the full overlay.
             let qrect = app.queue_rect.get();
             if qrect.width > 0 && qrect.height > 0 && in_rect(qrect, m.column, m.row) {
-                let n = app.pending.len();
+                // Match draw_strip's filtered count: items with an empty
+                // display are not drawn, so the clickable row count + the
+                // overflow threshold must use the same filter.
+                let n = app
+                    .pending
+                    .iter()
+                    .filter(|s| !s.display().is_empty())
+                    .count();
                 if n == 0 {
                     return;
                 }
@@ -302,7 +309,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     app.queue_view_open = true;
                     return;
                 }
-                let shown = std::cmp::min(n, 2) as usize;
+                let shown = if n > 2 { 1 } else { std::cmp::min(n, 2) } as usize;
                 if row < shown {
                     let item = app.pending.remove(row);
                     app.input.set(item.display().to_string());
