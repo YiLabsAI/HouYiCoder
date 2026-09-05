@@ -177,17 +177,16 @@ impl Tool for SkillTool {
                     return Err(skill_error_to_tool_error(e));
                 }
             };
-            // Grant the sandbox entitlements the skill's frontmatter
-            // declares, merged with any user-granted mach services. The
-            // session fence is re-derived per exec, so the next bash command
-            // the model runs after this invocation carries the grant.
+            // Resolve entitlements from frontmatter + profile + grant store.
+            // The fence is re-derived per exec so the next bash carries it.
             if let Some(session) = self.sandbox.as_ref() {
-                let mach = self
-                    .skill_grants
-                    .as_ref()
-                    .map(|g| g.merged_services(&params.skill, &desc.allowed_mach_services))
-                    .unwrap_or_else(|| desc.allowed_mach_services.clone());
-                session.set_allow_app_launch(desc.allow_app_launch);
+                let (mach, allow_launch) = houyicoder_api::skill_grant::resolve_entitlements(
+                    self.skill_grants.as_deref(),
+                    &params.skill,
+                    &desc.allowed_mach_services,
+                    desc.allow_app_launch,
+                );
+                session.set_allow_app_launch(allow_launch);
                 session.set_extra_mach_services(&mach);
             }
             // Register the skill's frontmatter hooks into the session hook
