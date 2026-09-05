@@ -161,21 +161,14 @@ fn entitlement_detail(args: &str, parsed: Option<&Value>) -> Vec<Line<'static>> 
     let mut lines = vec![Line::from(format!(
         " Skill {skill} ({origin}) was blocked from"
     ))];
-    if let Some(services) = parsed.and_then(|v| v.get("services"))
-        && let Some(arr) = services.as_array()
-    {
-        for s in arr {
-            if let Some(name) = s.as_str() {
-                lines.push(Line::from(format!(" {name}")));
-            }
-        }
-    }
+    // Command before services: the command is what the user judges by, so
+    // it stays visible when the card's bounded area clips the lower lines.
     if let Some(cmd) = parsed.and_then(|v| v.get("command"))
         && let Some(cmd_str) = cmd.as_str()
         && !cmd_str.is_empty()
     {
         // Truncate long commands (temp paths are very long) so the
-        // service names above stay visible in the card's bounded area.
+        // service names below stay visible in the card's bounded area.
         // floor_char_boundary avoids splitting a multi-byte character
         // at the byte offset, which would panic on CJK/emoji commands.
         let max = 60;
@@ -186,6 +179,15 @@ fn entitlement_detail(args: &str, parsed: Option<&Value>) -> Vec<Line<'static>> 
             cmd_str.to_string()
         };
         lines.push(Line::from(format!(" Command: {display}")));
+    }
+    if let Some(services) = parsed.and_then(|v| v.get("services"))
+        && let Some(arr) = services.as_array()
+    {
+        for s in arr {
+            if let Some(name) = s.as_str() {
+                lines.push(Line::from(format!(" {name}")));
+            }
+        }
     }
     lines
 }

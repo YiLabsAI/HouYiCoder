@@ -122,8 +122,11 @@ fn test_entitlement_yes_grants() {
         s.output_plain()
     );
     assert!(
-        has_words(&s.output_plain(), "Skill test-grant was blocked from"),
-        "the card must name the invoking skill:\n{}",
+        has_words(
+            &s.output_plain(),
+            "Skill test-grant (agents) was blocked from"
+        ),
+        "the card must name the invoking skill and its origin:\n{}",
         s.output_plain()
     );
     assert!(

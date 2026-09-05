@@ -208,7 +208,9 @@ fn build_working_layout(app: &App, input_h: u16, queue_h: u16, fleet_h: u16) -> 
     };
     constraints.push(Constraint::Min(1));
     let transcript_idx = constraints.len() - 1;
-    let approval_h = if app.approval.is_some() { 13u16 } else { 0u16 };
+    // The entitlement card shows the triggering command plus the denied
+    // services, so it needs more body rows than a plain tool-approval card.
+    let approval_h = if app.approval.is_some() { 16u16 } else { 0u16 };
     let ask_h = if let Some(aq) = app.ask_question.as_ref() {
         aq.card_height()
     } else {
