@@ -681,8 +681,8 @@ impl SandboxSession for MacSeatbeltSession {
             .clear();
     }
 
-    fn set_allow_app_launch(&self, allow: bool) {
-        *self.allow_app_launch.lock().expect("allow app launch lock") |= allow;
+    fn grant_app_launch(&self) {
+        *self.allow_app_launch.lock().expect("allow app launch lock") = true;
     }
 
     fn clear_skill_grants(&self) {

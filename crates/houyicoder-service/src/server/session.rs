@@ -216,7 +216,7 @@ pub(crate) async fn resume_pending(
             if let Err(e) = server.runner.store().append(audit).await {
                 tracing::warn!("permission-decision audit append failed: {e}");
             }
-            if decision.approved && ask_perm.tool != "entitlement" {
+            if decision.approved && ask_perm.tool != houyicoder_api::skill_grant::ENTITLEMENT_TOOL {
                 // Route by reason, not tool name: re-decide reconstructs the
                 // Ask reason (same display-only reconstruction as
                 // handle_approval), then route_consent sends a path-bounds ask

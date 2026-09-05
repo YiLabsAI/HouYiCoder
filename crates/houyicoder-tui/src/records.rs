@@ -5,6 +5,12 @@
 
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 
+/// The synthetic tool name for an entitlement approval request. The TUI
+/// crate cannot depend on the API crate (dep-graph layering), so the
+/// token is duplicated here as a private constant. The two must stay in
+/// sync.
+pub(crate) const ENTITLEMENT_TOOL: &str = "entitlement";
+
 /// Drill-down rows under the /context grid: per-file memory and per-skill
 /// footprints. These drill-down rows list in two sections below the grid;
 /// the stub path carries canned entries so the layout is faithful before
@@ -608,7 +614,7 @@ impl Approval {
     /// inherently persistent — the grant store IS the always — so the
     /// card renders two options, not three.
     pub fn is_entitlement(&self) -> bool {
-        self.tool == "entitlement"
+        self.tool == ENTITLEMENT_TOOL
     }
 
     /// Whether the card renders the two-option (Yes / No) form: a

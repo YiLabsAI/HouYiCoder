@@ -37,47 +37,16 @@ pub fn authorizable_services(discovered: Vec<String>) -> Vec<String> {
 /// time window, then strip the deny-list. Returns authorizable
 /// candidates the caller may offer to authorize. On non-macOS, empty.
 ///
-/// The scan is window-scoped, not pid-scoped: it surfaces every
-/// mach-lookup denial in the window, including denials from unrelated
-/// sandboxed processes on the host. When the caller holds the denied
-/// process pid, prefer discover_for_pid. When it does not (the seatbelt
-/// case: the pid in the log is a grandchild the session never tracked),
-/// a short window bounds the cross-process noise risk.
+/// Window-scoped: surfaces every mach-lookup denial in the window,
+/// including from unrelated sandboxed processes — a short window bounds
+/// that noise. The log attributes denials to sandboxd, not the denied
+/// process, so pid correlation is unreliable.
 ///
-/// Blocks: runs a synchronous subprocess (log show, ~0.7s for a 1s
-/// window). Call from spawn_blocking, never on a tokio worker.
+/// Blocks on a synchronous subprocess (~0.7s); call from
+/// spawn_blocking, never on a tokio worker.
 pub fn discover_authorizable(window_secs: u64) -> Vec<String> {
     let text = read_deny_log(window_secs);
     authorizable_services(parse_denied_services(&text))
-}
-
-/// Read denied mach-lookup services for a specific process id within a
-/// time window, then strip the deny-list. The pid is parsed from the
-/// message text (the trailing (PID) sandboxd appends), not from the
-/// log predicate — processID in the unified log is sandboxd itself,
-/// not the denied process. Pid-scoped so denials from unrelated
-/// sandboxed processes on the host do not surface. On non-macOS, empty.
-///
-/// Blocks: runs a synchronous subprocess (log show). Call from
-/// spawn_blocking, never on a tokio worker.
-pub fn discover_for_pid(pid: u32, window_secs: u64) -> Vec<String> {
-    let text = read_deny_log(window_secs);
-    authorizable_services(filter_by_pid(&text, pid))
-}
-
-/// Parse log text and keep only entries whose trailing (PID) matches.
-/// Pure so the pid-filter logic is testable without running log show.
-fn filter_by_pid(text: &str, pid: u32) -> Vec<String> {
-    let mut services = Vec::new();
-    for line in text.lines() {
-        if let Some((name, Some(line_pid))) = extract_mach_service_and_pid(line)
-            && line_pid == pid
-            && !services.contains(&name)
-        {
-            services.push(name);
-        }
-    }
-    services
 }
 
 #[cfg(target_os = "macos")]
@@ -167,10 +136,13 @@ mod tests {
 
     #[test]
     fn test_authorizable_strips_deny() {
+        // Real log names are suffixed: pasteboard.1, cfprefsd.daemon. The
+        // filter must drop the suffixed variants, not just the bare roots.
         let discovered = vec![
-            "com.apple.pasteboard".to_string(),
+            "com.apple.pasteboard.1".to_string(),
             "com.citrolabs.ego.lite.ego-browser".to_string(),
-            "com.apple.cfprefsd".to_string(),
+            "com.apple.cfprefsd.daemon".to_string(),
+            "com.apple.tccd.system".to_string(),
         ];
         let result = authorizable_services(discovered);
         assert_eq!(
@@ -231,35 +203,5 @@ mod tests {
         let line = "deny(1) mach-lookup com.apple.system.logger(abc)";
         let result = extract_mach_service_and_pid(line);
         assert_eq!(result, Some(("com.apple.system.logger".to_string(), None)));
-    }
-
-    #[test]
-    fn test_discover_for_pid_zero() {
-        // pid 0 never matches — no-suffix lines return None, not Some(0).
-        assert!(discover_for_pid(0, 0).is_empty());
-    }
-
-    #[test]
-    fn test_filter_pid_no_suffix() {
-        // A line with no pid suffix must not match pid 0.
-        let log = "deny(1) mach-lookup com.apple.system.logger";
-        assert!(filter_by_pid(log, 0).is_empty());
-    }
-
-    #[test]
-    fn test_filter_pid_match() {
-        let log = "deny(1) mach-lookup com.citrolabs.ego.lite.ego-browser(456)\n\
-                   deny(1) mach-lookup com.apple.system.logger(789)";
-        let result = filter_by_pid(log, 456);
-        assert_eq!(
-            result,
-            vec!["com.citrolabs.ego.lite.ego-browser".to_string()]
-        );
-    }
-
-    #[test]
-    fn test_filter_pid_miss() {
-        let log = "deny(1) mach-lookup com.apple.system.logger(789)";
-        assert!(filter_by_pid(log, 456).is_empty());
     }
 }

@@ -31,7 +31,7 @@ impl Server {
         approval: &houyicoder_core::agent::ApprovalRequest,
         delegation: Option<houyicoder_protocol::frontend::run::DelegationSource>,
     ) -> Result<houyicoder_core::agent::ApprovalDecision, WireError> {
-        let is_entitlement = approval.tool_name == "entitlement";
+        let is_entitlement = approval.tool_name == houyicoder_api::skill_grant::ENTITLEMENT_TOOL;
         let mut reason = if is_entitlement {
             // The entitlement ask is not a gate decision — reconstructing a
             // ladder reason for a synthetic tool would mislead the card.

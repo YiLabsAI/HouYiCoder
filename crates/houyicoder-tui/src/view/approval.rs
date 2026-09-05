@@ -73,22 +73,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // args.
     let args_value = serde_json::from_str::<Value>(&a.args).ok();
     if a.is_entitlement() {
-        // Entitlement card: the skill that was blocked and each service the
-        // deny-log scan found, one per line, instead of the raw input JSON.
-        let mut lines = vec![Line::from(format!(
-            " Skill {} was blocked from",
-            entitlement_skill(&a.args).unwrap_or_default()
-        ))];
-        if let Some(services) = args_value.as_ref().and_then(|v| v.get("services"))
-            && let Some(arr) = services.as_array()
-        {
-            for s in arr {
-                if let Some(name) = s.as_str() {
-                    lines.push(Line::from(format!(" {name}")));
-                }
-            }
-        }
-        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), chunks[3]);
+        f.render_widget(
+            Paragraph::new(entitlement_detail(&a.args, args_value.as_ref()))
+                .wrap(Wrap { trim: false }),
+            chunks[3],
+        );
     } else {
         let diff_lines = args_value.as_ref().and_then(|v| diff_preview(&a.tool, v));
         match diff_lines {
@@ -156,6 +145,42 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 fn entitlement_skill(args: &str) -> Option<String> {
     let v: Value = serde_json::from_str(args).ok()?;
     v.get("skill").and_then(|s| s.as_str()).map(String::from)
+}
+
+/// Detail lines for the entitlement card: the skill that was blocked, the
+/// command that triggered the denial, and each service the deny-log scan
+/// found. The command is shown so the user can judge whether the request
+/// is legitimate — a service name alone does not tell the user what the
+/// skill was trying to do.
+fn entitlement_detail(args: &str, parsed: Option<&Value>) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(format!(
+        " Skill {} was blocked from",
+        entitlement_skill(args).unwrap_or_default()
+    ))];
+    if let Some(services) = parsed.and_then(|v| v.get("services"))
+        && let Some(arr) = services.as_array()
+    {
+        for s in arr {
+            if let Some(name) = s.as_str() {
+                lines.push(Line::from(format!(" {name}")));
+            }
+        }
+    }
+    if let Some(cmd) = parsed.and_then(|v| v.get("command"))
+        && let Some(cmd_str) = cmd.as_str()
+        && !cmd_str.is_empty()
+    {
+        // Truncate long commands (temp paths are very long) so the
+        // service names above stay visible in the card's bounded area.
+        let max = 60;
+        let display = if cmd_str.len() > max {
+            format!("…{}", &cmd_str[cmd_str.len() - max..])
+        } else {
+            cmd_str.to_string()
+        };
+        lines.push(Line::from(format!(" Command: {display}")));
+    }
+    lines
 }
 
 /// Render the verdict options into the three option slots. Display order is
@@ -322,6 +347,7 @@ fn diff_preview(tool: &str, input: &Value) -> Option<Vec<Line<'static>>> {
 mod tests {
     use super::{cap_first, diff_preview};
     use crate::composition;
+    use crate::records::ENTITLEMENT_TOOL;
     use crate::test_support::render_text;
     use serde_json::json;
 
@@ -611,7 +637,7 @@ mod tests {
         let mut app = composition::app();
         app.screen = crate::state::Screen::Working;
         app.approval = Some(crate::state::Approval {
-            tool: "entitlement".into(),
+            tool: ENTITLEMENT_TOOL.into(),
             args: r#"{"skill":"ego-browser","services":["com.citrolabs.ego.lite.ego-browser"]}"#
                 .into(),
             reason: "deny-log discovery".into(),

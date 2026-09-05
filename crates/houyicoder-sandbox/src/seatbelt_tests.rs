@@ -884,7 +884,7 @@ fn test_app_launch_default_off() {
 fn test_clear_skill_grants_resets() {
     let root = mkdtemp("sb-app2").unwrap();
     let s = MacSeatbeltSession::new_in_cwd(&root).unwrap();
-    s.set_allow_app_launch(true);
+    s.grant_app_launch();
     let p = s.current_profile();
     assert!(p.contains("(allow lsopen)"), "lsopen granted: {p}");
     assert!(
@@ -920,10 +920,9 @@ fn test_mach_services_union_dedup() {
 fn test_app_launch_or_accumulate() {
     let root = mkdtemp("sb-or").unwrap();
     let s = MacSeatbeltSession::new_in_cwd(&root).unwrap();
-    s.set_allow_app_launch(true);
-    s.set_allow_app_launch(false);
+    s.grant_app_launch();
     let p = s.current_profile();
-    assert!(p.contains("(allow lsopen)"), "OR-accumulate: {p}");
+    assert!(p.contains("(allow lsopen)"), "app launch granted: {p}");
     s.clear_skill_grants();
     let p2 = s.current_profile();
     assert!(!p2.contains("(allow lsopen)"), "reset after clear: {p2}");

@@ -16,6 +16,8 @@
 //! ports live types.
 
 use houyicoder_protocol::envelope::RequestId;
+
+use crate::records::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
 
 use crate::pending_queue::PendingItem;
@@ -268,7 +270,7 @@ impl App {
         // (consent cannot override it).
         let args = ask.input.to_string();
         let mut selected = self.initial_cursor(&tool);
-        let (reason, source, containment_note) = if tool == "entitlement" {
+        let (reason, source, containment_note) = if tool == ENTITLEMENT_TOOL {
             // The entitlement ask carries no gate reason — the deny-log
             // scan is why the card is up.
             ("denied during the last command".to_string(), None, None)
@@ -278,7 +280,7 @@ impl App {
                 None => ("agent wants to run this tool".to_string(), None, None),
             }
         };
-        let two_option = tool == "entitlement"
+        let two_option = tool == ENTITLEMENT_TOOL
             || matches!(
                 source,
                 Some(houyicoder_protocol::frontend::permission::AskSource::SystemSafety)

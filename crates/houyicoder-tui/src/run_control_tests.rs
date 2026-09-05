@@ -432,7 +432,7 @@ fn test_entitlement_ask_two_option() {
     let mut app = composition::app();
     let ask = ApprovalRequest {
         call_id: "entitlement-ego-browser".into(),
-        tool_name: "entitlement".into(),
+        tool_name: crate::records::ENTITLEMENT_TOOL.into(),
         input: serde_json::json!({
             "skill": "ego-browser",
             "services": ["com.citrolabs.ego.lite.ego-browser"],
@@ -446,7 +446,7 @@ fn test_entitlement_ask_two_option() {
         ask,
     });
     let a = app.approval.as_ref().expect("approval raised");
-    assert_eq!(a.tool, "entitlement");
+    assert_eq!(a.tool, crate::records::ENTITLEMENT_TOOL);
     assert!(
         a.reason.contains("denied during the last command"),
         "entitlement reason must name the discovery, got: {}",

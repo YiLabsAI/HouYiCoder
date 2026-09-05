@@ -14,6 +14,9 @@ use super::runner_config::{
 };
 use super::*;
 use houyicoder_api::provider::ModelProvider;
+use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32};
+use std::sync::{Arc, Mutex, RwLock};
 
 impl Runner {
     /// Construct a runner that shares an already-Arced store. The caller keeps
@@ -26,8 +29,8 @@ impl Runner {
         config: RunnerConfig,
     ) -> Self {
         let observability = obs_wire::new_log(provider.capabilities().context_window);
-        let active_model = Arc::new(std::sync::RwLock::new(config.model.clone()));
-        let active_effort = Arc::new(std::sync::RwLock::new(None));
+        let active_model = Arc::new(RwLock::new(config.model.clone()));
+        let active_effort = Arc::new(RwLock::new(None));
         let runner = Self {
             store,
             provider,
@@ -38,15 +41,15 @@ impl Runner {
             effort_resolver: None,
             context_builder: ContextBuilder::new(),
             live: None,
-            inbox: std::sync::Mutex::new(None),
-            startup_warnings: std::sync::Mutex::new(Vec::new()),
+            inbox: Mutex::new(None),
+            startup_warnings: Mutex::new(Vec::new()),
             breaker: None,
-            usage: Arc::new(std::sync::Mutex::new(UsageAccumulator::default())),
+            usage: Arc::new(Mutex::new(UsageAccumulator::default())),
             observability,
-            cancel: std::sync::Mutex::new(None),
-            aborted: std::sync::atomic::AtomicBool::new(false),
-            paused: std::sync::atomic::AtomicBool::new(false),
-            turn_cancel: std::sync::Mutex::new(None),
+            cancel: Mutex::new(None),
+            aborted: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+            turn_cancel: Mutex::new(None),
             verify_gate: None,
             undo_stack: None,
             snapshot_store: None,
@@ -57,31 +60,31 @@ impl Runner {
             skill_registry: None,
             sandbox_session: None,
             skill_grants: None,
-            active_skill: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            active_skill: Arc::new(Mutex::new(None)),
             hooks: None,
             registrar: None,
             conditional: None,
             skill_reloader: None,
             cache_policy: Arc::new(houyicoder_api::cache_policy::AutoCachePolicy),
             cost_model: Arc::new(houyicoder_api::cost_model::AnthropicCostModel),
-            recall_meter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            recall_meter: Arc::new(AtomicU32::new(0)),
             workspace_probe: None,
-            compact_suppress: std::sync::atomic::AtomicU8::new(0),
-            compact_consecutive_failures: std::sync::atomic::AtomicU32::new(0),
-            cache_prev_read: std::sync::Mutex::new(None),
-            cache_compact_flag: std::sync::atomic::AtomicBool::new(false),
-            cache_model_switch_flag: std::sync::atomic::AtomicBool::new(false),
-            cached_prefix: std::sync::Arc::new(cache_liveness::CachedPrefixState::new()),
+            compact_suppress: AtomicU8::new(0),
+            compact_consecutive_failures: AtomicU32::new(0),
+            cache_prev_read: Mutex::new(None),
+            cache_compact_flag: AtomicBool::new(false),
+            cache_model_switch_flag: AtomicBool::new(false),
+            cached_prefix: Arc::new(cache_liveness::CachedPrefixState::new()),
             reducer: None,
             extractor: None,
             dream: None,
-            auto_memory: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            auto_dream: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            queued_input: std::sync::Mutex::new(std::collections::VecDeque::new()),
-            queued_notifications: std::sync::Mutex::new(std::collections::VecDeque::new()),
-            consumed_input: std::sync::Mutex::new(Vec::new()),
-            redundancy: std::sync::Mutex::new(redundancy::RedundancyTracker::new()),
-            denied_agents: Arc::new(std::collections::HashSet::new()),
+            auto_memory: Arc::new(AtomicBool::new(true)),
+            auto_dream: Arc::new(AtomicBool::new(true)),
+            queued_input: Mutex::new(VecDeque::new()),
+            queued_notifications: Mutex::new(VecDeque::new()),
+            consumed_input: Mutex::new(Vec::new()),
+            redundancy: Mutex::new(redundancy::RedundancyTracker::new()),
+            denied_agents: Arc::new(HashSet::new()),
             spawn_handle: None,
             agent_identity: houyicoder_api::spawn::AgentIdentity::top_level(),
         };
@@ -105,6 +108,12 @@ impl Runner {
         if let Some(session) = self.sandbox_session.as_ref() {
             session.clear_skill_grants();
         }
+        // Clear the active-skill attribution at the same boundary so a
+        // later unrelated bash failure in this run is not misattributed to
+        // the previous run's skill. Without this, the deny-log scan would
+        // surface a denial under the prior skill's name and write a
+        // persistent grant for a skill that was not even invoked this run.
+        *self.active_skill.lock().expect("active_skill lock") = None;
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
         // Deterministic fact extraction: scan the user input for explicit

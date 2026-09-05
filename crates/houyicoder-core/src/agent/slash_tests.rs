@@ -57,8 +57,9 @@ use houyicoder_api::trust::TrustState;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::env;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::agent::SkillHookRegistrar;
 use crate::agent::{HookEvent, HookPayload, HookRegistry, ToolResult};
@@ -109,6 +110,19 @@ impl SkillRegistry for SlashStubRegistry {
             _ => Err(SkillError::NotFound(name.into())),
         }
     }
+    fn list_with_origin(&self) -> Vec<houyicoder_api::skill::SkillSnapshot> {
+        ["commit", "secret", "launcher"]
+            .iter()
+            .filter_map(|name| {
+                self.find(name)
+                    .map(|descriptor| houyicoder_api::skill::SkillSnapshot {
+                        descriptor,
+                        origin: "managed".to_string(),
+                        usage: houyicoder_api::skill::SkillUsage::default(),
+                    })
+            })
+            .collect()
+    }
 }
 
 fn runner_with_slash() -> Runner {
@@ -143,10 +157,9 @@ async fn test_resolve_known_skill() {
         } => {
             assert_eq!(name, "commit", "name carried: {name}");
             assert!(body.contains("commit body: fix typo"), "{body}");
-            // The stub leaves list_with_origin at the default (empty),
-            // so the origin scan finds nothing and defaults to
-            // untrusted=true (fail-closed for an unknown source).
-            assert!(untrusted, "unknown origin defaults to untrusted");
+            // The stub reports a managed origin for its skills, so the
+            // body is trusted (served as instruction, not framed as data).
+            assert!(!untrusted, "managed origin is trusted");
         }
         other => panic!("expected Prepared, got {other:?}"),
     }
@@ -460,7 +473,7 @@ fn runner_with_paths(activator: Arc<dyn crate::agent::ConditionalSkillActivator>
 #[tokio::test]
 async fn test_slash_conditional_refuses() {
     let reg: Arc<dyn houyicoder_api::skill::SkillRegistry> = Arc::new(PathsSlashRegistry);
-    let cwd = std::env::temp_dir().join("houyi-slash-refuse");
+    let cwd = env::temp_dir().join("houyi-slash-refuse");
     let activator = Arc::new(crate::agent::ConditionalActivation::new(reg, cwd));
     let runner = runner_with_paths(activator);
     let outcome = runner
@@ -478,7 +491,7 @@ async fn test_slash_conditional_refuses() {
 #[tokio::test]
 async fn test_slash_conditional_passes() {
     let reg: Arc<dyn houyicoder_api::skill::SkillRegistry> = Arc::new(PathsSlashRegistry);
-    let cwd = std::env::temp_dir().join("houyi-slash-pass");
+    let cwd = env::temp_dir().join("houyi-slash-pass");
     let activator = Arc::new(crate::agent::ConditionalActivation::new(reg, cwd));
     // Activate via a matching file, then slash reaches the body.
     activator.activate_for_paths(&["src/foo.rs".to_string()]);
@@ -655,8 +668,8 @@ async fn test_session_context_injection() {
 /// A sandbox session that records the entitlement grants so the slash
 /// path's grant wiring can be asserted.
 struct SlashRecordingSession {
-    app_launch: std::sync::Mutex<Option<bool>>,
-    mach: std::sync::Mutex<Vec<String>>,
+    app_launch: Mutex<Option<bool>>,
+    mach: Mutex<Vec<String>>,
 }
 impl houyicoder_api::sandbox::SandboxSession for SlashRecordingSession {
     fn exec_with_config(
@@ -683,11 +696,11 @@ impl houyicoder_api::sandbox::SandboxSession for SlashRecordingSession {
     ) -> houyicoder_async::PFut<'_, Result<(), houyicoder_context::SandboxError>> {
         Box::pin(async { Ok(()) })
     }
-    fn workspace_root(&self) -> Arc<std::path::Path> {
-        Arc::from(std::path::PathBuf::from("/"))
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(PathBuf::from("/"))
     }
-    fn set_allow_app_launch(&self, allow: bool) {
-        *self.app_launch.lock().unwrap() = Some(allow);
+    fn grant_app_launch(&self) {
+        *self.app_launch.lock().unwrap() = Some(true);
     }
     fn set_extra_mach_services(&self, services: &[String]) {
         let mut m = self.mach.lock().unwrap();
@@ -702,8 +715,8 @@ impl houyicoder_api::sandbox::SandboxSession for SlashRecordingSession {
 #[tokio::test]
 async fn test_slash_grants() {
     let session = Arc::new(SlashRecordingSession {
-        app_launch: std::sync::Mutex::new(None),
-        mach: std::sync::Mutex::new(Vec::new()),
+        app_launch: Mutex::new(None),
+        mach: Mutex::new(Vec::new()),
     });
     let runner = runner_with_slash().with_sandbox_session(Some(session.clone()));
     let outcome = runner

@@ -8,23 +8,16 @@ use houyicoder_context::{SessionId, TurnEventKind};
 
 use super::synthetic::{SyntheticToolOutcome, tool_error_json};
 use super::{ApprovalDecision, ApprovalRequest, RunError, Runner};
+use std::collections::HashSet;
 
 impl Runner {
-    /// Apply a caller's approval decisions to the pending tool calls. Approved
-    /// calls execute; rejected calls get a rejection-note result. Unknown tools
-    /// (registry miss on resume) get an error result. Pending approvals WITHOUT
-    /// a matching decision are LEFT pending — no ToolResult is appended for
-    /// them, so they stay resolvable on a later resume() call. This enables
-    /// one-at-a-time approval (the caller passes a single decision per resume,
-    /// gets re-interrupted for the rest). Returns the still-pending approval
-    /// requests (those with no matching decision) so the caller can re-raise
-    /// them. A full decision set returns an empty vec and the loop continues.
+    /// Apply approval decisions to pending tool calls. Approved calls
+    /// execute; rejected and unknown-tool calls get error results.
+    /// Undecided approvals stay pending for a later resume. Returns the
+    /// still-pending requests so the caller can re-raise them.
     ///
-    /// Precondition: call_id is unique across the session (minted at the
-    /// provider boundary by unique_id_gen in openai_compat.rs). Decisions
-    /// route by find on call_id; a duplicate id could attach an approval
-    /// onto the wrong call — a safety, not just a display, failure. The mint
-    /// makes it unreachable; this function does not re-defend.
+    /// Precondition: call_id is unique per session (minted at the
+    /// provider boundary). This function does not re-defend that.
     pub(crate) async fn apply_decisions(
         &self,
         session: SessionId,
@@ -42,7 +35,7 @@ impl Runner {
                 // Entitlement approval: write services to the grant store
                 // instead of executing a tool. The services were discovered
                 // by the deny-log scan after a failed bash command.
-                if req.tool_name == "entitlement" {
+                if req.tool_name == houyicoder_api::skill_grant::ENTITLEMENT_TOOL {
                     let output = self.apply_entitlement_grant(&req.input);
                     self.append_tool_result(
                         session,
@@ -143,7 +136,7 @@ impl Runner {
         session: SessionId,
     ) -> Result<Vec<ApprovalRequest>, RunError> {
         let events = self.store.replay(session).await?;
-        let mut answered = std::collections::HashSet::new();
+        let mut answered = HashSet::new();
         for e in &events {
             if let TurnEventKind::ToolResult { call_id, .. } = &e.kind {
                 answered.insert(call_id.clone());
@@ -189,14 +182,7 @@ fn apply_entitlement(
         })
         .unwrap_or_default();
     if let Some(store) = store {
-        let existing = store.grant_for(skill);
-        let mut merged = existing;
-        for s in &services {
-            if !merged.contains(s) {
-                merged.push(s.clone());
-            }
-        }
-        store.set_grant(skill, merged);
+        store.add_grants(skill, services.clone());
         serde_json::json!({
             "granted": services,
             "skill": skill,
@@ -210,21 +196,29 @@ fn apply_entitlement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::fs;
+    use std::process;
 
     #[test]
     fn test_entitlement_grants_services() {
-        let store = houyicoder_api::skill_grant::SkillGrantStore::new();
+        let dir = env::temp_dir().join(format!("houyi-entitlement-grant-{}", process::id()));
+        let _ = fs::remove_dir_all(&dir).is_ok();
+        fs::create_dir_all(&dir).expect("mkdir grant test");
+        let path = dir.join("skill-grants.json");
+        let store = houyicoder_api::skill_grant::SkillGrantStore::with_path(path);
         let input = serde_json::json!({
             "skill": "ego-browser",
-            "services": ["com.citrolabs.ego.lite.ego-browser"],
+            "services": ["com.houyi.test.entitlement"],
         });
         let result = apply_entitlement(&input, Some(&store));
-        assert_eq!(result["granted"][0], "com.citrolabs.ego.lite.ego-browser");
+        assert_eq!(result["granted"][0], "com.houyi.test.entitlement");
         assert!(
             store
                 .grant_for("ego-browser")
-                .contains(&"com.citrolabs.ego.lite.ego-browser".to_string())
+                .contains(&"com.houyi.test.entitlement".to_string())
         );
+        let _ = fs::remove_dir_all(&dir).is_ok();
     }
 
     #[test]
@@ -236,7 +230,11 @@ mod tests {
 
     #[test]
     fn test_entitlement_empty_skill_refused() {
-        let store = houyicoder_api::skill_grant::SkillGrantStore::new();
+        let dir = env::temp_dir().join(format!("houyi-entitlement-empty-{}", process::id()));
+        let _ = fs::remove_dir_all(&dir).is_ok();
+        fs::create_dir_all(&dir).expect("mkdir empty-skill test");
+        let path = dir.join("skill-grants.json");
+        let store = houyicoder_api::skill_grant::SkillGrantStore::with_path(path);
         let input = serde_json::json!({ "skill": "", "services": ["a.b.c"] });
         let result = apply_entitlement(&input, Some(&store));
         assert_eq!(result["error"], "no skill named");
@@ -244,5 +242,6 @@ mod tests {
             store.grant_for("").is_empty(),
             "empty-name grant must not be written"
         );
+        let _ = fs::remove_dir_all(&dir).is_ok();
     }
 }

@@ -116,15 +116,21 @@ impl Runner {
             Ok(body) => {
                 registry.record_invocation(&name, false);
                 // Resolve entitlements from frontmatter + profile + grant
-                // store (same as the Skill tool path).
+                // store (same as the Skill tool path). A project or mcp
+                // source is not trusted for entitlements — frontmatter and
+                // the compiled profile are skipped.
+                let ent_untrusted = super::skill_body::entitlement_untrusted(&**registry, &name);
                 if let Some(session) = self.sandbox_session.as_ref() {
                     let (mach, allow_launch) = houyicoder_api::skill_grant::resolve_entitlements(
                         self.skill_grants.as_deref(),
                         &name,
                         &desc.allowed_mach_services,
                         desc.allow_app_launch,
+                        !ent_untrusted,
                     );
-                    session.set_allow_app_launch(allow_launch);
+                    if allow_launch {
+                        session.grant_app_launch();
+                    }
                     session.set_extra_mach_services(&mach);
                 }
                 self.set_active_skill(&name);

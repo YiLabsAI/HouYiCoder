@@ -7,6 +7,7 @@
 
 use houyicoder_api::skill::SkillRegistry;
 use houyicoder_context::{SessionId, TurnEventKind};
+use std::collections::HashSet;
 
 use super::append::new_event;
 use super::{RunError, Runner, projection};
@@ -63,6 +64,20 @@ pub(crate) fn origin_untrusted(registry: &dyn SkillRegistry, name: &str) -> bool
         .unwrap_or(true)
 }
 
+/// Whether a skill may install sandbox entitlements directly from
+/// frontmatter or the compiled profile. User-installed sources (agents,
+/// claude_eco, local) are trusted; project and mcp are not — those go
+/// through deny-log discovery + explicit approval. Fails closed when
+/// the skill is absent from the origin snapshot.
+pub(crate) fn entitlement_untrusted(registry: &dyn SkillRegistry, name: &str) -> bool {
+    registry
+        .list_with_origin()
+        .iter()
+        .find(|s| s.descriptor.name == name)
+        .map(|s| !houyicoder_api::skill_grant::is_entitlement_trusted_origin(&s.origin))
+        .unwrap_or(true)
+}
+
 /// Neutralize the framing wrapper's tag tokens inside body content so a
 /// crafted body cannot forge an early close (or a nested open) of the
 /// untrusted block.
@@ -115,7 +130,7 @@ impl Runner {
         // Most-recent body per skill (dedup by name) within the per-skill +
         // per-agent budget. Reverse-collect so the most recent land first;
         // reverse back to chronological for append order.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut seen: HashSet<String> = HashSet::new();
         let mut revived: Vec<(&houyicoder_context::TurnEvent, String)> = Vec::new();
         let mut total: usize = 0;
         for ev in view.events.iter().rev() {
