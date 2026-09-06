@@ -142,14 +142,14 @@ fn test_entitlement_yes_grants() {
     assert!(
         has_words(
             &s.output_plain(),
-            "Do you want to authorize this service for test-grant?"
+            "Always authorize this service for test-grant?"
         ),
         "the card must ask the authorize question:\n{}",
         s.output_plain()
     );
     assert!(
-        s.output_plain().contains("1. Yes") && s.output_plain().contains("2. No"),
-        "the card must be two-option:\n{}",
+        s.output_plain().contains("1. Always allow") && s.output_plain().contains("2. No"),
+        "the card must expose persistent allow and decline options:\n{}",
         s.output_plain()
     );
     assert!(

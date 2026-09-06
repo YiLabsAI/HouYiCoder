@@ -83,6 +83,7 @@ const MANDATORY_DENY_WRITE_ONLY_FILES: &[&str] =
 const MANDATORY_DENY_AUTHORITY_FILES: &[&str] = &[
     ".houyicoder/permissions.json",
     ".houyicoder/settings.json",
+    ".houyicoder/skill-grants.json",
     "houyicoder-permissions/permissions.json",
 ];
 
@@ -291,6 +292,7 @@ mod tests {
         let p = mandatory_deny("/Users/alice", "tag-x");
         assert!(p.contains(r".*/\.houyicoder/permissions\.json$"));
         assert!(p.contains(r".*/\.houyicoder/settings\.json$"));
+        assert!(p.contains(r".*/\.houyicoder/skill-grants\.json$"));
         assert!(p.contains(r".*/houyicoder-permissions/permissions\.json$"));
         assert!(p.contains("(subpath \"/Users/alice/.houyicoder/permissions.json\")"));
         let line = p

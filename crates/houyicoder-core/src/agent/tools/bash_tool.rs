@@ -5,7 +5,7 @@
 //! that file stays under the file-size gate.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_async::PFut;
@@ -48,8 +48,9 @@ fn looks_like_sandbox_denial(stderr: &str) -> bool {
 /// commands snapshot the workspace before executing so /undo can revert.
 pub struct BashTool {
     session: Arc<dyn SandboxSession>,
-    undo_stack: Option<Arc<std::sync::Mutex<crate::snapshot::UndoStack>>>,
+    undo_stack: Option<Arc<Mutex<crate::snapshot::UndoStack>>>,
     snapshot_store: Option<Arc<crate::snapshot::SnapshotStore>>,
+    active_skill: Option<Arc<Mutex<Option<String>>>>,
 }
 
 impl BashTool {
@@ -58,20 +59,29 @@ impl BashTool {
             session,
             undo_stack: None,
             snapshot_store: None,
+            active_skill: None,
         }
     }
 
     /// Wire the undo hook: snapshot before destructive exec, push to undo stack.
     pub fn with_undo(
         session: Arc<dyn SandboxSession>,
-        undo_stack: Arc<std::sync::Mutex<crate::snapshot::UndoStack>>,
+        undo_stack: Arc<Mutex<crate::snapshot::UndoStack>>,
         snapshot_store: Arc<crate::snapshot::SnapshotStore>,
     ) -> Self {
         Self {
             session,
             undo_stack: Some(undo_stack),
             snapshot_store: Some(snapshot_store),
+            active_skill: None,
         }
+    }
+
+    /// Wire the shared active-skill cell. Deny-log discovery is skipped
+    /// when no skill is active because no approval can consume the result.
+    pub fn with_active_skill(mut self, cell: Option<Arc<Mutex<Option<String>>>>) -> Self {
+        self.active_skill = cell;
+        self
     }
 }
 
@@ -105,6 +115,7 @@ impl Tool for BashTool {
         let session = self.session.clone();
         let undo_stack = self.undo_stack.clone();
         let snapshot_store = self.snapshot_store.clone();
+        let active_skill = self.active_skill.clone();
         // Clone the progress sink so a spawned ticker can report elapsed
         // seconds to the host while exec runs. None for non-interactive runs
         // (the ticker then no-ops). The sink ticks every ~1s; the host
@@ -186,15 +197,24 @@ impl Tool for BashTool {
                 Some(n) => format!("{n}\n{stderr}"),
                 None => stderr,
             };
-            let authorizable =
-                discover_authorizable_if_failed(success, &stderr, self.session.clone()).await;
-            Ok(json!({
+            let has_active_skill = active_skill
+                .as_ref()
+                .is_some_and(|cell| cell.lock().expect("active_skill lock").as_ref().is_some());
+            let authorizable = if has_active_skill {
+                discover_authorizable_if_failed(success, &stderr, self.session.clone()).await
+            } else {
+                Vec::new()
+            };
+            let mut output = json!({
                 "stdout": stdout,
                 "stderr": stderr,
                 "exit_code": exit_code,
                 "success": success,
-                "authorizable_services": authorizable,
-            }))
+            });
+            if !authorizable.is_empty() {
+                output["authorizable_services"] = json!(authorizable);
+            }
+            Ok(output)
         })
     }
     fn is_destructive(&self) -> bool {
@@ -331,28 +351,54 @@ mod bash_bound_tests {
         assert_eq!(tail_chars(&big, 100).chars().next(), Some('a'));
     }
 
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 
-    struct DiscoverStub(Vec<String>);
+    struct DiscoverStub {
+        services: Vec<String>,
+        scans: Arc<AtomicUsize>,
+    }
+
+    impl DiscoverStub {
+        fn new(services: Vec<String>) -> (Self, Arc<AtomicUsize>) {
+            let scans = Arc::new(AtomicUsize::new(0));
+            (
+                Self {
+                    services,
+                    scans: Arc::clone(&scans),
+                },
+                scans,
+            )
+        }
+    }
+
     impl SandboxSession for DiscoverStub {
         fn exec_with_config(
             &self,
             _c: &str,
             _cfg: ExecConfig,
         ) -> PFut<'_, Result<ExecResult, SandboxError>> {
-            unreachable!()
+            Box::pin(async {
+                Ok(ExecResult {
+                    stdout: String::new(),
+                    stderr: "Operation not permitted".to_string(),
+                    exit_code: Some(1),
+                })
+            })
         }
         fn workspace_root(&self) -> Arc<Path> {
             Arc::from(std::env::temp_dir())
         }
         fn discover_authorizable(&self) -> Vec<String> {
-            self.0.clone()
+            self.scans.fetch_add(1, Ordering::Relaxed);
+            self.services.clone()
         }
     }
 
     #[tokio::test]
     async fn test_discover_on_denial() {
-        let s = DiscoverStub(vec!["com.citrolabs.x".into()]);
+        let (s, _scans) = DiscoverStub::new(vec!["com.citrolabs.x".into()]);
         assert!(s.workspace_root().to_path_buf().exists());
         let session: Arc<dyn SandboxSession> = Arc::new(s);
         let r = discover_authorizable_if_failed(false, "Operation not permitted", session).await;
@@ -361,17 +407,42 @@ mod bash_bound_tests {
 
     #[tokio::test]
     async fn test_discover_skips_plain_fail() {
-        let session: Arc<dyn SandboxSession> =
-            Arc::new(DiscoverStub(vec!["com.citrolabs.x".into()]));
+        let (stub, _scans) = DiscoverStub::new(vec!["com.citrolabs.x".into()]);
+        let session: Arc<dyn SandboxSession> = Arc::new(stub);
         let r = discover_authorizable_if_failed(false, "command not found", session).await;
         assert!(r.is_empty());
     }
 
     #[tokio::test]
     async fn test_discover_skips_success() {
-        let session: Arc<dyn SandboxSession> =
-            Arc::new(DiscoverStub(vec!["com.citrolabs.x".into()]));
+        let (stub, _scans) = DiscoverStub::new(vec!["com.citrolabs.x".into()]);
+        let session: Arc<dyn SandboxSession> = Arc::new(stub);
         let r = discover_authorizable_if_failed(true, "", session).await;
         assert!(r.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_no_skill_skips_scan() {
+        let (stub, scans) = DiscoverStub::new(vec!["com.citrolabs.x".into()]);
+        let tool = BashTool::new(Arc::new(stub));
+        let output = tool
+            .execute(ToolCtx::new("test"), json!({"command": "fail"}))
+            .await
+            .expect("bash result");
+        assert_eq!(scans.load(Ordering::Relaxed), 0);
+        assert!(output.get("authorizable_services").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_active_skill_scans() {
+        let (stub, scans) = DiscoverStub::new(vec!["com.citrolabs.x".into()]);
+        let active = Arc::new(Mutex::new(Some("ego-browser".to_string())));
+        let tool = BashTool::new(Arc::new(stub)).with_active_skill(Some(active));
+        let output = tool
+            .execute(ToolCtx::new("test"), json!({"command": "fail"}))
+            .await
+            .expect("bash result");
+        assert_eq!(scans.load(Ordering::Relaxed), 1);
+        assert_eq!(output["authorizable_services"][0], "com.citrolabs.x");
     }
 }

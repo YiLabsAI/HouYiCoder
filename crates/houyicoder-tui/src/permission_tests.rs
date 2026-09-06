@@ -9,6 +9,7 @@
 use crate::composition;
 use crate::state::{App, Pane};
 use crate::test_support::render_text;
+use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 fn app() -> App {
     let mut app = composition::app();
@@ -206,19 +207,11 @@ fn test_approval_r_binds_reject() {
 
 /// On a two-option entitlement card, 'r' must select No (index 1).
 #[test]
-fn test_approval_r_rejects_twoopt() {
+fn test_entitlement_r_rejects() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: crate::records::ENTITLEMENT_TOOL.into(),
-        args: r#"{"skill":"ego-browser","origin":"user","services":["x.y.z"]}"#.into(),
-        reason: "deny-log discovery".into(),
-        selected: 0,
-        call_id: "c1".into(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.approval = Some(entitlement_approval());
     let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
     crate::keys::handle_working(&mut app, key);
     assert_eq!(
@@ -226,6 +219,24 @@ fn test_approval_r_rejects_twoopt() {
         1,
         "r must focus No (index 1 on a two-option card)"
     );
+}
+
+#[test]
+fn test_entitlement_scope_always() {
+    let approval = entitlement_approval();
+    assert_eq!(crate::keys::approval_scope(&approval), "always");
+}
+
+fn entitlement_approval() -> crate::state::Approval {
+    crate::state::Approval {
+        tool: ENTITLEMENT_TOOL.into(),
+        args: r#"{"skill":"ego-browser","origin":"user","services":["x.y.z"]}"#.into(),
+        reason: "deny-log discovery".into(),
+        selected: 0,
+        call_id: "c1".into(),
+        options: Vec::new(),
+        ..Default::default()
+    }
 }
 
 #[test]

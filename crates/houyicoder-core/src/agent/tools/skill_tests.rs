@@ -279,13 +279,15 @@ fn test_not_found_uses_display() {
     }
 }
 
-/// Read-only + non-destructive + approval-free: the tool loads text
-/// and mutates no external state, so the loop never gates it.
+/// Skill activation updates sandbox entitlements and attribution state,
+/// so adjacent skill calls must run serially even though activation is
+/// non-destructive and does not itself require approval.
 #[test]
-fn test_flags_are_read_only() {
+fn test_flags_require_serial_execution() {
     let reg = Arc::new(InMemoryRegistry::new());
     let tool = SkillTool::new(reg);
-    assert!(tool.is_read_only());
+    assert!(!tool.is_read_only());
+    assert!(!tool.is_concurrency_safe());
     assert!(!tool.is_destructive());
     assert!(!tool.requires_approval());
 }

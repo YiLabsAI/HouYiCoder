@@ -5,9 +5,7 @@
 
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 
-/// Re-exported from the protocol crate — the single source for the
-/// entitlement tool name shared by runner, service, and TUI.
-pub(crate) use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 /// Drill-down rows under the /context grid: per-file memory and per-skill
 /// footprints. These drill-down rows list in two sections below the grid;
@@ -615,9 +613,9 @@ impl Approval {
         self.tool == ENTITLEMENT_TOOL
     }
 
-    /// Whether the card renders the two-option (Yes / No) form: a
-    /// protected-path ask (consent cannot override) or an entitlement
-    /// ask (no once/always distinction exists).
+    /// Whether the card renders a two-option form: a protected-path ask
+    /// hides persistence, while an entitlement ask offers a persistent
+    /// allow or a decline.
     pub fn two_option_card(&self) -> bool {
         self.remember_hidden() || self.is_entitlement()
     }

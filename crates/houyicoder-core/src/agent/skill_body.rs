@@ -86,7 +86,7 @@ pub(crate) fn origin_untrusted(registry: &dyn SkillRegistry, name: &str) -> bool
 pub(crate) fn entitlement_untrusted(registry: &dyn SkillRegistry, name: &str) -> bool {
     skill_origin(registry, name)
         .as_deref()
-        .map(|o| !houyicoder_api::skill_grant::is_entitlement_trusted_origin(o))
+        .map(|o| !houyicoder_api::skill::grant::is_entitlement_trusted_origin(o))
         .unwrap_or(true)
 }
 
@@ -630,7 +630,7 @@ mod tests {
     /// user only). Agents, claude_eco, local, project, and mcp are all
     /// untrusted for entitlements. Absent from snapshot fails closed.
     #[test]
-    fn test_entitlement_untrusted_classification() {
+    fn test_entitlement_trust_classes() {
         use houyicoder_api::skill::{SkillDescriptor, SkillRegistry, SkillSnapshot};
 
         struct OriginRegistry {

@@ -217,6 +217,8 @@ mod pager;
 
 /// Approval prompt and cursor-navigation keys live in keys::approval.
 mod approval;
+#[cfg(test)]
+pub(crate) use approval::approval_scope;
 
 /// AskUserQuestion card key handlers and the /worktrees pane handler, split out
 /// to keep this module under the file-size gate.

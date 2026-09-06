@@ -394,13 +394,16 @@ pub(crate) fn assemble(
         &mut tools,
         &gate_dyn,
     );
-    // Assemble tools from providers (built-in here; an external crate adds
-    // its own). TodoWriteTool is registered above; the rest come from here.
+    // Assemble built-in tools; external providers join below.
     let (skill_registry, skill_conditional) =
         hook_compose::build_skill_registry_and_activator(workspace.as_deref());
+    let active_skill = Arc::new(Mutex::new(None::<String>));
+    let skill_grants = hook_compose::build_skill_grants();
+    let discovery_skill = skill_grants.as_ref().map(|_| active_skill.clone());
     let builtin =
         built_in_tools::BuiltInToolProvider::new(sandbox_session.clone(), gate_dyn.clone())
-            .with_activator(Some(std::sync::Arc::clone(&skill_conditional)));
+            .with_activator(Some(std::sync::Arc::clone(&skill_conditional)))
+            .with_active_skill(discovery_skill);
     let undo_handles = builtin.undo_handles();
     let mut providers: Vec<Box<dyn houyicoder_api::tool::ToolProvider>> = vec![Box::new(builtin)];
     // External tool servers (block-on-init): spawn each subprocess via the
@@ -461,9 +464,6 @@ pub(crate) fn assemble(
     // Hook registry + skill-hook registrar + shared launcher.
     let hook_launcher: Arc<dyn houyicoder_api::launcher::ProcessLauncher> =
         Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
-    let skill_grants: Arc<houyicoder_api::skill_grant::SkillGrantStore> =
-        Arc::new(houyicoder_api::skill_grant::SkillGrantStore::new());
-    let active_skill = Arc::new(Mutex::new(None::<String>));
     let hook_registry = hook_compose::build_session_registry(
         gate_dyn.clone(),
         std::sync::Arc::clone(&hook_launcher),
@@ -483,7 +483,7 @@ pub(crate) fn assemble(
         &skill_registrar,
         &skill_conditional,
         sandbox_session.clone(),
-        std::sync::Arc::clone(&skill_grants),
+        skill_grants.clone(),
         std::sync::Arc::clone(&active_skill),
     );
     // Agent tool: delegate a sub-task to a spawned child (not sandbox-backed;
@@ -532,7 +532,7 @@ pub(crate) fn assemble(
         .with_skill_registry(std::sync::Arc::clone(&skill_registry)
             as std::sync::Arc<dyn houyicoder_api::skill::SkillRegistry>)
         .with_sandbox_session(sandbox_session.clone())
-        .with_skill_grants(Some(std::sync::Arc::clone(&skill_grants)))
+        .with_skill_grants(skill_grants)
         .with_active_skill(std::sync::Arc::clone(&active_skill))
         .with_conditional(std::sync::Arc::clone(&skill_conditional));
     runner.set_skill_reloader(hook_compose::build_skill_reloader(

@@ -667,9 +667,10 @@ impl SandboxSession for MacSeatbeltSession {
             .extra_mach_services
             .lock()
             .expect("extra mach services lock");
-        for s in services {
-            if !mach.contains(s) {
-                mach.push(s.clone());
+        mach.clear();
+        for service in services {
+            if !mach.contains(service) {
+                mach.push(service.clone());
             }
         }
     }

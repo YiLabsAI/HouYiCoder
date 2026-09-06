@@ -115,7 +115,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // Question
     let question = if a.is_entitlement() {
         format!(
-            " Do you want to authorize this service for {}?",
+            " Always authorize this service for {}?",
             entitlement_skill(&a.args).unwrap_or_default()
         )
     } else {
@@ -198,14 +198,21 @@ fn entitlement_detail(args: &str, parsed: Option<&Value>) -> Vec<Line<'static>> 
 /// or entitlement) hides Yes-don't-ask and renumbers No to 2.
 fn render_options(f: &mut Frame, a: &crate::state::Approval, chunks: &[Rect]) {
     let yes_focused = a.selected == 0;
+    let yes_label = if a.is_entitlement() {
+        "Always allow"
+    } else {
+        "Yes"
+    };
     f.render_widget(
-        Paragraph::new(format!(" {} 1. Yes", if yes_focused { "❯" } else { " " })).style(
-            if yes_focused {
-                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::new().fg(Color::White)
-            },
-        ),
+        Paragraph::new(format!(
+            " {} 1. {yes_label}",
+            if yes_focused { "❯" } else { " " }
+        ))
+        .style(if yes_focused {
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(Color::White)
+        }),
         chunks[7],
     );
     if a.two_option_card() {
@@ -356,8 +363,8 @@ fn diff_preview(tool: &str, input: &Value) -> Option<Vec<Line<'static>>> {
 mod tests {
     use super::{cap_first, diff_preview};
     use crate::composition;
-    use crate::records::ENTITLEMENT_TOOL;
     use crate::test_support::render_text;
+    use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
     use serde_json::json;
 
     #[test]
@@ -639,8 +646,8 @@ mod tests {
     }
 
     /// The entitlement card: its own title, the skill + blocked services
-    /// rendered as lines, the authorize question, and the two-option
-    /// (Yes / No) layout — no don't-ask-again.
+    /// rendered as lines, the persistent authorize question, and the
+    /// two-option (Always allow / No) layout — no don't-ask-again.
     #[test]
     fn test_entitlement_card_two_option() {
         let mut app = composition::app();
@@ -670,8 +677,12 @@ mod tests {
             "service line missing: {out}"
         );
         assert!(
-            out.contains("Do you want to authorize this service for ego-browser?"),
-            "authorize question missing: {out}"
+            out.contains("Always authorize this service for ego-browser?"),
+            "persistent authorize question missing: {out}"
+        );
+        assert!(
+            out.contains("1. Always allow"),
+            "persistent allow option missing: {out}"
         );
         assert!(
             !out.contains("don't ask again"),

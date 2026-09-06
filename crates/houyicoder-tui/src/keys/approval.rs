@@ -24,6 +24,17 @@ pub(super) fn option_count(a: &crate::records::Approval) -> usize {
     }
 }
 
+/// The wire scope of the focused approval choice. Entitlement approval
+/// always persists to the user grant store, so its allow choice must not
+/// claim one-shot scope.
+pub(crate) fn approval_scope(a: &crate::records::Approval) -> &'static str {
+    if a.focused_persists() || (a.is_entitlement() && a.focused_approves()) {
+        "always"
+    } else {
+        "once"
+    }
+}
+
 /// Advance to the next option. Wraps around. When the server sends no
 /// options, uses the built-in display order (Yes, Yes-don't-ask, No);
 /// when it does, cycles linearly through the dynamic list.
@@ -93,14 +104,14 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
         KeyCode::Enter => {
             // Capture the focused verdict by identity before the mutable
             // resolve so the next popup for this tool preselects it.
-            let (call_id, tool, kind, approved, persist) = {
+            let (call_id, tool, kind, approved, scope) = {
                 let a = app.approval.as_ref().expect("approval present");
                 (
                     a.call_id.clone(),
                     a.tool.clone(),
                     a.focused_kind(),
                     a.focused_approves(),
-                    a.focused_persists(),
+                    approval_scope(a),
                 )
             };
             app.sticky_choices.insert(tool, kind);
@@ -111,13 +122,12 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                 // from the approval's own tool and input, and applies a scoped
                 // always-allow rule to the gate. The prefix scoping lives
                 // server-side so the TUI never imports the permission crate.
-                let scope = if persist { "always" } else { "once" }.to_string();
                 app.resolve_current_approval(
                     houyicoder_protocol::frontend::run::ApprovalDecision {
                         call_id,
                         approved,
                         updated_input: None,
-                        scope,
+                        scope: scope.to_string(),
                     },
                 );
             } else {

@@ -166,6 +166,50 @@ async fn test_resolve_known_skill() {
 }
 
 #[tokio::test]
+async fn test_missing_origin_fails_closed() {
+    struct MissingOriginRegistry;
+    impl SkillRegistry for MissingOriginRegistry {
+        fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+            Vec::new()
+        }
+        fn find(&self, name: &str) -> Option<SkillDescriptor> {
+            SlashStubRegistry.find(name)
+        }
+        fn prepare_body(
+            &self,
+            name: &str,
+            args: Option<&str>,
+            sid: Option<&str>,
+        ) -> Result<String, SkillError> {
+            SlashStubRegistry.prepare_body(name, args, sid)
+        }
+    }
+
+    let store: Arc<dyn houyicoder_api::session::SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::with_shared_store(
+        store,
+        Arc::new(crate::provider::test_support::FakeProvider::text("done")),
+        crate::agent::ToolRegistry::new(),
+        crate::agent::runner_config::RunnerConfig::default(),
+    )
+    .with_skill_registry(Arc::new(MissingOriginRegistry));
+    let outcome = runner
+        .resolve_skill_slash(SessionId::new(), "@skill:commit")
+        .await;
+    assert!(
+        matches!(
+            outcome,
+            SkillSlashOutcome::Prepared {
+                untrusted: true,
+                ..
+            }
+        ),
+        "a known skill absent from the origin snapshot must fail closed"
+    );
+}
+
+#[tokio::test]
 async fn test_resolve_unknown() {
     let runner = runner_with_slash();
     let outcome = runner

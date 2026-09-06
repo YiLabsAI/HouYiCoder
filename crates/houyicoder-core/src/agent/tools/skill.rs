@@ -1,8 +1,16 @@
-//! The Skill tool: model-invocable entry point for loading a skill body
-//! on demand. Resolves the name through the SkillRegistry port, prepares
-//! the body, returns it as the tool result. Progressive disclosure: the
-//! listing carries only descriptions; the full body loads here.
-//! A large body past the isolation threshold is externalized to the CAS.
+//! The Skill tool: the model-invocable entry point for loading a skill
+//! body on demand. The model calls this tool with a skill name (and
+//! optional args) when it decides a skill applies; the tool resolves the
+//! name through the SkillRegistry port, prepares the body (argument and
+//! variable substitution done by the registry impl), and returns it as
+//! the tool result. Progressive disclosure: the listing attachment the
+//! model sees each turn carries only descriptions; the full body is
+//! loaded here, only when invoked.
+//!
+//! A large body past the isolation threshold is externalized to the CAS
+//! by the agent loop's large-output isolation, so the model sees a
+//! preview and can materialize on demand rather than re-reading the
+//! whole body each turn.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,14 +21,16 @@ use houyicoder_protocol::extension::ToolError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// Loads and returns a skill body. The registry is injected from the
-/// composition root. Read-only — mutates no external state.
+/// The Skill tool. Holds a SkillRegistry port; the concrete registry
+/// is constructed at the composition root and injected here. Loading a
+/// body is read-only, while optional host-owned integrations update the
+/// current sandbox entitlement and invocation metadata.
 pub struct SkillTool {
     registry: Arc<dyn SkillRegistry>,
     registrar: Option<Arc<super::super::SkillHookRegistrar>>,
     activator: Option<Arc<dyn super::super::conditional_activation::ConditionalSkillActivator>>,
     sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    skill_grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
+    skill_grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
     active_skill: Option<Arc<Mutex<Option<String>>>>,
 }
 
@@ -56,7 +66,7 @@ impl SkillTool {
     /// Wire the skill grant store so invocation merges granted mach services.
     pub fn with_skill_grants(
         mut self,
-        grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
+        grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
     ) -> Self {
         self.skill_grants = grants;
         self
@@ -184,7 +194,7 @@ impl Tool for SkillTool {
                 .unwrap_or_else(|| "unknown".to_string());
             let untrusted = !super::super::skill_body::is_trusted_origin(&origin);
             if let Some(session) = self.sandbox.as_ref() {
-                let (mach, allow_launch) = houyicoder_api::skill_grant::resolve_entitlements(
+                let (mach, allow_launch) = houyicoder_api::skill::grant::resolve_entitlements(
                     self.skill_grants.as_deref(),
                     &params.skill,
                     &origin,
@@ -192,10 +202,11 @@ impl Tool for SkillTool {
                     desc.allow_app_launch,
                     !untrusted,
                 );
+                session.clear_skill_grants();
+                session.set_extra_mach_services(&mach);
                 if allow_launch {
                     session.grant_app_launch();
                 }
-                session.set_extra_mach_services(&mach);
             }
             if let Some(cell) = &self.active_skill {
                 *cell.lock().expect("active_skill lock") = Some(params.skill.clone());
@@ -224,8 +235,11 @@ impl Tool for SkillTool {
         })
     }
 
+    fn is_concurrency_safe(&self) -> bool {
+        false
+    }
     fn is_read_only(&self) -> bool {
-        true
+        false
     }
     fn is_destructive(&self) -> bool {
         false

@@ -26,6 +26,7 @@ pub(super) struct BuiltInToolProvider {
     undo_stack: Option<Arc<std::sync::Mutex<UndoStack>>>,
     snapshot_store: Option<Arc<SnapshotStore>>,
     activator: Option<Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>>,
+    active_skill: Option<Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 impl BuiltInToolProvider {
@@ -57,6 +58,7 @@ impl BuiltInToolProvider {
             undo_stack,
             snapshot_store,
             activator: None,
+            active_skill: None,
         }
     }
 
@@ -67,6 +69,15 @@ impl BuiltInToolProvider {
         activator: Option<Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>>,
     ) -> Self {
         self.activator = activator;
+        self
+    }
+
+    /// Wire the skill attribution shared by the runner and skill tool.
+    pub(super) fn with_active_skill(
+        mut self,
+        cell: Option<Arc<std::sync::Mutex<Option<String>>>>,
+    ) -> Self {
+        self.active_skill = cell;
         self
     }
 
@@ -97,7 +108,7 @@ impl ToolProvider for BuiltInToolProvider {
                 _ => BashTool::new(session.clone()),
             };
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(bash),
+                Arc::new(bash.with_active_skill(self.active_skill.clone())),
                 self.gate.clone(),
             )));
             v.push(Arc::new(GuardedTool::new(

@@ -164,7 +164,7 @@ fn test_discover_authorizable_ok() {
     assert!(
         authorizable
             .iter()
-            .all(|s| !houyicoder_api::skill_grant::is_denied(s))
+            .all(|s| !houyicoder_api::skill::grant::is_denied(s))
     );
 }
 
@@ -904,15 +904,15 @@ fn test_clear_skill_grants_resets() {
 }
 
 #[test]
-fn test_mach_services_union_dedup() {
-    let root = mkdtemp("sb-union").unwrap();
+fn test_mach_services_replace() {
+    let root = mkdtemp("sb-replace").unwrap();
     let s = MacSeatbeltSession::new_in_cwd(&root).unwrap();
     s.set_extra_mach_services(&["a.b.c".into(), "d.e.f".into()]);
-    s.set_extra_mach_services(&["d.e.f".into(), "g.h.i".into()]);
+    s.set_extra_mach_services(&["d.e.f".into(), "d.e.f".into(), "g.h.i".into()]);
     let p = s.current_profile();
-    assert!(p.contains("a.b.c"), "first service present: {p}");
+    assert!(!p.contains("a.b.c"), "prior skill service removed: {p}");
     assert_eq!(p.matches("d.e.f").count(), 1, "dedup: {p}");
-    assert!(p.contains("g.h.i"), "second-push service present: {p}");
+    assert!(p.contains("g.h.i"), "current skill service present: {p}");
     std::fs::remove_dir_all(&root).ok();
 }
 

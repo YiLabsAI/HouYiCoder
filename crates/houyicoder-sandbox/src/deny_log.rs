@@ -17,23 +17,15 @@ fn truncate_service_name(name: &str) -> String {
         .collect()
 }
 
-/// Parse denied mach-lookup service names from macOS log text. Only lines
-/// that are actual sandbox denials are read — the kernel format is
-/// Sandbox: proc(pid) deny(n) mach-lookup service, so a line must
-/// contain deny( to count. This excludes unrelated log lines that merely
-/// mention mach-lookup (an AppIntents message like
-/// mach-lookup entitlement, will NOT register is not a denial and must
-/// not surface a service named entitlement,). The service name is
-/// truncated to the mach-name charset so a metadata blob cannot pose as
-/// a service. Dedup.
+/// Parse denied mach-lookup service names from macOS sandbox log text.
+/// A candidate must follow the adjacent kernel denial shape within a
+/// Sandbox record; unrelated messages and file paths that merely contain
+/// mach-lookup are ignored. Service names are truncated to the renderer's
+/// accepted charset and deduplicated.
 pub fn parse_denied_services(log_text: &str) -> Vec<String> {
     let mut services = Vec::new();
     for line in log_text.lines() {
-        if !line.contains("deny(") {
-            continue;
-        }
         if let Some(name) = extract_mach_service(line)
-            && !name.is_empty()
             && !services.contains(&name)
         {
             services.push(name);
@@ -43,7 +35,20 @@ pub fn parse_denied_services(log_text: &str) -> Vec<String> {
 }
 
 fn extract_mach_service(line: &str) -> Option<String> {
-    extract_mach_service_and_pid(line).map(|(name, _)| name)
+    let sandbox = line.find("Sandbox:")?;
+    let record = &line[sandbox + "Sandbox:".len()..];
+    let deny = record.find(" deny(")?;
+    let after_open = &record[deny + " deny(".len()..];
+    let close = after_open.find(')')?;
+    let code = &after_open[..close];
+    if code.is_empty() || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let rest = after_open[close + 1..].strip_prefix(" mach-lookup ")?;
+    let token = rest.split_whitespace().next()?;
+    let raw_name = token.split_once('(').map_or(token, |(name, _)| name);
+    let name = truncate_service_name(raw_name);
+    (!name.is_empty()).then_some(name)
 }
 
 /// Strip the Apple deny-list from a set of discovered services. Only
@@ -52,7 +57,7 @@ fn extract_mach_service(line: &str) -> Option<String> {
 pub fn authorizable_services(discovered: Vec<String>) -> Vec<String> {
     discovered
         .into_iter()
-        .filter(|s| !houyicoder_api::skill_grant::is_denied(s))
+        .filter(|s| !houyicoder_api::skill::grant::is_denied(s))
         .collect()
 }
 
@@ -81,7 +86,7 @@ fn read_deny_log(window_secs: u64) -> String {
             "--last",
             &format!("{window_secs}s"),
             "--predicate",
-            "eventMessage CONTAINS \"mach-lookup\"",
+            "eventMessage CONTAINS \"mach-lookup\" AND eventMessage CONTAINS \"deny(\"",
             "--style",
             "syslog",
         ],
@@ -93,24 +98,7 @@ fn read_deny_log(_window_secs: u64) -> String {
     String::new()
 }
 
-fn extract_mach_service_and_pid(line: &str) -> Option<(String, Option<u32>)> {
-    let pos = line.find("mach-lookup ")?;
-    let rest = &line[pos + "mach-lookup ".len()..];
-    let token = rest.split_whitespace().next()?;
-    let (raw_name, pid) = if let Some(paren) = token.find('(') {
-        let name = &token[..paren];
-        let pid_str = token[paren + 1..].trim_end_matches(')');
-        (name, pid_str.parse::<u32>().ok())
-    } else {
-        (token, None)
-    };
-    let name = truncate_service_name(raw_name);
-    if name.is_empty() {
-        return None;
-    }
-    Some((name, pid))
-}
-
+#[cfg(target_os = "macos")]
 fn run_query(cmd: &str, args: &[&str]) -> String {
     #[expect(clippy::disallowed_methods, reason = "infra query, not model-driven")]
     match std::process::Command::new(cmd).args(args).output() {
@@ -128,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_parse_extracts_service() {
-        let log = "2024-01-01 host sandboxd[123]: deny(1) mach-lookup com.citrolabs.ego.lite.ego-browser(456)";
+        let log = "2024-01-01 host kernel: Sandbox: ego-browser(123) deny(1) mach-lookup com.citrolabs.ego.lite.ego-browser(456)";
         let services = parse_denied_services(log);
         assert_eq!(
             services,
@@ -138,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_parse_dedup() {
-        let log = "line1 deny(1) mach-lookup com.apple.system.logger(1)\nline2 deny(1) mach-lookup com.apple.system.logger(2)";
+        let log = "Sandbox: one(1) deny(1) mach-lookup com.apple.system.logger(1)\nSandbox: two(2) deny(1) mach-lookup com.apple.system.logger(2)";
         let services = parse_denied_services(log);
         assert_eq!(services.len(), 1);
         assert_eq!(services[0], "com.apple.system.logger");
@@ -152,16 +140,35 @@ mod tests {
 
     #[test]
     fn test_parse_empty_name() {
-        let log = "deny(1) mach-lookup (123)";
+        let log = "Sandbox: proc(1) deny(1) mach-lookup (123)";
         assert!(parse_denied_services(log).is_empty());
     }
 
-    /// A line that mentions mach-lookup but is not a sandbox denial (an
-    /// AppIntents complaint) must not surface a service. Without the
-    /// deny-line filter this parsed a service named entitlement,.
+    /// A line that mentions mach-lookup but is not a sandbox denial must
+    /// not surface a service.
     #[test]
     fn test_parse_skips_non_denial() {
-        let log = "ego-browser[123]: Missing com.apple.linkd.application-service / com.apple.linkd.autoShortcut mach-lookup entitlement, will NOT register the process";
+        let log = "ego-browser[123]: Missing application-service mach-lookup entitlement, will NOT register the process";
+        assert!(parse_denied_services(log).is_empty());
+    }
+
+    /// A file denial whose attacker-controlled path contains mach-lookup
+    /// must not be confused with an adjacent mach service denial.
+    #[test]
+    fn test_parse_rejects_path_injection() {
+        let log = "kernel: Sandbox: sh(123) deny(1) file-read-data /workspace/mach-lookup com.citrolabs.injected";
+        assert!(parse_denied_services(log).is_empty());
+    }
+
+    #[test]
+    fn test_parse_requires_sandbox_sender() {
+        let log = "process: deny(1) mach-lookup com.citrolabs.injected";
+        assert!(parse_denied_services(log).is_empty());
+    }
+
+    #[test]
+    fn test_parse_numeric_deny() {
+        let log = "Sandbox: proc(1) deny(other) mach-lookup com.citrolabs.injected";
         assert!(parse_denied_services(log).is_empty());
     }
 
@@ -199,6 +206,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn test_run_query_success() {
         // "true" succeeds with no stdout.
@@ -206,6 +214,7 @@ mod tests {
         assert!(result.is_empty());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn test_run_query_failure() {
         // "false" exits non-zero; output() still succeeds (Err is only for
@@ -214,6 +223,7 @@ mod tests {
         assert!(result.is_empty());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn test_run_query_spawn_fail() {
         // A command that does not exist triggers the Err branch.
@@ -227,29 +237,5 @@ mod tests {
         // filter) without asserting on the result — the log may contain
         // entries from other sandboxed processes on the host.
         discover_authorizable(0);
-    }
-
-    #[test]
-    fn test_extract_service_and_pid() {
-        let line = "deny(1) mach-lookup com.citrolabs.ego.lite.ego-browser(456)";
-        let result = extract_mach_service_and_pid(line);
-        assert_eq!(
-            result,
-            Some(("com.citrolabs.ego.lite.ego-browser".to_string(), Some(456)))
-        );
-    }
-
-    #[test]
-    fn test_extract_service_no_pid() {
-        let line = "deny(1) mach-lookup com.apple.system.logger";
-        let result = extract_mach_service_and_pid(line);
-        assert_eq!(result, Some(("com.apple.system.logger".to_string(), None)));
-    }
-
-    #[test]
-    fn test_extract_non_numeric_pid() {
-        let line = "deny(1) mach-lookup com.apple.system.logger(abc)";
-        let result = extract_mach_service_and_pid(line);
-        assert_eq!(result, Some(("com.apple.system.logger".to_string(), None)));
     }
 }

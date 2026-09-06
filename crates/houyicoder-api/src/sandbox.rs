@@ -633,13 +633,13 @@ pub trait SandboxSession: Send + Sync {
     fn working_dirs(&self) -> Vec<String> {
         Vec::new()
     }
-
-    /// Declare extra mach services a skill needs; clear reverts to base.
+    /// Replace the current skill's extra mach services; clear reverts to base.
     fn set_extra_mach_services(&self, _services: &[String]) {}
+    /// Remove all extra mach services granted to the current skill.
     fn clear_extra_mach_services(&self) {}
-    /// Grant app-launch so a sandboxed process can open -a. Cleared by clear_skill_grants.
+    /// Grant app-launch for the current skill; clear_skill_grants revokes it.
     fn grant_app_launch(&self) {}
-    /// Reset skill-granted entitlements at the start of a new work period.
+    /// Reset skill entitlements before another skill becomes active.
     fn clear_skill_grants(&self) {}
 
     /// Scan OS deny log for authorizable mach-service candidates. Blocks.

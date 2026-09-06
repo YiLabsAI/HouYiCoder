@@ -206,7 +206,7 @@ pub struct Runner {
     sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
     /// Per-skill sandbox grant store (user-scope, not in repo). When wired,
     /// grants for a skill merge with its frontmatter declaration on invoke.
-    skill_grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
+    skill_grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
     /// The skill whose entitlements are active for the current run. Shared
     /// with the SkillTool so both invocation paths can set it. Read by the
     /// post-bash-failure approval to attribute discovered services.
@@ -382,7 +382,7 @@ impl Runner {
     /// Wire the per-skill grant store so skill invocations merges granted mach services.
     pub fn with_skill_grants(
         mut self,
-        grants: Option<Arc<houyicoder_api::skill_grant::SkillGrantStore>>,
+        grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
     ) -> Self {
         self.skill_grants = grants;
         self

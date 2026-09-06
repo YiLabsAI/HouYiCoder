@@ -11,13 +11,12 @@ use super::{ApprovalDecision, ApprovalRequest, RunError, Runner};
 use std::collections::HashSet;
 
 impl Runner {
-    /// Apply approval decisions to pending tool calls. Approved calls
-    /// execute; rejected and unknown-tool calls get error results.
-    /// Undecided approvals stay pending for a later resume. Returns the
-    /// still-pending requests so the caller can re-raise them.
+    /// Apply decisions to pending tool calls and return requests that still
+    /// lack a decision. Unmatched requests remain pending for a later resume.
     ///
-    /// Precondition: call_id is unique per session (minted at the
-    /// provider boundary). This function does not re-defend that.
+    /// Requires call_id to be unique within the session. Decisions route only
+    /// by call_id, so a duplicate could authorize the wrong call. IDs are
+    /// minted at the provider boundary; this function does not revalidate them.
     pub(crate) async fn apply_decisions(
         &self,
         session: SessionId,
@@ -166,7 +165,7 @@ impl Runner {
 /// result the model sees. Pure of runner state — takes the store by ref.
 fn apply_entitlement(
     input: &serde_json::Value,
-    store: Option<&houyicoder_api::skill_grant::SkillGrantStore>,
+    store: Option<&houyicoder_api::skill::grant::SkillGrantStore>,
 ) -> serde_json::Value {
     let skill = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
     if skill.is_empty() {
@@ -186,12 +185,21 @@ fn apply_entitlement(
         })
         .unwrap_or_default();
     if let Some(store) = store {
-        store.add_grants(skill, origin, services.clone());
-        serde_json::json!({
-            "granted": services,
-            "skill": skill,
-            "message": format!("Authorized {} service(s) for {skill}.", services.len()),
-        })
+        match store.add_grants(skill, origin, services) {
+            Ok(granted) => {
+                let count = granted.len();
+                serde_json::json!({
+                    "granted": granted,
+                    "skill": skill,
+                    "message": format!("Authorized {count} service(s) for {skill}."),
+                })
+            }
+            Err(e) => serde_json::json!({
+                "error": format!("grant persistence failed: {e}"),
+                "skill": skill,
+                "granted": [],
+            }),
+        }
     } else {
         serde_json::json!({ "error": "grant store not wired", "skill": skill })
     }
@@ -210,20 +218,49 @@ mod tests {
         let _ = fs::remove_dir_all(&dir).is_ok();
         fs::create_dir_all(&dir).expect("mkdir grant test");
         let path = dir.join("skill-grants.json");
-        let store = houyicoder_api::skill_grant::SkillGrantStore::with_path(path);
+        let store = houyicoder_api::skill::grant::SkillGrantStore::with_path(path);
         let input = serde_json::json!({
             "skill": "ego-browser",
             "origin": "user",
-            "services": ["com.houyi.test.entitlement"],
+            "services": ["com.apple.trustd", "com.houyi.test.entitlement"],
         });
         let result = apply_entitlement(&input, Some(&store));
-        assert_eq!(result["granted"][0], "com.houyi.test.entitlement");
+        assert_eq!(
+            result["granted"],
+            serde_json::json!(["com.houyi.test.entitlement"])
+        );
+        assert_eq!(
+            result["message"],
+            "Authorized 1 service(s) for ego-browser."
+        );
         assert!(
             store
                 .grant_for("ego-browser", "user")
                 .contains(&"com.houyi.test.entitlement".to_string())
         );
         let _ = fs::remove_dir_all(&dir).is_ok();
+    }
+
+    #[test]
+    fn test_entitlement_persist_failure() {
+        let dir = env::temp_dir().join(format!("houyi-entitlement-error-{}", process::id()));
+        let _cleanup = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir persistence test");
+        let store = houyicoder_api::skill::grant::SkillGrantStore::with_path(dir.clone());
+        let input = serde_json::json!({
+            "skill": "ego-browser",
+            "origin": "user",
+            "services": ["com.houyi.test.entitlement"],
+        });
+        let result = apply_entitlement(&input, Some(&store));
+        assert!(
+            result["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("persistence failed"))
+        );
+        assert!(result["granted"].as_array().is_some_and(Vec::is_empty));
+        assert!(store.grant_for("ego-browser", "user").is_empty());
+        let _cleanup = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -239,7 +276,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir).is_ok();
         fs::create_dir_all(&dir).expect("mkdir empty-skill test");
         let path = dir.join("skill-grants.json");
-        let store = houyicoder_api::skill_grant::SkillGrantStore::with_path(path);
+        let store = houyicoder_api::skill::grant::SkillGrantStore::with_path(path);
         let input = serde_json::json!({ "skill": "", "services": ["a.b.c"] });
         let result = apply_entitlement(&input, Some(&store));
         assert_eq!(result["error"], "no skill named");

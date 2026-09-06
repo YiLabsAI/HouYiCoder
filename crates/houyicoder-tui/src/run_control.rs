@@ -16,8 +16,7 @@
 //! ports live types.
 
 use houyicoder_protocol::envelope::RequestId;
-
-use crate::records::ENTITLEMENT_TOOL;
+use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
 
 use crate::pending_queue::PendingItem;

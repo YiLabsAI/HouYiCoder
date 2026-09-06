@@ -11,6 +11,8 @@
 
 use std::fmt;
 
+pub mod grant;
+
 /// A minimal, engine-facing view of a discovered skill. Carries only the
 /// fields the engine consumes (listing, invocation gating, cost visibility);
 /// the full parsed definition stays in the skill data crate and never

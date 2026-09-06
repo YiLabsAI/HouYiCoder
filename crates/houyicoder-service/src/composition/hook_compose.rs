@@ -249,6 +249,18 @@ pub(super) fn build_skill_registry_and_activator(
     (registry, activator)
 }
 
+/// Build the user grant store. Missing home state disables persistence
+/// rather than placing an authority file in the workspace.
+pub(super) fn build_skill_grants() -> Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>> {
+    match houyicoder_api::skill::grant::SkillGrantStore::new() {
+        Ok(store) => Some(Arc::new(store)),
+        Err(e) => {
+            tracing::warn!("skill grant store unavailable: {e}");
+            None
+        }
+    }
+}
+
 /// Register the SkillTool: resolves skill names through the registry, gates
 /// invocation through the registrar + conditional activator. Not
 /// sandbox-backed (reads skill files directly), so registered directly.
@@ -258,7 +270,7 @@ pub(super) fn register_skill_tool(
     registrar: &Arc<houyicoder_core::agent::SkillHookRegistrar>,
     conditional: &Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>,
     sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    skill_grants: Arc<houyicoder_api::skill_grant::SkillGrantStore>,
+    skill_grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
     active_skill: Arc<std::sync::Mutex<Option<String>>>,
 ) {
     tools.register(Arc::new(
@@ -268,7 +280,7 @@ pub(super) fn register_skill_tool(
         .with_registrar(std::sync::Arc::clone(registrar))
         .with_activator(Some(std::sync::Arc::clone(conditional)))
         .with_sandbox(sandbox)
-        .with_skill_grants(Some(std::sync::Arc::clone(&skill_grants)))
+        .with_skill_grants(skill_grants)
         .with_active_skill(Some(std::sync::Arc::clone(&active_skill))),
     ));
 }

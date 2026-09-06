@@ -125,7 +125,7 @@ impl Runner {
                 // to body trust, so the untrusted flag above feeds both.
                 let origin_str = origin.as_deref().unwrap_or("unknown");
                 if let Some(session) = self.sandbox_session.as_ref() {
-                    let (mach, allow_launch) = houyicoder_api::skill_grant::resolve_entitlements(
+                    let (mach, allow_launch) = houyicoder_api::skill::grant::resolve_entitlements(
                         self.skill_grants.as_deref(),
                         &name,
                         origin_str,
@@ -133,10 +133,11 @@ impl Runner {
                         desc.allow_app_launch,
                         !untrusted,
                     );
+                    session.clear_skill_grants();
+                    session.set_extra_mach_services(&mach);
                     if allow_launch {
                         session.grant_app_launch();
                     }
-                    session.set_extra_mach_services(&mach);
                 }
                 self.set_active_skill(&name);
                 // Inject session context into the body (dynamic template
