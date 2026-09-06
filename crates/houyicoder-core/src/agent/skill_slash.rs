@@ -121,11 +121,8 @@ impl Runner {
                 // Resolve entitlements from frontmatter + profile + grant
                 // store (same as the Skill tool path). A non-managed/user
                 // source is not trusted for entitlements — frontmatter and
-                // the compiled profile are skipped.
-                let ent_untrusted = origin
-                    .as_deref()
-                    .map(|o| !houyicoder_api::skill_grant::is_entitlement_trusted_origin(o))
-                    .unwrap_or(true);
+                // the compiled profile are skipped. The trust set converged
+                // to body trust, so the untrusted flag above feeds both.
                 let origin_str = origin.as_deref().unwrap_or("unknown");
                 if let Some(session) = self.sandbox_session.as_ref() {
                     let (mach, allow_launch) = houyicoder_api::skill_grant::resolve_entitlements(
@@ -134,7 +131,7 @@ impl Runner {
                         origin_str,
                         &desc.allowed_mach_services,
                         desc.allow_app_launch,
-                        !ent_untrusted,
+                        !untrusted,
                     );
                     if allow_launch {
                         session.grant_app_launch();
