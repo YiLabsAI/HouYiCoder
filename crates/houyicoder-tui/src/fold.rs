@@ -368,7 +368,7 @@ fn extract_bash_comment_label(command: &str) -> Option<&str> {
 }
 
 /// Truncate a bash command to HINT_CAP chars for the ⎿ hint, preserving
-/// newlines so continuation lines indent under ⎿ (the renderer wraps). Drops
+/// newlines so the one-line preview can signal that a command body is hidden. Drops
 /// blank lines and collapses inline whitespace, mirroring commandAsHint.
 fn command_hint(command: &str) -> String {
     let cleaned_body: String = command
@@ -592,7 +592,13 @@ impl crate::state::App {
         let mut first = true;
         for slot in &slots {
             let (needs_spacer, rows) = match slot {
-                DisplaySlot::Line(i, _) => (true, self.line_display_rows(&transcript[*i])),
+                DisplaySlot::Line(i, group) => {
+                    let full = self.verbose
+                        || group
+                            .as_ref()
+                            .is_some_and(|key| self.expanded_fold_groups.contains(key));
+                    (true, self.line_display_rows_mode(&transcript[*i], full))
+                }
                 DisplaySlot::Summary(g) => (true, 1 + g.hint.is_some() as usize),
             };
             if !first && needs_spacer {

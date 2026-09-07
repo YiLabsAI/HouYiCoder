@@ -18,6 +18,14 @@ impl App {
     /// offset past real rows and surfaced as blank space + skipped tool calls
     /// when scrolled); anything else falls back to its rendered lines.
     pub(crate) fn line_display_rows(&self, line: &TranscriptLine) -> usize {
+        self.line_display_rows_mode(line, self.verbose)
+    }
+
+    pub(crate) fn line_display_rows_mode(
+        &self,
+        line: &TranscriptLine,
+        full_tool_call: bool,
+    ) -> usize {
         let w = self.last_transcript_width.get();
         match line {
             TranscriptLine::Agent(text) => self.agent_text_rows(text),
@@ -74,9 +82,12 @@ impl App {
             }
             // count==render: a user prompt wraps + caps like the render path.
             TranscriptLine::User(text) => self.render_cache.borrow_mut().user_row_count(text, w),
+            TranscriptLine::Tool { name, .. } if name != "result" => line
+                .tool_call_rows(w, full_tool_call)
+                .map_or(1, |rows| rows.len()),
             // count==render: the chip text is mode-dependent (verbose renders
             // the untruncated invocation, which can span many lines where the
-            // truncated status spans at most two) — count the same form the
+            // truncated status occupies one) — count the same form the
             // draw path emits, or the scroll offset drifts past real rows.
             _ => {
                 let text = if self.verbose {

@@ -4,6 +4,81 @@ use crate::records::TranscriptLine;
 use crate::test_support::render_text;
 use crate::test_support::working_app;
 
+fn bash_call(command: &str) -> TranscriptLine {
+    TranscriptLine::Tool {
+        name: "bash".into(),
+        tool: "bash".into(),
+        status: crate::brief::tool_call_brief("bash", &serde_json::json!({ "command": command })),
+        invocation: command.into(),
+        outcome: crate::records::ToolOutcome::Success,
+        call_id: "c1".into(),
+        body: String::new(),
+        is_diff: false,
+    }
+}
+
+fn bash_result() -> TranscriptLine {
+    TranscriptLine::Tool {
+        name: "result".into(),
+        tool: "bash".into(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: crate::records::ToolOutcome::Success,
+        call_id: "c1".into(),
+        body: String::new(),
+        is_diff: false,
+    }
+}
+
+#[test]
+fn test_hint_single_line() {
+    use unicode_width::UnicodeWidthStr;
+    let mut app = working_app();
+    let command = "ego-browser nodejs <<'EOF'\nconst task = 7\nEOF";
+    app.transcript = vec![
+        TranscriptLine::User("run it".into()),
+        bash_call(command),
+        bash_result(),
+    ];
+    drop(render_text(&app, 32, 12));
+    let rows = app.last_all_rows.borrow();
+    let hint = rows
+        .iter()
+        .map(|(_, row)| row)
+        .find(|row| row.contains('\u{23bf}'))
+        .expect("fold hint");
+    assert!(!hint.contains('\n'), "hint must occupy one row: {hint:?}");
+    assert!(
+        hint.ends_with('\u{2026}'),
+        "hidden body needs an ellipsis: {hint}"
+    );
+    assert!(
+        UnicodeWidthStr::width(hint.as_str()) <= 32,
+        "hint overflow: {hint}"
+    );
+}
+
+#[test]
+fn test_expand_shows_command() {
+    let mut app = working_app();
+    let command = "ego-browser nodejs <<'EOF'\nconst task = 7\nEOF";
+    app.transcript = vec![
+        TranscriptLine::User("run it".into()),
+        bash_call(command),
+        bash_result(),
+    ];
+    app.expanded_fold_groups.insert("c1#0".into());
+    let out = render_text(&app, 32, 16);
+    assert!(
+        out.contains("const task = 7"),
+        "expanded command body missing: {out}"
+    );
+    assert!(
+        out.contains("EOF)"),
+        "expanded command terminator missing: {out}"
+    );
+}
+
 /// Entering a teammate view must swap the rendered transcript to the child's
 /// rows. The slots cache keys on the parent transcript version, and entering
 /// the view sets teammate_view without bumping that version, so the cache

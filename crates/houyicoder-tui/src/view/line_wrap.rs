@@ -15,7 +15,7 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 /// Truncate a string so its display width is at most max_width columns,
 /// appending an ellipsis when truncation occurs. Width-aware: a CJK
@@ -44,13 +44,13 @@ pub(crate) fn truncate_width(s: &str, max_width: usize) -> String {
     let target = max_width - 1; // reserve 1 column for the ellipsis
     let mut acc = 0usize;
     let mut out = String::new();
-    for ch in s.chars() {
-        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if acc + cw > target {
+    for grapheme in s.graphemes(true) {
+        let width = UnicodeWidthStr::width(grapheme);
+        if acc + width > target {
             break;
         }
-        acc += cw;
-        out.push(ch);
+        acc += width;
+        out.push_str(grapheme);
     }
     out.push('\u{2026}');
     out
@@ -68,100 +68,25 @@ pub fn wrap_line(text: &str, avail: usize) -> Vec<String> {
     if UnicodeWidthStr::width(text) <= avail {
         return vec![text.to_string()];
     }
-    // Tokens: alternating runs of non-space and ASCII-space, so the whitespace
-    // between words is preserved as its own token (a wrap point lands between
-    // a word and the following space, never inside the space run).
-    let mut tokens: Vec<&str> = Vec::new();
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let is_space = bytes[i] == b' ';
-        let start = i;
-        while i < bytes.len() && (bytes[i] == b' ') == is_space {
-            i += 1;
-        }
-        tokens.push(&text[start..i]);
-    }
-    let mut lines: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let mut cur_w = 0usize;
-    // first_row: true until the first row is flushed. A space token at the
-    // start of the FIRST row is line indentation and is kept (Python/YAML
-    // semantics depend on it); a space token at the start of a CONTINUATION
-    // row is the inter-word space at the wrap point and is dropped (standard
-    // greedy word-wrap — a wrapped row does not start with the space that
-    // was the wrap boundary).
-    let mut first_row = true;
-    // Flush cur as a row, but skip it when it trims to empty. A row that is
-    // only whitespace (indentation wider than the column) would otherwise
-    // become a phantom blank row after trim_trailing — dropping it at flush
-    // time keeps the indentation on rows that DO carry content (greedy fit
-    // pushes the spaces into cur, and they survive until a real token forces
-    // a non-empty flush).
-    let flush = |cur: &mut String, lines: &mut Vec<String>, first_row: &mut bool| {
-        let row = trim_trailing(cur);
-        if !row.is_empty() {
-            lines.push(row);
-        }
-        cur.clear();
-        *first_row = false;
-    };
-    for tok in tokens {
-        let tok_w = UnicodeWidthStr::width(tok);
-        let is_space_tok = tok.chars().all(|c| c == ' ');
-        // A single non-space token wider than avail: hard-break it on grapheme
-        // boundaries so it cannot overflow the column.
-        if tok_w > avail && !is_space_tok {
-            if !cur.is_empty() {
-                flush(&mut cur, &mut lines, &mut first_row);
-                cur_w = 0;
+    let mut end = 0usize;
+    let cells: Vec<WrapCell> = text
+        .graphemes(true)
+        .map(|grapheme| {
+            end += grapheme.len();
+            WrapCell {
+                text: grapheme.to_string(),
+                style: Style::default(),
+                end,
             }
-            let mut chunk = String::new();
-            let mut chunk_w = 0usize;
-            for g in tok.graphemes(true) {
-                let gw = UnicodeWidthStr::width(g);
-                if chunk_w + gw > avail && !chunk.is_empty() {
-                    lines.push(chunk.clone());
-                    chunk.clear();
-                    chunk_w = 0;
-                }
-                chunk.push_str(g);
-                chunk_w += gw;
-            }
-            if !chunk.is_empty() {
-                cur = chunk;
-                cur_w = chunk_w;
-            }
-            continue;
-        }
-        // Drop a space token at the start of a CONTINUATION row (the
-        // wrap-point inter-word space). On the first row, keep it — it is
-        // indentation.
-        if cur.is_empty() && is_space_tok && !first_row {
-            continue;
-        }
-        // Greedy fit: flush the current row if this token would overflow.
-        if cur_w + tok_w > avail && !cur.is_empty() {
-            flush(&mut cur, &mut lines, &mut first_row);
-            cur_w = 0;
-            // After flushing, a space token is the wrap-point space — drop it.
-            if is_space_tok {
-                continue;
-            }
-        }
-        cur.push_str(tok);
-        cur_w += tok_w;
-    }
-    if !cur.is_empty() {
-        flush(&mut cur, &mut lines, &mut first_row);
-    }
-    if lines.is_empty() {
-        // Input was all whitespace wider than avail: every flush was skipped.
-        // Return one empty row rather than the original (the caller asked for
-        // a wrap and the content has no visible columns).
+        })
+        .collect();
+    let rows = wrap_cells(text, cells, avail);
+    if rows.is_empty() {
         vec![String::new()]
     } else {
-        lines
+        rows.into_iter()
+            .map(|row| row.into_iter().map(|cell| cell.text).collect())
+            .collect()
     }
 }
 
@@ -255,153 +180,112 @@ pub fn wrap_styled_line(line: Line<'static>, avail: usize) -> Vec<Line<'static>>
     if avail == 0 {
         return vec![line];
     }
-    // Flatten to (grapheme, style) cells, then group into tokens: maximal runs
-    // of same-(style, space-class) graphemes. A space token is its own token
-    // so a wrap lands between a word and the following space.
-    let cells: Vec<(String, Style)> = line
+    let text: String = line
         .spans
         .iter()
-        .flat_map(|s| {
-            s.content
-                .graphemes(true)
-                .map(move |g| (g.to_string(), s.style))
-        })
+        .map(|span| span.content.as_ref())
         .collect();
-    let total_w: usize = cells
-        .iter()
-        .map(|(g, _)| UnicodeWidthStr::width(g.as_str()))
-        .sum();
-    if total_w <= avail {
-        return vec![line.clone()];
+    if UnicodeWidthStr::width(text.as_str()) <= avail {
+        return vec![line];
     }
-    let mut tokens: Vec<(String, Style, bool)> = Vec::new(); // (text, style, is_space)
-    let mut acc = String::new();
-    let mut acc_style: Option<Style> = None;
-    let mut acc_space = false;
-    for (g, style) in cells {
-        let is_space = g == " ";
-        if acc_style != Some(style) || acc_space != is_space || acc.is_empty() {
-            if !acc.is_empty() {
-                tokens.push((
-                    std::mem::take(&mut acc),
-                    acc_style.unwrap_or_default(),
-                    acc_space,
-                ));
-            }
-            acc_style = Some(style);
-            acc_space = is_space;
+    let mut end = 0usize;
+    let mut cells = Vec::new();
+    for span in &line.spans {
+        for grapheme in span.content.graphemes(true) {
+            end += grapheme.len();
+            cells.push(WrapCell {
+                text: grapheme.to_string(),
+                style: span.style,
+                end,
+            });
         }
-        acc.push_str(&g);
     }
-    if !acc.is_empty() {
-        tokens.push((acc, acc_style.unwrap_or_default(), acc_space));
-    }
-    // Greedy fit.
-    let mut rows: Vec<Vec<(String, Style)>> = Vec::new();
-    let mut cur: Vec<(String, Style)> = Vec::new();
-    let mut cur_w = 0usize;
-    // first_row: true until the first row is flushed. A space token at the
-    // start of the FIRST row is indentation (kept); at the start of a
-    // continuation row it is the wrap-point space (dropped). Matches the
-    // plain wrap_line path.
-    let mut first_row = true;
-    // Flush cur as a row, skipping it when it trims to empty (a whitespace-only
-    // row would be a phantom blank). Matches the plain wrap_line path: leading
-    // indentation that fits is preserved on content rows, indentation wider
-    // than the column is dropped at flush rather than kept as an empty row.
-    let flush = |cur: &mut Vec<(String, Style)>,
-                 rows: &mut Vec<Vec<(String, Style)>>,
-                 first_row: &mut bool| {
-        let row = trim_trailing_styled(std::mem::take(cur));
-        if !row.is_empty() {
-            rows.push(row);
-        }
-        *first_row = false;
-    };
-    for (tok, style, is_space) in tokens {
-        let tok_w = UnicodeWidthStr::width(tok.as_str());
-        // Hard-break a single non-space token wider than avail on grapheme
-        // boundaries (cannot overflow the column).
-        if tok_w > avail && !is_space {
-            if !cur.is_empty() {
-                flush(&mut cur, &mut rows, &mut first_row);
-                cur_w = 0;
-            }
-            let mut chunk = String::new();
-            let mut chunk_w = 0usize;
-            for g in tok.graphemes(true) {
-                let gw = UnicodeWidthStr::width(g);
-                if chunk_w + gw > avail && !chunk.is_empty() {
-                    rows.push(vec![(chunk.clone(), style)]);
-                    chunk.clear();
-                    chunk_w = 0;
-                }
-                chunk.push_str(g);
-                chunk_w += gw;
-            }
-            if !chunk.is_empty() {
-                cur.push((chunk, style));
-                cur_w = chunk_w;
-            }
-            continue;
-        }
-        // Drop a space token at the start of a CONTINUATION row (wrap-point
-        // space). On the first row, keep it (indentation).
-        if cur.is_empty() && is_space && !first_row {
-            continue;
-        }
-        // Greedy: flush if this token would overflow.
-        if cur_w + tok_w > avail && !cur.is_empty() {
-            flush(&mut cur, &mut rows, &mut first_row);
-            cur_w = 0;
-            // After flushing, a space token is the wrap-point space — drop it.
-            if is_space {
-                continue;
-            }
-        }
-        cur.push((tok, style));
-        cur_w += tok_w;
-    }
-    if !cur.is_empty() {
-        flush(&mut cur, &mut rows, &mut first_row);
-    }
+    let rows = wrap_cells(&text, cells, avail);
     if rows.is_empty() {
-        vec![line.clone()]
+        vec![Line::default()]
     } else {
         rows.into_iter().map(rebuild_spans).collect()
     }
 }
 
-/// Drop a trailing space token from a styled-cell row (matches trim_trailing
-/// for the plain path) so a wrapped row does not end in a space.
-fn trim_trailing_styled(mut row: Vec<(String, Style)>) -> Vec<(String, Style)> {
-    while row
-        .last()
-        .map(|(t, _)| t.chars().all(|c| c == ' '))
-        .unwrap_or(false)
-    {
+#[derive(Clone)]
+struct WrapCell {
+    text: String,
+    style: Style,
+    end: usize,
+}
+
+fn wrap_cells(text: &str, cells: Vec<WrapCell>, avail: usize) -> Vec<Vec<WrapCell>> {
+    let breaks: std::collections::HashSet<usize> = unicode_linebreak::linebreaks(text)
+        .map(|(offset, _)| offset)
+        .collect();
+    let mut rows = Vec::new();
+    let mut start = 0usize;
+    let mut first = true;
+    while start < cells.len() {
+        if !first {
+            while start < cells.len() && cells[start].text == " " {
+                start += 1;
+            }
+        }
+        if start == cells.len() {
+            break;
+        }
+        let mut width = 0usize;
+        let mut cursor = start;
+        let mut last_break = None;
+        while cursor < cells.len() {
+            let cell = &cells[cursor];
+            let cell_width = UnicodeWidthStr::width(cell.text.as_str());
+            let space = cell.text == " ";
+            if width + cell_width > avail && width > 0 && !space {
+                break;
+            }
+            width += cell_width;
+            cursor += 1;
+            if breaks.contains(&cell.end) {
+                last_break = Some(cursor);
+            }
+        }
+        let end = if cursor == cells.len() {
+            cursor
+        } else {
+            last_break
+                .filter(|end| *end > start)
+                .unwrap_or(cursor.max(start + 1))
+        };
+        let row = trim_cells(cells[start..end].to_vec());
+        if !row.is_empty() {
+            rows.push(row);
+        }
+        start = end;
+        first = false;
+    }
+    rows
+}
+
+fn trim_cells(mut row: Vec<WrapCell>) -> Vec<WrapCell> {
+    while row.last().is_some_and(|cell| cell.text == " ") {
         row.pop();
     }
     row
 }
 
-/// Rebuild a ratatui Line from styled cells by merging adjacent same-style
-/// graphemes into Spans (fewer spans = lighter render + cleaner selection).
-fn rebuild_spans(row: Vec<(String, Style)>) -> Line<'static> {
+fn rebuild_spans(row: Vec<WrapCell>) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut acc = String::new();
     let mut acc_style: Option<Style> = None;
-    for (text, style) in row {
-        if acc_style != Some(style) {
+    for cell in row {
+        if acc_style != Some(cell.style) {
             if !acc.is_empty() {
                 spans.push(Span::styled(
                     std::mem::take(&mut acc),
                     acc_style.unwrap_or_default(),
                 ));
             }
-            acc_style = Some(style);
+            acc_style = Some(cell.style);
         }
-        acc.push_str(&text);
+        acc.push_str(&cell.text);
     }
     if !acc.is_empty() {
         spans.push(Span::styled(acc, acc_style.unwrap_or_default()));
@@ -460,6 +344,12 @@ mod tests {
         // ideographs (width 4) + ellipsis (width 1) = 5.
         let out = truncate_width("\u{4e2d}\u{6587}\u{6d4b}\u{8bd5}", 5);
         assert_eq!(out, "\u{4e2d}\u{6587}\u{2026}");
+    }
+
+    #[test]
+    fn test_truncate_keeps_grapheme() {
+        let out = truncate_width("\u{1f469}\u{200d}\u{1f4bb}xy", 3);
+        assert_eq!(out, "\u{1f469}\u{200d}\u{1f4bb}\u{2026}");
     }
 
     #[test]
@@ -596,6 +486,45 @@ mod tests {
             rows,
             vec![wide.to_string(), wide.to_string(), wide.to_string()]
         );
+    }
+
+    #[test]
+    fn test_cjk_uses_width() {
+        let rows = wrap_line(
+            "\u{8bf4}\u{660e} alpha \u{4e2d}\u{6587}\u{5c3e}\u{53e5}\u{5e94}\u{8be5}\u{586b}\u{6ee1}\u{ff09}\u{3002}",
+            24,
+        );
+        assert!(
+            UnicodeWidthStr::width(rows[0].as_str())
+                > UnicodeWidthStr::width("\u{8bf4}\u{660e} alpha"),
+            "the CJK tail should use the first row's remaining width: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .skip(1)
+                .all(|row| { !row.starts_with(['\u{ff09}', '\u{ff0c}', '\u{3002}']) }),
+            "closing punctuation must not lead a continuation row: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn test_style_keeps_wraps() {
+        use ratatui::style::{Color, Style};
+        let text = "\u{8bf4}\u{660e} alpha \u{4e2d}\u{6587}\u{5c3e}\u{53e5}\u{5e94}\u{8be5}\u{586b}\u{6ee1}\u{ff09}\u{3002}";
+        let plain_rows = wrap_line(text, 24);
+        let styled = Line::from(vec![
+            Span::raw("\u{8bf4}\u{660e} alpha "),
+            Span::styled(
+                "\u{4e2d}\u{6587}\u{5c3e}\u{53e5}",
+                Style::new().fg(Color::Cyan),
+            ),
+            Span::raw("\u{5e94}\u{8be5}\u{586b}\u{6ee1}\u{ff09}\u{3002}"),
+        ]);
+        let styled_rows: Vec<String> = wrap_styled_line(styled, 24)
+            .into_iter()
+            .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+            .collect();
+        assert_eq!(styled_rows, plain_rows);
     }
 
     #[test]

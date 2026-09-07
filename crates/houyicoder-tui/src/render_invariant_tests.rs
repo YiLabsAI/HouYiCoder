@@ -666,8 +666,8 @@ fn test_expanded_results_callid_collide() {
 // all three verbose-sensitive sites in counts.rs. Mutation-tested: each of
 // the three || self.verbose additions is pinned by a distinct corpus leg, so
 // reverting any one branch reddens this test.
-//   - :59 chip    -> a 30-line bash command: status truncates to 2 lines,
-//                   render_verbose spans 30 (28-row desync without the fix).
+//   - :59 chip    -> a 30-line bash command: status renders on one row,
+//                   while render_verbose exposes every command line.
 //   - :49 result  -> a 10-line result body, past COLLAPSE_SHOW=3: collapsed
 //                   shows 3 + ellipsis, expanded shows all 10 (6-row desync).
 //   - :29 reasoning -> a 12-line ThoughtFor reasoning: collapsed is the

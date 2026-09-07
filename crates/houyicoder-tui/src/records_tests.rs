@@ -218,6 +218,29 @@ fn test_verbose_render_uses_invocation() {
 }
 
 #[test]
+fn test_tool_chip_ellipsis() {
+    let call = TranscriptLine::Tool {
+        name: "bash".into(),
+        tool: "bash".into(),
+        status: "ego-browser nodejs with a long argument".into(),
+        invocation: "ego-browser nodejs with a long argument".into(),
+        outcome: ToolOutcome::Success,
+        call_id: "c1".into(),
+        body: String::new(),
+        is_diff: false,
+    };
+    let rows = call.tool_call_rows(24, false).expect("tool rows");
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].contains('\u{2026}'), "missing ellipsis: {:?}", rows);
+    assert!(
+        rows[0].ends_with(')'),
+        "closing delimiter missing: {:?}",
+        rows
+    );
+    assert!(unicode_width::UnicodeWidthStr::width(rows[0].as_str()) <= 24);
+}
+
+#[test]
 fn test_result_body_only_result() {
     let call = TranscriptLine::Tool {
         name: "bash".into(),

@@ -321,6 +321,42 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
+fn rendered_tool_rows(
+    line: &crate::records::TranscriptLine,
+    grp: Option<&str>,
+    width: u16,
+    app: &App,
+) -> Option<Vec<String>> {
+    let full_call = app.verbose || grp.is_some_and(|key| app.expanded_fold_groups.contains(key));
+    let mut rows = line.tool_call_rows(width, full_call)?;
+    // Live bash-elapsed suffix: a long-running bash call shows (Ns) on its
+    // chip after 2s so a stalled-looking command is distinguishable from a
+    // stuck one. When the backend streams stdout, lines Some -> (Ns . M lines).
+    let crate::records::TranscriptLine::Tool { call_id, .. } = line else {
+        return Some(rows);
+    };
+    let Some(prog) = app.bash_progress.get(call_id) else {
+        return Some(rows);
+    };
+    if prog.elapsed_secs < 2 {
+        return Some(rows);
+    }
+    let suffix = match prog.lines {
+        Some(n) => format!(" ({}s · {n} lines)", prog.elapsed_secs),
+        None => format!(" ({}s)", prog.elapsed_secs),
+    };
+    if let Some(last) = rows.last_mut() {
+        let suffix_width = unicode_width::UnicodeWidthStr::width(suffix.as_str());
+        let keep = (width as usize).saturating_sub(suffix_width);
+        *last = format!(
+            "{}{}",
+            crate::view::line_wrap::truncate_width(last, keep),
+            crate::view::line_wrap::truncate_width(&suffix, width as usize)
+        );
+    }
+    Some(rows)
+}
+
 /// Emit the rendered rows for one transcript line (the row layer). Shared
 /// by the slot-based live render (draw_transcript) and the flat window render
 /// (draw_flat_transcript): the slot layer (fold grouping + collapse handles)
@@ -484,28 +520,16 @@ pub(crate) fn push_line_rows(
         }
         return true;
     }
+    if let Some(rows) = rendered_tool_rows(line, grp, width, app) {
+        for row in rows {
+            sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
+        }
+        return true;
+    }
     let text = if app.verbose {
         line.render_verbose()
     } else {
         line.render()
-    };
-    // Live bash-elapsed suffix: a long-running bash call shows (Ns) on its
-    // chip after 2s so a stalled-looking command is distinguishable from a
-    // stuck one. When the backend streams stdout, lines Some -> (Ns . M lines).
-    let text = if let crate::records::TranscriptLine::Tool { name, call_id, .. } = line {
-        if name != "result"
-            && let Some(prog) = app.bash_progress.get(call_id)
-            && prog.elapsed_secs >= 2
-        {
-            match prog.lines {
-                Some(n) => format!("{text} ({}s · {n} lines)", prog.elapsed_secs),
-                None => format!("{text} ({}s)", prog.elapsed_secs),
-            }
-        } else {
-            text
-        }
-    } else {
-        text
     };
     for row in text.split('\n') {
         sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
@@ -630,6 +654,22 @@ fn visible_window<T: Clone>(
     out
 }
 
+fn fold_hint_row(hint: &str, width: u16) -> String {
+    const PREFIX: &str = "  \u{23bf}  ";
+    let avail = (width as usize).saturating_sub(5);
+    let mut lines = hint.lines();
+    let first = lines.next().unwrap_or_default();
+    let preview = if lines.next().is_some() {
+        format!("{first}\u{2026}")
+    } else {
+        first.to_string()
+    };
+    format!(
+        "{PREFIX}{}",
+        crate::view::line_wrap::truncate_width(&preview, avail)
+    )
+}
+
 fn build_slots_rows(area: Rect, app: &App) -> RowParts {
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
     const FOLD: u8 = crate::selection::TAG_FOLD;
@@ -664,7 +704,7 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
                 );
                 if let Some(hint) = g.hint.as_ref() {
                     sink.push(
-                        Row::new(FOLD, format!("  \u{23bf}  {hint}"))
+                        Row::new(FOLD, fold_hint_row(hint, area.width))
                             .fold_key(Some(g.key.clone()))
                             .group(enclosing),
                     );

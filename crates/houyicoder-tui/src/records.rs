@@ -364,6 +364,55 @@ impl TranscriptLine {
         self.render_with(true)
     }
 
+    pub(crate) fn tool_call_rows(&self, width: u16, full: bool) -> Option<Vec<String>> {
+        let Self::Tool {
+            name,
+            status,
+            invocation,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        if name == "result" {
+            return None;
+        }
+        let prefix = format!("\u{23fa} {}(", capitalize(name));
+        if full {
+            if width == 0 {
+                return Some(
+                    format!("{prefix}{invocation})")
+                        .split('\n')
+                        .map(str::to_string)
+                        .collect(),
+                );
+            }
+            return Some(crate::view::line_wrap::wrap_plain_block(
+                &format!("{invocation})"),
+                &prefix,
+                width,
+                None,
+            ));
+        }
+        let rendered = format!("{prefix}{status})");
+        if width == 0 {
+            return Some(vec![rendered]);
+        }
+        let max_width = width as usize;
+        let fixed = unicode_width::UnicodeWidthStr::width(prefix.as_str()) + 1;
+        let row = if unicode_width::UnicodeWidthStr::width(rendered.as_str()) <= max_width {
+            rendered
+        } else if max_width > fixed {
+            format!(
+                "{prefix}{})",
+                crate::view::line_wrap::truncate_width(status, max_width - fixed)
+            )
+        } else {
+            crate::view::line_wrap::truncate_width(&rendered, max_width)
+        };
+        Some(vec![row])
+    }
+
     fn render_with(&self, verbose: bool) -> String {
         match self {
             Self::User(s) => format!("> {s}"),

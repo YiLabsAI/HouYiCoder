@@ -29,7 +29,7 @@ pub(crate) fn value_brief(v: &Value) -> String {
 /// verbatim) rather than raw JSON args. Known tools delegate the field
 /// selection to the shared, untruncated tool_invocation projection (so the
 /// chip, the verbose view, and the search index all read the same source
-/// text), then truncate to the chip budget: at most 160 chars and 2 lines so
+/// text), then truncate to the chip budget: at most 160 chars on one line so
 /// a long shell one-liner stays one-glance. Unknown tools keep the original
 /// 60-char value_brief glimpse — MCP tools fall here with large inputs, and a
 /// 160-char 2-line dump is not a chip. The path field name matches the tool
