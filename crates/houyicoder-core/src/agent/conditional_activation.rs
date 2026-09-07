@@ -182,13 +182,20 @@ impl ConditionalSkillActivator for ConditionalActivation {
 /// outside cwd cannot match cwd-relative patterns.
 fn relative_under_cwd(cwd: &Path, file: &str) -> Option<PathBuf> {
     let p = Path::new(file);
+    // Absolute paths (platform-native) must strip under cwd. On Windows,
+    // a Unix-style /etc/passwd is NOT absolute (no drive), so it falls to
+    // the relative branch — but it still escapes cwd, so the starts_with
+    // guard below catches it.
     let rel = if p.is_absolute() {
+        if !p.starts_with(cwd) {
+            return None;
+        }
         p.strip_prefix(cwd).ok()?.to_path_buf()
     } else {
         p.to_path_buf()
     };
     let s = rel.to_string_lossy();
-    if s.is_empty() || s.starts_with("..") || rel.is_absolute() {
+    if s.is_empty() || s.starts_with("..") || s.starts_with('/') || rel.is_absolute() {
         return None;
     }
     Some(rel)
@@ -396,6 +403,17 @@ mod tests {
         let a = act.activate_for_paths(&["/etc/passwd".to_string()]);
         assert!(a.is_empty());
         assert!(!act.is_active("abs"));
+    }
+
+    /// An absolute path under cwd strips to a relative path and matches.
+    #[test]
+    fn test_absolute_under_cwd_matches() {
+        let cwd = tmp_cwd();
+        let reg = Arc::new(StubRegistry::new(&[("abs", &["src"])]));
+        let act = ConditionalActivation::new(reg, cwd.clone());
+        let abs = cwd.join("src/foo.rs").to_string_lossy().to_string();
+        let a = act.activate_for_paths(&[abs]);
+        assert_eq!(a, vec!["abs".to_string()]);
     }
 
     #[test]

@@ -37,9 +37,9 @@ fn write_skill(dir: &Path, name: &str, body: &str) {
 }
 
 /// The real end-to-end slash path. A real SKILL.md on disk is discovered,
-/// then Runner.run("/commit fix typo") resolves the slash, keeps the raw
-/// /-text as UserInput, and appends the real body (file content + the
-/// base-dir header) as a durable SkillBody. Proves discover then resolve
+/// then Runner.run("@skill:commit fix typo") resolves the slash, keeps the
+/// raw @skill: text as UserInput, and appends the real body (file content +
+/// the base-dir header) as a durable SkillBody. Proves discover then resolve
 /// then prepare_body then inject with real files, not stubs.
 #[tokio::test]
 async fn test_run_slash_real_body() {
@@ -64,16 +64,20 @@ async fn test_run_slash_real_body() {
     .with_skill_registry(Arc::clone(&reg));
     let session = SessionId::new();
     runner
-        .run(session, "/commit fix typo".into())
+        .run(session, "@skill:commit fix typo".into())
         .await
         .expect("run completes");
     let view = store.current_view(session).await.unwrap();
-    // The raw /-text is the UserInput (transcript fidelity).
+    // The raw @skill: text is the UserInput (transcript fidelity).
     let user = view.events.iter().find_map(|e| match &e.kind {
         TurnEventKind::UserInput { text } => Some(text.clone()),
         _ => None,
     });
-    assert_eq!(user.as_deref(), Some("/commit fix typo"), "raw /-text kept");
+    assert_eq!(
+        user.as_deref(),
+        Some("@skill:commit fix typo"),
+        "raw @skill: text kept"
+    );
     // The real body read from disk lands as a durable SkillBody (not a
     // MetaUser, so it survives a compaction boundary) with the base-dir
     // header, not a stub string.
