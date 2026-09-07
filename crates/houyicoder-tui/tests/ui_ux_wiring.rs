@@ -11,8 +11,60 @@ mod common;
 
 use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
 
+#[test]
+#[ignore]
+fn test_trust_enter_skips_flash() {
+    let home = fresh_temp_dir("trust-home");
+    let project = fresh_temp_dir("trust-project");
+    let mut session = PtySession::launch_untrusted(home.clone(), project.clone());
+    assert!(
+        session.wait_for("Trust this workspace?", RENDER_TIMEOUT),
+        "trust screen missing: {}",
+        session.output_plain()
+    );
+    assert!(
+        !session.output_plain().contains("sign in to houyicoder"),
+        "login screen flashed before trust: {}",
+        session.output_plain()
+    );
+    session.send_key(&Key::Enter);
+    assert!(
+        session.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
+        "Enter did not accept trust: {}",
+        session.output_plain()
+    );
+    drop(session);
+    drop(std::fs::remove_dir_all(home));
+    drop(std::fs::remove_dir_all(project));
+}
+
 /// /hooks opens the Hooks pane (a live view with a "Hooks" header), not a
 /// transcript system-line dump. The user journey: type /hooks, see the pane.
+#[test]
+#[ignore]
+fn test_trust_down_exits() {
+    let home = fresh_temp_dir("trust-exit-home");
+    let project = fresh_temp_dir("trust-exit-project");
+    let mut session = PtySession::launch_untrusted(home.clone(), project.clone());
+    assert!(session.wait_for("Trust this workspace?", RENDER_TIMEOUT));
+    session.send_key(&Key::Down);
+    assert!(
+        session.wait_for_compact("›No,exit", RENDER_TIMEOUT),
+        "Down did not select exit: {}",
+        session.output_plain()
+    );
+    session.send_key(&Key::Enter);
+    assert!(
+        session.wait_for_exit(RENDER_TIMEOUT),
+        "Enter did not confirm the selected exit"
+    );
+    let settings = home.join(".houyicoder").join("settings.json");
+    assert!(!houyicoder_config::is_path_trusted(&settings, &project));
+    drop(session);
+    drop(std::fs::remove_dir_all(home));
+    drop(std::fs::remove_dir_all(project));
+}
+
 #[test]
 #[ignore]
 fn test_hooks_opens_pane() {
@@ -95,11 +147,8 @@ fn test_status_bar_renders_gauge() {
         s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
         "working screen"
     );
-    s.clear_output();
-    // Let the status bar repaint a frame after clear.
-    std::thread::sleep(std::time::Duration::from_millis(200));
     assert!(
-        s.output().contains("context"),
+        s.output_plain().contains("context"),
         "status bar context gauge missing (context_window may be 0 in local mode):\n{}",
         s.output()
     );

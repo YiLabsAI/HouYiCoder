@@ -24,6 +24,8 @@ use houyicoder_service::composition::walk_to_workspace_root;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 use std::sync::mpsc;
+use std::thread::sleep;
+use std::time::Duration;
 fn user_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
         ContentBlock::Text { text: text.into() },
@@ -213,7 +215,7 @@ fn test_guarded_tool_manual_raises() {
             raised = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(raised, "Manual should raise an approval popup");
     assert!(!boom.ran(), "the tool must not run before approval");
@@ -236,7 +238,7 @@ fn test_guarded_tool_auto_raises() {
             raised = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(raised, "Auto should raise an approval popup");
     assert!(!boom.ran(), "the tool must not run before approval");
@@ -270,7 +272,7 @@ fn test_approve_yes_executes_tool() {
             raised = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(raised, "Manual should raise an approval popup");
 
@@ -290,7 +292,7 @@ fn test_approve_yes_executes_tool() {
             settled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(settled, "resume should settle after approval");
 
@@ -331,7 +333,7 @@ fn test_reject_does_not_execute() {
             raised = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(raised, "Manual should raise an approval popup");
 
@@ -350,7 +352,7 @@ fn test_reject_does_not_execute() {
             settled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(settled, "resume should settle after reject");
     assert!(!boom.ran(), "the tool MUST NOT run after a human reject");
@@ -526,7 +528,7 @@ fn test_spawn_run_final_output() {
             got = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(got, "agent message should arrive");
     assert!(app.transcript.iter().any(|l| matches!(
@@ -564,7 +566,7 @@ fn test_spawn_run_interruption() {
             got = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(got, "agent message should arrive");
     assert!(app.approval.is_some(), "popup raised");
@@ -628,7 +630,7 @@ fn test_resume_after_approval() {
             got = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(got && app.approval.is_some());
     // Approve the current approval (one decision for its call_id) and resume.
@@ -646,7 +648,7 @@ fn test_resume_after_approval() {
             got2 = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(got2, "resume message should arrive");
     assert!(app.approval.is_none());
@@ -701,7 +703,7 @@ fn test_slash_queries_ship_wired() {
         {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(
         app.transcript
@@ -794,7 +796,7 @@ fn test_agents_tools_round_trip() {
             landed = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(
         landed,
@@ -810,7 +812,7 @@ fn test_agents_tools_round_trip() {
             landed = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(
         landed,
@@ -926,9 +928,47 @@ fn test_model_switch_ships_wired() {
             saw_error = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(!saw_error, "ModelSwitch wire round-trip must not error");
+}
+
+/// The startup handshake drains a queued trust ask before the run loop,
+/// so the trust card is raised without flashing the login screen.
+#[test]
+fn test_startup_handshake_drains_trust() {
+    let p = Arc::new(FakeProvider::text("ok"));
+    let mut app = app_with_provider(p, ToolRegistry::new());
+    // Queue a trust ask before the handshake, simulating a server that
+    // surfaces the gate before the first draw.
+    let tx = app.agent_tx.as_ref().expect("agent tx wired");
+    tx.send(AgentMessage::TrustAsk {
+        req_id: houyicoder_protocol::envelope::RequestId(7),
+        prompt: houyicoder_protocol::frontend::trust::TrustPrompt {
+            project_path: "/proj".into(),
+            risks: Vec::new(),
+        },
+    })
+    .unwrap();
+    app.startup_handshake(Duration::from_secs(2));
+    assert!(
+        app.pending_trust.is_some(),
+        "handshake drains the trust ask"
+    );
+    assert_eq!(
+        app.pending_trust_req_id,
+        Some(houyicoder_protocol::envelope::RequestId(7))
+    );
+}
+
+/// The startup handshake is harmless when no message arrives within the
+/// bounded wait: the app simply proceeds to the run loop with no card.
+#[test]
+fn test_startup_handshake_empty_timeout() {
+    let p = Arc::new(FakeProvider::text("ok"));
+    let mut app = app_with_provider(p, ToolRegistry::new());
+    app.startup_handshake(Duration::from_millis(50));
+    assert!(app.pending_trust.is_none(), "no card on empty handshake");
 }
 
 #[cfg(test)]

@@ -9,7 +9,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_app_mut_borrows import evaluate, MUT_APP_BASELINE  # noqa: E402
+from check_app_mut_borrows import (  # noqa: E402
+    MUT_APP_BASELINE,
+    _sig_has_mut_app_param,
+    evaluate,
+)
 
 
 def test_growth_blocks():
@@ -26,6 +30,16 @@ def test_drift_blocks():
 def test_exact_green():
     # total == baseline -> 0 (the only green state)
     assert evaluate(MUT_APP_BASELINE) == 0
+
+
+def test_qualified_app_detected():
+    source = "fn dispatch(app: &mut crate::state::App) {}"
+    assert _sig_has_mut_app_param(source, 0)
+
+
+def test_other_type_ignored():
+    source = "fn dispatch(state: &mut crate::state::TrustChoice) {}"
+    assert not _sig_has_mut_app_param(source, 0)
 
 
 if __name__ == "__main__":

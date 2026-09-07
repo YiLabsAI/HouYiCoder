@@ -33,8 +33,6 @@ use houyicoder_core::agent::Runner;
 #[cfg(test)]
 use houyicoder_permission::DefaultModeGate;
 use ratatui::layout::Rect;
-use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
 #[cfg(test)]
 use std::sync::Arc;
 use std::sync::mpsc;

@@ -1,27 +1,12 @@
-//! The live session between the TUI and the engine. The TUI holds one
-//! Session per wired backend; the session owns the outbound command channel,
-//! the inbound agent-message receiver, the monotonic request-id counter, and
-//! the background driver task that pumps the protocol client.
-//!
-//! The driver (drive_client) is the stateless wire translator: it reads
-//! inbound server frames and translates them to AgentMessage values on the
-//! inbound channel, and it drains outbound ClientCommand values and ships
-//! them as wire requests. The session history (the accumulated frames) and
-//! the transcript projection live on App, not here — this module moves bytes
-//! across the boundary, nothing more. The layering is the same in kind:
-//! the SDK yields message deltas and the frontend owns the message list.
-//!
-//! The driver runs on the shared tokio runtime the composition root also uses
-//! for the server task; ratatui's render loop is blocking and synchronous, so
-//! it cannot await the client's async frame stream directly. The driver task
-//! is the TUI's equivalent of awaiting an SDK generator inside the render
-//! cycle — the runtime is already paid for, the task parks idle between
-//! frames, and the select multiplexes inbound/outbound without the
-//! recv-future's exclusive client borrow aliasing on a send.
+//! Protocol bridge between the synchronous TUI and its asynchronous server.
+//! Session owns the channels and driver task; App owns transcript state.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::mpsc;
+use std::time::Duration;
 
+use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
     ClientResponsePayload, RequestId, ResponsePayload, ServerFrame, ServerRequestPayload,
 };
@@ -29,14 +14,13 @@ use houyicoder_protocol::frontend::FrontendEventKind;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_protocol::frontend::run::RunError;
+use houyicoder_protocol::frontend::trust::TrustAccept;
 
 use crate::agent_message::{AgentMessage, ClientCommand};
 use crate::transcript::TranscriptFrame;
 
-/// An outbound frame the driver should send on the wire. Held in a queue the
-/// driver drains between select rounds so the select branches never borrow the
-/// client (the recv future borrows the client exclusively for its whole life;
-/// sending from inside a branch would alias it).
+/// A queued outbound frame. Sending between select rounds avoids aliasing the
+/// client borrowed by the receive future.
 enum Outbound {
     Request {
         req_id: RequestId,
@@ -48,24 +32,19 @@ enum Outbound {
     },
     /// A JSON-RPC notification (no id, no reply). Used for client-to-server
     /// signals like session/cancel.
-    Notification(houyicoder_protocol::acp_wire::AcpNotification),
+    Notification(AcpNotification),
 }
 
-/// The live session with the engine. Owns the command channel (App to driver),
-/// the message channel (driver to App), the request-id counter, and the driver
-/// task handle. Drop closes the channels and detaches the driver.
+/// Channels, request identifiers, and driver lifetime for one live connection.
 pub struct Session {
     cmd_tx: tokio::sync::mpsc::UnboundedSender<ClientCommand>,
     agent_rx: mpsc::Receiver<AgentMessage>,
-    next_req_id: std::cell::Cell<u64>,
+    next_req_id: Cell<u64>,
     _driver: tokio::task::JoinHandle<()>,
 }
 
 impl Session {
-    /// Spawn the driver on the shared runtime and return a Session holding the
-    /// two ends App uses (the command sender + the message receiver) plus the
-    /// request-id counter. The driver takes ownership of the client; App holds
-    /// only this handle.
+    /// Spawn the protocol driver and retain the application-facing channels.
     pub fn spawn(
         client: houyicoder_client::Client,
         agent_tx: mpsc::Sender<AgentMessage>,
@@ -77,31 +56,31 @@ impl Session {
         Self {
             cmd_tx,
             agent_rx,
-            next_req_id: std::cell::Cell::new(0),
+            next_req_id: Cell::new(0),
             _driver,
         }
     }
 
-    /// Mint a fresh request id. Monotonic within the session; the matching
-    /// response returns it (the driver pairs by the run boundary, not by id,
-    /// since only one run is live at a time).
+    /// Mint a session-local monotonic request identifier.
     pub fn mint_request_id(&self) -> RequestId {
         let id = self.next_req_id.get();
         self.next_req_id.set(id.wrapping_add(1));
         RequestId(id)
     }
 
-    /// Ship a command to the driver (fire-and-forget). The driver drains and
-    /// translates it to an outbound wire request on its next select round.
+    /// Queue a command for wire translation.
     pub fn send(&self, cmd: ClientCommand) {
         let _send = self.cmd_tx.send(cmd);
     }
 
-    /// Drain one inbound agent message, if any is pending. Non-blocking; the
-    /// render loop calls this each tick. Returns None when the channel is empty
-    /// or the driver has detached.
+    /// Take one pending inbound message without blocking.
     pub fn poll(&mut self) -> Option<AgentMessage> {
         self.agent_rx.try_recv().ok()
+    }
+
+    /// Wait for the first bounded startup response before the initial draw.
+    pub fn poll_startup(&mut self, timeout: Duration) -> Option<AgentMessage> {
+        self.agent_rx.recv_timeout(timeout).ok()
     }
 
     /// Ship a status query to refresh the cached status snapshot. Used by the
@@ -111,10 +90,7 @@ impl Session {
         self.send(ClientCommand::StatusQuery { req_id });
     }
 
-    /// Ship a rename request so the server persists the session name to the
-    /// sidecar. The reply is a StatusSnapshot routed to StatusResult, so the
-    /// pane + the terminal tab title refresh together. The session_id is the
-    /// App's current session (a rename only applies to the live session).
+    /// Persist a new name for the live session and request refreshed status.
     pub fn request_rename(&self, session_id: WireSessionId, name: String) {
         let req_id = self.mint_request_id();
         self.send(ClientCommand::RenameSessionQuery {
@@ -124,24 +100,15 @@ impl Session {
         });
     }
 
-    /// Ship a permission-mode query so the server reports the current
-    /// permission mode, seeding the mode cache for the status-bar pill. Used
-    /// once on the first idle poll to fill the initial gap; later mode cycles
-    /// update the cache directly.
+    /// Seed the permission-mode cache from the server.
     pub fn request_permission_mode(&self) {
         let req_id = self.mint_request_id();
         self.send(ClientCommand::PermissionModeQuery { req_id });
     }
 }
 
-/// The background driver: own the protocol client, translate inbound server
-/// frames to AgentMessage values on agent_tx, and drain outbound
-/// ClientCommand values from cmd_rx into wire requests. The driver is
-/// stateless: each durable frame ships as an AgentMessage::Frame so the event
-/// loop owns the history. Deltas ride the acpx/llm/* stream as live preview
-/// (Delta/ReasoningDelta), not accumulated. Outbound sends queue between
-/// select rounds so neither branch borrows the client (the recv future holds
-/// the client exclusively for its whole life).
+/// Translate server frames into application messages and commands into wire
+/// requests. Durable history remains owned by the event loop.
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn drive_client(
     mut client: houyicoder_client::Client,
@@ -195,7 +162,7 @@ async fn drive_client(
                     outbound.push_back(Outbound::Reverse {
                         req_id,
                         payload: ClientResponsePayload::TrustAccept(
-                            houyicoder_protocol::frontend::trust::TrustAccept { accepted: accept },
+                            TrustAccept { accepted: accept },
                         ),
                     });
                 }
@@ -373,7 +340,7 @@ async fn drive_client(
                     // select catches it and aborts the runner token. No id
                     // (no reply) — the run resolves Interrupted and the
                     // outcome returns on the original run's req_id.
-                    let notif = houyicoder_protocol::acp_wire::AcpNotification::new(
+                    let notif = AcpNotification::new(
                         "session/cancel",
                         serde_json::json!({ "sessionId": session_id.0 }),
                     );
@@ -620,7 +587,7 @@ async fn drive_client(
                         // Convert the wire frames to the live-frame shape once,
                         // at the driver boundary. The fill site then runs
                         // transcript_from_frames unchanged.
-                        let frames: Vec<crate::transcript::TranscriptFrame> =
+                        let frames: Vec<TranscriptFrame> =
                             frames.into_iter().map(Into::into).collect();
                         let _send = agent_tx.send(AgentMessage::ChildTranscriptResult {
                             child_sid: child_sid.0,
@@ -684,11 +651,8 @@ async fn drive_client(
 /// params the server's handle_session_notification reads) is unit-testable:
 /// a typo here would make mid-turn injection silently no-op (the server
 /// would not match the method or find the text param).
-fn inject_notification(
-    session_id: &houyicoder_protocol::frontend::SessionId,
-    text: &str,
-) -> houyicoder_protocol::acp_wire::AcpNotification {
-    houyicoder_protocol::acp_wire::AcpNotification::new(
+fn inject_notification(session_id: &WireSessionId, text: &str) -> AcpNotification {
+    AcpNotification::new(
         "session/inject",
         serde_json::json!({ "sessionId": session_id.0, "text": text }),
     )
@@ -697,11 +661,8 @@ fn inject_notification(
 /// Build a session/inject_child notification. Pure so the wire shape (the
 /// childSid + text the server's handle_session_notification reads) is
 /// unit-testable: a typo would make steering silently no-op.
-fn inject_child_notification(
-    child_sid: &str,
-    text: &str,
-) -> houyicoder_protocol::acp_wire::AcpNotification {
-    houyicoder_protocol::acp_wire::AcpNotification::new(
+fn inject_child_notification(child_sid: &str, text: &str) -> AcpNotification {
+    AcpNotification::new(
         "session/inject_child",
         serde_json::json!({ "childSid": child_sid, "text": text }),
     )
@@ -710,10 +671,8 @@ fn inject_child_notification(
 /// Build a session/cancel_child_turn notification. Pure so the wire shape
 /// (the childSid the server's handle_session_notification reads) is
 /// unit-testable: a typo would make the abort silently no-op.
-fn cancel_child_turn_notification(
-    child_sid: &str,
-) -> houyicoder_protocol::acp_wire::AcpNotification {
-    houyicoder_protocol::acp_wire::AcpNotification::new(
+fn cancel_child_turn_notification(child_sid: &str) -> AcpNotification {
+    AcpNotification::new(
         "session/cancel_child_turn",
         serde_json::json!({ "childSid": child_sid }),
     )
@@ -721,11 +680,8 @@ fn cancel_child_turn_notification(
 
 /// Build a session/queue_remove notification. Pure for the same reason:
 /// the wire shape must match what the server reads to drop a queued message.
-fn queue_remove_notification(
-    session_id: &houyicoder_protocol::frontend::SessionId,
-    text: &str,
-) -> houyicoder_protocol::acp_wire::AcpNotification {
-    houyicoder_protocol::acp_wire::AcpNotification::new(
+fn queue_remove_notification(session_id: &WireSessionId, text: &str) -> AcpNotification {
+    AcpNotification::new(
         "session/queue_remove",
         serde_json::json!({ "sessionId": session_id.0, "text": text }),
     )
@@ -734,14 +690,14 @@ fn queue_remove_notification(
 /// Build a session/kill_all notification. Pure so the wire method name
 /// matches what the server's handle_session_notification routes to
 /// kill_all_children; a typo would make the kill silently no-op.
-fn kill_all_notification() -> houyicoder_protocol::acp_wire::AcpNotification {
-    houyicoder_protocol::acp_wire::AcpNotification::new("session/kill_all", serde_json::json!({}))
+fn kill_all_notification() -> AcpNotification {
+    AcpNotification::new("session/kill_all", serde_json::json!({}))
 }
 
 /// Build a session/kill_child notification. Pure so the method + childSid
 /// match what the server's handle_session_notification routes to kill_child.
-fn kill_child_notification(child_sid: &str) -> houyicoder_protocol::acp_wire::AcpNotification {
-    houyicoder_protocol::acp_wire::AcpNotification::new(
+fn kill_child_notification(child_sid: &str) -> AcpNotification {
+    AcpNotification::new(
         "session/kill_child",
         serde_json::json!({ "childSid": child_sid }),
     )

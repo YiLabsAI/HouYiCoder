@@ -2,7 +2,7 @@
 //! Commands travel through the client driver; returned frames form the durable
 //! transcript, while streaming events update the live presentation.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
@@ -161,14 +161,16 @@ impl App {
         self.send_cmd(ClientCommand::Verdict { req_id, decision });
     }
 
-    /// Resolve the startup workspace-trust request. Acceptance continues the
-    /// session and persists the trusted path; rejection ends the session.
+    /// Send the startup trust verdict. Rejection also exits the local TUI.
     pub fn resolve_trust(&mut self, accept: bool) {
         let Some(req_id) = self.pending_trust_req_id.take() else {
             return;
         };
         self.pending_trust = None;
         self.send_cmd(ClientCommand::TrustVerdict { req_id, accept });
+        if !accept {
+            self.quit = true;
+        }
     }
 
     /// Present a wire permission request and retain its request identifier.
@@ -236,6 +238,23 @@ impl App {
     /// requests pause so they cannot compete for response frames.
     pub fn reverse_request_in_flight(&self) -> bool {
         self.pending_permission_req_id.get().is_some()
+    }
+
+    /// Request an initial status snapshot and wait for the first bounded
+    /// startup message before the run loop begins. The handshake prevents the
+    /// login screen from flashing when a trust prompt is already queued.
+    pub fn startup_handshake(&mut self, timeout: Duration) {
+        if let Some(session) = self.session.as_ref() {
+            session.request_status();
+        }
+        let startup = self
+            .session
+            .as_mut()
+            .and_then(|session| session.poll_startup(timeout));
+        if let Some(message) = startup {
+            self.handle_agent_message(message);
+            self.poll_agent();
+        }
     }
 
     /// Apply all available agent messages and return whether state changed.

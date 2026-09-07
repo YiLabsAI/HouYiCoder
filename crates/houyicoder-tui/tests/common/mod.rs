@@ -1,66 +1,55 @@
-//! Shared harness for end-to-end terminal tests.
-//!
-//! Launches the real binary in an isolated pseudo-terminal, sends key events,
-//! and captures rendered output. These ignored tests cover event routing,
-//! repainting, and interaction flows that state-based unit tests cannot.
-//! Assertions inspect the accumulated terminal byte stream; cell-level checks
-//! remain in the unit-test renderer.
+//! Shared pseudo-terminal harness for real-binary interaction tests.
+//! It isolates process state, sends key events, and captures terminal output.
 
 #![allow(dead_code)] // shared helpers vary by integration target
 
-use std::io::Read;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::env;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{self, Command};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::cmdbuilder::CommandBuilder;
 use portable_pty::{Child, PtySize};
 
-/// A live houyi TUI driven through a PTY. The reader thread continuously
-/// drains the PTY master into an accumulated byte buffer; wait_for polls
-/// that buffer for a marker substring. Drop kills the child + waits on it
-/// (best-effort, never panics); the reader thread is detached + exits on
-/// its own when the master EOFs.
+/// A real TUI process with writable input and accumulated terminal output.
+/// Drop stops the child; the reader exits when the pseudo-terminal closes.
 pub struct PtySession {
     _child: Box<dyn Child + Send + Sync>,
-    writer: Box<dyn std::io::Write + Send>,
-    output: Arc<std::sync::Mutex<Vec<u8>>>,
+    writer: Box<dyn Write + Send>,
+    output: Arc<Mutex<Vec<u8>>>,
     _reader: thread::JoinHandle<()>,
-    sessions_dir: std::path::PathBuf,
+    sessions_dir: PathBuf,
     /// A temp home the harness created (not caller-provided); cleaned in Drop
     /// so isolated config roots do not accumulate in /tmp.
-    _owned_home: Option<std::path::PathBuf>,
+    _owned_home: Option<PathBuf>,
 }
 
 const ROWS: u16 = 24;
-/// Wide enough that long canonical paths (macOS /private/var/folders/.../basename)
-/// render fully instead of truncating, so substring assertions on the basename
-/// match. The TUI layout adapts to any width.
+/// Wide viewport for stable path and layout assertions.
 const COLS: u16 = 200;
 
+#[derive(Clone, Copy)]
+struct LaunchOptions {
+    rows: u16,
+    pretrust: bool,
+}
+
 impl PtySession {
-    /// Spawn target/debug/houyi under a 200×24 PTY with no API key
-    /// (FakeProvider) + the workspace root as cwd (so the project manifest
-    /// resolves cleanly). Returns once the binary has started; the reader
-    /// thread is already accumulating output.
+    /// Launch the real binary with an isolated home, stub provider, and workspace cwd.
     pub fn launch() -> Self {
         Self::launch_inner(None, None, None, None)
     }
 
-    /// Like launch(), but runs the binary in the given dir instead of the
-    /// workspace root. For tests that assert on the workspace additional-dirs
-    /// list's empty state: launched from a linked worktree (the default
-    /// workspace root during a sprint), the startup allow-back adds the main
-    /// checkout's git dir, so the list is never empty there.
-    pub fn launch_in_dir(dir: std::path::PathBuf) -> Self {
+    /// Launch from an explicit working directory.
+    pub fn launch_in_dir(dir: PathBuf) -> Self {
         Self::launch_inner(None, None, None, Some(dir))
     }
 
-    /// Like launch(), but sets HOUYICODER_STUB_DELAY_MS so the stub run streams
-    /// slowly enough to drive mid-run keys (e.g. a Shift+Tab mode cycle while
-    /// agent_busy). The default launch() streams back-to-back, so its busy
-    /// window is too short to catch mid-run.
+    /// Slow stub streaming so tests can act during a live run.
     pub fn launch_with_stub_delay(ms: u64) -> Self {
         Self::launch_inner(None, Some(ms), None, None)
     }
@@ -68,77 +57,71 @@ impl PtySession {
     /// Like launch_with_stub_delay, but runs in the given repo dir instead of
     /// the workspace root (isolated startup, no project state to delay the
     /// stub).
-    pub fn launch_in_repo_with_delay(repo: std::path::PathBuf, ms: u64) -> Self {
+    pub fn launch_in_repo_with_delay(repo: PathBuf, ms: u64) -> Self {
         Self::launch_inner(None, Some(ms), None, Some(repo))
     }
 
-    /// Like launch(), but sets HOUYICODER_STUB_SCRIPT so the stub emits a
-    /// scripted response sequence (a ToolCall then plain text) so PTY tests
-    /// can drive real tool calls (glob / read / edit / todo_write) through the
-    /// real binary — the interaction layer (permission cards, tool-result
-    /// rendering, transcript fold) is otherwise unreachable. The script is a
-    /// JSON array of per-call output-item lists; see provider_or_stub.
+    /// Drive the stub provider with a JSON sequence of model output items.
     pub fn launch_with_stub_script(script_json: &str) -> Self {
         Self::launch_inner(Some(script_json.to_string()), None, None, None)
     }
 
-    /// Like launch(), but overrides HOME so the user + auto memory roots and
-    /// the settings file land in a temp dir the test owns + can assert on,
-    /// never touching the developer's real home. The project-scope root still
-    /// lives under the workspace cwd; /save writes to the auto scope (the last
-    /// root), so it lands in the temp HOME. Used by the /memory smoke tests.
-    pub fn launch_with_home(home: std::path::PathBuf) -> Self {
+    /// Launch with a caller-owned home for config and memory assertions.
+    pub fn launch_with_home(home: PathBuf) -> Self {
         Self::launch_inner(None, None, Some(home), None)
     }
 
-    /// Like launch_with_stub_script, but runs the binary in the given repo
-    /// dir instead of the workspace root. Used by the worktree PTY tests so
-    /// enter_worktree creates worktrees in a throwaway git repo (a real
-    /// linked worktree under the repo state dir), never in the developer
-    /// actual workspace. The dir must carry a workspace manifest so
-    /// resolve_project_workspace pins it and the worktree controller wires;
-    /// git must be init'd with one commit so branching from HEAD succeeds.
-    pub fn launch_in_repo_with_script(repo: std::path::PathBuf, script_json: &str) -> Self {
+    /// Launch without pre-trusting the workspace so startup trust UX can be tested.
+    pub fn launch_untrusted(home: PathBuf, cwd: PathBuf) -> Self {
+        let sessions_dir = fresh_temp_dir("sessions");
+        Self::launch_impl(
+            None,
+            None,
+            Some(home),
+            Some(cwd),
+            &[],
+            sessions_dir,
+            LaunchOptions {
+                rows: ROWS,
+                pretrust: false,
+            },
+        )
+    }
+
+    /// Run a scripted session in a caller-owned repository fixture.
+    pub fn launch_in_repo_with_script(repo: PathBuf, script_json: &str) -> Self {
         Self::launch_inner(Some(script_json.to_string()), None, None, Some(repo))
     }
 
     fn launch_inner(
         script: Option<String>,
         delay: Option<u64>,
-        home: Option<std::path::PathBuf>,
-        cwd_override: Option<std::path::PathBuf>,
+        home: Option<PathBuf>,
+        cwd_override: Option<PathBuf>,
     ) -> Self {
         Self::launch_with_args(script, delay, home, cwd_override, &[])
     }
 
-    /// Like launch(), but passes extra args to the binary (used by the
-    /// --resume tests to spawn the binary with a --resume <file> flag).
-    /// Otherwise identical isolation (sessions dir isolated, stub mode,
-    /// no network).
+    /// Launch with explicit CLI arguments while retaining test isolation.
     pub fn launch_with_args(
         script: Option<String>,
         delay: Option<u64>,
-        home: Option<std::path::PathBuf>,
-        cwd_override: Option<std::path::PathBuf>,
+        home: Option<PathBuf>,
+        cwd_override: Option<PathBuf>,
         extra_args: &[String],
     ) -> Self {
         let sessions_dir = fresh_temp_dir("sessions");
         Self::launch_with_sessions_dir(script, delay, home, cwd_override, extra_args, sessions_dir)
     }
 
-    /// Like launch_with_args, but uses a caller-provided sessions dir instead
-    /// of a fresh temp dir. Used by tests that need to share the sessions root
-    /// across two binary spawns (e.g. the lock-contention test where a second
-    /// --resume <sid> must see the same session the first holds the lock on),
-    /// or that need to seed a session on disk before launch (the in-process
-    /// swap test writes a fixture session into the dir the binary will read).
+    /// Launch with a shared session root for multi-process and resume tests.
     pub fn launch_with_sessions_dir(
         script: Option<String>,
         delay: Option<u64>,
-        home: Option<std::path::PathBuf>,
-        cwd_override: Option<std::path::PathBuf>,
+        home: Option<PathBuf>,
+        cwd_override: Option<PathBuf>,
         extra_args: &[String],
-        sessions_dir: std::path::PathBuf,
+        sessions_dir: PathBuf,
     ) -> Self {
         Self::launch_impl(
             script,
@@ -147,21 +130,21 @@ impl PtySession {
             cwd_override,
             extra_args,
             sessions_dir,
-            ROWS,
+            LaunchOptions {
+                rows: ROWS,
+                pretrust: true,
+            },
         )
     }
 
-    /// Like launch_with_sessions_dir, but with a custom PTY row count. Used by
-    /// the /status pane tests: the pane caps at area/2, so a 24-row terminal
-    /// clips the lower status fields (breaker / provenance / tokens / tasks).
-    /// A taller terminal admits the full field set.
+    /// Launch with an explicit terminal height.
     pub fn launch_with_sessions_dir_rows(
         script: Option<String>,
         delay: Option<u64>,
-        home: Option<std::path::PathBuf>,
-        cwd_override: Option<std::path::PathBuf>,
+        home: Option<PathBuf>,
+        cwd_override: Option<PathBuf>,
         extra_args: &[String],
-        sessions_dir: std::path::PathBuf,
+        sessions_dir: PathBuf,
         rows: u16,
     ) -> Self {
         Self::launch_impl(
@@ -171,25 +154,25 @@ impl PtySession {
             cwd_override,
             extra_args,
             sessions_dir,
-            rows,
+            LaunchOptions {
+                rows,
+                pretrust: true,
+            },
         )
     }
 
     fn launch_impl(
         script: Option<String>,
         delay: Option<u64>,
-        home: Option<std::path::PathBuf>,
-        cwd_override: Option<std::path::PathBuf>,
+        home: Option<PathBuf>,
+        cwd_override: Option<PathBuf>,
         extra_args: &[String],
-        sessions_dir: std::path::PathBuf,
-        rows: u16,
+        sessions_dir: PathBuf,
+        options: LaunchOptions,
     ) -> Self {
         let bin = houyi_binary_path();
         let cwd = cwd_override.unwrap_or_else(workspace_root);
-        // Default to an isolated temp home when none is provided: the test
-        // owns its config root (no leakage into the developer's real home)
-        // and the trust gate pre-trusts the test cwd there so the startup
-        // prompt does not obscure the screen the test asserts on.
+        // Default to a harness-owned home and pre-trust ordinary fixtures.
         let home_provided = home.is_some();
         let home = home.unwrap_or_else(|| fresh_temp_dir("pty-home"));
         let _owned_home = if home_provided {
@@ -203,38 +186,21 @@ impl PtySession {
             cmd.arg(arg);
         }
         cmd.env("HOME", &home);
-        // config_home() checks HOUYICODER_CONFIG_HOME BEFORE HOME, so an
-        // ambient value in the developer's shell leaks into the subprocess
-        // and the server writes settings.json to the wrong path. Point it
-        // at the temp home so the test owns the config root regardless.
+        // Override both home inputs so ambient config cannot enter the fixture.
         cmd.env("HOUYICODER_CONFIG_HOME", home.join(".houyicoder"));
         let settings = home.join(".houyicoder").join("settings.json");
-        houyicoder_config::persist_project_trust(&settings, &cwd)
-            .expect("pre-trust cwd in temp settings");
-        // Isolate the session log root: the production binary now persists
-        // every durable event to a file backend at the sessions root, so
-        // without this override each PTY test would write its session log
-        // into the developer real home. Point the override at a per-launch
-        // temp dir so every test's log lands somewhere it owns + cleans up.
+        if options.pretrust {
+            houyicoder_config::persist_project_trust(&settings, &cwd)
+                .expect("pre-trust cwd in temp settings");
+        }
+        // Keep durable session output inside the per-launch fixture.
         cmd.env("HOUYICODER_SESSIONS_DIR", &sessions_dir);
-        // Force stub mode: set the API keys to EMPTY (not just removed). The
-        // config layer treats an empty key as missing (the merge path filters
-        // !is_empty, checking DASHSCOPE / OPENAI / HOUYICODER in order), so
-        // build_provider falls to the stub path. The binary does not auto-load
-        // .env (dotenvy was removed; settings.json + env are the only sources),
-        // so no stray .env in the worktree can revive a real provider + hit the
-        // network. All THREE key vars must be emptied — missing one
-        // (HOUYICODER_API_KEY) re-enables a real provider. This matters now
-        // that the dynamic mode-switch test sends
-        // a MessageSend — a real provider would make a network call mid-test.
+        // Empty every supported key so tests deterministically select the stub
+        // provider and never inherit network credentials.
         cmd.env("DASHSCOPE_API_KEY", "");
         cmd.env("OPENAI_API_KEY", "");
         cmd.env("HOUYICODER_API_KEY", "");
-        // Suppress the fence-status startup notice so it does not occupy a
-        // transcript line that PTY text assertions must account for. The
-        // notice is a user-facing safety alert; PTY tests run unfenced by
-        // design (stub sandbox) and assert on run/command output, not fence
-        // status.
+        // Keep unrelated fence diagnostics out of transcript assertions.
         cmd.env("HOUYICODER_QUIET_FENCE", "1");
         if let Some(s) = script {
             cmd.env("HOUYICODER_STUB_SCRIPT", s);
@@ -246,7 +212,7 @@ impl PtySession {
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
-                rows,
+                rows: options.rows,
                 cols: COLS,
                 pixel_width: 0,
                 pixel_height: 0,
@@ -259,7 +225,7 @@ impl PtySession {
         drop(pair.slave);
         let writer = pair.master.take_writer().expect("pty writer");
         let reader = pair.master.try_clone_reader().expect("pty reader clone");
-        let output = Arc::new(std::sync::Mutex::new(Vec::<u8>::with_capacity(64 * 1024)));
+        let output = Arc::new(Mutex::new(Vec::<u8>::with_capacity(64 * 1024)));
         let out_buf = output.clone();
         let reader_thread = thread::spawn(move || {
             let mut r = reader;
@@ -286,17 +252,14 @@ impl PtySession {
         }
     }
 
-    /// The per-launch temp dir the binary writes session logs into (set via
-    /// the sessions-dir env override so PTY tests never touch the developer
-    /// real home). After a turn, <sid>/log.jsonl lives here.
-    pub fn sessions_dir(&self) -> &std::path::Path {
+    /// Return the isolated session-log root.
+    pub fn sessions_dir(&self) -> &Path {
         &self.sessions_dir
     }
 
     /// Write raw bytes to the PTY master (the binary reads them as crossterm
     /// key events on stdin).
     pub fn send_bytes(&mut self, bytes: &[u8]) {
-        use std::io::Write;
         self.writer.write_all(bytes).expect("pty write");
         self.writer.flush().expect("pty flush");
     }
@@ -312,13 +275,21 @@ impl PtySession {
         self.send_bytes(&bytes);
     }
 
-    /// Hard-kill the child (SIGKILL on Unix) so the process dies without
-    /// running Drop handlers. Used by the crash-release test to verify the
-    /// OS releases the advisory file flock on process death (the single-
-    /// writer invariant must hold even when a holder crashes, not just on a
-    /// clean exit). Best-effort: ignores a kill error (process may be gone).
+    /// Kill the process immediately for crash-recovery tests.
     pub fn kill_hard(&mut self) {
         drop(self._child.kill());
+    }
+
+    /// Wait until the child exits.
+    pub fn wait_for_exit(&mut self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self._child.try_wait().ok().flatten().is_some() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
     }
 
     /// The accumulated raw ANSI output as a lossy UTF-8 string.
@@ -327,12 +298,7 @@ impl PtySession {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
-    /// The accumulated output with ANSI escape sequences stripped, so a
-    /// substring assertion can match text that the renderer splits across
-    /// styled spans (e.g. "Auto-memory: on" where the value is a separate
-    /// span and an SGR run sits between the label and the value). Raw bytes
-    /// are kept for the few assertions that need SGR proximity; this is the
-    /// form for content checks.
+    /// Return accumulated output without terminal escape sequences.
     pub fn output_plain(&self) -> String {
         strip_ansi(&self.output())
     }
@@ -351,11 +317,7 @@ impl PtySession {
         self.output_plain().contains(marker)
     }
 
-    /// The accumulated output ANSI-stripped and with all whitespace removed.
-    /// ratatui's cell-diff repaint can split a phrase across styled spans and
-    /// collapse the spaces between words, so a spaced marker ("ctrl+o to
-    /// expand") flakes; the compacted form ("ctrl+otoexpand") is stable. Use
-    /// for any marker that contains a space.
+    /// Return plain output without whitespace for style-independent matching.
     pub fn output_compact(&self) -> String {
         self.output_plain()
             .chars()
@@ -377,10 +339,7 @@ impl PtySession {
         self.output_compact().contains(marker)
     }
 
-    /// Drop the accumulated output so a subsequent absence check (wait_for
-    /// returning false) tests the CURRENT render, not the historical one.
-    /// Needed because the buffer accumulates every byte ever written — a
-    /// marker from an earlier render would otherwise always read present.
+    /// Clear accumulated bytes before an assertion about the current render.
     #[allow(dead_code)]
     pub fn clear_output(&mut self) {
         if let Ok(mut o) = self.output.lock() {
@@ -414,11 +373,7 @@ impl PtySession {
 
 impl Drop for PtySession {
     fn drop(&mut self) {
-        // Best-effort kill + wait; never panic in Drop. The PTY child is a
-        // session leader (forkpty setsid), so SIGKILL its whole process group
-        // to reap descendants the binary spawned (git, ps, sandbox-exec) that
-        // a SIGHUP-only kill on the leader would orphan — nextest flags those
-        // as leaks. kill with a negative pid targets the process group.
+        // Kill the process group so spawned descendants cannot outlive the fixture.
         let _kill = self._child.kill();
         #[cfg(unix)]
         {
@@ -430,15 +385,12 @@ impl Drop for PtySession {
         }
         let _wait = self._child.wait();
         if let Some(h) = &self._owned_home {
-            drop(std::fs::remove_dir_all(h));
+            drop(fs::remove_dir_all(h));
         }
     }
 }
 
-/// A crossterm-compatible key encoding for the subset the flows need.
-/// A crossterm-compatible key encoding for the subset the flows need. Some
-/// variants are not used by the first tests but are part of the harness API
-/// for future flows (Esc to exit sub-modes, Up/Down to move the cursor, etc.).
+/// Terminal key encodings used by interaction journeys.
 #[allow(dead_code)]
 pub enum Key {
     Char(char),
@@ -581,7 +533,7 @@ pub fn strip_ansi(s: &str) -> String {
 /// mint the same path as a stale leftover dir from a prior run, and create_dir
 /// (which fails on an existing dir) would panic. The pid + a per-process
 /// monotonic counter cannot.
-pub fn fresh_temp_dir(slug: &str) -> std::path::PathBuf {
+pub fn fresh_temp_dir(slug: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     // Retry on collision: a stale leftover dir from a previous run (same pid
@@ -591,10 +543,10 @@ pub fn fresh_temp_dir(slug: &str) -> std::path::PathBuf {
     // fix for the parallel-run flake --retries used to paper over.
     loop {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!("houyi-ui-{slug}-{}-{n}", std::process::id(),));
-        match std::fs::create_dir(&p) {
+        let p = env::temp_dir().join(format!("houyi-ui-{slug}-{}-{n}", process::id(),));
+        match fs::create_dir(&p) {
             Ok(()) => return p,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => panic!("mkdir temp dir {p:?}: {e}"),
         }
     }
@@ -607,7 +559,7 @@ pub fn fresh_temp_dir(slug: &str) -> std::path::PathBuf {
 #[allow(clippy::disallowed_methods)]
 pub fn make_temp_repo(slug: &str) -> PathBuf {
     let dir = fresh_temp_dir(&format!("repo-{slug}"));
-    std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
+    fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
     for args in [
         &["init", "-q"][..],
         &["config", "user.email", "t@x"][..],
@@ -615,7 +567,7 @@ pub fn make_temp_repo(slug: &str) -> PathBuf {
         &["add", "Cargo.toml"][..],
         &["commit", "-m", "init", "-q"][..],
     ] {
-        let ok = std::process::Command::new("git")
+        let ok = Command::new("git")
             .arg("-C")
             .arg(&dir)
             .args(args)
@@ -638,7 +590,7 @@ pub const ONE_REPLY_SCRIPT: &str = r#"[[{"type":"Text","text":"logged"}]]"#;
 /// durable events) the resume path can deserialize. serde ignores the
 /// derived-stats fields a full export carries, so this slice round-trips
 /// through resume. Shared by the resume + status-provenance PTY tests.
-pub fn write_resume_fixture() -> std::path::PathBuf {
+pub fn write_resume_fixture() -> PathBuf {
     use houyicoder_core::{EventId, SessionId, TurnEvent, TurnEventKind};
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA"; // legacy ULID (pre-change)
     let sid = SessionId::from_display_string(legacy_sid).expect("legacy ULID parses");
@@ -663,17 +615,17 @@ pub fn write_resume_fixture() -> std::path::PathBuf {
         "model": "stub-resume-model",
         "trajectory": events,
     });
-    let dir = std::env::temp_dir().join(format!(
+    let dir = env::temp_dir().join(format!(
         "houyi-resume-fixture-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::create_dir_all(&dir).expect("mkdir fixture dir");
+    fs::create_dir_all(&dir).expect("mkdir fixture dir");
     let path = dir.join("export.json");
-    std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).expect("write fixture");
+    fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).expect("write fixture");
     path
 }
 
@@ -684,8 +636,8 @@ pub use seed::*;
 /// List the session-id dirs (each a sid directory) under a sessions root.
 /// Files (the export json, lock files) are filtered out. Shared by the
 /// live-export-resume PTY test.
-pub fn sid_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    std::fs::read_dir(root)
+pub fn sid_dirs(root: &Path) -> Vec<PathBuf> {
+    fs::read_dir(root)
         .unwrap_or_else(|e| panic!("read sessions root {root:?}: {e}"))
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -704,7 +656,7 @@ pub fn pty_session() -> PtySession {
 /// additional-dirs list's empty state: from a linked worktree the startup
 /// allow-back adds the main checkout's git dir, so the workspace root's list
 /// is never empty.
-pub fn pty_session_in_dir(dir: std::path::PathBuf) -> PtySession {
+pub fn pty_session_in_dir(dir: PathBuf) -> PtySession {
     pty_session_inner(PtySession::launch_in_dir(dir))
 }
 
@@ -717,7 +669,7 @@ pub fn pty_session_slow(ms: u64) -> PtySession {
 
 /// Like pty_session_slow, but in an isolated temp repo (avoids the
 /// workspace root's project state delaying stub delivery past the timeout).
-pub fn pty_session_slow_in_repo(repo: std::path::PathBuf, ms: u64) -> PtySession {
+pub fn pty_session_slow_in_repo(repo: PathBuf, ms: u64) -> PtySession {
     pty_session_inner(PtySession::launch_in_repo_with_delay(repo, ms))
 }
 
@@ -726,7 +678,7 @@ pub fn pty_session_slow_in_repo(repo: std::path::PathBuf, ms: u64) -> PtySession
 /// the working directory so the project-scope memory root (the workspace
 /// cwd's memory dir) is also temp — not the developer's real workspace, whose
 /// entries would leak into the test's list_memories scan.
-pub fn pty_session_isolated(home: std::path::PathBuf) -> PtySession {
+pub fn pty_session_isolated(home: PathBuf) -> PtySession {
     let repo = make_temp_repo("home");
     pty_session_inner(PtySession::launch_with_args(
         None,
@@ -766,17 +718,13 @@ pub fn pty_session_scripted_rows(script_json: &str, rows: u16) -> PtySession {
 /// worktree PTY tests so a real linked worktree is created + removed under the
 /// temp repo, never the developer workspace. The caller seeds the repo (init +
 /// one commit + a workspace manifest) before launching.
-pub fn pty_session_in_repo(repo: std::path::PathBuf, script_json: &str) -> PtySession {
+pub fn pty_session_in_repo(repo: PathBuf, script_json: &str) -> PtySession {
     pty_session_inner(PtySession::launch_in_repo_with_script(repo, script_json))
 }
 
 /// Like pty_session_in_repo, but with a custom HOME so the test can
 /// populate .claude/skills/ (ecosystem path) before launch.
-pub fn pty_session_with_home(
-    repo: std::path::PathBuf,
-    home: std::path::PathBuf,
-    script_json: &str,
-) -> PtySession {
+pub fn pty_session_with_home(repo: PathBuf, home: PathBuf, script_json: &str) -> PtySession {
     pty_session_inner(PtySession::launch_with_args(
         Some(script_json.to_string()),
         None,

@@ -692,7 +692,7 @@ fn test_trajectory_shows_resumed_events() {
         s.output_plain()
     );
     assert!(
-        s.wait_for_plain("seeded trajectory prompt", RENDER_TIMEOUT),
+        s.wait_for_compact("seededtrajectoryprompt", RENDER_TIMEOUT),
         "trajectory turn row must render the seeded user input:\n{}",
         s.output_plain()
     );

@@ -1,9 +1,5 @@
-//! The startup workspace-trust reverse-request. Mirrors the mid-run
-//! permission ask (server/approval.rs) but fires once before the frame loop:
-//! when the project workspace is not yet trusted, the server asks the client
-//! to confirm, persists the answer in user-level settings so the prompt does
-//! not repeat, and shuts the session down on a decline. Split from server.rs
-//! to keep that file under the size gate.
+//! Startup workspace-trust handshake.
+//! Untrusted projects must receive a client verdict before the frame loop.
 
 use houyicoder_api::trust::TrustState;
 use houyicoder_protocol::envelope::{
@@ -14,11 +10,8 @@ use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
 use super::Server;
 
-/// Resolve the trust state for a project path from persisted user-level
-/// settings. Acknowledged when the path or an ancestor is recorded as
-/// trusted; Untrusted otherwise. User-level (never project-local) so a
-/// repository cannot self-author trust. A None project path (a non-project
-/// session, e.g. a test harness) is Trusted — no project source to gate.
+/// Resolve project trust from user-owned settings. Ancestor trust applies to
+/// descendants; a session without a project is trusted.
 pub(crate) fn compute_trust_state(
     settings_path: &std::path::Path,
     project_path: Option<&std::path::Path>,
@@ -34,12 +27,8 @@ pub(crate) fn compute_trust_state(
 }
 
 impl Server {
-    /// Ask the client to trust the project workspace when it is not yet
-    /// acknowledged. Fires once at serve start (before the frame loop), so
-    /// no run proceeds until trust is resolved. On accept the path is
-    /// persisted in user-level settings so the prompt never repeats for it
-    /// or its descendants; on decline the session ends (no partial trust).
-    /// A None project path skips the prompt (a non-project session).
+    /// Resolve startup trust before serving frames. Acceptance persists the
+    /// project boundary; rejection ends the session.
     pub(crate) async fn ensure_trust(
         &mut self,
         io: &mut super::io::ServerIo,
@@ -64,9 +53,7 @@ impl Server {
             }),
         );
         self.send_typed(io, &ServerFrame::Request(prompt)).await?;
-        // Mirror the permission-ask wait: loop over incoming frames so a
-        // non-matching frame mid-ask (a status tick, a session/cancel) does
-        // not fatal. session/cancel mid-trust is a decline.
+        // Ignore unrelated frames while preserving cancellation as decline.
         let resp = loop {
             let frame = match io.next_frame().await {
                 Some(f) => f,
@@ -120,10 +107,7 @@ impl Server {
                 false,
             ));
         }
-        // Persist the accepted path so the prompt does not repeat for it or
-        // its descendants. A persist failure does not fail the session — the
-        // user already accepted this run, so trust holds in session memory;
-        // only the next launch re-asks.
+        // Persistence failure keeps this session trusted but forces a later recheck.
         if let Err(e) = houyicoder_config::persist_project_trust(&settings_path, &project_path) {
             tracing::warn!("trust persist failed (re-asks next launch): {e:?}");
         }

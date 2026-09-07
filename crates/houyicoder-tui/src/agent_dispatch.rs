@@ -4,8 +4,10 @@
 #[path = "agent_dispatch/run_completion.rs"]
 mod run_completion;
 
+use std::iter;
 use std::time::Instant;
 
+use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_protocol::frontend::memory::MemorySavedKind;
 use houyicoder_protocol::frontend::run::RunError;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCallStatus};
@@ -19,7 +21,7 @@ use crate::composition::suggestions_for;
 use crate::pending_queue::PendingItem;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::enums::LiveBlock;
-use crate::state::{App, BashProgress, Pane};
+use crate::state::{App, BashProgress, Pane, TrustChoice};
 use crate::terminal_title::sync as sync_terminal_title;
 use crate::transcript::{TranscriptFrame, transcript_from_frames};
 use crate::view::model_pane::row_for_tier;
@@ -101,7 +103,7 @@ impl App {
     fn handle_agent_message_inner(&mut self, msg: AgentMessage) {
         match msg {
             AgentMessage::Frame(frame) => {
-                self.apply_frames(std::iter::once(frame));
+                self.apply_frames(iter::once(frame));
             }
             AgentMessage::Delta { text } => {
                 self.live_assistant_text.push_str(&text);
@@ -185,6 +187,7 @@ impl App {
                 // run to pause — busy is already false at startup, but the
                 // card's presence gates new message sends until resolved).
                 self.pending_trust = Some(prompt);
+                self.trust_choice = TrustChoice::Accept;
                 self.pending_trust_req_id = Some(req_id);
             }
             // Completion and matching request errors are handled before this dispatch.
@@ -500,7 +503,7 @@ impl App {
                     if let Some(req_id) = self.mint_request_id() {
                         self.send_cmd(ClientCommand::ChildTranscriptQuery {
                             req_id,
-                            child_sid: houyicoder_protocol::frontend::SessionId(agent_id.clone()),
+                            child_sid: WireSessionId(agent_id.clone()),
                         });
                     }
                 }

@@ -8,7 +8,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::{Arc, mpsc};
+use std::time::Instant;
 
 pub(crate) mod app_methods;
 pub(crate) mod counts;
@@ -17,17 +19,48 @@ mod scroll;
 mod search_view;
 mod teammate_view;
 
+use crate::agent_message::{FleetState, PaneAgents};
+use crate::composition::WorktreeEntry;
+#[cfg(test)]
+use crate::composition::app as test_app;
 use crate::console_state::ConsoleState;
+use crate::history::HistoryNav;
 use crate::input::InputField;
+use crate::list_pane_state::ListPaneState;
+use crate::notifications::NotificationState;
 use crate::palette::PaletteState;
 use crate::paste::PasteStore;
+use crate::pending_queue::PendingItem;
+use crate::records::{AskQuestion, TeammateView, ToolOutcome};
+use crate::render_cache::RenderCache;
+use crate::resume_picker::{SessionLister, SessionPickerState};
 use crate::review_queue::ReviewQueue;
-use crate::scroll::{SearchState, TranscriptScroll};
-use crate::selection::Selection;
-use houyicoder_protocol::frontend::LoginMode;
-use houyicoder_protocol::frontend::SessionId;
+use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
+use crate::selection::{ClipboardWriter, Selection};
+use crate::session::Session;
+use crate::todo_view::TodoView;
+use crate::transcript::TranscriptFrame;
+use crate::transcript::snapshot::TranscriptSnapshot;
+use crate::view::export_log::ExportLog;
+use crate::view::trajectory_pane::TrajectoryLog;
+use houyicoder_protocol::acp_wire::PermissionOptionKind;
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::context::ContextBreakdown;
+use houyicoder_protocol::frontend::hooks::HookEntry;
+use houyicoder_protocol::frontend::memory::ToggleState;
+use houyicoder_protocol::frontend::model::ModelCatalog;
+use houyicoder_protocol::frontend::permission::{
+    PermissionDecisionEntry, PermissionMode, PermissionRule,
+};
 use houyicoder_protocol::frontend::run::ApprovalRequest;
+use houyicoder_protocol::frontend::skills::SkillEntry;
+use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_protocol::frontend::tools::ToolEntry;
+use houyicoder_protocol::frontend::trust::TrustPrompt;
+use houyicoder_protocol::frontend::{LoginMode, SessionId};
+use houyicoder_protocol::llm::EffortLevel;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 
 /// Live progress for one long-running tool call (bash): elapsed seconds +
 /// the running stdout line count (None when the backend does not stream
@@ -69,13 +102,13 @@ pub struct App {
     pub input: InputField,
     /// Up/Down prompt history navigation (cache + cursor + draft + abort
     /// skip-set). Backed by a JSONL file at the config home.
-    pub history: crate::history::HistoryNav,
+    pub history: HistoryNav,
     pub transcript: Vec<TranscriptLine>,
     /// The durable wire frame history, owned by App (not the driver). The
     /// driver ships one Frame per server frame; App pushes here and the
     /// transcript projection reads from it. The source of truth for the
     /// session history.
-    pub frames: Vec<crate::transcript::TranscriptFrame>,
+    pub frames: Vec<TranscriptFrame>,
     /// Seal cursor (frames side): frames[..sealed_frames_end] are already
     /// projected into transcript[..sealed_transcript_len] and are immutable
     /// for the current turn. The mid-run rebuild re-projects only
@@ -96,15 +129,14 @@ pub struct App {
     /// Cached display rows: the full pre-visible computation (display_slots +
     /// row formatting). Invalidated by a version counter — only recomputed
     /// when the transcript or display inputs change, not every frame.
-    pub display_rows_cache:
-        std::cell::RefCell<Vec<(u8, String, Option<crate::records::ToolOutcome>)>>,
-    pub display_rows_version: std::cell::Cell<u64>,
-    pub transcript_version: std::cell::Cell<u64>,
-    pub cached_callids: std::cell::RefCell<Vec<Option<String>>>,
-    pub cached_fold_keys: std::cell::RefCell<Vec<Option<String>>>,
-    pub cached_expanded_group: std::cell::RefCell<Vec<Option<String>>>,
-    pub cached_turn_ids: std::cell::RefCell<Vec<Option<String>>>,
-    pub cached_pre_rendered: std::cell::RefCell<Vec<Option<ratatui::text::Line<'static>>>>,
+    pub display_rows_cache: RefCell<Vec<(u8, String, Option<ToolOutcome>)>>,
+    pub display_rows_version: Cell<u64>,
+    pub transcript_version: Cell<u64>,
+    pub cached_callids: RefCell<Vec<Option<String>>>,
+    pub cached_fold_keys: RefCell<Vec<Option<String>>>,
+    pub cached_expanded_group: RefCell<Vec<Option<String>>>,
+    pub cached_turn_ids: RefCell<Vec<Option<String>>>,
+    pub cached_pre_rendered: RefCell<Vec<Option<Line<'static>>>>,
     /// Frame index captured on first scroll-away (None while following). Pill
     /// counts agent segments in frames since; eviction-safe. Reset on tail return.
     pub scrolled_from_frame: Option<usize>,
@@ -143,7 +175,7 @@ pub struct App {
     pub frozen_file_size: u64,
     /// Within-window row scroll state. Separate from TranscriptScroll (the
     /// whole-vec path) so the 5 total consumers stay on their own path.
-    pub window_scroll: crate::scroll::WindowScroll,
+    pub window_scroll: WindowScroll,
     /// Corrupt lines skipped in the current window (separate from the
     /// whole-log search_skipped so window-mode chrome shows the per-window
     /// count).
@@ -152,14 +184,14 @@ pub struct App {
     /// frames (one chunk per frame keeps the UI responsive; Esc interrupts).
     /// The flat render path drives index_chunk while this is set. Cell so the
     /// draw borrow (&App) can flip it off when the build completes.
-    pub indexing: std::cell::Cell<bool>,
+    pub indexing: Cell<bool>,
     /// Bytes of the log indexed so far (for the indexing-percent chrome),
     /// published by the render path each frame while indexing.
-    pub indexed_bytes: std::cell::Cell<u64>,
+    pub indexed_bytes: Cell<u64>,
     /// Total log bytes the index covers (the frozen file size).
-    pub index_total: std::cell::Cell<u64>,
+    pub index_total: Cell<u64>,
     /// True when the full index is built (event_count/byte_at answer).
-    pub index_done: std::cell::Cell<bool>,
+    pub index_done: Cell<bool>,
     /// Optional full-history disk-search seam. None in stub / unwired modes
     /// (the /search --all flag then reports no disk results). When wired, the
     /// composition root injects an impl that reads the durable session log +
@@ -168,24 +200,24 @@ pub struct App {
     /// that reads the durable session log and projects events into a
     /// TrajectoryView; None in stub and unwired modes falls back to the mock
     /// trajectory so the pane still renders a demo.
-    pub trajectory_log: Option<std::sync::Arc<dyn crate::view::trajectory_pane::TrajectoryLog>>,
+    pub trajectory_log: Option<Arc<dyn TrajectoryLog>>,
     /// Optional export seam. The composition root injects an impl that reads
     /// the durable session log and serializes the full trajectory, tool
     /// stats, usage, checkpoints, and errors to a JSON document. None in
     /// stub or unwired modes, where /export reports "no session log wired"
     /// instead of writing an empty file.
-    pub export_log: Option<std::sync::Arc<dyn crate::view::export_log::ExportLog>>,
+    pub export_log: Option<Arc<dyn ExportLog>>,
     /// Optional transcript-snapshot seam. The composition root injects an
     /// impl that loads the durable session log into a TranscriptLine
     /// snapshot for the search view (the read-whole path for logs under
     /// the threshold). None in stub or unwired modes, where the search
     /// view falls back to the in-memory transcript vec.
-    pub snapshot: Option<std::sync::Arc<dyn crate::transcript::snapshot::TranscriptSnapshot>>,
+    pub snapshot: Option<Arc<dyn TranscriptSnapshot>>,
     /// The session-listing bridge for the /resume picker (lists resumable
     /// sessions with derived titles). None in stub/test bundles.
-    pub session_lister: Option<std::sync::Arc<dyn crate::resume_picker::SessionLister>>,
+    pub session_lister: Option<Arc<dyn SessionLister>>,
     /// The session picker overlay state (opened by /resume with no arg).
-    pub resume_picker: crate::resume_picker::SessionPickerState,
+    pub resume_picker: SessionPickerState,
     /// A pending resume request set when the user picks a session in the
     /// picker (or /resume <id|name|file>). Carries a session id OR an export
     /// file path (the resume builder dispatches on which). The event loop's
@@ -199,7 +231,7 @@ pub struct App {
     /// Parallel to approval: when the model calls AskUserQuestion, the
     /// interruption is parsed into this card instead of the generic approval
     /// popup. None for plain tool-approval interruptions.
-    pub ask_question: Option<crate::records::AskQuestion>,
+    pub ask_question: Option<AskQuestion>,
     pub status: StatusStub,
     pub spec_ctx: SpecContext,
     pub spec_clauses: Vec<SpecClause>,
@@ -214,43 +246,43 @@ pub struct App {
     /// The auto-memory / auto-dream toggle snapshot rendered as on/off rows in
     /// the /memory pane. Defaults to both on; refreshed from the wire on
     /// pane-open and after each /memory toggle flip.
-    pub memory_toggles: houyicoder_protocol::frontend::memory::ToggleState,
+    pub memory_toggles: ToggleState,
     /// Storage-scope filter the /memory pane is narrowed to. Shift+Tab cycles
     /// All → User → Project → Auto. All shows the merged set; the others
     /// narrow to one physical root.
-    pub memory_scope_tab: crate::state::enums::MemoryScopeTab,
+    pub memory_scope_tab: MemoryScopeTab,
     /// Cursor + search query for the /memory pane. The cursor indexes the
     /// scope-and-text-filtered list; move_cursor/clamp take the filtered
     /// length. The query composes with the scope tab (both must match).
     /// Adopted from ListPaneState (the worktree pane was the first adopter).
-    pub memory_list: crate::list_pane_state::ListPaneState,
+    pub memory_list: ListPaneState,
     /// The linked-worktree rows for the /worktrees pane. Refreshed from
     /// parse_worktrees on pane-open. Empty until the user opens the pane (no
     /// background poll — the list is cheap and the pane is one-shot).
-    pub worktree_entries: Vec<crate::composition::WorktreeEntry>,
+    pub worktree_entries: Vec<WorktreeEntry>,
     /// Cursor + search query for the /worktrees pane. The first pane to
     /// adopt ListPaneState; others migrate on touch-ratchet.
-    pub worktree_list: crate::list_pane_state::ListPaneState,
+    pub worktree_list: ListPaneState,
     /// /worktrees pane drill-down: 0 = list, 1 = detail.
-    pub worktree_level: std::cell::Cell<u8>,
+    pub worktree_level: Cell<u8>,
     /// /trajectory pane drill-down state: 0 = turn list, 1 = turn detail
     /// (events + ASCII bar), 2 = event detail (full data).
-    pub trajectory_level: std::cell::Cell<u8>,
+    pub trajectory_level: Cell<u8>,
     /// Cursor into the current level's list (turn list at level 0, event
     /// list at level 1). Clamped to the list length at render time.
-    pub trajectory_cursor: std::cell::Cell<usize>,
+    pub trajectory_cursor: Cell<usize>,
     /// List length at the current drill level, stashed by the render path so
     /// the Up/Down key handler can clamp the cursor in [0, len-1] — without
     /// this the cursor grows past the last row on Down and the selection
     /// glyph vanishes (no row matches the out-of-range index).
-    pub trajectory_list_len: std::cell::Cell<usize>,
+    pub trajectory_list_len: Cell<usize>,
     /// The L0-selected row index, frozen on drill so L1/L2 render the row
     /// the user picked (not always the first turn — drilling a later turn or
     /// a [bg] row showed the first turn's events before this field existed).
-    pub trajectory_turn_idx: std::cell::Cell<usize>,
+    pub trajectory_turn_idx: Cell<usize>,
     /// True when the L0 row is a bg event (skips L2 drill-in).
-    pub trajectory_at_bg: std::cell::Cell<bool>,
-    pub agents: crate::agent_message::PaneAgents,
+    pub trajectory_at_bg: Cell<bool>,
+    pub agents: PaneAgents,
     pub agent_directory: Option<String>,
     /// An opened artifact for inline review and annotation. Stub content; real
     /// wiring reads the file from disk.
@@ -279,41 +311,40 @@ pub struct App {
     /// The live session with the engine: owns the command channel to the
     /// driver, the message channel back to the event loop, the request-id
     /// counter, and the driver task handle. None in the pure-stub path.
-    pub session: Option<crate::session::Session>,
+    pub session: Option<Session>,
     /// The reverse-request req_id of the currently-shown permission ask,
     /// echoed back with the verdict. None when no approval card is up.
-    pub pending_permission_req_id:
-        std::cell::Cell<Option<houyicoder_protocol::envelope::RequestId>>,
+    pub pending_permission_req_id: Cell<Option<RequestId>>,
     /// True while a run or resume is in flight, so a second Enter queues
     /// instead of stacking a second run.
     pub agent_busy: bool,
     /// Transient notification toast: one-line auto-expiring hint above the
     /// input box (copy feedback, exit-again prompt). Poll-driven expiry.
-    pub notifications: crate::notifications::NotificationState,
+    pub notifications: NotificationState,
     /// Whether the terminal window has focus (FocusGained/FocusLost events).
     /// The input cursor (invert) gates on this so the caret hides when the
     /// window is unfocused, following a renderPlaceholder terminal
     /// focus gate. Defaults true (assume focused at startup).
     pub terminal_focused: bool,
-    pub active_run_req_id: std::cell::Cell<Option<houyicoder_protocol::envelope::RequestId>>,
+    pub active_run_req_id: Cell<Option<RequestId>>,
     /// When the current run started (set on spawn, cleared on completion)
     /// so the spinner row can show elapsed time and animate its glyph.
-    pub run_started: Option<std::time::Instant>,
+    pub run_started: Option<Instant>,
     /// When the session's first run started, for end-to-end elapsed.
-    pub session_started_at: Option<std::time::Instant>,
+    pub session_started_at: Option<Instant>,
     /// Cumulative output tokens across all turns this session.
     pub cumulative_tokens: u64,
     /// Cumulative model-call steps across all turns.
     pub cumulative_steps: u32,
     /// The session checklist from the wire stream. Last-write-wins; rebuilt
     /// from the full frame list each batch.
-    pub todos_cache: Vec<crate::todo_view::TodoView>,
+    pub todos_cache: Vec<TodoView>,
     /// Whether the collapsed checklist is force-expanded inline.
     pub todo_expanded: bool,
     /// When each checklist item transitioned to Completed, keyed by content.
     /// Drives the 30-second recent-completed visibility window in the
     /// collapsed checklist. Updated in accumulate_wire_state.
-    pub todo_completion_at: HashMap<String, std::time::Instant>,
+    pub todo_completion_at: HashMap<String, Instant>,
     /// Last terminal height seen by the draw pass, stashed for height-aware
     /// checklist rendering. Interior-mutable for draw-borrow updates.
     pub last_terminal_rows: Cell<u16>,
@@ -337,17 +368,17 @@ pub struct App {
     /// Responding. The spinner verb shows Thinking only while this is
     /// Thinking (plus the 2-second min-display hold), else Working — so the
     /// verb tracks the active block, not whether any reasoning streamed.
-    pub live_block: crate::state::enums::LiveBlock,
+    pub live_block: LiveBlock,
     /// When the reasoning phase started. Enforces a 2-second minimum
     /// display of the Thinking verb. Cleared on Done.
-    pub thinking_started_at: Option<std::time::Instant>,
+    pub thinking_started_at: Option<Instant>,
     /// Last token count displayed by the spinner. Lerps toward the actual
     /// count each frame for a smooth increment animation.
-    pub displayed_tokens: std::cell::Cell<u32>,
+    pub displayed_tokens: Cell<u32>,
     /// When the last streamed Delta arrived. None until the first delta;
     /// drives the spinner stall gradient after STALL_THRESHOLD_SECS.
     /// Cleared on spawn_run/spawn_resume for a grace period.
-    pub last_delta_at: Option<std::time::Instant>,
+    pub last_delta_at: Option<Instant>,
     /// Call ids of tool calls currently executing (ToolCall seen, no terminal
     /// update yet). Drives the spinner's tool-use breathing pulse and exempts
     /// tool runtime from the stall gradient. Cleared on Done.
@@ -368,13 +399,15 @@ pub struct App {
     /// loop. The trust card shows while it is set; a verdict (accept /
     /// decline) ships the reverse response. None once resolved or when the
     /// project is already trusted (no prompt fired).
-    pub pending_trust: Option<houyicoder_protocol::frontend::trust::TrustPrompt>,
+    pub pending_trust: Option<TrustPrompt>,
+    /// Selected action on the trust screen.
+    pub trust_choice: TrustChoice,
     /// The reverse-request req_id pairing the pending trust ask, so
     /// resolve_trust can ship the matching TrustAccept response.
-    pub pending_trust_req_id: Option<houyicoder_protocol::envelope::RequestId>,
+    pub pending_trust_req_id: Option<RequestId>,
     /// Queued user inputs submitted while a run was in flight (FIFO). A
     /// Typed queue (messages + slash commands); drained FIFO at idle.
-    pub pending: Vec<crate::pending_queue::PendingItem>,
+    pub pending: Vec<PendingItem>,
     /// In-app text selection (drag-select in the transcript, copy on release).
     pub selection: Selection,
     /// Last-rendered transcript rect (screen coords), stashed by the draw
@@ -433,7 +466,7 @@ pub struct App {
     pub approval_selection: Selection,
     /// Per-line render cache (content hash + width + expand key; indices are
     /// unstable — transcript rebuilds each batch). Count + render share it.
-    pub render_cache: RefCell<crate::render_cache::RenderCache>,
+    pub render_cache: RefCell<RenderCache>,
     /// Parallel to last_transcript_rows: the result call_id a visible row
     /// belongs to (Some on a summary row) so Ctrl+O maps the anchor's row to
     /// the result to toggle, without changing the (u8, String) copy tuple.
@@ -453,9 +486,9 @@ pub struct App {
     pub expanded_subagents: HashSet<String>,
     /// Drilled-in teammate transcript; when Some, active_transcript swaps to
     /// the child's turns with a banner. Enter opens, Esc closes.
-    pub teammate_view: Option<crate::records::TeammateView>,
+    pub teammate_view: Option<TeammateView>,
     /// Footer fleet state: the child snapshots + the Shift-arrow selection.
-    pub fleet: crate::agent_message::FleetState,
+    pub fleet: FleetState,
     /// Verbose render: force results, reasoning, and fold groups expanded
     /// with untruncated chips. Set in the search view, cleared on exit.
     pub verbose: bool,
@@ -493,31 +526,30 @@ pub struct App {
     /// after a 50ms gap with no new chunk.
     pub paste_buffer: Option<String>,
     /// Timestamp of the last paste chunk, for the gap-based flush.
-    pub paste_last: Option<std::time::Instant>,
+    pub paste_last: Option<Instant>,
     /// Last computed input wrap column count (set by the draw pass, read by
     /// key handlers for cursor up/down in wrapped space). Interior-mutable so
     /// the draw borrow of App can update it without going through &mut.
-    pub last_cols: std::cell::Cell<usize>,
+    pub last_cols: Cell<usize>,
     /// The permission mode cache, wire-typed. Seeded once on the first idle
     /// poll (so the status-bar pill renders from session start), then updated
     /// by the PermissionMode / PermissionCycleMode responses the server ships
     /// on Shift+Tab cycle. The server is the single write authority for mode;
     /// the TUI never imports the permission crate's gate.
-    pub mode_cache: Option<houyicoder_protocol::frontend::permission::PermissionMode>,
+    pub mode_cache: Option<PermissionMode>,
     /// Durable rule cache (wire-typed), refreshed by PermissionRulesResult.
-    pub rules_cache: Vec<houyicoder_protocol::frontend::permission::PermissionRule>,
+    pub rules_cache: Vec<PermissionRule>,
     pub dirs_cache: Vec<String>,
     /// Ask-before-git checkpoint toggle cache (default on); /permission git refreshes it.
     pub ask_before_git_enabled: bool,
     /// /context cache: last breakdown, rendered immediately on /context (refreshed in background). None until the first ContextResult.
-    pub context_cache: Option<houyicoder_protocol::frontend::context::ContextBreakdown>,
+    pub context_cache: Option<ContextBreakdown>,
     /// Per-tool last-used verdict (identity, not list position). The cursor
     /// preselect reads this so rejecting bash lands on No next time.
     /// Session-scoped; not persisted across processes.
-    pub sticky_choices:
-        std::collections::HashMap<String, houyicoder_protocol::acp_wire::PermissionOptionKind>,
+    pub sticky_choices: HashMap<String, PermissionOptionKind>,
     /// The session verdict log, from the acpx/context/permission_decision stream — the client-side audit trail of every approve/deny.
-    pub verdict_log_cache: Vec<houyicoder_protocol::frontend::permission::PermissionDecisionEntry>,
+    pub verdict_log_cache: Vec<PermissionDecisionEntry>,
     /// Selected tab in /permission (Allow/Ask/Deny filter rules; Recent shows the verdict log).
     pub permission_tab: PermissionTab,
     /// Cursor row in the current /permission tab; clamped at render.
@@ -532,61 +564,61 @@ pub struct App {
     /// of the Workspace tab in /permissions (empty in a stub App).
     pub working_dir: String,
     /// The last wire status snapshot, cached from the periodic poll the event loop drives while a carrier is wired. The per-frame status bar plus /sandbox and /compact read this so they never call the engine runner. None in stub mode (render falls back to a zeroed stub).
-    pub status_cache: Option<houyicoder_protocol::frontend::status::StatusSnapshot>,
+    pub status_cache: Option<StatusSnapshot>,
     /// When the last periodic StatusQuery shipped. Fires every
     /// STATUS_POLL_INTERVAL_SECS so the bar + /sandbox stay recent.
-    pub last_status_poll: Option<std::time::Instant>,
+    pub last_status_poll: Option<Instant>,
     /// The registered-hook rows for the /hooks pane. Refreshed from the wire
     /// (HooksResult) when the user opens /hooks. Empty until the first reply.
-    pub hook_entries: Vec<houyicoder_protocol::frontend::hooks::HookEntry>,
-    pub tool_entries: Vec<houyicoder_protocol::frontend::tools::ToolEntry>,
+    pub hook_entries: Vec<HookEntry>,
+    pub tool_entries: Vec<ToolEntry>,
     /// The discovered-skill rows for the /skills pane. Refreshed from
     /// the wire when the user opens /skills. Empty until the first
     /// reply.
-    pub skill_entries: Vec<houyicoder_protocol::frontend::skills::SkillEntry>,
+    pub skill_entries: Vec<SkillEntry>,
     /// The /skills pane drill-down level: 0 = list, 1 = selected skill
     /// detail (body + usage + disable toggle). Mirrors the hooks pane pattern.
-    pub skill_level: std::cell::Cell<u8>,
+    pub skill_level: Cell<u8>,
     /// The selected skill index in the /skills Level-0 list.
-    pub skill_sel: std::cell::Cell<usize>,
+    pub skill_sel: Cell<usize>,
     /// Session-scoped disabled skills (toggled via t in the detail view).
     /// Persisted disable is a follow-up (settings wire).
-    pub skill_disabled: std::collections::HashSet<String>,
+    pub skill_disabled: HashSet<String>,
     /// Whether the @ skill-picker overlay is open (typing @ in the input).
     pub skill_picker_open: bool,
     /// Selected index in the @ skill-picker.
-    pub skill_picker_sel: std::cell::Cell<usize>,
+    pub skill_picker_sel: Cell<usize>,
     /// The /hooks pane drill-down level: 0 = event list, 1 = selected event
     /// detail (registered hooks + description). A
     /// select-event → view-hook browse pattern.
-    pub hooks_level: std::cell::Cell<u8>,
+    pub hooks_level: Cell<u8>,
     /// The selected event index in the /hooks Level-0 list.
-    pub hooks_sel: std::cell::Cell<usize>,
-    pub projected_from_frame: std::cell::Cell<usize>,
+    pub hooks_sel: Cell<usize>,
+    pub projected_from_frame: Cell<usize>,
     /// The current model tier label in the /model pane. The active row renders
     /// with a check; the provider model id updates on select.
     pub model_tier: String,
     /// The /model pane cursor (Up/Down moves, Enter selects); clamped to list len.
     pub model_sel: usize,
     /// The /model pane catalog (ModelInfo reply); empty until it lands.
-    pub model_catalog: houyicoder_protocol::frontend::model::ModelCatalog,
+    pub model_catalog: ModelCatalog,
     /// Applied effort (ModelApplied reply); None hides the badge.
-    pub applied_effort: Option<houyicoder_protocol::llm::EffortLevel>,
+    pub applied_effort: Option<EffortLevel>,
     /// Picker effort pick (None = auto); updated by arrows.
-    pub model_effort: Option<houyicoder_protocol::llm::EffortLevel>,
+    pub model_effort: Option<EffortLevel>,
     /// True once arrows pressed; cursor-move stops clobbering.
     pub model_effort_toggled: bool,
     /// The active /status sub-tab (Status / Config / Usage). Tab or Left/Right
     /// cycles it; the pane header renders the three titles with the active one
     /// highlighted. A Settings-modal-style multiple tabs.
-    pub status_tab: crate::state::enums::StatusTab,
+    pub status_tab: StatusTab,
     /// In-place session-name edit buffer for the status Status tab. None
     /// unless the user pressed e on the Status tab to rename; the pane
     /// renders the name row as an editable input + the keys route char,
     /// backspace, Left/Right to the buffer. Enter commits (sends a
     /// RenameSession request), Esc cancels. Houyi makes the session name
     /// inline-editable (rather than a rename command).
-    pub status_name_edit: Option<crate::input::InputField>,
+    pub status_name_edit: Option<InputField>,
     pub last_title: Option<String>,
     /// True when a /status command is awaiting a wire reply. The periodic
     /// poll updates the cache silently; a command-initiated poll also renders
@@ -603,11 +635,11 @@ pub struct App {
     /// (pbcopy/OSC 52); adversarial selection tests inject a RecordingClipboard
     /// so the exact copied text can be asserted without touching the OS
     /// clipboard. Arc<dyn> so App stays Send + Sync across the TUI/runner.
-    pub clipboard: Arc<dyn crate::selection::ClipboardWriter>,
+    pub clipboard: Arc<dyn ClipboardWriter>,
 }
 
 impl std::fmt::Debug for App {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("App")
             .field("screen", &self.screen)
             .field("stage", &self.stage)
@@ -627,7 +659,7 @@ mod tests {
     use super::*;
     #[test]
     fn test_palette_nav_no_panic() {
-        let mut app = crate::composition::app();
+        let mut app = test_app();
         app.open_palette();
         app.palette_up();
         app.palette_down();
@@ -637,14 +669,14 @@ mod tests {
 
     #[test]
     fn test_console_focus_nav() {
-        let mut app = crate::composition::app();
+        let mut app = test_app();
         app.console_focus_up();
         app.console_focus_down();
     }
 
     #[test]
     fn test_app_debug_format() {
-        let app = crate::composition::app();
+        let app = test_app();
         drop(format!("{app:?}"));
     }
 

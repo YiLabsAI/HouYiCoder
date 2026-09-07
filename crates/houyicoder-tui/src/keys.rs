@@ -1,6 +1,5 @@
-//! Per-screen and overlay key handlers. Each handler mutates App state in
-//! response to a key. The working surface dispatches to palette / approval /
-//! input handlers; the input handler also
+//! Key routing for screens, overlays, panes, and text input.
+//! Higher-priority surfaces consume a key before the working input handler.
 
 mod fleet;
 mod login;
@@ -11,7 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[cfg(test)]
 use crate::state::Stage;
-use crate::state::{App, Pane, ViewportMode};
+use crate::state::{App, Pane, TrustChoice, ViewportMode};
 
 mod input;
 mod pane_predicates;
@@ -91,14 +90,6 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         app.abort_viewed_child_turn();
         return;
     }
-    // Approval pending: handled inline at the top of handle_input so scroll,
-    // palette, and search still work. a/r decide, Enter confirms, Esc dismisses.
-    // Startup workspace-trust card fires once before any run; it takes
-    // priority over a mid-run approval, so check it first.
-    if app.pending_trust.is_some() {
-        handle_trust(app, k);
-        return;
-    }
     if app.viewport == ViewportMode::Focus {
         handle_focus(app, k);
         return;
@@ -152,10 +143,13 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
 /// (persists the trust + continues); Esc or n declines (the server shuts the
 /// session). Fires once at startup before any run, so the dispatch in
 /// handle_working checks it before the Focus/approval gate.
-fn handle_trust(app: &mut App, k: KeyEvent) {
+pub(crate) fn handle_trust(app: &mut App, k: KeyEvent) {
     use crossterm::event::KeyCode;
     match k.code {
-        KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => app.resolve_trust(true),
+        KeyCode::Up => app.trust_choice = TrustChoice::Accept,
+        KeyCode::Down => app.trust_choice = TrustChoice::Exit,
+        KeyCode::Enter => app.resolve_trust(app.trust_choice == TrustChoice::Accept),
+        KeyCode::Char('y') | KeyCode::Char('Y') => app.resolve_trust(true),
         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => app.resolve_trust(false),
         _ => {}
     }

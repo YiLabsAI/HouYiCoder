@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rules.paths import is_test_file
 
-MUT_APP_BASELINE = 43
+MUT_APP_BASELINE = 44
 
 
 def evaluate(total, baseline=MUT_APP_BASELINE) -> int:
@@ -75,7 +75,7 @@ def _sig_has_mut_app_param(src: str, fn_pos: int) -> bool:
         if depth >= 1:
             params.append(c)
         i += 1
-    return "&mut App" in "".join(params)
+    return re.search(r"&mut\s+(?:[A-Za-z_]\w*::)*App\b", "".join(params)) is not None
 
 
 def mut_app_counts(root: Path) -> list[tuple[str, int]]:

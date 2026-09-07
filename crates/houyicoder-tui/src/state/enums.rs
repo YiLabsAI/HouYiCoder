@@ -49,6 +49,14 @@ pub enum Screen {
     Working,
 }
 
+/// Selected action on the startup trust screen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TrustChoice {
+    #[default]
+    Accept,
+    Exit,
+}
+
 /// Where the spec-driven guided chain currently sits. The chain is three
 /// stages: design (spec + plan, one approval), implement (per-change diff),
 /// and verify (agent review + machine check, one checkpoint). Slash commands
