@@ -1,24 +1,8 @@
-//! The terminal frontend for the engine.
+//! Terminal frontend for session interaction.
 //!
-//! Renders the locked UX: a login screen, an enterprise console, and a coding
-//! working surface (not a chat). The working surface is an activity log (action
-//! log, scrollable and searchable) with a capability pane that switches by
-//! state. A spec context strip with a three-stage progress bar (design /
-//! implement / verify) stays visible at the top. Slash commands open a palette
-//! over the protocol SlashCommand set.
-//!
-//! The guided chain is three stages: design (spec + plan, one approval),
-//! implement (per-change diff approval), and verify (agent review + machine
-//! check, one checkpoint). Typing a task + Enter auto-enters design. The
-//! convergence loop lets review/verify rework back to implementing. One approval
-//! pattern (approve/reject, shared components) and one color vocabulary govern
-//! every screen. The status bar carries a contextual stage hint plus a token
-//! budget bar that surfaces current token usage against the configured budget.
-//!
-//! The frontend speaks the wire protocol exclusively: a Client handle
-//! (from the client crate) sends requests and receives events; no engine
-//! type crosses into this crate at runtime. The TUI is a pure protocol
-//! consumer — presentation over the wire, never over shared engine state.
+//! Renders the transcript, input, approvals, status, and on-demand panes.
+//! Requests and events cross the wire protocol through the client; runtime
+//! engine types and shared engine state do not enter this crate.
 
 #![allow(dead_code)] // crate root re-exports tui modules consumed by other crates; locally unused
 

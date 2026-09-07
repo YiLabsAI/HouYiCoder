@@ -1,31 +1,23 @@
-//! Real agent-loop wiring for the TUI. The TUI holds a protocol Client (L4)
-//! and drives the agent turn over the wire: spawn_run ships a MessageSend
-//! request to a long-lived client-driver task; the driver drains server
-//! frames, routes acpx/llm/* token deltas to AgentMessage::Delta, raises
-//! mid-turn permission asks as AgentMessage::PermissionAsk, and ships the
-//! final outcome as AgentMessage::Done. The transcript is rebuilt from the
-//! ordered wire frame stream the driver accumulates (session/update chunks
-//! and acpx/context/* audit). The wire frames are the source of truth for
-//! the projection, so the TUI never imports engine event types.
-//!
-//! Streaming rides the wire: the composition root installs a live delta
-//! sink on the shared runner that fires acpx/llm/* notifications during the
-//! server's run; the driver routes them to AgentMessage::Delta. Run,
-//! permission, and streaming all cross the wire; the transcript rides the
-//! accumulated wire frames. The TUI holds no engine handle and imports no
-//! ports live types.
+//! Coordinates user turns between application state and the protocol client.
+//! Commands travel through the client driver; returned frames form the durable
+//! transcript, while streaming events update the live presentation.
+
+use std::time::Instant;
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use houyicoder_protocol::frontend::permission::{AskSource, PermissionMode};
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 use crate::pending_queue::PendingItem;
-use crate::records::{Approval, TranscriptLine};
+use crate::records::{Approval, AskQuestion, TranscriptLine};
 
 const MAX_PROJECT_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;
 use crate::state::App;
-use crate::transcript::TranscriptFrame;
+use crate::state::enums::LiveBlock;
+use crate::transcript::{TranscriptFrame, chunk_text};
 
 #[path = "run_control/projection.rs"]
 mod projection;
@@ -47,20 +39,11 @@ impl App {
         }
     }
 
-    /// Start a new user turn by shipping a MessageSend to the driver task. The
-    /// driver forwards it over the wire; the server drives runner.run (firing
-    /// the shared live sink so streamed deltas arrive here as Delta); the final
-    /// outcome arrives as Done. Sets agent_busy so a second Enter queues. The
-    /// user echo lands immediately and is replaced consistently when the
-    /// durable transcript is rebuilt on Done.
+    /// Start a user turn, steer input to the viewed child, or queue it while
+    /// another turn is active. New turns render an immediate user echo before
+    /// the durable transcript arrives.
     pub fn spawn_run(&mut self, input: String) {
-        // Steering: when the user is viewing a child, the typed input
-        // routes to that child's inbox, not the parent. An optimistic echo
-        // appends the text as a user line to the viewed transcript right
-        // away; the live refetch on the child's next turn replaces it with
-        // the durable line the child drained into its log. A completed child
-        // (fleet entry done, or retired from the footer) gets a clear notice
-        // instead of a silent drop on the closed inbox.
+        // A viewed child receives input directly and shows an optimistic echo.
         let steer = self
             .teammate_view
             .as_ref()
@@ -77,14 +60,8 @@ impl App {
             });
         if let Some((child_sid, completed)) = steer {
             if completed {
-                // The child's inbox is closed (it finished), so the typed
-                // input cannot be steered to it. Exit the teammate view +
-                // surface a notice in the PARENT transcript (visible at the
-                // tail) so the user learns the child is done + is back at the
-                // parent to start a new task. Pushing the notice into the
-                // viewed transcript instead would race the async re-fetch
-                // (fill_teammate_view replaces view.transcript) + the
-                // window-scroll follow, hiding it.
+                // A completed child cannot accept input; notify from the parent
+                // transcript so a child refetch cannot hide the message.
                 self.exit_teammate_view();
                 self.system_line("this child has finished — start a new task or /agents to review");
             } else {
@@ -93,9 +70,7 @@ impl App {
                     view.pending_echo = Some(input.clone());
                     self.transcript_scroll.follow_tail = true;
                 }
-                // The optimistic echo mutates the viewed transcript, so bump
-                // or the render cache holds the pre-echo rows and the line
-                // stays invisible until the next turn-boundary refetch lands.
+                // Invalidate cached rows after the optimistic echo.
                 self.bump_transcript_version();
                 self.send_cmd(ClientCommand::InjectToChild {
                     child_sid,
@@ -104,40 +79,27 @@ impl App {
             }
             return;
         }
-        // Queue path: a run is in flight, so the new input joins pending.
-        // Push parked (no server copy), then promote the head only if the
-        // queue was empty -- the single-copy invariant keeps at most one
-        // live copy, so an Esc recall races at most one injection. A
-        // non-empty queue already holds the live head or a Command
-        // barrier; the newcomer waits its turn. active_run_req_id stays
-        // set so a wire Error for the in-flight run still routes as a run
-        // failure.
+        // Active turns park new input locally. Promotion keeps at most one
+        // server-side copy while preserving queue order.
         if self.agent_busy {
             self.pending.push(PendingItem::ParkedMessage(input.clone()));
             self.promote_next_pending();
             return;
         }
-        // Mint the request id only on the real-spawn path (the queue path
-        // above ships nothing). Borrow ends at the Option<RequestId>, so the
-        // mutable self access below is clean.
         let Some(req_id) = self.session.as_ref().map(|s| s.mint_request_id()) else {
             return;
         };
-        // Track THIS run's req_id so a wire Error for it routes as a run
-        // failure (Done{Err}); a non-matching Error (a permission verb)
-        // routes as a per-request system line instead.
+        // Only errors matching this request terminate the active run.
         self.active_run_req_id.set(Some(req_id));
-        // Stash the input so an abort-with-no-real-content can restore it to
-        // the input box. Not set on the queue path: a queued input is not the
-        // in-flight run's origin.
+        // Preserve the submitted input in case interruption restores the turn.
         self.last_run_input = Some(input.clone());
         self.push_transcript_line(TranscriptLine::User(input.clone()));
         self.agent_busy = true;
-        self.run_started = Some(std::time::Instant::now());
+        self.run_started = Some(Instant::now());
         self.last_delta_at = None;
         self.displayed_tokens.set(0);
         self.thinking_started_at = None;
-        self.live_block = crate::state::enums::LiveBlock::None;
+        self.live_block = LiveBlock::None;
         let session_id = self.session_id.clone();
         let content = vec![ContentBlock::Text { text: input }];
         let disabled_skills = self.skill_disabled.clone();
@@ -149,26 +111,10 @@ impl App {
         });
     }
 
-    /// Drain the head of the pending queue. Called from the event loop's idle
-    /// guard (idle_drain), which gates on a clean run end (FinalOutput); bound
-    /// to the consume action (not the idle condition) so the per-frame poll
-    /// stays silent. Returns false when the queue is empty.
-    ///
-    /// A queued message auto-sends as the next turn after a clean run end (the
-    /// user got their answer, drain FIFO). An interrupt/error parks the queue
-    /// (idle_drain's gate holds) for the user to pop via Esc + edit. A
-    /// permission pause is not idle (reverse_request_in_flight holds), so the
-    /// drain does not fire there. Strict FIFO: the head always goes first, so
-    /// a Command behind a parked message waits its turn (no starvation, but
-    /// also no head-of-line skip).
-    ///
-    /// Single-copy: after spawning the head's run, promote_next_pending
-    /// promotes exactly one parked head into the new run's input_queue
-    /// (not the whole tail). The drive_loop drains it at the next turn
-    /// boundary, QueueConsumed removes it, and the next promote fires --
-    /// so N queued messages still share one run, but at most one live
-    /// copy exists at a time. A 1-turn run leaves the rest parked for
-    /// the next idle_drain.
+    /// Consume the pending queue head in first-in, first-out order. Clean
+    /// completion may start the next turn; other outcomes leave input parked.
+    /// At most one parked message is promoted to the server queue. Returns
+    /// false when no item is available.
     pub fn drain_pending_head(&mut self) -> bool {
         let Some(item) = self.pending.first().cloned() else {
             return false;
@@ -177,8 +123,7 @@ impl App {
         match item {
             PendingItem::Command(text) => self.run_slash_text(&text),
             PendingItem::Message(head) => {
-                // Drop the head's stale server copy (the prior run's
-                // input_queue was cleared at finalize) + start a fresh run.
+                // Remove the stale server copy before starting a fresh run.
                 let session_id = self.session_id.clone();
                 self.send_cmd(ClientCommand::QueueRemove {
                     session_id,
@@ -189,8 +134,6 @@ impl App {
                 true
             }
             PendingItem::ParkedMessage(text) => {
-                // No server copy: spawn a fresh run directly, then promote
-                // the next parked head into it (one copy).
                 self.spawn_run(text);
                 self.promote_next_pending();
                 true
@@ -198,14 +141,9 @@ impl App {
         }
     }
 
-    /// Resolve the currently-shown approval with the user's verdict and ship
-    /// it to the driver task, which forwards it as the matching reverse
-    /// response so the server resumes the turn. The caller (keys.rs
-    /// handle_approval or ask_question_keys) builds the full wire decision
-    /// (call_id, approved, optional edited input, scope); this method pairs it
-    /// with the pending reverse-request req_id, clears the card, and ships
-    /// it. Over the wire the server (not the TUI) drives runner.resume and
-    /// records the PermissionDecision audit event.
+    /// Resolve the active approval, clear its interface state, and send the
+    /// verdict as the matching reverse response. No-op when no request awaits
+    /// a decision.
     pub fn resolve_current_approval(&mut self, decision: ApprovalDecision) {
         let Some(req_id) = self.pending_permission_req_id.take() else {
             return;
@@ -213,29 +151,18 @@ impl App {
         self.pending_approvals.clear();
         self.approval = None;
         self.ask_question = None;
-        // The resume is now in flight on the server; keep the run marked busy so
-        // the spinner animates until the final Done lands. displayed_tokens is
-        // NOT reset here: live text persists across the approval, so zeroing
-        // it would replay the count-up animation mid-turn.
+        // Keep the resumed run busy without resetting its displayed tokens.
         self.agent_busy = true;
-        self.run_started = Some(std::time::Instant::now());
+        self.run_started = Some(Instant::now());
         self.last_delta_at = None;
-        // Clear the live block AND the 2s thinking-min-display window so a
-        // stale Thinking from before the approval does not linger during the
-        // resume gap; the first post-resume delta sets both fresh. Without
-        // clearing thinking_started_at the spinner verb stays "Thinking" for
-        // up to 2s after a fast approval even though no reasoning is flowing.
-        self.live_block = crate::state::enums::LiveBlock::None;
+        // Clear stale thinking state before post-resume streaming begins.
+        self.live_block = LiveBlock::None;
         self.thinking_started_at = None;
         self.send_cmd(ClientCommand::Verdict { req_id, decision });
     }
 
-    /// Answer the pending startup workspace-trust ask. accept true lets the
-    /// server proceed (it persists the path so the prompt does not repeat);
-    /// accept false ends the session. Mirrors resolve_current_approval but
-    /// there is no run to resume, so the card just clears + ships the
-    /// reverse response. No-op when no trust ask is pending (the user
-    /// pressed the key with no card up).
+    /// Resolve the startup workspace-trust request. Acceptance continues the
+    /// session and persists the trusted path; rejection ends the session.
     pub fn resolve_trust(&mut self, accept: bool) {
         let Some(req_id) = self.pending_trust_req_id.take() else {
             return;
@@ -244,10 +171,9 @@ impl App {
         self.send_cmd(ClientCommand::TrustVerdict { req_id, accept });
     }
 
-    /// Populate the approval card from a wire permission ask and stash the
-    /// reverse-request req_id so resolve_current_approval can pair the verdict.
-    /// When the tool is AskUserQuestion, the input is parsed into an
-    /// interactive question card instead of the generic approval popup.
+    /// Present a wire permission request and retain its request identifier.
+    /// Question tools use the interactive question card; others use the
+    /// generic approval card.
     fn raise_agent_approval(&mut self, ask: ApprovalRequest) {
         let call_id = ask.call_id.clone();
         let tool = ask.tool_name.clone();
@@ -256,17 +182,13 @@ impl App {
         self.run_started = None;
         self.pending_approvals = vec![ask.clone()];
         if tool == "AskUserQuestion"
-            && let Some(aq) = crate::records::AskQuestion::parse(&call_id, &ask.input)
+            && let Some(aq) = AskQuestion::parse(&call_id, &ask.input)
         {
             self.ask_question = Some(aq);
             return;
         }
-        // Malformed input for AskUserQuestion, or a different tool: use the
-        // generic approval card so the user can still approve or reject. The
-        // reason the gate produced travels the wire AskReason; surface its
-        // detail + source so the card reads "why am I being asked" and hides
-        // the remember option when the source is a protected-path check
-        // (consent cannot override it).
+        // Malformed questions fall back to the generic card. Safety requests
+        // hide persistent approval because consent cannot override them.
         let args = ask.input.to_string();
         let mut selected = self.initial_cursor(&tool);
         let (reason, source, containment_note) = if tool == ENTITLEMENT_TOOL {
@@ -279,14 +201,9 @@ impl App {
                 None => ("agent wants to run this tool".to_string(), None, None),
             }
         };
-        let two_option = tool == ENTITLEMENT_TOOL
-            || matches!(
-                source,
-                Some(houyicoder_protocol::frontend::permission::AskSource::SystemSafety)
-            );
-        // A two-option card (protected-path or entitlement) hides
-        // Yes-don't-ask; clamp a sticky AllowAlways preselect down to Yes so
-        // the cursor never lands on a hidden option.
+        let two_option =
+            tool == ENTITLEMENT_TOOL || matches!(source, Some(AskSource::SystemSafety));
+        // Two-option cards cannot retain a hidden persistent choice.
         if two_option && selected == 2 {
             selected = 0;
         }
@@ -303,45 +220,29 @@ impl App {
         });
     }
 
-    /// Pick the initial cursor for a fresh approval popup. Priority: a sticky
-    /// last-used verdict for this tool (matched by identity, not list
-    /// position); then YOLO when the permission mode auto-approves (Auto or
-    /// Bypass) focuses the quickest approve; otherwise index-0. A configured
-    /// per-tool default would sit between sticky and YOLO, but no config
-    /// schema exists for it yet.
+    /// Select the initial approval choice. A remembered verdict wins;
+    /// automatic mode and the default both select one-time approval.
     fn initial_cursor(&self, tool: &str) -> usize {
         if let Some(kind) = self.sticky_choices.get(tool) {
-            return crate::records::Approval::index_for_kind(*kind);
+            return Approval::index_for_kind(*kind);
         }
-        use houyicoder_protocol::frontend::permission::PermissionMode as M;
-        if matches!(self.mode_cache, Some(M::Auto)) {
+        if matches!(self.mode_cache, Some(PermissionMode::Auto)) {
             return 0;
         }
         0
     }
 
-    /// Drain any finished agent message off the session. Returns true when at
-    /// least one message was applied (so the caller knows to redraw). Drains all
-    /// pending messages in one call so a burst of streamed Deltas followed by a
-    /// Done is processed atomically.
-    /// True when a reverse-request (a permission ask, including an
-    /// AskUserQuestion) is in flight and its verdict has not been sent. The
-    /// status poll and any idle client request must suppress while this is set
-    /// so their frames do not compete with the run/resume loop frame reads.
-    /// This is the true invariant; the prior guard approximated it with
-    /// agent_busy plus approval, which AskUserQuestion satisfies neither (it
-    /// does not set approval and runs with agent_busy false), so a status tick
-    /// landed mid-ask and deadlocked.
+    /// Whether a reverse request still awaits its verdict. Idle client
+    /// requests pause so they cannot compete for response frames.
     pub fn reverse_request_in_flight(&self) -> bool {
         self.pending_permission_req_id.get().is_some()
     }
 
+    /// Apply all available agent messages and return whether state changed.
+    /// Consecutive frames are projected as one batch to keep replay linear;
+    /// other messages first flush preceding frames to preserve order.
     pub fn poll_agent(&mut self) -> bool {
         let mut applied = false;
-        // Consecutive frames accumulate and land as one batch: a resume
-        // replays the whole session history through this drain, and projecting
-        // per frame is quadratic in the history size. Any other message flushes
-        // the batch first so it observes the frames that preceded it.
         let mut batch: Vec<TranscriptFrame> = Vec::new();
         loop {
             // Poll one owned message off the session so the session borrow
@@ -361,10 +262,7 @@ impl App {
             }
         }
         self.apply_frames(batch);
-        // Progressive resume resolution: resolve a few unresolved rows per
-        // frame so the picker fills in titles + last-active times top-to-
-        // bottom. Each resolve is one log-head read; batching 3/frame keeps
-        // the poll cheap while making the list feel instant.
+        // Resolve a bounded number of resume rows per poll.
         if self.resume_picker.open
             && let Some(lister) = self.session_lister.as_ref()
         {
@@ -377,10 +275,7 @@ impl App {
                     lister.resolve_detail(&mut self.resume_picker.rows[i]);
                     self.resume_picker.resolved.insert(i);
                     resolved_count += 1;
-                    // Lazy dedup: rows are sorted newest-first + resolved
-                    // top-to-bottom, so the first occurrence of each title
-                    // is the newest. If this row's just-filled real title
-                    // duplicates one already seen, hide this older row.
+                    // Newest rows resolve first, so duplicate titles hide older rows.
                     let title = self.resume_picker.rows[i].title.clone();
                     if !self.resume_picker.seen_titles.insert(title) {
                         self.resume_picker.rows[i].hidden = true;
@@ -388,14 +283,8 @@ impl App {
                 }
             }
         }
-        // Periodic status refresh: poll the server every second while idle (no
-        // run or approval in flight) so the per-frame status bar + the /sandbox
-        // + /compact read a recent snapshot without an engine call. Suppressed
-        // during a run or a pending approval so the status query frame never
-        // competes with the run/resume loop's frame reads — the snapshot does
-        // not change mid-run anyway (usage lands on Done). Cheap on the
-        // in-memory carrier; the result updates status_cache silently unless a
-        // /status command is pending.
+        // Refresh status while idle. Active runs and reverse requests retain
+        // exclusive ownership of response frames.
         const STATUS_POLL_INTERVAL_SECS: u64 = 1;
         if !self.agent_busy
             && !self.reverse_request_in_flight()
@@ -404,14 +293,10 @@ impl App {
                 .map(|t| t.elapsed().as_secs() >= STATUS_POLL_INTERVAL_SECS)
                 .unwrap_or(true)
         {
-            self.last_status_poll = Some(std::time::Instant::now());
+            self.last_status_poll = Some(Instant::now());
             if let Some(s) = self.session.as_ref() {
                 s.request_status();
-                // The mode pill reads mode_cache, which stays None until the
-                // first explicit /mode or /model query. Seed it once on the
-                // idle poll so the pill renders from session start; later /mode
-                // cycles already update the cache via PermissionModeResult, so
-                // this only fills the initial gap.
+                // Seed the mode cache once so the status pill renders at startup.
                 if self.mode_cache.is_none() {
                     s.request_permission_mode();
                 }
@@ -439,33 +324,18 @@ impl App {
         );
     }
 
-    /// Abort the in-flight run, if any. When a client is wired, also sends a
-    /// RunCancel wire request for the server's audit trail. The actual token
-    /// fire is always direct (the TUI shares the Arc<Runner>) so the run
-    /// resolves promptly: the token propagates through resolve_turn ->
-    /// execute_partitioned into ToolCtx, and a tool that honors ctx.cancel
-    /// (Grep/Glob) short-circuits its spawn_blocking walk; a tool that does
-    /// not is still cut off because the partition select! races the batch
-    /// against cancellation. The wire request is for bookkeeping, not the
-    /// abort itself.
+    /// Abort the active run. The driver propagates cancellation through the
+    /// execution pipeline and records the request for auditing.
     pub fn abort_run(&mut self) {
-        // Mark the cancel in flight so the UI can show a cancelling state
-        // until the run resolves Interrupted on Done. Cleared in the Done
-        // handler. Idempotent: re-firing before the run settles is a no-op
-        // (the server aborts once; extra notifications are harmless).
+        // Keep cancellation visible until run completion clears the state.
         self.cancelling = true;
         self.send_cmd(ClientCommand::AbortRun {
             session_id: self.session_id.clone(),
         });
     }
 
-    /// Recall every queued message into the input box in queue order,
-    /// merging ahead of any draft (cursor parks at the draft start). Slash
-    /// commands stay queued — joining them would reparse the batch as a
-    /// command and lose the messages. Each recalled Message fires
-    /// QueueRemove so a follow-up run does not re-inject it; ParkedMessage
-    /// and Command have no server copy to drop. No-op when only commands
-    /// (or nothing) is queued.
+    /// Recall queued messages into the input box before the current draft.
+    /// Commands remain queued, and server-side message copies are removed.
     pub fn pop_queued_to_input(&mut self) {
         let messages: Vec<String> = self
             .pending
@@ -495,21 +365,14 @@ impl App {
             }
         }
         self.pending = keep;
-        // The pop is the user's explicit recall: it supersedes the aborted
-        // run's origin stash, so Done(Interrupted) no-content restore must
-        // not re-fill the input box with the old origin and lose the popped
-        // text (which is already removed from the queue).
+        // Explicit recall supersedes automatic interrupted-turn restoration.
         self.last_run_input = None;
         let text = messages.join("\n");
         self.merge_recalled_text(text);
     }
 
-    /// Merge recalled text ahead of any in-progress draft: queued messages
-    /// prepend, a newline separates, and the cursor parks at the draft start
-    /// so the user resumes typing where they were. An empty draft just takes
-    /// the recalled text (cursor at the end). Overwriting would destroy the
-    /// user's half-typed draft. Shared by Esc batch recall (pop_queued_to_input)
-    /// and mouse single-row recall (handle_mouse) so both preserve the draft.
+    /// Insert recalled text before the current draft. The cursor remains at
+    /// the draft boundary so editing can continue without losing input.
     pub(crate) fn merge_recalled_text(&mut self, text: String) {
         let draft = self.input.value().to_string();
         if draft.is_empty() {
@@ -522,15 +385,10 @@ impl App {
         }
     }
 
-    /// Rewind the frame log to just before the last user message — drop the
-    /// user echo and everything after it (agent chunks, tool calls, thoughts
-    /// from this turn) — then rebuild the transcript so the user echo and any
-    /// partial turn content disappear. The rewind-on-
-    /// cancel behavior: when the user interrupted before any real content, undo the
-    /// submit so they can edit and resend. No-op when no user echo is in the
-    /// frames (the caller already checked run_produced_real_content is false).
+    /// Remove the latest submitted turn from the frame log and rebuild the
+    /// transcript. Used when interruption arrives before substantive output so
+    /// the user can edit and resend the restored input.
     pub fn rewind_to_last_user_input(&mut self) {
-        use houyicoder_protocol::frontend::session_update::SessionUpdate;
         let Some(start) = self.frames.iter().rposition(|f| {
             matches!(
                 f,
@@ -544,13 +402,10 @@ impl App {
     }
 }
 
-/// Whether the run that just finished produced any real assistant-originated
-/// content after the last user message. Used to decide auto-restore on
-/// interrupt: a turn that streamed nothing back gives the input back so the
-/// user can edit and resend. Streaming deltas are not on the wire (they ride
-/// the shared live sink), so the wire stream carries only the authoritative
-/// agent message chunk + tool calls + thought chunks.
-fn run_produced_real_content(frames: &[TranscriptFrame]) -> bool {
+/// Whether an interrupted turn must remain submitted. Assistant output, tool
+/// calls, and reasoning preserve the turn; a user-only turn may be restored.
+/// Missing user context preserves the turn conservatively.
+fn should_preserve_interrupted_turn(frames: &[TranscriptFrame]) -> bool {
     let Some(start) = frames.iter().rposition(|f| {
         matches!(
             f,
@@ -559,10 +414,9 @@ fn run_produced_real_content(frames: &[TranscriptFrame]) -> bool {
     }) else {
         return true;
     };
-    use houyicoder_protocol::frontend::session_update::SessionUpdate;
     frames[start + 1..].iter().any(|f| match f {
         TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(chunk)) => {
-            !crate::transcript::chunk_text(chunk).is_empty()
+            !chunk_text(chunk).is_empty()
         }
         TranscriptFrame::Session(SessionUpdate::ToolCall(_)) => true,
         TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(_)) => true,

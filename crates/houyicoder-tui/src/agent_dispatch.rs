@@ -1,38 +1,43 @@
-//! Inbound agent-message dispatch: map each AgentMessage the driver ships to
-//! its App state mutation. Extracted from run_control.rs so that file holds
-//! only the run lifecycle + poll tick, not the per-message match.
+//! Maps inbound agent messages to application state transitions.
+//! Run completion is delegated so this module remains focused on dispatch.
 
-#[path = "agent_dispatch/done.rs"]
-mod done;
+#[path = "agent_dispatch/run_completion.rs"]
+mod run_completion;
 
-use houyicoder_protocol::frontend::run::RunError;
 use std::time::Instant;
 
-use crate::agent_message::AgentMessage;
+use houyicoder_protocol::frontend::memory::MemorySavedKind;
+use houyicoder_protocol::frontend::run::RunError;
+use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCallStatus};
+
+use crate::agent_message::{AgentMessage, ClientCommand, FleetEntry};
+use crate::command::render::{
+    memory_entries_from_wire, render_memory_entry, render_permission_rules_wire,
+    render_trajectory_wire,
+};
+use crate::composition::suggestions_for;
 use crate::pending_queue::PendingItem;
-use crate::records::TranscriptLine;
-use crate::state::{App, Pane};
+use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
+use crate::state::enums::LiveBlock;
+use crate::state::{App, BashProgress, Pane};
+use crate::terminal_title::sync as sync_terminal_title;
+use crate::transcript::{TranscriptFrame, transcript_from_frames};
+use crate::view::model_pane::row_for_tier;
 
 impl App {
-    /// Apply one inbound agent message: stream a delta, raise a permission ask,
-    /// settle a run on Done, or render a query reply. Drained by poll_agent each
-    /// tick; the mutation is the side effect.
-    /// Dispatch a wire agent message. Done / a run-matching RequestError end
-    /// the run: handle_run_done clears busy, rebuilds the transcript, surfaces
-    /// the outcome, and records was_final on status so the event loop's idle
-    /// drain can gate the queued-message drain (a deferred resume swap drains
-    /// any-end; a queued message only when was_final -- a user interrupt must
-    /// not auto-send the next queued message).
+    /// Apply an inbound agent message to application state. Completion and a
+    /// matching request error settle the active run; other messages update the
+    /// live interface.
     pub fn handle_agent_message(&mut self, msg: AgentMessage) {
         match msg {
             AgentMessage::Done { result } => {
                 self.active_run_req_id.set(None);
-                self.handle_run_done(result);
+                self.handle_run_completion(result);
             }
             AgentMessage::RequestError { req_id, message } => {
                 if self.active_run_req_id.get().is_some_and(|r| r == req_id) {
                     self.active_run_req_id.set(None);
-                    self.handle_run_done(Err(RunError {
+                    self.handle_run_completion(Err(RunError {
                         kind: "wire".to_string(),
                         message,
                     }));
@@ -104,24 +109,24 @@ impl App {
                 // verb must read Working, not Thinking (a sticky "reasoning
                 // ever streamed" test would lock it to Thinking for the rest
                 // of the turn even while text is streaming).
-                self.live_block = crate::state::enums::LiveBlock::Responding;
+                self.live_block = LiveBlock::Responding;
                 self.live_active = true;
-                self.last_delta_at = Some(std::time::Instant::now());
+                self.last_delta_at = Some(Instant::now());
                 // Do NOT re-pin to the tail per delta: the draw already pins
                 // to the new tail when follow_tail is true, and a user who
                 // scrolled up to re-read history must stay where they scrolled.
             }
             AgentMessage::ReasoningDelta { text } => {
                 if self.live_reasoning_text.is_empty() && !text.is_empty() {
-                    self.thinking_started_at = Some(std::time::Instant::now());
+                    self.thinking_started_at = Some(Instant::now());
                 }
                 self.live_reasoning_text.push_str(&text);
                 // Reasoning is the active streaming block: the spinner verb
                 // reads Thinking while this holds (until an assistant-text
                 // Delta or a tool start flips it away).
-                self.live_block = crate::state::enums::LiveBlock::Thinking;
+                self.live_block = LiveBlock::Thinking;
                 self.live_active = true;
-                self.last_delta_at = Some(std::time::Instant::now());
+                self.last_delta_at = Some(Instant::now());
             }
             AgentMessage::ToolProgress {
                 call_id,
@@ -136,7 +141,7 @@ impl App {
                 if self.running_tools.contains(&call_id) {
                     self.bash_progress.insert(
                         call_id,
-                        crate::state::BashProgress {
+                        BashProgress {
                             elapsed_secs,
                             lines,
                         },
@@ -182,8 +187,7 @@ impl App {
                 self.pending_trust = Some(prompt);
                 self.pending_trust_req_id = Some(req_id);
             }
-            // Done / RequestError are intercepted by handle_agent_message
-            // (which returns was_final); they never reach the inner match.
+            // Completion and matching request errors are handled before this dispatch.
             AgentMessage::Done { .. } | AgentMessage::RequestError { .. } => {
                 unreachable!("run-end variants are intercepted by handle_agent_message")
             }
@@ -193,13 +197,11 @@ impl App {
                 self.pending_status_command = false;
                 // Sync the terminal tab title (OSC 0/2) on change only (not
                 // unconditionally every status update).
-                crate::terminal_title::sync(&snapshot, &mut self.last_title);
+                sync_terminal_title(&snapshot, &mut self.last_title);
                 self.status_cache = Some(snapshot);
             }
             AgentMessage::TrajectoryResult { entries, redundant } => {
-                self.system_line(crate::command::render::render_trajectory_wire(
-                    &entries, &redundant,
-                ));
+                self.system_line(render_trajectory_wire(&entries, &redundant));
             }
             AgentMessage::ContextResult { breakdown } => {
                 // Cache the breakdown so the next /context renders immediately
@@ -212,10 +214,10 @@ impl App {
                 // suggestions all render. Drill-down (memory files, skills)
                 // is empty until the server ships those sections; the grid
                 // itself is honest data from the breakdown.
-                let suggestions = crate::composition::suggestions_for(&breakdown);
-                let view = crate::records::ContextView {
+                let suggestions = suggestions_for(&breakdown);
+                let view = ContextView {
                     breakdown,
-                    drill: crate::records::ContextDrillDown::default(),
+                    drill: ContextDrillDown::default(),
                     suggestions,
                 };
                 // Replace the last ContextGrid (from the /context cache
@@ -261,7 +263,7 @@ impl App {
             }
             AgentMessage::PermissionRulesResult { rules } => {
                 self.rules_cache = rules.clone();
-                self.system_line(crate::command::render::render_permission_rules_wire(&rules));
+                self.system_line(render_permission_rules_wire(&rules));
             }
             AgentMessage::PermissionWorkingDirsResult { dirs } => {
                 self.dirs_cache = dirs.clone();
@@ -289,7 +291,7 @@ impl App {
                 let folded = if frames.is_empty() {
                     vec![self.empty_child_transcript_line(&child_sid)]
                 } else {
-                    crate::transcript::transcript_from_frames(&frames)
+                    transcript_from_frames(&frames)
                 };
                 // Swap the child rows into the matching Subagent line in place
                 // to preserve position. Mirrors the ContextGrid refresh.
@@ -354,7 +356,7 @@ impl App {
                     .to_string();
                 // Position by tier (stable) so a refresh does not slide
                 // the cursor when active_id flips between the two paths.
-                self.model_sel = crate::view::model_pane::row_for_tier(self, &self.model_tier);
+                self.model_sel = row_for_tier(self, &self.model_tier);
                 let max_sel = self.model_catalog.catalog.len();
                 if self.model_sel > max_sel {
                     self.model_sel = 0;
@@ -363,7 +365,7 @@ impl App {
             AgentMessage::MemoryListResult { entries } => {
                 // Populate the memory pane with the real stored-memory list.
                 // The wire→pane mapping is a pure fn so it is unit-testable.
-                self.memory_entries = crate::command::render::memory_entries_from_wire(&entries);
+                self.memory_entries = memory_entries_from_wire(&entries);
                 // Reset the cursor so it never points past the refreshed list
                 // (a forget / rescan shrank it).
                 self.memory_list.cursor = 0;
@@ -378,7 +380,7 @@ impl App {
                 self.system_line(format!("memory: {} stored", entries.len()));
             }
             AgentMessage::MemoryShowResult { entry } => match entry {
-                Some(e) => self.system_line(crate::command::render::render_memory_entry(&e)),
+                Some(e) => self.system_line(render_memory_entry(&e)),
                 None => self.system_line("memory: no such key"),
             },
             AgentMessage::MemoryToggleStateResult { state } => {
@@ -400,10 +402,8 @@ impl App {
                 // (extract = Saved, dream = Improved); the count gets a
                 // singular/plural noun.
                 let verb = match kind {
-                    houyicoder_protocol::frontend::memory::MemorySavedKind::Extracted => "Saved",
-                    houyicoder_protocol::frontend::memory::MemorySavedKind::Consolidated => {
-                        "Improved"
-                    }
+                    MemorySavedKind::Extracted => "Saved",
+                    MemorySavedKind::Consolidated => "Improved",
                 };
                 let plural = if count == 1 { "memory" } else { "memories" };
                 self.system_line(format!("{verb} {count} {plural}"));
@@ -412,7 +412,7 @@ impl App {
                 if self.pane == Pane::Memory
                     && let Some(req_id) = self.mint_request_id()
                 {
-                    self.send_cmd(crate::run_control::ClientCommand::MemoryListQuery { req_id });
+                    self.send_cmd(ClientCommand::MemoryListQuery { req_id });
                 }
             }
             AgentMessage::UndoResult { description } => match description {
@@ -472,7 +472,7 @@ impl App {
                     }
                     entry.completed = completed;
                 } else {
-                    self.fleet.entries.push(crate::agent_message::FleetEntry {
+                    self.fleet.entries.push(FleetEntry {
                         agent_id: agent_id.clone(),
                         subagent_type,
                         turn,
@@ -498,7 +498,7 @@ impl App {
                 {
                     view.last_fetched_turn = Some(turn);
                     if let Some(req_id) = self.mint_request_id() {
-                        self.send_cmd(crate::run_control::ClientCommand::ChildTranscriptQuery {
+                        self.send_cmd(ClientCommand::ChildTranscriptQuery {
                             req_id,
                             child_sid: houyicoder_protocol::frontend::SessionId(agent_id.clone()),
                         });
@@ -520,10 +520,7 @@ impl App {
     /// history in one drain. Re-projecting per frame there costs the frame
     /// count squared and stalls the first paint for minutes on a long
     /// session.
-    pub(crate) fn apply_frames(
-        &mut self,
-        frames: impl IntoIterator<Item = crate::transcript::TranscriptFrame>,
-    ) {
+    pub(crate) fn apply_frames(&mut self, frames: impl IntoIterator<Item = TranscriptFrame>) {
         let mut any = false;
         for frame in frames {
             if let Some(msg) = frame_log_msg(&frame) {
@@ -545,9 +542,8 @@ impl App {
     /// Retiring a tool also resets the stall clock: last_delta_at is stale
     /// from before the tool ran, and without a fresh grace period the spinner
     /// would snap red the moment the exemption lifts.
-    fn track_running_tool(&mut self, frame: &crate::transcript::TranscriptFrame) {
-        use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCallStatus};
-        let crate::transcript::TranscriptFrame::Session(update) = frame else {
+    fn track_running_tool(&mut self, frame: &TranscriptFrame) {
+        let TranscriptFrame::Session(update) = frame else {
             return;
         };
         match update {
@@ -560,7 +556,7 @@ impl App {
                     // A tool is now running: the active streaming block is no
                     // longer reasoning, so the spinner verb must read Working
                     // (not stay Thinking from the last reasoning delta).
-                    self.live_block = crate::state::enums::LiveBlock::Responding;
+                    self.live_block = LiveBlock::Responding;
                 }
             },
             SessionUpdate::ToolCallUpdate(upd)
@@ -581,26 +577,18 @@ impl App {
     /// the tool-runtime stall exemption lifts.
     fn retire_tool(&mut self, call_id: &str) {
         if self.running_tools.remove(call_id) {
-            self.last_delta_at = Some(std::time::Instant::now());
+            self.last_delta_at = Some(Instant::now());
         }
         // Drop the elapsed ticker for this call — the authoritative result
         // frame has landed, the chip no longer shows (Ns).
         self.bash_progress.remove(call_id);
     }
-
-    // handle_run_done lives in agent_dispatch/done.rs (file-size split).
 }
 
-/// Build a frame-level debug message: the call_id, tool title, and for results
-/// the output's shape (diff / content / error / files / stdout / status). Used
-/// to capture the exact wire stream a misalignment bug reproduces on so the
-/// fix rests on observed data, not inference. The body itself is NOT logged
-/// (it can be large + carry file content); the shape tags are enough to spot a
-/// swapped call_id at the server or a pairing bug. Pure (no I/O) so it is
-/// unit-testable without the debug-log file env.
-fn frame_log_msg(frame: &crate::transcript::TranscriptFrame) -> Option<String> {
-    use houyicoder_protocol::frontend::session_update::SessionUpdate;
-    let crate::transcript::TranscriptFrame::Session(update) = frame else {
+/// Describe a tool frame for diagnostic logging without recording payload
+/// contents. Call frames include identity; result frames include output shape.
+fn frame_log_msg(frame: &TranscriptFrame) -> Option<String> {
+    let TranscriptFrame::Session(update) = frame else {
         return None;
     };
     match update {
@@ -634,9 +622,5 @@ fn frame_log_msg(frame: &crate::transcript::TranscriptFrame) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "agent_dispatch_tests.rs"]
+#[path = "agent_dispatch/tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "agent_dispatch_teammate_tests.rs"]
-mod teammate_tests;

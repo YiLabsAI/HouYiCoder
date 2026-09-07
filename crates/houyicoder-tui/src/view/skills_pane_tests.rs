@@ -1,5 +1,4 @@
-//! Skills pane rendering tests, extracted from agent_dispatch_tests on
-//! size grounds.
+//! Skills pane rendering tests.
 
 use crate::composition;
 use crate::state::{Pane, Screen};

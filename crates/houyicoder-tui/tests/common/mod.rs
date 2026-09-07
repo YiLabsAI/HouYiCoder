@@ -1,30 +1,12 @@
-//! Shared PTY test harness for the TUI: spawn the real houyi binary under a
-//! pseudo-terminal, feed it keystrokes, and assert on the rendered byte stream.
+//! Shared harness for end-to-end terminal tests.
 //!
-//! This is the "real UX path" layer that TestBackend unit tests cannot cover:
-//! the actual crossterm event loop, the real repaint, and the full key-routing
-//! chain from a terminal. It complements the inline unit tests (fast, exhaustive,
-//! assert on App state) — it does not replace them. The unit layer catches
-//! cell-state regressions (e.g. the Workspace cursor-clamp bug, via
-//! render_buffer); this layer catches flow + render + key-routing breakage
-//! that only surfaces when the real binary drives a real terminal.
-//!
-//! Tests are #[ignore] (they spawn a binary + a PTY — too slow + flaky for the
-//! 60s commit gate). Run via make test ui (which builds the bin first) or
-//! cargo test --test ui_<category> -- --ignored after cargo build --bin houyi.
-//!
-//! This module is compiled into EVERY ui_* test binary (each does mod common;),
-//! so a helper used by one category but not another would warn dead_code — the
-//! module-level allow keeps the shared helpers clean across categories.
-//!
-//! Assertion strategy: accumulate the raw ANSI bytes the binary writes, and
-//! assert by substring (wait_for, assert_contains). This sidesteps a full
-//! terminal emulator (a fragile 150-line vte Perform would make every test
-//! flaky on an exotic escape). A complete screen-grid emulator can land later
-//! if cell-precise assertions are needed here; for now the raw-stream +
-//! SGR-proximity checks cover the flow/render class.
+//! Launches the real binary in an isolated pseudo-terminal, sends key events,
+//! and captures rendered output. These ignored tests cover event routing,
+//! repainting, and interaction flows that state-based unit tests cannot.
+//! Assertions inspect the accumulated terminal byte stream; cell-level checks
+//! remain in the unit-test renderer.
 
-#![allow(dead_code)] // test fixtures; used by some ui test binaries, unused from others
+#![allow(dead_code)] // shared helpers vary by integration target
 
 use std::io::Read;
 use std::path::PathBuf;

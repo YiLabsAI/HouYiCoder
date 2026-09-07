@@ -73,13 +73,8 @@ pub fn stream_from_response(
                     while chars.peek().is_some() {
                         let chunk: String = chars.by_ref().take(4).collect();
                         if !chunk.is_empty() {
-                            // Delay BEFORE each delta (including the first) so the
-                            // stub stream starts after delay_ms, not immediately.
-                            // A pre-content in-flight window is what the PTY
-                            // abort/abort-restore tests need: the first delta
-                            // must not land before an Esc sent right after Enter
-                            // cancels the run, otherwise run_produced_real_content
-                            // is true and the restore path never fires.
+                            // Delay the first delta so interruption tests have
+                            // a deterministic window before assistant output.
                             if let Some(ms) = delay_ms {
                                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
                             }

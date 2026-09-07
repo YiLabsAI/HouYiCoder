@@ -50,15 +50,17 @@ fn test_final_output_defers_drain() {
         ],
         "queue intact after Done (drain moved to idle_drain)"
     );
-    // The idle drain: head leaves, tail stays parked (no live copy while idle).
-    assert!(app.drain_pending_head(), "head drained by the idle drain");
+    // Simulate the final-only idle gate consuming one queue head.
+    assert!(
+        app.drain_pending_head(),
+        "head drained after final completion"
+    );
     assert_eq!(app.pending, vec![PendingItem::ParkedMessage("tail".into())]);
 }
 
-/// An Interrupted run clears busy + demotes the queued Message to
-/// ParkedMessage (the server buffer is gone), then the idle drain auto-sends
-/// it as the next turn. A queue processor that fires
-/// the next item regardless of how the prior run ended.
+/// Interruption clears busy and parks the queued message after its server
+/// copy disappears. Direct helper invocation can consume it later; production
+/// idle draining remains gated on final completion.
 #[test]
 fn test_interrupt_demotes_then_drains() {
     let mut app = working();
@@ -81,14 +83,16 @@ fn test_interrupt_demotes_then_drains() {
         "queued message demoted to ParkedMessage after an interrupt (server \
          buffer cleared; host FIFO preserved for the follow-up drain)"
     );
-    // Auto-drain on any idle: the ParkedMessage sends as the next turn.
-    assert!(app.drain_pending_head(), "parked message drains on idle");
+    // Exercise explicit queue consumption independently of the idle gate.
+    assert!(
+        app.drain_pending_head(),
+        "parked message can drain explicitly"
+    );
     assert!(app.pending.is_empty(), "parked message consumed");
 }
 
-/// A RequestError whose req_id matches the in-flight run routes as a run
-/// failure: handle_run_done clears busy. The drain is not gated on the
-/// outcome, so any queued item auto-sends on the next idle.
+/// A request error matching the active run settles that run and clears its
+/// request identifier.
 #[test]
 fn test_request_error_ends_run() {
     let mut app = working();

@@ -1,8 +1,6 @@
-//! Teammate-view Esc/echo/steer tests split from agent_dispatch_tests
-//! to keep the file under the size gate.
+//! Teammate interruption, optimistic echo, and steering behavior.
 
-use crate::agent_message::AgentMessage;
-
+use super::*;
 /// Esc on a viewed child only interrupts its current turn; it never exits
 /// the view. A running child gets a per-turn cancel and the view stays; an
 /// idle child is a no-op on the run that pops a toast reminding the exit

@@ -932,8 +932,8 @@ fn test_model_switch_ships_wired() {
 }
 
 #[cfg(test)]
-#[path = "real_content_predicate_tests.rs"]
-mod real_content_predicate_tests;
+#[path = "interrupted_turn_tests.rs"]
+mod interrupted_turn_tests;
 #[cfg(test)]
 #[path = "rebuild_cap_tests.rs"]
 mod rebuild_cap_tests;

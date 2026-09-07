@@ -1,20 +1,7 @@
-//! Real-binary PTY tests for the run-lifecycle interactions: Esc abort +
-//! rewind/restore, and the ambient queue strip render while a run is
-//! in-flight. The unit layer covers the state-machine decisions; this
-//! layer drives the real houyi binary through a real terminal so the run
-//! chain (driver -> wire -> server -> runner -> cancel token) + the
-//! transcript rebuild on Interrupted are pinned end-to-end. These are the
-//! bugs the unit layer let through because the breakage only surfaces when
-//! the real crossterm loop + the wire + the repaint all chain together.
+//! End-to-end terminal tests for interruption and queued input.
 //!
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_run -- --ignored after cargo build --bin houyi.
-//!
-//! The stub streams with a large inter-chunk delay (HOUYICODER_STUB_DELAY_MS)
-//! so the run stays in-flight with NO streamed content for a clean window:
-//! the stub's first delta lands RUN_DELAY_MS after Enter, so an Esc sent right
-//! after Enter always lands before any content — run_produced_real_content is
-//! false and the rewind/restore path fires deterministically (no race).
+//! A delayed stub provides a deterministic window before assistant output so
+//! immediate cancellation exercises input restoration without a timing race.
 
 #![allow(clippy::unwrap_in_result)]
 

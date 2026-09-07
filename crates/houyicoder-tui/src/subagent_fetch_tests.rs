@@ -1,8 +1,6 @@
-//! Wired round-trip tests for the on-demand child transcript fetch. The pure
-//! fill + projection are pinned in agent_dispatch_tests; these pin the
-//! cross-layer wiring: a first expand fires a ChildTranscriptQuery, the server
-//! replays the child log and projects, the driver forwards the reply, and the
-//! fill arm swaps the child rows into the fold-group in place.
+//! End-to-end wiring tests for on-demand child transcript fetches.
+//! Expansion requests the child log and replaces the matching folded rows
+//! with the projected transcript.
 use super::*;
 use crate::records::TranscriptLine;
 
