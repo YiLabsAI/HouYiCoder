@@ -134,3 +134,36 @@ fn test_no_fence_still_asks() {
         "the supplied-string check must survive a gate with no fence"
     );
 }
+
+/// A read-only tool touching a protected path must Ask (fail-closed), and
+/// the detail must be operation-neutral ("accessing", not "writing") so a
+/// read is not presented as a write to the user.
+#[test]
+fn test_read_only_protected_asks() {
+    use crate::Decision;
+    let v: &'static Value = Box::leak(serde_json::json!({ "pattern": ".git/" }).into());
+    let req = ToolRequest {
+        tool_name: "glob",
+        input: Some(v),
+        is_destructive: false,
+        is_read_only: true,
+        native_requires_approval: false,
+    };
+    let d = DefaultModeGate::with_mode(PermissionMode::Auto).decide(&req);
+    assert_eq!(d.outcome(), Outcome::Ask);
+    match d {
+        Decision::Ask(reason) => {
+            assert!(
+                reason.detail.contains("accessing"),
+                "detail should be operation-neutral: {}",
+                reason.detail
+            );
+            assert!(
+                !reason.detail.contains("writing"),
+                "read-only ask must not say writing: {}",
+                reason.detail
+            );
+        }
+        other => panic!("expected Ask, got {other:?}"),
+    }
+}

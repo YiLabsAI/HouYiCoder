@@ -97,7 +97,7 @@ impl Validator for ProtectedPathValidator {
         Some(Decision::Ask(AskReason {
             source: AskSource::SystemSafety,
             validator: self.name(),
-            detail: "writing to a protected path needs confirmation".into(),
+            detail: "accessing a protected path needs confirmation".into(),
             containment_note: None,
         }))
     }
