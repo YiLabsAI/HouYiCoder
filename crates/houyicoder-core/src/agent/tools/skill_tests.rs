@@ -1,6 +1,9 @@
 use super::*;
 use houyicoder_api::sandbox::SandboxSession;
-use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry, SkillSnapshot};
+use houyicoder_api::skill::{
+    ProjectIdentity, SkillDescriptor, SkillError, SkillFamily, SkillProvenance, SkillRegistry,
+    SkillSnapshot, SkillSource,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -128,6 +131,20 @@ impl SkillRegistry for InMemoryRegistry {
                 usage: Default::default(),
             })
             .collect()
+    }
+
+    fn source_for(&self, name: &str) -> Option<SkillSource> {
+        let origin = self.origins.get(name)?;
+        let (family, provenance) = match origin.as_str() {
+            "managed" => (SkillFamily::Houyi, SkillProvenance::Managed),
+            "user" => (SkillFamily::Houyi, SkillProvenance::UserHome),
+            "ecosystem" => (SkillFamily::Agents, SkillProvenance::UserHome),
+            _ => (
+                SkillFamily::Houyi,
+                SkillProvenance::Project(ProjectIdentity::from_canonical_root(Path::new("/repo"))),
+            ),
+        };
+        Some(SkillSource::new(family, provenance))
     }
 }
 
@@ -298,9 +315,11 @@ fn test_flags_require_serial_execution() {
 /// (execute fails with NotFound, a clearer signal).
 #[test]
 fn test_safe_property_allowlist() {
-    let reg = InMemoryRegistry::new()
+    let mut reg = InMemoryRegistry::new()
         .insert_with_tools("dangerous", "body", true, vec!["Bash".to_string()])
+        .insert_with_tools("ecosystem", "body", true, vec!["Bash".to_string()])
         .insert("safe", "body", true);
+    reg.origins.insert("ecosystem".into(), "ecosystem".into());
     let tool = SkillTool::new(Arc::new(reg));
     assert!(
         tool.requires_approval_for(&json!({"skill":"dangerous"})),
@@ -309,6 +328,10 @@ fn test_safe_property_allowlist() {
     assert!(
         !tool.requires_approval_for(&json!({"skill":"safe"})),
         "skill without allowed_tools is auto-allowed"
+    );
+    assert!(
+        !tool.requires_approval_for(&json!({"skill":"ecosystem"})),
+        "ignored ecosystem grants do not ask"
     );
     assert!(
         !tool.requires_approval_for(&json!({"skill":"unknown"})),
@@ -425,7 +448,7 @@ struct RecordingSession {
     app_launch: Mutex<Option<bool>>,
     mach: Mutex<Vec<String>>,
 }
-impl houyicoder_api::sandbox::SandboxSession for RecordingSession {
+impl SandboxSession for RecordingSession {
     fn exec_with_config(
         &self,
         _: &str,
@@ -481,12 +504,15 @@ impl SkillRegistry for AppLaunchRegistry {
             allow_app_launch: true,
         })
     }
-    fn list_with_origin(&self) -> Vec<houyicoder_api::skill::SkillSnapshot> {
-        vec![houyicoder_api::skill::SkillSnapshot {
+    fn list_with_origin(&self) -> Vec<SkillSnapshot> {
+        vec![SkillSnapshot {
             descriptor: self.find("launcher").unwrap(),
             origin: "managed".into(),
             usage: Default::default(),
         }]
+    }
+    fn source_for(&self, name: &str) -> Option<SkillSource> {
+        (name == "launcher").then(|| SkillSource::new(SkillFamily::Houyi, SkillProvenance::Managed))
     }
     fn prepare_body(
         &self,
@@ -510,12 +536,20 @@ impl SkillRegistry for ProjectOriginRegistry {
     fn find(&self, name: &str) -> Option<SkillDescriptor> {
         AppLaunchRegistry.find(name)
     }
-    fn list_with_origin(&self) -> Vec<houyicoder_api::skill::SkillSnapshot> {
-        vec![houyicoder_api::skill::SkillSnapshot {
+    fn list_with_origin(&self) -> Vec<SkillSnapshot> {
+        vec![SkillSnapshot {
             descriptor: self.find("launcher").unwrap(),
             origin: "project".into(),
             usage: Default::default(),
         }]
+    }
+    fn source_for(&self, name: &str) -> Option<SkillSource> {
+        (name == "launcher").then(|| {
+            SkillSource::new(
+                SkillFamily::Houyi,
+                SkillProvenance::Project(ProjectIdentity::from_canonical_root(Path::new("/repo"))),
+            )
+        })
     }
     fn prepare_body(
         &self,

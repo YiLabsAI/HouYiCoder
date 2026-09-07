@@ -14,7 +14,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use houyicoder_api::skill::{SkillError, SkillRegistry};
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::skill::grant::{SkillGrantStore, resolve_entitlements};
+use houyicoder_api::skill::{SkillError, SkillRegistry, SkillSource};
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_protocol::extension::ToolError;
@@ -29,8 +31,8 @@ pub struct SkillTool {
     registry: Arc<dyn SkillRegistry>,
     registrar: Option<Arc<super::super::SkillHookRegistrar>>,
     activator: Option<Arc<dyn super::super::conditional_activation::ConditionalSkillActivator>>,
-    sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    skill_grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
+    sandbox: Option<Arc<dyn SandboxSession>>,
+    skill_grants: Option<Arc<SkillGrantStore>>,
     active_skill: Option<Arc<Mutex<Option<String>>>>,
 }
 
@@ -55,19 +57,13 @@ impl SkillTool {
     }
 
     /// Wire the sandbox session so invoking a skill grants entitlements.
-    pub fn with_sandbox(
-        mut self,
-        sandbox: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    ) -> Self {
+    pub fn with_sandbox(mut self, sandbox: Option<Arc<dyn SandboxSession>>) -> Self {
         self.sandbox = sandbox;
         self
     }
 
     /// Wire the skill grant store so invocation merges granted mach services.
-    pub fn with_skill_grants(
-        mut self,
-        grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
-    ) -> Self {
+    pub fn with_skill_grants(mut self, grants: Option<Arc<SkillGrantStore>>) -> Self {
         self.skill_grants = grants;
         self
     }
@@ -190,17 +186,18 @@ impl Tool for SkillTool {
             // key so a same-named project skill cannot consume grants
             // approved for a user-level copy. One origin scan feeds
             // both body-trust and entitlement-trust decisions.
-            let origin = super::super::skill_body::skill_origin(&*registry, &params.skill)
-                .unwrap_or_else(|| "unknown".to_string());
-            let untrusted = !super::super::skill_body::is_trusted_origin(&origin);
+            let source = super::super::skill_body::skill_source(&*registry, &params.skill);
+            let untrusted = source
+                .as_ref()
+                .map(|source| !source.is_trusted())
+                .unwrap_or(true);
             if let Some(session) = self.sandbox.as_ref() {
-                let (mach, allow_launch) = houyicoder_api::skill::grant::resolve_entitlements(
+                let (mach, allow_launch) = resolve_entitlements(
                     self.skill_grants.as_deref(),
                     &params.skill,
-                    &origin,
+                    source.as_ref(),
                     &desc.allowed_mach_services,
                     desc.allow_app_launch,
-                    !untrusted,
                 );
                 session.clear_skill_grants();
                 session.set_extra_mach_services(&mach);
@@ -223,14 +220,17 @@ impl Tool for SkillTool {
             // directives as unverified. Shared with the slash path.
             let body =
                 super::super::skill_body::frame_untrusted_body(&params.skill, &body, untrusted);
-            // The grant hook gates session-scoped allowed-tools grants by
-            // this trust flag; the model cannot forge it (derived from the
-            // registry's origin snapshot, not the body it dresses).
+            // Skill-authored tool grants use the same authority boundary as
+            // other frontmatter entitlements. A user-home compatibility skill
+            // may receive a host profile without self-authorizing tool rules.
+            let frontmatter_trusted = source
+                .as_ref()
+                .is_some_and(SkillSource::applies_frontmatter_entitlements);
             Ok(json!({
                 "skill": params.skill,
                 "result": body,
                 "allowed_tools": desc.allowed_tools,
-                "trusted": !untrusted,
+                "trusted": frontmatter_trusted,
             }))
         })
     }
@@ -244,16 +244,20 @@ impl Tool for SkillTool {
     fn is_destructive(&self) -> bool {
         false
     }
-    /// A skill with non-empty allowed_tools requests permission before
-    /// executing; safe-only skills auto-allow.
+    /// Trusted frontmatter with tool grants requires approval before loading.
+    /// Sources that cannot install those grants do not raise a vacant prompt.
     fn requires_approval_for(&self, input: &Value) -> bool {
         let Some(name) = input.get("skill").and_then(|v| v.as_str()) else {
             return false;
         };
-        match self.registry.find(name) {
-            Some(desc) => !desc.allowed_tools.is_empty(),
-            None => false,
-        }
+        let Some(desc) = self.registry.find(name) else {
+            return false;
+        };
+        !desc.allowed_tools.is_empty()
+            && self
+                .registry
+                .source_for(name)
+                .is_some_and(|source| source.applies_frontmatter_entitlements())
     }
     fn requires_approval(&self) -> bool {
         false

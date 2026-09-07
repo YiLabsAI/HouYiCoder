@@ -19,6 +19,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["process", "time", "rt", "macros"] }
 tracing = "0.1.44"
 dunce = "1"
+sha2 = "0.11"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

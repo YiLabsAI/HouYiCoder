@@ -52,7 +52,13 @@ fn test_parse_dash_digit() {
 
 // ---- resolve_skill_slash method ----
 
-use houyicoder_api::skill::{SkillDescriptor, SkillHookSpec, SkillRegistry};
+use houyicoder_api::launcher::{ProcessLauncher, StdProcessLauncher};
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::session::SessionLog;
+use houyicoder_api::skill::{
+    HookSourceKind, SkillDescriptor, SkillFamily, SkillHookSpec, SkillProvenance, SkillRegistry,
+    SkillSnapshot, SkillSource, SkillUsage,
+};
 use houyicoder_api::trust::TrustState;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_resilience::Retry;
@@ -110,24 +116,26 @@ impl SkillRegistry for SlashStubRegistry {
             _ => Err(SkillError::NotFound(name.into())),
         }
     }
-    fn list_with_origin(&self) -> Vec<houyicoder_api::skill::SkillSnapshot> {
+    fn list_with_origin(&self) -> Vec<SkillSnapshot> {
         ["commit", "secret", "launcher"]
             .iter()
             .filter_map(|name| {
-                self.find(name)
-                    .map(|descriptor| houyicoder_api::skill::SkillSnapshot {
-                        descriptor,
-                        origin: "managed".to_string(),
-                        usage: houyicoder_api::skill::SkillUsage::default(),
-                    })
+                self.find(name).map(|descriptor| SkillSnapshot {
+                    descriptor,
+                    origin: "managed".to_string(),
+                    usage: SkillUsage::default(),
+                })
             })
             .collect()
+    }
+    fn source_for(&self, name: &str) -> Option<SkillSource> {
+        self.find(name)
+            .map(|_| SkillSource::new(SkillFamily::Houyi, SkillProvenance::Managed))
     }
 }
 
 fn runner_with_slash() -> Runner {
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Runner::with_shared_store(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
@@ -185,8 +193,7 @@ async fn test_missing_origin_fails_closed() {
         }
     }
 
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::with_shared_store(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
@@ -247,8 +254,7 @@ async fn test_resolve_plain_text() {
 
 #[tokio::test]
 async fn test_resolve_noop_without_registry() {
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::with_shared_store(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
@@ -394,7 +400,7 @@ impl SkillRegistry for HookStubRegistry {
             args: vec![],
             once: false,
             if_rule: None,
-            source: houyicoder_api::skill::HookSourceKind::Managed,
+            source: HookSourceKind::Managed,
         }]
     }
 }
@@ -407,11 +413,9 @@ impl SkillRegistry for HookStubRegistry {
 async fn test_invoke_registers_hook_timing() {
     let hook_reg = Arc::new(HookRegistry::new());
     let trust = Arc::new(RwLock::new(TrustState::Trusted));
-    let launcher: Arc<dyn houyicoder_api::launcher::ProcessLauncher> =
-        Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
+    let launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
     let registrar = Arc::new(SkillHookRegistrar::new(hook_reg.clone(), trust, launcher));
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::with_shared_store(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
@@ -494,8 +498,7 @@ fn paths_descriptor(name: &str) -> SkillDescriptor {
 }
 
 fn runner_with_paths(activator: Arc<dyn crate::agent::ConditionalSkillActivator>) -> Runner {
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Runner::with_shared_store(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
@@ -516,7 +519,7 @@ fn runner_with_paths(activator: Arc<dyn crate::agent::ConditionalSkillActivator>
 /// names the paths.
 #[tokio::test]
 async fn test_slash_conditional_refuses() {
-    let reg: Arc<dyn houyicoder_api::skill::SkillRegistry> = Arc::new(PathsSlashRegistry);
+    let reg: Arc<dyn SkillRegistry> = Arc::new(PathsSlashRegistry);
     let cwd = env::temp_dir().join("houyi-slash-refuse");
     let activator = Arc::new(crate::agent::ConditionalActivation::new(reg, cwd));
     let runner = runner_with_paths(activator);
@@ -534,7 +537,7 @@ async fn test_slash_conditional_refuses() {
 
 #[tokio::test]
 async fn test_slash_conditional_passes() {
-    let reg: Arc<dyn houyicoder_api::skill::SkillRegistry> = Arc::new(PathsSlashRegistry);
+    let reg: Arc<dyn SkillRegistry> = Arc::new(PathsSlashRegistry);
     let cwd = env::temp_dir().join("houyi-slash-pass");
     let activator = Arc::new(crate::agent::ConditionalActivation::new(reg, cwd));
     // Activate via a matching file, then slash reaches the body.
@@ -598,8 +601,7 @@ async fn test_slash_load_error_refusal() {
     let reg = Arc::new(LoadFailRegistry {
         refused: AtomicU64::new(0),
     });
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::with_shared_store(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
@@ -631,7 +633,7 @@ async fn test_slash_load_error_refusal() {
 #[tokio::test]
 async fn test_session_context_injection() {
     struct TemplateRegistry;
-    impl houyicoder_api::skill::SkillRegistry for TemplateRegistry {
+    impl SkillRegistry for TemplateRegistry {
         fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
             Vec::new()
         }
@@ -662,9 +664,8 @@ async fn test_session_context_injection() {
         }
     }
 
-    let reg: Arc<dyn houyicoder_api::skill::SkillRegistry> = Arc::new(TemplateRegistry);
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let reg: Arc<dyn SkillRegistry> = Arc::new(TemplateRegistry);
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::with_shared_store(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
@@ -715,7 +716,7 @@ struct SlashRecordingSession {
     app_launch: Mutex<Option<bool>>,
     mach: Mutex<Vec<String>>,
 }
-impl houyicoder_api::sandbox::SandboxSession for SlashRecordingSession {
+impl SandboxSession for SlashRecordingSession {
     fn exec_with_config(
         &self,
         _: &str,

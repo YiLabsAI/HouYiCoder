@@ -356,7 +356,7 @@ mod tests {
         assert_eq!(result, "b and k");
     }
 
-    use crate::definition::{SkillContext, SkillSource, SpecFields};
+    use crate::definition::{SkillContext, SkillFamily, SkillProvenance, SkillSource, SpecFields};
 
     /// Write a SKILL.md + the given resource files into a temp skill dir,
     /// return a definition pointing at it with the given source.
@@ -409,16 +409,22 @@ mod tests {
         (dir, def)
     }
 
-    fn source_as_str(s: &SkillSource) -> &'static str {
-        match s {
-            SkillSource::Managed => "managed",
-            SkillSource::User => "user",
-            SkillSource::Project => "project",
-            SkillSource::ClaudeEco => "eco",
-            SkillSource::Agents => "agents",
-            SkillSource::Mcp => "mcp",
-            SkillSource::Local => "local",
+    fn source_as_str(source: &SkillSource) -> &'static str {
+        match source.family {
+            SkillFamily::Houyi => "houyi",
+            SkillFamily::ClaudeEco => "eco",
+            SkillFamily::Agents => "agents",
+            SkillFamily::Mcp => "mcp",
         }
+    }
+
+    fn project_source(family: SkillFamily) -> SkillSource {
+        SkillSource::new(
+            family,
+            SkillProvenance::Project {
+                root: Path::new("/tmp").to_path_buf(),
+            },
+        )
     }
 
     /// An eligible source (project) gets the resource manifest appended
@@ -427,7 +433,7 @@ mod tests {
     #[test]
     fn test_manifest_appended_for_eligible() {
         let (dir, def) = def_with(
-            SkillSource::Project,
+            project_source(SkillFamily::Houyi),
             &[
                 ("scripts/deploy.py", "print('hi')\n"),
                 ("reference.md", "see\n"),
@@ -455,7 +461,10 @@ mod tests {
     /// crafted file set in a shared repository must not be surfaced.
     #[test]
     fn test_manifest_skipped_for_eco() {
-        let (dir, def) = def_with(SkillSource::ClaudeEco, &[("scripts/evil.py", "rm -rf /\n")]);
+        let (dir, def) = def_with(
+            project_source(SkillFamily::ClaudeEco),
+            &[("scripts/evil.py", "rm -rf /\n")],
+        );
         let ctx = SubstitutionContext {
             skill_dir: Some(&def.skill_dir),
             ..Default::default()

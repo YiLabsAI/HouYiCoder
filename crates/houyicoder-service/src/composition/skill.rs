@@ -6,51 +6,69 @@
 //! only resolves the name, checks the model-invocation gate, and threads
 //! the session id into the substitution context.
 
-use std::collections::HashSet;
-use std::path::Path;
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::collections::{HashMap, HashSet};
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use houyicoder_api::skill::{
-    HookSourceKind, SkillDescriptor, SkillError, SkillHookSpec, SkillRegistry, SkillScriptRef,
-    SkillSnapshot,
+    HookSourceKind, ProjectIdentity, RemoteIdentity, SkillDescriptor, SkillError,
+    SkillFamily as ApiSkillFamily, SkillHookSpec, SkillProvenance as ApiSkillProvenance,
+    SkillRegistry, SkillScriptRef, SkillSnapshot, SkillSource as ApiSkillSource, SkillUsage,
 };
-use houyicoder_skill::definition::{SkillDefinition, SkillSource};
-use houyicoder_skill::lifecycle::should_swap;
+use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_skill::definition::{SkillDefinition, SkillFamily, SkillProvenance, SkillSource};
+use houyicoder_skill::disclose::script_gate::detect_skill_scripts;
+use houyicoder_skill::lifecycle::{should_swap, watch_roots};
 use houyicoder_skill::{discover, invoke};
 
-/// The snake_case wire label for a discovery source, used for grouping in
-/// the /skills pane. Mirrors SkillSource's serde rename_all so the wire
-/// label stays stable if the enum is ever serialized elsewhere.
+/// The stable wire label for a discovery family, used for grouping in the
+/// skills pane without exposing authority identity or filesystem paths.
 fn source_label(source: &SkillSource) -> &'static str {
-    match source {
-        SkillSource::Managed => "managed",
-        SkillSource::User => "user",
-        SkillSource::Project => "project",
-        SkillSource::ClaudeEco => "claude_eco",
-        SkillSource::Agents => "agents",
-        SkillSource::Mcp => "mcp",
-        SkillSource::Local => "local",
+    match source.family {
+        SkillFamily::ClaudeEco => "claude_eco",
+        SkillFamily::Agents => "agents",
+        SkillFamily::Mcp => "mcp",
+        SkillFamily::Houyi => match source.provenance {
+            SkillProvenance::Managed => "managed",
+            SkillProvenance::UserHome => "user",
+            SkillProvenance::Project { .. } => "project",
+            SkillProvenance::Remote { .. } => "mcp",
+        },
     }
 }
 
-/// Map a skill's discovery source to the port-level hook-source kind the
-/// registry gates by. MCP skills are remote and never register command
-/// hooks (None); the others map to the trust level they were discovered
-/// at. ClaudeEco and Agents are shared-repo paths, grouped with Project
-/// so they are skipped under an untrusted project like checked-in hooks.
-/// A skill hook built with this kind flows through the registry's
-/// policy + trust gate the same as a persisted hook. Direct mapping: the
-/// engine-side registrar maps the kind onward itself, so no detour
-/// through the engine's own source enum is needed here.
-fn skill_source_to_kind(s: &SkillSource) -> Option<HookSourceKind> {
-    match s {
-        SkillSource::Managed => Some(HookSourceKind::Managed),
-        SkillSource::User => Some(HookSourceKind::User),
-        SkillSource::Project | SkillSource::ClaudeEco | SkillSource::Agents => {
-            Some(HookSourceKind::Project)
+fn to_api_source(source: &SkillSource) -> ApiSkillSource {
+    let family = match source.family {
+        SkillFamily::Houyi => ApiSkillFamily::Houyi,
+        SkillFamily::ClaudeEco => ApiSkillFamily::ClaudeEco,
+        SkillFamily::Agents => ApiSkillFamily::Agents,
+        SkillFamily::Mcp => ApiSkillFamily::Mcp,
+    };
+    let provenance = match &source.provenance {
+        SkillProvenance::Managed => ApiSkillProvenance::Managed,
+        SkillProvenance::UserHome => ApiSkillProvenance::UserHome,
+        SkillProvenance::Project { root } => {
+            ApiSkillProvenance::Project(ProjectIdentity::from_canonical_root(root))
         }
-        SkillSource::Local => Some(HookSourceKind::Local),
-        SkillSource::Mcp => None,
+        SkillProvenance::Remote { server } => {
+            ApiSkillProvenance::Remote(RemoteIdentity(server.clone()))
+        }
+    };
+    ApiSkillSource::new(family, provenance)
+}
+
+/// Map authority provenance to the hook trust level. Directory family does
+/// not decide trust: user-home ecosystem hooks are user-owned, project hooks
+/// stay behind workspace trust, and remote skills never register commands.
+fn skill_source_to_kind(source: &SkillSource) -> Option<HookSourceKind> {
+    match source.provenance {
+        SkillProvenance::Managed => Some(HookSourceKind::Managed),
+        SkillProvenance::UserHome => Some(HookSourceKind::User),
+        SkillProvenance::Project { .. } => Some(HookSourceKind::Project),
+        SkillProvenance::Remote { .. } => None,
     }
 }
 
@@ -163,74 +181,44 @@ fn to_descriptor(s: &SkillDefinition) -> SkillDescriptor {
     }
 }
 
-/// A registry backed by filesystem discovery. Scans the configured paths
-/// once at construction; the set is fixed for the session (a skill added
-/// mid-session surfaces on the next run, mirroring the external tool
-/// server contract). Skills are sorted by precedence at discovery time,
-/// so a name lookup returns the highest-precedence match. Descriptors are
-/// materialized once at construction and cached: the listing, find, and
-/// origin paths clone the cached value instead of re-reading every body
-/// file per call (the body token estimate is the only field that touches
-/// disk, so caching it once bounds the per-call cost to a clone).
-/// The cached discovery set: three parallel vectors built together at
-/// discovery and swapped atomically on reload, so a reader never sees a
-/// torn mix where one skill's name resolves to another's hooks. The
-/// lockstep is structural — the vectors are born and replaced together —
-/// not a runtime invariant guarded by asserts.
+/// One immutable discovery snapshot. Skills, descriptors, and hooks are built
+/// together and replaced under one lock, so readers cannot observe a torn reload.
 pub struct SkillSet {
     skills: Vec<SkillDefinition>,
     descriptors: Vec<SkillDescriptor>,
     hooks: Vec<Vec<SkillHookSpec>>,
 }
 
-/// The result of a reload: whether the new set was swapped in and which
-/// skill names changed (added, removed, or hooks spec changed). The driver
-/// feeds changed to the hook registrar so only those skills' hooks are
-/// invalidated and re-registered. When swapped is false (the empty-set
-/// guard held), changed is empty — no swap means no change to act on.
+/// A reload decision and the skill names whose hook registrations changed.
+/// changed is empty when swapped is false.
 pub struct ReloadOutcome {
     pub swapped: bool,
     pub changed: Vec<String>,
 }
 
-/// A registry backed by filesystem discovery, cached behind a single
-/// RwLock so a hot reload can swap the whole set atomically without
-/// tearing a reader between the name index and the hooks/skills vectors it
-/// indexes into. Descriptors and hooks are materialized once at discovery
-/// (the body token estimate is the only field that touches disk, so caching
-/// it bounds the per-call cost to a clone).
+/// Filesystem-backed registry with atomic hot-reload and session state that
+/// survives discovery snapshot replacement.
 pub struct SkillRegistryImpl {
     set: RwLock<SkillSet>,
-    usage: std::sync::Mutex<std::collections::HashMap<String, houyicoder_api::skill::SkillUsage>>,
-    /// Session-scoped disabled skill names. Sibling of set: a disabled skill
-    /// is filtered from the model listing but stays in list_with_origin
-    /// (visible in /skills, marked disabled). Survives reload (reload swaps
-    /// set only).
-    disabled: std::sync::Mutex<std::collections::HashSet<String>>,
+    usage: Mutex<HashMap<String, SkillUsage>>,
+    /// Disabled names remain visible in the skills pane and survive reloads.
+    disabled: Mutex<HashSet<String>>,
 }
 
 impl SkillRegistryImpl {
-    /// Discover skills reading the user-level home from the process env.
-    /// Production entry point. Delegates to discover_with_home, which
-    /// rejects skills whose names collide with builtin slash commands.
-    /// Tests use discover_with_home to pass an explicit (or None) home so
-    /// they are not coupled to the real home directory of the machine
-    /// running the suite.
+    /// Discover project and user-home skills using the process environment.
     pub fn discover(cwd: Option<&Path>) -> Self {
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let home = env::var_os("HOME").map(PathBuf::from);
         Self::discover_with_home(cwd, home.as_deref())
     }
 
-    /// Discover skills with an explicit user-level home directory. A None
-    /// home skips the user level so the scan covers only managed + project,
-    /// which is what a hermetic test wants. A skill whose name collides with
-    /// a builtin slash command is rejected at registration (warned, not
-    /// silently dropped) so it cannot shadow the builtin at invoke.
+    /// Discover with an explicit home. None skips user-home sources; reserved
+    /// command names are rejected before registration.
     pub fn discover_with_home(cwd: Option<&Path>, home: Option<&Path>) -> Self {
         Self {
             set: RwLock::new(build_skillset(cwd, home)),
-            usage: std::sync::Mutex::new(std::collections::HashMap::new()),
-            disabled: std::sync::Mutex::new(std::collections::HashSet::new()),
+            usage: Mutex::new(HashMap::new()),
+            disabled: Mutex::new(HashSet::new()),
         }
     }
 
@@ -244,9 +232,9 @@ impl SkillRegistryImpl {
     /// and swap take the write lock.
     pub fn reload(&self, cwd: Option<&Path>, home: Option<&Path>) -> ReloadOutcome {
         let new = build_skillset(cwd, home);
-        let roots_readable = houyicoder_skill::lifecycle::watch_roots(cwd, home)
+        let roots_readable = watch_roots(cwd, home)
             .iter()
-            .all(|(p, _)| std::fs::read_dir(p).is_ok());
+            .all(|(p, _)| fs::read_dir(p).is_ok());
         let mut set = self.write_set();
         let old = &*set;
         let old_len = old.descriptors.len();
@@ -328,14 +316,14 @@ impl SkillRegistry for SkillRegistryImpl {
             entry.refusals += 1;
         } else {
             entry.invocations += 1;
-            entry.last_used_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            entry.last_used_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
         }
     }
 
-    fn usage_for(&self, name: &str) -> houyicoder_api::skill::SkillUsage {
+    fn usage_for(&self, name: &str) -> SkillUsage {
         self.usage
             .lock()
             .expect("usage lock poisoned")
@@ -344,10 +332,18 @@ impl SkillRegistry for SkillRegistryImpl {
             .unwrap_or_default()
     }
 
-    fn set_session_disabled(&self, disabled: std::collections::HashSet<String>) {
+    fn set_session_disabled(&self, disabled: HashSet<String>) {
         let count = disabled.len();
         *self.disabled.lock().expect("disabled lock poisoned") = disabled;
         tracing::debug!(count, "session disabled skills set");
+    }
+
+    fn source_for(&self, name: &str) -> Option<ApiSkillSource> {
+        let set = self.read_set();
+        set.skills
+            .iter()
+            .find(|skill| skill.name == name)
+            .map(|skill| to_api_source(&skill.source))
     }
 
     fn list_with_origin(&self) -> Vec<SkillSnapshot> {
@@ -368,7 +364,6 @@ impl SkillRegistry for SkillRegistryImpl {
     }
 
     fn detect_run_scripts(&self, command: &str) -> Vec<SkillScriptRef> {
-        use houyicoder_skill::disclose::script_gate::detect_skill_scripts;
         // No file read: the card shows the verifiable path, not a first-line
         // summary (attacker-controlled text framed as authoritative).
         let set = self.read_set();
@@ -418,7 +413,7 @@ fn build_skillset(cwd: Option<&Path>, home: Option<&Path>) -> SkillSet {
     let skills: Vec<SkillDefinition> = discover::discover_skills(cwd, home)
         .into_iter()
         .filter(|s| {
-            if houyicoder_protocol::frontend::SlashCommand::is_reserved_skill_name(&s.name) {
+            if SlashCommand::is_reserved_skill_name(&s.name) {
                 tracing::warn!(
                     name = %s.name,
                     "skill rejected: name collides with a builtin slash command"

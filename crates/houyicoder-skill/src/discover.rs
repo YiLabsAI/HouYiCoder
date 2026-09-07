@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use super::definition::{SkillDefinition, SkillSource};
+use super::definition::{SkillDefinition, SkillFamily, SkillProvenance, SkillSource};
 use super::parse;
 
 /// Maximum recursion depth when walking for SKILL.md files.
@@ -48,7 +48,7 @@ pub fn discover_skills(cwd: Option<&Path>, home: Option<&Path>) -> Vec<SkillDefi
     // Level 1: managed (highest precedence).
     collect_from_dir(
         Path::new(MANAGED_DIR),
-        SkillSource::Managed,
+        SkillSource::new(SkillFamily::Houyi, SkillProvenance::Managed),
         0,
         &mut all,
         &mut seen_canonical,
@@ -61,11 +61,17 @@ pub fn discover_skills(cwd: Option<&Path>, home: Option<&Path>) -> Vec<SkillDefi
         // canonical git_root are correct (handles symlinks in cwd).
         let cwd = dunce::canonicalize(cwd_raw).unwrap_or_else(|_| cwd_raw.to_path_buf());
         let git_root = find_git_root(&cwd);
+        let project_root = git_root.clone().unwrap_or_else(|| cwd.clone());
         let walk_dirs: Vec<PathBuf> = walk_up_to_root(&cwd, git_root.as_deref());
         for dir in &walk_dirs {
             for (i, family) in CONFIG_DIR_FAMILIES.iter().enumerate() {
                 let skills_dir = dir.join(family).join("skills");
-                let source = project_source_for_family(i);
+                let source = source_for_family(
+                    i,
+                    SkillProvenance::Project {
+                        root: project_root.clone(),
+                    },
+                );
                 collect_from_dir(
                     &skills_dir,
                     source,
@@ -84,7 +90,7 @@ pub fn discover_skills(cwd: Option<&Path>, home: Option<&Path>) -> Vec<SkillDefi
     if let Some(home) = home {
         for (i, family) in CONFIG_DIR_FAMILIES.iter().enumerate() {
             let skills_dir = home.join(family).join("skills");
-            let source = user_source_for_family(i);
+            let source = source_for_family(i, SkillProvenance::UserHome);
             collect_from_dir(
                 &skills_dir,
                 source,
@@ -245,24 +251,15 @@ pub(crate) fn walk_up_to_root(start: &Path, root: Option<&Path>) -> Vec<PathBuf>
     dirs
 }
 
-/// Map a config directory family index to a SkillSource for project level.
-fn project_source_for_family(idx: usize) -> SkillSource {
-    match idx {
-        0 => SkillSource::Project,
-        1 => SkillSource::ClaudeEco,
-        2 => SkillSource::Agents,
-        _ => SkillSource::Project,
-    }
-}
-
-/// Map a config directory family index to a SkillSource for user level.
-fn user_source_for_family(idx: usize) -> SkillSource {
-    match idx {
-        0 => SkillSource::User,
-        1 => SkillSource::ClaudeEco,
-        2 => SkillSource::Agents,
-        _ => SkillSource::User,
-    }
+/// Map a config directory index and authority level to a typed source.
+fn source_for_family(idx: usize, provenance: SkillProvenance) -> SkillSource {
+    let family = match idx {
+        0 => SkillFamily::Houyi,
+        1 => SkillFamily::ClaudeEco,
+        2 => SkillFamily::Agents,
+        _ => SkillFamily::Houyi,
+    };
+    SkillSource::new(family, provenance)
 }
 
 #[cfg(test)]

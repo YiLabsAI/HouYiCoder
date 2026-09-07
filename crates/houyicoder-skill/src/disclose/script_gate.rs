@@ -79,26 +79,39 @@ pub fn detect_skill_scripts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::definition::SkillSource;
+    use crate::definition::{SkillFamily, SkillProvenance, SkillSource};
     use std::path::Path;
+
+    fn managed_source() -> SkillSource {
+        SkillSource::new(SkillFamily::Houyi, SkillProvenance::Managed)
+    }
+
+    fn project_source() -> SkillSource {
+        SkillSource::new(
+            SkillFamily::Houyi,
+            SkillProvenance::Project {
+                root: Path::new("/srv").to_path_buf(),
+            },
+        )
+    }
 
     fn skills() -> Vec<(String, SkillSource, &'static Path)> {
         vec![
             (
                 "deploy".into(),
-                SkillSource::Project,
+                project_source(),
                 Path::new("/srv/skills/deploy"),
             ),
             // deployment prefixes deploy — a collision guard for the path
             // boundary check (a shorter name must not match a longer one).
             (
                 "deployment".into(),
-                SkillSource::Managed,
+                managed_source(),
                 Path::new("/srv/skills/deployment"),
             ),
             (
                 "tool".into(),
-                SkillSource::Managed,
+                managed_source(),
                 Path::new("/etc/houyicoder/skills/tool"),
             ),
         ]
@@ -113,7 +126,7 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].skill_name, "deploy");
         assert_eq!(refs[0].script_rel_path, "scripts/deploy.py");
-        assert_eq!(refs[0].source, SkillSource::Project);
+        assert_eq!(refs[0].source, project_source());
     }
 
     #[test]
@@ -167,7 +180,7 @@ mod tests {
         let refs =
             detect_skill_scripts("python /etc/houyicoder/skills/tool/scripts/y.py", &skills());
         assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0].source, SkillSource::Managed);
+        assert_eq!(refs[0].source, managed_source());
     }
 
     /// A shorter skill name must not match a longer one: a command running

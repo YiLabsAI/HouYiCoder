@@ -3,8 +3,11 @@
 //! still await a decision. Extracted from the main impl so the approval
 //! path and its call_id-uniqueness invariant live together.
 
+use houyicoder_api::skill::GrantSubject;
+use houyicoder_api::skill::grant::SkillGrantStore;
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 use super::synthetic::{SyntheticToolOutcome, tool_error_json};
 use super::{ApprovalDecision, ApprovalRequest, RunError, Runner};
@@ -34,7 +37,7 @@ impl Runner {
                 // Entitlement approval: write services to the grant store
                 // instead of executing a tool. The services were discovered
                 // by the deny-log scan after a failed bash command.
-                if req.tool_name == houyicoder_protocol::extension::ENTITLEMENT_TOOL {
+                if req.tool_name == ENTITLEMENT_TOOL {
                     let output = self.apply_entitlement_grant(&req.input);
                     self.append_tool_result(
                         session,
@@ -165,16 +168,20 @@ impl Runner {
 /// result the model sees. Pure of runner state — takes the store by ref.
 fn apply_entitlement(
     input: &serde_json::Value,
-    store: Option<&houyicoder_api::skill::grant::SkillGrantStore>,
+    store: Option<&SkillGrantStore>,
 ) -> serde_json::Value {
     let skill = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
     if skill.is_empty() {
         return serde_json::json!({ "error": "no skill named", "granted": [] });
     }
-    let origin = input
-        .get("origin")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
+    let subject = input.get("grant_subject").and_then(GrantSubject::from_json);
+    let Some(subject) = subject.filter(|subject| subject.skill == skill) else {
+        return serde_json::json!({
+            "error": "invalid grant subject",
+            "skill": skill,
+            "granted": [],
+        });
+    };
     let services: Vec<String> = input
         .get("services")
         .and_then(|v| v.as_array())
@@ -185,7 +192,7 @@ fn apply_entitlement(
         })
         .unwrap_or_default();
     if let Some(store) = store {
-        match store.add_grants(skill, origin, services) {
+        match store.add_grants(&subject, services) {
             Ok(granted) => {
                 let count = granted.len();
                 serde_json::json!({
@@ -208,9 +215,14 @@ fn apply_entitlement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use houyicoder_api::skill::{SkillFamily, SkillProvenance, SkillSource};
     use std::env;
     use std::fs;
     use std::process;
+
+    fn user_subject(skill: &str) -> GrantSubject {
+        SkillSource::new(SkillFamily::Houyi, SkillProvenance::UserHome).grant_subject(skill)
+    }
 
     #[test]
     fn test_entitlement_grants_services() {
@@ -218,10 +230,10 @@ mod tests {
         let _ = fs::remove_dir_all(&dir).is_ok();
         fs::create_dir_all(&dir).expect("mkdir grant test");
         let path = dir.join("skill-grants.json");
-        let store = houyicoder_api::skill::grant::SkillGrantStore::with_path(path);
+        let store = SkillGrantStore::with_path(path);
         let input = serde_json::json!({
             "skill": "ego-browser",
-            "origin": "user",
+            "grant_subject": user_subject("ego-browser").to_json(),
             "services": ["com.apple.trustd", "com.houyi.test.entitlement"],
         });
         let result = apply_entitlement(&input, Some(&store));
@@ -235,7 +247,7 @@ mod tests {
         );
         assert!(
             store
-                .grant_for("ego-browser", "user")
+                .grant_for(&user_subject("ego-browser"))
                 .contains(&"com.houyi.test.entitlement".to_string())
         );
         let _ = fs::remove_dir_all(&dir).is_ok();
@@ -246,10 +258,10 @@ mod tests {
         let dir = env::temp_dir().join(format!("houyi-entitlement-error-{}", process::id()));
         let _cleanup = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("mkdir persistence test");
-        let store = houyicoder_api::skill::grant::SkillGrantStore::with_path(dir.clone());
+        let store = SkillGrantStore::with_path(dir.clone());
         let input = serde_json::json!({
             "skill": "ego-browser",
-            "origin": "user",
+            "grant_subject": user_subject("ego-browser").to_json(),
             "services": ["com.houyi.test.entitlement"],
         });
         let result = apply_entitlement(&input, Some(&store));
@@ -259,13 +271,17 @@ mod tests {
                 .is_some_and(|e| e.contains("persistence failed"))
         );
         assert!(result["granted"].as_array().is_some_and(Vec::is_empty));
-        assert!(store.grant_for("ego-browser", "user").is_empty());
+        assert!(store.grant_for(&user_subject("ego-browser")).is_empty());
         let _cleanup = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_entitlement_no_store() {
-        let input = serde_json::json!({ "skill": "x", "services": ["a.b.c"] });
+        let input = serde_json::json!({
+            "skill": "x",
+            "grant_subject": user_subject("x").to_json(),
+            "services": ["a.b.c"],
+        });
         let result = apply_entitlement(&input, None);
         assert_eq!(result["error"], "grant store not wired");
     }
@@ -276,12 +292,12 @@ mod tests {
         let _ = fs::remove_dir_all(&dir).is_ok();
         fs::create_dir_all(&dir).expect("mkdir empty-skill test");
         let path = dir.join("skill-grants.json");
-        let store = houyicoder_api::skill::grant::SkillGrantStore::with_path(path);
+        let store = SkillGrantStore::with_path(path);
         let input = serde_json::json!({ "skill": "", "services": ["a.b.c"] });
         let result = apply_entitlement(&input, Some(&store));
         assert_eq!(result["error"], "no skill named");
         assert!(
-            store.grant_for("", "unknown").is_empty(),
+            store.grant_for(&user_subject("unused")).is_empty(),
             "empty-name grant must not be written"
         );
         let _ = fs::remove_dir_all(&dir).is_ok();

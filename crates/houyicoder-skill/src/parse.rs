@@ -383,6 +383,20 @@ fn recover_scalar_fields(yaml_str: &str) -> serde_yaml::Mapping {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::definition::{SkillFamily, SkillProvenance};
+
+    fn user_source() -> SkillSource {
+        SkillSource::new(SkillFamily::Houyi, SkillProvenance::UserHome)
+    }
+
+    fn project_source() -> SkillSource {
+        SkillSource::new(
+            SkillFamily::Houyi,
+            SkillProvenance::Project {
+                root: Path::new("/tmp").to_path_buf(),
+            },
+        )
+    }
 
     #[test]
     fn test_parse_minimal_skill() {
@@ -392,7 +406,7 @@ mod tests {
             "my-skill",
             Path::new("/tmp/my-skill"),
             Path::new("/tmp/my-skill/SKILL.md"),
-            SkillSource::User,
+            user_source(),
         )
         .expect("parse");
         assert_eq!(def.name, "my-skill");
@@ -408,7 +422,7 @@ mod tests {
             "launcher",
             Path::new("/tmp/launcher"),
             Path::new("/tmp/launcher/SKILL.md"),
-            SkillSource::User,
+            user_source(),
         )
         .expect("parse");
         assert!(
@@ -425,7 +439,7 @@ mod tests {
             "plain",
             Path::new("/tmp/plain"),
             Path::new("/tmp/plain/SKILL.md"),
-            SkillSource::User,
+            user_source(),
         )
         .expect("parse");
         assert!(
@@ -442,7 +456,7 @@ mod tests {
             "no-desc",
             Path::new("/tmp/no-desc"),
             Path::new("/tmp/no-desc/SKILL.md"),
-            SkillSource::Project,
+            project_source(),
         )
         .expect("parse");
         assert_eq!(def.description, "This is the first line of body.");
@@ -457,7 +471,7 @@ mod tests {
                 "empty",
                 Path::new("/tmp/empty"),
                 Path::new("/tmp/empty/SKILL.md"),
-                SkillSource::Project
+                project_source()
             )
             .is_err()
         );
@@ -471,7 +485,7 @@ mod tests {
             "test",
             Path::new("/tmp/test"),
             Path::new("/tmp/test/SKILL.md"),
-            SkillSource::User,
+            user_source(),
         )
         .expect("parse");
         assert!(
@@ -488,7 +502,7 @@ mod tests {
             "dir-name",
             Path::new("/tmp/dir-name"),
             Path::new("/tmp/dir-name/SKILL.md"),
-            SkillSource::User,
+            user_source(),
         )
         .expect("parse");
         // Directory name is identity; frontmatter name is display-only.
@@ -509,7 +523,7 @@ mod tests {
             "forked",
             Path::new("/tmp/forked"),
             Path::new("/tmp/forked/SKILL.md"),
-            SkillSource::User,
+            user_source(),
         )
         .expect("parse");
         assert_eq!(def.context, SkillContext::Fork("reviewer".into()));
@@ -524,7 +538,7 @@ mod tests {
                 "broken",
                 Path::new("/tmp/broken"),
                 Path::new("/tmp/broken/SKILL.md"),
-                SkillSource::User
+                user_source()
             )
             .is_ok()
         );
@@ -539,7 +553,7 @@ mod tests {
                 "Bad_Name",
                 Path::new("/tmp/Bad_Name"),
                 Path::new("/tmp/Bad_Name/SKILL.md"),
-                SkillSource::User
+                user_source()
             )
             .is_ok()
         );
@@ -584,7 +598,7 @@ mod tests {
             "test",
             Path::new("/tmp/test"),
             Path::new("/tmp/test/SKILL.md"),
-            SkillSource::User,
+            user_source(),
         )
         .expect("parse with recovery");
         assert!(

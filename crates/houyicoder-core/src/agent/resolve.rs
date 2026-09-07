@@ -11,8 +11,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use houyicoder_api::skill::GrantSubject;
 use houyicoder_api::tool::Tool;
 use houyicoder_context::SessionId;
+use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use tokio_util::sync::CancellationToken;
 
@@ -112,14 +114,17 @@ impl Runner {
         }
         obs_wire::record_tool_outcomes(&self.observability, &results, &call_names);
         if let Some(skill) = self.active_skill()
-            && let Some(req) = {
-                let origin = self
-                    .skill_registry
-                    .as_ref()
-                    .and_then(|r| super::skill_body::skill_origin(&**r, &skill))
+            && let Some(req) = self.skill_registry.as_ref().and_then(|registry| {
+                let source = super::skill_body::skill_source(&**registry, &skill)?;
+                let subject = source.grant_subject(&skill);
+                let origin = registry
+                    .list_with_origin()
+                    .into_iter()
+                    .find(|snapshot| snapshot.descriptor.name == skill)
+                    .map(|snapshot| snapshot.origin)
                     .unwrap_or_else(|| "unknown".to_string());
-                scan_for_authorizable(&results, &call_names, &skill, &origin, &exec)
-            }
+                scan_for_authorizable(&results, &call_names, &subject, &origin, &exec)
+            })
         {
             // Append the synthetic ToolCall so the pending-approval scan on
             // resume finds it (the decision routes by log call_id) and the
@@ -159,7 +164,7 @@ impl Runner {
 fn scan_for_authorizable(
     results: &[(String, serde_json::Value)],
     call_names: &HashMap<String, String>,
-    skill: &str,
+    subject: &GrantSubject,
     origin: &str,
     exec: &[(String, Arc<dyn Tool>, serde_json::Value, bool)],
 ) -> Option<ApprovalRequest> {
@@ -189,11 +194,12 @@ fn scan_for_authorizable(
             let seq = RAISE_SEQ.fetch_add(1, Ordering::Relaxed);
             let command = commands.get(id.as_str()).copied().unwrap_or("");
             return Some(ApprovalRequest::new(
-                format!("entitlement-{seq}-{skill}"),
-                houyicoder_protocol::extension::ENTITLEMENT_TOOL.to_string(),
+                format!("entitlement-{seq}-{}", subject.skill),
+                ENTITLEMENT_TOOL.to_string(),
                 serde_json::json!({
-                    "skill": skill,
+                    "skill": subject.skill,
                     "origin": origin,
+                    "grant_subject": subject.to_json(),
                     "services": services,
                     "command": command,
                 }),
@@ -206,6 +212,11 @@ fn scan_for_authorizable(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use houyicoder_api::skill::{SkillFamily, SkillProvenance, SkillSource};
+
+    fn subject(skill: &str) -> GrantSubject {
+        SkillSource::new(SkillFamily::Houyi, SkillProvenance::UserHome).grant_subject(skill)
+    }
 
     fn bash_names(ids: &[&str]) -> HashMap<String, String> {
         ids.iter()
@@ -230,15 +241,12 @@ mod tests {
         let req = scan_for_authorizable(
             &results,
             &bash_names(&["call-1", "call-2"]),
-            "ego-browser",
+            &subject("ego-browser"),
             "user",
             &empty_exec(),
         );
         let req = req.expect("bash result with services raises");
-        assert_eq!(
-            req.tool_name,
-            houyicoder_protocol::extension::ENTITLEMENT_TOOL
-        );
+        assert_eq!(req.tool_name, ENTITLEMENT_TOOL);
         assert!(req.call_id.starts_with("entitlement-"));
         assert!(req.call_id.ends_with("-ego-browser"));
         assert_eq!(req.input["skill"], "ego-browser");
@@ -254,7 +262,7 @@ mod tests {
         let a = scan_for_authorizable(
             &results,
             &bash_names(&["call-1"]),
-            "s",
+            &subject("s"),
             "user",
             &empty_exec(),
         )
@@ -262,7 +270,7 @@ mod tests {
         let b = scan_for_authorizable(
             &results,
             &bash_names(&["call-1"]),
-            "s",
+            &subject("s"),
             "user",
             &empty_exec(),
         )
@@ -278,7 +286,14 @@ mod tests {
         )];
         let names = HashMap::from([("call-1".to_string(), "grep".to_string())]);
         assert!(
-            scan_for_authorizable(&results, &names, "ego-browser", "user", &empty_exec()).is_none()
+            scan_for_authorizable(
+                &results,
+                &names,
+                &subject("ego-browser"),
+                "user",
+                &empty_exec(),
+            )
+            .is_none()
         );
     }
 
@@ -292,7 +307,7 @@ mod tests {
             scan_for_authorizable(
                 &results,
                 &bash_names(&["call-1"]),
-                "ego-browser",
+                &subject("ego-browser"),
                 "user",
                 &empty_exec()
             )
@@ -307,7 +322,7 @@ mod tests {
             scan_for_authorizable(
                 &results,
                 &bash_names(&["call-1"]),
-                "ego-browser",
+                &subject("ego-browser"),
                 "user",
                 &empty_exec()
             )

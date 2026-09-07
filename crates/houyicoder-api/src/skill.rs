@@ -9,9 +9,211 @@
 //! body preparation is a one-shot file read plus string substitution.
 //! The Skill tool wraps them inside its async execute.
 
+use std::collections::HashSet;
+use std::error::Error;
 use std::fmt;
+use std::path::Path;
+
+use sha2::{Digest, Sha256};
 
 pub mod grant;
+
+/// The directory or transport family that supplied a skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SkillFamily {
+    /// The native skill family.
+    Houyi,
+    /// A compatible ecosystem directory family.
+    ClaudeEco,
+    /// The interoperable agents directory family.
+    Agents,
+    /// A remote prompt family.
+    Mcp,
+}
+
+/// Non-reversible identity for a canonical project root.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProjectIdentity(String);
+
+impl ProjectIdentity {
+    /// Hash a canonical project root into a stable machine-local identity.
+    pub fn from_canonical_root(root: &Path) -> Self {
+        let mut hasher = Sha256::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            hasher.update(root.as_os_str().as_bytes());
+        }
+        #[cfg(windows)]
+        {
+            let case_folded = root.to_string_lossy().to_lowercase();
+            hasher.update(case_folded.as_bytes());
+        }
+        let digest = hasher.finalize();
+        let mut encoded = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            use std::fmt::Write as _;
+            let _ = write!(encoded, "{byte:02x}");
+        }
+        Self(encoded)
+    }
+
+    /// Return the encoded project-root identity.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Stable identity for a remote skill provider.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RemoteIdentity(
+    /// Provider identity assigned by the host connection.
+    pub String,
+);
+
+/// The authority boundary where a skill was discovered.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SkillProvenance {
+    /// Host-managed installation.
+    Managed,
+    /// Installation below the user's home directory.
+    UserHome,
+    /// Installation associated with a stable project identity.
+    Project(ProjectIdentity),
+    /// Installation supplied by a remote server identity.
+    Remote(RemoteIdentity),
+}
+
+/// A skill's orthogonal family and authority provenance.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SkillSource {
+    /// Directory or transport compatibility family.
+    pub family: SkillFamily,
+    /// Host-derived authority boundary.
+    pub provenance: SkillProvenance,
+}
+
+impl SkillSource {
+    /// Construct a typed source from its independent dimensions.
+    pub fn new(family: SkillFamily, provenance: SkillProvenance) -> Self {
+        Self { family, provenance }
+    }
+
+    /// Whether the skill body and hooks are trusted host instructions.
+    pub fn is_trusted(&self) -> bool {
+        matches!(
+            self.provenance,
+            SkillProvenance::Managed | SkillProvenance::UserHome
+        )
+    }
+
+    /// Whether the host-owned compiled capability profile applies.
+    pub fn applies_capability_profile(&self) -> bool {
+        self.is_trusted()
+    }
+
+    /// Whether skill-authored frontmatter may directly grant entitlements.
+    pub fn applies_frontmatter_entitlements(&self) -> bool {
+        matches!(self.provenance, SkillProvenance::Managed)
+            || matches!(self.provenance, SkillProvenance::UserHome)
+                && self.family == SkillFamily::Houyi
+    }
+
+    /// Build the stable authority subject used by the persistent grant store.
+    pub fn grant_subject(&self, skill: &str) -> GrantSubject {
+        let scope = match &self.provenance {
+            SkillProvenance::Managed => GrantScope::Managed,
+            SkillProvenance::UserHome => GrantScope::UserHome,
+            SkillProvenance::Project(identity) => GrantScope::Project(identity.clone()),
+            SkillProvenance::Remote(identity) => GrantScope::Remote(identity.clone()),
+        };
+        GrantSubject {
+            skill: skill.to_string(),
+            scope,
+        }
+    }
+}
+
+/// Stable authority scope for a persisted entitlement grant.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GrantScope {
+    /// Host-managed scope.
+    Managed,
+    /// Shared user-home scope across local directory families.
+    UserHome,
+    /// One canonical project root.
+    Project(ProjectIdentity),
+    /// One remote server identity.
+    Remote(RemoteIdentity),
+}
+
+/// Typed persistent-grant identity, independent of display origin labels.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GrantSubject {
+    /// Skill directory identity.
+    pub skill: String,
+    /// Stable authority scope.
+    pub scope: GrantScope,
+}
+
+fn valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--")
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+impl GrantSubject {
+    /// Encode the subject for a host-generated synthetic approval payload.
+    pub fn to_json(&self) -> serde_json::Value {
+        let (kind, identity) = match &self.scope {
+            GrantScope::Managed => ("managed", None),
+            GrantScope::UserHome => ("user_home", None),
+            GrantScope::Project(identity) => ("project", Some(identity.0.as_str())),
+            GrantScope::Remote(identity) => ("remote", Some(identity.0.as_str())),
+        };
+        serde_json::json!({
+            "skill": self.skill,
+            "kind": kind,
+            "identity": identity,
+        })
+    }
+
+    /// Decode and validate a subject carried by a synthetic approval payload.
+    pub fn from_json(value: &serde_json::Value) -> Option<Self> {
+        let skill = value.get("skill")?.as_str()?;
+        if !valid_skill_name(skill) {
+            return None;
+        }
+        let scope = match value.get("kind")?.as_str()? {
+            "managed" => GrantScope::Managed,
+            "user_home" => GrantScope::UserHome,
+            "project" => {
+                let identity = value.get("identity")?.as_str()?;
+                if identity.len() != 64 || !identity.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return None;
+                }
+                GrantScope::Project(ProjectIdentity(identity.to_ascii_lowercase()))
+            }
+            "remote" => {
+                let identity = value.get("identity")?.as_str()?;
+                if identity.is_empty() || identity.len() > 256 || identity.contains('\0') {
+                    return None;
+                }
+                GrantScope::Remote(RemoteIdentity(identity.to_string()))
+            }
+            _ => return None,
+        };
+        Some(Self {
+            skill: skill.to_string(),
+            scope,
+        })
+    }
+}
 
 /// A minimal, engine-facing view of a discovered skill. Carries only the
 /// fields the engine consumes (listing, invocation gating, cost visibility);
@@ -71,7 +273,7 @@ impl fmt::Display for SkillError {
     }
 }
 
-impl std::error::Error for SkillError {}
+impl Error for SkillError {}
 
 /// The engine-facing skill registry. The Skill tool + the slash dispatch
 /// both call find (to gate on their own invocation flag) then prepare_body
@@ -117,6 +319,12 @@ pub trait SkillRegistry: Send + Sync {
     /// grouped skills, so production registries override this.
     fn list_with_origin(&self) -> Vec<SkillSnapshot> {
         Vec::new()
+    }
+
+    /// Return the host-derived typed source for one discovered skill. None
+    /// fails closed when a registry cannot supply provenance.
+    fn source_for(&self, _name: &str) -> Option<SkillSource> {
+        None
     }
 
     /// Detect skill-directory script executions in a Bash command. Returns one
@@ -171,7 +379,7 @@ pub trait SkillRegistry: Send + Sync {
     /// is no-op: a registry that does not track session state silently
     /// drops the set. Called by the server before a run starts, from the
     /// TUI's skill_disabled state.
-    fn set_session_disabled(&self, _disabled: std::collections::HashSet<String>) {}
+    fn set_session_disabled(&self, _disabled: HashSet<String>) {}
 }
 
 /// A model-invocable descriptor paired with where it was discovered, for
@@ -179,8 +387,7 @@ pub trait SkillRegistry: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct SkillSnapshot {
     pub descriptor: SkillDescriptor,
-    /// snake_case discovery source (managed/user/project/claude_eco/agents/
-    /// mcp/local). Empty when the registry does not track origin.
+    /// Backward-compatible display origin. This never carries a project root.
     pub origin: String,
     /// Session-scoped invocation stats for this skill. Default (zeros)
     /// when the registry does not track usage.

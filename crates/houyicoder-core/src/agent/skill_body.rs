@@ -5,7 +5,7 @@
 //! by a per-agent byte budget (most-recent-first), so the model retains
 //! invoked skill directives across a compaction boundary.
 
-use houyicoder_api::skill::SkillRegistry;
+use houyicoder_api::skill::{SkillRegistry, SkillSource};
 use houyicoder_context::{SessionId, TurnEventKind};
 use std::collections::HashSet;
 
@@ -42,51 +42,17 @@ fn head_truncate(s: &str, budget: usize) -> String {
     t
 }
 
-/// Discovery origins whose skill bodies are served as trusted directives:
-/// managed (policy/built-in) and user-level sources are machine-local and
-/// admin-installed. Every other origin (project, eco, agents, mcp,
-/// local) is untrusted and framed as data at injection.
-pub(crate) fn is_trusted_origin(origin: &str) -> bool {
-    origin == "managed" || origin == "user"
+/// Look up a skill's host-derived typed source. None fails closed when a
+/// registry cannot supply provenance.
+pub(crate) fn skill_source(registry: &dyn SkillRegistry, name: &str) -> Option<SkillSource> {
+    registry.source_for(name)
 }
 
-/// Look up a skill's origin string from the registry snapshot. Returns
-/// None when the skill is absent (fail-closed). A single scan that both
-/// body-trust and entitlement-trust decisions derive from, so the slash
-/// path does not call list_with_origin twice.
-pub(crate) fn skill_origin(registry: &dyn SkillRegistry, name: &str) -> Option<String> {
-    registry
-        .list_with_origin()
-        .iter()
-        .find(|s| s.descriptor.name == name)
-        .map(|s| s.origin.clone())
-}
-
-/// Whether a skill's body should be framed as untrusted data. Looks the
-/// skill up by name in the origin snapshot; fails closed (untrusted) when
-/// the skill is absent from the snapshot, so a body from a source the
-/// registry does not track origin for is never served as trusted
-/// instruction. Test-only now: production callers derive untrusted from
-/// the origin they already fetched (one scan instead of two).
 #[cfg(test)]
 pub(crate) fn origin_untrusted(registry: &dyn SkillRegistry, name: &str) -> bool {
-    skill_origin(registry, name)
-        .as_deref()
-        .map(|o| !is_trusted_origin(o))
-        .unwrap_or(true)
-}
-
-/// Whether a skill may install sandbox entitlements directly from
-/// frontmatter or the compiled profile. Converged to the same trust
-/// set as body trust: only managed and user origins are trusted.
-/// Every other origin (agents, claude_eco, local, project, mcp) must
-/// go through deny-log discovery + explicit approval. Fails closed
-/// when the skill is absent from the origin snapshot.
-#[cfg(test)]
-pub(crate) fn entitlement_untrusted(registry: &dyn SkillRegistry, name: &str) -> bool {
-    skill_origin(registry, name)
-        .as_deref()
-        .map(|o| !houyicoder_api::skill::grant::is_entitlement_trusted_origin(o))
+    skill_source(registry, name)
+        .as_ref()
+        .map(|source| !source.is_trusted())
         .unwrap_or(true)
 }
 
@@ -560,22 +526,35 @@ mod tests {
         );
     }
 
-    /// origin_untrusted: a managed or user source is trusted; any other
-    /// origin is untrusted; and a skill absent from the origin snapshot is
-    /// untrusted (fail-closed, so an unrecognized source is never trusted).
     #[test]
-    fn test_origin_untrusted_classification() {
-        use houyicoder_api::skill::{SkillDescriptor, SkillRegistry, SkillSnapshot};
+    fn test_provenance_controls_trust() {
+        use houyicoder_api::skill::{
+            ProjectIdentity, SkillDescriptor, SkillFamily, SkillProvenance, SkillRegistry,
+            SkillSource,
+        };
 
-        struct OriginRegistry {
-            entries: Vec<(String, String)>,
-        }
-        impl SkillRegistry for OriginRegistry {
+        struct SourceRegistry;
+        impl SkillRegistry for SourceRegistry {
             fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
                 Vec::new()
             }
             fn find(&self, _: &str) -> Option<SkillDescriptor> {
                 None
+            }
+            fn source_for(&self, name: &str) -> Option<SkillSource> {
+                match name {
+                    "home" => Some(SkillSource::new(
+                        SkillFamily::Agents,
+                        SkillProvenance::UserHome,
+                    )),
+                    "project" => Some(SkillSource::new(
+                        SkillFamily::Houyi,
+                        SkillProvenance::Project(ProjectIdentity::from_canonical_root(
+                            std::path::Path::new("/repo"),
+                        )),
+                    )),
+                    _ => None,
+                }
             }
             fn prepare_body(
                 &self,
@@ -585,117 +564,11 @@ mod tests {
             ) -> Result<String, houyicoder_api::skill::SkillError> {
                 Err(houyicoder_api::skill::SkillError::NotFound("none".into()))
             }
-            fn list_with_origin(&self) -> Vec<SkillSnapshot> {
-                self.entries
-                    .iter()
-                    .map(|(name, origin)| SkillSnapshot {
-                        descriptor: SkillDescriptor {
-                            name: name.clone(),
-                            description: String::new(),
-                            when_to_use: None,
-                            argument_hint: None,
-                            disable_model_invocation: false,
-                            user_invocable: true,
-                            body_token_estimate: 0,
-                            allowed_tools: Vec::new(),
-                            allowed_mach_services: Vec::new(),
-                            allow_app_launch: false,
-                        },
-                        origin: origin.clone(),
-                        usage: Default::default(),
-                    })
-                    .collect()
-            }
         }
 
-        let reg = OriginRegistry {
-            entries: vec![
-                ("commit".into(), "managed".into()),
-                ("mine".into(), "user".into()),
-                ("proj".into(), "project".into()),
-                ("eco".into(), "claude_eco".into()),
-            ],
-        };
-        assert!(!origin_untrusted(&reg, "commit"), "managed is trusted");
-        assert!(!origin_untrusted(&reg, "mine"), "user is trusted");
-        assert!(origin_untrusted(&reg, "proj"), "project is untrusted");
-        assert!(origin_untrusted(&reg, "eco"), "claude_eco is untrusted");
-        assert!(
-            origin_untrusted(&reg, "absent"),
-            "absent from snapshot fails closed (untrusted)"
-        );
-    }
-
-    /// entitlement_untrusted: same trust set as body trust (managed +
-    /// user only). Agents, claude_eco, local, project, and mcp are all
-    /// untrusted for entitlements. Absent from snapshot fails closed.
-    #[test]
-    fn test_entitlement_trust_classes() {
-        use houyicoder_api::skill::{SkillDescriptor, SkillRegistry, SkillSnapshot};
-
-        struct OriginRegistry {
-            entries: Vec<(String, String)>,
-        }
-        impl SkillRegistry for OriginRegistry {
-            fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
-                Vec::new()
-            }
-            fn find(&self, _: &str) -> Option<SkillDescriptor> {
-                None
-            }
-            fn prepare_body(
-                &self,
-                _: &str,
-                _: Option<&str>,
-                _: Option<&str>,
-            ) -> Result<String, houyicoder_api::skill::SkillError> {
-                Err(houyicoder_api::skill::SkillError::NotFound("none".into()))
-            }
-            fn list_with_origin(&self) -> Vec<SkillSnapshot> {
-                self.entries
-                    .iter()
-                    .map(|(name, origin)| SkillSnapshot {
-                        descriptor: SkillDescriptor {
-                            name: name.clone(),
-                            description: String::new(),
-                            when_to_use: None,
-                            argument_hint: None,
-                            disable_model_invocation: false,
-                            user_invocable: true,
-                            body_token_estimate: 0,
-                            allowed_tools: Vec::new(),
-                            allowed_mach_services: Vec::new(),
-                            allow_app_launch: false,
-                        },
-                        origin: origin.clone(),
-                        usage: Default::default(),
-                    })
-                    .collect()
-            }
-        }
-
-        let reg = OriginRegistry {
-            entries: vec![
-                ("commit".into(), "managed".into()),
-                ("mine".into(), "user".into()),
-                ("proj".into(), "project".into()),
-                ("eco".into(), "claude_eco".into()),
-                ("agent".into(), "agents".into()),
-                ("loc".into(), "local".into()),
-            ],
-        };
-        assert!(!entitlement_untrusted(&reg, "commit"), "managed is trusted");
-        assert!(!entitlement_untrusted(&reg, "mine"), "user is trusted");
-        assert!(entitlement_untrusted(&reg, "proj"), "project is untrusted");
-        assert!(
-            entitlement_untrusted(&reg, "eco"),
-            "claude_eco is untrusted"
-        );
-        assert!(entitlement_untrusted(&reg, "agent"), "agents is untrusted");
-        assert!(entitlement_untrusted(&reg, "loc"), "local is untrusted");
-        assert!(
-            entitlement_untrusted(&reg, "absent"),
-            "absent from snapshot fails closed (untrusted)"
-        );
+        let registry = SourceRegistry;
+        assert!(!origin_untrusted(&registry, "home"));
+        assert!(origin_untrusted(&registry, "project"));
+        assert!(origin_untrusted(&registry, "absent"));
     }
 }

@@ -3,14 +3,21 @@
 //! event semantics and the SkillGrantHook trust contract.
 
 use super::hook_compose::*;
+use houyicoder_api::launcher::{ProcessLauncher, StdProcessLauncher};
+use houyicoder_api::skill::{
+    ProjectIdentity, SkillDescriptor, SkillError, SkillFamily, SkillProvenance, SkillRegistry,
+    SkillScriptRef, SkillSnapshot, SkillSource,
+};
+use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_config::HookSpec;
-use houyicoder_core::agent::ToolResult;
-use houyicoder_core::agent::{HookPolicy, HookSource};
+use houyicoder_core::agent::{
+    HookContext, HookEvent, HookPayload, HookPolicy, HookSource, SkillTool, ToolResult,
+};
 use houyicoder_permission::{Effect, Scope};
 use std::sync::Arc;
 
-fn launcher() -> Arc<dyn houyicoder_api::launcher::ProcessLauncher> {
-    Arc::new(houyicoder_api::launcher::StdProcessLauncher::new())
+fn launcher() -> Arc<dyn ProcessLauncher> {
+    Arc::new(StdProcessLauncher::new())
 }
 
 fn spec(name: &str, events: &[&str], program: &str) -> HookSpec {
@@ -198,9 +205,6 @@ fn test_build_if_cond_fires() {
     // Dispatch the hook on a Bash PreToolUse event and verify it fires
     // (returns a verdict, not an Allow skip).
     use houyicoder_context::SessionId;
-    use houyicoder_core::agent::HookContext;
-    use houyicoder_core::agent::HookEvent;
-    use houyicoder_core::agent::HookPayload;
     let ctx = HookContext {
         event: HookEvent::PreToolUse,
         payload: HookPayload::PreToolUse {
@@ -397,12 +401,12 @@ struct StubRegistry {
     allowed: Vec<String>,
 }
 
-impl houyicoder_api::skill::SkillRegistry for StubRegistry {
-    fn list_model_invocable(&self) -> Vec<houyicoder_api::skill::SkillDescriptor> {
+impl SkillRegistry for StubRegistry {
+    fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
         Vec::new()
     }
-    fn find(&self, _name: &str) -> Option<houyicoder_api::skill::SkillDescriptor> {
-        Some(houyicoder_api::skill::SkillDescriptor {
+    fn find(&self, _name: &str) -> Option<SkillDescriptor> {
+        Some(SkillDescriptor {
             name: "s".into(),
             description: "stub".into(),
             when_to_use: None,
@@ -420,17 +424,30 @@ impl houyicoder_api::skill::SkillRegistry for StubRegistry {
         _name: &str,
         _args: Option<&str>,
         _sid: Option<&str>,
-    ) -> Result<String, houyicoder_api::skill::SkillError> {
+    ) -> Result<String, SkillError> {
         Ok("body".into())
     }
-    fn list_with_origin(&self) -> Vec<houyicoder_api::skill::SkillSnapshot> {
-        vec![houyicoder_api::skill::SkillSnapshot {
+    fn list_with_origin(&self) -> Vec<SkillSnapshot> {
+        vec![SkillSnapshot {
             descriptor: self.find("s").unwrap(),
             origin: self.origin.into(),
             usage: Default::default(),
         }]
     }
-    fn detect_run_scripts(&self, _command: &str) -> Vec<houyicoder_api::skill::SkillScriptRef> {
+    fn source_for(&self, _name: &str) -> Option<SkillSource> {
+        let (family, provenance) = match self.origin {
+            "managed" => (SkillFamily::Houyi, SkillProvenance::Managed),
+            "ecosystem" => (SkillFamily::Agents, SkillProvenance::UserHome),
+            _ => (
+                SkillFamily::Houyi,
+                SkillProvenance::Project(ProjectIdentity::from_canonical_root(
+                    std::path::Path::new("/repo"),
+                )),
+            ),
+        };
+        Some(SkillSource::new(family, provenance))
+    }
+    fn detect_run_scripts(&self, _command: &str) -> Vec<SkillScriptRef> {
         Vec::new()
     }
 }
@@ -442,22 +459,18 @@ impl houyicoder_api::skill::SkillRegistry for StubRegistry {
 /// silently in production.
 #[tokio::test]
 async fn test_grant_contract_runs_skilltool() {
-    use houyicoder_api::tool::Tool;
     use houyicoder_context::SessionId;
     use houyicoder_permission::DefaultModeGate;
 
     let gate = Arc::new(DefaultModeGate::new());
     let hook = SkillGrantHook::new(gate.clone());
-    let reg: Arc<dyn houyicoder_api::skill::SkillRegistry> = Arc::new(StubRegistry {
+    let reg: Arc<dyn SkillRegistry> = Arc::new(StubRegistry {
         origin: "managed",
         allowed: vec!["Bash".into()],
     });
-    let tool = houyicoder_core::agent::SkillTool::new(reg);
+    let tool = SkillTool::new(reg);
     let out = tool
-        .execute(
-            houyicoder_api::tool::ToolCtx::new("c1"),
-            serde_json::json!({"skill":"s"}),
-        )
+        .execute(ToolCtx::new("c1"), serde_json::json!({"skill":"s"}))
         .await
         .unwrap();
     let ctx = HookContext {
@@ -481,16 +494,13 @@ async fn test_grant_contract_runs_skilltool() {
 
     let gate2 = Arc::new(DefaultModeGate::new());
     let hook2 = SkillGrantHook::new(gate2.clone());
-    let reg2: Arc<dyn houyicoder_api::skill::SkillRegistry> = Arc::new(StubRegistry {
+    let reg2: Arc<dyn SkillRegistry> = Arc::new(StubRegistry {
         origin: "project",
         allowed: vec!["Bash".into()],
     });
-    let tool2 = houyicoder_core::agent::SkillTool::new(reg2);
+    let tool2 = SkillTool::new(reg2);
     let out2 = tool2
-        .execute(
-            houyicoder_api::tool::ToolCtx::new("c2"),
-            serde_json::json!({"skill":"s"}),
-        )
+        .execute(ToolCtx::new("c2"), serde_json::json!({"skill":"s"}))
         .await
         .unwrap();
     let ctx2 = HookContext {
@@ -511,5 +521,41 @@ async fn test_grant_contract_runs_skilltool() {
             .iter()
             .any(|r| r.action == "Bash" && r.scope == Scope::Session),
         "untrusted source: no session rule from the SkillTool result"
+    );
+}
+
+#[tokio::test]
+async fn test_ecosystem_tools_stay_gated() {
+    use houyicoder_context::SessionId;
+    use houyicoder_permission::DefaultModeGate;
+
+    let registry: Arc<dyn SkillRegistry> = Arc::new(StubRegistry {
+        origin: "ecosystem",
+        allowed: vec!["Bash".into()],
+    });
+    let output = SkillTool::new(registry)
+        .execute(ToolCtx::new("c3"), serde_json::json!({"skill":"s"}))
+        .await
+        .unwrap();
+    assert_eq!(output["trusted"], false);
+    let gate = Arc::new(DefaultModeGate::new());
+    let hook = SkillGrantHook::new(gate.clone());
+    hook.evaluate(&HookContext {
+        event: HookEvent::PostToolUse,
+        payload: HookPayload::PostToolUse {
+            tool_name: "skill".into(),
+            input: serde_json::json!({"skill":"s"}),
+            result: ToolResult {
+                output: output.to_string(),
+            },
+        },
+        session: SessionId::new(),
+    })
+    .unwrap();
+    assert!(
+        !gate
+            .rules()
+            .iter()
+            .any(|rule| rule.action == "Bash" && rule.scope == Scope::Session)
     );
 }

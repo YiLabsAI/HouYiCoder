@@ -5,6 +5,7 @@
 //! appends as a SkillBody event so the model reads the body as a directive.
 
 use houyicoder_api::skill::SkillError;
+use houyicoder_api::skill::grant::resolve_entitlements;
 use houyicoder_context::SessionId;
 use houyicoder_context::TurnEventKind;
 
@@ -110,10 +111,10 @@ impl Runner {
         // entitlement trust both derive from the same origin string, so
         // one scan suffices. Fails closed (untrusted) when the skill is
         // absent from the origin snapshot.
-        let origin = super::skill_body::skill_origin(&**registry, &name);
-        let untrusted = origin
-            .as_deref()
-            .map(|o| !super::skill_body::is_trusted_origin(o))
+        let source = super::skill_body::skill_source(&**registry, &name);
+        let untrusted = source
+            .as_ref()
+            .map(|source| !source.is_trusted())
             .unwrap_or(true);
         match registry.prepare_body(&name, args, Some(&sid)) {
             Ok(body) => {
@@ -123,15 +124,13 @@ impl Runner {
                 // source is not trusted for entitlements — frontmatter and
                 // the compiled profile are skipped. The trust set converged
                 // to body trust, so the untrusted flag above feeds both.
-                let origin_str = origin.as_deref().unwrap_or("unknown");
                 if let Some(session) = self.sandbox_session.as_ref() {
-                    let (mach, allow_launch) = houyicoder_api::skill::grant::resolve_entitlements(
+                    let (mach, allow_launch) = resolve_entitlements(
                         self.skill_grants.as_deref(),
                         &name,
-                        origin_str,
+                        source.as_ref(),
                         &desc.allowed_mach_services,
                         desc.allow_app_launch,
-                        !untrusted,
                     );
                     session.clear_skill_grants();
                     session.set_extra_mach_services(&mach);

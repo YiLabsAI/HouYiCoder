@@ -5,22 +5,52 @@
 
 use std::path::PathBuf;
 
-/// Where a skill was discovered. Determines precedence (managed >
-/// project > user) and trust gating.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SkillSource {
-    Managed,
-    User,
-    Project,
-    /// .claude/skills — ecosystem compat path (zero-migration reuse).
+/// The directory or transport family that supplied a skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SkillFamily {
+    /// The native skill family.
+    Houyi,
+    /// A compatible ecosystem directory family.
     ClaudeEco,
-    /// .agents/skills/ — AgentSkill spec interop convention.
+    /// The interoperable agents directory family.
     Agents,
-    /// MCP server prompts surfaced as skills.
+    /// A remote prompt family.
     Mcp,
-    /// Gitignored local overrides (not committed to the repo).
-    Local,
+}
+
+/// The authority boundary where a skill was discovered.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SkillProvenance {
+    /// Host-managed installation.
+    Managed,
+    /// Installation below the user's home directory.
+    UserHome,
+    /// Installation associated with a canonical project root.
+    Project {
+        /// Canonical root that scopes project authority.
+        root: PathBuf,
+    },
+    /// Installation supplied by a remote server identity.
+    Remote {
+        /// Stable identity assigned by the host connection.
+        server: String,
+    },
+}
+
+/// A skill's orthogonal family and authority provenance.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SkillSource {
+    /// Directory or transport compatibility family.
+    pub family: SkillFamily,
+    /// Host-derived authority boundary.
+    pub provenance: SkillProvenance,
+}
+
+impl SkillSource {
+    /// Construct a typed source from its independent dimensions.
+    pub fn new(family: SkillFamily, provenance: SkillProvenance) -> Self {
+        Self { family, provenance }
+    }
 }
 
 /// Execution context for a skill invocation.

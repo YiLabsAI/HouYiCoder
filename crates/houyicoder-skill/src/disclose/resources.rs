@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::definition::SkillSource;
+use crate::definition::{SkillFamily, SkillProvenance, SkillSource};
 use crate::discover::{MAX_WALK_DEPTH, PRUNED_DIRS};
 
 /// Cap on manifest entries so a skill dir with thousands of data files does
@@ -43,10 +43,11 @@ pub enum ResourceKind {
 /// directories may be listed. Ecosystem-compat paths (shared repositories)
 /// and remote servers are excluded.
 pub fn is_manifest_eligible(source: &SkillSource) -> bool {
-    matches!(
-        source,
-        SkillSource::Managed | SkillSource::User | SkillSource::Project
-    )
+    source.family == SkillFamily::Houyi
+        && matches!(
+            source.provenance,
+            SkillProvenance::Managed | SkillProvenance::UserHome | SkillProvenance::Project { .. }
+        )
 }
 
 /// Scan a skill directory for resource files. Returns one entry per file
@@ -341,13 +342,26 @@ mod tests {
 
     #[test]
     fn test_manifest_eligibility() {
-        assert!(is_manifest_eligible(&SkillSource::Managed));
-        assert!(is_manifest_eligible(&SkillSource::User));
-        assert!(is_manifest_eligible(&SkillSource::Project));
-        assert!(!is_manifest_eligible(&SkillSource::ClaudeEco));
-        assert!(!is_manifest_eligible(&SkillSource::Agents));
-        assert!(!is_manifest_eligible(&SkillSource::Mcp));
-        assert!(!is_manifest_eligible(&SkillSource::Local));
+        let managed = SkillSource::new(SkillFamily::Houyi, SkillProvenance::Managed);
+        let user = SkillSource::new(SkillFamily::Houyi, SkillProvenance::UserHome);
+        let project = SkillSource::new(
+            SkillFamily::Houyi,
+            SkillProvenance::Project {
+                root: PathBuf::from("/repo"),
+            },
+        );
+        let ecosystem = SkillSource::new(SkillFamily::ClaudeEco, SkillProvenance::UserHome);
+        let remote = SkillSource::new(
+            SkillFamily::Mcp,
+            SkillProvenance::Remote {
+                server: "server".into(),
+            },
+        );
+        assert!(is_manifest_eligible(&managed));
+        assert!(is_manifest_eligible(&user));
+        assert!(is_manifest_eligible(&project));
+        assert!(!is_manifest_eligible(&ecosystem));
+        assert!(!is_manifest_eligible(&remote));
     }
 
     #[test]

@@ -1,44 +1,68 @@
 use super::*;
 use std::fs;
+use std::sync::{Arc, Mutex};
 
-/// A skill's discovery source maps to the port-level hook-source
-/// kind the registry gates by. MCP never registers (remote,
-/// untrusted); the others map to their trust level. ClaudeEco/Agents
-/// group with Project (shared-repo, skipped under an untrusted
-/// project).
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::skill::grant::SkillGrantStore;
+use houyicoder_api::tool::{Tool, ToolCtx};
+use houyicoder_async::PFut;
+use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use houyicoder_core::agent::SkillTool;
+
+fn data_source(family: SkillFamily, provenance: SkillProvenance) -> SkillSource {
+    SkillSource::new(family, provenance)
+}
+
+fn managed_source() -> SkillSource {
+    data_source(SkillFamily::Houyi, SkillProvenance::Managed)
+}
+
+fn project_source(family: SkillFamily) -> SkillSource {
+    data_source(
+        family,
+        SkillProvenance::Project {
+            root: Path::new("/repo").to_path_buf(),
+        },
+    )
+}
+
+fn user_source(family: SkillFamily) -> SkillSource {
+    data_source(family, SkillProvenance::UserHome)
+}
+
+fn remote_source() -> SkillSource {
+    data_source(
+        SkillFamily::Mcp,
+        SkillProvenance::Remote {
+            server: "server".into(),
+        },
+    )
+}
+
+/// A skill's hook authority follows provenance rather than directory family.
+/// User-home ecosystem skills are user hooks, project copies are project
+/// hooks, and remote skills never register commands.
 #[test]
 fn test_skill_source_kind_map() {
     assert_eq!(
-        skill_source_to_kind(&SkillSource::Managed),
+        skill_source_to_kind(&managed_source()),
         Some(HookSourceKind::Managed)
     );
-    assert_eq!(
-        skill_source_to_kind(&SkillSource::User),
-        Some(HookSourceKind::User)
-    );
-    assert_eq!(
-        skill_source_to_kind(&SkillSource::Project),
-        Some(HookSourceKind::Project)
-    );
-    assert_eq!(
-        skill_source_to_kind(&SkillSource::ClaudeEco),
-        Some(HookSourceKind::Project),
-        "ClaudeEco groups with Project"
-    );
-    assert_eq!(
-        skill_source_to_kind(&SkillSource::Agents),
-        Some(HookSourceKind::Project),
-        "Agents groups with Project"
-    );
-    assert_eq!(
-        skill_source_to_kind(&SkillSource::Local),
-        Some(HookSourceKind::Local)
-    );
-    assert_eq!(
-        skill_source_to_kind(&SkillSource::Mcp),
-        None,
-        "MCP never registers command hooks"
-    );
+    for family in [
+        SkillFamily::Houyi,
+        SkillFamily::ClaudeEco,
+        SkillFamily::Agents,
+    ] {
+        assert_eq!(
+            skill_source_to_kind(&user_source(family)),
+            Some(HookSourceKind::User)
+        );
+        assert_eq!(
+            skill_source_to_kind(&project_source(family)),
+            Some(HookSourceKind::Project)
+        );
+    }
+    assert_eq!(skill_source_to_kind(&remote_source()), None);
 }
 
 fn write_skill(dir: &Path, name: &str, body: &str) {
@@ -49,6 +73,132 @@ fn write_skill(dir: &Path, name: &str, body: &str) {
         format!("---\nname: {name}\ndescription: {name} skill\n---\n{body}\n"),
     )
     .unwrap();
+}
+
+fn write_family_skill(root: &Path, family: &str, name: &str) {
+    let skill_dir = root.join(family).join("skills").join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: fixture\n---\nbody\n"),
+    )
+    .unwrap();
+}
+
+fn provenance_dir(label: &str) -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "skill-provenance-{label}-{}-{nonce}",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn test_home_ecosystem_gets_profile() {
+    let home = provenance_dir("home");
+    write_family_skill(&home, ".claude", "ego-browser");
+    let registry = SkillRegistryImpl::discover_with_home(None, Some(&home));
+    let source = registry.source_for("ego-browser").expect("typed source");
+    assert_eq!(source.family, ApiSkillFamily::ClaudeEco);
+    assert_eq!(source.provenance, ApiSkillProvenance::UserHome);
+    let descriptor = registry.find("ego-browser").expect("descriptor");
+    let store = SkillGrantStore::with_path(home.join("grants.json"));
+    let (mach, app_launch) = store.resolve(
+        "ego-browser",
+        &source,
+        &descriptor.allowed_mach_services,
+        descriptor.allow_app_launch,
+    );
+    assert_eq!(mach, vec!["com.citrolabs.ego.lite.ego-browser"]);
+    assert!(app_launch);
+    let _cleanup = fs::remove_dir_all(home);
+}
+
+struct RecordingSandbox {
+    app_launch: Mutex<bool>,
+    mach: Mutex<Vec<String>>,
+}
+
+impl SandboxSession for RecordingSandbox {
+    fn exec_with_config(
+        &self,
+        _command: &str,
+        _config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        unreachable!("the skill invocation does not execute a shell command")
+    }
+
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(std::env::temp_dir())
+    }
+
+    fn set_extra_mach_services(&self, services: &[String]) {
+        *self.mach.lock().unwrap() = services.to_vec();
+    }
+
+    fn grant_app_launch(&self) {
+        *self.app_launch.lock().unwrap() = true;
+    }
+
+    fn clear_skill_grants(&self) {
+        self.mach.lock().unwrap().clear();
+        *self.app_launch.lock().unwrap() = false;
+    }
+}
+
+#[tokio::test]
+async fn test_home_profile_reaches_sandbox() {
+    let home = provenance_dir("sandbox");
+    write_family_skill(&home, ".claude", "ego-browser");
+    let registry: Arc<dyn SkillRegistry> =
+        Arc::new(SkillRegistryImpl::discover_with_home(None, Some(&home)));
+    let sandbox = Arc::new(RecordingSandbox {
+        app_launch: Mutex::new(false),
+        mach: Mutex::new(Vec::new()),
+    });
+    let grants = Arc::new(SkillGrantStore::with_path(home.join("grants.json")));
+    let tool = SkillTool::new(registry)
+        .with_sandbox(Some(sandbox.clone()))
+        .with_skill_grants(Some(grants));
+    tool.execute(
+        ToolCtx::new("call"),
+        serde_json::json!({"skill":"ego-browser"}),
+    )
+    .await
+    .expect("invoke ecosystem skill");
+    assert!(*sandbox.app_launch.lock().unwrap());
+    assert_eq!(
+        *sandbox.mach.lock().unwrap(),
+        vec!["com.citrolabs.ego.lite.ego-browser"]
+    );
+    let _cleanup = fs::remove_dir_all(home);
+}
+
+#[test]
+fn test_project_ecosystem_skips_profile() {
+    let project = provenance_dir("project");
+    let home = provenance_dir("shadowed-home");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    write_family_skill(&project, ".claude", "ego-browser");
+    write_family_skill(&home, ".claude", "ego-browser");
+    let registry = SkillRegistryImpl::discover_with_home(Some(&project), Some(&home));
+    let source = registry.source_for("ego-browser").expect("typed source");
+    assert!(matches!(source.provenance, ApiSkillProvenance::Project(_)));
+    let descriptor = registry.find("ego-browser").expect("descriptor");
+    let store = SkillGrantStore::with_path(home.join("grants.json"));
+    let (mach, app_launch) = store.resolve(
+        "ego-browser",
+        &source,
+        &descriptor.allowed_mach_services,
+        descriptor.allow_app_launch,
+    );
+    assert!(mach.is_empty());
+    assert!(!app_launch);
+    let _project_cleanup = fs::remove_dir_all(project);
+    let _home_cleanup = fs::remove_dir_all(home);
 }
 
 #[test]
@@ -326,7 +476,7 @@ PreToolUse:
       - command: ./nomatch.sh
 "#;
     let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-    let specs = parse_hooks(Some(&raw), &SkillSource::Project);
+    let specs = parse_hooks(Some(&raw), &project_source(SkillFamily::Houyi));
     assert_eq!(specs.len(), 3, "three hook entries: {specs:?}");
     let first = &specs[0];
     assert_eq!(first.event, "PreToolUse");
@@ -348,7 +498,7 @@ PreToolUse:
 /// No hooks block yields no specs (the skill still loads, no hooks fire).
 #[test]
 fn test_parse_hooks_none_empty() {
-    assert!(parse_hooks(None, &SkillSource::Managed).is_empty());
+    assert!(parse_hooks(None, &managed_source()).is_empty());
 }
 
 /// MCP skills yield no specs regardless of their hooks block — remote
@@ -358,7 +508,7 @@ fn test_parse_hooks_mcp_filtered() {
     let yaml = "PreToolUse:\n  - hooks:\n      - command: ./evil.sh\n";
     let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
     assert!(
-        parse_hooks(Some(&raw), &SkillSource::Mcp).is_empty(),
+        parse_hooks(Some(&raw), &remote_source()).is_empty(),
         "MCP source produces no specs"
     );
 }
@@ -468,7 +618,7 @@ fn test_disabled_excluded_from_listing() {
 #[test]
 fn test_parse_hooks_malformed_drops() {
     let raw = serde_yaml::Value::String("not a mapping".into());
-    assert!(parse_hooks(Some(&raw), &SkillSource::Managed).is_empty());
+    assert!(parse_hooks(Some(&raw), &managed_source()).is_empty());
 }
 
 /// A malformed event bucket is isolated: the bad event is skipped but a
@@ -478,7 +628,7 @@ fn test_parse_hooks_malformed_drops() {
 fn test_parse_hooks_isolates_malformed() {
     let yaml = "PreToolUse:\n  - hooks:\n      - command: ./good.sh\nBroken:\n  - just a string\n";
     let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-    let specs = parse_hooks(Some(&raw), &SkillSource::Managed);
+    let specs = parse_hooks(Some(&raw), &managed_source());
     assert_eq!(
         specs.len(),
         1,
@@ -493,7 +643,7 @@ fn test_parse_hooks_isolates_malformed() {
 fn test_parse_hooks_missing_command() {
     let yaml = "PreToolUse:\n  - hooks:\n      - command: ./good.sh\n      - type: command\n";
     let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-    let specs = parse_hooks(Some(&raw), &SkillSource::Managed);
+    let specs = parse_hooks(Some(&raw), &managed_source());
     assert_eq!(specs.len(), 1, "entry without command skipped");
     assert_eq!(specs[0].command, "./good.sh");
 }
@@ -504,7 +654,7 @@ fn test_parse_hooks_missing_command() {
 fn test_parse_hooks_timeout_warns() {
     let yaml = "PreToolUse:\n  - hooks:\n      - command: ./x.sh\n        timeout: 30\n";
     let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
-    let specs = parse_hooks(Some(&raw), &SkillSource::Managed);
+    let specs = parse_hooks(Some(&raw), &managed_source());
     assert_eq!(specs.len(), 1, "spec produced despite timeout key");
     assert_eq!(specs[0].command, "./x.sh");
 }
@@ -516,7 +666,7 @@ fn test_parse_hooks_skips_noncommand() {
     let yaml = "PreToolUse:\n  - hooks:\n      - type: prompt\n        command: ./p.sh\n";
     let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
     assert!(
-        parse_hooks(Some(&raw), &SkillSource::Managed).is_empty(),
+        parse_hooks(Some(&raw), &managed_source()).is_empty(),
         "non-command type skipped"
     );
 }

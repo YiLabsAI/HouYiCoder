@@ -13,6 +13,8 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use super::{GrantScope, GrantSubject, SkillSource};
+
 /// Apple services observed during sandbox probes. All services in the
 /// com.apple namespace are denied by is_denied; this list records common
 /// examples without pretending to be an exhaustive security boundary.
@@ -48,19 +50,6 @@ pub fn is_denied(service: &str) -> bool {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(APPLE_PREFIX))
 }
 
-/// Whether a skill origin may install entitlements directly from
-/// frontmatter or the compiled profile. Converged to the same set as
-/// body trust (managed + user): every other origin — including
-/// agents, claude_eco, local, project, and mcp — must go through
-/// deny-log discovery and explicit approval. A repo that ships
-/// .claude/skills or .agents/skills gets claude_eco/agents origin,
-/// which is untrusted for entitlements even though the body may be
-/// served; the capability direction is the more dangerous one, so
-/// it gets the stricter gate.
-pub fn is_entitlement_trusted_origin(origin: &str) -> bool {
-    origin == "managed" || origin == "user"
-}
-
 /// A compiled-in mapping of known community skills to the entitlements they
 /// need, so a skill works without the user hand-editing the grant store or
 /// the vendor adding houyi-specific frontmatter. Parsed from the embedded
@@ -93,7 +82,7 @@ fn capability_for(skill: &str) -> Option<(Vec<String>, bool)> {
     Some((mach, allow_launch))
 }
 
-/// User-owned persistent Mach-service grants, isolated by skill and origin.
+/// User-owned persistent Mach-service grants, isolated by typed authority subject.
 pub struct SkillGrantStore {
     grants: Mutex<HashMap<String, Vec<String>>>,
     path: PathBuf,
@@ -141,20 +130,22 @@ impl SkillGrantStore {
         grant_path(env::var_os("HOME"), env::var_os("USERPROFILE"))
     }
 
-    /// Format the composite grant-store key. The key is scoped by both
-    /// skill name and origin so a project-level skill with the same name
-    /// as a user-level skill cannot consume grants the user approved for
-    /// the user-level copy.
-    fn grant_key(skill: &str, origin: &str) -> String {
-        format!("{skill}\x00{origin}")
+    fn grant_key(subject: &GrantSubject) -> String {
+        let scope = match &subject.scope {
+            GrantScope::Managed => "managed".to_string(),
+            GrantScope::UserHome => "user_home".to_string(),
+            GrantScope::Project(identity) => format!("project:{}", identity.as_str()),
+            GrantScope::Remote(identity) => format!("remote:{}", identity.0),
+        };
+        format!("v2\x00{}\x00{scope}", subject.skill)
     }
 
-    /// Return effective grants for one skill origin after deny filtering.
-    pub fn grant_for(&self, skill: &str, origin: &str) -> Vec<String> {
-        let key = Self::grant_key(skill, origin);
+    /// Return effective grants for one typed subject after deny filtering.
+    pub fn grant_for(&self, subject: &GrantSubject) -> Vec<String> {
+        let key = Self::grant_key(subject);
         self.grants
             .lock()
-            .expect("grant lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(&key)
             .cloned()
             .unwrap_or_default()
@@ -164,10 +155,13 @@ impl SkillGrantStore {
     }
 
     #[cfg(test)]
-    fn set_grant(&self, skill: &str, origin: &str, services: Vec<String>) -> io::Result<()> {
+    fn set_grant(&self, subject: &GrantSubject, services: Vec<String>) -> io::Result<()> {
         let filtered: Vec<String> = services.into_iter().filter(|s| !is_denied(s)).collect();
-        let key = Self::grant_key(skill, origin);
-        let mut grants = self.grants.lock().expect("grant lock poisoned");
+        let key = Self::grant_key(subject);
+        let mut grants = self
+            .grants
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut updated = grants.clone();
         updated.insert(key, filtered);
         save_grants(&self.path, &updated)?;
@@ -175,19 +169,21 @@ impl SkillGrantStore {
         Ok(())
     }
 
-    /// Persist newly approved services for one skill origin. The complete
+    /// Persist newly approved services for one skill authority. The complete
     /// read-modify-write is serialized so concurrent approvals cannot lose
     /// updates. Returns only services added by this approval after the write
     /// succeeds; a failed write leaves in-memory grants unchanged.
     pub fn add_grants(
         &self,
-        skill: &str,
-        origin: &str,
+        subject: &GrantSubject,
         new_services: Vec<String>,
     ) -> io::Result<Vec<String>> {
         let filtered: Vec<String> = new_services.into_iter().filter(|s| !is_denied(s)).collect();
-        let key = Self::grant_key(skill, origin);
-        let mut grants = self.grants.lock().expect("grant lock poisoned");
+        let key = Self::grant_key(subject);
+        let mut grants = self
+            .grants
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let existing = grants.get(&key);
         let mut added = Vec::new();
         for service in filtered {
@@ -214,79 +210,80 @@ impl SkillGrantStore {
     /// store. Returns the deny-filtered mach-service union and the OR of
     /// every feeder's allow_app_launch flag.
     ///
-    /// When trusted is false (non-managed/user origin), frontmatter and
-    /// the compiled capability profile are skipped — a repo-checked-in or
-    /// server-sourced skill cannot install sandbox capabilities by
-    /// declaring them in its own frontmatter or by matching a known
-    /// skill's name. The grant store is keyed by (skill, origin) so a
-    /// project-level skill with the same name as a user-level skill
-    /// cannot consume grants the user approved for the user-level copy.
+    /// Host-owned profiles apply to managed and user-home skills. Skill-authored
+    /// frontmatter applies only to managed and native user-home skills. Explicit
+    /// grants are isolated by user, project-root, or remote-provider authority.
     pub fn resolve(
         &self,
         skill: &str,
-        origin: &str,
+        source: &SkillSource,
         frontmatter: &[String],
         fm_allow_launch: bool,
-        trusted: bool,
     ) -> (Vec<String>, bool) {
-        let cap = if trusted { capability_for(skill) } else { None };
-        let fm_mach: Vec<String> = if trusted {
-            frontmatter
-                .iter()
-                .filter(|s| !is_denied(s))
-                .cloned()
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let fm_launch = if trusted { fm_allow_launch } else { false };
-        let mut mach = fm_mach;
-        if let Some((cap_mach, _)) = &cap {
-            for s in cap_mach {
-                if !is_denied(s) && !mach.contains(s) {
-                    mach.push(s.clone());
-                }
-            }
-        }
-        for s in self.grant_for(skill, origin) {
-            if !mach.contains(&s) {
-                mach.push(s);
-            }
-        }
-        let allow_launch = fm_launch || cap.map(|(_, a)| a).unwrap_or(false);
-        (mach, allow_launch)
+        resolve_feeders(
+            skill,
+            source,
+            frontmatter,
+            fm_allow_launch,
+            self.grant_for(&source.grant_subject(skill)),
+        )
     }
+}
+
+fn resolve_feeders(
+    skill: &str,
+    source: &SkillSource,
+    frontmatter: &[String],
+    fm_allow_launch: bool,
+    stored: Vec<String>,
+) -> (Vec<String>, bool) {
+    let cap = source
+        .applies_capability_profile()
+        .then(|| capability_for(skill))
+        .flatten();
+    let mut mach: Vec<String> = if source.applies_frontmatter_entitlements() {
+        frontmatter
+            .iter()
+            .filter(|service| !is_denied(service))
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if let Some((cap_mach, _)) = &cap {
+        for service in cap_mach {
+            if !is_denied(service) && !mach.contains(service) {
+                mach.push(service.clone());
+            }
+        }
+    }
+    for service in stored {
+        if !mach.contains(&service) {
+            mach.push(service);
+        }
+    }
+    let frontmatter_launch = source.applies_frontmatter_entitlements() && fm_allow_launch;
+    let profile_launch = cap.map(|(_, allow_launch)| allow_launch).unwrap_or(false);
+    (mach, frontmatter_launch || profile_launch)
 }
 
 /// Resolve entitlements for a skill invocation. When a grant store is
 /// wired, delegates to its resolve (three-feeder union). When not wired
-/// (tests, no-sandbox), falls back to frontmatter alone — still
-/// deny-list filtered, so a skill declaring a system service cannot
-/// leak past the fence even without a store. When trusted is false
-/// (project or mcp origin), frontmatter is ignored and only the grant
-/// store feeds in — untrusted sources must go through deny-log
-/// discovery and explicit approval.
+/// (tests, no-sandbox), resolves the host profile and permitted frontmatter
+/// without persistent user grants. A missing typed source fails closed.
 pub fn resolve_entitlements(
     grants: Option<&SkillGrantStore>,
     skill: &str,
-    origin: &str,
+    source: Option<&SkillSource>,
     frontmatter: &[String],
     fm_allow_launch: bool,
-    trusted: bool,
 ) -> (Vec<String>, bool) {
+    let Some(source) = source else {
+        return (Vec::new(), false);
+    };
     match grants {
-        Some(g) => g.resolve(skill, origin, frontmatter, fm_allow_launch, trusted),
-        None => {
-            if !trusted {
-                return (Vec::new(), false);
-            }
-            let mach: Vec<String> = frontmatter
-                .iter()
-                .filter(|s| !is_denied(s))
-                .cloned()
-                .collect();
-            (mach, fm_allow_launch)
-        }
+        Some(grants) => grants.resolve(skill, source, frontmatter, fm_allow_launch),
+        None => resolve_feeders(skill, source, frontmatter, fm_allow_launch, Vec::new()),
     }
 }
 
