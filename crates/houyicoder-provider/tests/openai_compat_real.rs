@@ -1,7 +1,5 @@
-//! Live integration test: real call against an OpenAI-compatible endpoint
-//! via DASHSCOPE credentials. Skips silently when no API key is set, so a
-//! bare make test-integration never fails on a machine without credentials.
-//! Run with: make test-integration (after writing .env or exporting the vars).
+//! Live provider integration test. Requires configured credentials and runs
+//! only through the explicit live capability suite.
 
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_config::{DEFAULT_DASHSCOPE_BASE_URL, DEFAULT_MODEL};
@@ -9,6 +7,7 @@ use houyicoder_protocol::llm::{CompletionRequest, InputItem, ModelSettings, Outp
 use houyicoder_provider::OpenAiCompatibleProvider;
 
 #[tokio::test]
+#[ignore = "requires the live provider suite"]
 async fn test_openai_roundtrip() {
     let Ok(api_key) = std::env::var("DASHSCOPE_API_KEY") else {
         eprintln!("skip: DASHSCOPE_API_KEY not set");

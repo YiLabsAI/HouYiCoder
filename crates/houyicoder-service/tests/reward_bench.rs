@@ -1,8 +1,6 @@
-//! Self-evolution reward-loop benchmark. Two ignored tests run a query
-//! pair against one Runner so the cross-query dream trigger and recall
-//! path get exercised. Set HOUYICODER_REWARD_OFF=1 for the off variant.
-//! Needs a real provider. Not in make verify — run manually via
-//! cargo test --test reward_bench -- --ignored.
+//! Live benchmark for reward-loop learning and recall. The benchmark dispatcher
+//! runs paired queries with reward enabled and disabled, then prints comparable
+//! tool, error, redundancy, and memory metrics. Requires a real provider.
 
 #![cfg(test)]
 

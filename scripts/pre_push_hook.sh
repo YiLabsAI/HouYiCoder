@@ -5,11 +5,8 @@
 # already-pushed history is an open-source taboo), so anything that crosses
 # this gate is final. Two checks run:
 #
-# 1. make check-full (the full unit + integration suite). make check (the
-#    unit gate) runs before every commit; this runs the heavier integration suite
-#    (cross-decode, drop-in, dual-transport equivalence, control-lease)
-#    before a push, so the most valuable invariants of the refactor cannot
-#    regress silently.
+# 1. make check-full reruns the commit gate and enforces workspace unit
+#    coverage before publication.
 #
 # 2. Re-scan every commit in the about-to-publish range (@{u}..HEAD -- the
 #    local commits not yet on the upstream) through the same style lint the
@@ -25,7 +22,7 @@
 set -e
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY
 
-echo "pre-push: running make check-full (lint + unit + integration + coverage)..."
+echo "pre-push: running make check-full (commit gate + unit coverage)..."
 make check-full
 echo "pre-push: gate green."
 

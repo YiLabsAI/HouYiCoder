@@ -149,10 +149,12 @@ make install       # one-time toolchain setup
 make quick-check   # fmt-check + clippy (fast, during dev)
 make check         # full pre-commit gate (fmt + clippy + typecheck + test)
 make check-full    # check + coverage gate (what the pre-push hook runs)
-make verify        # check-full + the ignored suite (sandbox, PTY UI) + doc-stale
+make verify        # deterministic gates + ignored sandbox and PTY suites
+make test unit     # correctness tests selected by scope
+make suite ui      # capability suites: ui, sandbox, or live
+make benchmark reward # named evaluation workloads
 make format        # cargo fmt --all
 make lint          # clippy -D warnings
-make test          # cargo test --workspace
 make clean
 ```
 

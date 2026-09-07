@@ -15,8 +15,7 @@
 
 - [ ] `make check` passes (pre-commit gate: fmt, clippy, comments, naming, file-size, dep-graph, unit tests, diff-cov)
 - [ ] `make verify` passes (unit tests + unit coverage + the ignored suite)
-      <!-- The non-ignored integration suite (tests/ binaries) runs in CI only,
-           via run_tests.py --full; no local make target runs it yet. -->
+      <!-- Run `make test integration` for the non-ignored integration binaries. -->
 - [ ] UI changes include a screenshot / PTY capture
 - [ ] Commit messages follow the conventional format (type(scope): subject ≤72)
 - [ ] No internal doc/codename references introduced

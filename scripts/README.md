@@ -11,10 +11,10 @@ are their implementation, not a CLI to drive directly.
   comment style, no-CJK-in-source, naming, file-size, dependency graph,
   stderr hygiene, and the `--lib` unit suite with diff coverage. Must be
   green to commit.
-- **`make verify`** — the verify gate. Slower (runs the full workspace
-  test suite including integration and `#[ignore]` live-server tests,
-  coverage ratchets, and doc-stale reports). Run before declaring a
-  change done or opening a PR.
+- **`make verify`** — the deterministic verify gate. Runs workspace tests,
+  coverage ratchets, ignored PTY and sandbox suites, and doc-stale reports.
+  Live providers and benchmarks use explicit commands so this gate never
+  consumes credentials or model tokens.
 
 Both are plain `python3` + `cargo` invocations wired in `Makefile` and
 `scripts/check_code.sh`; no special runtime is required.
@@ -77,13 +77,16 @@ unreliably, so the gate itself is guarded).
 | `test_app_coupling.py` | The App-coupling measurement (default-include / explicit-exclude) |
 | `test_stderr_gate.py` | The console-write gate |
 | `test_run_tests_timeout.py` | The unit-gate timeout reaps cargo's test-binary grandchildren (no orphan spiral) |
+| `test_harness_routing.py` | Correctness, capability-suite, live, and benchmark routing stay separated |
 
 ## Shell helpers
 
 | Script | Role |
 |---|---|
 | `check_code.sh` | The `make check` runner — fail-fast, stops at the first red gate |
-| `test.sh` | The `make test` dispatcher — unit / integration / ui / live categories |
+| `test.sh` | Correctness-test scope dispatcher — unit / integration / all |
+| `suite.sh` | Runtime-capability suites — UI terminal, sandbox, and live provider |
+| `benchmark.sh` | Named evaluation workloads with explicit environment variants |
 | `quick_check.sh` | Dev fast path — fmt + clippy only, no tests |
 | `check_coverage.sh` | Workspace unit-coverage total, one global threshold — `make check-full` and CI (cargo-llvm-cov; opt-in locally until the tool is installed, installed explicitly in CI) |
 | `ensure_nextest.sh` | Installs nextest if absent, before the test runner needs it |

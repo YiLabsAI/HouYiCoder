@@ -34,6 +34,6 @@ make check         # full pre-commit gate
 make format        # cargo fmt
 make lint          # clippy
 make test          # cargo test
-make benchmark     # verification spikes
+make benchmark reward # live reward-loop evaluation
 make clean
 ```

@@ -4,8 +4,8 @@ SHELL := /bin/bash -o pipefail
 
 .PHONY: help install setup-hooks \
         format fmt-check lint typecheck \
-        test test-cov \
-        unit integration ui sandbox all \
+        test suite benchmark test-cov \
+        unit integration all ui sandbox live reward \
         quick-check check check-full \
         check-deps check-stderr \
         deny clean
@@ -24,20 +24,26 @@ help:
 	@echo "  make quick-check      Fast checks (fmt-check + clippy, no tests)"
 	@echo "  make check            Full pre-commit gate (fmt + clippy + comments + naming +"
 	@echo "                        file-size + dep-graph + stderr + unit tests + diff-cov)"
-	@echo "  make check-full       Pre-push: check + integration tests + coverage gate"
+	@echo "  make check-full       Pre-push: check + workspace coverage gate"
 	@echo "  make format           Auto-format (cargo fmt)"
 	@echo "  make fmt-check        Verify formatting (--check)"
 	@echo "  make lint             Clippy with -D warnings"
 	@echo "  make typecheck        cargo check (Rust type check)"
 	@echo ""
-	@echo "Testing (one umbrella, category as an arg):"
-	@echo "  make test             All tests: unit + integration + ui (default = all)"
+	@echo "Correctness tests (scope):"
+	@echo "  make test             Unit + integration tests (default = all)"
 	@echo "  make test unit        Inline unit tests (--lib --bins)"
-	@echo "  make test integration Integration tests (tests/ binaries; live self-skip w/o .env)"
-	@echo "  make test ui          PTY UI tests: build the houyi bin + run tests/ui_*.rs --ignored"
-	@echo "  make test sandbox     Live sandbox tests: real sandbox-exec, needs macOS, #[ignore]"
+	@echo "  make test integration Integration test binaries"
 	@echo "  make test-cov         Coverage gates (workspace unit total + diff-cov)"
-	@echo "  (NEXTEST=1 selects cargo-nextest for unit/integration legs)"
+	@echo "  (NEXTEST=1 selects cargo-nextest)"
+	@echo ""
+	@echo "Capability suites (runtime environment):"
+	@echo "  make suite ui         Real-binary PTY interaction tests"
+	@echo "  make suite sandbox    Kernel sandbox tests (macOS)"
+	@echo "  make suite live       Real provider and MCP tests"
+	@echo ""
+	@echo "Benchmarks (evaluation workload):"
+	@echo "  make benchmark reward Reward-loop ON/OFF comparison with a real provider"
 	@echo ""
 	@echo "  make check-deps       Layering dep-graph assertion (binding; exits 1 on runtime-dep violation)"
 	@echo "  make check-stderr     Console-write assertion (binding; print macros must not reach the TUI screen)"
@@ -75,19 +81,31 @@ lint:
 typecheck:
 	$(CARGO) check --workspace --all-targets
 
-# Test umbrella: one entry point, category is a positional arg.
-#   make test            = all (unit + integration + ui)
-#   make test unit|integration|ui|sandbox|all  = that category
-# Category names are also targets so make test ui does not error; they
-# re-invoke test with the arg via MAKECMDGOALS. scripts/test.sh dispatches.
-# make check does NOT depend on make test -- the commit gate stays run_tests.py.
+# Correctness scope. Capability-dependent suites and benchmarks have
+# separate entry points so unlike dimensions are not mixed as categories.
 test:
 	@./scripts/test.sh $(filter-out $@,$(MAKECMDGOALS))
 
-# Category markers: make test <cat> and make <cat> both work.
-# The no-op recipe silences the "Nothing to be done" message.
-unit integration ui sandbox all: test
-	@:
+unit integration all:
+	@if [[ " $(MAKECMDGOALS) " != *" test "* ]]; then \
+		echo "use: make test $@" >&2; exit 2; \
+	fi
+
+suite:
+	@./scripts/suite.sh $(filter-out $@,$(MAKECMDGOALS))
+
+ui sandbox live:
+	@if [[ " $(MAKECMDGOALS) " != *" suite "* ]]; then \
+		echo "use: make suite $@" >&2; exit 2; \
+	fi
+
+benchmark:
+	@./scripts/benchmark.sh $(filter-out $@,$(MAKECMDGOALS))
+
+reward:
+	@if [[ " $(MAKECMDGOALS) " != *" benchmark "* ]]; then \
+		echo "use: make benchmark $@" >&2; exit 2; \
+	fi
 
 test-cov:
 	@./scripts/check_coverage.sh
@@ -107,18 +125,10 @@ check:
 check-full: check
 	@./scripts/check_coverage.sh
 
-# Verify gate: check-full + the ignored test suite (sandbox-exec, PTY UI,
-# live-in-name unit tests) run in parallel via nextest + doc-stale detection.
-# cargo test runs ignored tests serially (~18min); nextest -j=N finishes in
-# seconds. The ignored suite runs in parallel here so a green gate is fast
-# enough to run before every commit, not just CI.
-#
-# Filter split: real-infra tests (live_agent + live MCP server, need API key
-# or network) and pinned bug_repro (expected to fail) run report-only below.
-# reward_bench is a real-LLM benchmark excluded from verify entirely:
-#   cargo test -p houyicoder-service --test reward_bench -- --ignored
-NEXTEST_IGNORED_BLOCKING := -E 'not(test(/bug_repro/)) and not(binary(/live_agent/)) and not(test(/live_mcp_real_server/)) and not(binary(/reward_bench/))'
-NEXTEST_IGNORED_REPORT := -E 'test(/bug_repro/) or binary(/live_agent/) or test(/live_mcp_real_server/) or binary(/reward_bench/)'
+# Verify combines deterministic gates with ignored PTY and sandbox suites.
+# Real-provider tests, expected-failure reproductions, and benchmarks remain
+# explicit so verification never consumes network credentials or model tokens.
+NEXTEST_VERIFY_FILTER := -E 'not(test(/bug_repro/)) and not(binary(/live_agent/)) and not(binary(/openai_compat_real/)) and not(binary(/mcp_live_server/)) and not(binary(/reward_bench/))'
 # Parallel-safety: fresh_temp_dir retries on AlreadyExists (nextest gives each
 # test its own process, so the per-process SEQ counter restarts at 0; an
 # OS-recycled pid could mint a path matching a leftover dir). No --retries
@@ -129,24 +139,20 @@ verify: check-full
 	@echo "▶ Building the houyi bin (the PTY tests spawn it via a hardcoded path;"
 	@echo "  cargo test does not build the plain bin target, only the test binaries)."
 	@$(CARGO) build --bin houyi
-	@echo "▶ Running ignored suite in PARALLEL (BLOCKING: real failures fail verify)."
-	@echo "  Real-infra (live_agent binary + live_mcp_real_server, need API key /"
-	@echo "  network) + pinned bug_repro are excluded here + run report-only below."
+	@echo "▶ Running deterministic ignored suites in parallel."
 	@start=$$(date +%s); \
-	$(CARGO) nextest run --workspace --run-ignored only -j 3 $(NEXTEST_IGNORED_BLOCKING); status=$$?; \
+	$(CARGO) nextest run --workspace --run-ignored only -j 3 $(NEXTEST_VERIFY_FILTER); status=$$?; \
 	end=$$(date +%s); total=$$((end - start)); \
 	warn_budget=$${VERIFY_BUDGET_WARN:-60}; \
 	if [ $$total -gt $$warn_budget ]; then \
 		printf "\033[1;33m⚠ verify ignored-suite %ds over %ds budget — prune slow tests (sleep→events, shared fixtures) or raise VERIFY_BUDGET_WARN\033[0m\n" $$total $$warn_budget; \
 	fi; \
 	exit $$status
-	@echo "▶ Running real-infra + pinned bug-repro tests (report-only):"
-	@$(CARGO) nextest run --workspace --run-ignored only $(NEXTEST_IGNORED_REPORT) || true
 	@echo "▶ Running doc-stale detection..."
 	@if [ -f scripts/check_doc_stale.py ]; then python3 scripts/check_doc_stale.py || true; fi
 	@echo "▶ Running structure-facts report (for deep review)..."
 	@python3 scripts/report_structure_facts.py || true
-	@echo "✓ verify passed: unit + integration + coverage + ignored-suite(blocking,parallel) + live/bug-repro(report) + docs(report)"
+	@echo "✓ verify passed: deterministic tests + coverage + ignored suites + docs"
 
 # Layering dependency-graph assertion. Joins the blocking check gate once
 # the full migration completes.
