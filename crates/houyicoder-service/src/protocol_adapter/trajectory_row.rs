@@ -1,9 +1,9 @@
-//! A short fixed-width label for each event kind, for the trajectory audit
-//! row. Split from projection.rs so that file stays under the file-size gate.
+//! Display fields for the trajectory audit row: the event name and the
+//! short hash chain link.
 
 use houyicoder_context::SessionEvent;
 
-pub fn trajectory_kind_label(kind: &SessionEvent) -> &'static str {
+pub fn event_name(kind: &SessionEvent) -> &'static str {
     match kind {
         SessionEvent::UserInput { .. } => "user",
         SessionEvent::MidTurnInput { .. } => "user",
@@ -46,7 +46,7 @@ pub fn hex_short(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{hex_short, trajectory_kind_label};
+    use super::{event_name, hex_short};
     use houyicoder_context::SessionEvent;
 
     #[test]
@@ -60,13 +60,13 @@ mod tests {
     /// the trajectory row does not mislead by borrowing another kind's label.
     #[test]
     fn test_unknown_kind_labeled_unknown() {
-        assert_eq!(trajectory_kind_label(&SessionEvent::Unknown), "unknown");
+        assert_eq!(event_name(&SessionEvent::Unknown), "unknown");
     }
 
     #[test]
     fn test_subagent_kinds_labeled() {
         assert_eq!(
-            trajectory_kind_label(&SessionEvent::SubagentSpawn {
+            event_name(&SessionEvent::SubagentSpawn {
                 child_session_id: String::new(),
                 subagent_type: String::new(),
                 prompt_summary: String::new(),
@@ -77,7 +77,7 @@ mod tests {
             "spawn"
         );
         assert_eq!(
-            trajectory_kind_label(&SessionEvent::SubagentReturn {
+            event_name(&SessionEvent::SubagentReturn {
                 child_session_id: String::new(),
                 status: String::new(),
                 summary: String::new(),
@@ -91,7 +91,7 @@ mod tests {
             "return"
         );
         assert_eq!(
-            trajectory_kind_label(&SessionEvent::NotificationInjected {
+            event_name(&SessionEvent::NotificationInjected {
                 child_session_id: String::new(),
                 turn: 0,
                 order: 0,

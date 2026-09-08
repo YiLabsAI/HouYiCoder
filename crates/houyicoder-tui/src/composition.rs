@@ -387,9 +387,9 @@ pub fn pair_inproc_server_tracked(
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
     let next_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     houyicoder_service::server::install_live_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
-    // Fleet projector: translate bus child status into AgentStatus wire
+    // Fleet status relay: translate bus child status into AgentStatus wire
     // frames so the TUI footer renders without touching the engine bus.
-    houyicoder_service::composition::fleet_projector::spawn(
+    houyicoder_service::composition::fleet_status_relay::spawn(
         bus,
         s2c_tx.clone(),
         next_seq.clone(),

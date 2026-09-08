@@ -10,7 +10,7 @@
 
 mod api_key;
 mod effort_resolver;
-pub mod fleet_projector;
+pub mod fleet_status_relay;
 pub mod notification_drain;
 pub use effort_resolver::{effort_to_persist, persist_model_pick};
 mod built_in_tools;
@@ -100,7 +100,7 @@ pub struct AssembledRunner {
     pub append_notify: Arc<Notify>,
     pub worktree_controller: Option<Arc<houyicoder_core::agent::WorktreeController>>,
     /// The shared multi-agent bus; threaded to the pairing point so the
-    /// fleet projector can subscribe + emit agent status wire frames.
+    /// fleet status relay can subscribe + emit agent status wire frames.
     pub bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 }
 
@@ -495,7 +495,7 @@ pub(crate) fn assemble(
     let agent_registry = multi_agent::built_in_registry();
     tools.register(Arc::new(AgentTool::new(agent_registry.clone())));
     // Spawn port + agent directory; construction is in the multi_agent module.
-    // Hoist the bus so the fleet projector (wired at pairing) can share it.
+    // Hoist the bus so the fleet status relay (wired at pairing) can share it.
     let bus = std::sync::Arc::new(houyicoder_core::agent::multi_agent::bus_types::AgentBus::new());
     let spawn_handle = multi_agent::build_runtime(multi_agent::MultiAgentDeps {
         registry: agent_registry.clone(),

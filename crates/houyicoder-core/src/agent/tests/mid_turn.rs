@@ -292,7 +292,7 @@ async fn test_run_repairs_orphan_call() {
         result.outcome
     );
     let events = runner.store().replay(session).await.expect("replay");
-    let items = project_input_items(&events, None);
+    let items = assemble_model_input(&events, None);
     let mut checked = 0;
     let mut i = 0;
     while i < items.len() {

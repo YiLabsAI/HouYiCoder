@@ -90,7 +90,7 @@ fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -
 /// for kinds that are pure metadata (TurnUsage carries tokens at the turn
 /// level, not as a displayable event; the rest are folded into the turn's
 /// counts or skipped as audit-only).
-fn project_event(
+fn build_trajectory_event(
     ev: &SessionLogEntry,
     start_ms: u64,
     calls: &CallIndex,
@@ -295,7 +295,7 @@ impl TurnBuilder {
     }
 
     fn push_event(&mut self, ev: &SessionLogEntry, offset: u64, calls: &CallIndex) {
-        if let Some(e) = project_event(ev, offset, calls) {
+        if let Some(e) = build_trajectory_event(ev, offset, calls) {
             self.events.push(e);
         }
     }

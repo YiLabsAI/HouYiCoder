@@ -10,7 +10,7 @@ use houyicoder_context::{SessionEvent, SessionId};
 use std::collections::HashSet;
 
 use super::append::new_event;
-use super::{RunError, Runner, projection};
+use super::{RunError, Runner, selection};
 
 /// Per-agent byte budget for revived skill bodies. Most-recent-first: when
 /// exceeded, the body that would overflow is head-truncated to the
@@ -96,7 +96,7 @@ impl Runner {
     pub(crate) async fn inject_skill_body(&self, session: SessionId) -> Result<(), RunError> {
         let view = self.store.current_view(session).await?;
         let filtered = match view.manifest.as_ref() {
-            Some(m) => projection::apply_manifest(&view.events, m, Some(self.store.backend())),
+            Some(m) => selection::apply_manifest(&view.events, m, Some(self.store.backend())),
             None => view.events.clone(),
         };
         if filtered
@@ -353,7 +353,7 @@ mod tests {
         let view_before = runner.store().current_view(session).await.unwrap();
         let filtered = match view_before.manifest.as_ref() {
             Some(m) => {
-                projection::apply_manifest(&view_before.events, m, Some(runner.store().backend()))
+                selection::apply_manifest(&view_before.events, m, Some(runner.store().backend()))
             }
             None => view_before.events.clone(),
         };

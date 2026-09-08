@@ -1,6 +1,6 @@
 //! Status-snapshot sidecar attachers: the env/config display fields + the
 //! per-model usage projection the server attaches to the wire StatusSnapshot
-//! after project_status builds the runner-owned fields. Split from dispatch
+//! after map_status_snapshot builds the runner-owned fields. Split from dispatch
 //! so that file stays under the size gate; these are pure readers of env +
 //! the observability log, with no Server state.
 

@@ -1,5 +1,5 @@
-//! Projection: apply a CheckpointManifest to an event log, producing the
-//! filtered event sequence for projection. This is the Select stage's
+//! Selection: apply a CheckpointManifest to an event log, producing the
+//! filtered event sequence for the served view. This is the Select stage's
 //! plan-application step (the bridge between Compress's manifest and the
 //! served view).
 //!
@@ -10,13 +10,13 @@
 use houyicoder_context::{ContextBackend, Disposition, EventId, SessionEvent, SessionLogEntry};
 
 /// Apply a CheckpointManifest to an event log, producing the filtered event
-/// sequence for projection. This is the Select stage's plan-application step
-/// (the bridge between Compress's manifest and the served view).
+/// sequence for the served view. This is the Select stage's plan-application
+/// step (the bridge between Compress's manifest and the served view).
 ///
 /// Disposition handling:
 /// - Verbatim: event stays as-is. A tool_result the Isolate stage
 ///   externalized already carries a block_ref marker; it rides in the group
-///   verbatim, and the turn-group projection materializes it on demand.
+///   verbatim, and the turn-group assembler materializes it on demand.
 /// - Summarized: event is dropped. The manifest's summary text is injected
 ///   once as a synthetic UserInput at the position of the first Summarized
 ///   event, so the model sees a summary of the folded span, not the raw
@@ -29,7 +29,7 @@ use houyicoder_context::{ContextBackend, Disposition, EventId, SessionEvent, Ses
 /// default to Verbatim — they are newer than the plan covers.
 ///
 /// AssistantTextDelta events are always skipped (subsumed by the
-/// authoritative AssistantMessage, same as the turn-group projection).
+/// authoritative AssistantMessage, same as the turn-group assembler).
 ///
 /// The pair invariant (tool_use and its tool_result share a group, so they
 /// share a fate) is structural: the manifest builder groups one API round
@@ -82,7 +82,7 @@ pub fn apply_manifest(
             // Referenced is not a Compress disposition. A tool_result the
             // Isolate stage externalized already carries a block_ref marker
             // in the event log; a Verbatim group keeps it as-is, and the
-            // turn-group projection materializes it on demand. This branch
+            // turn-group assembler materializes it on demand. This branch
             // is unreachable for a manifest build_manifest produced.
             Disposition::Referenced => {
                 result.push(event.clone());
@@ -95,7 +95,7 @@ pub fn apply_manifest(
 #[cfg(test)]
 mod tests {
     use super::super::manifest::{CompressPolicy, HeuristicSummarizer, build_manifest};
-    use super::super::turn_group::project_input_items;
+    use super::super::turn_group::assemble_model_input;
     use super::*;
     use houyicoder_context::{
         BlockHash, CheckpointId, ContextError, EventId, SessionEvent, SessionId, SessionLogEntry,
@@ -139,7 +139,7 @@ mod tests {
     }
 
     /// Verify every ToolResult in the slice has a matching ToolCall in the
-    /// same slice (the pair invariant the projection debug_assert guards).
+    /// same slice (the pair invariant the assembler debug_assert guards).
     fn pairs_intact(events: &[SessionLogEntry]) -> bool {
         let calls: std::collections::HashSet<&str> = events
             .iter()
@@ -221,7 +221,7 @@ mod tests {
         // apply_manifest. The Isolate stage (PostToolUse) stores a large
         // output and writes a block_ref marker into the event log; Compress
         // keeps the marker verbatim in its round's group; the turn-group
-        // projection materializes it on demand so the model sees the real
+        // assembler materializes it on demand so the model sees the real
         // output. This test simulates the Isolate step by storing the output
         // and constructing the marker by hand.
         use houyicoder_memory::InMemoryBackend;
@@ -261,7 +261,7 @@ mod tests {
             );
         }
         // Materialization restores the real output from the CAS.
-        let items = project_input_items(&filtered, Some(&backend as &dyn ContextBackend));
+        let items = assemble_model_input(&filtered, Some(&backend as &dyn ContextBackend));
         let tr_item = items
             .iter()
             .find(|i| matches!(i, InputItem::ToolResult { .. }));
@@ -344,7 +344,7 @@ mod tests {
         let manifest = build_manifest(&events, &policy, &HeuristicSummarizer, None).await;
         let backend = StubBackend;
         let filtered = apply_manifest(&events, &manifest, Some(&backend as &dyn ContextBackend));
-        let items = project_input_items(&filtered, Some(&backend as &dyn ContextBackend));
+        let items = assemble_model_input(&filtered, Some(&backend as &dyn ContextBackend));
         let tr_item = items
             .iter()
             .find(|i| matches!(i, InputItem::ToolResult { .. }));
@@ -463,8 +463,8 @@ mod tests {
                 SessionEvent::ToolCall { call_id, .. } if call_id == "big")),
             "big pair tool_call dropped with its group"
         );
-        // Also verify project_input_items does not trip its debug_assert.
-        let _items = project_input_items(&result, None);
+        // Also verify assemble_model_input does not trip its debug_assert.
+        let _items = assemble_model_input(&result, None);
     }
 
     #[tokio::test]

@@ -124,16 +124,16 @@ fn test_notification_old_log_deserializes() {
     // Strip the summary field so the JSON looks like a pre-summary log line.
     let value = serde_json::from_str::<serde_json::Value>(&json).expect("parse");
     let kind = value
-        .get("kind")
+        .get("event")
         .and_then(serde_json::Value::as_object)
-        .expect("kind object");
+        .expect("event object");
     let mut kind_obj = kind.clone();
     kind_obj.remove("summary");
     let mut wrapped = serde_json::Map::new();
     if let serde_json::Value::Object(top) = value {
         for (k, v) in top {
-            if k == "kind" {
-                wrapped.insert("kind".into(), serde_json::Value::Object(kind_obj.clone()));
+            if k == "event" {
+                wrapped.insert("event".into(), serde_json::Value::Object(kind_obj.clone()));
             } else {
                 wrapped.insert(k, v);
             }
@@ -342,7 +342,7 @@ fn test_event_variants_round_trip() {
         "hash on the wire: {sl_json}"
     );
     let mut v: serde_json::Value = serde_json::from_str(&sl_json).unwrap();
-    if let Some(serde_json::Value::Object(kind_map)) = v.get_mut("kind") {
+    if let Some(serde_json::Value::Object(kind_map)) = v.get_mut("event") {
         kind_map.remove("content_hash");
     }
     let legacy: SessionLogEntry = serde_json::from_value(v).expect("legacy deserialize");

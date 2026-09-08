@@ -362,7 +362,7 @@ pub enum AgentMessage {
     DebugResult {
         state: houyicoder_protocol::frontend::debug::DebugState,
     },
-    /// A spawned child's live status snapshot, from the fleet projector.
+    /// A spawned child's live status snapshot, from the fleet status relay.
     /// Drives the agent status footer. completed is None while running.
     AgentStatus {
         agent_id: String,

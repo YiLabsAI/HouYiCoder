@@ -23,7 +23,7 @@ use houyicoder_context::{
 };
 
 use super::append::new_event;
-use super::{RunError, Runner, context, projection};
+use super::{RunError, Runner, context, selection};
 
 /// Collect the keys of memory-recall events that survive in the served view
 /// (after applying the manifest) plus their cumulative byte size. Summarized
@@ -42,7 +42,7 @@ fn surfaced_memory_scan(
     backend: Option<&dyn ContextBackend>,
 ) -> (HashSet<String>, usize) {
     let filtered = match manifest {
-        Some(m) => projection::apply_manifest(events, m, backend),
+        Some(m) => selection::apply_manifest(events, m, backend),
         None => events.to_vec(),
     };
     let mut keys = HashSet::new();

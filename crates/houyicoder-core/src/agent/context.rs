@@ -20,9 +20,9 @@ use houyicoder_context::{
 };
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
 
-use super::projection;
 use super::prompt;
 use super::retention;
+use super::selection;
 use super::turn_group;
 
 /// Token budget for per-turn memory recall. Keeps the recalled-memory
@@ -341,7 +341,7 @@ impl ContextBuilder {
         memory_index: Option<&str>,
     ) -> ServedView {
         let filtered = match manifest {
-            Some(m) => projection::apply_manifest(events, m, backend),
+            Some(m) => selection::apply_manifest(events, m, backend),
             None => events.to_vec(),
         };
         // When the cache-liveness policy is installed, serve with it + the
@@ -354,9 +354,9 @@ impl ContextBuilder {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
-                turn_group::project_input_items_with(&filtered, backend, &*policy, now_ms)
+                turn_group::assemble_model_input_with(&filtered, backend, &*policy, now_ms)
             }
-            None => turn_group::project_input_items(&filtered, backend),
+            None => turn_group::assemble_model_input(&filtered, backend),
         };
         let msg_tokens: u32 = messages.iter().map(|m| self.tokenizer.count_input(m)).sum();
 

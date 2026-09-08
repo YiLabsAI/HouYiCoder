@@ -675,7 +675,7 @@ fn test_error_key_counted() {
 /// A MetaUser event (system reminder — redundancy nudge, blind-retry warning)
 /// must NOT enter the turn's user_input. The trajectory title reads
 /// user_input; a system reminder showing there would mislead the user into
-/// thinking they typed it. MetaUser is skipped in project_event (no
+/// thinking they typed it. MetaUser is skipped in build_trajectory_event (no
 /// trajectory event row) and never sets user_input in the projection loop.
 #[test]
 fn test_meta_user_excluded() {

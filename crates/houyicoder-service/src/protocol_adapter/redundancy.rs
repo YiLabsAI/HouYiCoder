@@ -1,12 +1,10 @@
-//! Project the engine redundant-call records to the wire form so the
-//! /trajectory pane surfaces same-input re-issues as a self-evolution
-//! reward signal. Split from projection.rs so that file stays under the
-//! file-size gate.
+//! Map engine redundant-call records to the wire form for the /trajectory
+//! pane's self-evolution reward signal.
 
 use houyicoder_core::observability::evolution::{RedundancyKind, RedundantCall};
 use houyicoder_protocol::frontend::trajectory::RedundantCallEntry;
 
-pub(crate) fn project_redundant(records: &[RedundantCall]) -> Vec<RedundantCallEntry> {
+pub(crate) fn map_redundant_entries(records: &[RedundantCall]) -> Vec<RedundantCallEntry> {
     records
         .iter()
         .map(|r| RedundantCallEntry {
@@ -28,7 +26,7 @@ mod tests {
     use houyicoder_core::observability::evolution::{RedundancyKind, RedundantCall};
 
     #[test]
-    fn test_project_maps_kind_label() {
+    fn test_redundant_carries_kind_label() {
         let records = vec![
             RedundantCall {
                 tool: "read".into(),
@@ -47,7 +45,7 @@ mod tests {
                 prior_ref: None,
             },
         ];
-        let wire = project_redundant(&records);
+        let wire = map_redundant_entries(&records);
         assert_eq!(wire.len(), 2);
         assert_eq!(wire[0].kind, "same-batch");
         assert_eq!(wire[0].tool, "read");
@@ -57,7 +55,7 @@ mod tests {
     }
 
     #[test]
-    fn test_project_redundant_empty() {
-        assert!(project_redundant(&[]).is_empty());
+    fn test_redundant_empty() {
+        assert!(map_redundant_entries(&[]).is_empty());
     }
 }

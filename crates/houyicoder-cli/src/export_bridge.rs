@@ -340,31 +340,48 @@ fn collect_checkpoints_and_errors(
     (checkpoints, errors)
 }
 
-pub(crate) fn project_export(
-    events: &[SessionLogEntry],
-    session_id: &str,
-    model: &str,
-) -> ExportData {
-    let started_at = events.first().map(|e| e.ts).unwrap_or(0);
-    let tool_stats = compute_tool_stats(events);
-    let usage = compute_usage(events);
-    let (checkpoints, errors) = collect_checkpoints_and_errors(events);
-    ExportData {
-        session_id: session_id.to_string(),
-        model: model.to_string(),
-        started_at,
-        trajectory: events.to_vec(),
-        tool_stats,
-        usage,
-        checkpoints,
-        errors,
+/// Builder for the export document. Aggregates tool stats, token usage,
+/// checkpoints, and errors from the durable event stream into the
+/// self-evolution data artifact. Owns the trajectory Vec so no extra copy
+/// is needed at the seam.
+pub(crate) struct ExportDataBuilder<'a> {
+    events: &'a [SessionLogEntry],
+    session_id: &'a str,
+    model: &'a str,
+}
+
+impl<'a> ExportDataBuilder<'a> {
+    pub(crate) fn new(events: &'a [SessionLogEntry], session_id: &'a str, model: &'a str) -> Self {
+        Self {
+            events,
+            session_id,
+            model,
+        }
+    }
+
+    pub(crate) fn build(self) -> ExportData {
+        let started_at = self.events.first().map(|e| e.ts).unwrap_or(0);
+        let tool_stats = compute_tool_stats(self.events);
+        let usage = compute_usage(self.events);
+        let (checkpoints, errors) = collect_checkpoints_and_errors(self.events);
+        ExportData {
+            session_id: self.session_id.to_string(),
+            model: self.model.to_string(),
+            started_at,
+            trajectory: self.events.to_vec(),
+            tool_stats,
+            usage,
+            checkpoints,
+            errors,
+        }
     }
 }
 
 impl ExportLog for SessionLogTrajectory {
     fn export(&self) -> ExportPayload {
         let events = self.session_log.trajectory_snapshot(self.session_id);
-        let data = project_export(&events, &self.session_id.to_string(), &self.model);
+        let data =
+            ExportDataBuilder::new(&events, &self.session_id.to_string(), &self.model).build();
         let raw = serde_json::to_string_pretty(&data)
             .unwrap_or_else(|e| format!("{{\"error\": \"export serialization failed: {e}\"}}"));
         // Redact secrets on the share boundary — the export file is sent
@@ -463,7 +480,7 @@ mod tests {
                 },
             ),
         ];
-        let data = project_export(&events, "s", "m");
+        let data = ExportDataBuilder::new(&events, "s", "m").build();
         assert_eq!(data.tool_stats.len(), 1, "one tool (bash)");
         let bash = &data.tool_stats[0];
         assert_eq!(bash.tool, "bash");
@@ -480,7 +497,7 @@ mod tests {
             usage_event(110, "haiku", 500, 100),
             usage_event(120, "sonnet", 3000, 400),
         ];
-        let data = project_export(&events, "s", "m");
+        let data = ExportDataBuilder::new(&events, "s", "m").build();
         assert_eq!(data.usage.total.input_tokens, 4500);
         assert_eq!(data.usage.total.output_tokens, 700);
         // per-model in first-seen order: haiku then sonnet.
@@ -516,7 +533,7 @@ mod tests {
                 reason: "crashed".into(),
             },
         );
-        let data = project_export(&[hook_fault, aborted], "s", "m");
+        let data = ExportDataBuilder::new(&[hook_fault, aborted], "s", "m").build();
         assert_eq!(data.errors.len(), 2);
         assert_eq!(data.errors[0].kind, "hook_error");
         assert_eq!(data.errors[0].hook_name.as_deref(), Some("guard"));
@@ -541,7 +558,7 @@ mod tests {
                 },
             ),
         ];
-        let data = project_export(&events, "s", "m");
+        let data = ExportDataBuilder::new(&events, "s", "m").build();
         assert_eq!(data.checkpoints.len(), 2);
         assert!(data.checkpoints[0].checkpoint.is_some());
         assert_eq!(data.checkpoints[1].summary.as_deref(), Some("folded T1-T3"));
@@ -564,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_export_empty_is_empty() {
-        let data = project_export(&[], "s", "m");
+        let data = ExportDataBuilder::new(&[], "s", "m").build();
         assert_eq!(data.started_at, 0);
         assert!(data.tool_stats.is_empty());
         assert_eq!(data.usage.total.input_tokens, 0);
@@ -596,7 +613,7 @@ mod tests {
                 duration_ms: 0,
             },
         )];
-        let data = project_export(&events, "s", "m");
+        let data = ExportDataBuilder::new(&events, "s", "m").build();
         let raw = serde_json::to_string(&data).unwrap();
         let redacted = houyicoder_tui::redaction::redact(&raw);
         assert!(

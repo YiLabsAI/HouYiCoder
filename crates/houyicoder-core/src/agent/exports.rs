@@ -25,12 +25,12 @@ pub use super::lifecycle::{CompressResult, LlmSummarizer, compress_session};
 pub use super::manifest::{
     CompressPolicy, HeuristicSummarizer, SummarizeError, Summarizer, build_manifest,
 };
-pub use super::projection::apply_manifest;
 pub use super::prompt::SystemPrompt;
 pub use super::prompt::extract::extraction_prompt;
 pub use super::reducer::{
     HotPathReducer, ReduceCtx, ReducedOutput, ToolOutputReducer, TrustLevel, never_worse,
 };
+pub use super::selection::apply_manifest;
 pub use super::skill_hooks::SkillHookRegistrar;
 pub use super::skill_reload::SkillReloadGuard;
 pub use super::status::{StatusSnapshot, UsageAccumulator};
@@ -42,6 +42,6 @@ pub use super::tools::{
     ExitWorktreeTool, GlobTool, GrepTool, MemoryAddTool, MultiEditTool, ReadTool, SkillTool,
     TodoItem, TodoStatus, TodoWriteTool, WebFetchTool, WriteTool,
 };
-pub use super::turn_group::project_input_items;
+pub use super::turn_group::assemble_model_input;
 pub use super::verify::{MakeCheckGate, VerifyFailure, VerifyGate};
 pub use super::worktree_controller::WorktreeController;

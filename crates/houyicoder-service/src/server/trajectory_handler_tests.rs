@@ -52,8 +52,8 @@ fn delayed_runner(delay_ms: u64) -> std::sync::Arc<houyicoder_core::agent::Runne
     ))
 }
 
-/// A Trajectory request drives the dispatch handler (project_trajectory +
-/// project_redundant + TrajectoryResponse build). No run, so entries +
+/// A Trajectory request drives the dispatch handler (build_trajectory_entries +
+/// map_redundant_entries + TrajectoryResponse build). No run, so entries +
 /// redundant are empty, but the handler path executes.
 #[tokio::test]
 async fn test_trajectory_handler_builds_response() {

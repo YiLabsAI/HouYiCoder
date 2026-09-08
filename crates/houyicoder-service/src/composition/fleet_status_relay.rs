@@ -1,4 +1,4 @@
-//! The fleet projector: a service-side bridge that subscribes to the
+//! The fleet status relay: a service-side bridge that subscribes to the
 //! multi-agent bus and translates child progress and completion into
 //! AgentStatus wire frames the TUI renders as the agent status footer.
 //! Lives in the service so the TUI (presentation) stays bus-free.
@@ -22,7 +22,7 @@ use houyicoder_protocol::envelope::{EventEnvelope, EventSeq, ServerFrame};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::event_kind::FrontendEventKind;
 
-/// Spawn the fleet projector on the runtime. It subscribes to the global
+/// Spawn the fleet status relay on the runtime. It subscribes to the global
 /// spawned, progress, and completion topics and emits an AgentStatus wire
 /// frame per state change. No-op when the bus is absent (non-multi-agent
 /// runs).
@@ -135,7 +135,7 @@ async fn emit(
     let Ok(line) = encode(&frame) else { return };
     // AgentStatus is load-bearing pill state, not an ephemeral preview a
     // later frame replaces, so a full channel backpressures instead of
-    // dropping the marker. The projector owns its task, so blocking only
+    // dropping the marker. The relay owns its task, so blocking only
     // delays the pill update; broadcast buffers messages while send awaits.
     let _ = out_tx.send(line).await;
 }
@@ -151,7 +151,7 @@ mod tests {
     /// A Spawned + Progress sequence emits a running frame then a progress
     /// frame, both demuxed from the global topics by agent_id.
     #[tokio::test]
-    async fn test_projector_translates_progress() {
+    async fn test_relay_translates_progress() {
         let bus = Arc::new(AgentBus::new());
         let (tx, mut rx) = mpsc::channel(16);
         let next_seq = Arc::new(AtomicU64::new(0));
@@ -202,7 +202,7 @@ mod tests {
     /// on running). The global subscribe-before-publish guarantee makes the
     /// loss structurally impossible.
     #[tokio::test]
-    async fn test_projector_immediate_completion() {
+    async fn test_relay_immediate_completion() {
         let bus = Arc::new(AgentBus::new());
         let (tx, mut rx) = mpsc::channel(16);
         let next_seq = Arc::new(AtomicU64::new(0));
@@ -252,10 +252,10 @@ mod tests {
     }
 
     /// A full outbound channel must not drop an AgentStatus frame. The pill
-    /// state is load-bearing, not an ephemeral preview, so the projector
+    /// state is load-bearing, not an ephemeral preview, so the relay
     /// backpressures (send.await) instead of try_send-dropping. This is the
     /// regression guard for the real-provider streaming case: delta try_sends
-    /// saturate the shared s2c channel, and a try_send projector would lose
+    /// saturate the shared s2c channel, and a try_send relay would lose
     /// every spawn/progress frame.
     ///
     /// Distinguishing mutation: poll emit once on a FULL channel. Under
@@ -265,7 +265,7 @@ mod tests {
     /// is synchronous and single-step, so the frame cannot slip past the
     /// full channel into an emptied slot.
     #[tokio::test]
-    async fn test_projector_backpressures_full_channel() {
+    async fn test_relay_backpressures_full_channel() {
         let (mut tx, mut rx) = mpsc::channel(1);
         let next_seq = Arc::new(AtomicU64::new(0));
         // Fill the single slot so the next send faces a full channel.

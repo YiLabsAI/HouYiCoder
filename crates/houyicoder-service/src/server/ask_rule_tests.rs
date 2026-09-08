@@ -11,12 +11,12 @@ use houyicoder_permission::{Effect, Rule, RuleContent};
 fn test_ask_rule_round_trips() {
     let engine_rule =
         Rule::with_content("bash", RuleContent::Prefix("git push".into()), Effect::Ask).unwrap();
-    let wire = crate::projection::project_permission_rule(&engine_rule);
+    let wire = crate::protocol_adapter::permission_rule_to_wire(&engine_rule);
     assert_eq!(
         wire.effect,
         houyicoder_protocol::frontend::permission::PermissionEffect::Ask
     );
-    let back = crate::projection::wire_rule_to_engine(&wire).unwrap();
+    let back = crate::protocol_adapter::permission_rule_from_wire(&wire).unwrap();
     assert_eq!(
         back.effect,
         Effect::Ask,
@@ -29,7 +29,8 @@ fn test_ask_rule_round_trips() {
 fn test_ask_effect_label() {
     use houyicoder_protocol::frontend::permission::PermissionEffect;
     assert_eq!(
-        crate::projection::project_permission_rule(&Rule::new("edit", Effect::Ask).unwrap()).effect,
+        crate::protocol_adapter::permission_rule_to_wire(&Rule::new("edit", Effect::Ask).unwrap())
+            .effect,
         PermissionEffect::Ask
     );
 }

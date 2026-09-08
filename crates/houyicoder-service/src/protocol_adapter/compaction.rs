@@ -1,12 +1,11 @@
-//! Project the engine compaction outcome to the wire reply so the TUI
-//! renders /compact without importing the engine or context crate.
+//! Map the engine compaction outcome to the wire reply.
 
 use houyicoder_core::agent::compact::CompactOutcome;
 use houyicoder_protocol::frontend::compact::CompactReply;
 
-/// Project the CompactOutcome (made progress, folded count, manifest id,
-/// pre/post token estimates) to the wire reply.
-pub(crate) fn project_compact_reply(outcome: &CompactOutcome) -> CompactReply {
+/// Map CompactOutcome (progress, folded count, manifest id, token estimates)
+/// to the wire reply.
+pub(crate) fn map_compact_reply(outcome: &CompactOutcome) -> CompactReply {
     CompactReply::new(
         outcome.made_progress,
         outcome.folded_count as u64,
@@ -35,7 +34,7 @@ mod tests {
             recall_rate: Some(0.5),
             conflict_rate: None,
         };
-        let reply = project_compact_reply(&outcome);
+        let reply = map_compact_reply(&outcome);
         assert!(reply.made_progress);
         assert_eq!(reply.folded_count, 12);
         assert_eq!(reply.pre_compact_tokens, Some(8000));
@@ -55,7 +54,7 @@ mod tests {
             recall_rate: None,
             conflict_rate: None,
         };
-        let reply = project_compact_reply(&outcome);
+        let reply = map_compact_reply(&outcome);
         assert!(!reply.made_progress);
         assert_eq!(reply.folded_count, 0);
         assert_eq!(reply.recall_rate, None);

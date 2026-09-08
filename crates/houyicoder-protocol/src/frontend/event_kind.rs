@@ -94,7 +94,7 @@ pub enum FrontendEventKind {
         text: String,
     },
     /// A spawned child's live status snapshot, for the agent status footer.
-    /// The service fleet projector translates bus progress and completed
+    /// The service fleet status relay translates bus progress and completed
     /// messages into this wire frame so the frontend renders the footer
     /// without touching the engine bus. completed is None while the child
     /// runs; Some once terminal ("completed" / "failed" / "killed" / ...).

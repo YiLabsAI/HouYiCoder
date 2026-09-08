@@ -21,9 +21,7 @@ pub struct SessionLogEntry {
     pub session: SessionId,
     pub ts: u64,
     pub prev_hash: Option<PrevHash>,
-    /// The session event this record carries. Renamed on the wire to
-    /// "kind" so existing JSONL logs deserialize without migration.
-    #[serde(rename = "kind")]
+    /// The session event this record carries.
     pub event: SessionEvent,
 }
 

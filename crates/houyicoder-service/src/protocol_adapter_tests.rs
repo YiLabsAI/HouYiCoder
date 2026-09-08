@@ -1,15 +1,15 @@
 use super::*;
 use houyicoder_context::PermissionVerdict;
 
-/// Every engine turn-event kind projects to exactly one stream — a
+/// Every engine turn-event kind maps to exactly one stream — a
 /// session/update variant or an acpx/context notification — except
-/// streaming assistant deltas, which project to neither: a delta is the
+/// streaming assistant deltas, which map to neither: a delta is the
 /// live audit trail subsumed by the authoritative AssistantMessage at
 /// turn end, so neither stream carries it (the live preview rides the
 /// shared live sink, not the wire). A new kind that fails to map surfaces
 /// here, not in production.
 #[test]
-fn test_every_kind_projects() {
+fn test_every_kind_maps() {
     let cases: Vec<(SessionEvent, bool, bool)> = vec![
         (SessionEvent::UserInput { text: "hi".into() }, true, false),
         (
@@ -69,29 +69,29 @@ fn test_every_kind_projects() {
             true,
         ),
         // Unknown lands on neither stream: a future binary's event type the
-        // current binary does not recognize carries no projection.
+        // current binary does not recognize carries no mapping.
         (SessionEvent::Unknown, false, false),
     ];
     for (kind, expects_update, expects_acpx) in cases {
         assert_eq!(
-            project_session_update(&kind).is_some(),
+            map_session_update(&kind).is_some(),
             expects_update,
-            "session/update projection mismatch for {:?}",
+            "session/update mapping mismatch for {:?}",
             kind
         );
         assert_eq!(
-            project_acpx_context(&kind).is_some(),
+            map_acpx_notification(&kind).is_some(),
             expects_acpx,
-            "acpx projection mismatch for {:?}",
+            "acpx mapping mismatch for {:?}",
             kind
         );
     }
 }
 
 #[test]
-fn test_tool_result_projects_update() {
+fn test_tool_result_maps_update() {
     let kind = SessionEvent::tool_result("toolu_1", serde_json::Value::String("ok".into()));
-    let update = project_session_update(&kind).expect("tool result projects");
+    let update = map_session_update(&kind).expect("tool result maps");
     let SessionUpdate::ToolCallUpdate(upd) = update else {
         panic!("tool result is a tool-call update");
     };
@@ -104,21 +104,21 @@ fn test_tool_result_projects_update() {
 }
 
 #[test]
-fn test_permission_decision_projects_acpx() {
+fn test_permission_decision_maps_acpx() {
     let kind = SessionEvent::PermissionDecision {
         call_id: "c".into(),
         tool: "bash".into(),
         verdict: PermissionVerdict::Denied,
         scope: "session".into(),
     };
-    let n = project_acpx_context(&kind).expect("verdict projects");
+    let n = map_acpx_notification(&kind).expect("verdict maps");
     assert_eq!(n.method, AcpxMethod::ContextPermissionDecision);
     assert_eq!(n.params["verdict"], "denied");
     assert_eq!(n.params["scope"], "session");
 }
 
 #[test]
-fn test_approval_projects_acp_permission() {
+fn test_approval_maps_acp_permission() {
     let req = houyicoder_core::agent::ApprovalRequest::new(
         "call_1".into(),
         "bash".into(),
@@ -177,11 +177,11 @@ fn test_permission_mode_both_ways() {
     use houyicoder_permission::PermissionMode as E;
     // The two modes round-trip engine -> wire -> engine.
     assert!(matches!(
-        wire_mode_to_engine(project_permission_mode(E::Manual)),
+        permission_mode_from_wire(permission_mode_to_wire(E::Manual)),
         E::Manual
     ));
     assert!(matches!(
-        wire_mode_to_engine(project_permission_mode(E::Auto)),
+        permission_mode_from_wire(permission_mode_to_wire(E::Auto)),
         E::Auto
     ));
 }
@@ -201,31 +201,31 @@ fn test_rule_destination_round_trips() {
         let rule = Rule::with_content("bash", RuleContent::Prefix("npm".into()), Effect::Allow)
             .unwrap()
             .with_scope(scope);
-        let wire = project_permission_rule(&rule);
+        let wire = permission_rule_to_wire(&rule);
         assert_eq!(wire.destination, dest, "scope {scope:?} -> wire");
-        let back = wire_rule_to_engine(&wire).expect("wire -> engine");
+        let back = permission_rule_from_wire(&wire).expect("wire -> engine");
         assert_eq!(back.scope, scope, "wire {dest:?} -> engine scope");
     }
 }
 
-/// TurnAborted projects to the "aborted" trajectory label, a visible
+/// TurnAborted maps to the "aborted" trajectory label, a visible
 /// session-update message chunk (so the host renders the boundary
-/// notice), and skips the acpx context projection (it is not a
+/// notice), and skips the acpx context mapping (it is not a
 /// model-input or side-channel event).
 #[test]
-fn test_turn_aborted_projects_label() {
+fn test_turn_aborted_maps_label() {
     use houyicoder_context::SessionEvent;
     let kind = SessionEvent::TurnAborted {
         reason: "crash".into(),
     };
-    assert_eq!(trajectory_kind_label(&kind), "aborted");
+    assert_eq!(event_name(&kind), "aborted");
     assert!(
-        project_acpx_context(&kind).is_none(),
+        map_acpx_notification(&kind).is_none(),
         "acpx context skips TurnAborted"
     );
-    // The session-update projection must produce a visible message chunk
+    // The session-update mapping must produce a visible message chunk
     // so the host renders the boundary notice (guardrail 3).
-    let update = project_session_update(&kind);
+    let update = map_session_update(&kind);
     let s = serde_json::to_string(&update).unwrap_or_default();
     assert!(
         s.contains("previous turn was interrupted"),
@@ -240,7 +240,7 @@ fn test_auth_error_mentions_key() {
     let e = houyicoder_core::agent::RunError::ProviderFatal(
         houyicoder_protocol::llm::ProviderError::Auth,
     );
-    let wire = super::project_run_error(&e);
+    let wire = super::map_run_error(&e);
     assert!(
         wire.message.contains("API key"),
         "auth → key hint: {}",
@@ -255,7 +255,7 @@ fn test_not_found_omits_key() {
     let e = houyicoder_core::agent::RunError::ProviderFatal(
         houyicoder_protocol::llm::ProviderError::ModelNotFound("qwen3.8-max".into()),
     );
-    let wire = super::project_run_error(&e);
+    let wire = super::map_run_error(&e);
     assert!(
         wire.message.contains("catalog"),
         "model-not-found → catalog hint: {}",
@@ -274,7 +274,7 @@ fn test_not_found_omits_key() {
 }
 
 #[test]
-fn test_project_trajectory_carries_duration() {
+fn test_build_trajectory_carries_duration() {
     use houyicoder_context::{EventId, SessionId, SessionLogEntry};
     let mk = |kind| SessionLogEntry {
         id: EventId::new(),
@@ -288,11 +288,11 @@ fn test_project_trajectory_carries_duration() {
         output: serde_json::json!({}),
         duration_ms: 4200,
     });
-    let entries = super::project_trajectory(std::slice::from_ref(&tool));
+    let entries = super::build_trajectory_entries(std::slice::from_ref(&tool));
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].duration_ms, Some(4200));
     let user = mk(SessionEvent::UserInput { text: "hi".into() });
-    let entries2 = super::project_trajectory(std::slice::from_ref(&user));
+    let entries2 = super::build_trajectory_entries(std::slice::from_ref(&user));
     assert_eq!(entries2[0].duration_ms, None);
 }
 

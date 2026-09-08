@@ -343,7 +343,7 @@ async fn test_stream_persists_deltas() {
         .filter(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }))
         .count();
     assert_eq!(msg_n, 1, "one authoritative AssistantMessage");
-    let items = project_input_items(&events, None);
+    let items = assemble_model_input(&events, None);
     let assistant = items
         .iter()
         .filter(|i| matches!(i, houyicoder_protocol::llm::InputItem::Assistant { .. }))

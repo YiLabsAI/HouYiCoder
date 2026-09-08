@@ -1,7 +1,7 @@
-//! Turn grouping: project a replayed event log into the model-input history.
+//! Turn grouping: assemble the model-input history from a replayed event log.
 //!
 //! This is the "transcript-as-truth" seam: the loop holds no in-memory
-//! message buffer — it re-reads the event log each turn and projects.
+//! message buffer — it re-reads the event log each turn and assembles input.
 //!
 //! Grouping: one AssistantMessage event plus its immediately-following
 //! ToolCall events collapse into a single Assistant InputItem (content =
@@ -9,8 +9,8 @@
 //! message with its tool_use blocks. A subsequent ToolResult event becomes
 //! a ToolResult InputItem referencing the call_id — the
 //! tool_use/tool_result pair invariant must hold in the window (a
-//! ToolResult whose ToolCall was compacted out is a view bug, not a
-//! projection bug).
+//! ToolResult whose ToolCall was compacted out is a view bug, not an
+//! assembly bug).
 //!
 //! The integral-group boundary: thinking + tool_use share a Disposition
 //! (an API constraint — they share the same fate; an assistant message
@@ -28,7 +28,7 @@ use std::collections::HashSet;
 
 use super::retention::{AgeRetentionPolicy, RetentionPolicy};
 
-/// Project a replayed event log into the model-input history, in order.
+/// Assemble the model-input history from a replayed event log, in order.
 ///
 /// In debug builds this guards the tool_use/tool_result pair invariant: a
 /// ToolResult whose ToolCall is not in the same window trips a
@@ -36,11 +36,11 @@ use super::retention::{AgeRetentionPolicy, RetentionPolicy};
 /// a compaction plan drops a ToolCall while keeping its ToolResult — the
 /// kind of silent break that would otherwise surface as a provider "tool_result
 /// without tool_use" error deep in a run.
-pub fn project_input_items(
+pub fn assemble_model_input(
     events: &[SessionLogEntry],
     backend: Option<&dyn ContextBackend>,
 ) -> Vec<InputItem> {
-    project_input_items_with(events, backend, &AgeRetentionPolicy::default(), 0)
+    assemble_model_input_with(events, backend, &AgeRetentionPolicy::default(), 0)
 }
 
 /// Push a user-role text into the items, merging into the last item if it is
@@ -56,7 +56,7 @@ fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
     }
 }
 
-/// Project a replayed event log into the model-input history with an explicit
+/// Assemble the model-input history from a replayed event log with an explicit
 /// retention policy + wall-clock now. The cache-liveness policy uses now to
 /// test the cached-prefix TTL; the default path (tests + the no-cache view)
 /// passes the age policy + 0, which never reports a live cache.
@@ -64,7 +64,7 @@ fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
     clippy::too_many_lines,
     reason = "exhaustive match on a growing event enum; new variant arms pushed past the limit"
 )]
-pub fn project_input_items_with(
+pub fn assemble_model_input_with(
     events: &[SessionLogEntry],
     backend: Option<&dyn ContextBackend>,
     policy: &dyn RetentionPolicy,
@@ -80,7 +80,7 @@ pub fn project_input_items_with(
             // user-in-a-row. MetaUser (runner nudge) + MemoryRecall
             // (system-reminder memories) + SkillListing (system-reminder
             // skill catalog) are served to the model identically; the
-            // transcript-skip happens in the host records projection.
+            // transcript-skip happens in the host records assembly.
             SessionEvent::UserInput { text }
             | SessionEvent::MetaUser { text }
             | SessionEvent::MemoryRecall { text, .. }
@@ -185,7 +185,7 @@ pub fn project_input_items_with(
                 #[cfg(debug_assertions)]
                 debug_assert!(
                     seen_call_ids.contains(call_id.as_str()),
-                    "project_input_items: orphan ToolResult {call_id} has no matching ToolCall in the window — a compaction plan dropped the pair"
+                    "assemble_model_input: orphan ToolResult {call_id} has no matching ToolCall in the window — a compaction plan dropped the pair"
                 );
                 items.push(InputItem::ToolResult {
                     call_id: call_id.clone(),
@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn test_projects_user_assistant_toolresult() {
+    fn test_assembles_user_assistant_toolresult() {
         let events = vec![
             evt(SessionEvent::UserInput { text: "hi".into() }),
             evt(SessionEvent::AssistantMessage {
@@ -281,7 +281,7 @@ mod tests {
                 serde_json::json!({"echo": {"x": 1}}),
             )),
         ];
-        let items = project_input_items(&events, None);
+        let items = assemble_model_input(&events, None);
         assert_eq!(items.len(), 3);
         assert!(matches!(items[0], InputItem::User { .. }));
         match &items[1] {
@@ -307,7 +307,7 @@ mod tests {
                 thinking: None,
             }),
         ];
-        let items = project_input_items(&events, None);
+        let items = assemble_model_input(&events, None);
         match &items[1] {
             InputItem::Assistant { tool_calls, .. } => assert!(tool_calls.is_empty()),
             _ => panic!(),
@@ -323,7 +323,7 @@ mod tests {
             evt(SessionEvent::UserInput { text: "hi".into() }),
             evt(SessionEvent::Summary { text: "old".into() }),
         ];
-        let items = project_input_items(&events, None);
+        let items = assemble_model_input(&events, None);
         assert_eq!(items.len(), 1);
         assert!(matches!(items[0], InputItem::User { .. }));
     }
@@ -342,7 +342,7 @@ mod tests {
                 thinking: None,
             }),
         ];
-        let items = project_input_items(&events, None);
+        let items = assemble_model_input(&events, None);
         assert_eq!(items.len(), 2);
         match &items[1] {
             InputItem::Assistant {
@@ -362,7 +362,7 @@ mod tests {
         // item so the model sees the query plus the recalled-memory
         // attachment as one user message — the cross-layer chain's
         // load-bearing merge. If this regressed, /context accounting could
-        // still pass (it counts events, not projected messages) while the
+        // still pass (it counts events, not assembled messages) while the
         // model never sees the recalled memory.
         let s = SessionId::new();
         let ids = (0..2).map(|_| EventId::new()).collect::<Vec<_>>();
@@ -386,7 +386,7 @@ mod tests {
                 },
             },
         ];
-        let items = project_input_items(&events, None);
+        let items = assemble_model_input(&events, None);
         assert_eq!(items.len(), 1, "recall merges into the user item");
         match &items[0] {
             InputItem::User { content } => {
@@ -413,7 +413,7 @@ mod tests {
                 thinking: None,
             }),
         ];
-        let items = project_input_items(&events, None);
+        let items = assemble_model_input(&events, None);
         assert_eq!(items.len(), 2, "Unknown skipped, no input item");
         assert!(matches!(items[0], InputItem::User { .. }));
         assert!(matches!(items[1], InputItem::Assistant { .. }));
@@ -430,7 +430,7 @@ mod tests {
             agent_id: None,
             untrusted: true,
         })];
-        let items = project_input_items(&events, None);
+        let items = assemble_model_input(&events, None);
         match &items[0] {
             InputItem::User { content } => {
                 assert!(
@@ -457,7 +457,7 @@ mod tests {
             agent_id: None,
             untrusted: false,
         })];
-        let items = project_input_items(&events, None);
+        let items = assemble_model_input(&events, None);
         match &items[0] {
             InputItem::User { content } => {
                 assert_eq!(

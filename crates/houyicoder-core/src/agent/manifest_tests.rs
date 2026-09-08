@@ -344,7 +344,7 @@ fn test_reasoning_counted_in_estimate() {
             },
         },
     ];
-    let items = super::super::turn_group::project_input_items(&events, None);
+    let items = super::super::turn_group::assemble_model_input(&events, None);
     assert!(
         items.iter().all(|i| !matches!(i,
                 houyicoder_protocol::llm::InputItem::Assistant { content, .. }

@@ -1,16 +1,13 @@
-//! Engine-to-wire boundary projections. The server's protocol loop owns the
-//! carrier and the half-live turn state machine; the mapping from engine
-//! types to protocol wire types lives here so the two concerns stay apart
-//! and server.rs does not exceed the file-size gate. Every function is a pure
-//! boundary mapping — no I/O, no state — so it is trivially testable without
-//! a carrier.
+//! Engine-to-wire boundary adapter. Pure mapping from engine types to
+//! protocol wire types — no I/O, no state — so the server loop stays apart
+//! and under the file-size gate.
 
-pub(crate) mod compact;
-mod labels;
-pub(crate) mod memory;
-pub(crate) mod redundant;
-pub(crate) mod session_meta;
-use labels::{hex_short, trajectory_kind_label};
+pub(crate) mod compaction;
+pub(crate) mod memory_view;
+pub(crate) mod redundancy;
+pub(crate) mod session_profile;
+mod trajectory_row;
+use trajectory_row::{event_name, hex_short};
 
 use houyicoder_context::SessionEvent;
 use houyicoder_protocol::acp_wire::{
@@ -25,13 +22,13 @@ use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use houyicoder_protocol::frontend::status::StatusSnapshot as WireStatusSnapshot;
-pub(crate) use session_meta::project_session_meta;
+pub(crate) use session_profile::map_session_meta;
 
-/// Project the engine run result to the protocol message form. Outcome
+/// Map the engine run result to the protocol message form. Outcome
 /// variants match the engine enum one-for-one except Interruption (a
 /// mid-turn permission ask is a reverse request, not an outcome) and
 /// VerifyFailure (collapses to a summary string).
-pub(crate) fn project_run_result(run: &houyicoder_core::agent::RunResult) -> RunResult {
+pub(crate) fn map_run_result(run: &houyicoder_core::agent::RunResult) -> RunResult {
     let (outcome, stop_reason) = match &run.outcome {
         houyicoder_core::agent::RunOutcome::FinalOutput(text) => (
             RunOutcome::FinalOutput {
@@ -72,7 +69,7 @@ pub(crate) fn project_run_result(run: &houyicoder_core::agent::RunResult) -> Run
             StopReason::MaxTurnRequests,
         ),
         // Interruption never reaches the wire: the turn loop drives the
-        // reverse-request + resume loop and only calls project_run_result on
+        // reverse-request + resume loop and only calls map_run_result on
         // a final outcome. Reaching this arm is a logic bug; fail visibly.
         houyicoder_core::agent::RunOutcome::Interruption(_) => {
             unreachable!("interruption is resolved by the reverse-request loop, not mapped to wire")
@@ -121,11 +118,13 @@ pub(crate) fn parse_approval_decision(
     }
 }
 
-/// Project the engine runner status snapshot to the wire form. The engine
+/// Map the engine runner status snapshot to the wire form. The engine
 /// snapshot carries a borrowed breaker-state label and a Duration cool-down;
-/// the wire form owns both (a String and a whole-second count) so the TUI
-/// renders /status without importing the engine or resilience crate.
-pub(crate) fn project_status(s: &houyicoder_core::agent::StatusSnapshot) -> WireStatusSnapshot {
+/// the wire form owns both so the TUI renders /status without importing the
+/// engine or resilience crate.
+pub(crate) fn map_status_snapshot(
+    s: &houyicoder_core::agent::StatusSnapshot,
+) -> WireStatusSnapshot {
     WireStatusSnapshot {
         model: s.model.clone(),
         breaker_state: s.breaker_state.map(String::from),
@@ -143,16 +142,11 @@ pub(crate) fn project_status(s: &houyicoder_core::agent::StatusSnapshot) -> Wire
     }
 }
 
-/// Project the engine trajectory (a Vec of turn events) to the wire audit-log
-/// form (a Vec of TrajectoryEntry). Unlike the live SessionUpdate stream which
-/// carries only the chat render surface, the audit log keeps one row per event
-/// across ALL kinds including those the base session/update has no standard
-/// counterpart for (compaction boundary, summary, meta user, permission
-/// decision), plus the event id and the prev_hash linking each event into the
-/// append-only chain. The TUI renders /trajectory from this and can verify the
-/// server is not dropping events. The kind label is rendered as a fixed-width
-/// string at the TUI boundary.
-pub(crate) fn project_trajectory(
+/// Build the wire audit-log form of the trajectory. One row per event across
+/// all kinds (including those with no session/update counterpart), each
+/// carrying its event id and prev_hash so the TUI can verify the chain is
+/// intact.
+pub(crate) fn build_trajectory_entries(
     events: &[houyicoder_context::SessionLogEntry],
 ) -> Vec<houyicoder_protocol::frontend::trajectory::TrajectoryEntry> {
     use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
@@ -166,7 +160,7 @@ pub(crate) fn project_trajectory(
                 _ => None,
             };
             TrajectoryEntry {
-                kind: trajectory_kind_label(&ev.event).to_string(),
+                kind: event_name(&ev.event).to_string(),
                 ts: ev.ts,
                 event_id: ev.id.to_string(),
                 prev_hash: ev.prev_hash.as_ref().map(|h| hex_short(&h.0)),
@@ -176,9 +170,9 @@ pub(crate) fn project_trajectory(
         .collect()
 }
 
-/// Project the engine context-window breakdown to the wire form so the TUI
+/// Map the engine context-window breakdown to the wire form so the TUI
 /// renders /context without importing the engine or context crate.
-pub(crate) fn project_context_breakdown(
+pub(crate) fn map_context_breakdown(
     bd: &houyicoder_core::agent::ContextBreakdown,
 ) -> houyicoder_protocol::frontend::context::ContextBreakdown {
     use houyicoder_protocol::frontend::context::{
@@ -200,7 +194,7 @@ pub(crate) fn project_context_breakdown(
     // the cached prefix (system prompt + tools) ends. Cells [0, bp) are the
     // cached prefix; bp onward is the per-turn fresh suffix. Derived from
     // cache_prefix_tokens / context_window scaled to the grid cell count, so
-    // it stays in sync with the grid the projection just built (not a stale
+    // it stays in sync with the grid the adapter just built (not a stale
     // engine-side value). None when the prefix or window is unknown or the
     // grid is empty.
     let total_cells: usize = grid.iter().map(|r| r.len()).sum();
@@ -234,10 +228,10 @@ pub(crate) fn project_context_breakdown(
     }
 }
 
-/// Project a run failure to the protocol message form. The kind is the
+/// Map a run failure to the protocol message form. The kind is the
 /// variant name the frontend records; the message is the Display string it
 /// surfaces as an error line.
-pub(crate) fn project_run_error(e: &houyicoder_core::agent::RunError) -> RunError {
+pub(crate) fn map_run_error(e: &houyicoder_core::agent::RunError) -> RunError {
     let kind = match e {
         houyicoder_core::agent::RunError::Context(..) => "context",
         houyicoder_core::agent::RunError::ProviderFatal(..) => "provider_fatal",
@@ -279,8 +273,8 @@ pub(crate) fn project_run_error(e: &houyicoder_core::agent::RunError) -> RunErro
     }
 }
 
-/// Project the engine permission mode to the wire form.
-pub(crate) fn project_permission_mode(
+/// Map the engine permission mode to the wire form.
+pub(crate) fn permission_mode_to_wire(
     mode: houyicoder_permission::PermissionMode,
 ) -> houyicoder_protocol::frontend::permission::PermissionMode {
     use houyicoder_permission::PermissionMode as M;
@@ -291,10 +285,10 @@ pub(crate) fn project_permission_mode(
     }
 }
 
-/// Inverse of project_permission_mode: take a wire PermissionMode back to the
+/// Inverse of permission_mode_to_wire: take a wire PermissionMode back to the
 /// engine form the gate stores. The server is the single write authority for
 /// mode; the frontend never names the engine PermissionMode.
-pub(crate) fn wire_mode_to_engine(
+pub(crate) fn permission_mode_from_wire(
     mode: houyicoder_protocol::frontend::permission::PermissionMode,
 ) -> houyicoder_permission::PermissionMode {
     use houyicoder_permission::PermissionMode as M;
@@ -307,18 +301,10 @@ pub(crate) fn wire_mode_to_engine(
     }
 }
 
-/// Apply a Yes-don't-ask consent rule at the service boundary when the human
-/// approves a tool call with scope "always". For bash-family tools the rule is
-/// scoped to a command prefix (refusing compound/destructive commands → None,
-/// so the call is approved this once only); for the skill tool the rule is
-/// scoped to the specific skill name and lands at Local scope (machine-local,
-/// not repo-shared) so one approval cannot pre-authorize every future skill
-/// invocation for every collaborator; for other tools a content-less tool rule.
-/// The server owns the approval (tool name + input Value), so the prefix is
-/// computed here from the same data the engine raised the interruption with —
-/// the frontend never imports the permission crate's prefix-scoping helpers.
-/// Mirrors the frontend's former always_allow_rule, moved server-side so the
-/// tui->permission dep closes.
+/// Build a Yes-don't-ask consent rule when the human approves with scope
+/// "always". Bash-family tools scope to a command prefix (compound/destructive
+/// commands → None, approved this once only); the skill tool scopes to the
+/// skill name at Local scope; other tools get a content-less rule.
 pub(crate) fn consent_rule_for(
     tool_name: &str,
     input: &serde_json::Value,
@@ -349,13 +335,13 @@ pub(crate) fn consent_rule_for(
     }
 }
 
-/// Project a wire rule back to the engine form at the service boundary so
-/// the server applies exactly the rule the frontend authored — including a
-/// bash prefix-scoped content rule, not the blanket tool-allow the server
-/// would otherwise reconstruct from a bare action string, and the rule's
-/// persistence scope (destination). Inverse of project_permission_rule; the
-/// wire path is the single write authority.
-pub(crate) fn wire_rule_to_engine(
+/// Map a wire rule back to the engine form at the service boundary so the
+/// server applies exactly the rule the frontend authored — including a bash
+/// prefix-scoped content rule, not the blanket tool-allow the server would
+/// otherwise reconstruct, and the rule's persistence scope (destination).
+/// Inverse of permission_rule_to_wire; the wire path is the single write
+/// authority.
+pub(crate) fn permission_rule_from_wire(
     rule: &houyicoder_protocol::frontend::permission::PermissionRule,
 ) -> Result<houyicoder_permission::Rule, houyicoder_permission::ModeError> {
     use houyicoder_permission::{Effect, Rule, RuleContent};
@@ -378,9 +364,9 @@ pub(crate) fn wire_rule_to_engine(
     Ok(rule.with_scope(scope))
 }
 
-/// Project a durable engine rule to the wire form, including its persistence
+/// Map a durable engine rule to the wire form, including its persistence
 /// scope (destination) so the /permissions Add flow's pick round-trips.
-pub(crate) fn project_permission_rule(
+pub(crate) fn permission_rule_to_wire(
     rule: &houyicoder_permission::Rule,
 ) -> houyicoder_protocol::frontend::permission::PermissionRule {
     use houyicoder_permission::{Effect, RuleContent};
@@ -436,17 +422,12 @@ fn scope_to_wire_destination(
     }
 }
 
-/// Project an engine turn-event kind onto its ACP session/update form. Kinds
-/// the base protocol has a standard variant for (user / agent / thought
-/// message chunks, tool calls, tool-call updates) map one-to-one; kinds with
-/// no base counterpart (meta user, compaction boundary, summary, permission
-/// decision) return None here and ride the acpx/context/* stream instead.
-/// Streaming assistant deltas return None too: they are the live audit trail
-/// subsumed by the authoritative AssistantMessage that lands at turn end, so
-/// the wire transcript never double-counts a streamed chunk (the live preview
-/// rides the shared live sink, not the wire). A future kind with no mapping
-/// returns None so the adapter drops it rather than inventing a wire shape.
-pub fn project_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
+/// Map a session event to its session/update form. Standard event kinds map
+/// one-to-one; audit-only kinds (meta user, compaction boundary, summary,
+/// permission decision) return None and ride the acpx/context/* stream.
+/// Streaming deltas return None (subsumed by the authoritative
+/// AssistantMessage at turn end).
+pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
     let text_chunk = |text: &str| {
         ContentChunk::new(ContentBlock::Text {
             text: text.to_string(),
@@ -464,7 +445,7 @@ pub fn project_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
         SessionEvent::NotificationInjected { summary, .. } => {
             SessionUpdate::UserMessageChunk(text_chunk(summary))
         }
-        // The thinking field is a projection convenience folded from sibling
+        // The thinking field is a convenience folded from sibling
         // Reasoning events; the wire streams those as AgentThoughtChunk
         // separately, so the message chunk carries text only.
         SessionEvent::AssistantMessage { text, .. } => {
@@ -505,9 +486,9 @@ pub fn project_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
         | SessionEvent::CacheBreak { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. } => return None,
-        // TurnAborted is the user-visible boundary marker: project it as a
+        // TurnAborted is the user-visible boundary marker: map it as a
         // message chunk so the host renders the notice. The model-input
-        // projection skips it (the partial turn events are already there).
+        // assembler skips it (the partial turn events are already there).
         SessionEvent::TurnAborted { reason } => {
             let notice = format!("previous turn was interrupted ({reason}), regenerated");
             SessionUpdate::UserMessageChunk(text_chunk(&notice))
@@ -517,14 +498,11 @@ pub fn project_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
     })
 }
 
-/// Project an engine turn-event kind onto its acpx/context/* extension
-/// notification. These are the durable-context audit kinds the base
-/// session/update has no standard variant for; they ride the extension
-/// stream so a standard client ignores them and an acpx client renders the
-/// audit trail. Kinds with a standard session/update variant return None
-/// here. The params carry the event's own fields serialized as the event's
-/// serde shape so a client reconstructs the typed payload.
-pub(crate) fn project_acpx_context(kind: &SessionEvent) -> Option<AcpxNotification> {
+/// Map a session event to its acpx/context/* extension notification. Covers
+/// the audit kinds with no standard session/update variant; kinds that
+/// already map to session/update return None. Params carry the event's serde
+/// shape so a client reconstructs the typed payload.
+pub(crate) fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
     use AcpxMethod::*;
     Some(match kind {
         SessionEvent::MetaUser { text } => {
@@ -610,8 +588,8 @@ pub(crate) fn standard_permission_options() -> Vec<PermissionOption> {
     ]
 }
 
-/// Project an engine approval request to the ACP reverse-request shape the
-/// agent sends to the client mid-turn. The tool call under review rides a
+/// Map an engine approval request to the ACP reverse-request shape the agent
+/// sends to the client mid-turn. The tool call under review rides a
 /// ToolCallUpdate (call id plus raw input); the options are the four standard
 /// verdicts. session_id is the display string of the session the ask is for.
 pub(crate) fn approval_to_acp_permission(
@@ -633,7 +611,7 @@ pub(crate) fn approval_to_acp_permission(
     }
 }
 
-/// Project the client's permission response back to the engine decision the
+/// Map the client's permission response back to the engine decision the
 /// resume path consumes. Selected maps the option id to approved/rejected
 /// (allow options approve; reject options deny). Cancelled is a reap (the run
 /// was cancelled, not answered) — treat as denied so the tool sees a veto and
@@ -658,5 +636,5 @@ pub(crate) fn acp_permission_response_to_decision(
 }
 
 #[cfg(test)]
-#[path = "projection_tests.rs"]
+#[path = "protocol_adapter_tests.rs"]
 mod tests;

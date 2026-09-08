@@ -67,7 +67,7 @@ impl houyicoder_api::tool::Tool for BlockingTool {
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn test_disconnect_orphan_repaired() {
     use houyicoder_context::SessionEvent;
-    use houyicoder_core::agent::project_input_items;
+    use houyicoder_core::agent::assemble_model_input;
     use houyicoder_protocol::llm::InputItem;
 
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -240,7 +240,7 @@ async fn test_disconnect_orphan_repaired() {
     // tool_call id set. No-fix red (orphan ships as assistant(tool_calls)
     // with no role:"tool"); run-entry green.
     let evs = store.replay(session).await.expect("replay final");
-    let items = project_input_items(&evs, None);
+    let items = assemble_model_input(&evs, None);
     let mut checked = 0;
     let mut i = 0;
     while i < items.len() {

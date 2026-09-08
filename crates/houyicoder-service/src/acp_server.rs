@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use crate::acp_adapter::AcpAdapter;
 use crate::acp_serve::AcpIo;
-use crate::projection::{
-    acp_permission_response_to_decision, approval_to_acp_permission, project_run_error,
-    project_run_result, project_session_update,
+use crate::protocol_adapter::{
+    acp_permission_response_to_decision, approval_to_acp_permission, map_run_error, map_run_result,
+    map_session_update,
 };
 use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::{RunOutcome, Runner};
@@ -363,7 +363,7 @@ impl AcpServer {
                         continue;
                     }
                     _ => {
-                        let projected = project_run_result(&run);
+                        let projected = map_run_result(&run);
                         let resp = PromptResponse {
                             stop_reason: projected.stop_reason,
                             meta: None,
@@ -380,7 +380,7 @@ impl AcpServer {
                     }
                 },
                 Err(e) => {
-                    let _projected_err = project_run_error(&e);
+                    let _projected_err = map_run_error(&e);
                     return self
                         .send_response(
                             io,
@@ -430,7 +430,7 @@ impl AcpServer {
         io: &mut AcpIo,
         ev: &SessionLogEntry,
     ) -> Result<(), WireError> {
-        if let Some(update) = project_session_update(&ev.event) {
+        if let Some(update) = map_session_update(&ev.event) {
             let params = serde_json::to_value(&update).expect("session update serialize");
             let notif = AcpNotification::new("session/update", params);
             self.send_typed(io, &notif).await?;

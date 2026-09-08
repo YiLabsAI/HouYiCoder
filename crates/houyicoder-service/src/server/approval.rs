@@ -11,7 +11,7 @@ use houyicoder_protocol::envelope::{
 };
 use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
-use crate::projection::{build_approval_request, parse_approval_decision};
+use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 
 use super::{Server, io::ServerIo, now_millis};
 

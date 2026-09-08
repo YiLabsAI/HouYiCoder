@@ -6,6 +6,7 @@ use houyicoder_protocol::envelope::{RequestEnvelope, ResponsePayload};
 use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
 use super::{Server, io::ServerIo};
+use crate::protocol_adapter as pa;
 
 impl Server {
     /// Route one request to its handler. MessageSend drives the runner; RunCancel
@@ -245,10 +246,9 @@ impl Server {
             }
             houyicoder_protocol::frontend::FrontendRequest::Trajectory => {
                 let events = self.runner.store().trajectory_snapshot(self.session);
-                let entries = crate::projection::project_trajectory(&events);
-                let redundant = crate::projection::redundant::project_redundant(
-                    &self.runner.redundancy_snapshot(),
-                );
+                let entries = pa::build_trajectory_entries(&events);
+                let redundant =
+                    pa::redundancy::map_redundant_entries(&self.runner.redundancy_snapshot());
                 let unknown_count = events
                     .iter()
                     .filter(|e| matches!(e.event, houyicoder_context::SessionEvent::Unknown))
@@ -310,7 +310,7 @@ impl Server {
                     bd.cache_hit_rate =
                         Some(usage.cache_read_input_tokens as f64 / usage.input_tokens as f64);
                 }
-                let wire = crate::projection::project_context_breakdown(&bd);
+                let wire = pa::map_context_breakdown(&bd);
                 self.send_response(io, req_id, ResponsePayload::Context(wire))
                     .await
             }
@@ -327,7 +327,7 @@ impl Server {
                 // than hanging on the req_id.
                 match self.runner.compact(self.session).await {
                     Ok(outcome) => {
-                        let wire = crate::projection::compact::project_compact_reply(&outcome);
+                        let wire = pa::compaction::map_compact_reply(&outcome);
                         self.send_response(io, req_id, ResponsePayload::Compact(wire))
                             .await
                     }
@@ -346,14 +346,12 @@ impl Server {
                 }
             }
             houyicoder_protocol::frontend::FrontendRequest::MemoryList => {
-                let wire =
-                    crate::projection::memory::project_memory_list(self.runner.memory_list());
+                let wire = pa::memory_view::map_memory_list(self.runner.memory_list());
                 self.send_response(io, req_id, ResponsePayload::MemoryList(wire))
                     .await
             }
             houyicoder_protocol::frontend::FrontendRequest::MemoryShow { key } => {
-                let wire =
-                    crate::projection::memory::project_memory_entry(self.runner.memory_show(&key));
+                let wire = pa::memory_view::map_memory_entry(self.runner.memory_show(&key));
                 self.send_response(io, req_id, ResponsePayload::MemoryShow(wire))
                     .await
             }
@@ -365,9 +363,7 @@ impl Server {
                 // the user believes the forget worked when it did not.
                 match self.runner.memory_forget(&key, &scope) {
                     Ok(()) | Err(houyicoder_context::MemoryError::NotFound) => {
-                        let wire = crate::projection::memory::project_memory_list(
-                            self.runner.memory_list(),
-                        );
+                        let wire = pa::memory_view::map_memory_list(self.runner.memory_list());
                         self.send_response(io, req_id, ResponsePayload::MemoryList(wire))
                             .await
                     }
@@ -387,7 +383,7 @@ impl Server {
             }
             houyicoder_protocol::frontend::FrontendRequest::MemoryToggleState => {
                 let (auto_memory, auto_dream) = self.runner.toggles_state();
-                let wire = crate::projection::memory::project_toggle_state(auto_memory, auto_dream);
+                let wire = pa::memory_view::map_toggle_state(auto_memory, auto_dream);
                 self.send_response(io, req_id, ResponsePayload::ToggleState(wire))
                     .await
             }
@@ -415,12 +411,12 @@ impl Server {
                         auto_dream,
                     },
                 );
-                let wire = crate::projection::memory::project_toggle_state(auto_memory, auto_dream);
+                let wire = pa::memory_view::map_toggle_state(auto_memory, auto_dream);
                 self.send_response(io, req_id, ResponsePayload::ToggleState(wire))
                     .await
             }
             houyicoder_protocol::frontend::FrontendRequest::PermissionMode => {
-                let wire = crate::projection::project_permission_mode(self.gate.current());
+                let wire = pa::permission_mode_to_wire(self.gate.current());
                 self.send_response(io, req_id, ResponsePayload::PermissionMode(wire))
                     .await
             }
@@ -434,9 +430,7 @@ impl Server {
             }
             houyicoder_protocol::frontend::FrontendRequest::PermissionCycleMode => {
                 let resp = match self.gate.tab_cycle() {
-                    Ok(mode) => ResponsePayload::PermissionMode(
-                        crate::projection::project_permission_mode(mode),
-                    ),
+                    Ok(mode) => ResponsePayload::PermissionMode(pa::permission_mode_to_wire(mode)),
                     Err(e) => ResponsePayload::Error(WireError::new(
                         WireErrorKind::InvalidRequest,
                         e.to_string(),
@@ -446,7 +440,7 @@ impl Server {
                 self.send_response(io, req_id, resp).await
             }
             houyicoder_protocol::frontend::FrontendRequest::PermissionAddRule { rule } => {
-                let resp = match crate::projection::wire_rule_to_engine(&rule) {
+                let resp = match pa::permission_rule_from_wire(&rule) {
                     Ok(r) => {
                         self.gate.add_rule(r);
                         ResponsePayload::PermissionRules(self.rule_set_wire())
@@ -583,7 +577,7 @@ impl Server {
             .rules()
             .iter()
             .filter(|r| r.scope.is_writable())
-            .map(crate::projection::project_permission_rule)
+            .map(pa::permission_rule_to_wire)
             .collect()
     }
 
@@ -604,7 +598,7 @@ impl Server {
     /// single-shot test path; the snapshot degrades to runner-only fields.
     fn status_snapshot_wire(&self) -> houyicoder_protocol::frontend::status::StatusSnapshot {
         let snap = self.runner.status_snapshot();
-        let mut wire = crate::projection::project_status(&snap);
+        let mut wire = pa::map_status_snapshot(&snap);
         if let Some(store) = self.meta_store.as_ref()
             && let Some(mut meta) = store.read_meta(self.session)
         {
@@ -616,7 +610,7 @@ impl Server {
             {
                 meta.name = first_prompt_slug(self.runner.store().as_ref(), self.session);
             }
-            wire.meta = Some(crate::projection::project_session_meta(&meta));
+            wire.meta = Some(pa::map_session_meta(&meta));
         }
         // Running build version; always known, not sidecar-gated.
         wire.version = env!("CARGO_PKG_VERSION").to_string();

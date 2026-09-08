@@ -5,8 +5,8 @@
 //! through the same transcript_from_frames the live render uses, so the
 //! snapshot renders identically to the live transcript.
 //!
-//! The event-to-SessionUpdate projection is the service layer's
-//! project_session_update -- one function, shared with the live path.
+//! The event-to-SessionUpdate mapping is the service layer's
+//! map_session_update -- one function, shared with the live path.
 //! A local copy would drift (it already did: TurnAborted was missing from
 //! the copy, so an interrupted turn rendered live but not in the snapshot
 //! -- the index!=render the snapshot seam exists to eliminate). Sharing the
@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{SessionId, SessionLogEntry};
-use houyicoder_service::projection::project_session_update;
+use houyicoder_service::protocol_adapter::map_session_update;
 use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::transcript::snapshot::{
     IndexProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
@@ -79,7 +79,7 @@ impl SessionLogSnapshot {
         serde_json::from_str::<SessionLogEntry>(line).ok()
     }
 
-    /// Project raw JSONL lines through the shared projection + flatten to
+    /// Map raw JSONL lines through the shared mapping + flatten to
     /// TranscriptLine. Corrupt lines are skipped + counted (the tolerant
     /// path, not the strict replay path).
     fn project_lines(lines: &[(u64, String)]) -> (Vec<TranscriptLine>, usize) {
@@ -87,7 +87,7 @@ impl SessionLogSnapshot {
         let frames: Vec<TranscriptFrame> = lines
             .iter()
             .filter_map(|(_, line)| match Self::parse_event(line) {
-                Some(ev) => project_session_update(&ev.event).map(TranscriptFrame::Session),
+                Some(ev) => map_session_update(&ev.event).map(TranscriptFrame::Session),
                 None => {
                     skipped += 1;
                     None
@@ -117,7 +117,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
         let frames: Vec<TranscriptFrame> = read
             .events
             .iter()
-            .filter_map(|ev| project_session_update(&ev.event))
+            .filter_map(|ev| map_session_update(&ev.event))
             .map(TranscriptFrame::Session)
             .collect();
         let lines = transcript_from_frames(&frames);
@@ -152,7 +152,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
             };
         }
         // One reverse read from EOF: the newest batch, newest-first. Reverse
-        // to forward (oldest-first) order so the projection renders top-down.
+        // to forward (oldest-first) order so the mapping renders top-down.
         let rev = self
             .session_log
             .backend()
@@ -292,7 +292,7 @@ mod tests {
         ];
         let frames: Vec<TranscriptFrame> = events
             .iter()
-            .filter_map(|ev| project_session_update(&ev.event))
+            .filter_map(|ev| map_session_update(&ev.event))
             .map(TranscriptFrame::Session)
             .collect();
         let lines = transcript_from_frames(&frames);
@@ -305,7 +305,7 @@ mod tests {
         assert!(body.contains("there"), "full stdout in body: {body}");
     }
 
-    /// TurnAborted must surface in the snapshot. The shared projection
+    /// TurnAborted must surface in the snapshot. The shared mapping
     /// closes the drift structurally; this test pins it.
     #[test]
     fn test_turn_aborted_visible_snapshot() {
@@ -314,7 +314,7 @@ mod tests {
         })];
         let frames: Vec<TranscriptFrame> = events
             .iter()
-            .filter_map(|ev| project_session_update(&ev.event))
+            .filter_map(|ev| map_session_update(&ev.event))
             .map(TranscriptFrame::Session)
             .collect();
         let lines = transcript_from_frames(&frames);
@@ -336,13 +336,13 @@ mod tests {
     #[test]
     fn test_metadata_project_to_none() {
         assert!(
-            project_session_update(&SessionEvent::MetaUser {
+            map_session_update(&SessionEvent::MetaUser {
                 text: "nudge".into()
             })
             .is_none()
         );
         assert!(
-            project_session_update(&SessionEvent::TurnStarted {
+            map_session_update(&SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0
             })
@@ -391,7 +391,7 @@ mod tests {
     /// Source parity: the whole-log load and the byte-window read render the
     /// same lines for the same events. The window path seeks + parses per
     /// screen; the load path reads the whole log tolerantly. Both go through
-    /// the same project_session_update + transcript_from_frames, so the
+    /// the same map_session_update + transcript_from_frames, so the
     /// rendered text must match byte-for-byte (the parity guarantee that
     /// closes index!=render).
     #[test]
@@ -510,13 +510,13 @@ mod tests {
     }
 
     /// Real-machine budget on a large log: enter (tail_window) actually
-    /// materializes the projection (lines > 0 + the tail needle renders), the
+    /// materializes the mapping (lines > 0 + the tail needle renders), the
     /// enter < 300 ms, one window scan < 100 ms, the full index build
     /// completes, and the resident window + index stay bounded. Generates a
-    /// synthetic local-format log just over the threshold so the projection is
+    /// synthetic local-format log just over the threshold so the mapping is
     /// real (a foreign-format log would parse-skip to empty, measuring only
     /// the byte mechanism). Set HOUYICODER_LARGE_LOG to a real log path to
-    /// additionally stress the byte mechanism on a bigger file (projection may
+    /// additionally stress the byte mechanism on a bigger file (mapping may
     /// be empty there -- the content assertions are skipped in that mode).
     #[test]
     #[ignore]
@@ -549,7 +549,7 @@ mod tests {
         } else {
             // Synthetic local-format log just over the threshold: ~520 events
             // with a ~32 KB body each ~ 16+ MB. The last event carries the
-            // needle so the tail window's projection must surface it.
+            // needle so the tail window's mapping must surface it.
             let mut buf: Vec<u8> = Vec::with_capacity(17 * 1024 * 1024);
             for i in 0..520u32 {
                 let text = if i == 519 {
@@ -588,9 +588,9 @@ mod tests {
             enter_ms < 300,
             "tail_window < 300ms on {total} bytes (took {enter_ms}ms)"
         );
-        // Content materialization (the real-projection mode): the tail window
+        // Content materialization (the real-mapping mode): the tail window
         // must hold rendered lines + the needle, not be empty. Skipped for a
-        // foreign-format real log (projection parses to nothing there).
+        // foreign-format real log (mapping parses to nothing there).
         let rendered: String = tail
             .lines
             .iter()
@@ -604,7 +604,7 @@ mod tests {
             );
             assert!(
                 rendered.contains(NEEDLE),
-                "tail window contains the needle (real projection):\n{}",
+                "tail window contains the needle (real mapping):\n{}",
                 &rendered[..rendered.len().min(400)]
             );
         }

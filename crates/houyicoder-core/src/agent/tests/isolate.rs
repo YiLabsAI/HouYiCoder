@@ -94,7 +94,7 @@ async fn test_externalizes_large_tool_result() {
     }
     // The turn-group projection materializes the large result (age 0 =>
     // Materialize tier) so the model sees the real content.
-    let items = super::turn_group::project_input_items(&events, Some(runner.store().backend()));
+    let items = super::turn_group::assemble_model_input(&events, Some(runner.store().backend()));
     let tr_item = items
         .iter()
         .find(|i| matches!(i, InputItem::ToolResult { call_id, .. } if call_id == "c1"))

@@ -8,7 +8,7 @@
 //! cross-track write would break the observability read-only invariant).
 //!
 //! Data (RewardSnapshot) and rendering (format_reward) are separate so
-//! prompt wording changes do not touch the projection layer (Type First).
+//! prompt wording changes do not touch the capture layer (Type First).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -82,7 +82,7 @@ pub struct RewardSnapshot {
 /// Project a read-only reward snapshot. Locks OL + redundancy briefly to
 /// clone out, drops both before returning. Never holds across an await —
 /// the dream spawn is the caller's job after this returns.
-pub fn project_reward_snapshot(
+pub fn capture_reward_snapshot(
     obs: &SharedObservability,
     redundancy: &Mutex<RedundancyTracker>,
 ) -> RewardSnapshot {
@@ -158,7 +158,7 @@ pub fn project_reward_snapshot(
 /// "Act on these in Phase 2" instruction via format_reward; the reward
 /// lesson prompt appends its own lesson-extraction instruction. Keeping the
 /// data rendering separate from the instruction lets two prompt paths share
-/// one projection without duplicating the rendering logic.
+/// one capture without duplicating the rendering logic.
 pub(crate) fn format_reward_data(snap: &RewardSnapshot) -> String {
     if snap.failures.is_empty() && snap.redundant.is_empty() && snap.cost.cumulative_input == 0 {
         return String::new();
@@ -253,10 +253,10 @@ mod tests {
     use crate::observability::evolution::RedundancyKind;
 
     #[test]
-    fn test_empty_session_projects_empty() {
+    fn test_empty_session_captures_empty() {
         let obs = new_log(200_000);
         let redundancy = Mutex::new(RedundancyTracker::new());
-        let snap = project_reward_snapshot(&obs, &redundancy);
+        let snap = capture_reward_snapshot(&obs, &redundancy);
         assert!(snap.failures.is_empty());
         assert!(snap.redundant.is_empty());
         assert_eq!(snap.cost.cumulative_input, 0);
@@ -284,7 +284,7 @@ mod tests {
         };
         record_turn(&obs, "model-a", &u, 30_000, 500, 200_000, 32_768);
         let redundancy = Mutex::new(RedundancyTracker::new());
-        let snap = project_reward_snapshot(&obs, &redundancy);
+        let snap = capture_reward_snapshot(&obs, &redundancy);
         assert_eq!(snap.failures.len(), 1);
         assert_eq!(snap.failures[0].tool, "bash");
         assert_eq!(snap.cost.cumulative_input, 1000);

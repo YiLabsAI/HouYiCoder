@@ -677,9 +677,9 @@ fn pair_inproc_server(
     // The server shares the bus so a child's permission ask (published while
     // the parent run is parked on the child) reaches the wire-approval flow.
     let server_bus = bus.clone();
-    // Fleet projector: bridge bus child status to AgentStatus wire frames so
+    // Fleet status relay: bridge bus child status to AgentStatus wire frames so
     // the TUI footer renders without a direct engine-bus dependency.
-    houyicoder_service::composition::fleet_projector::spawn(
+    houyicoder_service::composition::fleet_status_relay::spawn(
         bus,
         s2c_tx.clone(),
         next_seq.clone(),
@@ -703,7 +703,7 @@ fn pair_inproc_server(
     // Completion notification injector: when a detached (async) child
     // finishes, enqueue a lower-priority notification into the parent's
     // mid-turn queue so the parent model learns the child finished on its
-    // next turn boundary. Shares the same bus as the fleet projector;
+    // next turn boundary. Shares the same bus as the fleet status relay;
     // no-op without one.
     houyicoder_service::composition::notification_drain::spawn(
         server_bus.clone(),

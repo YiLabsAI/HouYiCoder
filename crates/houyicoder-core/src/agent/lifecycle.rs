@@ -103,7 +103,7 @@ impl Summarizer for LlmSummarizer {
             };
             let mut summaries: Vec<String> = Vec::with_capacity(chunks.len());
             for chunk in &chunks {
-                let input = turn_group::project_input_items(chunk, None);
+                let input = turn_group::assemble_model_input(chunk, None);
                 if input.is_empty() {
                     continue;
                 }

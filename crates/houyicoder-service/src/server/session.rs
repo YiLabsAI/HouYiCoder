@@ -18,7 +18,7 @@ use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
 use crate::composition::SessionHost;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
-use crate::projection::parse_approval_decision;
+use crate::protocol_adapter::parse_approval_decision;
 use crate::server::{Server, ServerIo};
 use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionLogEntry};
 

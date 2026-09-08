@@ -30,9 +30,9 @@ impl Server {
                 };
                 let frame = ServerFrame::Response(ResponseEnvelope::new(
                     req_id,
-                    ResponsePayload::PermissionMode(crate::projection::project_permission_mode(
-                        mode,
-                    )),
+                    ResponsePayload::PermissionMode(
+                        crate::protocol_adapter::permission_mode_to_wire(mode),
+                    ),
                 ));
                 // Encode failure is survivable: skip the frame and keep the
                 // serve loop alive rather than panicking the task, matching

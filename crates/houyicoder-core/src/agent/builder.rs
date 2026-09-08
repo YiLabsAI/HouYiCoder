@@ -369,7 +369,7 @@ impl Runner {
             // Reward snapshot: lock OL + redundancy briefly, clone out, drop
             // both before the fire-and-forget spawn. The snapshot is owned
             // and moved into the dream task; DreamRunner never holds OL.
-            let reward = crate::agent::reward_snapshot::project_reward_snapshot(
+            let reward = crate::agent::reward_snapshot::capture_reward_snapshot(
                 &self.observability,
                 &self.redundancy,
             );

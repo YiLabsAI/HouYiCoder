@@ -24,7 +24,7 @@ use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, permission_requ
 use tokio::sync::Notify;
 
 use crate::composition::SessionHost;
-use crate::projection::{project_run_error, project_run_result};
+use crate::protocol_adapter::{map_run_error, map_run_result};
 
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
@@ -270,7 +270,7 @@ impl Server {
                 return;
             }
         }
-        if let Some(rule) = crate::projection::consent_rule_for(tool_name, input) {
+        if let Some(rule) = crate::protocol_adapter::consent_rule_for(tool_name, input) {
             self.gate.add_rule(rule);
         }
     }
@@ -709,12 +709,12 @@ impl Server {
                     // Final outcome: the wire no longer carries an
                     // Interruption variant; the other arms are the final ones.
                     _ => {
-                        let payload = ResponsePayload::RunOk(project_run_result(&run));
+                        let payload = ResponsePayload::RunOk(map_run_result(&run));
                         return self.send_response(io, req_id, payload).await;
                     }
                 },
                 Err(e) => {
-                    let payload = ResponsePayload::RunErr(project_run_error(&e));
+                    let payload = ResponsePayload::RunErr(map_run_error(&e));
                     return self.send_response(io, req_id, payload).await;
                 }
             }

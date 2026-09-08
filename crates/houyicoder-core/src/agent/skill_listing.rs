@@ -16,7 +16,7 @@ use houyicoder_api::skill::SkillDescriptor;
 use houyicoder_context::{SessionEvent, SessionId};
 
 use super::append::new_event;
-use super::{RunError, Runner, model_window, projection};
+use super::{RunError, Runner, model_window, selection};
 
 /// Rough chars-per-token rate for converting a token budget to a char
 /// budget. An estimate; the listing is truncated to fit, not billed.
@@ -168,7 +168,7 @@ impl Runner {
         // Summarized listing folded by compaction drops out of the view,
         // so the scan naturally empties and the listing re-surfaces.
         let filtered = match view.manifest.as_ref() {
-            Some(m) => projection::apply_manifest(&view.events, m, Some(self.store.backend())),
+            Some(m) => selection::apply_manifest(&view.events, m, Some(self.store.backend())),
             None => view.events.clone(),
         };
         let descriptors = registry.list_model_invocable();

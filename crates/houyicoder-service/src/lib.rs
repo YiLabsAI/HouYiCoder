@@ -23,7 +23,7 @@ pub mod agent_registry;
 pub mod composition;
 pub mod diagnostics;
 pub mod lifecycle;
-pub mod projection;
+pub mod protocol_adapter;
 pub mod sandbox_policy;
 pub mod server;
 pub mod session_prune;
