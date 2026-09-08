@@ -75,7 +75,7 @@ async fn test_disk_options_write_durable() {
         .await
         .expect("append");
     // The first durable append materializes the sidecar (the deferred build
-    // meta) alongside the event log the backend writes.
+    // descriptor) alongside the event log the backend writes.
     assert!(
         sid_dir.join("session.json").is_file(),
         "first durable append must materialize the sidecar under {}",

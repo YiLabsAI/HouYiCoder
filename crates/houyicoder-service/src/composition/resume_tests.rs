@@ -97,9 +97,7 @@ fn test_resume_export_seeds_log() {
 
 /// After an export-resume, the new session's sidecar carries
 /// provenance=ResumedFromExport pointing back at the source session id
-/// (the lineage is recorded so /status can show where the session came
-/// from). Guards the sidecar-metadata correctness the /status provenance
-/// render relies on.
+/// The resumed descriptor preserves its export provenance for status views.
 #[test]
 fn test_resume_export_sidecar_provenance() {
     let sessions = temp_root();
@@ -119,8 +117,8 @@ fn test_resume_export_sidecar_provenance() {
 
     let sidecar = std::fs::read_to_string(sessions.join(new_sid.to_string()).join("session.json"))
         .expect("sidecar exists after resume");
-    let meta: serde_json::Value = serde_json::from_str(&sidecar).expect("sidecar is json");
-    let prov = meta
+    let descriptor: serde_json::Value = serde_json::from_str(&sidecar).expect("sidecar is json");
+    let prov = descriptor
         .get("provenance")
         .expect("sidecar has provenance")
         .as_object()
@@ -518,8 +516,8 @@ fn test_fork_keeps_source_untouched() {
     let sidecar =
         std::fs::read_to_string(sessions.join(forked_sid.to_string()).join("session.json"))
             .unwrap();
-    let meta: serde_json::Value = serde_json::from_str(&sidecar).expect("sidecar is json");
-    let prov = meta.get("provenance").and_then(|v| v.as_object());
+    let descriptor: serde_json::Value = serde_json::from_str(&sidecar).expect("sidecar is json");
+    let prov = descriptor.get("provenance").and_then(|v| v.as_object());
     assert_eq!(
         prov.and_then(|o| o.get("kind")).and_then(|v| v.as_str()),
         Some("forked_from"),
@@ -631,9 +629,11 @@ fn test_latest_picks_active_cwd() {
     // (zero turns -- e.g. a session opened + immediately quit). --continue
     // must exclude it: "continue" presupposes something to continue.
     let sid_b = SessionId::new();
-    let meta_store: std::sync::Arc<dyn houyicoder_context::SessionMetaStore> =
-        std::sync::Arc::new(houyicoder_memory::FileMetaStore::new(sessions.clone()));
-    let b_meta = houyicoder_context::SessionMeta {
+    let descriptor_store: std::sync::Arc<dyn houyicoder_context::SessionDescriptorStore> =
+        std::sync::Arc::new(houyicoder_memory::FileDescriptorStore::new(
+            sessions.clone(),
+        ));
+    let b_descriptor = houyicoder_context::SessionDescriptor {
         name: None,
         name_source: houyicoder_context::NameSource::Auto,
         cwd: super::super::workspace_cwd(None),
@@ -646,7 +646,9 @@ fn test_latest_picks_active_cwd() {
             .as_secs(),
         child_session_ids: Vec::new(),
     };
-    meta_store.write_meta(sid_b, &b_meta).unwrap();
+    descriptor_store
+        .write_descriptor(sid_b, &b_descriptor)
+        .unwrap();
     // B has no log.jsonl (never appended).
 
     // C: an active session in a DIFFERENT workspace (project pins its cwd

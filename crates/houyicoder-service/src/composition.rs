@@ -20,7 +20,7 @@ pub mod multi_agent;
 mod reloader;
 mod resume;
 mod retention_notice;
-mod session_meta;
+mod session_descriptor;
 mod skill;
 pub use skill::SkillRegistryImpl;
 mod startup_warnings;
@@ -44,8 +44,8 @@ use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::trust::TrustState;
 use houyicoder_context::ContextBackend;
+use houyicoder_context::SessionDescriptorStore;
 use houyicoder_context::SessionId;
-use houyicoder_context::SessionMetaStore;
 use houyicoder_core::agent::auto_dream::{DEFAULT_DREAM_MAX_TURNS, DreamRunner};
 use houyicoder_core::agent::extractor::MemoryExtractor;
 use houyicoder_core::agent::model_window;
@@ -55,7 +55,9 @@ use houyicoder_core::agent::{
     HookSource, HotPathReducer, LlmSummarizer, Runner, SkillHookRegistrar, TodoWriteTool,
     ToolRegistry, parse_event,
 };
-use houyicoder_memory::{FileMetaStore, InMemoryBackend, InMemoryMetaStore, LocalFileBackend};
+use houyicoder_memory::{
+    FileDescriptorStore, InMemoryBackend, InMemoryDescriptorStore, LocalFileBackend,
+};
 use houyicoder_permission::{DefaultModeGate, ModeGate, RuleStore};
 use houyicoder_provider::{FakeProvider, OpenAiCompatibleProvider};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
@@ -146,7 +148,7 @@ pub struct BuildRunnerOptions {
     pub project: Option<String>,
     pub rule_store: Option<Arc<dyn RuleStore>>,
     pub backend: Option<Box<dyn ContextBackend>>,
-    pub meta_store: Option<Arc<dyn SessionMetaStore>>,
+    pub descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
     /// None resolves one here; a caller reusing a provider across sessions
     /// passes its own.
     pub provider: Option<ResolvedProvider>,
@@ -171,25 +173,20 @@ impl BuildRunnerOptions {
             project,
             rule_store,
             backend: Some(Box::new(LocalFileBackend::new(root.clone()))),
-            meta_store: Some(Arc::new(FileMetaStore::new(root))),
+            descriptor_store: Some(Arc::new(FileDescriptorStore::new(root))),
             provider: None,
         }
     }
 }
 
-/// A disk meta store at the sid-keyed sessions root, for production entries
-/// that read sidecars without assembling a runner (the session picker); the
-/// composition root constructs stores so the binary never names the storage
-/// crate directly.
-pub fn disk_meta_store() -> Arc<dyn SessionMetaStore> {
-    Arc::new(FileMetaStore::new(session_log_root()))
+/// Build a descriptor store at the configured sessions root.
+pub fn disk_descriptor_store() -> Arc<dyn SessionDescriptorStore> {
+    Arc::new(FileDescriptorStore::new(session_log_root()))
 }
 
-/// A disk meta store at an explicit sessions root. The bridge uses this to
-/// derive its meta store from the same root it discovers sessions on, so
-/// the two never disagree about which sessions exist.
-pub fn disk_meta_store_at(root: std::path::PathBuf) -> Arc<dyn SessionMetaStore> {
-    Arc::new(FileMetaStore::new(root))
+/// Build a descriptor store at an explicit sessions root.
+pub fn disk_descriptor_store_at(root: std::path::PathBuf) -> Arc<dyn SessionDescriptorStore> {
+    Arc::new(FileDescriptorStore::new(root))
 }
 
 /// Build the Runner plus the handles the host needs to render host-side
@@ -202,25 +199,22 @@ pub fn disk_meta_store_at(root: std::path::PathBuf) -> Arc<dyn SessionMetaStore>
 /// going offline.
 pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
     let append_notify = Arc::new(Notify::new());
-    // A caller mounting a specific backend/meta store (a resume path, or a
-    // test that deliberately wants disk) passes it in.
     let backend = options
         .backend
         .unwrap_or_else(|| Box::new(InMemoryBackend::new()));
     let session = SessionId::new();
     let model = houyicoder_config::resolve_model();
-    let meta_store = options
-        .meta_store
-        .unwrap_or_else(|| Arc::new(InMemoryMetaStore::new()));
+    let descriptor_store = options
+        .descriptor_store
+        .unwrap_or_else(|| Arc::new(InMemoryDescriptorStore::new()));
     let project = options.project;
-    let initial_meta = session_meta::build_initial_meta(&model, project.as_deref());
-    // The sidecar lands on the first durable append, not at build time, so a
-    // build that never runs a turn leaves no dir. Resume/fork write directly.
+    let initial_descriptor =
+        session_descriptor::build_initial_descriptor(&model, project.as_deref());
     let store = SessionStore::new(backend)
         .with_append_notify(append_notify.clone())
-        .with_first_durable(session_meta::materialize_hook(
-            Arc::clone(&meta_store),
-            initial_meta,
+        .with_first_durable(session_descriptor::materialize_hook(
+            Arc::clone(&descriptor_store),
+            initial_descriptor,
         ));
     let store = Arc::new(store);
     let resolved = options
@@ -234,7 +228,7 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
         options.rule_store,
         append_notify,
         resolved,
-        meta_store,
+        descriptor_store,
     )
 }
 
@@ -255,7 +249,7 @@ pub(crate) fn assemble(
     rule_store: Option<Arc<dyn RuleStore>>,
     append_notify: Arc<Notify>,
     resolved: ResolvedProvider,
-    meta_store: Arc<dyn SessionMetaStore>,
+    descriptor_store: Arc<dyn SessionDescriptorStore>,
 ) -> AssembledRunner {
     let model_for_extractor = model.clone();
     let ResolvedProvider {
@@ -506,7 +500,7 @@ pub(crate) fn assemble(
         worktree_controller: worktree_controller.clone(),
         workspace: workspace.clone(),
         bus: Some(Arc::clone(&bus)),
-        meta_store: Some(Arc::clone(&meta_store)),
+        descriptor_store: Some(Arc::clone(&descriptor_store)),
     });
     // LlmSummarizer shares the main provider + model so compress produces
     // real summaries; the self-overflow guard + heuristic fallback are in

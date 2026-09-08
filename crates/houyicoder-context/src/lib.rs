@@ -35,11 +35,11 @@ pub use sandbox_types::{DirEntry, ExecConfig, ExecResult, SandboxError};
 mod backend;
 pub use backend::{ContextBackend, ContextError, LenientRead, LogRangeRead, ReverseRead};
 
-/// The session metadata sidecar (SessionMeta + SessionMetaStore trait). The
-/// per-session descriptor written alongside the event log at <sid>/session.json.
-mod meta;
-pub use meta::{
-    ContextMetaError, MetaUpdate, NameSource, SessionMeta, SessionMetaStore, SessionProvenance,
+/// The session descriptor sidecar written alongside the event log.
+mod descriptor;
+pub use descriptor::{
+    DescriptorUpdate, NameSource, SessionDescriptor, SessionDescriptorError,
+    SessionDescriptorStore, SessionProvenance,
 };
 
 /// The compaction plan types (Disposition, TurnGroup, CheckpointManifest,

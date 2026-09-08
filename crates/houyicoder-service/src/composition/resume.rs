@@ -1,12 +1,11 @@
-//! Resume entry for the composition root: build a runner whose session log +
-//! trajectory are seeded from an exported transcript file. Split out of the
-//! composition module on size grounds (same pattern as the memory + worktree
-//! + session_meta submodules). The CLI --resume <file> branch lands here.
+//! Build resumed and forked runners from durable session data.
 
 use super::*;
 use houyicoder_context::SessionLogEntry;
-use houyicoder_context::{NameSource, SessionMeta, SessionMetaStore, SessionProvenance};
-use houyicoder_memory::{FileMetaStore, LocalFileBackend};
+use houyicoder_context::{
+    NameSource, SessionDescriptor, SessionDescriptorStore, SessionProvenance,
+};
+use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
 use houyicoder_session::{SessionStore, SourceChain};
 use std::path::Path;
 
@@ -16,12 +15,12 @@ use std::path::Path;
 /// that reflects real usage. Sessions without a log (zero durable events) are
 /// excluded -- "continue" presupposes something to continue, and resuming an
 /// empty session is a no-op. Converges strictly to the current workspace
-/// (meta.cwd match); no cross-workspace fallback -- a silent jump into another
+/// (descriptor.cwd match); no cross-workspace fallback -- a silent jump into another
 /// repo's session is the hazard cwd convergence exists to prevent.
 pub fn latest_session_sid(sessions_root: &Path) -> Option<SessionId> {
     let cwd = workspace_cwd(None);
-    let meta_store: Arc<dyn SessionMetaStore> =
-        Arc::new(FileMetaStore::new(sessions_root.to_path_buf()));
+    let descriptor_store: Arc<dyn SessionDescriptorStore> =
+        Arc::new(FileDescriptorStore::new(sessions_root.to_path_buf()));
     // Stat-first: take the 200 most recently active sessions WITH a log
     // (stat only, no sidecar parse), then parse only those for cwd match.
     // On a 50k backlog this replaces 50k JSON parses with 200. A session
@@ -31,8 +30,8 @@ pub fn latest_session_sid(sessions_root: &Path) -> Option<SessionId> {
     let found = recent
         .iter()
         .filter_map(|(sid, _)| {
-            let m = meta_store.read_meta(*sid)?;
-            (m.cwd == cwd).then_some((sid, ()))
+            let descriptor = descriptor_store.read_descriptor(*sid)?;
+            (descriptor.cwd == cwd).then_some((sid, ()))
         })
         .map(|(sid, _)| *sid)
         .next();
@@ -42,8 +41,8 @@ pub fn latest_session_sid(sessions_root: &Path) -> Option<SessionId> {
     // Fallback: the cwd's session is outside the top 200 (old but still
     // the only one in this cwd). Do the full scan — rare, and the 200
     // window can be raised if it fires often enough to matter.
-    meta_store
-        .list_metas()
+    descriptor_store
+        .list_descriptors()
         .into_iter()
         .filter(|(_, m)| m.cwd == cwd)
         .filter_map(|(sid, _)| log_last_active_secs(sessions_root, &sid).map(|secs| (sid, secs)))
@@ -135,10 +134,10 @@ pub fn build_runner_for_resume_export(
     }
     // Write the sidecar with the resume lineage so /status can show it +
     // a later resume can carry it forward. Best-effort (see write_initial).
-    let meta_store: Arc<dyn SessionMetaStore> =
-        Arc::new(FileMetaStore::new(sessions_root.to_path_buf()));
-    write_resume_session_meta(
-        &meta_store,
+    let descriptor_store: Arc<dyn SessionDescriptorStore> =
+        Arc::new(FileDescriptorStore::new(sessions_root.to_path_buf()));
+    write_resume_descriptor(
+        &descriptor_store,
         session,
         &payload.model,
         project.as_deref(),
@@ -154,7 +153,7 @@ pub fn build_runner_for_resume_export(
         rule_store,
         append_notify,
         resolved,
-        meta_store.clone(),
+        descriptor_store.clone(),
     );
     Ok(ResumedRunner {
         assembled,
@@ -223,10 +222,10 @@ pub fn build_runner_for_resume_sid(
     // Restore the model from the sidecar; fall back to the current config so
     // a session whose sidecar is missing (created before the sidecar landed)
     // still resumes -- /status will show the resolved model instead.
-    let meta_store: Arc<dyn SessionMetaStore> =
-        Arc::new(FileMetaStore::new(sessions_root.to_path_buf()));
-    let model = meta_store
-        .read_meta(sid)
+    let descriptor_store: Arc<dyn SessionDescriptorStore> =
+        Arc::new(FileDescriptorStore::new(sessions_root.to_path_buf()));
+    let model = descriptor_store
+        .read_descriptor(sid)
         .and_then(|m| {
             if m.model.is_empty() {
                 None
@@ -244,7 +243,7 @@ pub fn build_runner_for_resume_sid(
         rule_store,
         append_notify,
         resolved,
-        meta_store.clone(),
+        descriptor_store.clone(),
     );
     Ok(ResumedRunner {
         assembled,
@@ -325,10 +324,10 @@ pub fn build_runner_for_fork(
             "no durable events after forking (all deltas?)".into(),
         ));
     }
-    let meta_store: Arc<dyn SessionMetaStore> =
-        Arc::new(FileMetaStore::new(sessions_root.to_path_buf()));
-    let model = meta_store
-        .read_meta(source_sid)
+    let descriptor_store: Arc<dyn SessionDescriptorStore> =
+        Arc::new(FileDescriptorStore::new(sessions_root.to_path_buf()));
+    let model = descriptor_store
+        .read_descriptor(source_sid)
         .and_then(|m| {
             if m.model.is_empty() {
                 None
@@ -337,8 +336,8 @@ pub fn build_runner_for_fork(
             }
         })
         .unwrap_or_else(houyicoder_config::resolve_model);
-    write_fork_session_meta(
-        &meta_store,
+    write_fork_descriptor(
+        &descriptor_store,
         new_session,
         &model,
         project.as_deref(),
@@ -354,7 +353,7 @@ pub fn build_runner_for_fork(
         rule_store,
         append_notify,
         resolved,
-        meta_store.clone(),
+        descriptor_store.clone(),
     );
     Ok(ResumedRunner {
         assembled,
@@ -386,13 +385,9 @@ impl std::fmt::Display for ResumeError {
 
 impl std::error::Error for ResumeError {}
 
-/// Write the sidecar for a resumed session. Provenance is ResumedFromExport
-/// (carries the source session id forward); cwd + model come from the export;
-/// name starts None (auto-derived from the seeded first prompt at display
-/// time). Best-effort: a sidecar write failure surfaces on stderr but does
-/// not block the resume -- the engine runs without it.
-fn write_resume_session_meta(
-    meta_store: &Arc<dyn SessionMetaStore>,
+/// Write the descriptor for a session resumed from an export.
+fn write_resume_descriptor(
+    descriptor_store: &Arc<dyn SessionDescriptorStore>,
     session: SessionId,
     model: &str,
     project: Option<&str>,
@@ -403,7 +398,7 @@ fn write_resume_session_meta(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let meta = SessionMeta {
+    let descriptor = SessionDescriptor {
         name: None,
         name_source: NameSource::Auto,
         cwd,
@@ -415,18 +410,14 @@ fn write_resume_session_meta(
         created_at: now,
         child_session_ids: Vec::new(),
     };
-    if let Err(e) = meta_store.write_meta(session, &meta) {
-        tracing::warn!("session meta: resume write failed: {e}; /status will show less");
+    if let Err(e) = descriptor_store.write_descriptor(session, &descriptor) {
+        tracing::warn!("session descriptor: resume write failed: {e}; /status will show less");
     }
 }
 
-/// Write the sidecar for a forked session. Provenance is ForkedFrom (carries
-/// the source sid + the event count at the fork point); cwd + model come from
-/// the current invocation + the source's model; name starts None (auto-derived
-/// at display time). Best-effort: a sidecar write failure surfaces on stderr
-/// but does not block the fork.
-fn write_fork_session_meta(
-    meta_store: &Arc<dyn SessionMetaStore>,
+/// Write the descriptor for a forked session.
+fn write_fork_descriptor(
+    descriptor_store: &Arc<dyn SessionDescriptorStore>,
     session: SessionId,
     model: &str,
     project: Option<&str>,
@@ -438,7 +429,7 @@ fn write_fork_session_meta(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let meta = SessionMeta {
+    let descriptor = SessionDescriptor {
         name: None,
         name_source: NameSource::Auto,
         cwd,
@@ -451,8 +442,8 @@ fn write_fork_session_meta(
         created_at: now,
         child_session_ids: Vec::new(),
     };
-    if let Err(e) = meta_store.write_meta(session, &meta) {
-        tracing::warn!("session meta: fork write failed: {e}; /status will show less");
+    if let Err(e) = descriptor_store.write_descriptor(session, &descriptor) {
+        tracing::warn!("session descriptor: fork write failed: {e}; /status will show less");
     }
 }
 

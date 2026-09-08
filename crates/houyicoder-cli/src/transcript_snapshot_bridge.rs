@@ -332,9 +332,8 @@ mod tests {
         );
     }
 
-    /// Metadata-only events project to None.
     #[test]
-    fn test_metadata_project_to_none() {
+    fn test_audit_events() {
         assert!(
             map_session_update(&SessionEvent::MetaUser {
                 text: "nudge".into()

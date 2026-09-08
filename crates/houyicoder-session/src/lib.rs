@@ -95,12 +95,12 @@ pub enum SourceChain {
 }
 
 /// Report from seeding a session store from an imported trajectory. Carries
-/// the rebuilt durable chain's head hash (for meta + provenance), the count of
-/// durable events written, the count of streaming deltas dropped (they are
-/// transport-only, never persisted), and the source-chain verdict. This is a
-/// typed report, not an error: an unverified source is a warning, not a
-/// failure, so the rescue path never hard-fails on the one file it exists to
-/// save.
+/// the rebuilt durable chain's head hash (for descriptor + provenance), the
+/// count of durable events written, the count of streaming deltas dropped
+/// (they are transport-only, never persisted), and the source-chain verdict.
+/// This is a typed report, not an error: an unverified source is a warning,
+/// not a failure, so the rescue path never hard-fails on the one file it
+/// exists to save.
 #[derive(Debug, Clone)]
 pub struct ImportReport {
     pub durable_count: usize,

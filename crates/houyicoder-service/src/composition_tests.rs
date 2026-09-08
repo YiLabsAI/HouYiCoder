@@ -125,18 +125,9 @@ fn test_new_for_resume_hydrates() {
     );
 }
 
-/// build_runner wires the fence containment into the gate so the path-bounds
-/// validator fires for a grep whose path is outside the workspace. Pins the
-/// composition-root ordering: the shared dyn handle must be cloned AFTER
-/// with_containment mutates the gate, so Arc::get_mut sees strong_count 1.
-/// An earlier clone left the count at 2 and Arc::get_mut silently returned
-/// None — the containment wiring was skipped, the path-bounds validator kept
-/// a None handle, the gate never asked, and the tool's own confine_path
-/// hard-refused instead of surfacing a card. Effect-level: a real temp repo
-/// with a workspace manifest, build_runner with that repo as the project,
-/// decide on a grep whose path is a sibling outside the repo — must Ask.
+/// Paths outside the workspace must reach the gate's containment validator.
 #[test]
-fn test_build_runner_outside_grep() {
+fn test_external_approval() {
     use houyicoder_permission::{Decision, ModeGate, ToolRequest};
     let root = std::env::temp_dir().join(format!("houyi-wire-{}-{}", std::process::id(), line!()));
     drop(std::fs::remove_dir_all(&root));
@@ -144,20 +135,17 @@ fn test_build_runner_outside_grep() {
     let repo = root.join("repo");
     std::fs::create_dir_all(&repo).expect("mkdir repo");
     std::fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("manifest");
-    let outside = root.join("outside");
-    std::fs::create_dir_all(&outside).expect("mkdir outside");
+    let external_path = root.join("external");
+    std::fs::create_dir_all(&external_path).expect("mkdir external path");
     let bundle = super::build_runner(BuildRunnerOptions {
         project: Some(repo.to_string_lossy().into_owned()),
         ..Default::default()
     });
     let gate = bundle.gate;
-    let input = serde_json::json!({"pattern":"x","path":outside.to_string_lossy()});
-    // native_requires_approval=false + read-only so the ONLY Ask source is the
-    // path-bounds Detection validator: mode_default would otherwise Allow a
-    // read-only grep under the default Auto posture, so an Ask here proves the
-    // containment wiring reached the gate's pipeline. Asserting the validator
-    // name pins that the Ask is path-bounds (not a built-in rule or mode ask),
-    // so the test fails if the wiring is skipped.
+    let input = serde_json::json!({
+        "pattern": "x",
+        "path": external_path.to_string_lossy()
+    });
     let req = ToolRequest {
         tool_name: "grep",
         input: Some(&input),
@@ -166,11 +154,8 @@ fn test_build_runner_outside_grep() {
         native_requires_approval: false,
     };
     match gate.decide(&req) {
-        Decision::Ask(r) => assert_eq!(
-            r.validator, "path-bounds",
-            "the outside-grep ask must come from the path-bounds validator (containment wired): {r:?}"
-        ),
-        other => panic!("outside grep must Ask via path-bounds, got {other:?}"),
+        Decision::Ask(reason) => assert_eq!(reason.validator, "path-bounds"),
+        other => panic!("external path must require approval, got {other:?}"),
     }
     std::fs::remove_dir_all(&root).ok();
 }
@@ -204,30 +189,29 @@ fn test_build_runner_wires_summarizer() {
 fn test_disk_options_construct_clean() {
     let opts = super::BuildRunnerOptions::disk(None, None);
     assert!(opts.backend.is_some(), "disk() must wire a backend");
-    assert!(opts.meta_store.is_some(), "disk() must wire a meta store");
+    assert!(
+        opts.descriptor_store.is_some(),
+        "disk() must wire a descriptor store"
+    );
     let opts = super::BuildRunnerOptions::disk_at(std::env::temp_dir(), None, None);
     assert!(opts.backend.is_some(), "disk_at() must wire a backend");
     assert!(
-        opts.meta_store.is_some(),
-        "disk_at() must wire a meta store"
+        opts.descriptor_store.is_some(),
+        "disk_at() must wire a descriptor store"
     );
-    let _store = super::disk_meta_store();
+    let _store = super::disk_descriptor_store();
 }
 
-/// disk_meta_store_at(root) derives the store from the given root, so a
-/// caller that discovers sessions on the same root reads + writes sidecars
-/// that agree with discovery. A meta written via the store round-trips at
-/// the same root, and a store at a different root sees nothing -- the single
-/// truth source the bridge relies on.
+/// Descriptor stores are isolated by their sessions root.
 #[test]
-fn test_meta_store_root_scoped() {
-    use houyicoder_context::{NameSource, SessionMeta, SessionProvenance};
+fn test_store_isolation() {
+    use houyicoder_context::{NameSource, SessionDescriptor, SessionProvenance};
     let root = std::env::temp_dir().join(format!("houyi-dms-{}-{}", std::process::id(), line!()));
     let _r = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("mkdir dms root");
-    let store = super::disk_meta_store_at(root.clone());
+    let store = super::disk_descriptor_store_at(root.clone());
     let sid = SessionId::new();
-    let meta = SessionMeta {
+    let descriptor = SessionDescriptor {
         name: Some("named".into()),
         name_source: NameSource::Auto,
         cwd: "/repo".into(),
@@ -237,20 +221,22 @@ fn test_meta_store_root_scoped() {
         created_at: 1,
         child_session_ids: Vec::new(),
     };
-    store.write_meta(sid, &meta).expect("write_meta");
+    store
+        .write_descriptor(sid, &descriptor)
+        .expect("write_descriptor");
     let back = store
-        .read_meta(sid)
-        .expect("read_meta roundtrips at same root");
+        .read_descriptor(sid)
+        .expect("read_descriptor roundtrips at same root");
     assert_eq!(back.name.as_deref(), Some("named"));
     let other = std::env::temp_dir().join(format!(
         "houyi-dms-other-{}-{}",
         std::process::id(),
         line!()
     ));
-    let other_store = super::disk_meta_store_at(other.clone());
+    let other_store = super::disk_descriptor_store_at(other.clone());
     assert!(
-        other_store.read_meta(sid).is_none(),
-        "a store at a different root must not see the meta"
+        other_store.read_descriptor(sid).is_none(),
+        "a store at a different root must not see the descriptor"
     );
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&other).ok();

@@ -14,19 +14,19 @@
 
 #![allow(dead_code)] // crate root re-exports backends consumed by other crates; locally unused
 
+pub mod descriptor_store;
 pub mod houyi;
 pub mod in_memory;
 pub mod local_file;
 pub mod markdown_memory;
-pub mod meta_store;
 pub mod native;
 pub mod provider;
 
+pub use descriptor_store::{FileDescriptorStore, InMemoryDescriptorStore};
 pub use houyi::StubMemoryProvider;
 pub use in_memory::InMemoryBackend;
 pub use local_file::LocalFileBackend;
 pub use markdown_memory::MarkdownMemoryProvider;
-pub use meta_store::{FileMetaStore, InMemoryMetaStore};
 pub use native::KeywordRecallProvider;
 
 use houyicoder_context::BlockHash;

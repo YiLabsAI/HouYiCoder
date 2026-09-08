@@ -5,7 +5,7 @@
 pub(crate) mod compaction;
 pub(crate) mod memory_view;
 pub(crate) mod redundancy;
-pub(crate) mod session_profile;
+pub(crate) mod session_descriptor;
 mod trajectory_row;
 use trajectory_row::{event_name, hex_short};
 
@@ -22,7 +22,7 @@ use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use houyicoder_protocol::frontend::status::StatusSnapshot as WireStatusSnapshot;
-pub(crate) use session_profile::map_session_meta;
+pub(crate) use session_descriptor::map_session_descriptor;
 
 /// Map the engine run result to the protocol message form. Outcome
 /// variants match the engine enum one-for-one except Interruption (a
@@ -136,8 +136,9 @@ pub(crate) fn map_status_snapshot(
         tool_calls: s.tool_calls,
         tool_success: s.tool_success,
         tool_errors: s.tool_errors,
-        // Sidecar + env-config (meta, auth, base_url, setting_sources) attach
-        // server-side; the engine snapshot has none. ..Default fills them.
+        // Sidecar + env-config (descriptor, auth, base_url, setting_sources)
+        // attach server-side; the engine snapshot has none. ..Default fills
+        // them.
         ..Default::default()
     }
 }

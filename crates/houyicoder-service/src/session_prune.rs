@@ -505,7 +505,7 @@ fn count_session_dirs(root: &Path) -> Option<usize> {
 
 /// List sessions by last-active, stat-only (no sidecar parse). Returns
 /// (sid, last_active_secs) sorted newest-first, limited to the top N.
-/// The caller parses only these N sidecars (read_meta), not all -- on a
+/// The caller parses only these N sidecars (read_descriptor), not all -- on a
 /// 50k backlog the stat phase is readdir + one metadata() per dir (fast,
 /// no JSON), and only the visible N pay the serde cost. last-active is
 /// the log.jsonl mtime. A session without a log is skipped: a log is the

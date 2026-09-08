@@ -12,8 +12,6 @@ use crate::composition;
 use crate::pending_queue::{PendingItem, is_state_changing};
 use crate::state::{App, ArtifactSession, Pane, Screen, Stage, TranscriptLine, pane_for_stage};
 
-/// /memory sub-command + pane-action methods (toggle / forget / cursor),
-/// split out so this file stays under the file-size gate.
 mod debug;
 mod memory;
 mod model;
@@ -258,7 +256,7 @@ impl App {
             tool_calls: 0,
             tool_success: 0,
             tool_errors: 0,
-            meta: None,
+            descriptor: None,
             ..Default::default()
         })
     }

@@ -11,8 +11,10 @@
 use super::*;
 use futures::StreamExt;
 use futures::channel::mpsc;
-use houyicoder_context::{NameSource, SessionMeta, SessionMetaStore, SessionProvenance};
-use houyicoder_memory::{InMemoryBackend, InMemoryMetaStore};
+use houyicoder_context::{
+    NameSource, SessionDescriptor, SessionDescriptorStore, SessionProvenance,
+};
+use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId, ServerFrame};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
@@ -33,12 +35,12 @@ fn stub_runner() -> Arc<houyicoder_core::agent::Runner> {
     ))
 }
 
-fn seeded_store(session: houyicoder_context::SessionId) -> Arc<dyn SessionMetaStore> {
-    let store: Arc<dyn SessionMetaStore> = Arc::new(InMemoryMetaStore::new());
+fn seeded_store(session: houyicoder_context::SessionId) -> Arc<dyn SessionDescriptorStore> {
+    let store: Arc<dyn SessionDescriptorStore> = Arc::new(InMemoryDescriptorStore::new());
     store
-        .write_meta(
+        .write_descriptor(
             session,
-            &SessionMeta {
+            &SessionDescriptor {
                 name: None,
                 name_source: NameSource::Auto,
                 cwd: "/tmp".into(),
@@ -81,7 +83,7 @@ async fn test_rename_sets_user_name() {
         session,
         Arc::new(houyicoder_permission::DefaultModeGate::new()),
     )
-    .with_meta_store(store.clone());
+    .with_descriptor_store(store.clone());
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -98,14 +100,14 @@ async fn test_rename_sets_user_name() {
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
             houyicoder_protocol::envelope::ResponsePayload::Status(snap) => {
-                let name = snap.meta.as_ref().and_then(|m| m.name.as_deref());
+                let name = snap.descriptor.as_ref().and_then(|m| m.name.as_deref());
                 assert_eq!(name, Some("fix-login"), "reply carries the new name");
             }
             other => panic!("expected Status, got {other:?}"),
         },
         other => panic!("expected response, got {other:?}"),
     }
-    let after = store.read_meta(session).expect("sidecar persisted");
+    let after = store.read_descriptor(session).expect("sidecar persisted");
     assert_eq!(after.name.as_deref(), Some("fix-login"));
     assert_eq!(after.name_source, NameSource::User, "marked User source");
     handle.abort();
@@ -126,7 +128,7 @@ async fn test_empty_clears_to_auto() {
         session,
         Arc::new(houyicoder_permission::DefaultModeGate::new()),
     )
-    .with_meta_store(store.clone());
+    .with_descriptor_store(store.clone());
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -145,7 +147,7 @@ async fn test_empty_clears_to_auto() {
         resp,
         ServerFrame::Response(r) if matches!(r.payload, houyicoder_protocol::envelope::ResponsePayload::Status(_))
     ));
-    let after = store.read_meta(session).expect("sidecar persisted");
+    let after = store.read_descriptor(session).expect("sidecar persisted");
     assert!(after.name.is_none(), "empty name clears to None");
     assert_eq!(after.name_source, NameSource::Auto, "marked Auto source");
     handle.abort();
@@ -166,7 +168,7 @@ async fn test_rename_mismatch_sid_errors() {
         session,
         Arc::new(houyicoder_permission::DefaultModeGate::new()),
     )
-    .with_meta_store(store);
+    .with_descriptor_store(store);
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -196,9 +198,9 @@ async fn test_rename_mismatch_sid_errors() {
     handle.abort();
 }
 
-/// No meta store wired (stub path) errors Internal, not a panic.
+/// A missing descriptor store returns an Internal error.
 #[tokio::test]
-async fn test_no_meta_store_errors() {
+async fn test_no_descriptor_store_errors() {
     use houyicoder_protocol::wire::WireErrorKind;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
@@ -247,7 +249,7 @@ async fn test_rename_no_sidecar_errors() {
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let wire_sid = houyicoder_protocol::frontend::SessionId(session.to_string());
-    let store: Arc<dyn SessionMetaStore> = Arc::new(InMemoryMetaStore::new());
+    let store: Arc<dyn SessionDescriptorStore> = Arc::new(InMemoryDescriptorStore::new());
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = ServerIo::new(server_tx, server_rx);
@@ -256,7 +258,7 @@ async fn test_rename_no_sidecar_errors() {
         session,
         Arc::new(houyicoder_permission::DefaultModeGate::new()),
     )
-    .with_meta_store(store);
+    .with_descriptor_store(store);
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -286,38 +288,38 @@ async fn test_rename_no_sidecar_errors() {
     handle.abort();
 }
 
-/// A meta store whose write_meta always fails, to cover the write-error branch.
-struct FailingMetaStore(InMemoryMetaStore);
+struct FailingDescriptorStore(InMemoryDescriptorStore);
 
-impl SessionMetaStore for FailingMetaStore {
-    fn read_meta(&self, session: houyicoder_context::SessionId) -> Option<SessionMeta> {
-        self.0.read_meta(session)
+impl SessionDescriptorStore for FailingDescriptorStore {
+    fn read_descriptor(&self, session: houyicoder_context::SessionId) -> Option<SessionDescriptor> {
+        self.0.read_descriptor(session)
     }
-    fn write_meta(
+    fn write_descriptor(
         &self,
         _session: houyicoder_context::SessionId,
-        _meta: &SessionMeta,
-    ) -> Result<(), houyicoder_context::ContextMetaError> {
-        Err(houyicoder_context::ContextMetaError(
+        _descriptor: &SessionDescriptor,
+    ) -> Result<(), houyicoder_context::SessionDescriptorError> {
+        Err(houyicoder_context::SessionDescriptorError(
             "simulated write failure".into(),
         ))
     }
-    fn update_meta(
+    fn update_descriptor(
         &self,
         _session: houyicoder_context::SessionId,
-        _edit: &mut dyn FnMut(&mut SessionMeta),
-    ) -> Result<houyicoder_context::MetaUpdate, houyicoder_context::ContextMetaError> {
-        // Fails like write_meta: the edit is never applied, so the rename
+        _edit: &mut dyn FnMut(&mut SessionDescriptor),
+    ) -> Result<houyicoder_context::DescriptorUpdate, houyicoder_context::SessionDescriptorError>
+    {
+        // Fails like write_descriptor: the edit is never applied, so the rename
         // path still sees a write failure rather than a silent success.
-        Err(houyicoder_context::ContextMetaError(
+        Err(houyicoder_context::SessionDescriptorError(
             "simulated write failure".into(),
         ))
     }
-    fn delete_meta(&self, session: houyicoder_context::SessionId) {
-        self.0.delete_meta(session);
+    fn delete_descriptor(&self, session: houyicoder_context::SessionId) {
+        self.0.delete_descriptor(session);
     }
-    fn list_metas(&self) -> Vec<(houyicoder_context::SessionId, SessionMeta)> {
-        self.0.list_metas()
+    fn list_descriptors(&self) -> Vec<(houyicoder_context::SessionId, SessionDescriptor)> {
+        self.0.list_descriptors()
     }
 }
 
@@ -328,11 +330,11 @@ async fn test_rename_write_failure_errors() {
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let wire_sid = houyicoder_protocol::frontend::SessionId(session.to_string());
-    let inner = InMemoryMetaStore::new();
+    let inner = InMemoryDescriptorStore::new();
     inner
-        .write_meta(
+        .write_descriptor(
             session,
-            &SessionMeta {
+            &SessionDescriptor {
                 name: None,
                 name_source: NameSource::Auto,
                 cwd: "/tmp".into(),
@@ -344,7 +346,7 @@ async fn test_rename_write_failure_errors() {
             },
         )
         .unwrap();
-    let store: Arc<dyn SessionMetaStore> = Arc::new(FailingMetaStore(inner));
+    let store: Arc<dyn SessionDescriptorStore> = Arc::new(FailingDescriptorStore(inner));
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = ServerIo::new(server_tx, server_rx);
@@ -353,7 +355,7 @@ async fn test_rename_write_failure_errors() {
         session,
         Arc::new(houyicoder_permission::DefaultModeGate::new()),
     )
-    .with_meta_store(store);
+    .with_descriptor_store(store);
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);

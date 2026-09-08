@@ -125,9 +125,8 @@ pub struct Server {
     /// so behavior is exactly today's (events push only at run resolve). The
     /// composition root shares one Arc<Notify> between the store impl + here.
     append_notify: Option<Arc<Notify>>,
-    /// The session-metadata sidecar store, so the Status handler can attach
-    /// the identity fields to the wire snapshot. None on the test path.
-    meta_store: Option<Arc<dyn houyicoder_context::SessionMetaStore>>,
+    /// Descriptor store used to attach session identity to status responses.
+    descriptor_store: Option<Arc<dyn houyicoder_context::SessionDescriptorStore>>,
     /// The process-wide diagnostic sink's control handle. None when no sink
     /// was installed (the loader binary, tests). A /debug wire request
     /// against a server with no sink returns an error rather than silently
@@ -175,7 +174,7 @@ impl Server {
             settings_path: houyicoder_config::settings_path(),
             project_path: None,
             append_notify: None,
-            meta_store: None,
+            descriptor_store: None,
             diagnostics: crate::diagnostics::handle(),
             bus: None,
         }
@@ -205,10 +204,6 @@ impl Server {
         self.sandbox_session = Some(session);
         self
     }
-
-    // The append-notify + meta-store attachment builders live in the session
-    // child module to keep this file under the size gate; both are pub, so
-    // callers are unaffected.
 
     /// Override the diagnostics handle the server read at construction. The
     /// construction path already reads the process-wide handle via

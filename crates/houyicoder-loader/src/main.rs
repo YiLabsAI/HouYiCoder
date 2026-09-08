@@ -22,7 +22,7 @@ use std::fs::{File, create_dir_all};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use houyicoder_context::{NameSource, PrevHash, SessionId, SessionMeta, SessionProvenance};
+use houyicoder_context::{NameSource, PrevHash, SessionDescriptor, SessionId, SessionProvenance};
 use sha2::{Digest, Sha256};
 
 mod mapping;
@@ -149,7 +149,7 @@ fn write_sidecar(
     created_at: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_dir = Path::new(&cfg.out_dir).join(sid.to_string());
-    let meta = SessionMeta {
+    let descriptor = SessionDescriptor {
         name: None,
         name_source: NameSource::Auto,
         cwd: cwd.filter(|c| !c.is_empty()).unwrap_or_else(|| {
@@ -165,7 +165,7 @@ fn write_sidecar(
         created_at,
         child_session_ids: Vec::new(),
     };
-    let json = serde_json::to_string_pretty(&meta)?;
+    let json = serde_json::to_string_pretty(&descriptor)?;
     std::fs::write(session_dir.join("session.json"), json + "\n")?;
     Ok(())
 }

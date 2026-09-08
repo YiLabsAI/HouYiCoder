@@ -5,11 +5,8 @@
 //! whole-second count) so it crosses the wire with no lifetime or
 //! resilience-type leakage. Usage is the shared protocol llm type.
 //!
-//! The session-meta summary is an optional sidecar attached by the server
-//! (the engine snapshot has no access to the sidecar store). The TUI
-//! renders the /status identity fields (version, session name, cwd,
-//! provenance) from it; None on the stub + test paths where no sidecar
-//! exists.
+//! The server optionally attaches a descriptor summary because the engine
+//! snapshot cannot access the descriptor store.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,12 +43,9 @@ pub struct StatusSnapshot {
     pub tool_success: u32,
     /// Tool executions that errored (an error payload).
     pub tool_errors: u32,
-    /// The session-metadata sidecar the server attaches so the TUI can
-    /// render the identity fields (version / name / cwd / provenance)
-    /// without importing the sidecar store. None on the stub path and
-    /// when no sidecar exists yet.
+    /// The session identity fields attached by the server, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<SessionMetaSummary>,
+    pub descriptor: Option<SessionDescriptorSummary>,
     /// Which env var provides the auth token (DASHSCOPE / OPENAI / HOUYICODER
     /// API KEY), or None. The server resolves this so the TUI never imports
     /// the config crate + never sees the secret value (only the source name).
@@ -118,7 +112,7 @@ fn default_true() -> bool {
 /// resumed-from-export) so the host surfaces where the session came from.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionMetaSummary {
+pub struct SessionDescriptorSummary {
     /// The user-set or auto-derived display name. None until a name is
     /// assigned.
     pub name: Option<String>,

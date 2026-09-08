@@ -22,7 +22,7 @@ fn snap_with_data() -> StatusSnapshot {
         tool_calls: 15,
         tool_success: 12,
         tool_errors: 3,
-        meta: None,
+        descriptor: None,
         ..Default::default()
     }
 }
@@ -54,7 +54,7 @@ fn test_context_zero_stub() {
         tool_calls: 0,
         tool_success: 0,
         tool_errors: 0,
-        meta: None,
+        descriptor: None,
         ..Default::default()
     });
     assert!(s.contains("0 calls"), "{s}");

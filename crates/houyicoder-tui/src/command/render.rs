@@ -277,22 +277,16 @@ pub(crate) fn render_status(
     todos: &[crate::todo_view::TodoView],
 ) -> String {
     let mut s = String::new();
-    // Identity fields, in display order: Version, Session name, Session ID,
-    // cwd, Auth token, Anthropic base URL, Model, sandbox, Setting sources.
-    // Version is the running build (always known, set by the server on the
-    // snapshot itself); name/cwd/provenance come from the sidecar and drop
-    // honestly when it is not materialized yet. The Session name row is
-    // spliced into an editable line by the pane when the user presses e.
     s.push_str(&field("Version", &snap.version));
     let name = snap
-        .meta
+        .descriptor
         .as_ref()
-        .and_then(|m| m.name.as_deref())
+        .and_then(|descriptor| descriptor.name.as_deref())
         .unwrap_or("(unnamed)");
     s.push_str(&field("Session name", name));
     s.push_str(&field("Session ID", &session.to_string()));
-    if let Some(meta) = snap.meta.as_ref() {
-        s.push_str(&field("cwd", &meta.cwd));
+    if let Some(descriptor) = snap.descriptor.as_ref() {
+        s.push_str(&field("cwd", &descriptor.cwd));
     }
     s.push_str(&field(
         "Auth token",
@@ -302,10 +296,12 @@ pub(crate) fn render_status(
     s.push_str(&field("Model", &snap.model));
     s.push_str(&field("sandbox", sandbox));
     s.push_str(&field("Setting sources", &snap.setting_sources));
-    if let Some(meta) = snap.meta.as_ref() {
-        s.push_str(&field("provenance", &render_provenance(&meta.provenance)));
+    if let Some(descriptor) = snap.descriptor.as_ref() {
+        s.push_str(&field(
+            "provenance",
+            &render_provenance(&descriptor.provenance),
+        ));
     }
-    // Todos (appended; tokens + wall duration live in the Usage tab).
     let todo = render_todo_section(todos);
     if !todo.is_empty() {
         s.push_str(&todo);
@@ -341,7 +337,7 @@ mod status_tests {
     use super::*;
     use crate::todo_view::{TodoStatus, TodoView};
     use houyicoder_protocol::frontend::status::{
-        SessionMetaSummary, SessionProvenance, StatusSnapshot,
+        SessionDescriptorSummary, SessionProvenance, StatusSnapshot,
     };
     use houyicoder_protocol::llm::Usage;
 
@@ -365,15 +361,15 @@ mod status_tests {
             tool_calls: 3,
             tool_success: 2,
             tool_errors: 1,
-            meta: None,
+            descriptor: None,
             version: env!("CARGO_PKG_VERSION").to_string(),
             ..Default::default()
         }
     }
 
-    fn snap_with_meta(model: &str) -> StatusSnapshot {
+    fn snap_with_descriptor(model: &str) -> StatusSnapshot {
         let mut s = snap(model);
-        s.meta = Some(SessionMetaSummary {
+        s.descriptor = Some(SessionDescriptorSummary {
             name: Some("fix login bug".to_string()),
             cwd: "/work/app".to_string(),
             model: model.into(),
@@ -449,7 +445,7 @@ mod status_tests {
     #[test]
     fn test_status_renders_identity_block() {
         let s = render_status(
-            &snap_with_meta("glm-5.1"),
+            &snap_with_descriptor("glm-5.1"),
             &houyicoder_protocol::frontend::SessionId::new("sess-123"),
             "mac-seatbelt",
             &[],
@@ -490,8 +486,8 @@ mod status_tests {
 
     #[test]
     fn test_status_provenance_fork_format() {
-        let mut s = snap_with_meta("glm-5.1");
-        s.meta = s.meta.map(|mut m| {
+        let mut s = snap_with_descriptor("glm-5.1");
+        s.descriptor = s.descriptor.map(|mut m| {
             m.provenance = SessionProvenance::ForkedFrom {
                 from_sid: "sess-aaa".into(),
                 from_seq: Some(7),
@@ -509,8 +505,8 @@ mod status_tests {
 
     #[test]
     fn test_status_provenance_spawned_format() {
-        let mut s = snap_with_meta("glm-5.1");
-        s.meta = s.meta.map(|mut m| {
+        let mut s = snap_with_descriptor("glm-5.1");
+        s.descriptor = s.descriptor.map(|mut m| {
             m.provenance = SessionProvenance::SpawnedBy {
                 parent_session_id: "parent-1".into(),
                 subagent_type: "explore".into(),
@@ -529,8 +525,8 @@ mod status_tests {
 
     #[test]
     fn test_status_provenance_resumed_format() {
-        let mut s = snap_with_meta("glm-5.1");
-        s.meta = s.meta.map(|mut m| {
+        let mut s = snap_with_descriptor("glm-5.1");
+        s.descriptor = s.descriptor.map(|mut m| {
             m.provenance = SessionProvenance::ResumedFromExport {
                 source_session_id: "sess-orig".into(),
             };
@@ -547,8 +543,8 @@ mod status_tests {
 
     #[test]
     fn test_status_unnamed_placeholder() {
-        let mut s = snap_with_meta("glm-5.1");
-        s.meta = s.meta.map(|mut m| {
+        let mut s = snap_with_descriptor("glm-5.1");
+        s.descriptor = s.descriptor.map(|mut m| {
             m.name = None;
             m
         });

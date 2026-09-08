@@ -3,7 +3,7 @@ use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
 use houyicoder_core::agent::multi_agent::registry::built_in_all;
 use houyicoder_core::agent::runner_config::RunnerConfig;
-use houyicoder_memory::{InMemoryBackend, InMemoryMetaStore};
+use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 
@@ -21,7 +21,7 @@ fn runtime_with_text_child(text: &str) -> (MultiAgentRuntime, Arc<SessionStore>,
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
         bus: None,
-        meta_store: Some(Arc::new(InMemoryMetaStore::new())),
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
     let parent_sid = SessionId::new();
     (runtime, store, parent_sid)
@@ -74,7 +74,7 @@ async fn test_child_task_excludes_memory() {
         worktree_controller: None,
         workspace: Some(dir.clone()),
         bus: None,
-        meta_store: Some(Arc::new(InMemoryMetaStore::new())),
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -134,7 +134,7 @@ async fn test_max_turns_surfaces_partial() {
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
         bus: None,
-        meta_store: Some(Arc::new(InMemoryMetaStore::new())),
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -225,7 +225,7 @@ async fn test_spawn_announces_on_bus() {
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
-        meta_store: None,
+        descriptor_store: None,
     });
     let mut rx = bus.subscribe(spawned_topic());
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -269,7 +269,7 @@ async fn test_spawn_system_records_trigger() {
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
         bus: None,
-        meta_store: Some(Arc::new(InMemoryMetaStore::new())),
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
     let args = SpawnArgs::new("explore", "review the diff", "review the diff");
     let outcome = runtime
@@ -371,7 +371,7 @@ async fn test_send_to_child_inbox() {
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
         bus: Some(bus),
-        meta_store: None,
+        descriptor_store: None,
     });
     runtime
         .send_to_child_inbox("c1", "focus on auth".into())
@@ -500,7 +500,7 @@ async fn test_async_spawn_notifies_parent() {
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
-        meta_store: None,
+        descriptor_store: None,
     });
     let parent_sid = SessionId::new();
     let mut args = SpawnArgs::new("explore", "review the diff", "review the diff");
@@ -635,7 +635,7 @@ async fn test_sync_failed_child_propagates() {
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
         bus: None,
-        meta_store: Some(Arc::new(InMemoryMetaStore::new())),
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -686,7 +686,7 @@ async fn test_sync_failed_midstream() {
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
         bus: None,
-        meta_store: Some(Arc::new(InMemoryMetaStore::new())),
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -765,7 +765,7 @@ async fn test_async_failed_child_notifies() {
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
-        meta_store: None,
+        descriptor_store: None,
     });
     let parent_sid = SessionId::new();
     let mut args = SpawnArgs::new("explore", "review the diff", "review the diff");

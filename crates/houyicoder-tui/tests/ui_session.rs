@@ -66,21 +66,21 @@ fn test_turn_writes_durable_log() {
         "session log should carry the turn text:\n{body}"
     );
 
-    // The session.json sidecar is written on the first durable append (the
-    // lazy-materialize hook), so it holds the model + the workspace cwd the
-    // session started in. Proves the metadata sidecar wiring (composition ->
-    // FileMetaStore -> disk) lands on the prod path the resume + /status
-    // paths will read.
-    let meta_path = sid_dir.join("session.json");
-    let meta = std::fs::read_to_string(&meta_path).unwrap();
-    assert!(!meta.is_empty(), "session.json empty: {meta_path:?}");
+    // The first durable append materializes the descriptor used by resume
+    // and status paths.
+    let descriptor_path = sid_dir.join("session.json");
+    let descriptor = std::fs::read_to_string(&descriptor_path).unwrap();
     assert!(
-        meta.contains("model"),
-        "session.json should carry the model field:\n{meta}"
+        !descriptor.is_empty(),
+        "session.json empty: {descriptor_path:?}"
     );
     assert!(
-        meta.contains("cwd"),
-        "session.json should carry the cwd field:\n{meta}"
+        descriptor.contains("model"),
+        "session.json should carry the model field:\n{descriptor}"
+    );
+    assert!(
+        descriptor.contains("cwd"),
+        "session.json should carry the cwd field:\n{descriptor}"
     );
 }
 
@@ -207,7 +207,7 @@ fn test_resume_export_persists_history() {
             fixture.to_string_lossy().into_owned(),
         ],
     );
-    // Pick local mode (3) to clear the login screen + land on the working
+    // Pick local mode to clear the login screen + land on the working
     // surface. The status line shows the export's model name, proving the
     // model was restored (not the default resolve_model()).
     // With skip_login, --resume goes straight to the working screen.
@@ -309,7 +309,7 @@ fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prom
     let dir = root.join(sid_str);
     std::fs::create_dir_all(&dir).expect("mkdir session dir");
     std::fs::write(dir.join("log.jsonl"), format!("{line}\n")).expect("write log");
-    let meta = serde_json::json!({
+    let descriptor = serde_json::json!({
         "name": null,
         "name_source": "auto",
         "cwd": "/tmp",
@@ -320,7 +320,7 @@ fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prom
     });
     std::fs::write(
         dir.join("session.json"),
-        serde_json::to_string_pretty(&meta).expect("serialize meta"),
+        serde_json::to_string_pretty(&descriptor).expect("serialize descriptor"),
     )
     .expect("write sidecar");
 }
@@ -756,17 +756,11 @@ fn test_fork_keeps_source_untouched() {
     );
 }
 
-/// A sessions store over the retention count cap surfaces as a startup
-/// system line pointing at the review path. The background sweep skips
-/// auto-apply above the threshold, so without this line a backlog is
-/// invisible until the user thinks to ask. Seeds a low cap (2) in the
-/// isolated HOME settings + three sessions in the isolated sessions dir,
-/// then asserts the notice reaches the transcript on launch - the same
-/// end-to-end wiring the stale-catalog startup warning proves by.
+/// Report a retention backlog in the startup transcript.
 #[test]
 #[ignore]
-fn test_backlog_notice_warns_startup() {
-    let home = fresh_temp_dir("backlog-warn-home");
+fn test_retention_notice() {
+    let home = fresh_temp_dir("retention-home");
     std::fs::create_dir_all(home.join(".houyicoder")).unwrap();
     std::fs::write(
         home.join(".houyicoder").join("settings.json"),

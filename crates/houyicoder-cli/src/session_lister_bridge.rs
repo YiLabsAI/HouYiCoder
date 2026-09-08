@@ -1,34 +1,26 @@
-//! The CLI-side bridge for the TUI session picker: implements the TUI's
-//! SessionLister trait over the sidecar store (FileMetaStore) + the runner's
-//! SessionLog. The TUI names SessionLister; this bridge provides it, so the
-//! TUI stays a presentation layer and never imports the storage traits (the
-//! dep-graph layering). Title derivation: the sidecar name wins,
-//! else the first user prompt slugified from the session log head,
-//! else a placeholder.
+//! Adapt durable session descriptors and logs to the TUI session picker.
 
 use std::sync::Arc;
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    SessionEvent, SessionId, SessionLogEntry, SessionMetaStore, SessionProvenance,
+    SessionDescriptorStore, SessionEvent, SessionId, SessionLogEntry, SessionProvenance,
 };
 use houyicoder_tui::resume_picker::{SessionLister, SessionRow};
 
 pub struct SessionListerBridge {
-    meta_store: Arc<dyn SessionMetaStore>,
+    descriptor_store: Arc<dyn SessionDescriptorStore>,
     session_log: Arc<dyn SessionLog>,
     sessions_root: std::path::PathBuf,
 }
 
 impl SessionListerBridge {
-    /// Construct from one truth source: sessions_root. The meta store is
-    /// derived from the same root (a FileMetaStore pointed at it), so
-    /// discovery (readdir) and metadata reading (read_meta) can never
-    /// disagree about which sessions exist.
+    /// Build both session readers from the same root.
     pub fn new(session_log: Arc<dyn SessionLog>, sessions_root: std::path::PathBuf) -> Self {
-        let meta_store = houyicoder_service::composition::disk_meta_store_at(sessions_root.clone());
+        let descriptor_store =
+            houyicoder_service::composition::disk_descriptor_store_at(sessions_root.clone());
         Self {
-            meta_store,
+            descriptor_store,
             session_log,
             sessions_root,
         }
@@ -38,15 +30,8 @@ impl SessionListerBridge {
 impl SessionLister for SessionListerBridge {
     fn list_sessions(&self, current_sid: &str) -> Vec<SessionRow> {
         let current = SessionId::from_display_string(current_sid).unwrap_or_default();
-        // Stat-first: read_dir + stat log.jsonl mtime for ALL sessions
-        // (no JSON parse), sort by last-active, take the top 100. Only
-        // those 100 pay the sidecar serde cost (read_meta). On a 50k
-        // backlog this replaces 50k JSON parses with 50k stats + 100
-        // parses. A session without a log is skipped: resume_sid
-        // hard-errors on a missing log, so a no-log row -- even one
-        // with a sidecar -- is a row the user cannot resume. Skipping
-        // them at the stat phase keeps the visible slots full of rows
-        // that are actually actionable.
+        // Rank by log mtime before parsing descriptors, and exclude sessions
+        // without a resumable log.
         const VISIBLE_LIMIT: usize = 100;
         let recent = houyicoder_service::session_prune::list_recent_sessions(
             &self.sessions_root,
@@ -56,20 +41,20 @@ impl SessionLister for SessionListerBridge {
             .into_iter()
             .filter(|(sid, _)| *sid != current)
             .filter_map(|(sid, last_active)| {
-                let meta = self.meta_store.read_meta(sid)?;
+                let descriptor = self.descriptor_store.read_descriptor(sid)?;
                 // Subagent sessions are not independently resumable — they
                 // are sidechains of a parent session. Filter them out.
-                if matches!(meta.provenance, SessionProvenance::SpawnedBy { .. }) {
+                if matches!(descriptor.provenance, SessionProvenance::SpawnedBy { .. }) {
                     return None;
                 }
-                let cwd_basename = meta
+                let cwd_basename = descriptor
                     .cwd
                     .rsplit('/')
                     .next()
                     .filter(|s| !s.is_empty())
                     .unwrap_or("?")
                     .to_string();
-                let title = meta
+                let title = descriptor
                     .name
                     .as_ref()
                     .filter(|n| !n.trim().is_empty())
@@ -90,7 +75,7 @@ impl SessionLister for SessionListerBridge {
             })
             .collect();
         // Already sorted by last_active desc from list_recent_sessions,
-        // but filter_map may have dropped entries (read_meta None), so
+        // but filter_map may have dropped entries (read_descriptor None), so
         // the order is preserved -- no re-sort needed.
         // Dedup by the cheap title: when multiple sessions share the same
         // sidecar name (the common "re-running + naming alike" case), keep
@@ -115,8 +100,8 @@ impl SessionLister for SessionListerBridge {
         // serde parse for the first-prompt slug. last_active is already the
         // log mtime (set by list_sessions' stat), so no re-stat here.
         let has_name = self
-            .meta_store
-            .read_meta(sid)
+            .descriptor_store
+            .read_descriptor(sid)
             .as_ref()
             .and_then(|m| m.name.as_ref())
             .is_some_and(|n| !n.trim().is_empty());
@@ -186,10 +171,10 @@ fn slugify(text: &str) -> String {
 mod tests {
     use super::*;
     use houyicoder_context::{
-        EventId, NameSource, SessionEvent, SessionId, SessionLogEntry, SessionMeta,
+        EventId, NameSource, SessionDescriptor, SessionEvent, SessionId, SessionLogEntry,
         SessionProvenance,
     };
-    use houyicoder_memory::{FileMetaStore, LocalFileBackend};
+    use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
     use houyicoder_session::SessionStore;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -202,8 +187,8 @@ mod tests {
         p
     }
 
-    fn meta(name: Option<&str>, cwd: &str, ts: u64) -> SessionMeta {
-        SessionMeta {
+    fn descriptor(name: Option<&str>, cwd: &str, ts: u64) -> SessionDescriptor {
+        SessionDescriptor {
             name: name.map(str::to_string),
             name_source: NameSource::Auto,
             cwd: cwd.into(),
@@ -217,9 +202,9 @@ mod tests {
 
     /// Write a sidecar for a session at the root (real disk, one truth
     /// source with the bridge's sessions_root).
-    fn write_sidecar(root: &std::path::Path, sid: SessionId, m: &SessionMeta) {
-        let store = FileMetaStore::new(root.to_path_buf());
-        store.write_meta(sid, m).unwrap();
+    fn write_sidecar(root: &std::path::Path, sid: SessionId, m: &SessionDescriptor) {
+        let store = FileDescriptorStore::new(root.to_path_buf());
+        store.write_descriptor(sid, m).unwrap();
     }
 
     /// Stamp a path's mtime to N seconds ago so the stat-first sort is
@@ -266,9 +251,13 @@ mod tests {
         let cur = SessionId::new();
         let older = SessionId::new();
         let newer = SessionId::new();
-        write_sidecar(&root, older, &meta(None, "/repo/a", 1));
-        write_sidecar(&root, newer, &meta(Some("named session"), "/repo/b", 1));
-        write_sidecar(&root, cur, &meta(None, "/repo/c", 1));
+        write_sidecar(&root, older, &descriptor(None, "/repo/a", 1));
+        write_sidecar(
+            &root,
+            newer,
+            &descriptor(Some("named session"), "/repo/b", 1),
+        );
+        write_sidecar(&root, cur, &descriptor(None, "/repo/c", 1));
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         append_log(&store, older, "hello world prompt").await;
         append_log(&store, newer, "named session prompt").await;
@@ -321,7 +310,7 @@ mod tests {
     async fn test_long_prompt_slug_ellipsis() {
         let root = temp_root();
         let sid = SessionId::new();
-        write_sidecar(&root, sid, &meta(None, "/repo", 1));
+        write_sidecar(&root, sid, &descriptor(None, "/repo", 1));
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         append_log(
             &store,
@@ -356,7 +345,7 @@ mod tests {
     async fn test_bridge_placeholder_no_prompt() {
         let root = temp_root();
         let sid = SessionId::new();
-        write_sidecar(&root, sid, &meta(None, "/repo", 1));
+        write_sidecar(&root, sid, &descriptor(None, "/repo", 1));
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         // Append an empty UserInput so the session has a log (resumable +
         // listed) but slugifies to nothing -- the title stays the sid
@@ -391,9 +380,9 @@ mod tests {
         let a = SessionId::new();
         let b = SessionId::new();
         let c = SessionId::new();
-        write_sidecar(&root, a, &meta(Some("shared"), "/repo", 1));
-        write_sidecar(&root, b, &meta(Some("shared"), "/repo", 1));
-        write_sidecar(&root, c, &meta(Some("unique"), "/repo", 1));
+        write_sidecar(&root, a, &descriptor(Some("shared"), "/repo", 1));
+        write_sidecar(&root, b, &descriptor(Some("shared"), "/repo", 1));
+        write_sidecar(&root, c, &descriptor(Some("unique"), "/repo", 1));
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         append_log(&store, a, "a prompt").await;
         append_log(&store, b, "b prompt").await;

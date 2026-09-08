@@ -187,7 +187,7 @@ pub(super) async fn run_async_spawn(
     let parent_sid_f = parent_sid;
     let child_str_f = child_str.clone();
     let child_str_stamp = child_str.clone();
-    let meta_store_f = this.meta_store.clone();
+    let descriptor_store_f = this.descriptor_store.clone();
     let subagent_type_f = args.subagent_type.clone();
     tokio::spawn(async move {
         // The permit releases here (end of the driver) so the slot frees when
@@ -209,7 +209,7 @@ pub(super) async fn run_async_spawn(
         )
         .await;
         super::stamp_spawned_by(
-            &meta_store_f,
+            &descriptor_store_f,
             child_sid,
             parent_sid_f,
             &subagent_type_f,

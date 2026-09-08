@@ -18,19 +18,16 @@ pub(crate) const DEFAULT_TITLE: &str = "houyicoder";
 /// sidecar value cannot dump megabytes of OSC into the stream.
 const MAX_TITLE_LEN: usize = 128;
 
-/// Compute the title a snapshot would set, without writing. A snapshot with
-/// no sidecar meta or no name yields the default app name -- the launch scene
-/// (fresh session, no sidecar yet) + a swap to an unnamed session both reset
-/// the tab to the default rather than leaving a stale prior session's name on
-/// the chrome. The caller caches the last title + only writes on change, so
-/// the per-second idle poll does not flood stdout.
+/// Compute the title for a status snapshot. A missing or unnamed descriptor
+/// resets the terminal to the default instead of retaining a previous session
+/// name. The caller suppresses duplicate writes.
 pub(crate) fn title_for(snap: &StatusSnapshot) -> Option<String> {
-    let name = snap.meta.as_ref().and_then(|m| m.name.as_deref());
+    let name = snap
+        .descriptor
+        .as_ref()
+        .and_then(|descriptor| descriptor.name.as_deref());
     let title = match name {
         Some(n) if !n.trim().is_empty() => sanitize(n).into_owned(),
-        // No meta, or a meta with no/blank name: the default title. Returning
-        // Some (not None) is what makes the launch + swap-to-unnamed scenes
-        // reset the chrome -- None would leave the prior OSC title in place.
         _ => DEFAULT_TITLE.to_string(),
     };
     Some(title)
@@ -95,23 +92,17 @@ fn sanitize(title: &str) -> std::borrow::Cow<'_, str> {
 mod tests {
     use super::*;
 
-    /// No sidecar meta => the default title (not None). Returning Some is what
-    /// makes the launch scene + a swap to an unnamed session reset the chrome;
-    /// None would leave the prior session's title stuck on the tab.
     #[test]
-    fn test_no_meta_uses_default() {
+    fn test_missing_descriptor() {
         let snap = StatusSnapshot::default();
         assert_eq!(title_for(&snap).as_deref(), Some(DEFAULT_TITLE));
     }
 
-    /// A meta with no name (sidecar exists but the session is unnamed) also
-    /// yields the default title -- the swap-to-unnamed case where a stale
-    /// prior name must not outlive the session.
     #[test]
-    fn test_meta_no_name_default() {
-        use houyicoder_protocol::frontend::status::SessionMetaSummary;
+    fn test_unnamed_descriptor() {
+        use houyicoder_protocol::frontend::status::SessionDescriptorSummary;
         let snap = StatusSnapshot {
-            meta: Some(SessionMetaSummary {
+            descriptor: Some(SessionDescriptorSummary {
                 name: None,
                 ..Default::default()
             }),
@@ -120,12 +111,11 @@ mod tests {
         assert_eq!(title_for(&snap).as_deref(), Some(DEFAULT_TITLE));
     }
 
-    /// A snapshot with a meta name yields that name as the title.
     #[test]
     fn test_named_snapshot_titles_name() {
-        use houyicoder_protocol::frontend::status::SessionMetaSummary;
+        use houyicoder_protocol::frontend::status::SessionDescriptorSummary;
         let snap = StatusSnapshot {
-            meta: Some(SessionMetaSummary {
+            descriptor: Some(SessionDescriptorSummary {
                 name: Some("fix-login".into()),
                 ..Default::default()
             }),
@@ -138,9 +128,9 @@ mod tests {
     /// not None -- the sidecar exists, the name just is not set).
     #[test]
     fn test_empty_name_uses_default() {
-        use houyicoder_protocol::frontend::status::SessionMetaSummary;
+        use houyicoder_protocol::frontend::status::SessionDescriptorSummary;
         let snap = StatusSnapshot {
-            meta: Some(SessionMetaSummary {
+            descriptor: Some(SessionDescriptorSummary {
                 name: Some("   ".into()),
                 ..Default::default()
             }),
@@ -154,9 +144,9 @@ mod tests {
     /// truncate the sequence + inject the tail as terminal commands.
     #[test]
     fn test_control_chars_stripped() {
-        use houyicoder_protocol::frontend::status::SessionMetaSummary;
+        use houyicoder_protocol::frontend::status::SessionDescriptorSummary;
         let snap = StatusSnapshot {
-            meta: Some(SessionMetaSummary {
+            descriptor: Some(SessionDescriptorSummary {
                 name: Some("fix\x1b]0;evil\x07login\n".into()),
                 ..Default::default()
             }),
@@ -173,9 +163,9 @@ mod tests {
     /// A pathologically long name is truncated so the OSC stays bounded.
     #[test]
     fn test_long_name_truncated() {
-        use houyicoder_protocol::frontend::status::SessionMetaSummary;
+        use houyicoder_protocol::frontend::status::SessionDescriptorSummary;
         let snap = StatusSnapshot {
-            meta: Some(SessionMetaSummary {
+            descriptor: Some(SessionDescriptorSummary {
                 name: Some("x".repeat(500)),
                 ..Default::default()
             }),
@@ -195,9 +185,9 @@ mod tests {
     /// would keep the prior session's name indefinitely.
     #[test]
     fn test_sync_resets_when_unnamed() {
-        use houyicoder_protocol::frontend::status::SessionMetaSummary;
+        use houyicoder_protocol::frontend::status::SessionDescriptorSummary;
         let named = StatusSnapshot {
-            meta: Some(SessionMetaSummary {
+            descriptor: Some(SessionDescriptorSummary {
                 name: Some("alpha".into()),
                 ..Default::default()
             }),
@@ -206,9 +196,8 @@ mod tests {
         let mut last: Option<String> = None;
         sync(&named, &mut last);
         assert_eq!(last.as_deref(), Some("alpha"));
-        // Swap to an unnamed session (meta with no name) -- sync must reset.
         let unnamed = StatusSnapshot {
-            meta: Some(SessionMetaSummary::default()),
+            descriptor: Some(SessionDescriptorSummary::default()),
             ..Default::default()
         };
         sync(&unnamed, &mut last);

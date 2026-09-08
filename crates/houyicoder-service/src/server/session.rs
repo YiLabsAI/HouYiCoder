@@ -49,7 +49,7 @@ impl Server {
             settings_path: houyicoder_config::settings_path(),
             project_path: None,
             append_notify: None,
-            meta_store: None,
+            descriptor_store: None,
             diagnostics: crate::diagnostics::handle(),
             // Resume path does not wire the bus yet; a reconnecting session
             // mid-child-approval is a follow-up (the parent serve path covers
@@ -68,15 +68,12 @@ impl Server {
         self
     }
 
-    /// Attach the session-metadata sidecar store so the Status handler can
-    /// project the identity fields (version / name / cwd / provenance) onto
-    /// the wire snapshot. The composition root shares the same Arc it used
-    /// to write the initial sidecar.
-    pub fn with_meta_store(
+    /// Attach the descriptor store used by status and session updates.
+    pub fn with_descriptor_store(
         mut self,
-        meta_store: Arc<dyn houyicoder_context::SessionMetaStore>,
+        descriptor_store: Arc<dyn houyicoder_context::SessionDescriptorStore>,
     ) -> Self {
-        self.meta_store = Some(meta_store);
+        self.descriptor_store = Some(descriptor_store);
         self
     }
 
@@ -85,10 +82,12 @@ impl Server {
     /// sidecar is skipped — the in-memory pick + settings.json persistence
     /// still take effect; only the resume-restore is lost.
     pub(super) fn persist_sidecar_model(&self, model: &str) {
-        let Some(store) = self.meta_store.as_ref() else {
+        let Some(store) = self.descriptor_store.as_ref() else {
             return;
         };
-        drop(store.update_meta(self.session, &mut |meta| meta.model = model.to_string()));
+        drop(store.update_descriptor(self.session, &mut |descriptor| {
+            descriptor.model = model.to_string();
+        }));
     }
 }
 

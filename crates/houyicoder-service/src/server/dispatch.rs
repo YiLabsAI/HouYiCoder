@@ -99,14 +99,14 @@ impl Server {
                 // TUI's stub mode never sends this request, but fail closed
                 // with a clear error if it does. Internal (not InvalidRequest):
                 // the client request is fine, the server lacks the store.
-                let Some(store) = self.meta_store.as_ref() else {
+                let Some(store) = self.descriptor_store.as_ref() else {
                     return self
                         .send_response(
                             io,
                             req_id,
                             ResponsePayload::Error(WireError::new(
                                 WireErrorKind::Internal,
-                                "rename: no session meta store wired (stub mode)",
+                                "rename: no session descriptor store wired (stub mode)",
                                 false,
                             )),
                         )
@@ -115,21 +115,21 @@ impl Server {
                 // Empty/whitespace clears back to Auto so the display reverts
                 // to the first-prompt slug; non-empty marks User so a later
                 // auto-derivation does not clobber the custom name. Applied
-                // through update_meta so a model switch landing at the same
+                // through update_descriptor so a model switch landing at the same
                 // moment does not write back the pre-rename name.
                 let trimmed = name.trim().to_string();
-                let outcome = store.update_meta(self.session, &mut |meta| {
+                let outcome = store.update_descriptor(self.session, &mut |descriptor| {
                     if trimmed.is_empty() {
-                        meta.name = None;
-                        meta.name_source = houyicoder_context::NameSource::Auto;
+                        descriptor.name = None;
+                        descriptor.name_source = houyicoder_context::NameSource::Auto;
                     } else {
-                        meta.name = Some(trimmed.clone());
-                        meta.name_source = houyicoder_context::NameSource::User;
+                        descriptor.name = Some(trimmed.clone());
+                        descriptor.name_source = houyicoder_context::NameSource::User;
                     }
                 });
                 let detail = match outcome {
-                    Ok(houyicoder_context::MetaUpdate::Written) => None,
-                    Ok(houyicoder_context::MetaUpdate::Absent) => {
+                    Ok(houyicoder_context::DescriptorUpdate::Written) => None,
+                    Ok(houyicoder_context::DescriptorUpdate::Absent) => {
                         Some("rename: no session sidecar to rename".to_string())
                     }
                     Err(e) => Some(format!("rename: write failed: {e}")),
@@ -590,27 +590,23 @@ impl Server {
             .unwrap_or_default()
     }
 
-    /// Build a wire StatusSnapshot for the current session, attaching the
-    /// sidecar identity fields (version / name / cwd / provenance) with
-    /// auto-derivation of an unnamed session's name from the first prompt in
-    /// the log head. Shared by the Status request + the RenameSession reply
-    /// so both project the same post-rename view. The store is None on the
-    /// single-shot test path; the snapshot degrades to runner-only fields.
+    /// Build the current wire status, deriving an unnamed session's display
+    /// name from the first prompt when its descriptor is available.
     fn status_snapshot_wire(&self) -> houyicoder_protocol::frontend::status::StatusSnapshot {
         let snap = self.runner.status_snapshot();
         let mut wire = pa::map_status_snapshot(&snap);
-        if let Some(store) = self.meta_store.as_ref()
-            && let Some(mut meta) = store.read_meta(self.session)
+        if let Some(store) = self.descriptor_store.as_ref()
+            && let Some(mut descriptor) = store.read_descriptor(self.session)
         {
-            if meta
+            if descriptor
                 .name
                 .as_ref()
                 .map(|s| s.trim().is_empty())
                 .unwrap_or(true)
             {
-                meta.name = first_prompt_slug(self.runner.store().as_ref(), self.session);
+                descriptor.name = first_prompt_slug(self.runner.store().as_ref(), self.session);
             }
-            wire.meta = Some(pa::map_session_meta(&meta));
+            wire.descriptor = Some(pa::map_session_descriptor(&descriptor));
         }
         // Running build version; always known, not sidecar-gated.
         wire.version = env!("CARGO_PKG_VERSION").to_string();

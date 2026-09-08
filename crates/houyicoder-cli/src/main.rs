@@ -320,7 +320,7 @@ fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn std::err
         startup_warnings: Vec::new(),
         history_path: houyicoder_config::config_home().join("history.jsonl"),
     };
-    // Attach mode has no session_log/meta_store, so the /resume picker cannot
+    // Attach mode has no session_log/descriptor_store, so the /resume picker cannot
     // open (run_resume reports no store wired); pending_resume_target stays None.
     drop(houyicoder_tui::app::run_with_runner(bundle, None)?);
     Ok(())
@@ -590,8 +590,8 @@ pub(crate) fn assemble_bundle(
     // The sidecar reader for the session picker (lists sessions + reads each
     // name/cwd/model). Built at the same sid-keyed sessions root the file
     // backend uses.
-    let meta_store: std::sync::Arc<dyn houyicoder_context::SessionMetaStore> =
-        houyicoder_service::composition::disk_meta_store();
+    let descriptor_store: std::sync::Arc<dyn houyicoder_context::SessionDescriptorStore> =
+        houyicoder_service::composition::disk_descriptor_store();
     // The snapshot bridge loads the durable log into a TranscriptLine
     // snapshot for the search view (read-whole path under the threshold).
     // Shares the same SessionLog as the trajectory/export bridges (an Arc
@@ -622,7 +622,7 @@ pub(crate) fn assemble_bundle(
         gate,
         sandbox_session,
         append_notify,
-        Some(meta_store.clone()),
+        Some(descriptor_store.clone()),
         worktree_controller,
         bus,
     );
@@ -666,7 +666,7 @@ fn pair_inproc_server(
     gate: Arc<houyicoder_permission::DefaultModeGate>,
     sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
     append_notify: Arc<tokio::sync::Notify>,
-    meta_store: Option<Arc<dyn houyicoder_context::SessionMetaStore>>,
+    descriptor_store: Option<Arc<dyn houyicoder_context::SessionDescriptorStore>>,
     worktree_controller: Option<Arc<houyicoder_core::agent::WorktreeController>>,
     bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 ) -> (Arc<Runner>, Client, Vec<String>) {
@@ -734,8 +734,8 @@ fn pair_inproc_server(
     }
     // Attach the sidecar so /status renders the identity fields (version /
     // name / cwd / provenance). None on paths without a store (tests).
-    if let Some(store) = meta_store {
-        server = server.with_meta_store(store);
+    if let Some(store) = descriptor_store {
+        server = server.with_descriptor_store(store);
     }
     let server = server;
     let runtime = houyicoder_tui::composition::shared_runtime();
