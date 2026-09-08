@@ -12,8 +12,8 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::{PFut, PStream};
 use houyicoder_context::{
-    CheckpointId, CheckpointManifest, ContextBackend, Disposition, EventId, SessionId, TurnEvent,
-    TurnEventKind, TurnGroup,
+    CheckpointId, CheckpointManifest, ContextBackend, Disposition, EventId, SessionEvent,
+    SessionId, SessionLogEntry, TurnGroup,
 };
 use houyicoder_core::agent::compact::CompactOutcome;
 use houyicoder_core::agent::runner_config::RunnerConfig;
@@ -63,21 +63,21 @@ impl ModelProvider for CannedProvider {
 async fn seed_folded_session() -> (Arc<SessionStore>, SessionId) {
     let session = SessionId::new();
     let backend = InMemoryBackend::new();
-    let folded = TurnEvent {
+    let folded = SessionLogEntry {
         id: EventId::new(),
         session,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput {
+        event: SessionEvent::UserInput {
             text: "remember the migration plan".into(),
         },
     };
-    let verbatim = TurnEvent {
+    let verbatim = SessionLogEntry {
         id: EventId::new(),
         session,
         ts: 1,
         prev_hash: None,
-        kind: TurnEventKind::AssistantMessage {
+        event: SessionEvent::AssistantMessage {
             text: "latest response".into(),
             thinking: None,
         },
@@ -155,21 +155,21 @@ async fn seed_rich_session() -> (Arc<SessionStore>, SessionId) {
     let session = SessionId::new();
     let backend = InMemoryBackend::new();
     for i in 0..6 {
-        let u = TurnEvent {
+        let u = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: i as u64 * 2,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: format!("prompt {i}"),
             },
         };
-        let a = TurnEvent {
+        let a = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: i as u64 * 2 + 1,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: format!("answer {i}"),
                 thinking: None,
             },
@@ -235,12 +235,12 @@ async fn test_search_filters_turn_range() {
     let session = SessionId::new();
     let backend = InMemoryBackend::new();
     for t in ["zero", "one", "two", "three"] {
-        let ev = TurnEvent {
+        let ev = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput { text: t.into() },
+            event: SessionEvent::UserInput { text: t.into() },
         };
         backend.append(ev).await.unwrap();
     }
@@ -277,7 +277,7 @@ impl FixedSummarizer {
 impl Summarizer for FixedSummarizer {
     fn summarize<'a>(
         &'a self,
-        events: &'a [TurnEvent],
+        events: &'a [SessionLogEntry],
         _custom: Option<&'a str>,
     ) -> PFut<'a, Result<String, SummarizeError>> {
         if events.is_empty() {
@@ -300,32 +300,32 @@ async fn seed_backbone_session(file: &str) -> (Arc<SessionStore>, SessionId) {
     let session = SessionId::new();
     let backend = InMemoryBackend::new();
     // Turn 0 — the edit sits here, before the verbatim tail, so it folds.
-    let u0 = TurnEvent {
+    let u0 = SessionLogEntry {
         id: EventId::new(),
         session,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput {
+        event: SessionEvent::UserInput {
             text: "prompt 0".into(),
         },
     };
-    let edit = TurnEvent {
+    let edit = SessionLogEntry {
         id: EventId::new(),
         session,
         ts: 1,
         prev_hash: None,
-        kind: TurnEventKind::ToolCall {
+        event: SessionEvent::ToolCall {
             call_id: "edit1".into(),
             tool: "edit".into(),
             input: serde_json::json!({"path": file, "old_string": "x", "new_string": "y"}),
         },
     };
-    let a0 = TurnEvent {
+    let a0 = SessionLogEntry {
         id: EventId::new(),
         session,
         ts: 2,
         prev_hash: None,
-        kind: TurnEventKind::AssistantMessage {
+        event: SessionEvent::AssistantMessage {
             text: "answer 0".into(),
             thinking: None,
         },
@@ -335,21 +335,21 @@ async fn seed_backbone_session(file: &str) -> (Arc<SessionStore>, SessionId) {
     backend.append(a0).await.unwrap();
     // Turns 1..6 — the last 4 stay verbatim, turn 1 + the edit fold.
     for i in 1..6 {
-        let u = TurnEvent {
+        let u = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: (i as u64 + 1) * 10,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: format!("prompt {i}"),
             },
         };
-        let a = TurnEvent {
+        let a = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: (i as u64 + 1) * 10 + 1,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: format!("answer {i}"),
                 thinking: None,
             },
@@ -499,21 +499,21 @@ async fn test_economy_gate_fires_compact() {
     // instead of tripping the overflow path. The window (20k) is larger than
     // the estimation margin (13k) so the ceiling threshold is non-zero.
     for i in 0..50 {
-        let u = TurnEvent {
+        let u = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: i as u64 * 2,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "x".repeat(400),
             },
         };
-        let a = TurnEvent {
+        let a = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: i as u64 * 2 + 1,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: format!("a{i}{}", "y".repeat(400)),
                 thinking: None,
             },
@@ -549,7 +549,7 @@ async fn test_economy_gate_fires_compact() {
     let events = store.replay(session).await.expect("replay");
     let compacted = events
         .iter()
-        .any(|e| matches!(e.kind, TurnEventKind::CompactionBoundary { .. }));
+        .any(|e| matches!(e.event, SessionEvent::CompactionBoundary { .. }));
     assert!(
         compacted,
         "economy gate fired a proactive compact (CompactionBoundary present)"
@@ -569,21 +569,21 @@ async fn test_still_over_sets_sticky() {
     // keeps everything Verbatim (no progress). With a small window + an
     // isolated cwd the served view sits over the ceiling threshold.
     for i in 0..2 {
-        let u = TurnEvent {
+        let u = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: i as u64 * 2,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "x".repeat(400),
             },
         };
-        let a = TurnEvent {
+        let a = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: i as u64 * 2 + 1,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: format!("a{i}{}", "y".repeat(400)),
                 thinking: None,
             },

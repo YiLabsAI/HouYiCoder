@@ -8,7 +8,7 @@
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use houyicoder_context::{SessionId, TruncationSignal, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId, TruncationSignal};
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, ModelSettings, OutputItem, ProviderError,
 };
@@ -521,7 +521,7 @@ impl Runner {
                 self.store
                     .append(new_event(
                         session,
-                        TurnEventKind::TruncationVerdict {
+                        SessionEvent::TruncationVerdict {
                             raw_finish_reason,
                             normalized_reason: state.finish_reason.clone(),
                             signal: truncation_signal,
@@ -588,7 +588,7 @@ impl Runner {
             self.store
                 .append(new_event(
                     session,
-                    TurnEventKind::TruncationVerdict {
+                    SessionEvent::TruncationVerdict {
                         raw_finish_reason,
                         normalized_reason,
                         signal: truncation_signal,
@@ -633,7 +633,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                houyicoder_context::TurnEventKind::MetaUser {
+                houyicoder_context::SessionEvent::MetaUser {
                     text: NUDGE.to_string(),
                 },
             ))
@@ -661,7 +661,7 @@ impl Runner {
                 self.store
                     .append(new_event(
                         session,
-                        TurnEventKind::AssistantTextDelta { text: text.clone() },
+                        SessionEvent::AssistantTextDelta { text: text.clone() },
                     ))
                     .await?;
                 state.assistant_text.push_str(&text);

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::{ContextBackend, EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, ModelCapabilities, OutputItem, ProviderError,
@@ -332,39 +332,42 @@ async fn test_loop_applies_manifest() {
 /// Seed the backend with initial events and return them for manifest building.
 /// The fixture includes a large tool result (Referenced), a summarized
 // assistant turn, and a verbatim tail assistant turn.
-async fn seed_manifest_events(backend: &InMemoryBackend, session: SessionId) -> Vec<TurnEvent> {
+async fn seed_manifest_events(
+    backend: &InMemoryBackend,
+    session: SessionId,
+) -> Vec<SessionLogEntry> {
     let big = serde_json::json!({"data": "x".repeat(200)});
     let kinds = [
-        TurnEventKind::UserInput {
+        SessionEvent::UserInput {
             text: "original task".into(),
         },
-        TurnEventKind::ToolCall {
+        SessionEvent::ToolCall {
             call_id: "c1".into(),
             tool: "run".into(),
             input: serde_json::json!({}),
         },
-        TurnEventKind::ToolResult {
+        SessionEvent::ToolResult {
             call_id: "c1".into(),
             output: big,
             duration_ms: 0,
         },
-        TurnEventKind::AssistantMessage {
+        SessionEvent::AssistantMessage {
             text: "old response".into(),
             thinking: None,
         },
-        TurnEventKind::AssistantMessage {
+        SessionEvent::AssistantMessage {
             text: "latest response".into(),
             thinking: None,
         },
     ];
     let mut events = Vec::new();
     for kind in kinds {
-        let ev = TurnEvent {
+        let ev = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         };
         backend.append(ev.clone()).await.unwrap();
         events.push(ev);

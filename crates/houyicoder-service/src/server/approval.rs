@@ -4,7 +4,7 @@
 //! yes-don't-ask-again consent, and returns the engine decision for resume.
 //! Split from server.rs so that file stays under the file-size gate.
 
-use houyicoder_context::{EventId, PermissionVerdict, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionLogEntry};
 use houyicoder_permission::{Decision, ToolRequest};
 use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
@@ -132,12 +132,12 @@ impl Server {
         } else {
             PermissionVerdict::Denied
         };
-        let audit = TurnEvent {
+        let audit = SessionLogEntry {
             id: EventId::new(),
             session: self.session,
             ts: now_millis(),
             prev_hash: None,
-            kind: TurnEventKind::PermissionDecision {
+            event: SessionEvent::PermissionDecision {
                 call_id: approval.call_id.clone(),
                 tool: approval.tool_name.clone(),
                 verdict,

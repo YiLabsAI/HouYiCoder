@@ -333,7 +333,7 @@ fn command_is_semantic_success(command: &str, exit_code: i64) -> bool {
 impl TranscriptLine {
     /// True when this line is TUI-only (not derived from session events).
     /// Slash-command User echoes (starting with /), ContextGrid, System,
-    /// and Approval lines have no matching TurnEvent, so the transcript
+    /// and Approval lines have no matching SessionLogEntry, so the transcript
     /// rebuild must preserve them at their original positions instead of
     /// appending them at the end.
     pub fn is_tui_only(&self) -> bool {

@@ -1,37 +1,37 @@
 //! A short fixed-width label for each event kind, for the trajectory audit
 //! row. Split from projection.rs so that file stays under the file-size gate.
 
-use houyicoder_context::TurnEventKind;
+use houyicoder_context::SessionEvent;
 
-pub fn trajectory_kind_label(kind: &TurnEventKind) -> &'static str {
+pub fn trajectory_kind_label(kind: &SessionEvent) -> &'static str {
     match kind {
-        TurnEventKind::UserInput { .. } => "user",
-        TurnEventKind::MidTurnInput { .. } => "user",
-        TurnEventKind::MetaUser { .. } => "meta",
-        TurnEventKind::MemoryRecall { .. } => "memory",
-        TurnEventKind::SkillListing { .. } => "skill_listing",
-        TurnEventKind::SkillBody { .. } => "skill_body",
-        TurnEventKind::AssistantMessage { .. } => "assistant",
-        TurnEventKind::AssistantTextDelta { .. } => "delta",
-        TurnEventKind::ToolCall { .. } => "tool_call",
-        TurnEventKind::ToolResult { .. } => "tool_result",
-        TurnEventKind::Reasoning { .. } => "reasoning",
-        TurnEventKind::CompactionBoundary { .. } => "boundary",
-        TurnEventKind::CacheBreak { .. } => "cache_break",
-        TurnEventKind::Summary { .. } => "summary",
-        TurnEventKind::PermissionDecision { .. } => "verdict",
-        TurnEventKind::TurnAborted { .. } => "aborted",
-        TurnEventKind::TruncationVerdict { .. } => "truncation",
-        TurnEventKind::WorktreeEnter { .. } => "worktree_enter",
-        TurnEventKind::WorktreeExit { .. } => "worktree_exit",
-        TurnEventKind::TurnUsage { .. } => "usage",
-        TurnEventKind::HookSignal { .. } => "hook",
-        TurnEventKind::TurnStarted { .. } => "turn_start",
-        TurnEventKind::RewardObservation { .. } => "reward",
-        TurnEventKind::SubagentSpawn { .. } => "spawn",
-        TurnEventKind::SubagentReturn { .. } => "return",
-        TurnEventKind::NotificationInjected { .. } => "notify",
-        TurnEventKind::Unknown => "unknown",
+        SessionEvent::UserInput { .. } => "user",
+        SessionEvent::MidTurnInput { .. } => "user",
+        SessionEvent::MetaUser { .. } => "meta",
+        SessionEvent::MemoryRecall { .. } => "memory",
+        SessionEvent::SkillListing { .. } => "skill_listing",
+        SessionEvent::SkillBody { .. } => "skill_body",
+        SessionEvent::AssistantMessage { .. } => "assistant",
+        SessionEvent::AssistantTextDelta { .. } => "delta",
+        SessionEvent::ToolCall { .. } => "tool_call",
+        SessionEvent::ToolResult { .. } => "tool_result",
+        SessionEvent::Reasoning { .. } => "reasoning",
+        SessionEvent::CompactionBoundary { .. } => "boundary",
+        SessionEvent::CacheBreak { .. } => "cache_break",
+        SessionEvent::Summary { .. } => "summary",
+        SessionEvent::PermissionDecision { .. } => "verdict",
+        SessionEvent::TurnAborted { .. } => "aborted",
+        SessionEvent::TruncationVerdict { .. } => "truncation",
+        SessionEvent::WorktreeEnter { .. } => "worktree_enter",
+        SessionEvent::WorktreeExit { .. } => "worktree_exit",
+        SessionEvent::TurnUsage { .. } => "usage",
+        SessionEvent::HookSignal { .. } => "hook",
+        SessionEvent::TurnStarted { .. } => "turn_start",
+        SessionEvent::RewardObservation { .. } => "reward",
+        SessionEvent::SubagentSpawn { .. } => "spawn",
+        SessionEvent::SubagentReturn { .. } => "return",
+        SessionEvent::NotificationInjected { .. } => "notify",
+        SessionEvent::Unknown => "unknown",
     }
 }
 
@@ -47,7 +47,7 @@ pub fn hex_short(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{hex_short, trajectory_kind_label};
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
 
     #[test]
     fn test_hex_short_first_bytes() {
@@ -60,13 +60,13 @@ mod tests {
     /// the trajectory row does not mislead by borrowing another kind's label.
     #[test]
     fn test_unknown_kind_labeled_unknown() {
-        assert_eq!(trajectory_kind_label(&TurnEventKind::Unknown), "unknown");
+        assert_eq!(trajectory_kind_label(&SessionEvent::Unknown), "unknown");
     }
 
     #[test]
     fn test_subagent_kinds_labeled() {
         assert_eq!(
-            trajectory_kind_label(&TurnEventKind::SubagentSpawn {
+            trajectory_kind_label(&SessionEvent::SubagentSpawn {
                 child_session_id: String::new(),
                 subagent_type: String::new(),
                 prompt_summary: String::new(),
@@ -77,7 +77,7 @@ mod tests {
             "spawn"
         );
         assert_eq!(
-            trajectory_kind_label(&TurnEventKind::SubagentReturn {
+            trajectory_kind_label(&SessionEvent::SubagentReturn {
                 child_session_id: String::new(),
                 status: String::new(),
                 summary: String::new(),
@@ -91,7 +91,7 @@ mod tests {
             "return"
         );
         assert_eq!(
-            trajectory_kind_label(&TurnEventKind::NotificationInjected {
+            trajectory_kind_label(&SessionEvent::NotificationInjected {
                 child_session_id: String::new(),
                 turn: 0,
                 order: 0,

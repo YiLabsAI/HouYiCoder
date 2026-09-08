@@ -7,7 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use houyicoder_async::PFut;
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
 
@@ -36,22 +36,22 @@ async fn test_manifest_fallback_threads_instructions() {
     let s = SessionId::new();
     // Six assistant turns so the default tail_turns=4 Summarizes the first 2
     // (the folded span the failing summarizer + heuristic fallback run on).
-    let mut events = vec![TurnEvent {
+    let mut events = vec![SessionLogEntry {
         id: EventId::new(),
         session: s,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput {
+        event: SessionEvent::UserInput {
             text: "do work".into(),
         },
     }];
     for i in 0..6 {
-        events.push(TurnEvent {
+        events.push(SessionLogEntry {
             id: EventId::new(),
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: format!("turn {i}"),
                 thinking: None,
             },
@@ -65,7 +65,7 @@ async fn test_manifest_fallback_threads_instructions() {
     impl Summarizer for FailingSummarizer {
         fn summarize<'a>(
             &'a self,
-            _events: &'a [TurnEvent],
+            _events: &'a [SessionLogEntry],
             _custom_instructions: Option<&'a str>,
         ) -> PFut<'a, Result<String, SummarizeError>> {
             Box::pin(async { Err(SummarizeError::LlmFailed("forced failure".into())) })
@@ -136,7 +136,7 @@ impl CapturingSummarizer {
 impl Summarizer for CapturingSummarizer {
     fn summarize<'a>(
         &'a self,
-        _events: &'a [TurnEvent],
+        _events: &'a [SessionLogEntry],
         custom_instructions: Option<&'a str>,
     ) -> PFut<'a, Result<String, SummarizeError>> {
         let seen = custom_instructions.map(str::to_string);
@@ -183,7 +183,7 @@ struct CapturingSummarizerWrapper(Arc<CapturingSummarizer>);
 impl Summarizer for CapturingSummarizerWrapper {
     fn summarize<'a>(
         &'a self,
-        events: &'a [TurnEvent],
+        events: &'a [SessionLogEntry],
         custom_instructions: Option<&'a str>,
     ) -> PFut<'a, Result<String, SummarizeError>> {
         self.0.summarize(events, custom_instructions)
@@ -195,25 +195,25 @@ impl Summarizer for CapturingSummarizerWrapper {
 }
 
 /// Six assistant turns over one user input; default tail_turns=4 folds 2.
-fn six_turn_session() -> (SessionId, Vec<TurnEvent>) {
+fn six_turn_session() -> (SessionId, Vec<SessionLogEntry>) {
     let s = SessionId::new();
     let ids: Vec<EventId> = (0..6).map(|_| EventId::new()).collect();
-    let mut events = vec![TurnEvent {
+    let mut events = vec![SessionLogEntry {
         id: ids[0],
         session: s,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput {
+        event: SessionEvent::UserInput {
             text: "do work".into(),
         },
     }];
     for (i, id) in ids[1..].iter().enumerate() {
-        events.push(TurnEvent {
+        events.push(SessionLogEntry {
             id: *id,
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: format!("turn {i}"),
                 thinking: None,
             },
@@ -222,7 +222,7 @@ fn six_turn_session() -> (SessionId, Vec<TurnEvent>) {
     (s, events)
 }
 
-async fn append_events(store: &SessionStore, events: &[TurnEvent]) {
+async fn append_events(store: &SessionStore, events: &[SessionLogEntry]) {
     for ev in events {
         store.append(ev.clone()).await.unwrap();
     }
@@ -258,8 +258,8 @@ async fn test_precompress_fires_return_channel() {
     let replay = store.replay(s).await.unwrap();
     assert!(
         replay.iter().any(|e| matches!(
-            &e.kind,
-            TurnEventKind::HookSignal {
+            &e.event,
+            SessionEvent::HookSignal {
                 event: houyicoder_context::HookEventKind::PreCompact,
                 ..
             }
@@ -290,13 +290,13 @@ async fn test_precompact_no_deny_path() {
     assert!(
         replay
             .iter()
-            .any(|e| matches!(&e.kind, TurnEventKind::CompactionBoundary { .. })),
+            .any(|e| matches!(&e.event, SessionEvent::CompactionBoundary { .. })),
         "CompactionBoundary appended despite PreCompact deny"
     );
     assert!(
         replay
             .iter()
-            .any(|e| matches!(&e.kind, TurnEventKind::Summary { .. })),
+            .any(|e| matches!(&e.event, SessionEvent::Summary { .. })),
         "Summary appended despite PreCompact deny"
     );
 }
@@ -322,14 +322,14 @@ async fn test_postcompact_fires_with_summary() {
     // PostCompact fires after CompactionBoundary + Summary.
     let boundary_idx = replay
         .iter()
-        .position(|e| matches!(&e.kind, TurnEventKind::CompactionBoundary { .. }))
+        .position(|e| matches!(&e.event, SessionEvent::CompactionBoundary { .. }))
         .expect("CompactionBoundary present");
     let post_idx = replay
         .iter()
         .position(|e| {
             matches!(
-                &e.kind,
-                TurnEventKind::HookSignal {
+                &e.event,
+                SessionEvent::HookSignal {
                     event: houyicoder_context::HookEventKind::PostCompact,
                     ..
                 }
@@ -343,8 +343,8 @@ async fn test_postcompact_fires_with_summary() {
     assert!(outcome.made_progress);
     let post_signal = replay.iter().find(|e| {
         matches!(
-            &e.kind,
-            TurnEventKind::HookSignal {
+            &e.event,
+            SessionEvent::HookSignal {
                 event: houyicoder_context::HookEventKind::PostCompact,
                 ..
             }
@@ -384,8 +384,8 @@ async fn test_auto_path_fires_precompact() {
     let replay = store.replay(s).await.unwrap();
     assert!(
         replay.iter().any(|e| matches!(
-            &e.kind,
-            TurnEventKind::HookSignal {
+            &e.event,
+            SessionEvent::HookSignal {
                 event: houyicoder_context::HookEventKind::PreCompact,
                 ..
             }

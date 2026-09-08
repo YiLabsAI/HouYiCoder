@@ -1,6 +1,6 @@
 //! The transcript-snapshot bridge: an impl of the TUI's TranscriptSnapshot
 //! seam backed by the runner's SessionLog. The search view loads the whole
-//! durable session log (every TurnEvent) via the backend's sync read,
+//! durable session log (every SessionLogEntry) via the backend's sync read,
 //! projects each event to a SessionUpdate, and flattens to TranscriptLine
 //! through the same transcript_from_frames the live render uses, so the
 //! snapshot renders identically to the live transcript.
@@ -20,7 +20,7 @@
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{SessionId, TurnEvent};
+use houyicoder_context::{SessionId, SessionLogEntry};
 use houyicoder_service::projection::project_session_update;
 use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::transcript::snapshot::{
@@ -72,11 +72,11 @@ impl SessionLogSnapshot {
         }
     }
 
-    /// Parse a raw JSONL line into a TurnEvent (for the offset index, which
+    /// Parse a raw JSONL line into a SessionLogEntry (for the offset index, which
     /// needs to know which lines are events + their byte positions). None
     /// for corrupt/non-event lines (skipped, not counted in offsets).
-    fn parse_event(line: &str) -> Option<TurnEvent> {
-        serde_json::from_str::<TurnEvent>(line).ok()
+    fn parse_event(line: &str) -> Option<SessionLogEntry> {
+        serde_json::from_str::<SessionLogEntry>(line).ok()
     }
 
     /// Project raw JSONL lines through the shared projection + flatten to
@@ -87,7 +87,7 @@ impl SessionLogSnapshot {
         let frames: Vec<TranscriptFrame> = lines
             .iter()
             .filter_map(|(_, line)| match Self::parse_event(line) {
-                Some(ev) => project_session_update(&ev.kind).map(TranscriptFrame::Session),
+                Some(ev) => project_session_update(&ev.event).map(TranscriptFrame::Session),
                 None => {
                     skipped += 1;
                     None
@@ -117,7 +117,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
         let frames: Vec<TranscriptFrame> = read
             .events
             .iter()
-            .filter_map(|ev| project_session_update(&ev.kind))
+            .filter_map(|ev| project_session_update(&ev.event))
             .map(TranscriptFrame::Session)
             .collect();
         let lines = transcript_from_frames(&frames);
@@ -261,16 +261,16 @@ impl TranscriptSnapshot for SessionLogSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_context::{EventId, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent};
     use houyicoder_tui::records::TranscriptLine;
 
-    fn ev(kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn ev(kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
@@ -280,19 +280,19 @@ mod tests {
     #[test]
     fn test_bash_renders_stdout_body() {
         let events = &[
-            ev(TurnEventKind::ToolCall {
+            ev(SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "bash".into(),
                 input: serde_json::json!({"command": "echo hi"}),
             }),
-            ev(TurnEventKind::tool_result(
+            ev(SessionEvent::tool_result(
                 "c1".to_string(),
                 serde_json::json!({"stdout": "hi\nthere", "exitCode": 0}),
             )),
         ];
         let frames: Vec<TranscriptFrame> = events
             .iter()
-            .filter_map(|ev| project_session_update(&ev.kind))
+            .filter_map(|ev| project_session_update(&ev.event))
             .map(TranscriptFrame::Session)
             .collect();
         let lines = transcript_from_frames(&frames);
@@ -309,12 +309,12 @@ mod tests {
     /// closes the drift structurally; this test pins it.
     #[test]
     fn test_turn_aborted_visible_snapshot() {
-        let events = &[ev(TurnEventKind::TurnAborted {
+        let events = &[ev(SessionEvent::TurnAborted {
             reason: "user escape".into(),
         })];
         let frames: Vec<TranscriptFrame> = events
             .iter()
-            .filter_map(|ev| project_session_update(&ev.kind))
+            .filter_map(|ev| project_session_update(&ev.event))
             .map(TranscriptFrame::Session)
             .collect();
         let lines = transcript_from_frames(&frames);
@@ -336,13 +336,13 @@ mod tests {
     #[test]
     fn test_metadata_project_to_none() {
         assert!(
-            project_session_update(&TurnEventKind::MetaUser {
+            project_session_update(&SessionEvent::MetaUser {
                 text: "nudge".into()
             })
             .is_none()
         );
         assert!(
-            project_session_update(&TurnEventKind::TurnStarted {
+            project_session_update(&SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0
             })
@@ -355,7 +355,7 @@ mod tests {
     /// tests (parity, multibyte, large-log budget) that must exercise the
     /// byte-window + reverse-read + index paths on disk, not the mock.
     fn bridge_with_log(
-        events: &[TurnEvent],
+        events: &[SessionLogEntry],
     ) -> (SessionLogSnapshot, SessionId, std::path::PathBuf) {
         use houyicoder_memory::LocalFileBackend;
         use houyicoder_session::SessionStore;
@@ -378,13 +378,13 @@ mod tests {
         (snap, session, root)
     }
 
-    fn ev_session(session: SessionId, id: EventId, kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn ev_session(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id,
             session,
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
@@ -397,12 +397,12 @@ mod tests {
     #[test]
     fn test_window_matches_load_render() {
         let session = SessionId::new();
-        let events: Vec<TurnEvent> = (0..5)
+        let events: Vec<SessionLogEntry> = (0..5)
             .map(|i| {
                 ev_session(
                     session,
                     EventId::new(),
-                    TurnEventKind::UserInput {
+                    SessionEvent::UserInput {
                         text: format!("line {i}"),
                     },
                 )
@@ -429,7 +429,7 @@ mod tests {
             ev_session(
                 session,
                 EventId::new(),
-                TurnEventKind::AssistantMessage {
+                SessionEvent::AssistantMessage {
                     text: body.clone(),
                     thinking: None,
                 },
@@ -437,7 +437,7 @@ mod tests {
             ev_session(
                 session,
                 EventId::new(),
-                TurnEventKind::AssistantMessage {
+                SessionEvent::AssistantMessage {
                     text: "second".into(),
                     thinking: None,
                 },
@@ -477,12 +477,12 @@ mod tests {
     #[test]
     fn test_index_builds_bounded_chunks() {
         let session = SessionId::new();
-        let events: Vec<TurnEvent> = (0..200)
+        let events: Vec<SessionLogEntry> = (0..200)
             .map(|i| {
                 ev_session(
                     session,
                     EventId::new(),
-                    TurnEventKind::UserInput {
+                    SessionEvent::UserInput {
                         text: format!("ev {i} padding to a few bytes"),
                     },
                 )
@@ -557,12 +557,12 @@ mod tests {
                 } else {
                     "x".repeat(32 * 1024)
                 };
-                let ev = TurnEvent {
+                let ev = SessionLogEntry {
                     id: EventId::new(),
                     session,
                     ts: i as u64,
                     prev_hash: None,
-                    kind: TurnEventKind::UserInput { text },
+                    event: SessionEvent::UserInput { text },
                 };
                 let mut line = serde_json::to_vec(&ev).expect("serialize event");
                 line.push(b'\n');

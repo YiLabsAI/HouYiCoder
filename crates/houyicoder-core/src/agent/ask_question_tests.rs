@@ -6,7 +6,7 @@
 
 use super::tests::runner_with;
 use crate::provider::test_support::FakeProvider;
-use houyicoder_context::TurnEventKind;
+use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
 use super::*;
@@ -83,8 +83,8 @@ async fn test_ask_question_resume_answer() {
     let events = runner.store().replay(session).await.expect("replay");
     let result_output = events
         .iter()
-        .find_map(|e| match &e.kind {
-            TurnEventKind::ToolResult { output, .. } => Some(output.clone()),
+        .find_map(|e| match &e.event {
+            SessionEvent::ToolResult { output, .. } => Some(output.clone()),
             _ => None,
         })
         .expect("a ToolResult event");

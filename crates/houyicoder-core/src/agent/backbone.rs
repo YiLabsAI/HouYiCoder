@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
-use houyicoder_context::{EventId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
 
 /// A host-side workspace probe for the derivation watermark. The git rev +
 /// dirty-tree hash come from the live workspace, which is mutable, so the
@@ -170,11 +170,11 @@ pub struct TodoLine {
 /// workspace watermark; None probe ⇒ the watermark fields are None (layer a
 /// only).
 pub fn derive_backbone(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     folded_ids: &HashSet<EventId>,
     probe: Option<&dyn WorkspaceProbe>,
 ) -> CompactBackbone {
-    let folded: Vec<&TurnEvent> = events
+    let folded: Vec<&SessionLogEntry> = events
         .iter()
         .filter(|e| folded_ids.contains(&e.id))
         .collect();
@@ -185,20 +185,20 @@ pub fn derive_backbone(
 
     // Pair ToolCall ↔ ToolResult by call_id so a bash test run can read its
     // own exit code + stdout.
-    let mut results_by_call: std::collections::HashMap<&str, &TurnEvent> =
+    let mut results_by_call: std::collections::HashMap<&str, &SessionLogEntry> =
         std::collections::HashMap::new();
     for ev in &folded {
-        if let TurnEventKind::ToolResult { call_id, .. } = &ev.kind {
+        if let SessionEvent::ToolResult { call_id, .. } = &ev.event {
             results_by_call.insert(call_id.as_str(), ev);
         }
     }
 
     for ev in &folded {
-        let TurnEventKind::ToolCall {
+        let SessionEvent::ToolCall {
             call_id,
             tool,
             input,
-        } = &ev.kind
+        } = &ev.event
         else {
             continue;
         };
@@ -366,8 +366,8 @@ fn looks_like_test(command: &str) -> bool {
 /// Infer a test outcome from the bash ToolResult: Fail on a non-zero exit or a
 /// FAILED marker in stdout; Pass on a zero exit with no FAILED; Unknown
 /// otherwise.
-fn test_outcome(result: &TurnEvent) -> TestOutcome {
-    let TurnEventKind::ToolResult { output, .. } = &result.kind else {
+fn test_outcome(result: &SessionLogEntry) -> TestOutcome {
+    let SessionEvent::ToolResult { output, .. } = &result.event else {
         return TestOutcome::Unknown;
     };
     let exit_code = output.get("exit_code").and_then(|v| v.as_i64());
@@ -389,8 +389,8 @@ fn test_outcome(result: &TurnEvent) -> TestOutcome {
 
 /// Read the todos array from a todo_write ToolResult output (captures the
 /// all-done-clears state the call input does not).
-fn todos_from_result(result: &TurnEvent) -> Option<Vec<TodoLine>> {
-    let TurnEventKind::ToolResult { output, .. } = &result.kind else {
+fn todos_from_result(result: &SessionLogEntry) -> Option<Vec<TodoLine>> {
+    let SessionEvent::ToolResult { output, .. } = &result.event else {
         return None;
     };
     let todos = output.get("todos")?.as_array()?;
@@ -470,33 +470,33 @@ fn md5_empty() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     use serde_json::json;
 
-    fn make_event(kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn make_event(kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
-    fn folded_ids(events: &[TurnEvent]) -> HashSet<EventId> {
+    fn folded_ids(events: &[SessionLogEntry]) -> HashSet<EventId> {
         events.iter().map(|e| e.id).collect()
     }
 
-    fn tool_call(call_id: &str, tool: &str, input: serde_json::Value) -> TurnEvent {
-        make_event(TurnEventKind::ToolCall {
+    fn tool_call(call_id: &str, tool: &str, input: serde_json::Value) -> SessionLogEntry {
+        make_event(SessionEvent::ToolCall {
             call_id: call_id.into(),
             tool: tool.into(),
             input,
         })
     }
 
-    fn tool_result(call_id: &str, output: serde_json::Value) -> TurnEvent {
-        make_event(TurnEventKind::ToolResult {
+    fn tool_result(call_id: &str, output: serde_json::Value) -> SessionLogEntry {
+        make_event(SessionEvent::ToolResult {
             call_id: call_id.into(),
             output,
             duration_ms: 0,

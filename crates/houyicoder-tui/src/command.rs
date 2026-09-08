@@ -440,7 +440,7 @@ impl App {
             return;
         }
         // Auto-start path. When a real runner is wired, spawn runner.run on
-        // the tokio runtime; the transcript is rebuilt from real TurnEvents
+        // the tokio runtime; the transcript is rebuilt from real SessionLogEntries
         // when the run lands. Without a runner, fall back to the legacy stub
         // reply so tests and the no-runtime path keep working.
         let text = crate::paste::PasteStore::expand(&text, &self.pasted);

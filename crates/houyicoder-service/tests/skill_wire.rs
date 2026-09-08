@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use houyicoder_api::skill::SkillRegistry;
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, SkillTool, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
@@ -69,8 +69,8 @@ async fn test_run_slash_real_body() {
         .expect("run completes");
     let view = store.current_view(session).await.unwrap();
     // The raw @skill: text is the UserInput (transcript fidelity).
-    let user = view.events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::UserInput { text } => Some(text.clone()),
+    let user = view.events.iter().find_map(|e| match &e.event {
+        SessionEvent::UserInput { text } => Some(text.clone()),
         _ => None,
     });
     assert_eq!(
@@ -81,8 +81,8 @@ async fn test_run_slash_real_body() {
     // The real body read from disk lands as a durable SkillBody (not a
     // MetaUser, so it survives a compaction boundary) with the base-dir
     // header, not a stub string.
-    let body = view.events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::SkillBody {
+    let body = view.events.iter().find_map(|e| match &e.event {
+        SessionEvent::SkillBody {
             skill_name,
             content,
             untrusted,
@@ -156,8 +156,8 @@ async fn test_run_model_skill_tool() {
     let view = store.current_view(session).await.unwrap();
     // The SkillTool ran; its ToolResult carries the real body read from disk
     // (not a stub), with the base-dir header.
-    let tool_result = view.events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::ToolResult { output, .. } => Some(output.clone()),
+    let tool_result = view.events.iter().find_map(|e| match &e.event {
+        SessionEvent::ToolResult { output, .. } => Some(output.clone()),
         _ => None,
     });
     let tr = tool_result.expect("a ToolResult from the Skill tool");
@@ -233,8 +233,8 @@ async fn test_run_large_body_compacts() {
     let tr = view
         .events
         .iter()
-        .find_map(|e| match &e.kind {
-            TurnEventKind::ToolResult { output, .. } => Some(output.clone()),
+        .find_map(|e| match &e.event {
+            SessionEvent::ToolResult { output, .. } => Some(output.clone()),
             _ => None,
         })
         .expect("a ToolResult from the Skill tool");
@@ -302,7 +302,7 @@ async fn test_compact_reinjects_listing() {
     let listing_id = view1
         .events
         .iter()
-        .find_map(|e| matches!(e.kind, TurnEventKind::SkillListing { .. }).then(|| e.id))
+        .find_map(|e| matches!(e.event, SessionEvent::SkillListing { .. }).then(|| e.id))
         .expect("listing injected on turn 1");
     let last_event = view1.events.last().unwrap().id;
 
@@ -334,7 +334,7 @@ async fn test_compact_reinjects_listing() {
     let listing_count = view2
         .events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::SkillListing { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::SkillListing { .. }))
         .count();
     assert!(
         listing_count >= 2,

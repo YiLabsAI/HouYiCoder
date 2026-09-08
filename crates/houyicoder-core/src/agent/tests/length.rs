@@ -158,7 +158,7 @@ async fn test_length_recovery_resumes_completes() {
     // the nudge must NOT surface as a readable transcript line, and the final
     // output must be the continuation with NO truncation marker (recovery
     // succeeded, so the notice is withheld).
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
@@ -206,20 +206,20 @@ async fn test_length_recovery_resumes_completes() {
     // and the continuation. The nudge must be MetaUser so it never surfaces as
     // a readable transcript line.
     let replay = runner.store().replay(session).await.expect("replay");
-    let mut kinds = replay.iter().map(|e| &e.kind);
+    let mut kinds = replay.iter().map(|e| &e.event);
     let has_partial = kinds
         .by_ref()
-        .any(|k| matches!(k, TurnEventKind::AssistantMessage { text, .. } if text == "partial"));
+        .any(|k| matches!(k, SessionEvent::AssistantMessage { text, .. } if text == "partial"));
     let has_nudge = kinds.by_ref().any(|k| {
         matches!(
             k,
-            TurnEventKind::MetaUser { text } if text.contains("Resume directly")
+            SessionEvent::MetaUser { text } if text.contains("Resume directly")
         )
     });
     let has_continuation = kinds.any(|k| {
         matches!(
             k,
-            TurnEventKind::AssistantMessage { text, .. } if text == " continued"
+            SessionEvent::AssistantMessage { text, .. } if text == " continued"
         )
     });
     assert!(has_partial, "partial assistant message must persist");
@@ -228,7 +228,7 @@ async fn test_length_recovery_resumes_completes() {
     // The nudge is MetaUser, never UserInput — so the host skips it in the
     // readable transcript.
     let leak = replay.iter().any(|e| {
-        matches!(&e.kind, TurnEventKind::UserInput { text } if text.contains("Resume directly"))
+        matches!(&e.event, SessionEvent::UserInput { text } if text.contains("Resume directly"))
     });
     assert!(!leak, "nudge must be MetaUser, not a readable UserInput");
     // Bounded: exactly 2 provider calls (1 partial + 1 continuation).
@@ -243,7 +243,7 @@ async fn test_stop_finish_no_recovery() {
     // A natural stop finish must NOT trigger recovery: no nudge appended, the
     // reply returns directly. Guards against the recovery loop firing on
     // every turn.
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(RawProvider::new(vec![
         LlmEvent::StepStart { index: 0 },
@@ -272,7 +272,7 @@ async fn test_stop_finish_no_recovery() {
     );
     let replay = runner.store().replay(session).await.expect("replay");
     let has_nudge = replay.iter().any(
-        |e| matches!(&e.kind, TurnEventKind::MetaUser { text } if text.contains("Resume directly")),
+        |e| matches!(&e.event, SessionEvent::MetaUser { text } if text.contains("Resume directly")),
     );
     assert!(!has_nudge, "stop finish must not append a resume nudge");
 }
@@ -286,7 +286,7 @@ async fn test_silent_trunc_recovers() {
     // here. The heuristic synthesizes "length" so the existing resume loop
     // appends the partial + nudge and re-calls. Call 2 is a clean stop with
     // low tokens and an even fence count — no synthesis, natural end.
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
@@ -337,20 +337,20 @@ async fn test_silent_trunc_recovers() {
     let replay = runner.store().replay(session).await.expect("replay");
     let has_partial = replay.iter().any(|e| {
         matches!(
-            &e.kind,
-            TurnEventKind::AssistantMessage { text, .. } if text.contains("fn main")
+            &e.event,
+            SessionEvent::AssistantMessage { text, .. } if text.contains("fn main")
         )
     });
     let has_nudge = replay.iter().any(|e| {
         matches!(
-            &e.kind,
-            TurnEventKind::MetaUser { text } if text.contains("Resume directly")
+            &e.event,
+            SessionEvent::MetaUser { text } if text.contains("Resume directly")
         )
     });
     let has_continuation = replay.iter().any(|e| {
         matches!(
-            &e.kind,
-            TurnEventKind::AssistantMessage { text, .. } if text == " continued"
+            &e.event,
+            SessionEvent::AssistantMessage { text, .. } if text == " continued"
         )
     });
     assert!(has_partial, "partial assistant message must persist");
@@ -364,7 +364,7 @@ async fn test_stop_clean_skips_recovery() {
     // trigger the silent-truncation heuristic. No nudge appended, the reply
     // returns directly. Guards against false-positive recovery on every
     // normal turn.
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(RawProvider::new(vec![
         LlmEvent::StepStart { index: 0 },
@@ -396,7 +396,7 @@ async fn test_stop_clean_skips_recovery() {
     );
     let replay = runner.store().replay(session).await.expect("replay");
     let has_nudge = replay.iter().any(
-        |e| matches!(&e.kind, TurnEventKind::MetaUser { text } if text.contains("Resume directly")),
+        |e| matches!(&e.event, SessionEvent::MetaUser { text } if text.contains("Resume directly")),
     );
     assert!(!has_nudge, "clean stop must not append a resume nudge");
 }
@@ -518,7 +518,7 @@ async fn test_recovery_verdict_preserves_dialect() {
     // carries the flattened form (length) the loop keys on. Recovery fires
     // on call 1 (recovery_fired true, recovery_attempts 1); call 2 is a clean
     // stop (recovery_fired false). Two verdicts in the replay.
-    use houyicoder_context::{TruncationSignal, TurnEventKind};
+    use houyicoder_context::{SessionEvent, TruncationSignal};
     use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
@@ -552,16 +552,16 @@ async fn test_recovery_verdict_preserves_dialect() {
     let session = SessionId::new();
     runner.run(session, "hi".into()).await.expect("run");
     let replay = runner.store().replay(session).await.expect("replay");
-    let verdicts: Vec<&TurnEventKind> = replay
+    let verdicts: Vec<&SessionEvent> = replay
         .iter()
-        .map(|e| &e.kind)
-        .filter(|k| matches!(k, TurnEventKind::TruncationVerdict { .. }))
+        .map(|e| &e.event)
+        .filter(|k| matches!(k, SessionEvent::TruncationVerdict { .. }))
         .collect();
     assert_eq!(verdicts.len(), 2, "one verdict per recovery + final turn");
     // First verdict: recovery fired, raw dialect preserved.
     let first = verdicts[0];
     let (raw, norm, fired, attempts) = match first {
-        TurnEventKind::TruncationVerdict {
+        SessionEvent::TruncationVerdict {
             raw_finish_reason,
             normalized_reason,
             recovery_fired,
@@ -586,7 +586,7 @@ async fn test_recovery_verdict_preserves_dialect() {
     // Second verdict: clean success, no recovery, raw stop preserved.
     let second = verdicts[1];
     let (raw, norm, fired, signal) = match second {
-        TurnEventKind::TruncationVerdict {
+        SessionEvent::TruncationVerdict {
             raw_finish_reason,
             normalized_reason,
             recovery_fired,
@@ -615,7 +615,7 @@ async fn test_stop_verdict_signals_none() {
     // A clean stop with low tokens must emit exactly one verdict with no
     // signal and recovery_fired false. Guards against false-positive signal
     // classification on every normal turn.
-    use houyicoder_context::{TruncationSignal, TurnEventKind};
+    use houyicoder_context::{SessionEvent, TruncationSignal};
     use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(RawProvider::new(vec![
         LlmEvent::StepStart { index: 0 },
@@ -637,14 +637,14 @@ async fn test_stop_verdict_signals_none() {
     let session = SessionId::new();
     runner.run(session, "hi".into()).await.expect("run");
     let replay = runner.store().replay(session).await.expect("replay");
-    let verdicts: Vec<&TurnEventKind> = replay
+    let verdicts: Vec<&SessionEvent> = replay
         .iter()
-        .map(|e| &e.kind)
-        .filter(|k| matches!(k, TurnEventKind::TruncationVerdict { .. }))
+        .map(|e| &e.event)
+        .filter(|k| matches!(k, SessionEvent::TruncationVerdict { .. }))
         .collect();
     assert_eq!(verdicts.len(), 1, "exactly one verdict on a clean turn");
     let (signal, fired) = match verdicts[0] {
-        TurnEventKind::TruncationVerdict {
+        SessionEvent::TruncationVerdict {
             signal,
             recovery_fired,
             ..
@@ -661,7 +661,7 @@ async fn test_verdict_records_truncation_signal() {
     // whose signal is ServerUsageNearCap (the server-reported count reached
     // the cap). The raw finish_reason stays stop (the proxy's dialect),
     // the normalized becomes length (synthesized), and recovery fires.
-    use houyicoder_context::{TruncationSignal, TurnEventKind};
+    use houyicoder_context::{SessionEvent, TruncationSignal};
     use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
@@ -701,15 +701,15 @@ async fn test_verdict_records_truncation_signal() {
     let session = SessionId::new();
     runner.run(session, "hi".into()).await.expect("run");
     let replay = runner.store().replay(session).await.expect("replay");
-    let verdicts: Vec<&TurnEventKind> = replay
+    let verdicts: Vec<&SessionEvent> = replay
         .iter()
-        .map(|e| &e.kind)
-        .filter(|k| matches!(k, TurnEventKind::TruncationVerdict { .. }))
+        .map(|e| &e.event)
+        .filter(|k| matches!(k, SessionEvent::TruncationVerdict { .. }))
         .collect();
     assert_eq!(verdicts.len(), 2, "recovery verdict + final verdict");
     let first = verdicts[0];
     let (raw, norm, signal, server_tokens, fired) = match first {
-        TurnEventKind::TruncationVerdict {
+        SessionEvent::TruncationVerdict {
             raw_finish_reason,
             normalized_reason,
             signal,

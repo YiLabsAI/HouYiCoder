@@ -5,7 +5,7 @@ use super::*;
 use crate::agent::tests::runner_with;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
-use houyicoder_context::TurnEventKind;
+use houyicoder_context::SessionEvent;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
@@ -106,7 +106,7 @@ async fn test_abort_in_tool_dispatch() {
     // An interrupted tool result lands so the session stays lossless.
     let interrupted = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::ToolResult { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::ToolResult { .. }))
         .count();
     assert!(
         interrupted >= 1,
@@ -191,7 +191,7 @@ async fn test_parallel_batch_streams() {
     let has_result = |cid: &str| {
         events
             .iter()
-            .any(|e| matches!(&e.kind, TurnEventKind::ToolResult { call_id, .. } if call_id == cid))
+            .any(|e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == cid))
     };
     assert!(
         has_result("c1") && has_result("c2"),

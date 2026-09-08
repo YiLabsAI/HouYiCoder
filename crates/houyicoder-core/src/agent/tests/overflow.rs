@@ -4,7 +4,7 @@
 //! reach sibling tests that resolve the default "test" window.
 
 use super::*;
-use houyicoder_context::TurnEventKind;
+use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 
@@ -90,17 +90,17 @@ async fn test_overflow_retries_then_compact() {
     for i in 0..6 {
         runner
             .store()
-            .append(houyicoder_context::TurnEvent {
+            .append(houyicoder_context::SessionLogEntry {
                 id: houyicoder_context::EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: if i == 0 {
-                    TurnEventKind::UserInput {
+                event: if i == 0 {
+                    SessionEvent::UserInput {
                         text: "do the work".into(),
                     }
                 } else {
-                    TurnEventKind::AssistantMessage {
+                    SessionEvent::AssistantMessage {
                         text: format!("response {i}"),
                         thinking: None,
                     }
@@ -133,12 +133,12 @@ async fn test_overflow_no_progress_fails() {
     // Only 1 assistant turn — compress cannot fold anything.
     runner
         .store()
-        .append(houyicoder_context::TurnEvent {
+        .append(houyicoder_context::SessionLogEntry {
             id: houyicoder_context::EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "do work".into(),
             },
         })
@@ -146,12 +146,12 @@ async fn test_overflow_no_progress_fails() {
         .unwrap();
     runner
         .store()
-        .append(houyicoder_context::TurnEvent {
+        .append(houyicoder_context::SessionLogEntry {
             id: houyicoder_context::EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "ok".into(),
                 thinking: None,
             },
@@ -186,17 +186,17 @@ async fn test_overflow_still_overflows_bounded() {
     for i in 0..6 {
         runner
             .store()
-            .append(houyicoder_context::TurnEvent {
+            .append(houyicoder_context::SessionLogEntry {
                 id: houyicoder_context::EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: if i == 0 {
-                    TurnEventKind::UserInput {
+                event: if i == 0 {
+                    SessionEvent::UserInput {
                         text: "do the work".into(),
                     }
                 } else {
-                    TurnEventKind::AssistantMessage {
+                    SessionEvent::AssistantMessage {
                         text: format!("response {i}"),
                         thinking: None,
                     }
@@ -342,8 +342,8 @@ async fn test_cache_break_compact_attribution() {
         .iter()
         .filter(|e| {
             matches!(
-                &e.kind,
-                houyicoder_context::TurnEventKind::CacheBreak { cause } if cause == "compact"
+                &e.event,
+                houyicoder_context::SessionEvent::CacheBreak { cause } if cause == "compact"
             )
         })
         .collect();
@@ -383,8 +383,8 @@ async fn test_cache_break_model_switch() {
     assert!(
         events.iter().any(|e| {
             matches!(
-                &e.kind,
-                houyicoder_context::TurnEventKind::CacheBreak { cause } if cause == "model-switch"
+                &e.event,
+                houyicoder_context::SessionEvent::CacheBreak { cause } if cause == "model-switch"
             )
         }),
         "break attributed to model-switch"
@@ -417,8 +417,8 @@ async fn test_cache_break_no_drop() {
     let events = runner.store().replay(session).await.unwrap();
     assert!(
         events.iter().all(|e| !matches!(
-            &e.kind,
-            houyicoder_context::TurnEventKind::CacheBreak { .. }
+            &e.event,
+            houyicoder_context::SessionEvent::CacheBreak { .. }
         )),
         "no CacheBreak when cache_read does not drop"
     );
@@ -565,17 +565,17 @@ async fn test_resume_then_overflow_recovers() {
     for i in 0..6 {
         runner
             .store()
-            .append(houyicoder_context::TurnEvent {
+            .append(houyicoder_context::SessionLogEntry {
                 id: houyicoder_context::EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: if i == 0 {
-                    TurnEventKind::UserInput {
+                event: if i == 0 {
+                    SessionEvent::UserInput {
                         text: "do the work".into(),
                     }
                 } else {
-                    TurnEventKind::AssistantMessage {
+                    SessionEvent::AssistantMessage {
                         text: format!("response {i}"),
                         thinking: None,
                     }

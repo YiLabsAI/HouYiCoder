@@ -625,14 +625,14 @@ async fn test_mid_cancel_multi_approval() {
     let events = log.replay(session).await.expect("replay");
     let mut answered = std::collections::HashSet::new();
     for e in &events {
-        if let houyicoder_context::TurnEventKind::ToolResult { call_id, .. } = &e.kind {
+        if let houyicoder_context::SessionEvent::ToolResult { call_id, .. } = &e.event {
             answered.insert(call_id.clone());
         }
     }
     let orphans: Vec<String> = events
         .iter()
-        .filter_map(|e| match &e.kind {
-            houyicoder_context::TurnEventKind::ToolCall { call_id, .. }
+        .filter_map(|e| match &e.event {
+            houyicoder_context::SessionEvent::ToolCall { call_id, .. }
                 if !answered.contains(call_id) =>
             {
                 Some(call_id.clone())

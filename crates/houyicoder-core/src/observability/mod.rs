@@ -30,7 +30,7 @@ mod tests;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use houyicoder_context::TurnEvent;
+use houyicoder_context::SessionLogEntry;
 use houyicoder_protocol::llm::Usage;
 use serde::{Deserialize, Serialize};
 
@@ -339,7 +339,7 @@ impl CostAccumulator {
 /// mutate any track state; it only appends and aggregates. The ContextView
 /// trait projects its contents as read-only snapshots.
 pub struct ObservabilityLog {
-    writes: Vec<TurnEvent>,
+    writes: Vec<SessionLogEntry>,
     tool_calls: Vec<ToolCallRecord>,
     last_report: Option<CompressResult>,
     errors: Vec<HookError>,
@@ -429,7 +429,7 @@ impl ObservabilityLog {
     }
 
     /// Append a trajectory event to the write log. O(1) push.
-    pub fn append_write(&mut self, event: TurnEvent) {
+    pub fn append_write(&mut self, event: SessionLogEntry) {
         self.writes.push(event);
     }
 
@@ -664,7 +664,7 @@ impl ObservabilityLog {
 pub trait MetricsView {
     /// The trajectory event stream (append order). Drops when the store
     /// becomes the single source for /trajectory projection.
-    fn trajectory(&self) -> &[TurnEvent];
+    fn trajectory(&self) -> &[SessionLogEntry];
     /// The most recent compress result, for trajectory compact drill-down.
     fn report(&self) -> Option<&CompressResult>;
     /// Per-tool aggregate statistics, for the trajectory tool-filter view.
@@ -676,7 +676,7 @@ pub trait MetricsView {
 }
 
 impl MetricsView for ObservabilityLog {
-    fn trajectory(&self) -> &[TurnEvent] {
+    fn trajectory(&self) -> &[SessionLogEntry] {
         &self.writes
     }
 

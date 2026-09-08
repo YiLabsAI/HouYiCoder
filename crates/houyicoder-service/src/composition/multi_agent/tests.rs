@@ -1,5 +1,5 @@
 use super::*;
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
 use houyicoder_core::agent::multi_agent::registry::built_in_all;
 use houyicoder_core::agent::runner_config::RunnerConfig;
@@ -41,13 +41,13 @@ async fn test_sync_spawn_drives_terminal() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. })),
+            .any(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. })),
         "parent log must record the SubagentSpawn boundary",
     );
     assert!(
         events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SubagentReturn { .. })),
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "parent log must record the SubagentReturn boundary",
     );
 }
@@ -87,7 +87,7 @@ async fn test_child_task_excludes_memory() {
     let text: String = store
         .trajectory_snapshot(child_sid)
         .iter()
-        .map(|e| format!("{:?}", e.kind))
+        .map(|e| format!("{:?}", e.event))
         .collect();
     assert!(
         text.contains("find the auth module"),
@@ -180,7 +180,7 @@ async fn test_async_spawn_launches() {
         let has_return = store
             .trajectory_snapshot(parent_sid)
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SubagentReturn { .. }));
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. }));
         if has_return {
             found = true;
             break;
@@ -254,7 +254,7 @@ async fn test_spawn_announces_on_bus() {
 /// runs the same narrowed pipeline; the only difference is the trigger.
 #[tokio::test]
 async fn test_spawn_system_records_trigger() {
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
 
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
@@ -284,10 +284,10 @@ async fn test_spawn_system_records_trigger() {
     let events = store.trajectory_snapshot(parent_sid);
     let spawn = events
         .iter()
-        .find(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. }))
+        .find(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }))
         .expect("first-party spawn writes the boundary");
-    let recorded = match &spawn.kind {
-        TurnEventKind::SubagentSpawn { trigger_source, .. } => trigger_source.clone(),
+    let recorded = match &spawn.event {
+        SessionEvent::SubagentSpawn { trigger_source, .. } => trigger_source.clone(),
         _ => unreachable!("matched above"),
     };
     assert_eq!(
@@ -301,7 +301,7 @@ async fn test_spawn_system_records_trigger() {
 /// runs. Pins the async branch of the service/hook entry.
 #[tokio::test]
 async fn test_spawn_system_async_records() {
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
 
     let (runtime, store, parent_sid) = runtime_with_text_child("ok");
@@ -321,7 +321,7 @@ async fn test_spawn_system_async_records() {
         let has = store
             .trajectory_snapshot(parent_sid)
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. }));
+            .any(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }));
         if has {
             found = true;
             break;
@@ -334,10 +334,10 @@ async fn test_spawn_system_async_records() {
     let snap = store.trajectory_snapshot(parent_sid);
     let spawn = snap
         .iter()
-        .find(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. }))
+        .find(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }))
         .expect("boundary present");
-    let recorded = match &spawn.kind {
-        TurnEventKind::SubagentSpawn { trigger_source, .. } => trigger_source.clone(),
+    let recorded = match &spawn.event {
+        SessionEvent::SubagentSpawn { trigger_source, .. } => trigger_source.clone(),
         _ => unreachable!("matched above"),
     };
     assert_eq!(
@@ -653,8 +653,8 @@ async fn test_sync_failed_child_propagates() {
     // The durable SubagentReturn boundary records the failure so replay
     // reconstructs the delegation honestly (not a silent drop).
     let events = store.trajectory_snapshot(parent_sid);
-    let ret_status = events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::SubagentReturn { status, .. } => Some(status.clone()),
+    let ret_status = events.iter().find_map(|e| match &e.event {
+        SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
         _ => None,
     });
     assert_eq!(
@@ -715,8 +715,8 @@ async fn test_sync_failed_midstream() {
         outcome.summary,
     );
     let events = store.trajectory_snapshot(parent_sid);
-    let ret_status = events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::SubagentReturn { status, .. } => Some(status.clone()),
+    let ret_status = events.iter().find_map(|e| match &e.event {
+        SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
         _ => None,
     });
     assert_eq!(
@@ -809,8 +809,8 @@ async fn test_async_failed_child_notifies() {
     // so a regression that records the wrong terminal on the async path goes
     // red rather than staying green on a status=completed mislabel.
     let events = store.trajectory_snapshot(parent_sid);
-    let ret_status = events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::SubagentReturn { status, .. } => Some(status.clone()),
+    let ret_status = events.iter().find_map(|e| match &e.event {
+        SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
         _ => None,
     });
     assert_eq!(

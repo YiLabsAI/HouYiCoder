@@ -6,7 +6,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,13 +19,13 @@ fn temp_root() -> std::path::PathBuf {
     p
 }
 
-fn event(session: SessionId, kind: TurnEventKind) -> TurnEvent {
-    TurnEvent {
+fn event(session: SessionId, kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
         id: EventId::new(),
         session,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     }
 }
 
@@ -44,7 +44,7 @@ async fn test_sidechain_isolates_sessions() {
     store
         .append(event(
             parent,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "delegate search".into(),
             },
         ))
@@ -53,7 +53,7 @@ async fn test_sidechain_isolates_sessions() {
     store
         .append(event(
             parent,
-            TurnEventKind::SubagentSpawn {
+            SessionEvent::SubagentSpawn {
                 child_session_id: child.to_string(),
                 subagent_type: "explore".into(),
                 prompt_summary: "find the auth module".into(),
@@ -67,7 +67,7 @@ async fn test_sidechain_isolates_sessions() {
     store
         .append(event(
             parent,
-            TurnEventKind::SubagentReturn {
+            SessionEvent::SubagentReturn {
                 child_session_id: child.to_string(),
                 status: "completed".into(),
                 summary: "auth lives in crates/api".into(),
@@ -84,7 +84,7 @@ async fn test_sidechain_isolates_sessions() {
     store
         .append(event(
             parent,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "now write tests".into(),
             },
         ))
@@ -95,7 +95,7 @@ async fn test_sidechain_isolates_sessions() {
     store
         .append(event(
             child,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "search auth".into(),
             },
         ))
@@ -104,7 +104,7 @@ async fn test_sidechain_isolates_sessions() {
     store
         .append(event(
             child,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "found auth in crates/api/src/auth.rs".into(),
                 thinking: None,
             },
@@ -121,22 +121,22 @@ async fn test_sidechain_isolates_sessions() {
     assert!(
         parent_events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. })),
+            .any(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. })),
         "parent log must carry the spawn boundary:\n{:?}",
         parent_events
     );
     assert!(
         parent_events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SubagentReturn { .. })),
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "parent log must carry the return boundary:\n{:?}",
         parent_events
     );
     assert!(
         !parent_events.iter().any(|e| {
             matches!(
-                &e.kind,
-                TurnEventKind::AssistantMessage { text, .. }
+                &e.event,
+                SessionEvent::AssistantMessage { text, .. }
                     if text.contains("found auth in crates/api")
             )
         }),
@@ -152,8 +152,8 @@ async fn test_sidechain_isolates_sessions() {
     assert!(
         child_events.iter().any(|e| {
             matches!(
-                &e.kind,
-                TurnEventKind::AssistantMessage { text, .. }
+                &e.event,
+                SessionEvent::AssistantMessage { text, .. }
                     if text.contains("found auth in crates/api")
             )
         }),
@@ -163,14 +163,14 @@ async fn test_sidechain_isolates_sessions() {
     assert!(
         !child_events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. })),
+            .any(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. })),
         "parent spawn must not leak into child log:\n{:?}",
         child_events
     );
     assert!(
         !child_events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SubagentReturn { .. })),
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "parent return must not leak into child log:\n{:?}",
         child_events
     );

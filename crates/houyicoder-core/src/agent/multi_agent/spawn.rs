@@ -11,7 +11,7 @@
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_async::CancellationToken;
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use std::sync::Arc;
 
 use crate::agent::append::new_event;
@@ -218,7 +218,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
 
     let spawn_event = new_event(
         parent_sid,
-        TurnEventKind::SubagentSpawn {
+        SessionEvent::SubagentSpawn {
             child_session_id: child_sid.to_string(),
             subagent_type,
             prompt_summary,
@@ -255,7 +255,7 @@ pub async fn record_subagent_return(
 ) -> Result<(), SpawnError> {
     let event = new_event(
         parent_sid,
-        TurnEventKind::SubagentReturn {
+        SessionEvent::SubagentReturn {
             child_session_id: child_session_id.to_string(),
             status: status.to_string(),
             summary: summary.to_string(),

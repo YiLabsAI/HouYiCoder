@@ -4,7 +4,7 @@
 //! + session_meta submodules). The CLI --resume <file> branch lands here.
 
 use super::*;
-use houyicoder_context::TurnEvent;
+use houyicoder_context::SessionLogEntry;
 use houyicoder_context::{NameSource, SessionMeta, SessionMetaStore, SessionProvenance};
 use houyicoder_memory::{FileMetaStore, LocalFileBackend};
 use houyicoder_session::{SessionStore, SourceChain};
@@ -75,7 +75,7 @@ pub fn log_last_active_secs(sessions_root: &Path, sid: &SessionId) -> Option<u64
 struct ResumePayload {
     session_id: String,
     model: String,
-    trajectory: Vec<TurnEvent>,
+    trajectory: Vec<SessionLogEntry>,
 }
 
 /// Build a runner resumed from an exported transcript file (--resume <file>

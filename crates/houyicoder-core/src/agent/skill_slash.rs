@@ -6,8 +6,8 @@
 
 use houyicoder_api::skill::SkillError;
 use houyicoder_api::skill::grant::resolve_entitlements;
+use houyicoder_context::SessionEvent;
 use houyicoder_context::SessionId;
-use houyicoder_context::TurnEventKind;
 
 use super::Runner;
 
@@ -192,8 +192,8 @@ impl Runner {
                 Ok(view) => view
                     .events
                     .iter()
-                    .filter_map(|e| match &e.kind {
-                        TurnEventKind::UserInput { text } => Some(text.clone()),
+                    .filter_map(|e| match &e.event {
+                        SessionEvent::UserInput { text } => Some(text.clone()),
                         _ => None,
                     })
                     .collect(),

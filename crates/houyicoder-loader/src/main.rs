@@ -119,13 +119,13 @@ fn find_session_id(cc_path: &str) -> Result<SessionId, Box<dyn std::error::Error
     }
 }
 
-/// Write one TurnEvent: set its prev_hash, serialize via serde_json (matching
+/// Write one SessionLogEntry: set its prev_hash, serialize via serde_json (matching
 /// the runtime's write-side hash_event so the chain verifies on re-read),
 /// write the line, then return the SHA-256 of the just-written bytes as the
 /// next event's prev_hash.
 fn write_event(
     writer: &mut BufWriter<File>,
-    mut event: houyicoder_context::TurnEvent,
+    mut event: houyicoder_context::SessionLogEntry,
     prev_hash: Option<PrevHash>,
 ) -> Result<Option<PrevHash>, Box<dyn std::error::Error>> {
     event.prev_hash = prev_hash;
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(lines.len(), 2, "user + assistant events (mode skipped)");
         let mut prev: Option<PrevHash> = None;
         for line in &lines {
-            let ev: houyicoder_context::TurnEvent = serde_json::from_str(line).unwrap();
+            let ev: houyicoder_context::SessionLogEntry = serde_json::from_str(line).unwrap();
             assert_eq!(ev.prev_hash, prev, "chain links at {}", line.len());
             let mut h = Sha256::new();
             h.update(line.as_bytes());

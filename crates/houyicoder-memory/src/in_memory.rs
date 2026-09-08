@@ -1,7 +1,7 @@
 //! InMemoryBackend: the canonical ContextBackend impl and test double. Stores
 //! events and checkpoints in HashMaps behind a Mutex. Not for production (no
 //! persistence) but exactly tracks the interface a real backend implements.
-//! The ContextBackend interface and TurnEvent types live in the context layer;
+//! The ContextBackend interface and SessionLogEntry types live in the context layer;
 //! this crate depends on that, not the reverse (dependency inversion).
 
 use std::collections::{HashMap, HashSet};
@@ -10,14 +10,14 @@ use std::sync::Mutex;
 use houyicoder_async::PFut;
 use houyicoder_context::{
     BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionId,
-    TurnEvent,
+    SessionLogEntry,
 };
 
 use crate::sha256_hex;
 
 #[derive(Default)]
 pub struct InMemoryBackend {
-    events: Mutex<HashMap<SessionId, Vec<TurnEvent>>>,
+    events: Mutex<HashMap<SessionId, Vec<SessionLogEntry>>>,
     seen: Mutex<HashMap<SessionId, HashSet<EventId>>>,
     checkpoints: Mutex<HashMap<CheckpointId, CheckpointManifest>>,
     // Content-addressed block store: hash -> blob. Insert is idempotent so
@@ -31,7 +31,7 @@ impl InMemoryBackend {
         Self::default()
     }
 
-    fn append_sync(&self, event: TurnEvent) -> Result<EventId, ContextError> {
+    fn append_sync(&self, event: SessionLogEntry) -> Result<EventId, ContextError> {
         let mut events = self.events.lock().expect("events mutex poisoned");
         let mut seen = self.seen.lock().expect("seen mutex poisoned");
         let set = seen.entry(event.session).or_default();
@@ -49,12 +49,12 @@ impl InMemoryBackend {
         session: SessionId,
         from: Option<EventId>,
         to: Option<EventId>,
-    ) -> Result<Vec<TurnEvent>, ContextError> {
+    ) -> Result<Vec<SessionLogEntry>, ContextError> {
         let events = self.events.lock().expect("events mutex poisoned");
         let Some(rows) = events.get(&session) else {
             return Ok(Vec::new());
         };
-        let in_range: Vec<TurnEvent> = rows
+        let in_range: Vec<SessionLogEntry> = rows
             .iter()
             .filter(|e| from.is_none_or(|f| e.id >= f))
             .filter(|e| to.is_none_or(|t| e.id < t))
@@ -63,7 +63,7 @@ impl InMemoryBackend {
         Ok(in_range)
     }
 
-    fn replay_sync(&self, session: SessionId) -> Result<Vec<TurnEvent>, ContextError> {
+    fn replay_sync(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
         let events = self.events.lock().expect("events mutex poisoned");
         Ok(events.get(&session).cloned().unwrap_or_default())
     }
@@ -115,7 +115,7 @@ impl InMemoryBackend {
 }
 
 impl ContextBackend for InMemoryBackend {
-    fn append(&self, event: TurnEvent) -> PFut<'_, Result<EventId, ContextError>> {
+    fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
         let id = self.append_sync(event);
         Box::pin(async move { id })
     }
@@ -125,12 +125,12 @@ impl ContextBackend for InMemoryBackend {
         session: SessionId,
         from: Option<EventId>,
         to: Option<EventId>,
-    ) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+    ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
         let out = self.read_range_sync(session, from, to);
         Box::pin(async move { out })
     }
 
-    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
         let out = self.replay_sync(session);
         Box::pin(async move { out })
     }
@@ -173,7 +173,7 @@ impl ContextBackend for InMemoryBackend {
     /// in-memory store has no corrupt lines, so this delegates to the same
     /// internal read the async replay path uses. The trait's
     /// read_log_lenient default then returns the events with skipped=0.
-    fn read_log(&self, session: SessionId) -> Result<Vec<TurnEvent>, ContextError> {
+    fn read_log(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
         self.replay_sync(session)
     }
 }
@@ -181,15 +181,15 @@ impl ContextBackend for InMemoryBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_context::{Disposition, TurnEvent, TurnEventKind};
+    use houyicoder_context::{Disposition, SessionEvent, SessionLogEntry};
 
-    fn event(session: SessionId, id: EventId, kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn event(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id,
             session,
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
@@ -200,12 +200,12 @@ mod tests {
         let e1 = event(
             s,
             EventId::new(),
-            TurnEventKind::UserInput { text: "a".into() },
+            SessionEvent::UserInput { text: "a".into() },
         );
         let e2 = event(
             s,
             EventId::new(),
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "b".into(),
                 thinking: None,
             },
@@ -223,7 +223,7 @@ mod tests {
         let b = InMemoryBackend::new();
         let s = SessionId::new();
         let id = EventId::new();
-        let e = event(s, id, TurnEventKind::UserInput { text: "a".into() });
+        let e = event(s, id, SessionEvent::UserInput { text: "a".into() });
         pollster::block_on(b.append(e.clone())).unwrap();
         pollster::block_on(b.append(e.clone())).unwrap();
         let replay = pollster::block_on(b.replay(s)).unwrap();
@@ -238,7 +238,7 @@ mod tests {
         pollster::block_on(b.append(event(
             s,
             EventId::new(),
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: call_id.clone(),
                 tool: "edit".into(),
                 input: serde_json::json!({}),
@@ -248,7 +248,7 @@ mod tests {
         pollster::block_on(b.append(event(
             s,
             EventId::new(),
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id,
                 output: serde_json::json!("ok"),
                 duration_ms: 0,
@@ -257,8 +257,8 @@ mod tests {
         .unwrap();
         let replay = pollster::block_on(b.replay(s)).unwrap();
         assert_eq!(replay.len(), 2);
-        assert!(matches!(replay[0].kind, TurnEventKind::ToolCall { .. }));
-        assert!(matches!(replay[1].kind, TurnEventKind::ToolResult { .. }));
+        assert!(matches!(replay[0].event, SessionEvent::ToolCall { .. }));
+        assert!(matches!(replay[1].event, SessionEvent::ToolResult { .. }));
     }
 
     #[test]
@@ -338,7 +338,7 @@ mod tests {
         pollster::block_on(b.append(event(
             s,
             EventId::new(),
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "hello".into(),
             },
         )))
@@ -346,7 +346,7 @@ mod tests {
         pollster::block_on(b.append(event(
             s,
             EventId::new(),
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "world".into(),
             },
         )))

@@ -10,32 +10,32 @@ async fn test_markers_find_unsolved() {
     let id2 = EventId::new();
     let id3 = EventId::new();
     let events = vec![
-        TurnEvent {
+        SessionLogEntry {
             id: id1,
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "hit an error here".into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: id2,
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "we decided to use rust".into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: id3,
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "latest".into(),
                 thinking: None,
             },
@@ -96,32 +96,32 @@ async fn test_preclear_scans_all_events() {
     let id2 = EventId::new();
     let id3 = EventId::new();
     let events = vec![
-        TurnEvent {
+        SessionLogEntry {
             id: id1,
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "hit an error here".into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: id2,
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "we decided to use rust".into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: id3,
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "latest".into(),
             },
         },
@@ -162,22 +162,22 @@ async fn test_markers_dedup_stable() {
     let id2 = EventId::new();
     let text = "the build is broken again";
     let events = vec![
-        TurnEvent {
+        SessionLogEntry {
             id: id1,
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: text.into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: id2,
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: text.into(),
                 thinking: None,
             },
@@ -232,61 +232,61 @@ async fn test_compact_persists_manifest() {
     let s = SessionId::new();
     let ids: Vec<EventId> = (0..6).map(|_| EventId::new()).collect();
     let events = vec![
-        TurnEvent {
+        SessionLogEntry {
             id: ids[0],
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "do work".into(),
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: ids[1],
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "old".into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: ids[2],
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "mid1".into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: ids[3],
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "mid2".into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: ids[4],
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "recent".into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: ids[5],
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "latest".into(),
                 thinking: None,
             },
@@ -320,12 +320,12 @@ async fn test_compact_persists_manifest() {
 
 #[test]
 fn test_byte_len_spawn_zero() {
-    let ev = TurnEvent {
+    let ev = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::SubagentSpawn {
+        event: SessionEvent::SubagentSpawn {
             child_session_id: "c".into(),
             subagent_type: "explore".into(),
             prompt_summary: "find auth".into(),

@@ -12,7 +12,7 @@ pub(crate) mod redundant;
 pub(crate) mod session_meta;
 use labels::{hex_short, trajectory_kind_label};
 
-use houyicoder_context::TurnEventKind;
+use houyicoder_context::SessionEvent;
 use houyicoder_protocol::acp_wire::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome,
@@ -153,20 +153,20 @@ pub(crate) fn project_status(s: &houyicoder_core::agent::StatusSnapshot) -> Wire
 /// server is not dropping events. The kind label is rendered as a fixed-width
 /// string at the TUI boundary.
 pub(crate) fn project_trajectory(
-    events: &[houyicoder_context::TurnEvent],
+    events: &[houyicoder_context::SessionLogEntry],
 ) -> Vec<houyicoder_protocol::frontend::trajectory::TrajectoryEntry> {
     use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
     events
         .iter()
         .map(|ev| {
-            let duration_ms = match &ev.kind {
-                houyicoder_context::TurnEventKind::ToolResult { duration_ms, .. } => {
+            let duration_ms = match &ev.event {
+                houyicoder_context::SessionEvent::ToolResult { duration_ms, .. } => {
                     Some(*duration_ms)
                 }
                 _ => None,
             };
             TrajectoryEntry {
-                kind: trajectory_kind_label(&ev.kind).to_string(),
+                kind: trajectory_kind_label(&ev.event).to_string(),
                 ts: ev.ts,
                 event_id: ev.id.to_string(),
                 prev_hash: ev.prev_hash.as_ref().map(|h| hex_short(&h.0)),
@@ -446,32 +446,32 @@ fn scope_to_wire_destination(
 /// the wire transcript never double-counts a streamed chunk (the live preview
 /// rides the shared live sink, not the wire). A future kind with no mapping
 /// returns None so the adapter drops it rather than inventing a wire shape.
-pub fn project_session_update(kind: &TurnEventKind) -> Option<SessionUpdate> {
+pub fn project_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
     let text_chunk = |text: &str| {
         ContentChunk::new(ContentBlock::Text {
             text: text.to_string(),
         })
     };
-    if matches!(kind, TurnEventKind::RewardObservation { .. }) {
+    if matches!(kind, SessionEvent::RewardObservation { .. }) {
         return None;
     }
     Some(match kind {
-        TurnEventKind::UserInput { text } => SessionUpdate::UserMessageChunk(text_chunk(text)),
-        TurnEventKind::MidTurnInput { text } => SessionUpdate::UserMessageChunk(text_chunk(text)),
+        SessionEvent::UserInput { text } => SessionUpdate::UserMessageChunk(text_chunk(text)),
+        SessionEvent::MidTurnInput { text } => SessionUpdate::UserMessageChunk(text_chunk(text)),
         // A child-completion notification surfaces in the transcript so the
         // user sees what the model was told (the durable kind distinguishes
         // it from a user interjection; the visual chunk is the text summary).
-        TurnEventKind::NotificationInjected { summary, .. } => {
+        SessionEvent::NotificationInjected { summary, .. } => {
             SessionUpdate::UserMessageChunk(text_chunk(summary))
         }
         // The thinking field is a projection convenience folded from sibling
         // Reasoning events; the wire streams those as AgentThoughtChunk
         // separately, so the message chunk carries text only.
-        TurnEventKind::AssistantMessage { text, .. } => {
+        SessionEvent::AssistantMessage { text, .. } => {
             SessionUpdate::AgentMessageChunk(text_chunk(text))
         }
-        TurnEventKind::Reasoning { text } => SessionUpdate::AgentThoughtChunk(text_chunk(text)),
-        TurnEventKind::ToolCall {
+        SessionEvent::Reasoning { text } => SessionUpdate::AgentThoughtChunk(text_chunk(text)),
+        SessionEvent::ToolCall {
             call_id,
             tool,
             input,
@@ -480,7 +480,7 @@ pub fn project_session_update(kind: &TurnEventKind) -> Option<SessionUpdate> {
                 .raw_input(input.clone())
                 .status(ToolCallStatus::InProgress),
         ),
-        TurnEventKind::ToolResult {
+        SessionEvent::ToolResult {
             call_id, output, ..
         } => SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
             call_id.clone(),
@@ -488,32 +488,32 @@ pub fn project_session_update(kind: &TurnEventKind) -> Option<SessionUpdate> {
                 .status(ToolCallStatus::Completed)
                 .raw_output(output.clone()),
         )),
-        TurnEventKind::AssistantTextDelta { .. }
-        | TurnEventKind::MetaUser { .. }
-        | TurnEventKind::MemoryRecall { .. }
-        | TurnEventKind::SkillListing { .. }
-        | TurnEventKind::SkillBody { .. }
-        | TurnEventKind::CompactionBoundary { .. }
-        | TurnEventKind::Summary { .. }
-        | TurnEventKind::PermissionDecision { .. }
-        | TurnEventKind::TruncationVerdict { .. }
-        | TurnEventKind::WorktreeEnter { .. }
-        | TurnEventKind::WorktreeExit { .. }
-        | TurnEventKind::TurnUsage { .. }
-        | TurnEventKind::HookSignal { .. }
-        | TurnEventKind::TurnStarted { .. }
-        | TurnEventKind::CacheBreak { .. }
-        | TurnEventKind::SubagentSpawn { .. }
-        | TurnEventKind::SubagentReturn { .. } => return None,
+        SessionEvent::AssistantTextDelta { .. }
+        | SessionEvent::MetaUser { .. }
+        | SessionEvent::MemoryRecall { .. }
+        | SessionEvent::SkillListing { .. }
+        | SessionEvent::SkillBody { .. }
+        | SessionEvent::CompactionBoundary { .. }
+        | SessionEvent::Summary { .. }
+        | SessionEvent::PermissionDecision { .. }
+        | SessionEvent::TruncationVerdict { .. }
+        | SessionEvent::WorktreeEnter { .. }
+        | SessionEvent::WorktreeExit { .. }
+        | SessionEvent::TurnUsage { .. }
+        | SessionEvent::HookSignal { .. }
+        | SessionEvent::TurnStarted { .. }
+        | SessionEvent::CacheBreak { .. }
+        | SessionEvent::SubagentSpawn { .. }
+        | SessionEvent::SubagentReturn { .. } => return None,
         // TurnAborted is the user-visible boundary marker: project it as a
         // message chunk so the host renders the notice. The model-input
         // projection skips it (the partial turn events are already there).
-        TurnEventKind::TurnAborted { reason } => {
+        SessionEvent::TurnAborted { reason } => {
             let notice = format!("previous turn was interrupted ({reason}), regenerated");
             SessionUpdate::UserMessageChunk(text_chunk(&notice))
         }
-        TurnEventKind::RewardObservation { .. } => return None,
-        TurnEventKind::Unknown => return None,
+        SessionEvent::RewardObservation { .. } => return None,
+        SessionEvent::Unknown => return None,
     })
 }
 
@@ -524,20 +524,20 @@ pub fn project_session_update(kind: &TurnEventKind) -> Option<SessionUpdate> {
 /// audit trail. Kinds with a standard session/update variant return None
 /// here. The params carry the event's own fields serialized as the event's
 /// serde shape so a client reconstructs the typed payload.
-pub(crate) fn project_acpx_context(kind: &TurnEventKind) -> Option<AcpxNotification> {
+pub(crate) fn project_acpx_context(kind: &SessionEvent) -> Option<AcpxNotification> {
     use AcpxMethod::*;
     Some(match kind {
-        TurnEventKind::MetaUser { text } => {
+        SessionEvent::MetaUser { text } => {
             AcpxNotification::new(ContextMetaUser, serde_json::json!({ "text": text }))
         }
-        TurnEventKind::CompactionBoundary { checkpoint } => AcpxNotification::new(
+        SessionEvent::CompactionBoundary { checkpoint } => AcpxNotification::new(
             ContextCompactionBoundary,
             serde_json::json!({ "checkpoint": checkpoint.to_string() }),
         ),
-        TurnEventKind::Summary { text } => {
+        SessionEvent::Summary { text } => {
             AcpxNotification::new(ContextSummary, serde_json::json!({ "text": text }))
         }
-        TurnEventKind::PermissionDecision {
+        SessionEvent::PermissionDecision {
             call_id,
             tool,
             verdict,
@@ -551,29 +551,29 @@ pub(crate) fn project_acpx_context(kind: &TurnEventKind) -> Option<AcpxNotificat
                 "scope": scope,
             }),
         ),
-        TurnEventKind::TurnAborted { .. } => return None,
-        TurnEventKind::TruncationVerdict { .. }
-        | TurnEventKind::WorktreeEnter { .. }
-        | TurnEventKind::WorktreeExit { .. }
-        | TurnEventKind::TurnUsage { .. }
-        | TurnEventKind::HookSignal { .. }
-        | TurnEventKind::TurnStarted { .. }
-        | TurnEventKind::CacheBreak { .. }
-        | TurnEventKind::SubagentSpawn { .. }
-        | TurnEventKind::SubagentReturn { .. }
-        | TurnEventKind::NotificationInjected { .. } => return None,
-        TurnEventKind::UserInput { .. }
-        | TurnEventKind::MidTurnInput { .. }
-        | TurnEventKind::MemoryRecall { .. }
-        | TurnEventKind::SkillListing { .. }
-        | TurnEventKind::SkillBody { .. }
-        | TurnEventKind::AssistantMessage { .. }
-        | TurnEventKind::AssistantTextDelta { .. }
-        | TurnEventKind::ToolCall { .. }
-        | TurnEventKind::ToolResult { .. }
-        | TurnEventKind::Reasoning { .. }
-        | TurnEventKind::RewardObservation { .. } => return None,
-        TurnEventKind::Unknown => return None,
+        SessionEvent::TurnAborted { .. } => return None,
+        SessionEvent::TruncationVerdict { .. }
+        | SessionEvent::WorktreeEnter { .. }
+        | SessionEvent::WorktreeExit { .. }
+        | SessionEvent::TurnUsage { .. }
+        | SessionEvent::HookSignal { .. }
+        | SessionEvent::TurnStarted { .. }
+        | SessionEvent::CacheBreak { .. }
+        | SessionEvent::SubagentSpawn { .. }
+        | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::NotificationInjected { .. } => return None,
+        SessionEvent::UserInput { .. }
+        | SessionEvent::MidTurnInput { .. }
+        | SessionEvent::MemoryRecall { .. }
+        | SessionEvent::SkillListing { .. }
+        | SessionEvent::SkillBody { .. }
+        | SessionEvent::AssistantMessage { .. }
+        | SessionEvent::AssistantTextDelta { .. }
+        | SessionEvent::ToolCall { .. }
+        | SessionEvent::ToolResult { .. }
+        | SessionEvent::Reasoning { .. }
+        | SessionEvent::RewardObservation { .. } => return None,
+        SessionEvent::Unknown => return None,
     })
 }
 

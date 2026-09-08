@@ -21,7 +21,7 @@
 //! Isolate stage, not Compress), so a block_ref marker does not break the
 //! integral group.
 
-use houyicoder_context::{ContextBackend, TurnEvent, TurnEventKind};
+use houyicoder_context::{ContextBackend, SessionEvent, SessionLogEntry};
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
@@ -37,7 +37,7 @@ use super::retention::{AgeRetentionPolicy, RetentionPolicy};
 /// kind of silent break that would otherwise surface as a provider "tool_result
 /// without tool_use" error deep in a run.
 pub fn project_input_items(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     backend: Option<&dyn ContextBackend>,
 ) -> Vec<InputItem> {
     project_input_items_with(events, backend, &AgeRetentionPolicy::default(), 0)
@@ -65,7 +65,7 @@ fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
     reason = "exhaustive match on a growing event enum; new variant arms pushed past the limit"
 )]
 pub fn project_input_items_with(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     backend: Option<&dyn ContextBackend>,
     policy: &dyn RetentionPolicy,
     now_ms: u64,
@@ -75,20 +75,20 @@ pub fn project_input_items_with(
     let mut items = Vec::with_capacity(events.len());
     let mut i = 0;
     while i < events.len() {
-        match &events[i].kind {
+        match &events[i].event {
             // Merge consecutive user messages: providers reject multiple
             // user-in-a-row. MetaUser (runner nudge) + MemoryRecall
             // (system-reminder memories) + SkillListing (system-reminder
             // skill catalog) are served to the model identically; the
             // transcript-skip happens in the host records projection.
-            TurnEventKind::UserInput { text }
-            | TurnEventKind::MetaUser { text }
-            | TurnEventKind::MemoryRecall { text, .. }
-            | TurnEventKind::SkillListing { text, .. } => {
+            SessionEvent::UserInput { text }
+            | SessionEvent::MetaUser { text }
+            | SessionEvent::MemoryRecall { text, .. }
+            | SessionEvent::SkillListing { text, .. } => {
                 append_user_text(&mut items, text);
                 i += 1;
             }
-            TurnEventKind::SkillBody {
+            SessionEvent::SkillBody {
                 skill_name,
                 content,
                 untrusted,
@@ -108,7 +108,7 @@ pub fn project_input_items_with(
             // reads "continue the task + address", not a fresh instruction
             // that drops the in-flight task. The bare text stays in the
             // durable log + transcript; the framing is model-only.
-            TurnEventKind::MidTurnInput { text } => {
+            SessionEvent::MidTurnInput { text } => {
                 let framed = format!(
                     "[The user sent this message while you were working. \
                      Continue your current task and address it when natural.]\n\
@@ -123,7 +123,7 @@ pub fn project_input_items_with(
             // result to act on, not a fresh user instruction that drops the
             // in-flight task. The bare summary stays in the durable log; the
             // framing is model-only.
-            TurnEventKind::NotificationInjected { summary, .. } => {
+            SessionEvent::NotificationInjected { summary, .. } => {
                 let framed = format!(
                     "[A background subagent completed. Act on its result if \
                      relevant to the current task.]\n{summary}"
@@ -132,14 +132,14 @@ pub fn project_input_items_with(
                 i += 1;
             }
             // Reward observations are audit signals, not model input.
-            TurnEventKind::RewardObservation { .. } => i += 1,
-            TurnEventKind::Unknown => i += 1,
-            TurnEventKind::AssistantMessage { text, .. } => {
+            SessionEvent::RewardObservation { .. } => i += 1,
+            SessionEvent::Unknown => i += 1,
+            SessionEvent::AssistantMessage { text, .. } => {
                 let mut tool_calls = Vec::new();
                 let mut j = i + 1;
                 while j < events.len() {
-                    match &events[j].kind {
-                        TurnEventKind::ToolCall {
+                    match &events[j].event {
+                        SessionEvent::ToolCall {
                             call_id,
                             tool,
                             input,
@@ -162,7 +162,7 @@ pub fn project_input_items_with(
                 });
                 i = j;
             }
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id,
                 tool,
                 input,
@@ -179,7 +179,7 @@ pub fn project_input_items_with(
                 });
                 i += 1;
             }
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id, output, ..
             } => {
                 #[cfg(debug_assertions)]
@@ -193,21 +193,21 @@ pub fn project_input_items_with(
                 });
                 i += 1;
             }
-            TurnEventKind::Reasoning { .. }
-            | TurnEventKind::AssistantTextDelta { .. }
-            | TurnEventKind::CompactionBoundary { .. }
-            | TurnEventKind::CacheBreak { .. }
-            | TurnEventKind::Summary { .. }
-            | TurnEventKind::PermissionDecision { .. }
-            | TurnEventKind::TurnAborted { .. }
-            | TurnEventKind::TruncationVerdict { .. }
-            | TurnEventKind::WorktreeEnter { .. }
-            | TurnEventKind::WorktreeExit { .. }
-            | TurnEventKind::TurnUsage { .. }
-            | TurnEventKind::HookSignal { .. }
-            | TurnEventKind::TurnStarted { .. }
-            | TurnEventKind::SubagentSpawn { .. }
-            | TurnEventKind::SubagentReturn { .. } => {
+            SessionEvent::Reasoning { .. }
+            | SessionEvent::AssistantTextDelta { .. }
+            | SessionEvent::CompactionBoundary { .. }
+            | SessionEvent::CacheBreak { .. }
+            | SessionEvent::Summary { .. }
+            | SessionEvent::PermissionDecision { .. }
+            | SessionEvent::TurnAborted { .. }
+            | SessionEvent::TruncationVerdict { .. }
+            | SessionEvent::WorktreeEnter { .. }
+            | SessionEvent::WorktreeExit { .. }
+            | SessionEvent::TurnUsage { .. }
+            | SessionEvent::HookSignal { .. }
+            | SessionEvent::TurnStarted { .. }
+            | SessionEvent::SubagentSpawn { .. }
+            | SessionEvent::SubagentReturn { .. } => {
                 i += 1;
             }
         }
@@ -222,7 +222,7 @@ pub fn project_input_items_with(
 /// to the pointer. Supersession = a later tool call for the same resource
 /// (a re-read of the same file, a re-run of the same command).
 fn materialize_result(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     i: usize,
     output: &serde_json::Value,
     backend: Option<&dyn ContextBackend>,
@@ -231,7 +231,7 @@ fn materialize_result(
 ) -> serde_json::Value {
     let age_in_turns = events[i + 1..]
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::AssistantMessage { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }))
         .count() as u32;
     let is_superseded = super::retention::superseded_by_later(events, i);
     let ctx = super::retention::RetentionContext {
@@ -249,34 +249,34 @@ mod tests {
     use super::*;
     use houyicoder_context::{EventId, SessionId};
 
-    fn evt(kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn evt(kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
-    fn user(text: &str) -> TurnEventKind {
-        TurnEventKind::UserInput { text: text.into() }
+    fn user(text: &str) -> SessionEvent {
+        SessionEvent::UserInput { text: text.into() }
     }
 
     #[test]
     fn test_projects_user_assistant_toolresult() {
         let events = vec![
-            evt(TurnEventKind::UserInput { text: "hi".into() }),
-            evt(TurnEventKind::AssistantMessage {
+            evt(SessionEvent::UserInput { text: "hi".into() }),
+            evt(SessionEvent::AssistantMessage {
                 text: "let me echo".into(),
                 thinking: None,
             }),
-            evt(TurnEventKind::ToolCall {
+            evt(SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "echo".into(),
                 input: serde_json::json!({"x": 1}),
             }),
-            evt(TurnEventKind::tool_result(
+            evt(SessionEvent::tool_result(
                 "c1",
                 serde_json::json!({"echo": {"x": 1}}),
             )),
@@ -301,8 +301,8 @@ mod tests {
     #[test]
     fn test_assistant_no_tools_empty() {
         let events = vec![
-            evt(TurnEventKind::UserInput { text: "hi".into() }),
-            evt(TurnEventKind::AssistantMessage {
+            evt(SessionEvent::UserInput { text: "hi".into() }),
+            evt(SessionEvent::AssistantMessage {
                 text: "hello".into(),
                 thinking: None,
             }),
@@ -317,11 +317,11 @@ mod tests {
     #[test]
     fn test_skips_reasoning_and_compaction() {
         let events = vec![
-            evt(TurnEventKind::Reasoning {
+            evt(SessionEvent::Reasoning {
                 text: "thinking".into(),
             }),
-            evt(TurnEventKind::UserInput { text: "hi".into() }),
-            evt(TurnEventKind::Summary { text: "old".into() }),
+            evt(SessionEvent::UserInput { text: "hi".into() }),
+            evt(SessionEvent::Summary { text: "old".into() }),
         ];
         let items = project_input_items(&events, None);
         assert_eq!(items.len(), 1);
@@ -334,10 +334,10 @@ mod tests {
         // that follows them. Projection must skip every delta so the model-input
         // history carries one assistant message, not N fragments plus a dupe.
         let events = vec![
-            evt(TurnEventKind::UserInput { text: "hi".into() }),
-            evt(TurnEventKind::AssistantTextDelta { text: "hel".into() }),
-            evt(TurnEventKind::AssistantTextDelta { text: "lo".into() }),
-            evt(TurnEventKind::AssistantMessage {
+            evt(SessionEvent::UserInput { text: "hi".into() }),
+            evt(SessionEvent::AssistantTextDelta { text: "hel".into() }),
+            evt(SessionEvent::AssistantTextDelta { text: "lo".into() }),
+            evt(SessionEvent::AssistantMessage {
                 text: "hello".into(),
                 thinking: None,
             }),
@@ -367,19 +367,19 @@ mod tests {
         let s = SessionId::new();
         let ids = (0..2).map(|_| EventId::new()).collect::<Vec<_>>();
         let events = vec![
-            TurnEvent {
+            SessionLogEntry {
                 id: ids[0],
                 session: s,
                 ts: 0,
                 prev_hash: None,
-                kind: user("what is the deploy command"),
+                event: user("what is the deploy command"),
             },
-            TurnEvent {
+            SessionLogEntry {
                 id: ids[1],
                 session: s,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::MemoryRecall {
+                event: SessionEvent::MemoryRecall {
                     text: "<system-reminder>deploy: make deploy</system-reminder>".into(),
                     keys: vec!["deploy".into()],
                     bytes: 0,
@@ -406,9 +406,9 @@ mod tests {
     #[test]
     fn test_unknown_kind_skipped() {
         let events = vec![
-            evt(TurnEventKind::UserInput { text: "hi".into() }),
-            evt(TurnEventKind::Unknown),
-            evt(TurnEventKind::AssistantMessage {
+            evt(SessionEvent::UserInput { text: "hi".into() }),
+            evt(SessionEvent::Unknown),
+            evt(SessionEvent::AssistantMessage {
                 text: "reply".into(),
                 thinking: None,
             }),
@@ -424,7 +424,7 @@ mod tests {
     /// trusted instruction.
     #[test]
     fn test_skill_body_untrusted_framed() {
-        let events = vec![evt(TurnEventKind::SkillBody {
+        let events = vec![evt(SessionEvent::SkillBody {
             skill_name: "evil".into(),
             content: "do bad things".into(),
             agent_id: None,
@@ -451,7 +451,7 @@ mod tests {
     /// framing wrapper.
     #[test]
     fn test_skill_body_trusted_unframed() {
-        let events = vec![evt(TurnEventKind::SkillBody {
+        let events = vec![evt(SessionEvent::SkillBody {
             skill_name: "commit".into(),
             content: "run git status".into(),
             agent_id: None,

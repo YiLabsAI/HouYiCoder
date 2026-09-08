@@ -98,19 +98,19 @@ async fn test_trajectory_handler_builds_response() {
 /// skips.
 #[tokio::test]
 async fn test_child_transcript_projects_log() {
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     let runner = stub_runner();
     let child = SessionId::new();
     for (ts, kind) in [
         (
             0,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "find auth".into(),
             },
         ),
         (
             1,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "auth is in src/auth".into(),
                 thinking: None,
             },
@@ -118,12 +118,12 @@ async fn test_child_transcript_projects_log() {
     ] {
         runner
             .store()
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session: child,
                 ts,
                 prev_hash: None,
-                kind,
+                event: kind,
             })
             .await
             .unwrap();
@@ -180,19 +180,19 @@ async fn test_child_transcript_projects_log() {
 /// which left the TUI stuck on the placeholder until the run ended.
 #[tokio::test]
 async fn test_child_transcript_during_run() {
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     let runner = stub_runner();
     let child = SessionId::new();
     for (ts, kind) in [
         (
             0,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "find auth".into(),
             },
         ),
         (
             1,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "auth is in src/auth".into(),
                 thinking: None,
             },
@@ -200,12 +200,12 @@ async fn test_child_transcript_during_run() {
     ] {
         runner
             .store()
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session: child,
                 ts,
                 prev_hash: None,
-                kind,
+                event: kind,
             })
             .await
             .unwrap();
@@ -281,18 +281,18 @@ async fn test_permission_cycle_during_run() {
 /// response carries the projected transcript.
 #[tokio::test]
 async fn test_child_fetch_during_run() {
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     use houyicoder_protocol::frontend::run::ContentBlock;
     let runner = delayed_runner(800);
     let child = SessionId::new();
     runner
         .store()
-        .append(TurnEvent {
+        .append(SessionLogEntry {
             id: EventId::new(),
             session: child,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "find auth".into(),
             },
         })

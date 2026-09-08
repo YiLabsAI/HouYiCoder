@@ -3,7 +3,7 @@
 //! memory recall) at the boundaries a caller hits. Extracted from the main
 //! impl so the entry surface and the loop body live apart.
 
-use houyicoder_context::{SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::Usage;
 use tokio_util::sync::CancellationToken;
 
@@ -120,7 +120,7 @@ impl Runner {
                 self.store
                     .append(new_event(
                         session,
-                        TurnEventKind::SkillBody {
+                        SessionEvent::SkillBody {
                             skill_name: name,
                             content: body,
                             agent_id: None,
@@ -171,14 +171,14 @@ impl Runner {
     pub async fn run_forked(
         &self,
         session: SessionId,
-        prefix: &[TurnEvent],
+        prefix: &[SessionLogEntry],
         user_input: String,
     ) -> Result<RunResult, RunError> {
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
         for ev in prefix {
             self.store
-                .append(new_event(session, ev.kind.clone()))
+                .append(new_event(session, ev.event.clone()))
                 .await?;
         }
         self.append_user_input(session, user_input).await?;

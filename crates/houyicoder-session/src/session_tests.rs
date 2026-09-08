@@ -1,24 +1,24 @@
 use super::*;
-use houyicoder_context::{EventId, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent};
 use houyicoder_memory::{InMemoryBackend, LocalFileBackend};
 
-fn evt(session: SessionId, id: EventId, kind: TurnEventKind) -> TurnEvent {
-    TurnEvent {
+fn evt(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
         id,
         session,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     }
 }
 
 async fn appended_event(
     store: &SessionStore,
     session: SessionId,
-    kind: TurnEventKind,
-) -> TurnEvent {
+    kind: SessionEvent,
+) -> SessionLogEntry {
     // Returns the event as SessionStore stored it (with prev_hash set), by
-    // appending then replaying the last. This is the bytes the next link hashes.
+    // appending then replaying the last. This is the bytes that next link hashes.
     let id = EventId::new();
     let e = evt(session, id, kind);
     store.append(e.clone()).await.unwrap();
@@ -30,17 +30,17 @@ async fn appended_event(
 async fn test_append_sets_hash_chain() {
     let store = SessionStore::new(Box::new(InMemoryBackend::new()));
     let s = SessionId::new();
-    let e1_stored = appended_event(&store, s, TurnEventKind::UserInput { text: "a".into() }).await;
+    let e1_stored = appended_event(&store, s, SessionEvent::UserInput { text: "a".into() }).await;
     let e2_stored = appended_event(
         &store,
         s,
-        TurnEventKind::AssistantMessage {
+        SessionEvent::AssistantMessage {
             text: "b".into(),
             thinking: None,
         },
     )
     .await;
-    let e3_stored = appended_event(&store, s, TurnEventKind::Reasoning { text: "c".into() }).await;
+    let e3_stored = appended_event(&store, s, SessionEvent::Reasoning { text: "c".into() }).await;
     // First event: no previous.
     assert!(e1_stored.prev_hash.is_none());
     // e2.prev_hash == H(e1 stored).
@@ -59,17 +59,17 @@ async fn test_append_sets_hash_chain() {
 async fn test_trajectory_keeps_order() {
     let store = SessionStore::new(Box::new(InMemoryBackend::new()));
     let s = SessionId::new();
-    let e1 = appended_event(&store, s, TurnEventKind::UserInput { text: "a".into() }).await;
+    let e1 = appended_event(&store, s, SessionEvent::UserInput { text: "a".into() }).await;
     let e2 = appended_event(
         &store,
         s,
-        TurnEventKind::AssistantMessage {
+        SessionEvent::AssistantMessage {
             text: "b".into(),
             thinking: None,
         },
     )
     .await;
-    let e3 = appended_event(&store, s, TurnEventKind::Reasoning { text: "c".into() }).await;
+    let e3 = appended_event(&store, s, SessionEvent::Reasoning { text: "c".into() }).await;
     let traj = store.trajectory_snapshot(s);
     assert_eq!(traj.len(), 3, "mirror holds every appended event");
     assert!(traj[0].prev_hash.is_none(), "first link has no predecessor");
@@ -109,7 +109,7 @@ async fn test_view_returns_replay() {
         .append(evt(
             s,
             EventId::new(),
-            TurnEventKind::UserInput { text: "hi".into() },
+            SessionEvent::UserInput { text: "hi".into() },
         ))
         .await
         .unwrap();
@@ -136,16 +136,16 @@ async fn test_rewind_persisted_counter() {
 /// bytes, including the previous event's own prev_hash). Mirrors what an
 /// exporting binary writes. Deltas are included in the chain as the
 /// exporter recorded them.
-fn chained_source(session: SessionId, kinds: Vec<TurnEventKind>) -> Vec<TurnEvent> {
+fn chained_source(session: SessionId, kinds: Vec<SessionEvent>) -> Vec<SessionLogEntry> {
     let mut out = Vec::new();
     let mut prev: Option<PrevHash> = None;
     for kind in kinds {
-        let ev = TurnEvent {
+        let ev = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: 0,
             prev_hash: prev,
-            kind,
+            event: kind,
         };
         let bytes = serde_json::to_vec(&ev).unwrap();
         prev = Some(SessionStore::hash_line_bytes(&bytes));
@@ -160,9 +160,9 @@ async fn test_seed_drops_text_delta() {
     let source = chained_source(
         src_session,
         vec![
-            TurnEventKind::UserInput { text: "hi".into() },
-            TurnEventKind::AssistantTextDelta { text: "par".into() },
-            TurnEventKind::AssistantMessage {
+            SessionEvent::UserInput { text: "hi".into() },
+            SessionEvent::AssistantTextDelta { text: "par".into() },
+            SessionEvent::AssistantMessage {
                 text: "hi".into(),
                 thinking: None,
             },
@@ -185,7 +185,7 @@ async fn test_seed_drops_text_delta() {
     assert!(
         !replayed
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::AssistantTextDelta { .. })),
+            .any(|e| matches!(e.event, SessionEvent::AssistantTextDelta { .. })),
         "delta must not be in the durable log"
     );
     // head_hash is the rebuilt durable chain's last hash (hash of the
@@ -204,8 +204,8 @@ async fn test_seed_unverified_source_rebuilds() {
     let mut source = chained_source(
         src_session,
         vec![
-            TurnEventKind::UserInput { text: "hi".into() },
-            TurnEventKind::AssistantMessage {
+            SessionEvent::UserInput { text: "hi".into() },
+            SessionEvent::AssistantMessage {
                 text: "hi".into(),
                 thinking: None,
             },
@@ -241,7 +241,7 @@ async fn test_seed_unverified_source_rebuilds() {
     );
 }
 
-fn verify_source_chain_inline(events: &[TurnEvent]) -> SourceChain {
+fn verify_source_chain_inline(events: &[SessionLogEntry]) -> SourceChain {
     // Same logic as SessionStore::verify_source_chain, exercised here on
     // the rebuilt durable chain to assert internal consistency.
     let mut prev: Option<PrevHash> = None;
@@ -277,13 +277,13 @@ mod disk_verify {
         p
     }
 
-    fn ev(session: SessionId, kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn ev(session: SessionId, kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
@@ -297,13 +297,13 @@ mod disk_verify {
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         let sid = SessionId::new();
         store
-            .append(ev(sid, TurnEventKind::UserInput { text: "a".into() }))
+            .append(ev(sid, SessionEvent::UserInput { text: "a".into() }))
             .await
             .expect("append 1");
         store
             .append(ev(
                 sid,
-                TurnEventKind::AssistantMessage {
+                SessionEvent::AssistantMessage {
                     text: "b".into(),
                     thinking: None,
                 },
@@ -324,7 +324,7 @@ mod disk_verify {
         store
             .append(ev(
                 sid,
-                TurnEventKind::UserInput {
+                SessionEvent::UserInput {
                     text: "orig".into(),
                 },
             ))
@@ -333,7 +333,7 @@ mod disk_verify {
         store
             .append(ev(
                 sid,
-                TurnEventKind::AssistantMessage {
+                SessionEvent::AssistantMessage {
                     text: "r".into(),
                     thinking: None,
                 },
@@ -359,7 +359,7 @@ mod disk_verify {
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         let sid = SessionId::new();
         store
-            .append(ev(sid, TurnEventKind::UserInput { text: "ok".into() }))
+            .append(ev(sid, SessionEvent::UserInput { text: "ok".into() }))
             .await
             .expect("append");
         // Append a garbage line after the valid one.
@@ -388,10 +388,10 @@ mod disk_verify {
         let source = chained_source(
             src_sid,
             vec![
-                TurnEventKind::UserInput {
+                SessionEvent::UserInput {
                     text: "seeded".into(),
                 },
-                TurnEventKind::AssistantMessage {
+                SessionEvent::AssistantMessage {
                     text: "reply".into(),
                     thinking: None,
                 },
@@ -404,7 +404,7 @@ mod disk_verify {
         store
             .append(ev(
                 dest_sid,
-                TurnEventKind::UserInput {
+                SessionEvent::UserInput {
                     text: "after resume".into(),
                 },
             ))
@@ -456,7 +456,7 @@ async fn test_fork_chain_accumulates_history() {
     let src_session = SessionId::new();
     let source_a = chained_source(
         src_session,
-        vec![TurnEventKind::UserInput {
+        vec![SessionEvent::UserInput {
             text: "A's prompt".into(),
         }],
     );
@@ -479,8 +479,8 @@ async fn test_fork_chain_accumulates_history() {
     assert_eq!(c_replay.len(), 1, "C carries A's single event forward");
     assert!(
         c_replay.iter().any(|e| matches!(
-            e.kind,
-            TurnEventKind::UserInput { ref text } if text == "A's prompt"
+            e.event,
+            SessionEvent::UserInput { ref text } if text == "A's prompt"
         )),
         "C's history must contain A's originating prompt (chain accumulation)"
     );
@@ -494,7 +494,7 @@ async fn test_seed_roundtrip_preserves_history() {
     let src_session = SessionId::new();
     let source_a = chained_source(
         src_session,
-        vec![TurnEventKind::UserInput {
+        vec![SessionEvent::UserInput {
             text: "first".into(),
         }],
     );
@@ -506,12 +506,12 @@ async fn test_seed_roundtrip_preserves_history() {
         .expect("seed B from A");
     // Append a new durable event to B (a continued turn after resume).
     store_b
-        .append(TurnEvent {
+        .append(SessionLogEntry {
             id: EventId::new(),
             session: sid_b,
             ts: 1,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "second".into(),
             },
         })
@@ -533,8 +533,8 @@ async fn test_seed_roundtrip_preserves_history() {
     );
     let texts: Vec<&str> = c_replay
         .iter()
-        .map(|e| match &e.kind {
-            TurnEventKind::UserInput { text } => text.as_str(),
+        .map(|e| match &e.event {
+            SessionEvent::UserInput { text } => text.as_str(),
             _ => "?",
         })
         .collect();
@@ -554,7 +554,7 @@ async fn test_read_child_result() {
         .append(evt(
             child,
             EventId::new(),
-            TurnEventKind::UserInput { text: "go".into() },
+            SessionEvent::UserInput { text: "go".into() },
         ))
         .await
         .expect("append");
@@ -581,11 +581,11 @@ async fn test_prev_hash_reads_raw() {
     std::fs::create_dir_all(&root).unwrap();
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
-    drop(appended_event(&store, sid, TurnEventKind::UserInput { text: "a".into() }).await);
+    drop(appended_event(&store, sid, SessionEvent::UserInput { text: "a".into() }).await);
     let e2 = appended_event(
         &store,
         sid,
-        TurnEventKind::AssistantMessage {
+        SessionEvent::AssistantMessage {
             text: "b".into(),
             thinking: None,
         },
@@ -625,7 +625,7 @@ async fn test_prev_hash_survives_drift() {
     std::fs::create_dir_all(&root).unwrap();
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
-    drop(appended_event(&store, sid, TurnEventKind::UserInput { text: "a".into() }).await);
+    drop(appended_event(&store, sid, SessionEvent::UserInput { text: "a".into() }).await);
     let rr = store.backend().read_lines_reverse(sid, u64::MAX, 1_048_576);
     let orig_line = rr.lines.first().expect("last line").1.clone();
     // Insert an unknown field a prior binary's schema carried; the current

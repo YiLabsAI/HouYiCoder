@@ -7,7 +7,7 @@
 //! stores to disk turns it red); the disk gate guards the opposite
 //! direction (the disk opt-in must actually persist).
 
-use houyicoder_context::{EventId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
 
 /// The default-build gate asserts on THIS build's sid dir rather than the
 /// root's global entry count. A count-based assert is a global probe: a
@@ -63,12 +63,12 @@ async fn test_disk_options_write_durable() {
     );
     let store = bundle.runner.store();
     store
-        .append(TurnEvent {
+        .append(SessionLogEntry {
             id: EventId::new(),
             session: bundle.session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "durable".to_string(),
             },
         })

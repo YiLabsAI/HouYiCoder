@@ -2,19 +2,19 @@
 
 use super::evolution::*;
 use super::*;
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::Usage;
 use std::path::PathBuf;
 
 use crate::agent::HookError;
 
-fn event(text: &str) -> TurnEvent {
-    TurnEvent {
+fn event(text: &str) -> SessionLogEntry {
+    SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput {
+        event: SessionEvent::UserInput {
             text: text.to_string(),
         },
     }

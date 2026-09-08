@@ -251,7 +251,7 @@ impl Server {
                 );
                 let unknown_count = events
                     .iter()
-                    .filter(|e| matches!(e.kind, houyicoder_context::TurnEventKind::Unknown))
+                    .filter(|e| matches!(e.event, houyicoder_context::SessionEvent::Unknown))
                     .count() as u32;
                 let wire = houyicoder_protocol::frontend::trajectory::TrajectoryResponse {
                     entries,
@@ -715,11 +715,11 @@ fn first_prompt_slug(
     log: &dyn houyicoder_api::session::SessionLog,
     session: houyicoder_context::SessionId,
 ) -> Option<String> {
-    use houyicoder_context::{TurnEvent, TurnEventKind};
+    use houyicoder_context::{SessionEvent, SessionLogEntry};
     let read = log.backend().read_log_range(session, 0, 64_000);
     for (_, line) in &read.lines {
-        if let Ok(ev) = serde_json::from_str::<TurnEvent>(line)
-            && let TurnEventKind::UserInput { text } = &ev.kind
+        if let Ok(ev) = serde_json::from_str::<SessionLogEntry>(line)
+            && let SessionEvent::UserInput { text } = &ev.event
         {
             return Some(slugify(text));
         }

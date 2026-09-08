@@ -28,7 +28,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use houyicoder_async::PFut;
 use houyicoder_context::{
     BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId,
-    LenientRead, LogRangeRead, ReverseRead, SessionId, TurnEvent,
+    LenientRead, LogRangeRead, ReverseRead, SessionId, SessionLogEntry,
 };
 
 use crate::sha256_hex;
@@ -89,7 +89,7 @@ impl LocalFileBackend {
             // Parse only to read the id; a corrupt line is skipped (a
             // later read_log surfaces it as Corrupt). Tolerating here keeps
             // a single bad line from blocking the whole session's dedup.
-            if let Ok(event) = serde_json::from_str::<TurnEvent>(&line) {
+            if let Ok(event) = serde_json::from_str::<SessionLogEntry>(&line) {
                 set.insert(event.id);
             }
         }
@@ -139,7 +139,7 @@ impl LocalFileBackend {
         }
     }
 
-    fn append_sync(&self, event: TurnEvent) -> Result<EventId, ContextError> {
+    fn append_sync(&self, event: SessionLogEntry) -> Result<EventId, ContextError> {
         let session = event.session;
         Self::ensure_dir(&self.session_dir(session))?;
         let log = self.log_path(session);
@@ -175,7 +175,7 @@ impl LocalFileBackend {
         Ok(event.id)
     }
 
-    fn read_log(&self, session: SessionId) -> Result<Vec<TurnEvent>, ContextError> {
+    fn read_log(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
         let log = self.log_path(session);
         let content = match fs::read_to_string(&log) {
             Ok(c) => c,
@@ -187,7 +187,7 @@ impl LocalFileBackend {
             if line.is_empty() {
                 continue;
             }
-            let event: TurnEvent = serde_json::from_str(line)
+            let event: SessionLogEntry = serde_json::from_str(line)
                 .map_err(|e| ContextError::Corrupt(format!("bad event line: {e}")))?;
             events.push(event);
         }
@@ -199,7 +199,7 @@ impl LocalFileBackend {
         session: SessionId,
         from: Option<EventId>,
         to: Option<EventId>,
-    ) -> Result<Vec<TurnEvent>, ContextError> {
+    ) -> Result<Vec<SessionLogEntry>, ContextError> {
         let events = self.read_log(session)?;
         Ok(events
             .into_iter()
@@ -208,7 +208,7 @@ impl LocalFileBackend {
             .collect())
     }
 
-    fn replay_sync(&self, session: SessionId) -> Result<Vec<TurnEvent>, ContextError> {
+    fn replay_sync(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
         self.read_log(session)
     }
 
@@ -395,7 +395,7 @@ impl LocalFileBackend {
 }
 
 impl ContextBackend for LocalFileBackend {
-    fn append(&self, event: TurnEvent) -> PFut<'_, Result<EventId, ContextError>> {
+    fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
         let id = self.append_sync(event);
         Box::pin(async move { id })
     }
@@ -405,12 +405,12 @@ impl ContextBackend for LocalFileBackend {
         session: SessionId,
         from: Option<EventId>,
         to: Option<EventId>,
-    ) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+    ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
         let out = self.read_range_sync(session, from, to);
         Box::pin(async move { out })
     }
 
-    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
         let out = self.replay_sync(session);
         Box::pin(async move { out })
     }
@@ -427,7 +427,7 @@ impl ContextBackend for LocalFileBackend {
         Some(&self.root)
     }
 
-    fn read_log(&self, session: SessionId) -> Result<Vec<TurnEvent>, ContextError> {
+    fn read_log(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
         // Strict: a corrupt line errors here. The snapshot's tolerant read
         // (skip + count) is a separate path, not this trait method.
         self.read_log(session)
@@ -450,7 +450,7 @@ impl ContextBackend for LocalFileBackend {
             if line.is_empty() {
                 continue;
             }
-            match serde_json::from_str::<TurnEvent>(&line) {
+            match serde_json::from_str::<SessionLogEntry>(&line) {
                 Ok(ev) => events.push(ev),
                 Err(_) => skipped += 1,
             }

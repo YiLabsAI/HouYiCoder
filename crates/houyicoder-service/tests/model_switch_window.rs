@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use houyicoder_api::provider::{ModelProvider, stream_from_response};
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
@@ -138,24 +138,24 @@ async fn append_history(store: &SessionStore, session: SessionId) {
     ];
     for (user, assistant) in rounds {
         store
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::UserInput {
+                event: SessionEvent::UserInput {
                     text: user.to_string(),
                 },
             })
             .await
             .unwrap();
         store
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::AssistantMessage {
+                event: SessionEvent::AssistantMessage {
                     text: assistant.to_string(),
                     thinking: None,
                 },

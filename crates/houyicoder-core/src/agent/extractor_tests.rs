@@ -214,24 +214,24 @@ fn extractor(provider: Arc<dyn ModelProvider>) -> (Arc<MemoryExtractor>, Arc<Rec
 }
 
 /// Build a simple conversation prefix: user asks, assistant answers.
-fn conversation() -> Vec<TurnEvent> {
+fn conversation() -> Vec<SessionLogEntry> {
     let session = houyicoder_context::SessionId::new();
     vec![
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "remember to keep responses terse".into(),
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "got it".into(),
                 thinking: None,
             },
@@ -285,12 +285,12 @@ async fn test_extract_skips_main_saved() {
     // The prefix already contains a save_memory tool call (the main agent
     // saved this turn) — mutual exclusion must skip the fork.
     let mut msgs = conversation();
-    msgs.push(TurnEvent {
+    msgs.push(SessionLogEntry {
         id: EventId::new(),
         session: msgs[0].session,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::ToolCall {
+        event: SessionEvent::ToolCall {
             call_id: "main-save".into(),
             tool: "save_memory".into(),
             input: serde_json::json!({
@@ -375,12 +375,12 @@ fn test_has_writes_detects_save() {
         "clean conversation has no save_memory call"
     );
     let mut msgs = msgs;
-    msgs.push(TurnEvent {
+    msgs.push(SessionLogEntry {
         id: EventId::new(),
         session: msgs[0].session,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::ToolCall {
+        event: SessionEvent::ToolCall {
             call_id: "c".into(),
             tool: "save_memory".into(),
             input: serde_json::json!({}),

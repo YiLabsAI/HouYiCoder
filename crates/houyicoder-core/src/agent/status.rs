@@ -261,7 +261,7 @@ impl crate::agent::Runner {
     pub fn trajectory_snapshot(
         &self,
         session: houyicoder_context::SessionId,
-    ) -> Vec<houyicoder_context::TurnEvent> {
+    ) -> Vec<houyicoder_context::SessionLogEntry> {
         self.store.trajectory_snapshot(session)
     }
 

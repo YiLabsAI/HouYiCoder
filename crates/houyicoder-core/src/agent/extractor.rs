@@ -24,13 +24,12 @@ use houyicoder_api::live::{LiveEvent, LiveSink, MemorySavedKind};
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{EventId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
 use tokio::task::JoinHandle;
 
 use super::extract::run_forked_extract;
 use super::{RunError, RunResult, RunnerConfig};
 
-/// The outcome of one extraction pass.
 #[derive(Debug)]
 pub enum ExtractOutcome {
     /// The forked agent ran to completion.
@@ -50,7 +49,7 @@ pub enum ExtractOutcome {
 pub struct MemoryExtractor {
     cursor: Mutex<Option<EventId>>,
     in_progress: Mutex<bool>,
-    pending_context: Mutex<Option<Vec<TurnEvent>>>,
+    pending_context: Mutex<Option<Vec<SessionLogEntry>>>,
     in_flight: Mutex<Vec<JoinHandle<()>>>,
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
@@ -117,7 +116,7 @@ impl MemoryExtractor {
     /// wrapper, coalescing, and trailing pickup live in run_extraction.
     pub async fn run_extraction_once(
         &self,
-        messages: &[TurnEvent],
+        messages: &[SessionLogEntry],
     ) -> Result<ExtractOutcome, RunError> {
         let cursor = *self.cursor.lock().expect("cursor");
         let new_message_count = count_messages_since(messages, cursor.as_ref());
@@ -166,7 +165,7 @@ impl MemoryExtractor {
     /// requires boxing).
     pub fn run_extraction(
         self: Arc<Self>,
-        messages: Vec<TurnEvent>,
+        messages: Vec<SessionLogEntry>,
         is_trailing: bool,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
@@ -203,7 +202,7 @@ impl MemoryExtractor {
     /// synchronously here (not in the spawned body) closes the race where a
     /// concurrent trigger would see in_progress=false between the check and
     /// the spawned task arming it.
-    pub fn extract_memories(self: &Arc<Self>, messages: Vec<TurnEvent>) {
+    pub fn extract_memories(self: &Arc<Self>, messages: Vec<SessionLogEntry>) {
         // Cheap pre-check: if there are no new messages since the cursor, do
         // nothing — avoids spawning a forked LLM run when the conversation
         // has not advanced (e.g. a re-emitted FinalOutput after a verify
@@ -259,7 +258,7 @@ impl MemoryExtractor {
 }
 
 /// Advance the cursor to the last message id. No-op if messages is empty.
-fn advance_cursor(cursor: &Mutex<Option<EventId>>, messages: &[TurnEvent]) {
+fn advance_cursor(cursor: &Mutex<Option<EventId>>, messages: &[SessionLogEntry]) {
     if let Some(last) = messages.last() {
         *cursor.lock().expect("cursor") = Some(last.id);
     }
@@ -269,7 +268,10 @@ fn advance_cursor(cursor: &Mutex<Option<EventId>>, messages: &[TurnEvent]) {
 /// cursor is None (fresh process) or its id is not found in the messages
 /// (compaction removed it), count all — never return 0, which would
 /// permanently disable extraction for the rest of the session.
-pub(crate) fn count_messages_since(messages: &[TurnEvent], cursor: Option<&EventId>) -> usize {
+pub(crate) fn count_messages_since(
+    messages: &[SessionLogEntry],
+    cursor: Option<&EventId>,
+) -> usize {
     let start = match cursor {
         None => 0,
         Some(id) => match messages.iter().position(|m| &m.id == id) {
@@ -280,7 +282,7 @@ pub(crate) fn count_messages_since(messages: &[TurnEvent], cursor: Option<&Event
     messages
         .iter()
         .skip(start)
-        .filter(|m| is_model_visible(&m.kind))
+        .filter(|m| is_model_visible(&m.event))
         .count()
 }
 
@@ -288,7 +290,10 @@ pub(crate) fn count_messages_since(messages: &[TurnEvent], cursor: Option<&Event
 /// (mutual exclusion: the fork would just re-extract what was already
 /// saved). Same fallback as count_messages_since when the cursor id is not
 /// found.
-pub(crate) fn has_memory_writes_since(messages: &[TurnEvent], cursor: Option<&EventId>) -> bool {
+pub(crate) fn has_memory_writes_since(
+    messages: &[SessionLogEntry],
+    cursor: Option<&EventId>,
+) -> bool {
     let start = match cursor {
         None => 0,
         Some(id) => match messages.iter().position(|m| &m.id == id) {
@@ -299,7 +304,7 @@ pub(crate) fn has_memory_writes_since(messages: &[TurnEvent], cursor: Option<&Ev
     messages
         .iter()
         .skip(start)
-        .any(|m| is_save_memory_call(&m.kind))
+        .any(|m| is_save_memory_call(&m.event))
 }
 
 /// Count of save_memory tool calls the main agent emitted after the cursor.
@@ -307,7 +312,10 @@ pub(crate) fn has_memory_writes_since(messages: &[TurnEvent], cursor: Option<&Ev
 /// main agent already saved) still owes the user a memory-saved notice — it
 /// is the path the user directly triggered by telling the agent to save.
 /// Same fallback as has_memory_writes_since when the cursor id is not found.
-pub(crate) fn count_memory_writes_since(messages: &[TurnEvent], cursor: Option<&EventId>) -> usize {
+pub(crate) fn count_memory_writes_since(
+    messages: &[SessionLogEntry],
+    cursor: Option<&EventId>,
+) -> usize {
     let start = match cursor {
         None => 0,
         Some(id) => match messages.iter().position(|m| &m.id == id) {
@@ -318,21 +326,21 @@ pub(crate) fn count_memory_writes_since(messages: &[TurnEvent], cursor: Option<&
     messages
         .iter()
         .skip(start)
-        .filter(|m| is_save_memory_call(&m.kind))
+        .filter(|m| is_save_memory_call(&m.event))
         .count()
 }
 
-fn is_model_visible(kind: &TurnEventKind) -> bool {
+fn is_model_visible(kind: &SessionEvent) -> bool {
     matches!(
         kind,
-        TurnEventKind::UserInput { .. }
-            | TurnEventKind::MidTurnInput { .. }
-            | TurnEventKind::AssistantMessage { .. }
+        SessionEvent::UserInput { .. }
+            | SessionEvent::MidTurnInput { .. }
+            | SessionEvent::AssistantMessage { .. }
     )
 }
 
-fn is_save_memory_call(kind: &TurnEventKind) -> bool {
-    matches!(kind, TurnEventKind::ToolCall { tool, .. } if tool == "save_memory")
+fn is_save_memory_call(kind: &SessionEvent) -> bool {
+    matches!(kind, SessionEvent::ToolCall { tool, .. } if tool == "save_memory")
 }
 
 #[cfg(test)]

@@ -121,7 +121,7 @@ pub fn project_reward_snapshot(
         // dream can judge each recalled memory against the failures that
         // followed — the failure→falsify-lesson edge.
         for ev in ol.trajectory() {
-            if let houyicoder_context::TurnEventKind::MemoryRecall { keys, .. } = &ev.kind {
+            if let houyicoder_context::SessionEvent::MemoryRecall { keys, .. } = &ev.event {
                 snap.recalled_keys.extend(keys.iter().cloned());
             }
         }

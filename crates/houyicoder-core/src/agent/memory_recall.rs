@@ -18,7 +18,9 @@
 
 use std::collections::HashSet;
 
-use houyicoder_context::{CheckpointManifest, ContextBackend, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{
+    CheckpointManifest, ContextBackend, SessionEvent, SessionId, SessionLogEntry,
+};
 
 use super::append::new_event;
 use super::{RunError, Runner, context, projection};
@@ -35,7 +37,7 @@ use super::{RunError, Runner, context, projection};
 /// raw log) is what makes compaction the reset point: the raw log is
 /// append-only, but a folded memory-recall event is gone from the served view.
 fn surfaced_memory_scan(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     manifest: Option<&CheckpointManifest>,
     backend: Option<&dyn ContextBackend>,
 ) -> (HashSet<String>, usize) {
@@ -52,12 +54,12 @@ fn surfaced_memory_scan(
         // same single source. Old logs predate the field (serde default 0):
         // fall back to text.len() so a resumed pre-bytes session still
         // accounts its recall bytes + the cumulative cap still trips.
-        if let TurnEventKind::MemoryRecall {
+        if let SessionEvent::MemoryRecall {
             text,
             keys: ks,
             bytes: b,
             ..
-        } = &e.kind
+        } = &e.event
         {
             for k in ks {
                 keys.insert(k.clone());
@@ -115,8 +117,8 @@ impl Runner {
             .events
             .iter()
             .rev()
-            .find_map(|e| match &e.kind {
-                TurnEventKind::UserInput { text } => Some(text.as_str()),
+            .find_map(|e| match &e.event {
+                SessionEvent::UserInput { text } => Some(text.as_str()),
                 _ => None,
             })
             .unwrap_or("");
@@ -142,7 +144,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::MemoryRecall { text, keys, bytes },
+                SessionEvent::MemoryRecall { text, keys, bytes },
             ))
             .await?;
         Ok(())
@@ -154,31 +156,31 @@ mod tests {
     use super::*;
     use houyicoder_context::{Disposition, EventId, SessionId};
 
-    fn ev(session: SessionId, id: EventId, kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn ev(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id,
             session,
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
-    fn recall(keys: &[&str]) -> TurnEventKind {
+    fn recall(keys: &[&str]) -> SessionEvent {
         let text = "<system-reminder>...</system-reminder>";
-        TurnEventKind::MemoryRecall {
+        SessionEvent::MemoryRecall {
             text: text.into(),
             keys: keys.iter().map(|s| s.to_string()).collect(),
             bytes: text.len() as u32,
         }
     }
 
-    fn user(text: &str) -> TurnEventKind {
-        TurnEventKind::UserInput { text: text.into() }
+    fn user(text: &str) -> SessionEvent {
+        SessionEvent::UserInput { text: text.into() }
     }
 
-    fn assistant(text: &str) -> TurnEventKind {
-        TurnEventKind::AssistantMessage {
+    fn assistant(text: &str) -> SessionEvent {
+        SessionEvent::AssistantMessage {
             text: text.into(),
             thinking: None,
         }
@@ -219,12 +221,12 @@ mod tests {
     fn test_scan_log_falls_back() {
         let s = SessionId::new();
         let text = "<system-reminder>old log recall</system-reminder>";
-        let event = TurnEvent {
+        let event = SessionLogEntry {
             id: EventId::new(),
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::MemoryRecall {
+            event: SessionEvent::MemoryRecall {
                 text: text.into(),
                 keys: vec!["old".into()],
                 bytes: 0,

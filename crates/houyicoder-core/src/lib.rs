@@ -19,5 +19,5 @@ pub mod observability;
 pub mod provider;
 pub mod snapshot;
 pub use houyicoder_context::{
-    EventId, PermissionVerdict, PrevHash, SessionId, TurnEvent, TurnEventKind,
+    EventId, PermissionVerdict, PrevHash, SessionEvent, SessionId, SessionLogEntry,
 };

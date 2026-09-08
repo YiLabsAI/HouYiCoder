@@ -1,5 +1,5 @@
-//! The append-only log's wire types: one logged record (TurnEvent), the
-//! vocabulary of what a record can be (TurnEventKind), and the two verdict
+//! The append-only log's wire types: one logged record (SessionLogEntry), the
+//! vocabulary of what a record can be (SessionEvent), and the two verdict
 //! enums a record carries. These are a compatibility surface - every variant
 //! is serialized into a session log that a later build has to read back - so
 //! they live in one module rather than in the crate root, which holds only
@@ -11,16 +11,20 @@ use crate::hook_types::{HookErrorKind, HookEventKind, HookVerdictKind};
 use crate::ids::{CheckpointId, EventId, PrevHash, SessionId};
 
 /// One record in the append-only session log. The wire type stored by a
-/// ContextBackend. Replay walks events in append order; the tool_use/tool_result
-/// pair invariant (a ToolResult links back to its ToolCall via call_id) must
-/// survive every cut — a replay or view that orphans one half is a bug.
+/// ContextBackend. Replay walks entries in append order; the tool_use/
+/// tool_result pair invariant (a ToolResult links back to its ToolCall via
+/// call_id) must survive every cut — a replay or view that orphans one half
+/// is a bug.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TurnEvent {
+pub struct SessionLogEntry {
     pub id: EventId,
     pub session: SessionId,
     pub ts: u64,
     pub prev_hash: Option<PrevHash>,
-    pub kind: TurnEventKind,
+    /// The session event this record carries. Renamed on the wire to
+    /// "kind" so existing JSONL logs deserialize without migration.
+    #[serde(rename = "kind")]
+    pub event: SessionEvent,
 }
 
 /// The outcome of a human permission verdict on a tool call. The durable
@@ -64,13 +68,13 @@ pub enum TruncationSignal {
     None,
 }
 
-/// The payload of a TurnEvent. Tagged for JSONL. ToolResult carries call_id
+/// The payload of a SessionLogEntry. Tagged for JSONL. ToolResult carries call_id
 /// linking to the ToolCall it answers — the pair invariant. PermissionDecision
 /// carries the call_id of the tool call the verdict answers, closing the audit
 /// gap where a verdict lived only in the transient transcript.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
-pub enum TurnEventKind {
+pub enum SessionEvent {
     UserInput {
         text: String,
     },
@@ -468,7 +472,7 @@ pub enum TurnEventKind {
     Unknown,
 }
 
-impl TurnEventKind {
+impl SessionEvent {
     /// Build a ToolResult with zero duration (the host did not time the call).
     /// Centralizes the field set so adding fields does not churn every call
     /// site; the agent loop passes a real duration_ms when timing wires.

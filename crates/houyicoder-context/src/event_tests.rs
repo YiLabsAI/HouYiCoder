@@ -5,13 +5,13 @@
 
 use super::*;
 
-fn event(session: SessionId, id: EventId, kind: TurnEventKind) -> TurnEvent {
-    TurnEvent {
+fn event(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
         id,
         session,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     }
 }
 
@@ -21,10 +21,10 @@ fn test_event_serde_round_trip() {
     let e = event(
         s,
         EventId::new(),
-        TurnEventKind::UserInput { text: "hi".into() },
+        SessionEvent::UserInput { text: "hi".into() },
     );
     let json = serde_json::to_string(&e).expect("serialize");
-    let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, e);
     assert!(json.contains("\"type\":\"UserInput\""));
 }
@@ -35,7 +35,7 @@ fn test_subagent_spawn_round_trip() {
     let e = event(
         s,
         EventId::new(),
-        TurnEventKind::SubagentSpawn {
+        SessionEvent::SubagentSpawn {
             child_session_id: "child-1".into(),
             subagent_type: "explore".into(),
             prompt_summary: "find the auth module".into(),
@@ -45,7 +45,7 @@ fn test_subagent_spawn_round_trip() {
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
-    let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, e);
     assert!(json.contains("\"type\":\"SubagentSpawn\""));
     assert!(
@@ -60,7 +60,7 @@ fn test_subagent_return_round_trip() {
     let e = event(
         s,
         EventId::new(),
-        TurnEventKind::SubagentReturn {
+        SessionEvent::SubagentReturn {
             child_session_id: "child-1".into(),
             status: "completed".into(),
             summary: "auth lives in crates/api".into(),
@@ -73,7 +73,7 @@ fn test_subagent_return_round_trip() {
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
-    let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, e);
     assert!(json.contains("\"type\":\"SubagentReturn\""));
 }
@@ -84,7 +84,7 @@ fn test_notification_round_trip() {
     let e = event(
         s,
         EventId::new(),
-        TurnEventKind::NotificationInjected {
+        SessionEvent::NotificationInjected {
             child_session_id: "child-1".into(),
             turn: 3,
             order: 1,
@@ -93,7 +93,7 @@ fn test_notification_round_trip() {
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
-    let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, e);
     assert!(json.contains("\"type\":\"NotificationInjected\""));
     assert!(
@@ -112,7 +112,7 @@ fn test_notification_old_log_deserializes() {
     let e = event(
         s,
         EventId::new(),
-        TurnEventKind::NotificationInjected {
+        SessionEvent::NotificationInjected {
             child_session_id: "child-2".into(),
             turn: 1,
             order: 0,
@@ -140,9 +140,9 @@ fn test_notification_old_log_deserializes() {
         }
     }
     let old = serde_json::to_string(&serde_json::Value::Object(wrapped)).expect("re-serialize");
-    let back: TurnEvent = serde_json::from_str(&old).expect("old log deserializes");
-    match back.kind {
-        TurnEventKind::NotificationInjected {
+    let back: SessionLogEntry = serde_json::from_str(&old).expect("old log deserializes");
+    match back.event {
+        SessionEvent::NotificationInjected {
             child_session_id,
             summary,
             turn,
@@ -198,7 +198,7 @@ fn test_session_id_rejects_garbage() {
 #[test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 fn test_event_variants_round_trip() {
-    // Every TurnEventKind variant must survive a serde cycle: the
+    // Every SessionEvent variant must survive a serde cycle: the
     // internally-tagged enum plus nested serde_json::Value and CheckpointId.
     let s = SessionId::new();
     let call_id = "toolu_01call";
@@ -207,7 +207,7 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "hi".into(),
                 thinking: None,
             },
@@ -215,12 +215,12 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            TurnEventKind::AssistantTextDelta { text: "hel".into() },
+            SessionEvent::AssistantTextDelta { text: "hel".into() },
         ),
         event(
             s,
             EventId::new(),
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: call_id.to_string(),
                 tool: "edit".into(),
                 input: serde_json::json!({"path": "x.rs", "line": 3}),
@@ -229,7 +229,7 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: call_id.to_string(),
                 output: serde_json::json!(["ok", 42]),
                 duration_ms: 0,
@@ -238,26 +238,26 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            TurnEventKind::Reasoning {
+            SessionEvent::Reasoning {
                 text: "thinking".into(),
             },
         ),
         event(
             s,
             EventId::new(),
-            TurnEventKind::CompactionBoundary { checkpoint: cp },
+            SessionEvent::CompactionBoundary { checkpoint: cp },
         ),
         event(
             s,
             EventId::new(),
-            TurnEventKind::Summary {
+            SessionEvent::Summary {
                 text: "head summarized".into(),
             },
         ),
         event(
             s,
             EventId::new(),
-            TurnEventKind::PermissionDecision {
+            SessionEvent::PermissionDecision {
                 call_id: call_id.to_string(),
                 tool: "bash".into(),
                 verdict: PermissionVerdict::Approved,
@@ -267,7 +267,7 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            TurnEventKind::TruncationVerdict {
+            SessionEvent::TruncationVerdict {
                 raw_finish_reason: Some("max_tokens".into()),
                 normalized_reason: Some("length".into()),
                 signal: TruncationSignal::ServerUsageNearCap,
@@ -281,7 +281,7 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 3,
                 call_in_turn: 2,
                 input_tokens: 1000,
@@ -297,7 +297,7 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            TurnEventKind::HookSignal {
+            SessionEvent::HookSignal {
                 event: HookEventKind::PreToolUse,
                 verdict: HookVerdictKind::Deny,
                 error: Some(HookErrorKind::Timeout),
@@ -312,7 +312,7 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            TurnEventKind::SkillListing {
+            SessionEvent::SkillListing {
                 text: "- commit: commit changes".into(),
                 bytes: 26,
                 content_hash: 0xdeadbeef,
@@ -321,20 +321,20 @@ fn test_event_variants_round_trip() {
     ];
     for e in &cases {
         let json = serde_json::to_string(e).expect("serialize");
-        let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+        let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, *e);
     }
     // CompactionBoundary carries the nested CheckpointId — verify it.
     let json = serde_json::to_string(&cases[5]).unwrap();
     assert!(json.contains("\"checkpoint\""));
-    let back: TurnEvent = serde_json::from_str(&json).unwrap();
+    let back: SessionLogEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(back, cases[5]);
     // SkillListing's content_hash is on the wire, and an old-log JSON
     // missing the field deserializes to 0 (forward compat for logs written
     // before the field existed).
     let sl = cases
         .iter()
-        .find(|e| matches!(e.kind, TurnEventKind::SkillListing { .. }))
+        .find(|e| matches!(e.event, SessionEvent::SkillListing { .. }))
         .expect("SkillListing case present");
     let sl_json = serde_json::to_string(sl).unwrap();
     assert!(
@@ -345,9 +345,9 @@ fn test_event_variants_round_trip() {
     if let Some(serde_json::Value::Object(kind_map)) = v.get_mut("kind") {
         kind_map.remove("content_hash");
     }
-    let legacy: TurnEvent = serde_json::from_value(v).expect("legacy deserialize");
-    match legacy.kind {
-        TurnEventKind::SkillListing {
+    let legacy: SessionLogEntry = serde_json::from_value(v).expect("legacy deserialize");
+    match legacy.event {
+        SessionEvent::SkillListing {
             content_hash: 0, ..
         } => {}
         other => panic!("expected legacy SkillListing with hash 0, got {other:?}"),
@@ -375,7 +375,7 @@ fn test_verdict_preserves_raw_dialect() {
     // (max_tokens) while the normalized carries the flattened form (length)
     // the drive loop keys on. If the raw is lost, trajectory analysis
     // cannot tell which gateway spelling triggered the cut.
-    let verdict = TurnEventKind::TruncationVerdict {
+    let verdict = SessionEvent::TruncationVerdict {
         raw_finish_reason: Some("max_tokens".into()),
         normalized_reason: Some("length".into()),
         signal: TruncationSignal::ServerUsageNearCap,
@@ -389,15 +389,15 @@ fn test_verdict_preserves_raw_dialect() {
     let json = serde_json::to_string(&e).expect("serialize");
     assert!(json.contains("\"raw_finish_reason\":\"max_tokens\""));
     assert!(json.contains("\"normalized_reason\":\"length\""));
-    let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, e);
     // Distinguish the two: raw is the provider dialect, normalized is the
     // flattened form. They must not collapse into one field.
-    if let TurnEventKind::TruncationVerdict {
+    if let SessionEvent::TruncationVerdict {
         raw_finish_reason,
         normalized_reason,
         ..
-    } = back.kind
+    } = back.event
     {
         assert_eq!(raw_finish_reason.as_deref(), Some("max_tokens"));
         assert_eq!(normalized_reason.as_deref(), Some("length"));

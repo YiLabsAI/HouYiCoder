@@ -1,5 +1,5 @@
 //! The /export projection: derives the export JSON document from the durable
-//! TurnEvent stream. Sibling to trajectory_bridge — that module owns the
+//! SessionLogEntry stream. Sibling to trajectory_bridge — that module owns the
 //! /trajectory view projection, this one owns the /export document projection.
 //! Both read the same SessionLogTrajectory; the ExportLog impl lives here so
 //! trajectory_bridge stays under the file-size gate.
@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use houyicoder_context::{TurnEvent, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_tui::view::export_log::{ExportLog, ExportPayload};
 
 use crate::trajectory_bridge::SessionLogTrajectory;
@@ -49,8 +49,8 @@ pub struct TokenCounts {
 }
 
 impl TokenCounts {
-    fn add(&mut self, u: &TurnEventKind) {
-        if let TurnEventKind::TurnUsage {
+    fn add(&mut self, u: &SessionEvent) {
+        if let SessionEvent::TurnUsage {
             input_tokens,
             output_tokens,
             cache_read_input_tokens,
@@ -114,7 +114,7 @@ pub struct ExportData {
     pub started_at: u64,
     /// The full durable event stream, in append order, with prev_hash chain
     /// intact. This IS the trajectory — the lossless replay substrate.
-    pub trajectory: Vec<TurnEvent>,
+    pub trajectory: Vec<SessionLogEntry>,
     pub tool_stats: Vec<ToolStat>,
     pub usage: UsageSummary,
     pub checkpoints: Vec<CheckpointEntry>,
@@ -147,11 +147,11 @@ fn format_ts_slug(ms: u64) -> String {
 /// First user prompt, slugified for a filename: lowercase, non-alphanumeric
 /// becomes dash, runs collapsed, trimmed to 40 chars. "session" when no
 /// UserInput (the log predates the prompt or the session was server-driven).
-fn first_prompt_slug(events: &[TurnEvent]) -> String {
+fn first_prompt_slug(events: &[SessionLogEntry]) -> String {
     let prompt = events
         .iter()
-        .find_map(|e| match &e.kind {
-            TurnEventKind::UserInput { text } => Some(text.as_str()),
+        .find_map(|e| match &e.event {
+            SessionEvent::UserInput { text } => Some(text.as_str()),
             _ => None,
         })
         .unwrap_or("session");
@@ -183,17 +183,17 @@ fn first_prompt_slug(events: &[TurnEvent]) -> String {
 /// Per-tool call counts, failures, and latency. Two passes: the first
 /// establishes tool order + call counts; the second attributes fail +
 /// latency via the call_id-to-tool map.
-fn compute_tool_stats(events: &[TurnEvent]) -> Vec<ToolStat> {
+fn compute_tool_stats(events: &[SessionLogEntry]) -> Vec<ToolStat> {
     let mut call_to_tool: BTreeMap<&str, &str> = BTreeMap::new();
     for ev in events {
-        if let TurnEventKind::ToolCall { call_id, tool, .. } = &ev.kind {
+        if let SessionEvent::ToolCall { call_id, tool, .. } = &ev.event {
             call_to_tool.insert(call_id.as_str(), tool.as_str());
         }
     }
     let mut tool_order: Vec<&str> = Vec::new();
     let mut tool_map: BTreeMap<&str, (u64, u64, u64, u64)> = BTreeMap::new();
     for ev in events {
-        if let TurnEventKind::ToolCall { tool, .. } = &ev.kind {
+        if let SessionEvent::ToolCall { tool, .. } = &ev.event {
             let name = tool.as_str();
             if let std::collections::btree_map::Entry::Vacant(v) = tool_map.entry(name) {
                 tool_order.push(name);
@@ -204,11 +204,11 @@ fn compute_tool_stats(events: &[TurnEvent]) -> Vec<ToolStat> {
         }
     }
     for ev in events {
-        if let TurnEventKind::ToolResult {
+        if let SessionEvent::ToolResult {
             call_id,
             output,
             duration_ms,
-        } = &ev.kind
+        } = &ev.event
         {
             let fail = if output.get("error").is_some() { 1 } else { 0 };
             if let Some(&tool) = call_to_tool.get(call_id.as_str()) {
@@ -235,7 +235,7 @@ fn compute_tool_stats(events: &[TurnEvent]) -> Vec<ToolStat> {
 }
 
 /// Total + per-model token usage from TurnUsage events.
-fn compute_usage(events: &[TurnEvent]) -> UsageSummary {
+fn compute_usage(events: &[SessionLogEntry]) -> UsageSummary {
     let mut total = TokenCounts::default();
     let mut model_order: Vec<String> = Vec::new();
     let mut model_map: BTreeMap<String, TokenCounts> = BTreeMap::new();
@@ -244,12 +244,12 @@ fn compute_usage(events: &[TurnEvent]) -> UsageSummary {
         // then re-matching it to pull the model out needed an unreachable arm
         // to satisfy the compiler, which is a claim about the code that the
         // reader has to verify against the line above it.
-        if let TurnEventKind::TurnUsage { model, .. } = &ev.kind {
-            total.add(&ev.kind);
+        if let SessionEvent::TurnUsage { model, .. } = &ev.event {
+            total.add(&ev.event);
             if !model_map.contains_key(model) {
                 model_order.push(model.clone());
             }
-            model_map.entry(model.clone()).or_default().add(&ev.kind);
+            model_map.entry(model.clone()).or_default().add(&ev.event);
         }
     }
     let per_model = model_order
@@ -263,22 +263,24 @@ fn compute_usage(events: &[TurnEvent]) -> UsageSummary {
 }
 
 /// Collect compaction checkpoints and error entries from the event stream.
-fn collect_checkpoints_and_errors(events: &[TurnEvent]) -> (Vec<CheckpointEntry>, Vec<ErrorEntry>) {
+fn collect_checkpoints_and_errors(
+    events: &[SessionLogEntry],
+) -> (Vec<CheckpointEntry>, Vec<ErrorEntry>) {
     let mut checkpoints: Vec<CheckpointEntry> = Vec::new();
     let mut errors: Vec<ErrorEntry> = Vec::new();
     for ev in events {
-        match &ev.kind {
-            TurnEventKind::CompactionBoundary { checkpoint } => checkpoints.push(CheckpointEntry {
+        match &ev.event {
+            SessionEvent::CompactionBoundary { checkpoint } => checkpoints.push(CheckpointEntry {
                 ts: ev.ts,
                 checkpoint: Some(format!("{checkpoint:?}")),
                 summary: None,
             }),
-            TurnEventKind::Summary { text } => checkpoints.push(CheckpointEntry {
+            SessionEvent::Summary { text } => checkpoints.push(CheckpointEntry {
                 ts: ev.ts,
                 checkpoint: None,
                 summary: Some(text.clone()),
             }),
-            TurnEventKind::HookSignal {
+            SessionEvent::HookSignal {
                 error: Some(_),
                 reason,
                 hook_name,
@@ -293,7 +295,7 @@ fn collect_checkpoints_and_errors(events: &[TurnEvent]) -> (Vec<CheckpointEntry>
                     tool_name: tool_name.clone(),
                 });
             }
-            TurnEventKind::TurnAborted { reason } => errors.push(ErrorEntry {
+            SessionEvent::TurnAborted { reason } => errors.push(ErrorEntry {
                 ts: ev.ts,
                 kind: "turn_aborted".to_string(),
                 reason: reason.clone(),
@@ -309,36 +311,40 @@ fn collect_checkpoints_and_errors(events: &[TurnEvent]) -> (Vec<CheckpointEntry>
             //
             // A hook signal with no error is the successful path, which is why
             // it is a skip here while the error-bearing form above is not.
-            TurnEventKind::HookSignal { error: None, .. }
-            | TurnEventKind::UserInput { .. }
-            | TurnEventKind::TurnStarted { .. }
-            | TurnEventKind::MetaUser { .. }
-            | TurnEventKind::MidTurnInput { .. }
-            | TurnEventKind::MemoryRecall { .. }
-            | TurnEventKind::SkillListing { .. }
-            | TurnEventKind::SkillBody { .. }
-            | TurnEventKind::AssistantMessage { .. }
-            | TurnEventKind::AssistantTextDelta { .. }
-            | TurnEventKind::ToolCall { .. }
-            | TurnEventKind::ToolResult { .. }
-            | TurnEventKind::TurnUsage { .. }
-            | TurnEventKind::RewardObservation { .. }
-            | TurnEventKind::Reasoning { .. }
-            | TurnEventKind::PermissionDecision { .. }
-            | TurnEventKind::TruncationVerdict { .. }
-            | TurnEventKind::WorktreeEnter { .. }
-            | TurnEventKind::WorktreeExit { .. }
-            | TurnEventKind::CacheBreak { .. }
-            | TurnEventKind::SubagentSpawn { .. }
-            | TurnEventKind::SubagentReturn { .. }
-            | TurnEventKind::NotificationInjected { .. }
-            | TurnEventKind::Unknown => {}
+            SessionEvent::HookSignal { error: None, .. }
+            | SessionEvent::UserInput { .. }
+            | SessionEvent::TurnStarted { .. }
+            | SessionEvent::MetaUser { .. }
+            | SessionEvent::MidTurnInput { .. }
+            | SessionEvent::MemoryRecall { .. }
+            | SessionEvent::SkillListing { .. }
+            | SessionEvent::SkillBody { .. }
+            | SessionEvent::AssistantMessage { .. }
+            | SessionEvent::AssistantTextDelta { .. }
+            | SessionEvent::ToolCall { .. }
+            | SessionEvent::ToolResult { .. }
+            | SessionEvent::TurnUsage { .. }
+            | SessionEvent::RewardObservation { .. }
+            | SessionEvent::Reasoning { .. }
+            | SessionEvent::PermissionDecision { .. }
+            | SessionEvent::TruncationVerdict { .. }
+            | SessionEvent::WorktreeEnter { .. }
+            | SessionEvent::WorktreeExit { .. }
+            | SessionEvent::CacheBreak { .. }
+            | SessionEvent::SubagentSpawn { .. }
+            | SessionEvent::SubagentReturn { .. }
+            | SessionEvent::NotificationInjected { .. }
+            | SessionEvent::Unknown => {}
         }
     }
     (checkpoints, errors)
 }
 
-pub(crate) fn project_export(events: &[TurnEvent], session_id: &str, model: &str) -> ExportData {
+pub(crate) fn project_export(
+    events: &[SessionLogEntry],
+    session_id: &str,
+    model: &str,
+) -> ExportData {
     let started_at = events.first().map(|e| e.ts).unwrap_or(0);
     let tool_stats = compute_tool_stats(events);
     let usage = compute_usage(events);
@@ -387,24 +393,24 @@ mod tests {
 
     use super::*;
     use houyicoder_context::{
-        CheckpointId, EventId, HookErrorKind, HookEventKind, HookVerdictKind, SessionId, TurnEvent,
-        TurnEventKind,
+        CheckpointId, EventId, HookErrorKind, HookEventKind, HookVerdictKind, SessionEvent,
+        SessionId, SessionLogEntry,
     };
 
-    fn ev(ts: u64, kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
-    fn usage_event(ts: u64, model: &str, input: u64, output: u64) -> TurnEvent {
+    fn usage_event(ts: u64, model: &str, input: u64, output: u64) -> SessionLogEntry {
         ev(
             ts,
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 1,
                 call_in_turn: 1,
                 input_tokens: input,
@@ -426,7 +432,7 @@ mod tests {
         let events = vec![
             ev(
                 100,
-                TurnEventKind::ToolCall {
+                SessionEvent::ToolCall {
                     call_id: "c1".into(),
                     tool: "bash".into(),
                     input: serde_json::json!({}),
@@ -434,7 +440,7 @@ mod tests {
             ),
             ev(
                 110,
-                TurnEventKind::ToolCall {
+                SessionEvent::ToolCall {
                     call_id: "c2".into(),
                     tool: "bash".into(),
                     input: serde_json::json!({}),
@@ -442,7 +448,7 @@ mod tests {
             ),
             ev(
                 120,
-                TurnEventKind::ToolResult {
+                SessionEvent::ToolResult {
                     call_id: "c1".into(),
                     output: serde_json::json!({"error": "boom"}),
                     duration_ms: 300,
@@ -450,7 +456,7 @@ mod tests {
             ),
             ev(
                 130,
-                TurnEventKind::ToolResult {
+                SessionEvent::ToolResult {
                     call_id: "c2".into(),
                     output: serde_json::json!({"ok": 1}),
                     duration_ms: 120,
@@ -492,7 +498,7 @@ mod tests {
         // only collects error-bearing signals). TurnAborted also lands.
         let hook_fault = ev(
             100,
-            TurnEventKind::HookSignal {
+            SessionEvent::HookSignal {
                 event: HookEventKind::default(),
                 verdict: HookVerdictKind::Deny,
                 error: Some(HookErrorKind::Timeout),
@@ -506,7 +512,7 @@ mod tests {
         );
         let aborted = ev(
             110,
-            TurnEventKind::TurnAborted {
+            SessionEvent::TurnAborted {
                 reason: "crashed".into(),
             },
         );
@@ -524,13 +530,13 @@ mod tests {
         let events = vec![
             ev(
                 100,
-                TurnEventKind::CompactionBoundary {
+                SessionEvent::CompactionBoundary {
                     checkpoint: CheckpointId::new(),
                 },
             ),
             ev(
                 110,
-                TurnEventKind::Summary {
+                SessionEvent::Summary {
                     text: "folded T1-T3".into(),
                 },
             ),
@@ -549,7 +555,7 @@ mod tests {
         assert_eq!(format_ts_slug(1_785_788_700_000), "2026-08-03-2025");
         let events = vec![ev(
             100,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "Fix the bug!! (urgent)".into(),
             },
         )];
@@ -584,7 +590,7 @@ mod tests {
         let secret = "sk-abcd1234efgh5678ijkl9012mnop3456qrst";
         let events = vec![ev(
             100,
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: "c1".into(),
                 output: serde_json::json!({"token": secret}),
                 duration_ms: 0,

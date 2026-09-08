@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::live::LiveEvent;
-use houyicoder_context::{SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
 use crate::agent::ToolRegistry;
@@ -77,22 +77,22 @@ async fn test_append_signals_cover_verdicts() {
         )
         .await;
     let snap = runner.store().trajectory_snapshot(session);
-    let signals: Vec<&TurnEvent> = snap
+    let signals: Vec<&SessionLogEntry> = snap
         .iter()
-        .filter(|ev| matches!(ev.kind, TurnEventKind::HookSignal { .. }))
+        .filter(|ev| matches!(ev.event, SessionEvent::HookSignal { .. }))
         .collect();
     // 8 outcomes minus the Allow skip = 7 signals.
     assert_eq!(signals.len(), 7, "Allow is skipped, the rest land");
-    let find = |name: &str| -> &TurnEvent {
+    let find = |name: &str| -> &SessionLogEntry {
         signals
             .iter()
-            .find(|ev| matches!(&ev.kind, TurnEventKind::HookSignal { hook_name, .. } if hook_name == name))
+            .find(|ev| matches!(&ev.event, SessionEvent::HookSignal { hook_name, .. } if hook_name == name))
             .copied()
             .expect("signal for hook")
     };
     // The Trigger arm carries triggered_event; the others do not.
-    match &find("t").kind {
-        TurnEventKind::HookSignal {
+    match &find("t").event {
+        SessionEvent::HookSignal {
             verdict,
             triggered_event,
             ..
@@ -104,8 +104,8 @@ async fn test_append_signals_cover_verdicts() {
     }
     // The Err arm: effective verdict is fail-closed Deny (single source),
     // error_kind is Some(Timeout), and it is NOT a policy Deny.
-    match &find("e").kind {
-        TurnEventKind::HookSignal {
+    match &find("e").event {
+        SessionEvent::HookSignal {
             verdict,
             error,
             hook_name,
@@ -129,8 +129,8 @@ async fn test_append_signals_cover_verdicts() {
         ("i", HookVerdictKind::Inject),
         ("k", HookVerdictKind::Ask),
     ] {
-        match &find(name).kind {
-            TurnEventKind::HookSignal {
+        match &find(name).event {
+            SessionEvent::HookSignal {
                 verdict, reason, ..
             } => {
                 assert_eq!(*verdict, kind, "verdict kind for hook {name}");

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
     Usage,
@@ -92,7 +92,7 @@ async fn test_per_turn_abort_continues() {
     let events = runner.store().replay(session).await.expect("replay");
     let aborted = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::TurnAborted { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::TurnAborted { .. }))
         .count();
     assert!(
         aborted >= 1,
@@ -191,7 +191,7 @@ async fn test_mid_stream_abort() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::TurnAborted { .. })),
+            .any(|e| matches!(e.event, SessionEvent::TurnAborted { .. })),
         "a TurnAborted marker lands for the mid-stream-interrupted turn"
     );
 }

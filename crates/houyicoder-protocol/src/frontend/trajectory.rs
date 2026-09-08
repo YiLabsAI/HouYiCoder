@@ -1,6 +1,6 @@
 //! The wire form of a trajectory audit-log entry, returned by the /trajectory
 //! query so the TUI renders the append-only event log without importing the
-//! engine or context crate. The engine TurnEvent carries the event id, the
+//! engine or context crate. The engine SessionLogEntry carries the event id, the
 //! wall-clock ts, the prev_hash linking it into the chain, and the kind; the
 //! wire form mirrors exactly those audit fields as owned, serde-friendly
 //! values (a string kind label, a u64 ts, a string event id, a hex prev_hash).
@@ -26,7 +26,7 @@ pub struct TrajectoryResponse {
     #[serde(default)]
     pub redundant: Vec<RedundantCallEntry>,
     /// Number of events the current binary did not recognize (serde(other)
-    /// fallback on TurnEventKind). These are events from a newer binary
+    /// fallback on SessionEvent). These are events from a newer binary
     /// or a corrupt line; they appear as "unknown" in the entries list but
     /// this count surfaces them as a visible warning so a stale build or
     /// a corrupt log does not silently drop events.
@@ -43,7 +43,7 @@ pub struct TrajectoryEntry {
     /// The event kind label (user / assistant / tool_call / verdict / ...),
     /// fixed-width at the render boundary, not here.
     pub kind: String,
-    /// The wall-clock ts (epoch seconds, matches the engine TurnEvent.ts).
+    /// The wall-clock ts (epoch seconds, matches the engine SessionLogEntry.ts).
     pub ts: u64,
     /// The event id (string form of the engine EventId).
     pub event_id: String,

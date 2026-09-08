@@ -42,7 +42,7 @@ pub enum NextStep {
 /// decides whether resume() executes it.
 #[derive(Debug, Clone)]
 pub struct ApprovalRequest {
-    /// The tool call id as it appears in TurnEventKind::ToolCall.call_id and
+    /// The tool call id as it appears in SessionEvent::ToolCall.call_id and
     /// OutputItem::ToolCall.id.
     pub call_id: String,
     pub tool_name: String,

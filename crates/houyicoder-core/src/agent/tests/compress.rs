@@ -1,6 +1,6 @@
 use super::*;
 use crate::provider::test_support::FakeProvider;
-use houyicoder_context::TurnEventKind;
+use houyicoder_context::SessionEvent;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
 use houyicoder_protocol::llm::{LlmEvent, Usage};
@@ -48,17 +48,17 @@ async fn test_compress_writes_checkpoint() {
     // Append enough assistant turns that compress has something to fold.
     for i in 0..6 {
         store
-            .append(houyicoder_context::TurnEvent {
+            .append(houyicoder_context::SessionLogEntry {
                 id: houyicoder_context::EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: if i == 0 {
-                    TurnEventKind::UserInput {
+                event: if i == 0 {
+                    SessionEvent::UserInput {
                         text: "do the work".into(),
                     }
                 } else {
-                    TurnEventKind::AssistantMessage {
+                    SessionEvent::AssistantMessage {
                         text: format!("response {i}"),
                         thinking: None,
                     }
@@ -85,12 +85,12 @@ async fn test_compress_writes_checkpoint() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::CompactionBoundary { .. }))
+            .any(|e| matches!(e.event, SessionEvent::CompactionBoundary { .. }))
     );
     assert!(
         events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::Summary { .. }))
+            .any(|e| matches!(e.event, SessionEvent::Summary { .. }))
     );
 }
 
@@ -176,17 +176,17 @@ async fn test_pre_flight_trips_compress() {
     for i in 0..6 {
         runner
             .store()
-            .append(houyicoder_context::TurnEvent {
+            .append(houyicoder_context::SessionLogEntry {
                 id: houyicoder_context::EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: if i == 0 {
-                    TurnEventKind::UserInput {
+                event: if i == 0 {
+                    SessionEvent::UserInput {
                         text: "do the work".into(),
                     }
                 } else {
-                    TurnEventKind::AssistantMessage {
+                    SessionEvent::AssistantMessage {
                         text: format!("response {i}"),
                         thinking: None,
                     }
@@ -262,17 +262,17 @@ async fn test_compress_runs_reinject() {
     for i in 0..8 {
         runner
             .store()
-            .append(houyicoder_context::TurnEvent {
+            .append(houyicoder_context::SessionLogEntry {
                 id: houyicoder_context::EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: if i == 0 {
-                    TurnEventKind::UserInput {
+                event: if i == 0 {
+                    SessionEvent::UserInput {
                         text: "do the work".into(),
                     }
                 } else {
-                    TurnEventKind::AssistantMessage {
+                    SessionEvent::AssistantMessage {
                         text: "x".repeat(200),
                         thinking: None,
                     }
@@ -292,7 +292,7 @@ async fn test_compress_runs_reinject() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::CompactionBoundary { .. })),
+            .any(|e| matches!(e.event, SessionEvent::CompactionBoundary { .. })),
         "pre-flight must trip compress when the served view exceeds the window"
     );
 }
@@ -343,8 +343,8 @@ async fn test_stall_flushes_partial() {
     let events = runner.store().replay(session).await.expect("replay");
     assert!(
         events.iter().any(|e| matches!(
-            e.kind,
-            houyicoder_context::TurnEventKind::AssistantMessage { .. }
+            e.event,
+            houyicoder_context::SessionEvent::AssistantMessage { .. }
         )),
         "partial text flushed before the stall failure"
     );
@@ -368,12 +368,12 @@ async fn test_compress_runs_marker_extraction() {
     for i in 0..6 {
         runner
             .store()
-            .append(houyicoder_context::TurnEvent {
+            .append(houyicoder_context::SessionLogEntry {
                 id: houyicoder_context::EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::AssistantMessage {
+                event: SessionEvent::AssistantMessage {
                     text: format!("turn {i} hit an error"),
                     thinking: None,
                 },
@@ -445,12 +445,12 @@ async fn test_before_clear_writes_markers() {
     for text in ["hit an error here", "we decided to use rust", "plain turn"] {
         runner
             .store()
-            .append(houyicoder_context::TurnEvent {
+            .append(houyicoder_context::SessionLogEntry {
                 id: houyicoder_context::EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::AssistantMessage {
+                event: SessionEvent::AssistantMessage {
                     text: text.into(),
                     thinking: None,
                 },
@@ -492,12 +492,12 @@ async fn test_before_clear_dedups_existing() {
     let session = houyicoder_context::SessionId::new();
     runner
         .store()
-        .append(houyicoder_context::TurnEvent {
+        .append(houyicoder_context::SessionLogEntry {
             id: houyicoder_context::EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "hit an error here".into(),
                 thinking: None,
             },

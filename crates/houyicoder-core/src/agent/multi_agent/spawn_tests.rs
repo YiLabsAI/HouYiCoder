@@ -2,7 +2,7 @@
 
 use super::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
 use houyicoder_async::CancellationToken;
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
@@ -76,10 +76,10 @@ async fn test_spawn_creates_boundary() {
     let parent_events = store.trajectory_snapshot(parent_sid);
     let spawn = parent_events
         .iter()
-        .find(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. }))
+        .find(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }))
         .expect("parent log must carry the spawn boundary");
-    let (recorded_child, recorded_trigger) = match &spawn.kind {
-        TurnEventKind::SubagentSpawn {
+    let (recorded_child, recorded_trigger) = match &spawn.event {
+        SessionEvent::SubagentSpawn {
             child_session_id,
             trigger_source,
             ..
@@ -115,10 +115,10 @@ async fn test_spawn_records_system_trigger() {
     let events = store.trajectory_snapshot(parent_sid);
     let spawn = events
         .iter()
-        .find(|e| matches!(e.kind, TurnEventKind::SubagentSpawn { .. }))
+        .find(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }))
         .expect("parent log must carry the spawn boundary");
-    let recorded_trigger = match &spawn.kind {
-        TurnEventKind::SubagentSpawn { trigger_source, .. } => trigger_source.clone(),
+    let recorded_trigger = match &spawn.event {
+        SessionEvent::SubagentSpawn { trigger_source, .. } => trigger_source.clone(),
         _ => unreachable!("matched above"),
     };
     assert_eq!(
@@ -438,8 +438,8 @@ async fn test_inbox_drained_at_boundary() {
         .await;
     let events = store.trajectory_snapshot(handle.session);
     assert!(
-        events.iter().any(|e| matches!(&e.kind,
-                TurnEventKind::MidTurnInput { text } if text == "steer here")),
+        events.iter().any(|e| matches!(&e.event,
+                SessionEvent::MidTurnInput { text } if text == "steer here")),
         "inbox text drained at the turn boundary as a MidTurnInput event"
     );
 }

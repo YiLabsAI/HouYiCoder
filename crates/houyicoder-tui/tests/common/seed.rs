@@ -29,14 +29,14 @@ pub fn seed_session_with_cwd(
     prompt: &str,
     cwd: &str,
 ) -> houyicoder_core::EventId {
-    use houyicoder_core::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
     let sid = SessionId::from_display_string(sid_str).expect("sid parses");
-    let event = TurnEvent {
+    let event = SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput {
+        event: SessionEvent::UserInput {
             text: prompt.into(),
         },
     };

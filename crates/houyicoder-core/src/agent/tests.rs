@@ -4,7 +4,7 @@ use crate::provider::test_support::FakeProvider;
 use futures::StreamExt;
 use houyicoder_api::live::LiveEvent;
 use houyicoder_api::tool::{Tool, ToolCtx};
-use houyicoder_context::TurnEventKind;
+use houyicoder_context::SessionEvent;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::Usage;
@@ -332,7 +332,7 @@ async fn test_stream_persists_deltas() {
     let events = runner.store().replay(session).await.expect("replay");
     let delta_n = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::AssistantTextDelta { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::AssistantTextDelta { .. }))
         .count();
     assert_eq!(
         delta_n, 0,
@@ -340,7 +340,7 @@ async fn test_stream_persists_deltas() {
     );
     let msg_n = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::AssistantMessage { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }))
         .count();
     assert_eq!(msg_n, 1, "one authoritative AssistantMessage");
     let items = project_input_items(&events, None);
@@ -402,8 +402,8 @@ async fn test_resume_partial_interrupts() {
     let has_result = |cid: &str| {
         events.iter().any(|e| {
             matches!(
-                &e.kind,
-                TurnEventKind::ToolResult { call_id, .. } if call_id == cid
+                &e.event,
+                SessionEvent::ToolResult { call_id, .. } if call_id == cid
             )
         })
     };
@@ -464,8 +464,8 @@ async fn test_resume_full_then_continues() {
     }
     // Verify the reject branch wrote the rejection-note result for c2.
     let events = runner.store().replay(session).await.unwrap();
-    let c2_outcome = events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::ToolResult {
+    let c2_outcome = events.iter().find_map(|e| match &e.event {
+        SessionEvent::ToolResult {
             call_id, output, ..
         } if call_id == "c2" => Some(output.clone()),
         _ => None,
@@ -516,7 +516,7 @@ async fn test_resume_empty_interrupts() {
     let events = runner.store().replay(session).await.unwrap();
     let results = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::ToolResult { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::ToolResult { .. }))
         .count();
     assert_eq!(results, 0, "no ToolResults appended for undecided calls");
 }
@@ -683,7 +683,7 @@ async fn test_abort_flushes_partial() {
     let events = runner.store().replay(session).await.expect("replay");
     let msg = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::AssistantMessage { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }))
         .count();
     assert_eq!(
         msg, 1,
@@ -692,7 +692,7 @@ async fn test_abort_flushes_partial() {
     // No orphan ToolResults when there were no tool calls.
     let results = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::ToolResult { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::ToolResult { .. }))
         .count();
     assert_eq!(results, 0);
 }
@@ -723,20 +723,20 @@ async fn test_abort_reconciles_orphan_results() {
     let events = runner.store().replay(session).await.expect("replay");
     let calls = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::ToolCall { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::ToolCall { .. }))
         .count();
     assert_eq!(calls, 1, "tool call flushed to log on abort");
-    let orphan_results: Vec<&TurnEventKind> = events
+    let orphan_results: Vec<&SessionEvent> = events
         .iter()
-        .map(|e| &e.kind)
-        .filter(|k| matches!(k, TurnEventKind::ToolResult { .. }))
+        .map(|e| &e.event)
+        .filter(|k| matches!(k, SessionEvent::ToolResult { .. }))
         .collect();
     assert_eq!(
         orphan_results.len(),
         1,
         "one reconciled ToolResult for the orphan call"
     );
-    if let TurnEventKind::ToolResult {
+    if let SessionEvent::ToolResult {
         call_id, output, ..
     } = orphan_results[0]
     {

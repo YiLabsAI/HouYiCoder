@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    SessionId, SessionMetaStore, SessionProvenance, TurnEvent, TurnEventKind,
+    SessionEvent, SessionId, SessionLogEntry, SessionMetaStore, SessionProvenance,
 };
 use houyicoder_tui::resume_picker::{SessionLister, SessionRow};
 
@@ -144,8 +144,8 @@ fn first_user_prompt(session_log: &dyn SessionLog, sid: SessionId) -> Option<Str
     let backend = session_log.backend();
     let read = backend.read_log_range(sid, 0, 64_000);
     for (_, line) in &read.lines {
-        if let Ok(ev) = serde_json::from_str::<TurnEvent>(line)
-            && let TurnEventKind::UserInput { text } = &ev.kind
+        if let Ok(ev) = serde_json::from_str::<SessionLogEntry>(line)
+            && let SessionEvent::UserInput { text } = &ev.event
         {
             return Some(text.clone());
         }
@@ -186,7 +186,8 @@ fn slugify(text: &str) -> String {
 mod tests {
     use super::*;
     use houyicoder_context::{
-        EventId, NameSource, SessionId, SessionMeta, SessionProvenance, TurnEvent, TurnEventKind,
+        EventId, NameSource, SessionEvent, SessionId, SessionLogEntry, SessionMeta,
+        SessionProvenance,
     };
     use houyicoder_memory::{FileMetaStore, LocalFileBackend};
     use houyicoder_session::SessionStore;
@@ -248,12 +249,12 @@ mod tests {
     /// hard-errors on a missing log).
     async fn append_log(store: &SessionStore, sid: SessionId, text: &str) {
         store
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session: sid,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::UserInput { text: text.into() },
+                event: SessionEvent::UserInput { text: text.into() },
             })
             .await
             .unwrap();

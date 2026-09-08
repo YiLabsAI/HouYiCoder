@@ -328,7 +328,7 @@ impl Runner {
             .filter(|g| g.disposition == Disposition::Verbatim)
             .flat_map(|g| g.event_ids.iter())
             .collect();
-        let post_events: Vec<houyicoder_context::TurnEvent> = events
+        let post_events: Vec<houyicoder_context::SessionLogEntry> = events
             .iter()
             .filter(|e| verbatim_ids.contains(&e.id))
             .cloned()

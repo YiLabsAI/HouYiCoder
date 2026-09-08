@@ -23,7 +23,7 @@ use crate::projection::{
     acp_permission_response_to_decision, approval_to_acp_permission, project_run_error,
     project_run_result, project_session_update,
 };
-use houyicoder_context::{EventId, PermissionVerdict, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::{RunOutcome, Runner};
 use houyicoder_protocol::acp_wire::{
     AcpError, AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, JsonRpcVersion,
@@ -294,12 +294,12 @@ impl AcpServer {
                                 PermissionVerdict::Approved
                             };
                             let _verdict = verdict; // reserved for the audit below
-                            let audit = TurnEvent {
+                            let audit = SessionLogEntry {
                                 id: EventId::new(),
                                 session: self.session,
                                 ts: now_millis(),
                                 prev_hash: None,
-                                kind: TurnEventKind::PermissionDecision {
+                                event: SessionEvent::PermissionDecision {
                                     call_id: approval.call_id.clone(),
                                     tool: approval.tool_name.clone(),
                                     verdict,
@@ -425,8 +425,12 @@ impl AcpServer {
     /// channel — that projection lands with the acpx serve integration; a
     /// pure-ACP client ignores it anyway, so the base stream here is complete
     /// for the first cut.
-    async fn push_turn_event(&mut self, io: &mut AcpIo, ev: &TurnEvent) -> Result<(), WireError> {
-        if let Some(update) = project_session_update(&ev.kind) {
+    async fn push_turn_event(
+        &mut self,
+        io: &mut AcpIo,
+        ev: &SessionLogEntry,
+    ) -> Result<(), WireError> {
+        if let Some(update) = project_session_update(&ev.event) {
             let params = serde_json::to_value(&update).expect("session update serialize");
             let notif = AcpNotification::new("session/update", params);
             self.send_typed(io, &notif).await?;

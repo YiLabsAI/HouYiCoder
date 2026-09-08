@@ -129,7 +129,7 @@ pub struct AssistantToolCall {
 }
 
 /// One history item sent to the model in a CompletionRequest. The loop
-/// translates its TurnEvent log into these (user/assistant text + tool
+/// translates its SessionLogEntry log into these (user/assistant text + tool
 /// results). Tagged for wire transport. An Assistant item may carry the tool
 /// calls it emitted alongside its text — the tool_use/tool_result pair
 /// invariant must survive every projection (a ToolResult without its matching
@@ -232,7 +232,7 @@ pub enum OutputItem {
 
 /// A complete model response: the output items plus usage. The loop inspects
 /// the output for tool calls (has_tools_or_approvals_to_run → run_again,
-/// the run_again rule) and appends a TurnEvent to the session.
+/// the run_again rule) and appends a SessionLogEntry to the session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompletionResponse {
     pub output: Vec<OutputItem>,

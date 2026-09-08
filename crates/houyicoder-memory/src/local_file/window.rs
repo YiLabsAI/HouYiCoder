@@ -6,7 +6,7 @@ mod tests {
     use crate::local_file::LocalFileBackend;
     use houyicoder_context::{
         BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, Disposition,
-        EventId, SessionId, TurnEvent, TurnEventKind,
+        EventId, SessionEvent, SessionId, SessionLogEntry,
     };
     use std::path::PathBuf;
 
@@ -17,13 +17,13 @@ mod tests {
         dir
     }
 
-    fn evt(session: SessionId, id: EventId, kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn evt(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id,
             session,
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
@@ -39,7 +39,7 @@ mod tests {
             pollster::block_on(b.append(evt(
                 s,
                 EventId::new(),
-                TurnEventKind::UserInput {
+                SessionEvent::UserInput {
                     text: format!("line-{i}"),
                 },
             )))
@@ -76,7 +76,7 @@ mod tests {
             pollster::block_on(b.append(evt(
                 s,
                 EventId::new(),
-                TurnEventKind::UserInput {
+                SessionEvent::UserInput {
                     text: format!("ev-{i}"),
                 },
             )))
@@ -114,7 +114,7 @@ mod tests {
         pollster::block_on(b.append(evt(
             s,
             EventId::new(),
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: body.clone(),
                 thinking: None,
             },
@@ -166,7 +166,7 @@ mod tests {
         pollster::block_on(b.append(evt(
             s,
             EventId::new(),
-            TurnEventKind::UserInput { text: "x".into() },
+            SessionEvent::UserInput { text: "x".into() },
         )))
         .unwrap();
         let total = b.log_size(s);
@@ -190,20 +190,20 @@ mod tests {
         pollster::block_on(b.append(evt(
             s,
             EventId::new(),
-            TurnEventKind::UserInput { text: "a".into() },
+            SessionEvent::UserInput { text: "a".into() },
         )))
         .unwrap();
         pollster::block_on(b.append(evt(
             s,
             EventId::new(),
-            TurnEventKind::UserInput { text: "b".into() },
+            SessionEvent::UserInput { text: "b".into() },
         )))
         .unwrap();
         assert!(b.log_size(s) > 0, "appended log sizes positive");
         let events = b.read_log(s).expect("read_log ok");
         assert_eq!(events.len(), 2, "both events round-trip in append order");
         assert!(
-            matches!(events[0].kind, TurnEventKind::UserInput { ref text } if text == "a"),
+            matches!(events[0].event, SessionEvent::UserInput { ref text } if text == "a"),
             "first event is the first appended"
         );
         std::fs::remove_dir_all(&root).ok();
@@ -220,7 +220,7 @@ mod tests {
         pollster::block_on(b.append(evt(
             s,
             EventId::new(),
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "good".into(),
             },
         )))
@@ -254,7 +254,7 @@ mod tests {
         let event = evt(
             s,
             id,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "once".into(),
             },
         );
@@ -374,14 +374,14 @@ mod tests {
             evt(
                 s,
                 id0,
-                TurnEventKind::UserInput {
+                SessionEvent::UserInput {
                     text: "task".into(),
                 },
             ),
             evt(
                 s,
                 id1,
-                TurnEventKind::AssistantMessage {
+                SessionEvent::AssistantMessage {
                     text: "response".into(),
                     thinking: None,
                 },
@@ -389,7 +389,7 @@ mod tests {
             evt(
                 s,
                 id2,
-                TurnEventKind::ToolCall {
+                SessionEvent::ToolCall {
                     call_id: "c1".into(),
                     tool: "bash".into(),
                     input: serde_json::json!({}),
@@ -418,8 +418,8 @@ mod tests {
         assert_eq!(replayed[0].id, id0, "replay preserves event order + ids");
         assert_eq!(replayed[2].id, id2);
         assert_eq!(
-            replayed[1].kind,
-            TurnEventKind::AssistantMessage {
+            replayed[1].event,
+            SessionEvent::AssistantMessage {
                 text: "response".into(),
                 thinking: None,
             },
@@ -442,7 +442,7 @@ mod tests {
         pollster::block_on(b.append(evt(
             s,
             EventId::new(),
-            TurnEventKind::UserInput { text: body },
+            SessionEvent::UserInput { text: body },
         )))
         .unwrap();
         let total = b.log_size(s);
@@ -469,7 +469,7 @@ mod tests {
         pollster::block_on(b.append(evt(
             s,
             EventId::new(),
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: body.clone(),
                 thinking: None,
             },
@@ -588,7 +588,7 @@ mod tests {
         pollster::block_on(b.append(evt(
             session,
             EventId::new(),
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: "c1".into(),
                 output: serde_json::json!({"block_ref": referenced_hash.0, "preview": "..."}),
                 duration_ms: 0,
@@ -635,7 +635,7 @@ mod tests {
         pollster::block_on(b.append(evt(
             session,
             EventId::new(),
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: "c1".into(),
                 output: serde_json::json!({"block_ref": hash.0, "preview": "..."}),
                 duration_ms: 0,

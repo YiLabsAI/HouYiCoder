@@ -591,21 +591,21 @@ pub const ONE_REPLY_SCRIPT: &str = r#"[[{"type":"Text","text":"logged"}]]"#;
 /// derived-stats fields a full export carries, so this slice round-trips
 /// through resume. Shared by the resume + status-provenance PTY tests.
 pub fn write_resume_fixture() -> PathBuf {
-    use houyicoder_core::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA"; // legacy ULID (pre-change)
     let sid = SessionId::from_display_string(legacy_sid).expect("legacy ULID parses");
-    let mk = |kind: TurnEventKind| TurnEvent {
+    let mk = |kind: SessionEvent| SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     };
     let events = vec![
-        mk(TurnEventKind::UserInput {
+        mk(SessionEvent::UserInput {
             text: "resumed hello from export".into(),
         }),
-        mk(TurnEventKind::AssistantMessage {
+        mk(SessionEvent::AssistantMessage {
             text: "resumed reply from export".into(),
             thinking: None,
         }),

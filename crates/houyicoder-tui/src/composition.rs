@@ -2,7 +2,7 @@
 //! with no runner wired (legacy stub flow, used by Login/Console tests and the
 //! fallback path). build_app_for_test() wires a real agent Runner so the working
 //! screen does real chat: input spawns runner.run, the transcript is rebuilt
-//! from real TurnEvents, and approvals come from real Interruptions.
+//! from real SessionLogEntries, and approvals come from real Interruptions.
 
 mod app_default;
 mod placeholder;

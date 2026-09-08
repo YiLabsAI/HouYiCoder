@@ -480,7 +480,7 @@ impl Server {
 
     /// Drive one user message through the runner. The run streams its turn
     /// events into the session log; on completion the service forwards each
-    /// event as a TurnEvent frame on the seq stream, then returns the run
+    /// event as a SessionLogEntry frame on the seq stream, then returns the run
     /// outcome as a response correlated to the request.
     ///
     /// Permission asks are surfaced mid-turn as reverse requests: when the

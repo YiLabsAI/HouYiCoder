@@ -1,6 +1,6 @@
 //! The trajectory-data bridge: an impl of the TUI's TrajectoryLog seam backed
 //! by the runner's SessionLog. The /trajectory pane queries the durable
-//! session log (every TurnEvent) via SessionLog::trajectory_snapshot,
+//! session log (every SessionLogEntry) via SessionLog::trajectory_snapshot,
 //! groups events into logical turns, and projects each into the plain-data
 //! TrajectoryView the TUI renders. Mirrors the disk-search bridge: the TUI
 //! owns the contract, this module owns the projection + the session-log
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::records::ToolOutcome;
 use houyicoder_tui::view::trajectory_pane::{
     TrajectoryEvent, TrajectoryLog, TrajectoryRow, TrajectoryTurn, TrajectoryView,
@@ -47,14 +47,14 @@ fn preview(s: &str) -> String {
 /// own rather than while walking the turns: a result is judged against the
 /// call that produced it, and the two events need not sit in the same turn,
 /// so the index must be complete before the first result is judged.
-fn index_calls(events: &[TurnEvent]) -> CallIndex<'_> {
+fn index_calls(events: &[SessionLogEntry]) -> CallIndex<'_> {
     let mut calls = CallIndex::new();
     for ev in events {
-        if let TurnEventKind::ToolCall {
+        if let SessionEvent::ToolCall {
             call_id,
             tool,
             input,
-        } = &ev.kind
+        } = &ev.event
         {
             calls.insert(call_id.as_str(), (tool.as_str(), input));
         }
@@ -86,24 +86,28 @@ fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -
     ToolOutcome::from_output_with(output, tool, input) == ToolOutcome::Error
 }
 
-/// Project one TurnEvent into a TrajectoryEvent (the per-event row), or None
+/// Project one SessionLogEntry into a TrajectoryEvent (the per-event row), or None
 /// for kinds that are pure metadata (TurnUsage carries tokens at the turn
 /// level, not as a displayable event; the rest are folded into the turn's
 /// counts or skipped as audit-only).
-fn project_event(ev: &TurnEvent, start_ms: u64, calls: &CallIndex) -> Option<TrajectoryEvent> {
+fn project_event(
+    ev: &SessionLogEntry,
+    start_ms: u64,
+    calls: &CallIndex,
+) -> Option<TrajectoryEvent> {
     let success = !matches!(
-        &ev.kind,
-        TurnEventKind::ToolResult { output, call_id, .. }
+        &ev.event,
+        SessionEvent::ToolResult { output, call_id, .. }
             if result_failed(output, call_id, calls)
     );
-    let (kind, summary, thinking, input, output, duration_ms) = match &ev.kind {
-        TurnEventKind::UserInput { text } => {
+    let (kind, summary, thinking, input, output, duration_ms) = match &ev.event {
+        SessionEvent::UserInput { text } => {
             ("user", preview(text), None, Some(text.clone()), None, 0)
         }
-        TurnEventKind::MidTurnInput { text } => {
+        SessionEvent::MidTurnInput { text } => {
             ("user", preview(text), None, Some(text.clone()), None, 0)
         }
-        TurnEventKind::AssistantMessage { text, thinking } => {
+        SessionEvent::AssistantMessage { text, thinking } => {
             // output carries the full reply so the L2 detail shows it (the
             // summary is only an 80-char preview).
             (
@@ -115,7 +119,7 @@ fn project_event(ev: &TurnEvent, start_ms: u64, calls: &CallIndex) -> Option<Tra
                 0,
             )
         }
-        TurnEventKind::Reasoning { text } => (
+        SessionEvent::Reasoning { text } => (
             "reasoning",
             preview(text),
             Some(text.clone()),
@@ -123,7 +127,7 @@ fn project_event(ev: &TurnEvent, start_ms: u64, calls: &CallIndex) -> Option<Tra
             None,
             0,
         ),
-        TurnEventKind::ToolCall { tool, input, .. } => (
+        SessionEvent::ToolCall { tool, input, .. } => (
             "tool_call",
             format!("{tool}({})", preview(&input.to_string())),
             None,
@@ -131,7 +135,7 @@ fn project_event(ev: &TurnEvent, start_ms: u64, calls: &CallIndex) -> Option<Tra
             None,
             0,
         ),
-        TurnEventKind::ToolResult {
+        SessionEvent::ToolResult {
             output,
             duration_ms,
             ..
@@ -154,35 +158,35 @@ fn project_event(ev: &TurnEvent, start_ms: u64, calls: &CallIndex) -> Option<Tra
                 *duration_ms,
             )
         }
-        TurnEventKind::HookSignal {
+        SessionEvent::HookSignal {
             verdict, reason, ..
         } => ("hook", format!("{verdict:?} {reason}"), None, None, None, 0),
-        TurnEventKind::TurnAborted { reason } => ("aborted", preview(reason), None, None, None, 0),
-        TurnEventKind::Summary { text } => {
+        SessionEvent::TurnAborted { reason } => ("aborted", preview(reason), None, None, None, 0),
+        SessionEvent::Summary { text } => {
             ("summary", preview(text), None, Some(text.clone()), None, 0)
         }
         // Metadata / audit-only / streaming-delta: not a displayable event.
         // TurnStarted is the turn boundary (the projection groups on it); it
         // is not itself an event row. TurnUsage contributes tokens at the
         // turn level (not an event row).
-        TurnEventKind::TurnStarted { .. }
-        | TurnEventKind::TurnUsage { .. }
-        | TurnEventKind::TruncationVerdict { .. }
-        | TurnEventKind::PermissionDecision { .. }
-        | TurnEventKind::CompactionBoundary { .. }
-        | TurnEventKind::CacheBreak { .. }
-        | TurnEventKind::MetaUser { .. }
-        | TurnEventKind::MemoryRecall { .. }
-        | TurnEventKind::SkillListing { .. }
-        | TurnEventKind::SkillBody { .. }
-        | TurnEventKind::AssistantTextDelta { .. }
-        | TurnEventKind::WorktreeEnter { .. }
-        | TurnEventKind::WorktreeExit { .. }
-        | TurnEventKind::RewardObservation { .. }
-        | TurnEventKind::SubagentSpawn { .. }
-        | TurnEventKind::SubagentReturn { .. }
-        | TurnEventKind::NotificationInjected { .. } => return None,
-        TurnEventKind::Unknown => return None,
+        SessionEvent::TurnStarted { .. }
+        | SessionEvent::TurnUsage { .. }
+        | SessionEvent::TruncationVerdict { .. }
+        | SessionEvent::PermissionDecision { .. }
+        | SessionEvent::CompactionBoundary { .. }
+        | SessionEvent::CacheBreak { .. }
+        | SessionEvent::MetaUser { .. }
+        | SessionEvent::MemoryRecall { .. }
+        | SessionEvent::SkillListing { .. }
+        | SessionEvent::SkillBody { .. }
+        | SessionEvent::AssistantTextDelta { .. }
+        | SessionEvent::WorktreeEnter { .. }
+        | SessionEvent::WorktreeExit { .. }
+        | SessionEvent::RewardObservation { .. }
+        | SessionEvent::SubagentSpawn { .. }
+        | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::NotificationInjected { .. } => return None,
+        SessionEvent::Unknown => return None,
     };
     Some(TrajectoryEvent {
         kind: kind.to_string(),
@@ -290,7 +294,7 @@ impl TurnBuilder {
         });
     }
 
-    fn push_event(&mut self, ev: &TurnEvent, offset: u64, calls: &CallIndex) {
+    fn push_event(&mut self, ev: &SessionLogEntry, offset: u64, calls: &CallIndex) {
         if let Some(e) = project_event(ev, offset, calls) {
             self.events.push(e);
         }
@@ -347,10 +351,10 @@ fn build_summary(
     }
 }
 
-pub(crate) fn project(events: &[TurnEvent], model: &str) -> TrajectoryView {
+pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView {
     let has_turn_started = events
         .iter()
-        .any(|e| matches!(e.kind, TurnEventKind::TurnStarted { .. }));
+        .any(|e| matches!(e.event, SessionEvent::TurnStarted { .. }));
 
     let mut turns: Vec<TrajectoryTurn> = Vec::new();
     let mut builder = TurnBuilder::new();
@@ -362,8 +366,8 @@ pub(crate) fn project(events: &[TurnEvent], model: &str) -> TrajectoryView {
     let calls = index_calls(events);
 
     for ev in events {
-        match &ev.kind {
-            TurnEventKind::UserInput { text } if !has_turn_started => {
+        match &ev.event {
+            SessionEvent::UserInput { text } if !has_turn_started => {
                 if n > 0 {
                     builder.flush(&mut turns, n);
                 }
@@ -371,17 +375,17 @@ pub(crate) fn project(events: &[TurnEvent], model: &str) -> TrajectoryView {
                 builder.reset(text.clone(), ev.ts);
                 builder.push_event(ev, 0, &calls);
             }
-            TurnEventKind::UserInput { text } => {
+            SessionEvent::UserInput { text } => {
                 pending_prompt = text.clone();
             }
-            TurnEventKind::TurnStarted { turn, .. } => {
+            SessionEvent::TurnStarted { turn, .. } => {
                 if n > 0 {
                     builder.flush(&mut turns, n);
                 }
                 n = *turn as usize;
                 builder.reset(std::mem::take(&mut pending_prompt), ev.ts);
             }
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 input_tokens,
                 output_tokens,
                 cache_read_input_tokens,
@@ -409,11 +413,11 @@ pub(crate) fn project(events: &[TurnEvent], model: &str) -> TrajectoryView {
                 total_tokens_in += *input_tokens;
                 total_tokens_out += *output_tokens;
             }
-            TurnEventKind::ToolCall { .. } => {
+            SessionEvent::ToolCall { .. } => {
                 builder.tool_count += 1;
                 builder.push_event(ev, builder.offset(ev.ts), &calls);
             }
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 duration_ms,
                 output,
                 call_id,
@@ -425,7 +429,7 @@ pub(crate) fn project(events: &[TurnEvent], model: &str) -> TrajectoryView {
                 }
                 builder.push_event(ev, builder.offset(ev.ts), &calls);
             }
-            TurnEventKind::TurnAborted { .. } => {
+            SessionEvent::TurnAborted { .. } => {
                 builder.success = false;
                 builder.push_event(ev, builder.offset(ev.ts), &calls);
             }

@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::{SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{
@@ -178,7 +178,7 @@ fn runner_with(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> Runner 
 }
 
 /// Collect the durable event stream via the public SessionLog accessor.
-fn events(runner: &Runner, session: SessionId) -> Vec<TurnEvent> {
+fn events(runner: &Runner, session: SessionId) -> Vec<SessionLogEntry> {
     runner.store().trajectory_snapshot(session)
 }
 
@@ -240,12 +240,12 @@ async fn test_trace_substrate_pairs_calls() {
     // call_id causal chain: the ToolCall precedes its ToolResult, same id.
     let tool_call = ev
         .iter()
-        .position(|e| matches!(&e.kind, TurnEventKind::ToolCall { call_id, .. } if call_id == "c1"))
+        .position(|e| matches!(&e.event, SessionEvent::ToolCall { call_id, .. } if call_id == "c1"))
         .expect("ToolCall c1");
     let tool_result = ev
         .iter()
         .position(
-            |e| matches!(&e.kind, TurnEventKind::ToolResult { call_id, .. } if call_id == "c1"),
+            |e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == "c1"),
         )
         .expect("ToolResult c1");
     assert!(
@@ -256,13 +256,13 @@ async fn test_trace_substrate_pairs_calls() {
     // One TurnUsage per logical turn, terminal (recovery=false), turn steps
     // 1→2, call_in_turn=1 (single round-trip each). Regression guard for
     // the turn/call split: a turn must NOT be one-per-call.
-    let usages: Vec<&TurnEvent> = ev
+    let usages: Vec<&SessionLogEntry> = ev
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::TurnUsage { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::TurnUsage { .. }))
         .collect();
     assert_eq!(usages.len(), 2, "one TurnUsage per logical turn");
-    let (t1, c1, r1) = match &usages[0].kind {
-        TurnEventKind::TurnUsage {
+    let (t1, c1, r1) = match &usages[0].event {
+        SessionEvent::TurnUsage {
             turn,
             call_in_turn,
             recovery,
@@ -270,8 +270,8 @@ async fn test_trace_substrate_pairs_calls() {
         } => (*turn, *call_in_turn, *recovery),
         _ => unreachable!(),
     };
-    let (t2, c2, r2) = match &usages[1].kind {
-        TurnEventKind::TurnUsage {
+    let (t2, c2, r2) = match &usages[1].event {
+        SessionEvent::TurnUsage {
             turn,
             call_in_turn,
             recovery,
@@ -295,7 +295,7 @@ async fn test_trace_substrate_pairs_calls() {
     // in-crate by fire_tests, which the private hook API cannot reach here.
     let hook_signals = ev
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::HookSignal { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::HookSignal { .. }))
         .count();
     assert_eq!(hook_signals, 0, "no hooks => no HookSignal (Allow absence)");
 }
@@ -359,15 +359,15 @@ async fn test_trace_substrate_length_retry() {
     assert!(matches!(result.outcome, RunOutcome::FinalOutput(_)));
 
     let ev = events(&runner, session);
-    let usages: Vec<&TurnEvent> = ev
+    let usages: Vec<&SessionLogEntry> = ev
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::TurnUsage { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::TurnUsage { .. }))
         .collect();
     assert_eq!(usages.len(), 2, "retry + terminal each record a TurnUsage");
     // The retry shares the logical turn with the terminal — turn=1 for both
     // (regression guard for the turn_count split). call_in_turn steps 1→2.
-    let (t_retry, c_retry, r_retry) = match &usages[0].kind {
-        TurnEventKind::TurnUsage {
+    let (t_retry, c_retry, r_retry) = match &usages[0].event {
+        SessionEvent::TurnUsage {
             turn,
             call_in_turn,
             recovery,
@@ -375,8 +375,8 @@ async fn test_trace_substrate_length_retry() {
         } => (*turn, *call_in_turn, *recovery),
         _ => unreachable!(),
     };
-    let (t_final, c_final, r_final) = match &usages[1].kind {
-        TurnEventKind::TurnUsage {
+    let (t_final, c_final, r_final) = match &usages[1].event {
+        SessionEvent::TurnUsage {
             turn,
             call_in_turn,
             recovery,

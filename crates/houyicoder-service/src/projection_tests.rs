@@ -10,10 +10,10 @@ use houyicoder_context::PermissionVerdict;
 /// here, not in production.
 #[test]
 fn test_every_kind_projects() {
-    let cases: Vec<(TurnEventKind, bool, bool)> = vec![
-        (TurnEventKind::UserInput { text: "hi".into() }, true, false),
+    let cases: Vec<(SessionEvent, bool, bool)> = vec![
+        (SessionEvent::UserInput { text: "hi".into() }, true, false),
         (
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "yo".into(),
                 thinking: None,
             },
@@ -24,13 +24,13 @@ fn test_every_kind_projects() {
         // AssistantMessage, so the wire carries neither the delta nor
         // an acpx counterpart.
         (
-            TurnEventKind::AssistantTextDelta { text: "d".into() },
+            SessionEvent::AssistantTextDelta { text: "d".into() },
             false,
             false,
         ),
-        (TurnEventKind::Reasoning { text: "r".into() }, true, false),
+        (SessionEvent::Reasoning { text: "r".into() }, true, false),
         (
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "c".into(),
                 tool: "bash".into(),
                 input: serde_json::Value::Null,
@@ -39,27 +39,27 @@ fn test_every_kind_projects() {
             false,
         ),
         (
-            TurnEventKind::tool_result("c", serde_json::Value::Null),
+            SessionEvent::tool_result("c", serde_json::Value::Null),
             true,
             false,
         ),
         (
-            TurnEventKind::MetaUser {
+            SessionEvent::MetaUser {
                 text: "nudge".into(),
             },
             false,
             true,
         ),
         (
-            TurnEventKind::CompactionBoundary {
+            SessionEvent::CompactionBoundary {
                 checkpoint: Default::default(),
             },
             false,
             true,
         ),
-        (TurnEventKind::Summary { text: "s".into() }, false, true),
+        (SessionEvent::Summary { text: "s".into() }, false, true),
         (
-            TurnEventKind::PermissionDecision {
+            SessionEvent::PermissionDecision {
                 call_id: "c".into(),
                 tool: "bash".into(),
                 verdict: PermissionVerdict::Approved,
@@ -70,7 +70,7 @@ fn test_every_kind_projects() {
         ),
         // Unknown lands on neither stream: a future binary's event type the
         // current binary does not recognize carries no projection.
-        (TurnEventKind::Unknown, false, false),
+        (SessionEvent::Unknown, false, false),
     ];
     for (kind, expects_update, expects_acpx) in cases {
         assert_eq!(
@@ -90,7 +90,7 @@ fn test_every_kind_projects() {
 
 #[test]
 fn test_tool_result_projects_update() {
-    let kind = TurnEventKind::tool_result("toolu_1", serde_json::Value::String("ok".into()));
+    let kind = SessionEvent::tool_result("toolu_1", serde_json::Value::String("ok".into()));
     let update = project_session_update(&kind).expect("tool result projects");
     let SessionUpdate::ToolCallUpdate(upd) = update else {
         panic!("tool result is a tool-call update");
@@ -105,7 +105,7 @@ fn test_tool_result_projects_update() {
 
 #[test]
 fn test_permission_decision_projects_acpx() {
-    let kind = TurnEventKind::PermissionDecision {
+    let kind = SessionEvent::PermissionDecision {
         call_id: "c".into(),
         tool: "bash".into(),
         verdict: PermissionVerdict::Denied,
@@ -214,8 +214,8 @@ fn test_rule_destination_round_trips() {
 /// model-input or side-channel event).
 #[test]
 fn test_turn_aborted_projects_label() {
-    use houyicoder_context::TurnEventKind;
-    let kind = TurnEventKind::TurnAborted {
+    use houyicoder_context::SessionEvent;
+    let kind = SessionEvent::TurnAborted {
         reason: "crash".into(),
     };
     assert_eq!(trajectory_kind_label(&kind), "aborted");
@@ -275,15 +275,15 @@ fn test_not_found_omits_key() {
 
 #[test]
 fn test_project_trajectory_carries_duration() {
-    use houyicoder_context::{EventId, SessionId, TurnEvent};
-    let mk = |kind| TurnEvent {
+    use houyicoder_context::{EventId, SessionId, SessionLogEntry};
+    let mk = |kind| SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     };
-    let tool = mk(TurnEventKind::ToolResult {
+    let tool = mk(SessionEvent::ToolResult {
         call_id: "c1".into(),
         output: serde_json::json!({}),
         duration_ms: 4200,
@@ -291,7 +291,7 @@ fn test_project_trajectory_carries_duration() {
     let entries = super::project_trajectory(std::slice::from_ref(&tool));
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].duration_ms, Some(4200));
-    let user = mk(TurnEventKind::UserInput { text: "hi".into() });
+    let user = mk(SessionEvent::UserInput { text: "hi".into() });
     let entries2 = super::project_trajectory(std::slice::from_ref(&user));
     assert_eq!(entries2[0].duration_ms, None);
 }

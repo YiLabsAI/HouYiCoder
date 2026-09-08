@@ -6,7 +6,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::{SessionStore, SourceChain};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,13 +19,13 @@ fn temp_root() -> std::path::PathBuf {
     p
 }
 
-fn event(session: SessionId, kind: TurnEventKind) -> TurnEvent {
-    TurnEvent {
+fn event(session: SessionId, kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
         id: EventId::new(),
         session,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     }
 }
 
@@ -38,13 +38,13 @@ async fn test_disk_chain_verifies_append() {
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
     store
-        .append(event(sid, TurnEventKind::UserInput { text: "a".into() }))
+        .append(event(sid, SessionEvent::UserInput { text: "a".into() }))
         .await
         .expect("append 1");
     store
         .append(event(
             sid,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "b".into(),
                 thinking: None,
             },
@@ -70,7 +70,7 @@ async fn test_disk_chain_detects_tamper() {
     store
         .append(event(
             sid,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "orig".into(),
             },
         ))
@@ -79,7 +79,7 @@ async fn test_disk_chain_detects_tamper() {
     store
         .append(event(
             sid,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "reply".into(),
                 thinking: None,
             },

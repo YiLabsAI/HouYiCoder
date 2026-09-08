@@ -1,4 +1,4 @@
-//! Mapping from a session transcript's typed events to TurnEvents. The
+//! Mapping from a session transcript's typed events to SessionLogEntries. The
 //! source jsonl is a flat stream of typed records
 //! (user / assistant / system / mode / ...), chained by parentUuid (UUID
 //! linkage). The engine's chain is prev_hash (SHA-256 of the previous line's
@@ -6,7 +6,7 @@
 //! verifies under the disk-chain check; the source schema is not
 //! preserved (Unverified source, self-consistent rebuilt durable chain).
 //!
-//! Mapping (source record to TurnEventKind):
+//! Mapping (source record to SessionEvent):
 //!   user (isMeta=false)            -> UserInput
 //!   user (isMeta=true)             -> MetaUser
 //!   assistant text block           -> folded into AssistantMessage
@@ -16,10 +16,10 @@
 //!   mode / permission-mode / system / attachment / file-history-* / etc.
 //!     -> skipped (not needed to resume the readable transcript)
 
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use serde_json::Value;
 
-/// Convert one source record into zero or more houyi TurnEvents. An assistant
+/// Convert one source record into zero or more houyi SessionLogEntries. An assistant
 /// record can yield several (Reasoning + ToolCall + AssistantMessage); a user
 /// record with tool_result blocks yields several ToolResults; a skipped
 /// record yields none. ts_ms is the record's timestamp parsed to unix
@@ -31,7 +31,7 @@ pub(crate) fn map_record(
     ts_ms: u64,
     model_out: &mut Option<String>,
     cwd_out: &mut Option<String>,
-) -> Vec<TurnEvent> {
+) -> Vec<SessionLogEntry> {
     let ty = rec.get("type").and_then(Value::as_str).unwrap_or("");
     // Session origin fields appear on every record; capture the first seen.
     if model_out.is_none()
@@ -48,7 +48,7 @@ pub(crate) fn map_record(
         *cwd_out = Some(c.to_string());
     }
 
-    let mut out: Vec<TurnEvent> = Vec::new();
+    let mut out: Vec<SessionLogEntry> = Vec::new();
     match ty {
         "user" => map_user(rec, sid, ts_ms, &mut out),
         "assistant" => map_assistant(rec, sid, ts_ms, &mut out),
@@ -61,7 +61,7 @@ pub(crate) fn map_record(
 /// block array (tool_result blocks returning tool output, or text). isMeta
 /// marks injected control messages (e.g. the resume-directly nudge) -> map to
 /// MetaUser so the projection hides them.
-fn map_user(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<TurnEvent>) {
+fn map_user(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<SessionLogEntry>) {
     let is_meta = rec.get("isMeta").and_then(Value::as_bool).unwrap_or(false);
     let Some(content) = rec.get("message").and_then(|m| m.get("content")) else {
         return;
@@ -84,7 +84,7 @@ fn map_user(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<TurnEvent>) {
                                 out,
                                 sid,
                                 ts_ms,
-                                TurnEventKind::ToolResult {
+                                SessionEvent::ToolResult {
                                     call_id,
                                     output,
                                     duration_ms: 0,
@@ -108,13 +108,13 @@ fn map_user(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<TurnEvent>) {
     }
 }
 
-fn user_kind(text: &str, is_meta: bool) -> TurnEventKind {
+fn user_kind(text: &str, is_meta: bool) -> SessionEvent {
     if is_meta {
-        TurnEventKind::MetaUser {
+        SessionEvent::MetaUser {
             text: text.to_string(),
         }
     } else {
-        TurnEventKind::UserInput {
+        SessionEvent::UserInput {
             text: text.to_string(),
         }
     }
@@ -126,7 +126,7 @@ fn user_kind(text: &str, is_meta: bool) -> TurnEventKind {
 /// text block accumulates into the AssistantMessage.text. One
 /// AssistantMessage is emitted per record (after all blocks), carrying the
 /// accumulated text and the folded thinking.
-fn map_assistant(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<TurnEvent>) {
+fn map_assistant(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<SessionLogEntry>) {
     let Some(content) = rec
         .get("message")
         .and_then(|m| m.get("content"))
@@ -145,7 +145,7 @@ fn map_assistant(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<TurnEven
                         out,
                         sid,
                         ts_ms,
-                        TurnEventKind::Reasoning {
+                        SessionEvent::Reasoning {
                             text: t.to_string(),
                         },
                     );
@@ -168,7 +168,7 @@ fn map_assistant(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<TurnEven
                     out,
                     sid,
                     ts_ms,
-                    TurnEventKind::ToolCall {
+                    SessionEvent::ToolCall {
                         call_id,
                         tool,
                         input,
@@ -188,7 +188,7 @@ fn map_assistant(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<TurnEven
             out,
             sid,
             ts_ms,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: text_buf,
                 thinking: if thinking_buf.is_empty() {
                     None
@@ -200,13 +200,13 @@ fn map_assistant(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<TurnEven
     }
 }
 
-fn push(out: &mut Vec<TurnEvent>, sid: SessionId, ts_ms: u64, kind: TurnEventKind) {
-    out.push(TurnEvent {
+fn push(out: &mut Vec<SessionLogEntry>, sid: SessionId, ts_ms: u64, kind: SessionEvent) {
+    out.push(SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: ts_ms,
         prev_hash: None, // set by the writer when chaining
-        kind,
+        event: kind,
     });
 }
 
@@ -245,16 +245,16 @@ mod tests {
         })
     }
 
-    fn kinds(events: &[TurnEvent]) -> Vec<&'static str> {
+    fn kinds(events: &[SessionLogEntry]) -> Vec<&'static str> {
         events
             .iter()
-            .map(|e| match &e.kind {
-                TurnEventKind::UserInput { .. } => "UserInput",
-                TurnEventKind::MetaUser { .. } => "MetaUser",
-                TurnEventKind::AssistantMessage { .. } => "AssistantMessage",
-                TurnEventKind::Reasoning { .. } => "Reasoning",
-                TurnEventKind::ToolCall { .. } => "ToolCall",
-                TurnEventKind::ToolResult { .. } => "ToolResult",
+            .map(|e| match &e.event {
+                SessionEvent::UserInput { .. } => "UserInput",
+                SessionEvent::MetaUser { .. } => "MetaUser",
+                SessionEvent::AssistantMessage { .. } => "AssistantMessage",
+                SessionEvent::Reasoning { .. } => "Reasoning",
+                SessionEvent::ToolCall { .. } => "ToolCall",
+                SessionEvent::ToolResult { .. } => "ToolResult",
                 _ => "other",
             })
             .collect()
@@ -266,8 +266,8 @@ mod tests {
         let mut cwd = None;
         let ev = map_record(&rec_user("hello", false), sid(), 0, &mut model, &mut cwd);
         assert_eq!(kinds(&ev), vec!["UserInput"]);
-        match &ev[0].kind {
-            TurnEventKind::UserInput { text } => assert_eq!(text, "hello"),
+        match &ev[0].event {
+            SessionEvent::UserInput { text } => assert_eq!(text, "hello"),
             _ => unreachable!(),
         }
     }
@@ -295,8 +295,8 @@ mod tests {
             vec!["Reasoning", "ToolCall", "AssistantMessage"]
         );
         // The thinking is folded into the AssistantMessage.
-        match ev.last().unwrap().kind {
-            TurnEventKind::AssistantMessage {
+        match ev.last().unwrap().event {
+            SessionEvent::AssistantMessage {
                 ref text,
                 ref thinking,
             } => {
@@ -307,8 +307,8 @@ mod tests {
         }
         // Model + the tool call fields round-trip.
         assert_eq!(model.as_deref(), Some("glm-5.2"));
-        match ev[1].kind {
-            TurnEventKind::ToolCall {
+        match ev[1].event {
+            SessionEvent::ToolCall {
                 ref call_id,
                 ref tool,
                 ..
@@ -335,8 +335,8 @@ mod tests {
         let mut cwd = None;
         let ev = map_record(&rec, sid(), 0, &mut model, &mut cwd);
         assert_eq!(kinds(&ev), vec!["ToolResult"]);
-        match ev[0].kind {
-            TurnEventKind::ToolResult { ref call_id, .. } => assert_eq!(call_id, "tu_1"),
+        match ev[0].event {
+            SessionEvent::ToolResult { ref call_id, .. } => assert_eq!(call_id, "tu_1"),
             _ => unreachable!(),
         }
     }

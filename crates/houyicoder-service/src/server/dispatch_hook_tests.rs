@@ -113,7 +113,7 @@ fn test_slugify_compacts_prompt() {
 
 #[tokio::test]
 async fn test_first_prompt_slug_log() {
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     use houyicoder_session::SessionStore;
     let root = std::env::temp_dir().join(format!(
         "slug-test-{}-{}",
@@ -129,12 +129,12 @@ async fn test_first_prompt_slug_log() {
     )));
     let sid = SessionId::new();
     store
-        .append(TurnEvent {
+        .append(SessionLogEntry {
             id: EventId::new(),
             session: sid,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "research demo repo".into(),
             },
         })

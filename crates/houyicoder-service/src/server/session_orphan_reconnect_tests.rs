@@ -66,7 +66,7 @@ impl houyicoder_api::tool::Tool for BlockingTool {
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn test_disconnect_orphan_repaired() {
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     use houyicoder_core::agent::project_input_items;
     use houyicoder_protocol::llm::InputItem;
 
@@ -145,8 +145,8 @@ async fn test_disconnect_orphan_repaired() {
         let evs = store.replay(session).await.expect("replay 1");
         if evs.iter().any(|e| {
             matches!(
-                e.kind,
-                TurnEventKind::ToolCall { ref call_id, .. } if call_id == "c1"
+                e.event,
+                SessionEvent::ToolCall { ref call_id, .. } if call_id == "c1"
             )
         }) {
             saw_call = true;
@@ -165,14 +165,14 @@ async fn test_disconnect_orphan_repaired() {
     let evs = store.replay(session).await.expect("replay orphan");
     let has_call = evs.iter().any(|e| {
         matches!(
-            e.kind,
-            TurnEventKind::ToolCall { ref call_id, .. } if call_id == "c1"
+            e.event,
+            SessionEvent::ToolCall { ref call_id, .. } if call_id == "c1"
         )
     });
     let has_result = evs.iter().any(|e| {
         matches!(
-            e.kind,
-            TurnEventKind::ToolResult { ref call_id, .. } if call_id == "c1"
+            e.event,
+            SessionEvent::ToolResult { ref call_id, .. } if call_id == "c1"
         )
     });
     assert!(has_call, "orphan ToolCall c1 present after disconnect");
@@ -217,8 +217,8 @@ async fn test_disconnect_orphan_repaired() {
         let evs = store.replay(session).await.expect("replay 2");
         if evs.iter().any(|e| {
             matches!(
-                e.kind,
-                TurnEventKind::AssistantMessage { ref text, .. } if text == "done"
+                e.event,
+                SessionEvent::AssistantMessage { ref text, .. } if text == "done"
             )
         }) {
             done = true;

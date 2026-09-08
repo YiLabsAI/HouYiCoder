@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{OutputItem, Usage};
 use houyicoder_session::SessionStore;
@@ -40,11 +40,11 @@ fn expected_error_object(message: &str) -> Value {
 async fn tool_result_output(runner: &Runner, session: SessionId, call_id: &str) -> Value {
     let events = runner.store().replay(session).await.expect("replay");
     for event in &events {
-        if let TurnEventKind::ToolResult {
+        if let SessionEvent::ToolResult {
             call_id: cid,
             output,
             ..
-        } = &event.kind
+        } = &event.event
             && cid == call_id
         {
             return output.clone();

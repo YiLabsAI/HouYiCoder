@@ -1,7 +1,7 @@
 //! Server-dimension contract: one protocol turn threaded end-to-end through
 //! the in-memory carrier, with the real runner driving the run. The server
 //! performs the Hello handshake, the client sends a MessageSend, the runner
-//! produces its turn events, and the server forwards each as a TurnEvent frame
+//! produces its turn events, and the server forwards each as a SessionLogEntry frame
 //! then returns the run outcome as a response. The client decodes ServerFrame
 //! (Event | Response) so it routes the seq stream and the req_id reply without
 //! guessing. The same path a pipe carrier would serve.
@@ -87,7 +87,7 @@ async fn test_message_send_returns_outcome() {
 
     // Drain the frames until the run outcome response arrives. The turn
     // events arrive on the seq stream; the outcome arrives as a response
-    // paired to req_id. Assert: at least one TurnEvent, then a RunOk
+    // paired to req_id. Assert: at least one SessionLogEntry, then a RunOk
     // response whose outcome is FinalOutput.
     let mut saw_turn_event = false;
     let mut outcome = None;

@@ -682,18 +682,18 @@ async fn test_fire_saved_pushes_consolidated() {
 #[test]
 fn test_merge_session_adds_retry() {
     use crate::agent::reward_snapshot::RewardSnapshot;
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
     let tmp = std::env::temp_dir().join(format!("merge-cross-{}", std::process::id()));
     let _cleanup = std::fs::remove_dir_all(&tmp);
     let dir = tmp.join("prev-session");
     std::fs::create_dir_all(&dir).expect("mkdir");
-    let ev = TurnEvent {
+    let ev = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::RewardObservation {
+        event: SessionEvent::RewardObservation {
             redundant: 0,
             retry_after_error: 3,
         },

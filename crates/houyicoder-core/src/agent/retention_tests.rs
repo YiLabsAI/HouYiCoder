@@ -27,7 +27,7 @@ impl CountingBackend {
 impl houyicoder_context::ContextBackend for CountingBackend {
     fn append(
         &self,
-        _: houyicoder_context::TurnEvent,
+        _: houyicoder_context::SessionLogEntry,
     ) -> houyicoder_async::PFut<
         '_,
         Result<houyicoder_context::EventId, houyicoder_context::ContextError>,
@@ -41,7 +41,7 @@ impl houyicoder_context::ContextBackend for CountingBackend {
         _: Option<houyicoder_context::EventId>,
     ) -> houyicoder_async::PFut<
         '_,
-        Result<Vec<houyicoder_context::TurnEvent>, houyicoder_context::ContextError>,
+        Result<Vec<houyicoder_context::SessionLogEntry>, houyicoder_context::ContextError>,
     > {
         Box::pin(async move { Ok(Vec::new()) })
     }
@@ -50,7 +50,7 @@ impl houyicoder_context::ContextBackend for CountingBackend {
         _: houyicoder_context::SessionId,
     ) -> houyicoder_async::PFut<
         '_,
-        Result<Vec<houyicoder_context::TurnEvent>, houyicoder_context::ContextError>,
+        Result<Vec<houyicoder_context::SessionLogEntry>, houyicoder_context::ContextError>,
     > {
         Box::pin(async move { Ok(Vec::new()) })
     }
@@ -404,13 +404,13 @@ fn test_materialize_top_level_compat() {
 #[test]
 fn test_counting_backend_noop() {
     let backend = CountingBackend::new();
-    use houyicoder_context::{CheckpointId, EventId, SessionId, TurnEvent};
-    let ev = TurnEvent {
+    use houyicoder_context::{CheckpointId, EventId, SessionId, SessionLogEntry};
+    let ev = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
         prev_hash: None,
-        kind: houyicoder_context::TurnEventKind::UserInput { text: "x".into() },
+        event: houyicoder_context::SessionEvent::UserInput { text: "x".into() },
     };
     assert!(pollster::block_on(backend.append(ev.clone())).is_err());
     assert!(
@@ -482,27 +482,27 @@ fn age_ctx(age: u32) -> RetentionContext<'static> {
 
 #[test]
 fn test_superseded_file_re_read() {
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
-    fn tc(cid: &str, tool: &str, input: serde_json::Value) -> TurnEvent {
-        TurnEvent {
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+    fn tc(cid: &str, tool: &str, input: serde_json::Value) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::ToolCall {
+            event: SessionEvent::ToolCall {
                 call_id: cid.into(),
                 tool: tool.into(),
                 input,
             },
         }
     }
-    fn tr(cid: &str) -> TurnEvent {
-        TurnEvent {
+    fn tr(cid: &str) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 1,
             prev_hash: None,
-            kind: TurnEventKind::ToolResult {
+            event: SessionEvent::ToolResult {
                 call_id: cid.into(),
                 output: serde_json::json!({"ok": true}),
                 duration_ms: 0,
@@ -528,27 +528,27 @@ fn test_superseded_file_re_read() {
 
 #[test]
 fn test_different_file_not_superseded() {
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
-    fn tc(cid: &str, path: &str) -> TurnEvent {
-        TurnEvent {
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+    fn tc(cid: &str, path: &str) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::ToolCall {
+            event: SessionEvent::ToolCall {
                 call_id: cid.into(),
                 tool: "read".into(),
                 input: serde_json::json!({"path": path}),
             },
         }
     }
-    fn tr(cid: &str) -> TurnEvent {
-        TurnEvent {
+    fn tr(cid: &str) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 1,
             prev_hash: None,
-            kind: TurnEventKind::ToolResult {
+            event: SessionEvent::ToolResult {
                 call_id: cid.into(),
                 output: serde_json::json!({}),
                 duration_ms: 0,
@@ -565,27 +565,27 @@ fn test_different_file_not_superseded() {
 
 #[test]
 fn test_edit_supersedes_prior_read() {
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
-    fn tc(cid: &str, tool: &str, input: serde_json::Value) -> TurnEvent {
-        TurnEvent {
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+    fn tc(cid: &str, tool: &str, input: serde_json::Value) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::ToolCall {
+            event: SessionEvent::ToolCall {
                 call_id: cid.into(),
                 tool: tool.into(),
                 input,
             },
         }
     }
-    fn tr(cid: &str) -> TurnEvent {
-        TurnEvent {
+    fn tr(cid: &str) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 1,
             prev_hash: None,
-            kind: TurnEventKind::ToolResult {
+            event: SessionEvent::ToolResult {
                 call_id: cid.into(),
                 output: serde_json::json!({}),
                 duration_ms: 0,

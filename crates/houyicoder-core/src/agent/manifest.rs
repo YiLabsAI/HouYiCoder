@@ -37,7 +37,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use houyicoder_async::PFut;
-use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, TurnEvent, TurnEventKind};
+use houyicoder_context::{
+    CheckpointId, CheckpointManifest, Disposition, SessionEvent, SessionLogEntry,
+};
 
 /// Knobs for the compaction disposition policy.
 #[derive(Debug, Clone)]
@@ -100,7 +102,7 @@ pub trait Summarizer: Send + Sync + std::any::Any {
     /// implementation can choose to borrow or clone.
     fn summarize<'a>(
         &'a self,
-        events: &'a [TurnEvent],
+        events: &'a [SessionLogEntry],
         custom_instructions: Option<&'a str>,
     ) -> PFut<'a, Result<String, SummarizeError>>;
 
@@ -121,7 +123,7 @@ pub struct HeuristicSummarizer;
 impl Summarizer for HeuristicSummarizer {
     fn summarize<'a>(
         &'a self,
-        events: &'a [TurnEvent],
+        events: &'a [SessionLogEntry],
         _custom_instructions: Option<&'a str>,
     ) -> PFut<'a, Result<String, SummarizeError>> {
         if events.is_empty() {
@@ -129,7 +131,7 @@ impl Summarizer for HeuristicSummarizer {
         }
         let turns = events
             .iter()
-            .filter(|e| matches!(e.kind, TurnEventKind::AssistantMessage { .. }))
+            .filter(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }))
             .count();
         let count = events.len();
         Box::pin(async move {
@@ -147,8 +149,8 @@ impl Summarizer for HeuristicSummarizer {
 /// AssistantTextDelta is a streaming audit chunk subsumed by the authoritative
 /// AssistantMessage at turn end. Projection skips it; the manifest skips it
 /// too (no disposition, not in the folded span).
-fn is_delta(kind: &TurnEventKind) -> bool {
-    matches!(kind, TurnEventKind::AssistantTextDelta { .. })
+fn is_delta(kind: &SessionEvent) -> bool {
+    matches!(kind, SessionEvent::AssistantTextDelta { .. })
 }
 
 /// Build a CheckpointManifest over the given events per the policy. Calls the
@@ -185,7 +187,7 @@ fn is_delta(kind: &TurnEventKind) -> bool {
 /// structurally integral — a debug_assert guards that every event lands in
 /// exactly one group and every group is non-empty.
 pub async fn build_manifest(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     policy: &CompressPolicy,
     summarizer: &dyn Summarizer,
     custom_instructions: Option<&str>,
@@ -229,20 +231,20 @@ pub async fn build_manifest(
     //    excluded: an invoked skill's body is revived post-compact, not
     //    summarized, so it never enters the summary channel (no untrusted-
     //    text leak, no double-billing when the revive re-serves it).
-    let folded: Vec<&TurnEvent> = events
+    let folded: Vec<&SessionLogEntry> = events
         .iter()
         .zip(dispositions.iter())
         .filter(|(e, d)| {
-            !is_delta(&e.kind)
+            !is_delta(&e.event)
                 && **d == Disposition::Summarized
-                && !matches!(e.kind, TurnEventKind::SkillBody { .. })
+                && !matches!(e.event, SessionEvent::SkillBody { .. })
         })
         .map(|(e, _)| e)
         .collect();
     let summary = if folded.is_empty() {
         None
     } else {
-        let folded_owned: Vec<TurnEvent> = folded.into_iter().cloned().collect();
+        let folded_owned: Vec<SessionLogEntry> = folded.into_iter().cloned().collect();
         match summarizer
             .summarize(&folded_owned, custom_instructions)
             .await
@@ -286,7 +288,7 @@ pub async fn build_manifest(
 /// contains one, else the first event's id (a leading user prompt or a bare
 /// tool_result).
 fn group_into_turn_groups(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     dispositions: &[Disposition],
 ) -> Vec<houyicoder_context::TurnGroup> {
     use houyicoder_context::TurnGroup;
@@ -296,11 +298,11 @@ fn group_into_turn_groups(
     let mut current_turn_id: Option<houyicoder_context::EventId> = None;
 
     for (i, e) in events.iter().enumerate() {
-        if is_delta(&e.kind) {
+        if is_delta(&e.event) {
             continue;
         }
         let disp = dispositions[i];
-        let is_asst = matches!(e.kind, TurnEventKind::AssistantMessage { .. });
+        let is_asst = matches!(e.event, SessionEvent::AssistantMessage { .. });
         // A new group starts at each AssistantMessage (a new API round) and
         // when the disposition changes. The assistant boundary keeps one
         // round's thinking + tool_use in one group; the disposition boundary
@@ -335,7 +337,7 @@ fn group_into_turn_groups(
 /// is non-empty. The structural pair invariant (thinking + tool_use share a
 /// group) falls out of the grouping; this guard catches a regression that
 /// would orphan an event (no disposition applied) or duplicate one.
-fn groups_cover_all(events: &[TurnEvent], plan: &[houyicoder_context::TurnGroup]) -> bool {
+fn groups_cover_all(events: &[SessionLogEntry], plan: &[houyicoder_context::TurnGroup]) -> bool {
     use std::collections::HashSet;
     let mut seen: HashSet<houyicoder_context::EventId> = HashSet::new();
     for g in plan {
@@ -350,7 +352,7 @@ fn groups_cover_all(events: &[TurnEvent], plan: &[houyicoder_context::TurnGroup]
     }
     // Every non-delta event must appear in some group.
     events.iter().all(|e| {
-        if is_delta(&e.kind) {
+        if is_delta(&e.event) {
             return true;
         }
         seen.contains(&e.id)
@@ -364,13 +366,13 @@ fn groups_cover_all(events: &[TurnEvent], plan: &[houyicoder_context::TurnGroup]
 /// all verbatim). The unit is the assistant response, not the user prompt: a
 /// single user prompt can drive dozens of assistant turns in an agentic
 /// session, so counting user turns would leave the whole session verbatim.
-fn verbatim_boundary(events: &[TurnEvent], tail_turns: usize) -> usize {
+fn verbatim_boundary(events: &[SessionLogEntry], tail_turns: usize) -> usize {
     if events.is_empty() || tail_turns == 0 {
         return if events.is_empty() { 0 } else { events.len() };
     }
     let mut count = 0usize;
     for i in (0..events.len()).rev() {
-        if matches!(events[i].kind, TurnEventKind::AssistantMessage { .. }) {
+        if matches!(events[i].event, SessionEvent::AssistantMessage { .. }) {
             count += 1;
             if count == tail_turns {
                 return i;
@@ -385,7 +387,7 @@ fn verbatim_boundary(events: &[TurnEvent], tail_turns: usize) -> usize {
 /// turns) until its token estimate fits the ceiling. If the tail never fits,
 /// everything is Summarized (boundary reaches events.len()).
 fn apply_token_ceiling(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     mut boundary: usize,
     ceiling: usize,
     tokenizer: &super::context::Tokenizer,
@@ -397,7 +399,7 @@ fn apply_token_ceiling(
         }
         // Advance past the assistant turn that currently starts the verbatim tail.
         let next = (boundary + 1..events.len())
-            .find(|&i| matches!(events[i].kind, TurnEventKind::AssistantMessage { .. }));
+            .find(|&i| matches!(events[i].event, SessionEvent::AssistantMessage { .. }));
         match next {
             Some(i) => boundary = i,
             None => return events.len(),
@@ -411,7 +413,7 @@ fn apply_token_ceiling(
 /// compact token counts for the PreCompact/PostCompact payloads + the wire
 /// reply. AssistantTextDelta is skipped (same double-count rationale as
 /// estimate_tokens).
-pub(crate) fn estimate_span_tokens(events: &[TurnEvent]) -> usize {
+pub(crate) fn estimate_span_tokens(events: &[SessionLogEntry]) -> usize {
     let tokenizer = super::context::Tokenizer::new();
     estimate_tokens(events, &tokenizer)
 }
@@ -422,7 +424,7 @@ pub(crate) fn estimate_span_tokens(events: &[TurnEvent]) -> usize {
 /// share one tokenizer, never two). AssistantTextDelta is skipped — it is
 /// not in the served view (projection subsumes it into the
 /// AssistantMessage), so counting it would double-count the assistant text.
-fn estimate_tokens(events: &[TurnEvent], tokenizer: &super::context::Tokenizer) -> usize {
+fn estimate_tokens(events: &[SessionLogEntry], tokenizer: &super::context::Tokenizer) -> usize {
     events
         .iter()
         .map(|e| estimate_event_tokens(e, tokenizer))
@@ -438,37 +440,37 @@ fn estimate_tokens(events: &[TurnEvent], tokenizer: &super::context::Tokenizer) 
 /// by design: served excludes reasoning, estimate includes it, cache key
 /// excludes it (the system prompt is byte-stable, reasoning is in the
 /// message stream).
-fn estimate_event_tokens(event: &TurnEvent, tokenizer: &super::context::Tokenizer) -> usize {
+fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &super::context::Tokenizer) -> usize {
     let count = |s: &str| tokenizer.count(s) as usize;
-    match &event.kind {
-        TurnEventKind::UserInput { text }
-        | TurnEventKind::MetaUser { text }
-        | TurnEventKind::MidTurnInput { text }
-        | TurnEventKind::MemoryRecall { text, .. }
-        | TurnEventKind::SkillListing { text, .. } => count(text),
-        TurnEventKind::SkillBody { content, .. } => count(content),
-        TurnEventKind::RewardObservation { .. } => 0,
-        TurnEventKind::Unknown => 0,
-        TurnEventKind::AssistantMessage { text, thinking } => {
+    match &event.event {
+        SessionEvent::UserInput { text }
+        | SessionEvent::MetaUser { text }
+        | SessionEvent::MidTurnInput { text }
+        | SessionEvent::MemoryRecall { text, .. }
+        | SessionEvent::SkillListing { text, .. } => count(text),
+        SessionEvent::SkillBody { content, .. } => count(content),
+        SessionEvent::RewardObservation { .. } => 0,
+        SessionEvent::Unknown => 0,
+        SessionEvent::AssistantMessage { text, thinking } => {
             count(text) + thinking.as_ref().map(|t| count(t)).unwrap_or(0)
         }
-        TurnEventKind::AssistantTextDelta { .. } => 0,
-        TurnEventKind::ToolCall { input, .. } => count(&input.to_string()),
-        TurnEventKind::ToolResult { output, .. } => count(&output.to_string()),
-        TurnEventKind::Reasoning { text } => count(text),
-        TurnEventKind::CompactionBoundary { .. } => 0,
-        TurnEventKind::CacheBreak { .. } => 0,
-        TurnEventKind::Summary { text } => count(text),
-        TurnEventKind::PermissionDecision { .. } => 0,
-        TurnEventKind::TurnAborted { reason } => count(reason),
-        TurnEventKind::TruncationVerdict { .. } => 0,
-        TurnEventKind::WorktreeEnter { .. } | TurnEventKind::WorktreeExit { .. } => 0,
-        TurnEventKind::TurnUsage { .. }
-        | TurnEventKind::HookSignal { .. }
-        | TurnEventKind::TurnStarted { .. }
-        | TurnEventKind::SubagentSpawn { .. }
-        | TurnEventKind::SubagentReturn { .. }
-        | TurnEventKind::NotificationInjected { .. } => 0,
+        SessionEvent::AssistantTextDelta { .. } => 0,
+        SessionEvent::ToolCall { input, .. } => count(&input.to_string()),
+        SessionEvent::ToolResult { output, .. } => count(&output.to_string()),
+        SessionEvent::Reasoning { text } => count(text),
+        SessionEvent::CompactionBoundary { .. } => 0,
+        SessionEvent::CacheBreak { .. } => 0,
+        SessionEvent::Summary { text } => count(text),
+        SessionEvent::PermissionDecision { .. } => 0,
+        SessionEvent::TurnAborted { reason } => count(reason),
+        SessionEvent::TruncationVerdict { .. } => 0,
+        SessionEvent::WorktreeEnter { .. } | SessionEvent::WorktreeExit { .. } => 0,
+        SessionEvent::TurnUsage { .. }
+        | SessionEvent::HookSignal { .. }
+        | SessionEvent::TurnStarted { .. }
+        | SessionEvent::SubagentSpawn { .. }
+        | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::NotificationInjected { .. } => 0,
     }
 }
 

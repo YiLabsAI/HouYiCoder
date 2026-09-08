@@ -17,8 +17,8 @@ use std::sync::Arc;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
 use houyicoder_context::{
-    CheckpointManifest, Disposition, EventId, MemoryEntry, MemorySource, SessionId, TurnEvent,
-    TurnEventKind,
+    CheckpointManifest, Disposition, EventId, MemoryEntry, MemorySource, SessionEvent, SessionId,
+    SessionLogEntry,
 };
 use houyicoder_protocol::llm::{CompletionRequest, CompletionResponse, ModelSettings, OutputItem};
 
@@ -79,7 +79,7 @@ impl LlmSummarizer {
 impl Summarizer for LlmSummarizer {
     fn summarize<'a>(
         &'a self,
-        events: &'a [TurnEvent],
+        events: &'a [SessionLogEntry],
         custom_instructions: Option<&'a str>,
     ) -> PFut<'a, Result<String, SummarizeError>> {
         if events.is_empty() {
@@ -164,20 +164,23 @@ fn extract_text(resp: &CompletionResponse) -> Option<String> {
 /// staying under the token budget. AssistantTextDelta is skipped (subsumed by
 /// the authoritative AssistantMessage). Each chunk starts with the event that
 /// begins an API round and ends just before the next one.
-fn chunk_by_assistant_turn(events: &[TurnEvent], chunk_token_limit: usize) -> Vec<Vec<TurnEvent>> {
-    let mut chunks: Vec<Vec<TurnEvent>> = Vec::new();
-    let mut current: Vec<TurnEvent> = Vec::new();
+fn chunk_by_assistant_turn(
+    events: &[SessionLogEntry],
+    chunk_token_limit: usize,
+) -> Vec<Vec<SessionLogEntry>> {
+    let mut chunks: Vec<Vec<SessionLogEntry>> = Vec::new();
+    let mut current: Vec<SessionLogEntry> = Vec::new();
     let mut current_bytes: usize = 0;
 
     for event in events {
-        if matches!(event.kind, TurnEventKind::AssistantTextDelta { .. }) {
+        if matches!(event.event, SessionEvent::AssistantTextDelta { .. }) {
             continue;
         }
         let event_bytes = event_byte_len(event);
 
         // Start a new chunk when an AssistantMessage begins a new API round
         // and the current chunk is non-empty and over budget.
-        if matches!(event.kind, TurnEventKind::AssistantMessage { .. })
+        if matches!(event.event, SessionEvent::AssistantMessage { .. })
             && !current.is_empty()
             && current_bytes > chunk_token_limit * 4
         {
@@ -195,36 +198,36 @@ fn chunk_by_assistant_turn(events: &[TurnEvent], chunk_token_limit: usize) -> Ve
 }
 
 /// Rough byte length of an event text content (for chunk budgeting).
-fn event_byte_len(event: &TurnEvent) -> usize {
-    match &event.kind {
-        TurnEventKind::UserInput { text }
-        | TurnEventKind::MetaUser { text }
-        | TurnEventKind::MidTurnInput { text }
-        | TurnEventKind::MemoryRecall { text, .. }
-        | TurnEventKind::SkillListing { text, .. } => text.len(),
-        TurnEventKind::SkillBody { content, .. } => content.len(),
-        TurnEventKind::RewardObservation { .. } => 0,
-        TurnEventKind::Unknown => 0,
-        TurnEventKind::AssistantMessage { text, thinking } => {
+fn event_byte_len(event: &SessionLogEntry) -> usize {
+    match &event.event {
+        SessionEvent::UserInput { text }
+        | SessionEvent::MetaUser { text }
+        | SessionEvent::MidTurnInput { text }
+        | SessionEvent::MemoryRecall { text, .. }
+        | SessionEvent::SkillListing { text, .. } => text.len(),
+        SessionEvent::SkillBody { content, .. } => content.len(),
+        SessionEvent::RewardObservation { .. } => 0,
+        SessionEvent::Unknown => 0,
+        SessionEvent::AssistantMessage { text, thinking } => {
             text.len() + thinking.as_ref().map(String::len).unwrap_or(0)
         }
-        TurnEventKind::AssistantTextDelta { .. } => 0,
-        TurnEventKind::ToolCall { input, .. } => input.to_string().len(),
-        TurnEventKind::ToolResult { output, .. } => output.to_string().len(),
-        TurnEventKind::Reasoning { text } => text.len(),
-        TurnEventKind::CompactionBoundary { .. } => 0,
-        TurnEventKind::CacheBreak { .. } => 0,
-        TurnEventKind::Summary { text } => text.len(),
-        TurnEventKind::PermissionDecision { .. } => 0,
-        TurnEventKind::TurnAborted { reason } => reason.len(),
-        TurnEventKind::TruncationVerdict { .. } => 0,
-        TurnEventKind::WorktreeEnter { .. } | TurnEventKind::WorktreeExit { .. } => 0,
-        TurnEventKind::TurnUsage { .. }
-        | TurnEventKind::HookSignal { .. }
-        | TurnEventKind::TurnStarted { .. }
-        | TurnEventKind::SubagentSpawn { .. }
-        | TurnEventKind::SubagentReturn { .. }
-        | TurnEventKind::NotificationInjected { .. } => 0,
+        SessionEvent::AssistantTextDelta { .. } => 0,
+        SessionEvent::ToolCall { input, .. } => input.to_string().len(),
+        SessionEvent::ToolResult { output, .. } => output.to_string().len(),
+        SessionEvent::Reasoning { text } => text.len(),
+        SessionEvent::CompactionBoundary { .. } => 0,
+        SessionEvent::CacheBreak { .. } => 0,
+        SessionEvent::Summary { text } => text.len(),
+        SessionEvent::PermissionDecision { .. } => 0,
+        SessionEvent::TurnAborted { reason } => reason.len(),
+        SessionEvent::TruncationVerdict { .. } => 0,
+        SessionEvent::WorktreeEnter { .. } | SessionEvent::WorktreeExit { .. } => 0,
+        SessionEvent::TurnUsage { .. }
+        | SessionEvent::HookSignal { .. }
+        | SessionEvent::TurnStarted { .. }
+        | SessionEvent::SubagentSpawn { .. }
+        | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::NotificationInjected { .. } => 0,
     }
 }
 
@@ -248,9 +251,7 @@ pub struct CompressResult {
 /// The caller (the agent loop overflow handler or pre-flight gate) checks
 /// made_progress: when false, the manifest is all-Verbatim and compressing
 /// again would not shrink the window — the caller must fail-closed instead of
-/// looping.
-///
-/// The summarizer is the LlmSummarizer when a provider is wired, or
+/// looping. The summarizer is the LlmSummarizer when a provider is wired, or
 /// HeuristicSummarizer when no provider is available (tests, offline).
 pub async fn commit_manifest(
     store: &dyn houyicoder_api::session::SessionLog,
@@ -271,23 +272,23 @@ pub async fn commit_manifest(
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         store
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session,
                 ts: now,
                 prev_hash: None,
-                kind: TurnEventKind::CompactionBoundary {
+                event: SessionEvent::CompactionBoundary {
                     checkpoint: manifest.id,
                 },
             })
             .await?;
         store
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session,
                 ts: now,
                 prev_hash: None,
-                kind: TurnEventKind::Summary {
+                event: SessionEvent::Summary {
                     text: summary_text.clone(),
                 },
             })
@@ -308,7 +309,7 @@ pub async fn commit_manifest(
 pub async fn compress_session(
     store: &dyn houyicoder_api::session::SessionLog,
     session: SessionId,
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     policy: &CompressPolicy,
     summarizer: &dyn Summarizer,
     custom_instructions: Option<&str>,
@@ -327,7 +328,7 @@ pub async fn compress_session(
 /// session log is the ultimate safety net — the folded raw stays in the log
 /// for the async tier to re-scan.
 pub(crate) fn extract_precompact_markers(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     manifest: &CheckpointManifest,
 ) -> Vec<MemoryEntry> {
     use std::collections::HashMap;
@@ -341,9 +342,9 @@ pub(crate) fn extract_precompact_markers(
         if !matches!(plan.get(&ev.id), Some(Disposition::Summarized)) {
             continue;
         }
-        let text = match &ev.kind {
-            TurnEventKind::AssistantMessage { text, .. } => text.as_str(),
-            TurnEventKind::UserInput { text } => text.as_str(),
+        let text = match &ev.event {
+            SessionEvent::AssistantMessage { text, .. } => text.as_str(),
+            SessionEvent::UserInput { text } => text.as_str(),
             _ => continue,
         };
         for marker in find_markers(text) {
@@ -365,12 +366,12 @@ pub(crate) fn extract_precompact_markers(
 /// agree on what counts as a marker. Dedup against the existing auto-scope
 /// keys happens at the caller (a marker already saved by a prior compact is
 /// not re-written).
-pub(crate) fn extract_preclear_markers(events: &[TurnEvent]) -> Vec<MemoryEntry> {
+pub(crate) fn extract_preclear_markers(events: &[SessionLogEntry]) -> Vec<MemoryEntry> {
     let mut out = Vec::new();
     for ev in events {
-        let text = match &ev.kind {
-            TurnEventKind::AssistantMessage { text, .. } => text.as_str(),
-            TurnEventKind::UserInput { text } => text.as_str(),
+        let text = match &ev.event {
+            SessionEvent::AssistantMessage { text, .. } => text.as_str(),
+            SessionEvent::UserInput { text } => text.as_str(),
             _ => continue,
         };
         for marker in find_markers(text) {
@@ -482,19 +483,18 @@ fn marker_key(kind: MarkerKind, text: &str) -> String {
 mod tests {
     use super::*;
     use crate::provider::test_support::FakeProvider;
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     use houyicoder_memory::InMemoryBackend;
-    use houyicoder_protocol::llm::Usage;
-    use houyicoder_protocol::llm::{CompletionResponse, OutputItem, ProviderError};
+    use houyicoder_protocol::llm::{CompletionResponse, OutputItem, ProviderError, Usage};
     use houyicoder_session::SessionStore;
 
-    fn ev(session: SessionId, id: EventId, kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn ev(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id,
             session,
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
@@ -503,7 +503,7 @@ mod tests {
     /// chunk estimator does not choke on a forward-compatible event.
     #[test]
     fn test_byte_len_unknown_zero() {
-        let e = ev(SessionId::new(), EventId::new(), TurnEventKind::Unknown);
+        let e = ev(SessionId::new(), EventId::new(), SessionEvent::Unknown);
         assert_eq!(event_byte_len(&e), 0);
     }
 
@@ -534,12 +534,12 @@ mod tests {
         );
     }
 
-    fn user(text: &str) -> TurnEventKind {
-        TurnEventKind::UserInput { text: text.into() }
+    fn user(text: &str) -> SessionEvent {
+        SessionEvent::UserInput { text: text.into() }
     }
 
-    fn assistant(text: &str) -> TurnEventKind {
-        TurnEventKind::AssistantMessage {
+    fn assistant(text: &str) -> SessionEvent {
+        SessionEvent::AssistantMessage {
             text: text.into(),
             thinking: None,
         }
@@ -709,12 +709,12 @@ mod tests {
         let replay = store.replay(s).await.unwrap();
         let boundary_count = replay
             .iter()
-            .filter(|e| matches!(e.kind, TurnEventKind::CompactionBoundary { .. }))
+            .filter(|e| matches!(e.event, SessionEvent::CompactionBoundary { .. }))
             .count();
         assert_eq!(boundary_count, 1, "one compaction boundary");
         let summary_count = replay
             .iter()
-            .filter(|e| matches!(e.kind, TurnEventKind::Summary { .. }))
+            .filter(|e| matches!(e.event, SessionEvent::Summary { .. }))
             .count();
         assert_eq!(summary_count, 1, "one summary event");
     }

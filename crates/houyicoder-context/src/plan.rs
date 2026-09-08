@@ -3,7 +3,7 @@
 //! only the served window moves. Split from lib.rs so the crate root
 //! stays under the file-size gate.
 
-use crate::{CheckpointId, EventId, SessionId, TurnEvent};
+use crate::{CheckpointId, EventId, SessionId, SessionLogEntry};
 use serde::{Deserialize, Serialize};
 
 /// How an event sits in the active context view. The plan is view-level: the
@@ -67,7 +67,7 @@ pub struct CheckpointManifest {
 pub struct ContextSnapshot {
     pub session: SessionId,
     /// Events in the served window (full replay; the manifest projects them).
-    pub events: Vec<TurnEvent>,
+    pub events: Vec<SessionLogEntry>,
     /// The most recent checkpoint, if any compaction has run.
     pub last_checkpoint: Option<CheckpointId>,
     /// All checkpoint ids for the session, oldest first (rewind picker).

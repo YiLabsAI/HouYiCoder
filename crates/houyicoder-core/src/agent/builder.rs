@@ -602,8 +602,8 @@ mod cache_policy_tests {
 mod compact_summary_tests {
     use super::*;
     use houyicoder_context::{
-        CheckpointId, CheckpointManifest, Disposition, EventId, SessionId, TurnEvent,
-        TurnEventKind, TurnGroup,
+        CheckpointId, CheckpointManifest, Disposition, EventId, SessionEvent, SessionId,
+        SessionLogEntry, TurnGroup,
     };
     use houyicoder_memory::InMemoryBackend;
     use houyicoder_session::SessionStore;
@@ -629,12 +629,12 @@ mod compact_summary_tests {
     #[tokio::test]
     async fn test_compact_summary_formats_manifest() {
         let (runner, session) = runner_with_store();
-        let event = TurnEvent {
+        let event = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "folded".into(),
                 thinking: None,
             },
@@ -675,12 +675,12 @@ mod compact_summary_tests {
     #[tokio::test]
     async fn test_compact_summary_tokens_none() {
         let (runner, session) = runner_with_store();
-        let event = TurnEvent {
+        let event = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "folded".into(),
                 thinking: None,
             },
@@ -714,12 +714,12 @@ mod compact_summary_tests {
     #[tokio::test]
     async fn test_compact_summary_tokens_counts() {
         let (runner, session) = runner_with_store();
-        let event = TurnEvent {
+        let event = SessionLogEntry {
             id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "folded".into(),
                 thinking: None,
             },

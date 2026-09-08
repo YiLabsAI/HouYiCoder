@@ -8,7 +8,7 @@ pub(crate) use hook::{emit_live_line, record_hook_signals};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use houyicoder_api::live::{LiveEvent, LiveSink};
-use houyicoder_context::{ContextBackend, EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{OutputItem, Usage};
 use serde_json::Value;
 
@@ -86,7 +86,7 @@ impl Runner {
         text: String,
     ) -> Result<(), RunError> {
         self.store
-            .append(new_event(session, TurnEventKind::UserInput { text }))
+            .append(new_event(session, SessionEvent::UserInput { text }))
             .await?;
         Ok(())
     }
@@ -120,7 +120,7 @@ impl Runner {
         text: String,
     ) -> Result<(), RunError> {
         self.store
-            .append(new_event(session, TurnEventKind::MidTurnInput { text }))
+            .append(new_event(session, SessionEvent::MidTurnInput { text }))
             .await?;
         Ok(())
     }
@@ -141,7 +141,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::NotificationInjected {
+                SessionEvent::NotificationInjected {
                     child_session_id,
                     turn: 0,
                     order: 0,
@@ -214,7 +214,7 @@ impl Runner {
                 .store
                 .append(new_event(
                     session,
-                    TurnEventKind::RewardObservation {
+                    SessionEvent::RewardObservation {
                         redundant: new_redundant,
                         retry_after_error: new_retry,
                     },
@@ -229,7 +229,7 @@ impl Runner {
             );
             if let Err(e) = self
                 .store
-                .append(new_event(session, TurnEventKind::MetaUser { text }))
+                .append(new_event(session, SessionEvent::MetaUser { text }))
                 .await
             {
                 tracing::warn!("redundancy reminder append failed: {e}");
@@ -251,7 +251,7 @@ impl Runner {
             );
             if let Err(e) = self
                 .store
-                .append(new_event(session, TurnEventKind::MetaUser { text }))
+                .append(new_event(session, SessionEvent::MetaUser { text }))
                 .await
             {
                 tracing::warn!("blind-retry reminder append failed: {e}");
@@ -287,7 +287,7 @@ impl Runner {
                 self.store
                     .append(new_event(
                         session,
-                        TurnEventKind::Reasoning { text: text.clone() },
+                        SessionEvent::Reasoning { text: text.clone() },
                     ))
                     .await?;
                 thinking_text.push_str(text);
@@ -307,7 +307,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::AssistantMessage {
+                SessionEvent::AssistantMessage {
                     text: assistant_text,
                     thinking,
                 },
@@ -318,7 +318,7 @@ impl Runner {
                 self.store
                     .append(new_event(
                         session,
-                        TurnEventKind::ToolCall {
+                        SessionEvent::ToolCall {
                             call_id: id.clone(),
                             tool: name.clone(),
                             input: input.clone(),
@@ -355,7 +355,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::ToolCall {
+                SessionEvent::ToolCall {
                     call_id: call_id.to_string(),
                     tool: tool.to_string(),
                     input,
@@ -377,7 +377,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::ToolResult {
+                SessionEvent::ToolResult {
                     call_id,
                     output,
                     duration_ms,
@@ -549,7 +549,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::TurnStarted { turn, call_in_turn },
+                SessionEvent::TurnStarted { turn, call_in_turn },
             ))
             .await?;
         Ok(())
@@ -564,7 +564,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::TurnAborted {
+                SessionEvent::TurnAborted {
                     reason: "interrupted by user".into(),
                 },
             ))
@@ -597,7 +597,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::TurnUsage {
+                SessionEvent::TurnUsage {
                     turn,
                     call_in_turn,
                     input_tokens: usage.input_tokens as u64,
@@ -651,7 +651,7 @@ impl Runner {
             self.store
                 .append(new_event(
                     session,
-                    TurnEventKind::CacheBreak {
+                    SessionEvent::CacheBreak {
                         cause: c.to_string(),
                     },
                 ))
@@ -689,15 +689,15 @@ impl Runner {
 }
 
 /// Emit a system line through the live sink when one is attached; no-op
-/// Build a TurnEvent with a fresh id and a wall-clock timestamp. prev_hash is
+/// Build a SessionLogEntry with a fresh id and a wall-clock timestamp. prev_hash is
 /// set by SessionStore::append.
-pub(crate) fn new_event(session: SessionId, kind: TurnEventKind) -> TurnEvent {
-    TurnEvent {
+pub(crate) fn new_event(session: SessionId, kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
         id: EventId::new(),
         session,
         ts: now_ts(),
         prev_hash: None,
-        kind,
+        event: kind,
     }
 }
 

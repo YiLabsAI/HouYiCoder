@@ -1,13 +1,13 @@
 //! The event-driven session layer.
 //!
 //! SessionStore is the engine-facing facade over a ContextBackend: it appends
-//! TurnEvents with a tamper-evident hash-chain, tracks a delta-persistence
+//! SessionLogEntries with a tamper-evident hash-chain, tracks a delta-persistence
 //! counter for interrupted-turn rewind, and assembles the served context view
 //! by applying a CompactionPlan to a replay. The raw log (owned by the
 //! ContextBackend in the context layer) is never mutated; compaction is
 //! view-selection, not destruction.
 //!
-//! Disentangled: ContextBackend + TurnEvent + CompactionPlan live in the
+//! Disentangled: ContextBackend + SessionLogEntry + CompactionPlan live in the
 //! context layer (this crate depends on that, not the reverse). Backends
 //! live in the memory layer. The agent loop (the engine) drives a
 //! SessionStore.
@@ -31,7 +31,7 @@ use std::sync::Mutex;
 use houyicoder_async::PFut;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
-    PrevHash, SessionId, TurnEvent, TurnEventKind,
+    PrevHash, SessionEvent, SessionId, SessionLogEntry,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
@@ -58,7 +58,7 @@ pub struct SessionStore {
     /// backend stays the source of truth; this mirror lets /trajectory read
     /// without an async replay. A resumed session starts with an empty mirror
     /// until restore_trajectory backfills it from the durable log.
-    trajectory: Mutex<HashMap<SessionId, Vec<TurnEvent>>>,
+    trajectory: Mutex<HashMap<SessionId, Vec<SessionLogEntry>>>,
     /// Optional Notify fired on each append so a host draining mid-run wakes
     /// to push the new durable event without waiting for the run future to
     /// resolve. None when no host wires the mid-run drain; behavior is then
@@ -163,10 +163,10 @@ impl SessionStore {
     /// durable subset (deltas never touched last_hashes, so the chain skips
     /// them naturally), hash, persist to the backend, cache the new hash,
     /// mirror, notify.
-    pub async fn append(&self, mut event: TurnEvent) -> Result<EventId, ContextError> {
+    pub async fn append(&self, mut event: SessionLogEntry) -> Result<EventId, ContextError> {
         let _guard = self.append_lock.lock().await;
         let session = event.session;
-        if matches!(event.kind, TurnEventKind::AssistantTextDelta { .. }) {
+        if matches!(event.event, SessionEvent::AssistantTextDelta { .. }) {
             // Delta path: mirror + notify only. No backend, no chain, no cache.
             self.trajectory
                 .lock()
@@ -227,9 +227,9 @@ impl SessionStore {
     /// Read the in-memory trajectory mirror for a session (sync): the finalized
     /// events in append order, each with prev_hash set. Empty when no events
     /// have been appended this process for the session. The /trajectory command
-    /// projects this directly — TurnEvent already carries the id, ts, prev_hash,
+    /// projects this directly — SessionLogEntry already carries the id, ts, prev_hash,
     /// and kind a trajectory row needs, so no separate record type is introduced.
-    pub fn trajectory_snapshot(&self, session: SessionId) -> Vec<TurnEvent> {
+    pub fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
         self.trajectory
             .lock()
             .expect("trajectory mutex poisoned")
@@ -242,7 +242,7 @@ impl SessionStore {
     /// the child log is gone (deleted or archived), so the caller falls back
     /// to the inline summary the parent already holds. Not a mirror -- the
     /// parent carries the summary; this follows the ref for the full text.
-    pub fn read_child_result(&self, child: SessionId) -> Vec<TurnEvent> {
+    pub fn read_child_result(&self, child: SessionId) -> Vec<SessionLogEntry> {
         match self.backend.read_log(child) {
             Ok(events) => events,
             Err(e) => {
@@ -313,7 +313,7 @@ impl SessionStore {
             return Ok(Some(h));
         }
         // Reverse-read budget: the last durable line is one serialized event.
-        // A TurnEvent larger than 1 MiB would be pathological (a tool result
+        // A SessionLogEntry larger than 1 MiB would be pathological (a tool result
         // with a huge payload); the fallback covers the rare miss.
         const COLD_REVERSE_BYTES: u64 = 1_048_576;
         let rr = self
@@ -340,7 +340,7 @@ impl SessionStore {
     }
 
     /// SHA-256 of the canonical JSON of an event (including its own prev_hash).
-    fn hash_event(event: &TurnEvent) -> Result<PrevHash, ContextError> {
+    fn hash_event(event: &SessionLogEntry) -> Result<PrevHash, ContextError> {
         let bytes = serde_json::to_vec(event)
             .map_err(|_| ContextError::Corrupt("event failed to serialize".into()))?;
         let mut hasher = Sha256::new();
@@ -386,7 +386,7 @@ impl SessionStore {
     pub async fn seed_trajectory(
         &self,
         session: SessionId,
-        events: Vec<TurnEvent>,
+        events: Vec<SessionLogEntry>,
     ) -> Result<ImportReport, ContextError> {
         // Step 1: verify the source chain (read-only, before consuming).
         let source_chain = Self::verify_source_chain(&events);
@@ -397,7 +397,7 @@ impl SessionStore {
         let mut durable_count = 0usize;
         let mut deltas_dropped = 0usize;
         for mut ev in events {
-            if matches!(ev.kind, TurnEventKind::AssistantTextDelta { .. }) {
+            if matches!(ev.event, SessionEvent::AssistantTextDelta { .. }) {
                 deltas_dropped += 1;
                 continue;
             }
@@ -426,7 +426,7 @@ impl SessionStore {
     /// checking linkage. Genesis (first event) must have prev_hash None. A
     /// serialize failure or a mismatch yields Unverified with the index and
     /// reason; the caller proceeds with a rebuilt chain regardless.
-    fn verify_source_chain(events: &[TurnEvent]) -> SourceChain {
+    fn verify_source_chain(events: &[SessionLogEntry]) -> SourceChain {
         let mut prev: Option<PrevHash> = None;
         for (i, ev) in events.iter().enumerate() {
             let Ok(bytes) = serde_json::to_vec(ev) else {
@@ -478,7 +478,7 @@ impl SessionStore {
         for (i, line) in lines.iter().enumerate() {
             // Parse only to read prev_hash; a schema drift with serde-default
             // fields still parses. The chain check hashes the RAW line bytes.
-            let Ok(ev) = serde_json::from_str::<TurnEvent>(line) else {
+            let Ok(ev) = serde_json::from_str::<SessionLogEntry>(line) else {
                 return SourceChain::Unverified {
                     at_index: i,
                     reason: "line failed to parse".into(),
@@ -496,7 +496,7 @@ impl SessionStore {
         SourceChain::Verified
     }
 
-    pub async fn replay(&self, session: SessionId) -> Result<Vec<TurnEvent>, ContextError> {
+    pub async fn replay(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
         self.backend.replay(session).await
     }
 
@@ -578,16 +578,16 @@ impl SessionStore {
 /// delegating to its inherent methods. Boxed futures re-pin the async bodies so
 /// the trait stays object-safe (Arc<dyn SessionLog>).
 impl houyicoder_api::session::SessionLog for SessionStore {
-    fn append(&self, event: TurnEvent) -> PFut<'_, Result<EventId, ContextError>> {
+    fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
         Box::pin(Self::append(self, event))
     }
-    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
         Box::pin(Self::replay(self, session))
     }
     fn current_view(&self, session: SessionId) -> PFut<'_, Result<ContextSnapshot, ContextError>> {
         Box::pin(Self::current_view(self, session))
     }
-    fn trajectory_snapshot(&self, session: SessionId) -> Vec<TurnEvent> {
+    fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
         Self::trajectory_snapshot(self, session)
     }
     fn reset_trajectory(&self, session: SessionId) {

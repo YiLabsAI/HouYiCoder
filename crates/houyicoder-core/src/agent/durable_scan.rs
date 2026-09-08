@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use houyicoder_context::{TurnEvent, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionLogEntry};
 
 /// Maximum sessions to scan, most recent first. A long-running project may
 /// have hundreds of sessions on disk; scanning all of them on every
@@ -33,7 +33,7 @@ const MAX_SESSIONS: usize = 20;
 ///
 /// Sessions are sorted by directory mtime (most recent first) and capped at
 /// MAX_SESSIONS. Each session's log.jsonl is read line by line; each line is
-/// deserialized as a TurnEvent. RewardObservation events carry the
+/// deserialized as a SessionLogEntry. RewardObservation events carry the
 /// retry_after_error count for that batch.
 ///
 /// Best-effort: unreadable logs, corrupt lines, and missing directories
@@ -85,12 +85,12 @@ pub(crate) fn scan_cross_session_retry(root: &Path, skip: Option<&str>) -> u32 {
             if !line.contains("RewardObservation") {
                 continue;
             }
-            let Ok(ev) = serde_json::from_str::<TurnEvent>(line) else {
+            let Ok(ev) = serde_json::from_str::<SessionLogEntry>(line) else {
                 continue;
             };
-            if let TurnEventKind::RewardObservation {
+            if let SessionEvent::RewardObservation {
                 retry_after_error, ..
-            } = ev.kind
+            } = ev.event
             {
                 total = total.saturating_add(retry_after_error);
             }
@@ -102,17 +102,17 @@ pub(crate) fn scan_cross_session_retry(root: &Path, skip: Option<&str>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
     fn write_session(root: &Path, sid: &str, retry: u32) {
         let dir = root.join(sid);
         std::fs::create_dir_all(&dir).expect("mkdir");
-        let ev = TurnEvent {
+        let ev = SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::RewardObservation {
+            event: SessionEvent::RewardObservation {
                 redundant: 0,
                 retry_after_error: retry,
             },
@@ -161,12 +161,12 @@ mod tests {
         let dir = tmp.join("s1");
         std::fs::create_dir_all(&dir).expect("mkdir");
         let valid = {
-            let ev = TurnEvent {
+            let ev = SessionLogEntry {
                 id: EventId::new(),
                 session: SessionId::new(),
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::RewardObservation {
+                event: SessionEvent::RewardObservation {
                     redundant: 0,
                     retry_after_error: 2,
                 },

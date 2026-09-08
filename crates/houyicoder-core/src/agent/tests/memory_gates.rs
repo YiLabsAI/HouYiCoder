@@ -4,7 +4,7 @@
 //! not tokens, and the tests stay sub-millisecond under any tokenizer.
 
 use super::*;
-use houyicoder_context::{MemoryEntry, MemorySource, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{MemoryEntry, MemorySource, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
 use houyicoder_protocol::llm::{LlmEvent, Usage};
@@ -87,10 +87,10 @@ async fn test_byte_cap_skips_recall() {
     // a memory-recall event over the 60KB cap. The byte-cap gate fires
     // before the query/single-word gate, so recall is skipped.
     for kind in [
-        TurnEventKind::UserInput {
+        SessionEvent::UserInput {
             text: "matching fact query".into(),
         },
-        TurnEventKind::MemoryRecall {
+        SessionEvent::MemoryRecall {
             text: "x".repeat(60 * 1024 + 100),
             keys: vec!["saturated".into()],
             bytes: (60 * 1024 + 100) as u32,
@@ -98,12 +98,12 @@ async fn test_byte_cap_skips_recall() {
     ] {
         runner
             .store()
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: houyicoder_context::EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind,
+                event: kind,
             })
             .await
             .unwrap();
@@ -112,7 +112,7 @@ async fn test_byte_cap_skips_recall() {
     let events = runner.store().replay(session).await.unwrap();
     let recall_events = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::MemoryRecall { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::MemoryRecall { .. }))
         .count();
     assert_eq!(
         recall_events, 1,
@@ -138,12 +138,12 @@ async fn test_recall_records_bytes() {
     let session = SessionId::new();
     runner
         .store()
-        .append(TurnEvent {
+        .append(SessionLogEntry {
             id: houyicoder_context::EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "matching fact query".into(),
             },
         })
@@ -153,8 +153,8 @@ async fn test_recall_records_bytes() {
     let events = runner.store().replay(session).await.unwrap();
     let recalled = events
         .iter()
-        .find_map(|e| match &e.kind {
-            TurnEventKind::MemoryRecall { text, bytes, .. } => Some((text.clone(), *bytes)),
+        .find_map(|e| match &e.event {
+            SessionEvent::MemoryRecall { text, bytes, .. } => Some((text.clone(), *bytes)),
             _ => None,
         })
         .expect("a matching query appends a memory-recall event");
@@ -189,12 +189,12 @@ async fn test_toggle_off_skips_recall() {
     let session = SessionId::new();
     runner
         .store()
-        .append(TurnEvent {
+        .append(SessionLogEntry {
             id: houyicoder_context::EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "matching fact query".into(),
             },
         })
@@ -205,7 +205,7 @@ async fn test_toggle_off_skips_recall() {
     assert!(
         events
             .iter()
-            .all(|e| !matches!(e.kind, TurnEventKind::MemoryRecall { .. })),
+            .all(|e| !matches!(e.event, SessionEvent::MemoryRecall { .. })),
         "auto_memory off must skip recall entirely"
     );
 }

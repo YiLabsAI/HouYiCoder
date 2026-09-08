@@ -14,8 +14,8 @@
 //!
 //! LlmEvent (token-level provider stream) projects onto acpx/llm/* as an
 //! independent notification stream — it does NOT ride the base session/update
-//! channel, which carries the turn-level TurnEvent projection. The two are
-//! orthogonal: LlmEvent is live token flow; TurnEvent is the durable turn
+//! channel, which carries the turn-level SessionLogEntry projection. The two are
+//! orthogonal: LlmEvent is live token flow; SessionLogEntry is the durable turn
 //! record.
 
 use crate::llm::LlmEvent;
@@ -77,7 +77,7 @@ pub enum AcpxMethod {
     #[serde(rename = "acpx/tool/progress")]
     ToolProgress,
 
-    // acpx/context/* — TurnEvent kinds the base session/update has no
+    // acpx/context/* — SessionLogEntry kinds the base session/update has no
     // standard counterpart for (CompactionBoundary, Summary, MetaUser,
     // PermissionDecision). These ride the extension notification stream
     // (the durable-context audit trail), orthogonal to session/update.

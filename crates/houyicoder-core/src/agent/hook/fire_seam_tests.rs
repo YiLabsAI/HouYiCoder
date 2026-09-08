@@ -6,7 +6,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use houyicoder_context::{HookEventKind, HookFirePayload, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{
+    HookEventKind, HookFirePayload, SessionEvent, SessionId, SessionLogEntry,
+};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
 use crate::agent::ToolRegistry;
@@ -124,15 +126,15 @@ async fn test_fire_dispatches_reserved_events() {
     assert!(recorded.contains(&HookEvent::WorktreeRemove));
 
     let snap = runner.store().trajectory_snapshot(session);
-    let signals: Vec<&TurnEvent> = snap
+    let signals: Vec<&SessionLogEntry> = snap
         .iter()
-        .filter(|ev| matches!(ev.kind, TurnEventKind::HookSignal { .. }))
+        .filter(|ev| matches!(ev.event, SessionEvent::HookSignal { .. }))
         .collect();
     assert_eq!(signals.len(), 4, "one HookSignal per fired event");
     let wire_kinds: Vec<HookEventKind> = signals
         .iter()
-        .filter_map(|ev| match &ev.kind {
-            TurnEventKind::HookSignal { event, .. } => Some(*event),
+        .filter_map(|ev| match &ev.event {
+            SessionEvent::HookSignal { event, .. } => Some(*event),
             _ => None,
         })
         .collect();
@@ -174,7 +176,7 @@ async fn test_hookfire_ignores_nonservice() {
     let snap = runner.store().trajectory_snapshot(session);
     let signals = snap
         .iter()
-        .filter(|ev| matches!(ev.kind, TurnEventKind::HookSignal { .. }))
+        .filter(|ev| matches!(ev.event, SessionEvent::HookSignal { .. }))
         .count();
     assert_eq!(signals, 0, "non-service event is a no-op");
 }

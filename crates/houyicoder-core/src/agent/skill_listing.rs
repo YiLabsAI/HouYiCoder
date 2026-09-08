@@ -13,7 +13,7 @@
 //! clear (the same natural-reset pattern memory-recall uses).
 
 use houyicoder_api::skill::SkillDescriptor;
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 
 use super::append::new_event;
 use super::{RunError, Runner, model_window, projection};
@@ -195,8 +195,8 @@ impl Runner {
         // current set. An older non-matching listing is irrelevant (a
         // newer one supersedes it); a stale newest (set changed since) or
         // no survivor at all re-injects full.
-        let already_current = filtered.iter().rev().find_map(|e| match &e.kind {
-            TurnEventKind::SkillListing { content_hash, .. } => Some(*content_hash),
+        let already_current = filtered.iter().rev().find_map(|e| match &e.event {
+            SessionEvent::SkillListing { content_hash, .. } => Some(*content_hash),
             _ => None,
         }) == Some(chash);
         if already_current {
@@ -211,7 +211,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::SkillListing {
+                SessionEvent::SkillListing {
                     text,
                     bytes,
                     content_hash: chash,
@@ -507,8 +507,8 @@ mod tests {
         let (runner, session) = runner_with_skills();
         runner.inject_skill_listing(session).await.unwrap();
         let view = runner.store().current_view(session).await.unwrap();
-        let listing = view.events.iter().find_map(|e| match &e.kind {
-            TurnEventKind::SkillListing { text, .. } => Some(text.clone()),
+        let listing = view.events.iter().find_map(|e| match &e.event {
+            SessionEvent::SkillListing { text, .. } => Some(text.clone()),
             _ => None,
         });
         let text = listing.expect("a SkillListing event was appended");
@@ -560,8 +560,8 @@ mod tests {
             .unwrap()
             .events
             .iter()
-            .filter_map(|e| match &e.kind {
-                TurnEventKind::SkillListing {
+            .filter_map(|e| match &e.event {
+                SessionEvent::SkillListing {
                     text, content_hash, ..
                 } => Some((text.clone(), *content_hash)),
                 _ => None,
@@ -585,8 +585,8 @@ mod tests {
             .unwrap()
             .events
             .iter()
-            .filter_map(|e| match &e.kind {
-                TurnEventKind::SkillListing {
+            .filter_map(|e| match &e.event {
+                SessionEvent::SkillListing {
                     text, content_hash, ..
                 } => Some((text.clone(), *content_hash)),
                 _ => None,
@@ -634,7 +634,7 @@ mod tests {
         assert!(
             view.events
                 .iter()
-                .all(|e| !matches!(e.kind, TurnEventKind::SkillListing { .. })),
+                .all(|e| !matches!(e.event, SessionEvent::SkillListing { .. })),
             "no listing appended without a registry"
         );
     }
@@ -724,8 +724,8 @@ mod tests {
             .unwrap()
             .events
             .iter()
-            .find_map(|e| match &e.kind {
-                TurnEventKind::SkillListing { text, .. } => Some(text.clone()),
+            .find_map(|e| match &e.event {
+                SessionEvent::SkillListing { text, .. } => Some(text.clone()),
                 _ => None,
             })
             .expect("listing appended");
@@ -746,8 +746,8 @@ mod tests {
             .events
             .iter()
             .rev()
-            .find_map(|e| match &e.kind {
-                TurnEventKind::SkillListing { text, .. } => Some(text.clone()),
+            .find_map(|e| match &e.event {
+                SessionEvent::SkillListing { text, .. } => Some(text.clone()),
                 _ => None,
             })
             .expect("re-announced listing");

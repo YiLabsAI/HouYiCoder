@@ -49,7 +49,7 @@ REPO = Path(__file__).resolve().parent.parent
 # variant added to one of these must surface in every match site or it
 # silently drops — the projection-duplication concern.
 WIRE_ENUMS = [
-    "TurnEventKind",
+    "SessionEvent",
     "FrontendRequest",
     "AgentMessage",
     "ToolCallStatus",

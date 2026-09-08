@@ -1,38 +1,38 @@
 use super::*;
 use crate::agent::context::Tokenizer;
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
-fn ev(session: SessionId, id: EventId, kind: TurnEventKind) -> TurnEvent {
-    TurnEvent {
+fn ev(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
         id,
         session,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     }
 }
 
-fn user(text: &str) -> TurnEventKind {
-    TurnEventKind::UserInput { text: text.into() }
+fn user(text: &str) -> SessionEvent {
+    SessionEvent::UserInput { text: text.into() }
 }
 
-fn assistant(text: &str) -> TurnEventKind {
-    TurnEventKind::AssistantMessage {
+fn assistant(text: &str) -> SessionEvent {
+    SessionEvent::AssistantMessage {
         text: text.into(),
         thinking: None,
     }
 }
 
-fn call(call_id: &str, tool: &str) -> TurnEventKind {
-    TurnEventKind::ToolCall {
+fn call(call_id: &str, tool: &str) -> SessionEvent {
+    SessionEvent::ToolCall {
         call_id: call_id.into(),
         tool: tool.into(),
         input: serde_json::json!({}),
     }
 }
 
-fn result(call_id: &str, output: serde_json::Value) -> TurnEventKind {
-    TurnEventKind::ToolResult {
+fn result(call_id: &str, output: serde_json::Value) -> SessionEvent {
+    SessionEvent::ToolResult {
         call_id: call_id.into(),
         output,
         duration_ms: 0,
@@ -311,12 +311,12 @@ async fn test_heuristic_summarizer_nonempty() {
 #[test]
 fn test_reasoning_counted_in_estimate() {
     let tokenizer = Tokenizer::new();
-    let ev = TurnEvent {
+    let ev = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::Reasoning {
+        event: SessionEvent::Reasoning {
             text: "let me think carefully".into(),
         },
     };
@@ -325,20 +325,20 @@ fn test_reasoning_counted_in_estimate() {
         "reasoning counted in the compress estimate"
     );
     let events = vec![
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput { text: "hi".into() },
+            event: SessionEvent::UserInput { text: "hi".into() },
         },
         ev,
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "hello".into(),
                 thinking: None,
             },
@@ -361,12 +361,12 @@ fn test_reasoning_counted_in_estimate() {
 fn test_manifest_shares_served_tokenizer() {
     let tokenizer = Tokenizer::new();
     let cjk = "你好世界 this is mixed content";
-    let ev = TurnEvent {
+    let ev = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput { text: cjk.into() },
+        event: SessionEvent::UserInput { text: cjk.into() },
     };
     let estimate = estimate_event_tokens(&ev, &tokenizer);
     let served = tokenizer.count(cjk) as usize;
@@ -383,14 +383,14 @@ fn test_manifest_shares_served_tokenizer() {
 fn test_estimate_counts_each_kind() {
     let tokenizer = Tokenizer::new();
     let s = SessionId::new();
-    let mk = |kind: TurnEventKind| TurnEvent {
+    let mk = |kind: SessionEvent| SessionLogEntry {
         id: EventId::new(),
         session: s,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     };
-    use TurnEventKind::*;
+    use SessionEvent::*;
     assert!(
         estimate_event_tokens(
             &mk(ToolCall {

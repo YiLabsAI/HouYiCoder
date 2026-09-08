@@ -203,14 +203,14 @@ fn test_model_switch_resets_streak() {
 #[tokio::test]
 async fn test_auto_failure_turn_suppress() {
     use houyicoder_async::PFut;
-    use houyicoder_context::{ContextBackend, ContextError, EventId, TurnEvent};
+    use houyicoder_context::{ContextBackend, ContextError, EventId, SessionLogEntry};
 
     /// A backend whose write_checkpoint always fails, so the auto compact's
     /// commit errors + the suppress is set. append succeeds so the
     /// TurnStarted marker + replay work.
     struct FailingBackend;
     impl ContextBackend for FailingBackend {
-        fn append(&self, _e: TurnEvent) -> PFut<'_, Result<EventId, ContextError>> {
+        fn append(&self, _e: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
             Box::pin(async { Ok(EventId::new()) })
         }
         fn read_range(
@@ -218,10 +218,10 @@ async fn test_auto_failure_turn_suppress() {
             _s: SessionId,
             _from: Option<EventId>,
             _to: Option<EventId>,
-        ) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
             Box::pin(async { Ok(vec![]) })
         }
-        fn replay(&self, _s: SessionId) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+        fn replay(&self, _s: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
             Box::pin(async { Ok(vec![]) })
         }
         fn write_checkpoint(
@@ -271,24 +271,24 @@ async fn test_auto_failure_turn_suppress() {
 /// pre-compact input tokens, so max(estimate, stale) re-tripped the gate.
 #[tokio::test]
 async fn test_compact_clears_stale_delta() {
-    use houyicoder_context::{EventId, TurnEvent, TurnEventKind};
+    use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
     use houyicoder_protocol::llm::Usage;
     let r = runner();
     let session = SessionId::new();
     // Seed events so compress has something to fold.
     for i in 0..6 {
         r.store()
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: if i == 0 {
-                    TurnEventKind::UserInput {
+                event: if i == 0 {
+                    SessionEvent::UserInput {
                         text: "do the work".into(),
                     }
                 } else {
-                    TurnEventKind::AssistantMessage {
+                    SessionEvent::AssistantMessage {
                         text: format!("response {i}"),
                         thinking: None,
                     }

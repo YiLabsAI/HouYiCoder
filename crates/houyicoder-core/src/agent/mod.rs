@@ -357,7 +357,7 @@ impl Runner {
 
     /// A shared handle to the session store. Clone it to replay events from a
     /// side channel (the TUI host does this after each run to refresh the
-    /// transcript view from real TurnEvents).
+    /// transcript view from real SessionLogEntries).
     pub fn store(&self) -> Arc<dyn houyicoder_api::session::SessionLog> {
         self.store.clone()
     }

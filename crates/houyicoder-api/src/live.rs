@@ -1,5 +1,5 @@
 //! Live (in-flight) events the runner emits to a frontend sink while a turn
-//! streams. These are NOT the durable TurnEvents (those live in the session
+//! streams. These are NOT the durable SessionLogEntries (those live in the session
 //! log); LiveEvent is the ephemeral, real-time channel from the streaming
 //! model call to whatever host wants token-by-token display.
 //!
@@ -13,7 +13,7 @@
 //! them without pulling in the engine crate. Core re-exports them.
 
 /// One real-time event from an in-flight streaming turn. Ephemeral — the
-/// durable record is the TurnEvent log; this is the live preview of it.
+/// durable record is the SessionLogEntry log; this is the live preview of it.
 ///
 /// MemorySaved is the exception to in-flight streaming: a background
 /// extract/dream task fires it once on completion (after the turn ended) to

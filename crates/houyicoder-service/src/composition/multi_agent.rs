@@ -584,7 +584,7 @@ fn stamp_spawned_by(
 /// or interrupted child is not silently empty.
 fn terminal_summary(
     r: RunResult,
-    child_log: &[houyicoder_context::TurnEvent],
+    child_log: &[houyicoder_context::SessionLogEntry],
 ) -> (String, String, Usage) {
     let usage = r.usage;
     match r.outcome {
@@ -602,17 +602,17 @@ fn terminal_summary(
 
 /// The last non-empty assistant text in the child log: the partial result a
 /// non-final terminal leaves behind.
-fn partial_of(child_log: &[houyicoder_context::TurnEvent]) -> String {
+fn partial_of(child_log: &[houyicoder_context::SessionLogEntry]) -> String {
     extract_last_assistant(child_log).unwrap_or_default()
 }
 
 /// Walk the child log backwards for the last assistant message carrying text;
 /// the partial result a non-final terminal leaves behind. None when no
 /// assistant message (or none with text) was emitted.
-fn extract_last_assistant(events: &[houyicoder_context::TurnEvent]) -> Option<String> {
-    use houyicoder_context::TurnEventKind;
+fn extract_last_assistant(events: &[houyicoder_context::SessionLogEntry]) -> Option<String> {
+    use houyicoder_context::SessionEvent;
     for ev in events.iter().rev() {
-        if let TurnEventKind::AssistantMessage { ref text, .. } = ev.kind
+        if let SessionEvent::AssistantMessage { ref text, .. } = ev.event
             && !text.is_empty()
         {
             return Some(text.clone());

@@ -4,7 +4,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,13 +17,13 @@ fn temp_root() -> std::path::PathBuf {
     p
 }
 
-fn event(session: SessionId, kind: TurnEventKind) -> TurnEvent {
-    TurnEvent {
+fn event(session: SessionId, kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
         id: EventId::new(),
         session,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     }
 }
 
@@ -38,7 +38,7 @@ async fn test_child_result_reads_log() {
     store
         .append(event(
             child,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "search auth".into(),
             },
         ))
@@ -47,7 +47,7 @@ async fn test_child_result_reads_log() {
     store
         .append(event(
             child,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "found auth in crates/api".into(),
                 thinking: None,
             },
@@ -60,8 +60,8 @@ async fn test_child_result_reads_log() {
     assert!(
         result.iter().any(|e| {
             matches!(
-                &e.kind,
-                TurnEventKind::AssistantMessage { text, .. }
+                &e.event,
+                SessionEvent::AssistantMessage { text, .. }
                     if text.contains("found auth in crates/api")
             )
         }),

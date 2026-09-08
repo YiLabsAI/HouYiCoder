@@ -7,7 +7,7 @@
 //! already durable — the idempotency invariant: a ToolResult in the log is
 //! never re-executed, only the model reply is regenerated.
 
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::llm::Usage;
 use tokio_util::sync::CancellationToken;
 
@@ -28,7 +28,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                TurnEventKind::TurnAborted {
+                SessionEvent::TurnAborted {
                     reason: "process restart".into(),
                 },
             ))

@@ -9,8 +9,8 @@ use super::*;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_context::{
-    CheckpointId, CheckpointManifest, Disposition, EventId, SessionId, TurnEvent, TurnEventKind,
-    TurnGroup,
+    CheckpointId, CheckpointManifest, Disposition, EventId, SessionEvent, SessionId,
+    SessionLogEntry, TurnGroup,
 };
 use houyicoder_core::agent::Runner;
 use houyicoder_memory::InMemoryBackend;
@@ -35,12 +35,12 @@ fn stub_runner_with_checkpoint() -> (Arc<Runner>, SessionId) {
 }
 
 async fn seed_checkpoint(runner: &Runner, session: SessionId) {
-    let event = TurnEvent {
+    let event = SessionLogEntry {
         id: EventId::new(),
         session,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::AssistantMessage {
+        event: SessionEvent::AssistantMessage {
             text: "folded".into(),
             thinking: None,
         },

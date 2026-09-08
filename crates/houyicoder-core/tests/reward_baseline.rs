@@ -2,7 +2,7 @@
 
 #![cfg(test)]
 
-use houyicoder_context::{SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RoundMetrics {
@@ -13,22 +13,22 @@ pub struct RoundMetrics {
     pub net_tokens: u64,
 }
 
-fn collect_from_events(events: &[TurnEvent]) -> RoundMetrics {
+fn collect_from_events(events: &[SessionLogEntry]) -> RoundMetrics {
     let mut m = RoundMetrics::default();
     let mut recall_keys: Vec<String> = Vec::new();
     for e in events {
-        match &e.kind {
-            TurnEventKind::ToolResult { output, .. } => {
+        match &e.event {
+            SessionEvent::ToolResult { output, .. } => {
                 if output.get("error").is_some() {
                     m.tool_failures += 1;
                 }
             }
-            TurnEventKind::TurnUsage { recovery, .. } => {
+            SessionEvent::TurnUsage { recovery, .. } => {
                 if *recovery {
                     m.recovery_retries += 1;
                 }
             }
-            TurnEventKind::MemoryRecall { keys, .. } => {
+            SessionEvent::MemoryRecall { keys, .. } => {
                 recall_keys.extend_from_slice(keys);
             }
             _ => {}
@@ -51,27 +51,27 @@ fn passes_self_evolution(off: &RoundMetrics, on: &RoundMetrics) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_context::{EventId, TurnEvent};
+    use houyicoder_context::{EventId, SessionLogEntry};
 
-    fn mk(kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn mk(kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
     #[test]
     fn test_dry_run_structure() {
         let events = vec![
-            mk(TurnEventKind::ToolResult {
+            mk(SessionEvent::ToolResult {
                 call_id: "c1".into(),
                 output: serde_json::json!({"error": "boom"}),
                 duration_ms: 0,
             }),
-            mk(TurnEventKind::TurnUsage {
+            mk(SessionEvent::TurnUsage {
                 turn: 0,
                 call_in_turn: 1,
                 input_tokens: 100,
@@ -83,7 +83,7 @@ mod tests {
                 recovery: true,
                 effort: None,
             }),
-            mk(TurnEventKind::MemoryRecall {
+            mk(SessionEvent::MemoryRecall {
                 text: "lesson".into(),
                 keys: vec!["feedback_dedup_grep".into()],
                 bytes: 6,

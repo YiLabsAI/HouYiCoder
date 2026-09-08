@@ -2,7 +2,7 @@
 //! surface (transcript, panes, stage) and the real agent-loop wiring (runner,
 //! session, tokio runtime, channel). When a runner is present, submit_input
 //! spawns runner.run on the runtime and the transcript is rebuilt from real
-//! TurnEvents; when no runner is wired (tests, login-only), the legacy stub
+//! SessionLogEntries; when no runner is wired (tests, login-only), the legacy stub
 //! path stays so existing tests keep passing. The view module reads App and
 //! renders it; the app/keys modules mutate it in response to keys.
 
@@ -89,7 +89,7 @@ pub use crate::state::enums::*;
 /// palette, console, and review-queue concerns are delegated to focused
 /// sub-structs (PaletteState, ConsoleState, ReviewQueue); the remaining
 /// fields are core surface + artifact state. The agent_* fields wire the real
-/// agent loop: when runner is Some, submit_input spawns runner.run on the tokio runtime and the transcript is rebuilt from real TurnEvents arriving over the channel.
+/// agent loop: when runner is Some, submit_input spawns runner.run on the tokio runtime and the transcript is rebuilt from real SessionLogEntries arriving over the channel.
 pub struct App {
     pub screen: Screen,
     pub stage: Stage,
@@ -195,7 +195,7 @@ pub struct App {
     /// Optional full-history disk-search seam. None in stub / unwired modes
     /// (the /search --all flag then reports no disk results). When wired, the
     /// composition root injects an impl that reads the durable session log +
-    /// projects TurnEvents to searchable text — the TUI never touches the log.
+    /// projects SessionLogEntries to searchable text — the TUI never touches the log.
     /// Optional trajectory-data seam. The composition root injects an impl
     /// that reads the durable session log and projects events into a
     /// TrajectoryView; None in stub and unwired modes falls back to the mock

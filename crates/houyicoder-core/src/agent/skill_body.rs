@@ -6,7 +6,7 @@
 //! invoked skill directives across a compaction boundary.
 
 use houyicoder_api::skill::{SkillRegistry, SkillSource};
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use std::collections::HashSet;
 
 use super::append::new_event;
@@ -101,7 +101,7 @@ impl Runner {
         };
         if filtered
             .iter()
-            .any(|e| matches!(e.kind, TurnEventKind::SkillBody { .. }))
+            .any(|e| matches!(e.event, SessionEvent::SkillBody { .. }))
         {
             return Ok(());
         }
@@ -109,14 +109,14 @@ impl Runner {
         // per-agent budget. Reverse-collect so the most recent land first;
         // reverse back to chronological for append order.
         let mut seen: HashSet<String> = HashSet::new();
-        let mut revived: Vec<(&houyicoder_context::TurnEvent, String)> = Vec::new();
+        let mut revived: Vec<(&houyicoder_context::SessionLogEntry, String)> = Vec::new();
         let mut total: usize = 0;
         for ev in view.events.iter().rev() {
-            if let TurnEventKind::SkillBody {
+            if let SessionEvent::SkillBody {
                 skill_name,
                 content,
                 ..
-            } = &ev.kind
+            } = &ev.event
             {
                 if !seen.insert(skill_name.clone()) {
                     continue;
@@ -135,17 +135,17 @@ impl Runner {
             }
         }
         for (ev, body) in revived.into_iter().rev() {
-            if let TurnEventKind::SkillBody {
+            if let SessionEvent::SkillBody {
                 skill_name,
                 agent_id,
                 untrusted,
                 ..
-            } = &ev.kind
+            } = &ev.event
             {
                 self.store
                     .append(new_event(
                         session,
-                        TurnEventKind::SkillBody {
+                        SessionEvent::SkillBody {
                             skill_name: skill_name.clone(),
                             content: body,
                             agent_id: agent_id.clone(),
@@ -177,7 +177,7 @@ impl Runner {
 mod tests {
     use super::*;
     use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry};
-    use houyicoder_context::{SessionId, TurnEventKind};
+    use houyicoder_context::{SessionEvent, SessionId};
     use houyicoder_memory::InMemoryBackend;
     use houyicoder_resilience::Retry;
     use houyicoder_session::SessionStore;
@@ -242,8 +242,8 @@ mod tests {
         .with_skill_registry(Arc::new(EmptyRegistry))
     }
 
-    fn body_kind(name: &str, content: &str, untrusted: bool) -> TurnEventKind {
-        TurnEventKind::SkillBody {
+    fn body_kind(name: &str, content: &str, untrusted: bool) -> SessionEvent {
+        SessionEvent::SkillBody {
             skill_name: name.into(),
             content: content.into(),
             agent_id: None,
@@ -261,7 +261,7 @@ mod tests {
             .store()
             .append(super::new_event(
                 session,
-                TurnEventKind::SkillBody {
+                SessionEvent::SkillBody {
                     skill_name: "commit".into(),
                     content: "body".into(),
                     agent_id: None,
@@ -298,7 +298,7 @@ mod tests {
         assert!(
             view.events
                 .iter()
-                .all(|e| !matches!(e.kind, TurnEventKind::SkillBody { .. })),
+                .all(|e| !matches!(e.event, SessionEvent::SkillBody { .. })),
             "no SkillBody appended when none exists to revive"
         );
     }
@@ -309,7 +309,7 @@ mod tests {
     /// an invoked skill's guidance is not lost to a compaction.
     #[tokio::test]
     async fn test_inject_revives_after_fold() {
-        use houyicoder_context::TurnEvent;
+        use houyicoder_context::SessionLogEntry;
         use houyicoder_context::{
             CheckpointId, CheckpointManifest, Disposition, EventId, TurnGroup,
         };
@@ -318,12 +318,12 @@ mod tests {
         let body_id = EventId::new();
         runner
             .store()
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: body_id,
                 session,
                 ts: 1,
                 prev_hash: None,
-                kind: TurnEventKind::SkillBody {
+                event: SessionEvent::SkillBody {
                     skill_name: "commit".into(),
                     content: "commit body".into(),
                     agent_id: None,
@@ -360,7 +360,7 @@ mod tests {
         assert!(
             filtered
                 .iter()
-                .all(|e| !matches!(e.kind, TurnEventKind::SkillBody { .. })),
+                .all(|e| !matches!(e.event, SessionEvent::SkillBody { .. })),
             "manifest folded the SkillBody out of the served view"
         );
         runner.inject_skill_body(session).await.unwrap();
@@ -368,7 +368,7 @@ mod tests {
         let count = view_after
             .events
             .iter()
-            .filter(|e| matches!(e.kind, TurnEventKind::SkillBody { .. }))
+            .filter(|e| matches!(e.event, SessionEvent::SkillBody { .. }))
             .count();
         assert_eq!(count, 2, "revive appended a second SkillBody: {count}");
     }
@@ -379,7 +379,7 @@ mod tests {
     /// the per-skill cap is head-truncated.
     #[tokio::test]
     async fn test_revive_dedup_and_truncate() {
-        use houyicoder_context::TurnEvent;
+        use houyicoder_context::SessionLogEntry;
         use houyicoder_context::{
             CheckpointId, CheckpointManifest, Disposition, EventId, TurnGroup,
         };
@@ -388,36 +388,36 @@ mod tests {
         let id1 = EventId::new();
         runner
             .store()
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: id1,
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: body_kind("a", "a-old", false),
+                event: body_kind("a", "a-old", false),
             })
             .await
             .unwrap();
         let id2 = EventId::new();
         runner
             .store()
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: id2,
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: body_kind("b", &"x".repeat(6_000), false),
+                event: body_kind("b", &"x".repeat(6_000), false),
             })
             .await
             .unwrap();
         let id3 = EventId::new();
         runner
             .store()
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: id3,
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: body_kind("a", "a-new", false),
+                event: body_kind("a", "a-new", false),
             })
             .await
             .unwrap();
@@ -444,8 +444,8 @@ mod tests {
         let revived: Vec<_> = view
             .events
             .iter()
-            .filter_map(|e| match &e.kind {
-                TurnEventKind::SkillBody {
+            .filter_map(|e| match &e.event {
+                SessionEvent::SkillBody {
                     skill_name,
                     content,
                     ..

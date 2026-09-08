@@ -32,8 +32,8 @@ async fn run_query(
         recalled: runner
             .trajectory_snapshot(session)
             .iter()
-            .filter_map(|ev| match &ev.kind {
-                houyicoder_context::TurnEventKind::MemoryRecall { keys, .. } => {
+            .filter_map(|ev| match &ev.event {
+                houyicoder_context::SessionEvent::MemoryRecall { keys, .. } => {
                     Some(keys.len() as u32)
                 }
                 _ => None,

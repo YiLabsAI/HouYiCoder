@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use houyicoder_api::tool::{Tool, ToolCtx};
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use serde_json::Value;
@@ -101,11 +101,11 @@ fn final_response() -> CompletionResponse {
 async fn duration_for(runner: &Runner, session: SessionId, call_id: &str) -> u64 {
     let events = runner.store().replay(session).await.expect("replay");
     for ev in &events {
-        if let TurnEventKind::ToolResult {
+        if let SessionEvent::ToolResult {
             call_id: cid,
             duration_ms,
             ..
-        } = &ev.kind
+        } = &ev.event
             && cid == call_id
         {
             return *duration_ms;

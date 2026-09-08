@@ -1,5 +1,5 @@
 //! Session metadata sidecar: the per-session descriptor written alongside
-//! the event log at <sid>/session.json. The hash chain spans TurnEvents only,
+//! the event log at <sid>/session.json. The hash chain spans SessionLogEntries only,
 //! so mutable session-level fields (name, cwd, model, provenance) live in a
 //! separate sidecar rather than appended to the chain, so the chain
 //! stays pure (mutable fields in the sidecar, immutable events in the chain).

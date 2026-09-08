@@ -3,7 +3,7 @@
 
 use houyicoder_api::live::{LiveEvent, LiveSink};
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{HookVerdictKind, SessionId, TurnEventKind};
+use houyicoder_context::{HookVerdictKind, SessionEvent, SessionId};
 
 use super::super::hook::{
     HookEvent, HookVerdict,
@@ -74,7 +74,7 @@ pub(crate) async fn record_hook_signals(
                 )
             }
         };
-        let signal = TurnEventKind::HookSignal {
+        let signal = SessionEvent::HookSignal {
             event: wire_event,
             verdict: verdict_kind,
             error: error_kind,

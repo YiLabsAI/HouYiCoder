@@ -191,7 +191,7 @@ pub(crate) fn render_todo_section(todos: &[crate::todo_view::TodoView]) -> Strin
 
 /// /permissions view: the full permission surface — active mode, durable
 /// rules, and the session verdict log. The verdict log projects
-/// PermissionDecision TurnEvents (the durable audit trail of every approve /
+/// PermissionDecision SessionLogEntries (the durable audit trail of every approve /
 /// deny the human issued this session). One row per verdict: the verdict,
 /// the tool, the scope, the call_id, and the wall-clock ts.
 pub(crate) fn render_permission_view(

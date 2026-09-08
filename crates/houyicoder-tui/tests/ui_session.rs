@@ -14,7 +14,7 @@
 mod common;
 
 use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session_scripted};
-use houyicoder_core::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 /// A single-response script: one call whose only item is a plain-text reply,
 /// so the run completes in one step (no tool call, no approval pause). The
@@ -146,18 +146,18 @@ fn wait_for_log_contains(
 fn write_resume_fixture() -> std::path::PathBuf {
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA"; // legacy ULID (pre-change)
     let sid = SessionId::from_display_string(legacy_sid).expect("legacy ULID parses");
-    let mk = |kind: TurnEventKind| TurnEvent {
+    let mk = |kind: SessionEvent| SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     };
     let events = vec![
-        mk(TurnEventKind::UserInput {
+        mk(SessionEvent::UserInput {
             text: "resumed hello from export".into(),
         }),
-        mk(TurnEventKind::AssistantMessage {
+        mk(SessionEvent::AssistantMessage {
             text: "resumed reply from export".into(),
             thinking: None,
         }),
@@ -296,12 +296,12 @@ fn test_resume_missing_reports_error() {
 /// verifies); the sidecar carries the model the resume path should restore.
 fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prompt: &str) {
     let sid = SessionId::from_display_string(sid_str).expect("sid parses");
-    let event = TurnEvent {
+    let event = SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput {
+        event: SessionEvent::UserInput {
             text: prompt.into(),
         },
     };

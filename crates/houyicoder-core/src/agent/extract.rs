@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicU32;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{SessionId, TurnEvent};
+use houyicoder_context::{SessionId, SessionLogEntry};
 
 use super::prompt::extract::build_extraction_prompt;
 use super::runner_config::RunnerConfig;
@@ -58,7 +58,7 @@ pub async fn run_forked_extract(
     memory: Arc<dyn MemoryProvider>,
     cwd: &Path,
     config: RunnerConfig,
-    prefix: &[TurnEvent],
+    prefix: &[SessionLogEntry],
     counter: Arc<AtomicU32>,
 ) -> Result<RunResult, RunError> {
     counter.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -88,7 +88,7 @@ mod tests {
     use super::*;
     use houyicoder_api::provider::stream_from_response;
     use houyicoder_async::{PFut, PStream};
-    use houyicoder_context::{EventId, MemoryEntry, MemorySource, TurnEventKind};
+    use houyicoder_context::{EventId, MemoryEntry, MemorySource, SessionEvent};
     use houyicoder_memory::InMemoryBackend;
     use houyicoder_protocol::llm::{
         CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem,
@@ -205,24 +205,24 @@ mod tests {
 
     /// A minimal main-session prefix: a user asks for terse responses, the
     /// assistant agrees. The forked extraction agent distills the feedback.
-    fn main_prefix() -> Vec<TurnEvent> {
+    fn main_prefix() -> Vec<SessionLogEntry> {
         let session = SessionId::new();
         vec![
-            TurnEvent {
+            SessionLogEntry {
                 id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::UserInput {
+                event: SessionEvent::UserInput {
                     text: "Please keep your responses terse, the long intros waste my time.".into(),
                 },
             },
-            TurnEvent {
+            SessionLogEntry {
                 id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::AssistantMessage {
+                event: SessionEvent::AssistantMessage {
                     text: "Got it — I will lead with the answer and drop the preamble.".into(),
                     thinking: None,
                 },

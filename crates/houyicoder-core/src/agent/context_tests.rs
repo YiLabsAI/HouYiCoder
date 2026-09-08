@@ -2,7 +2,9 @@
 //! stays under the file-size gate. The #[path] include in context.rs pulls
 //! this in for the test build only.
 use super::*;
-use houyicoder_context::{EventId, MemoryEntry, MemorySource, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{
+    EventId, MemoryEntry, MemorySource, SessionEvent, SessionId, SessionLogEntry,
+};
 
 #[test]
 fn test_tokenizer_counts_text() {
@@ -298,21 +300,21 @@ fn test_memory_section_recomputed_projection() {
     )
     .with_meta("the build must pass", 0)]);
     let events = vec![
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "what is the build rule".into(),
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::MemoryRecall {
+            event: SessionEvent::MemoryRecall {
                 text: mem_text.clone(),
                 keys: vec!["build-gate".to_string()],
                 bytes: mem_text.len() as u32,
@@ -371,21 +373,21 @@ fn test_skill_section_recomputed_projection() {
     std::fs::create_dir_all(&scratch).expect("mkdir scratch");
     let listing_text = "- commit: commit changes - after edits\n- review: review a PR";
     let events = vec![
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "help me commit".into(),
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::SkillListing {
+            event: SessionEvent::SkillListing {
                 text: listing_text.to_string(),
                 bytes: listing_text.len() as u32,
                 content_hash: 0,
@@ -542,41 +544,41 @@ fn test_system_block_stable_turns() {
     std::fs::write(scratch.join("AGENTS.md"), "# Stable Project\n\nrules.").expect("write");
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let s = SessionId::new();
-    let turn1 = vec![TurnEvent {
+    let turn1 = vec![SessionLogEntry {
         id: EventId::new(),
         session: s,
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput {
+        event: SessionEvent::UserInput {
             text: "first".into(),
         },
     }];
     let turn2 = vec![
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "first".into(),
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantMessage {
+            event: SessionEvent::AssistantMessage {
                 text: "reply".into(),
                 thinking: None,
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "second".into(),
             },
         },
@@ -610,21 +612,21 @@ fn test_recall_not_system_section() {
     let s = SessionId::new();
     let recall_text = "DEPLOY_COMMAND=make deploy".to_string();
     let events = vec![
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::UserInput {
+            event: SessionEvent::UserInput {
                 text: "how to deploy".into(),
             },
         },
-        TurnEvent {
+        SessionLogEntry {
             id: EventId::new(),
             session: s,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::MemoryRecall {
+            event: SessionEvent::MemoryRecall {
                 text: recall_text.clone(),
                 keys: vec!["deploy".into()],
                 bytes: recall_text.len() as u32,

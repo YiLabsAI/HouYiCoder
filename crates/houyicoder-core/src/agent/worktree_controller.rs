@@ -14,7 +14,7 @@
 //! discard: a remove with uncommitted changes + discard_changes=false refuses
 //! and lists the work so the user confirms before re-invoking with true.
 //!
-//! Both enter and exit append a TurnEvent (WorktreeEnter / WorktreeExit) to
+//! Both enter and exit append a SessionLogEntry (WorktreeEnter / WorktreeExit) to
 //! the session log so a replay can restore the execution environment later —
 //! the record lands now (resume consumption is a separate, deferred task);
 //! never silent on the cwd + fence switch.
@@ -28,7 +28,7 @@ use houyicoder_api::live::{LiveEvent, LiveSink};
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    EventId, HookEventKind, HookFirePayload, SessionId, TurnEvent, TurnEventKind,
+    EventId, HookEventKind, HookFirePayload, SessionEvent, SessionId, SessionLogEntry,
 };
 
 use super::worktree_session::{self, WorktreeError, WorktreeSession};
@@ -249,12 +249,12 @@ impl WorktreeController {
         // reproducible; resume consumption is deferred).
         if let Err(e) = self
             .store
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session: self.session_id,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::WorktreeEnter {
+                event: SessionEvent::WorktreeEnter {
                     slug: slug.clone(),
                     path: created.worktree_path.to_string_lossy().into_owned(),
                     branch: created.worktree_branch.clone(),
@@ -468,12 +468,12 @@ impl WorktreeController {
         // Record the exit event (H2).
         if let Err(e) = self
             .store
-            .append(TurnEvent {
+            .append(SessionLogEntry {
                 id: EventId::new(),
                 session: self.session_id,
                 ts: 0,
                 prev_hash: None,
-                kind: TurnEventKind::WorktreeExit {
+                event: SessionEvent::WorktreeExit {
                     action: action_str.into(),
                     path: session.worktree_path.to_string_lossy().into_owned(),
                 },

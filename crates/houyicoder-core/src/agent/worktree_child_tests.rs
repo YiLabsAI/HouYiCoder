@@ -2,7 +2,7 @@
 //! harness (make_repo, wired, wired_err); the helpers are pub(crate).
 
 use houyicoder_api::hook_fire::HookFire;
-use houyicoder_context::{HookEventKind, HookFirePayload, SessionId, TurnEventKind};
+use houyicoder_context::{HookEventKind, HookFirePayload, SessionEvent, SessionId};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
 use std::sync::{Arc, Mutex};
@@ -94,8 +94,8 @@ async fn test_spawn_child_worktree_isolation() {
     let events = store.trajectory_snapshot(parent_sid);
     let iso = events
         .iter()
-        .find_map(|e| match &e.kind {
-            TurnEventKind::SubagentSpawn { isolation, .. } => Some(isolation.clone()),
+        .find_map(|e| match &e.event {
+            SessionEvent::SubagentSpawn { isolation, .. } => Some(isolation.clone()),
             _ => None,
         })
         .expect("spawn boundary present");

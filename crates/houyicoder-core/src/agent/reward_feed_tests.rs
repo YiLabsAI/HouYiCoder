@@ -107,8 +107,8 @@ async fn test_redundancy_reminder_appends_user() {
     let events = runner.store.replay(session).await.expect("replay");
     assert!(
         events.iter().any(|e| matches!(
-            &e.kind,
-            houyicoder_context::TurnEventKind::MetaUser { text }
+            &e.event,
+            houyicoder_context::SessionEvent::MetaUser { text }
                 if text.contains("bash") && text.contains("Reuse")
         )),
         "dedup reminder appended as MetaUser naming the tool + reuse cue"
@@ -135,11 +135,11 @@ async fn test_blind_retry_reminder_appended() {
     let events = runner.store.replay(session).await.expect("replay");
     assert!(
         events.iter().any(|e| matches!(
-            &e.kind,
-            houyicoder_context::TurnEventKind::MetaUser { text }
+            &e.event,
+            houyicoder_context::SessionEvent::MetaUser { text }
                 if text.contains("blind retry") && text.contains("bash")
         )),
         "blind-retry warning appended as MetaUser: {:?}",
-        events.iter().map(|e| &e.kind).collect::<Vec<_>>()
+        events.iter().map(|e| &e.event).collect::<Vec<_>>()
     );
 }

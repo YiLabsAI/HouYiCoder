@@ -6,7 +6,7 @@
 use houyicoder_api::skill::GrantSubject;
 use houyicoder_api::skill::grant::SkillGrantStore;
 use houyicoder_api::tool::ToolCtx;
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 use super::synthetic::{SyntheticToolOutcome, tool_error_json};
@@ -140,17 +140,17 @@ impl Runner {
         let events = self.store.replay(session).await?;
         let mut answered = HashSet::new();
         for e in &events {
-            if let TurnEventKind::ToolResult { call_id, .. } = &e.kind {
+            if let SessionEvent::ToolResult { call_id, .. } = &e.event {
                 answered.insert(call_id.clone());
             }
         }
         let mut pending = Vec::new();
         for e in &events {
-            if let TurnEventKind::ToolCall {
+            if let SessionEvent::ToolCall {
                 call_id,
                 tool,
                 input,
-            } = &e.kind
+            } = &e.event
                 && !answered.contains(call_id)
             {
                 pending.push(ApprovalRequest::new(

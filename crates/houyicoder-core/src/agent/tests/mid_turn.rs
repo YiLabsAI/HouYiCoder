@@ -246,7 +246,7 @@ impl Tool for RemoveAfterEnqueueTool {
 /// no-fix red, wrapper-site red, run-entry green.
 #[tokio::test]
 async fn test_run_repairs_orphan_call() {
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     use houyicoder_protocol::llm::{InputItem, OutputItem};
     let runner = Arc::new(runner_with(
         Arc::new(crate::provider::test_support::FakeProvider::new(vec![
@@ -266,7 +266,7 @@ async fn test_run_repairs_orphan_call() {
         .store()
         .append(new_event(
             session,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: String::new(),
                 thinking: None,
             },
@@ -277,7 +277,7 @@ async fn test_run_repairs_orphan_call() {
         .store()
         .append(new_event(
             session,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "echo".into(),
                 input: serde_json::json!({}),
@@ -486,7 +486,7 @@ impl Tool for EnqueueNotificationTool {
 /// so a healthy session is not mutated.
 #[tokio::test]
 async fn test_reconcile_noop_clean_log() {
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     use houyicoder_protocol::llm::OutputItem;
     let runner = Arc::new(runner_with(
         Arc::new(crate::provider::test_support::FakeProvider::new(vec![
@@ -506,7 +506,7 @@ async fn test_reconcile_noop_clean_log() {
         .store()
         .append(new_event(
             session,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "let me echo".into(),
                 thinking: None,
             },
@@ -517,7 +517,7 @@ async fn test_reconcile_noop_clean_log() {
         .store()
         .append(new_event(
             session,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "echo".into(),
                 input: serde_json::json!({}),
@@ -529,20 +529,20 @@ async fn test_reconcile_noop_clean_log() {
         .store()
         .append(new_event(
             session,
-            TurnEventKind::tool_result("c1", serde_json::json!({"ok": true})),
+            SessionEvent::tool_result("c1", serde_json::json!({"ok": true})),
         ))
         .await
         .expect("append tool result");
     let before = runner.store().replay(session).await.expect("replay");
     let results_before = before
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::ToolResult { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::ToolResult { .. }))
         .count();
     runner.run(session, "next".into()).await.expect("run");
     let after = runner.store().replay(session).await.expect("replay");
     let results_after = after
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::ToolResult { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::ToolResult { .. }))
         .count();
     assert_eq!(
         results_after, results_before,

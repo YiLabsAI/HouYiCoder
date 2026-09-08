@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
-use houyicoder_context::{Disposition, EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{Disposition, EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::extension::ToolError;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -124,7 +124,7 @@ impl Tool for ConversationSearchTool {
                 .await
                 .map_err(|e| ToolError::Failed(format!("conversation_search: replay: {e}")))?;
             let folded_ids = folded_event_ids(&store, session).await;
-            let text_events: Vec<&TurnEvent> = events
+            let text_events: Vec<&SessionLogEntry> = events
                 .iter()
                 .filter(|e| event_search_text(e).is_some())
                 .collect();
@@ -205,17 +205,17 @@ async fn folded_event_ids(store: &Arc<dyn SessionLog>, session: SessionId) -> Ve
 /// hook signals, usage, boundaries, permission, and turn markers carry no
 /// recallable content). Tool calls serialize their input so a tool-call
 /// argument is searchable; tool results serialize their output likewise.
-fn event_search_text(event: &TurnEvent) -> Option<String> {
-    let text = match &event.kind {
-        TurnEventKind::UserInput { text } => text.clone(),
-        TurnEventKind::MidTurnInput { text } => text.clone(),
-        TurnEventKind::MetaUser { text } => text.clone(),
-        TurnEventKind::MemoryRecall { text, .. } => text.clone(),
-        TurnEventKind::SkillListing { text, .. } => text.clone(),
-        TurnEventKind::SkillBody { content, .. } => content.clone(),
-        TurnEventKind::RewardObservation { .. } => return None,
-        TurnEventKind::Unknown => return None,
-        TurnEventKind::AssistantMessage { text, thinking } => {
+fn event_search_text(event: &SessionLogEntry) -> Option<String> {
+    let text = match &event.event {
+        SessionEvent::UserInput { text } => text.clone(),
+        SessionEvent::MidTurnInput { text } => text.clone(),
+        SessionEvent::MetaUser { text } => text.clone(),
+        SessionEvent::MemoryRecall { text, .. } => text.clone(),
+        SessionEvent::SkillListing { text, .. } => text.clone(),
+        SessionEvent::SkillBody { content, .. } => content.clone(),
+        SessionEvent::RewardObservation { .. } => return None,
+        SessionEvent::Unknown => return None,
+        SessionEvent::AssistantMessage { text, thinking } => {
             let mut s = text.clone();
             if let Some(t) = thinking {
                 if !s.is_empty() {
@@ -225,49 +225,49 @@ fn event_search_text(event: &TurnEvent) -> Option<String> {
             }
             s
         }
-        TurnEventKind::ToolCall { tool, input, .. } => {
+        SessionEvent::ToolCall { tool, input, .. } => {
             format!("[{tool}]\n{}", input)
         }
-        TurnEventKind::ToolResult { output, .. } => output.to_string(),
-        TurnEventKind::Reasoning { text } => text.clone(),
-        TurnEventKind::Summary { text } => text.clone(),
-        TurnEventKind::AssistantTextDelta { .. }
-        | TurnEventKind::CompactionBoundary { .. }
-        | TurnEventKind::CacheBreak { .. }
-        | TurnEventKind::PermissionDecision { .. }
-        | TurnEventKind::TurnStarted { .. }
-        | TurnEventKind::TurnUsage { .. }
-        | TurnEventKind::HookSignal { .. }
-        | TurnEventKind::TurnAborted { .. }
-        | TurnEventKind::TruncationVerdict { .. }
-        | TurnEventKind::WorktreeEnter { .. }
-        | TurnEventKind::WorktreeExit { .. }
-        | TurnEventKind::SubagentSpawn { .. }
-        | TurnEventKind::SubagentReturn { .. }
-        | TurnEventKind::NotificationInjected { .. } => return None,
+        SessionEvent::ToolResult { output, .. } => output.to_string(),
+        SessionEvent::Reasoning { text } => text.clone(),
+        SessionEvent::Summary { text } => text.clone(),
+        SessionEvent::AssistantTextDelta { .. }
+        | SessionEvent::CompactionBoundary { .. }
+        | SessionEvent::CacheBreak { .. }
+        | SessionEvent::PermissionDecision { .. }
+        | SessionEvent::TurnStarted { .. }
+        | SessionEvent::TurnUsage { .. }
+        | SessionEvent::HookSignal { .. }
+        | SessionEvent::TurnAborted { .. }
+        | SessionEvent::TruncationVerdict { .. }
+        | SessionEvent::WorktreeEnter { .. }
+        | SessionEvent::WorktreeExit { .. }
+        | SessionEvent::SubagentSpawn { .. }
+        | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::NotificationInjected { .. } => return None,
     };
     if text.is_empty() { None } else { Some(text) }
 }
 
 /// A role label for an event, for rendering search hits + turn listings.
-fn role_of(event: &TurnEvent) -> &'static str {
-    match event.kind {
-        TurnEventKind::UserInput { .. }
-        | TurnEventKind::MidTurnInput { .. }
-        | TurnEventKind::MetaUser { .. } => "User",
-        TurnEventKind::AssistantMessage { .. } => "Assistant",
-        TurnEventKind::ToolCall { .. } => "Assistant",
-        TurnEventKind::ToolResult { .. } => "Tool",
-        TurnEventKind::Reasoning { .. } => "Reasoning",
-        TurnEventKind::Summary { .. } => "Summary",
-        TurnEventKind::MemoryRecall { .. } => "Memory",
+fn role_of(event: &SessionLogEntry) -> &'static str {
+    match event.event {
+        SessionEvent::UserInput { .. }
+        | SessionEvent::MidTurnInput { .. }
+        | SessionEvent::MetaUser { .. } => "User",
+        SessionEvent::AssistantMessage { .. } => "Assistant",
+        SessionEvent::ToolCall { .. } => "Assistant",
+        SessionEvent::ToolResult { .. } => "Tool",
+        SessionEvent::Reasoning { .. } => "Reasoning",
+        SessionEvent::Summary { .. } => "Summary",
+        SessionEvent::MemoryRecall { .. } => "Memory",
         _ => "System",
     }
 }
 
 /// Case-insensitive substring search over the text-bearing events. Each hit
 /// records its index, event id, role, and a snippet around the first match.
-fn search_events(events: &[&TurnEvent], query: &str) -> Vec<SearchMatch> {
+fn search_events(events: &[&SessionLogEntry], query: &str) -> Vec<SearchMatch> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
     for (idx, event) in events.iter().enumerate() {
@@ -332,7 +332,7 @@ fn format_search_results(query: &str, matches: &[SearchMatch], folded_matches: u
 /// Render a turn range: the text-bearing events with index in [start, end).
 /// Long texts truncate to 1000 chars so the model does not re-ingest a whole
 /// folded block (the whole point of recall over re-injection).
-fn format_turn_range(events: &[&TurnEvent], range: TurnRange) -> String {
+fn format_turn_range(events: &[&SessionLogEntry], range: TurnRange) -> String {
     let end = range.end.min(events.len());
     if range.start >= end {
         return format!(
@@ -361,13 +361,13 @@ fn format_turn_range(events: &[&TurnEvent], range: TurnRange) -> String {
 /// Render conversation statistics: total events, text-bearing events, folded
 /// count, and whether a summary exists.
 fn format_stats(
-    events: &[TurnEvent],
-    text_events: &[&TurnEvent],
+    events: &[SessionLogEntry],
+    text_events: &[&SessionLogEntry],
     folded_ids: &[EventId],
 ) -> String {
     let has_summary = events
         .iter()
-        .any(|e| matches!(e.kind, TurnEventKind::Summary { .. }));
+        .any(|e| matches!(e.event, SessionEvent::Summary { .. }));
     format!(
         "## Conversation Stats\n\n\
          - Total events: {}\n\
@@ -386,7 +386,7 @@ mod tests {
     use super::*;
     use houyicoder_context::{
         CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId, SessionId,
-        TurnEvent, TurnGroup,
+        SessionLogEntry, TurnGroup,
     };
     use houyicoder_protocol::extension::ToolError;
     use std::sync::atomic::AtomicU32;
@@ -395,7 +395,7 @@ mod tests {
     /// in a Vec; current_view returns the manifest the test sets, so the
     /// folded-id path is exercisable without a real backend.
     struct InMemoryLog {
-        events: std::sync::Mutex<Vec<TurnEvent>>,
+        events: std::sync::Mutex<Vec<SessionLogEntry>>,
         manifest: std::sync::Mutex<Option<CheckpointManifest>>,
     }
 
@@ -406,7 +406,7 @@ mod tests {
                 manifest: std::sync::Mutex::new(None),
             }
         }
-        fn push(&self, ev: TurnEvent) {
+        fn push(&self, ev: SessionLogEntry) {
             self.events.lock().unwrap().push(ev);
         }
         fn set_manifest(&self, m: CheckpointManifest) {
@@ -415,12 +415,15 @@ mod tests {
     }
 
     impl SessionLog for InMemoryLog {
-        fn append(&self, event: TurnEvent) -> PFut<'_, Result<EventId, ContextError>> {
+        fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
             let id = event.id;
             self.events.lock().unwrap().push(event);
             Box::pin(async move { Ok(id) })
         }
-        fn replay(&self, _session: SessionId) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+        fn replay(
+            &self,
+            _session: SessionId,
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
             let events = self.events.lock().unwrap().clone();
             Box::pin(async move { Ok(events) })
         }
@@ -440,7 +443,7 @@ mod tests {
                 })
             })
         }
-        fn trajectory_snapshot(&self, _session: SessionId) -> Vec<TurnEvent> {
+        fn trajectory_snapshot(&self, _session: SessionId) -> Vec<SessionLogEntry> {
             self.events.lock().unwrap().clone()
         }
         fn reset_trajectory(&self, _session: SessionId) {}
@@ -470,13 +473,13 @@ mod tests {
         }
     }
 
-    fn make_event(kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn make_event(kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
@@ -503,7 +506,7 @@ mod tests {
 
     /// Build the tool + a ctx bound to a session, with an event log preloaded.
     fn harness(
-        events: Vec<TurnEvent>,
+        events: Vec<SessionLogEntry>,
         manifest: Option<CheckpointManifest>,
     ) -> (ConversationSearchTool, ToolCtx, Arc<AtomicU32>) {
         let log = Arc::new(InMemoryLog::new());
@@ -524,11 +527,11 @@ mod tests {
         // A folded UserInput + a verbatim AssistantMessage. Searching the
         // folded keyword lands a match in the Summarized span — the recall
         // meter bumps, proving the tool recalls compacted detail.
-        let folded = make_event(TurnEventKind::UserInput {
+        let folded = make_event(SessionEvent::UserInput {
             text: "remember the migration plan".to_string(),
         });
         let folded_id = folded.id;
-        let verbatim = make_event(TurnEventKind::AssistantMessage {
+        let verbatim = make_event(SessionEvent::AssistantMessage {
             text: "ok".to_string(),
             thinking: None,
         });
@@ -566,16 +569,16 @@ mod tests {
     async fn test_search_filters_turn_range() {
         // A turns range returns only events in [start, end); events outside
         // the range are absent from the output.
-        let e0 = make_event(TurnEventKind::UserInput {
+        let e0 = make_event(SessionEvent::UserInput {
             text: "zero".to_string(),
         });
-        let e1 = make_event(TurnEventKind::UserInput {
+        let e1 = make_event(SessionEvent::UserInput {
             text: "one".to_string(),
         });
-        let e2 = make_event(TurnEventKind::UserInput {
+        let e2 = make_event(SessionEvent::UserInput {
             text: "two".to_string(),
         });
-        let e3 = make_event(TurnEventKind::UserInput {
+        let e3 = make_event(SessionEvent::UserInput {
             text: "three".to_string(),
         });
         let (tool, ctx, _meter) = harness(vec![e0, e1, e2, e3], None);
@@ -592,7 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_reports_no_results() {
-        let e = make_event(TurnEventKind::UserInput {
+        let e = make_event(SessionEvent::UserInput {
             text: "hello".to_string(),
         });
         let (tool, ctx, _meter) = harness(vec![e], None);
@@ -605,10 +608,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_stats_reports_counts() {
-        let e0 = make_event(TurnEventKind::UserInput {
+        let e0 = make_event(SessionEvent::UserInput {
             text: "a".to_string(),
         });
-        let e1 = make_event(TurnEventKind::Summary {
+        let e1 = make_event(SessionEvent::Summary {
             text: "sum".to_string(),
         });
         let folded_id = e0.id;
@@ -625,11 +628,11 @@ mod tests {
     async fn test_verbatim_match_skips_meter() {
         // A match in the verbatim (non-folded) span is not a recall of
         // compacted detail — the meter must stay zero.
-        let folded = make_event(TurnEventKind::UserInput {
+        let folded = make_event(SessionEvent::UserInput {
             text: "folded".to_string(),
         });
         let folded_id = folded.id;
-        let verbatim = make_event(TurnEventKind::AssistantMessage {
+        let verbatim = make_event(SessionEvent::AssistantMessage {
             text: "verbatim gem".to_string(),
             thinking: None,
         });
@@ -648,7 +651,7 @@ mod tests {
     /// text, so event_search_text returns None rather than indexing garbage.
     #[test]
     fn test_search_text_unknown_none() {
-        let e = make_event(TurnEventKind::Unknown);
+        let e = make_event(SessionEvent::Unknown);
         assert!(event_search_text(&e).is_none());
     }
 }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use houyicoder_api::tool::{Tool, ToolCtx};
-use houyicoder_context::{SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
@@ -158,7 +158,7 @@ async fn test_pre_tool_use_deny() {
         .store()
         .trajectory_snapshot(session)
         .iter()
-        .any(|ev| matches!(ev.kind, TurnEventKind::ToolResult { ref output, .. } if output.to_string().contains("blocked by hook")));
+        .any(|ev| matches!(ev.event, SessionEvent::ToolResult { ref output, .. } if output.to_string().contains("blocked by hook")));
     assert!(
         blocked,
         "the denied tool_result carries the hook block reason"
@@ -174,12 +174,12 @@ async fn test_hook_deny_records_signal() {
     let (runner, session, _ran) = deny_runner();
     runner.run(session, "go".into()).await.expect("run");
     let snap = runner.store().trajectory_snapshot(session);
-    let signals: Vec<&TurnEvent> = snap
+    let signals: Vec<&SessionLogEntry> = snap
         .iter()
-        .filter(|ev| matches!(ev.kind, TurnEventKind::HookSignal { .. }))
+        .filter(|ev| matches!(ev.event, SessionEvent::HookSignal { .. }))
         .collect();
-    let deny = signals.iter().find_map(|ev| match &ev.kind {
-        TurnEventKind::HookSignal {
+    let deny = signals.iter().find_map(|ev| match &ev.event {
+        SessionEvent::HookSignal {
             verdict,
             hook_name,
             reason,
@@ -246,7 +246,7 @@ async fn test_pre_tool_use_observe() {
         .store()
         .trajectory_snapshot(session)
         .iter()
-        .any(|ev| matches!(ev.kind, TurnEventKind::ToolResult { ref output, .. } if output.to_string().contains("ran")));
+        .any(|ev| matches!(ev.event, SessionEvent::ToolResult { ref output, .. } if output.to_string().contains("ran")));
     assert!(result_landed, "the executed tool_result lands in the log");
 }
 
@@ -373,7 +373,7 @@ async fn test_pre_tool_use_feedback() {
         .store()
         .trajectory_snapshot(session)
         .iter()
-        .any(|ev| matches!(ev.kind, TurnEventKind::ToolResult { ref output, .. } if output.to_string().contains("hook feedback")));
+        .any(|ev| matches!(ev.event, SessionEvent::ToolResult { ref output, .. } if output.to_string().contains("hook feedback")));
     assert!(
         feedback,
         "the feedback tool_result carries the self-correction signal"
@@ -415,7 +415,7 @@ async fn test_post_tool_use_fires() {
         .store()
         .trajectory_snapshot(session)
         .iter()
-        .any(|ev| matches!(ev.kind, TurnEventKind::ToolResult { ref output, .. } if output.to_string().contains("always fails")));
+        .any(|ev| matches!(ev.event, SessionEvent::ToolResult { ref output, .. } if output.to_string().contains("always fails")));
     assert!(failed, "the failing tool's error result lands losslessly");
 }
 
@@ -426,7 +426,7 @@ async fn test_post_tool_use_fires() {
 /// TurnAborted boundary marker lands before the regenerated content.
 #[tokio::test]
 async fn test_recover_turn_not_reexecute() {
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
 
     let ran = Arc::new(AtomicU8::new(0));
     let mut tools = ToolRegistry::new();
@@ -454,12 +454,12 @@ async fn test_recover_turn_not_reexecute() {
         .expect("append user input");
     runner
         .store()
-        .append(houyicoder_context::TurnEvent {
+        .append(houyicoder_context::SessionLogEntry {
             id: houyicoder_context::EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::ToolCall {
+            event: SessionEvent::ToolCall {
                 call_id: "toolu_1".into(),
                 tool: "recordable".into(),
                 input: serde_json::json!({}),
@@ -502,7 +502,7 @@ async fn test_recover_turn_not_reexecute() {
         .store()
         .trajectory_snapshot(session)
         .iter()
-        .any(|ev| matches!(ev.kind, TurnEventKind::TurnAborted { .. }));
+        .any(|ev| matches!(ev.event, SessionEvent::TurnAborted { .. }));
     assert!(
         has_aborted,
         "TurnAborted boundary marker must land before the regenerated turn"
@@ -541,12 +541,12 @@ async fn test_recover_reply_not_reexecute() {
         .expect("append user input");
     runner
         .store()
-        .append(houyicoder_context::TurnEvent {
+        .append(houyicoder_context::SessionLogEntry {
             id: houyicoder_context::EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::ToolCall {
+            event: SessionEvent::ToolCall {
                 call_id: "toolu_1".into(),
                 tool: "recordable".into(),
                 input: serde_json::json!({}),
@@ -566,12 +566,12 @@ async fn test_recover_reply_not_reexecute() {
         .expect("append tool result");
     runner
         .store()
-        .append(houyicoder_context::TurnEvent {
+        .append(houyicoder_context::SessionLogEntry {
             id: houyicoder_context::EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
-            kind: TurnEventKind::AssistantTextDelta { text: "par".into() },
+            event: SessionEvent::AssistantTextDelta { text: "par".into() },
         })
         .await
         .expect("append partial delta");

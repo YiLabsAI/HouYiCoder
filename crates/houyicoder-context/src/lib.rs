@@ -1,5 +1,5 @@
 //! The context layer: the ContextBackend storage
-//! interface, the TurnEvent wire types, and context-window assembly.
+//! interface, the SessionLogEntry wire types, and context-window assembly.
 //!
 //! The append-only event log is the source of truth; compaction is
 //! view-selection, not destruction — the raw log is never mutated. This crate
@@ -52,7 +52,7 @@ pub use plan::{CheckpointManifest, ContextSnapshot, Disposition, TurnGroup};
 mod ids;
 pub use ids::{AgentId, BlockHash, CheckpointId, EventId, PrevHash, SessionId};
 
-/// The append-only log's wire types (TurnEvent + the vocabulary of what a
+/// The append-only log's wire types (SessionLogEntry + the vocabulary of what a
 /// record can be).
 mod event;
-pub use event::{PermissionVerdict, TruncationSignal, TurnEvent, TurnEventKind};
+pub use event::{PermissionVerdict, SessionEvent, SessionLogEntry, TruncationSignal};

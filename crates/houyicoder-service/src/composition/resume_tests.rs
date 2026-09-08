@@ -5,12 +5,12 @@
 //! instead of silently starting a blank session the user thinks is their old one.
 
 use super::ResolvedProvider;
-use houyicoder_context::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 /// Serialize a minimal export slice (session_id + model + trajectory) so the
 /// resume path can deserialize it. serde ignores the derived-stats fields a
 /// full export carries, so this slice round-trips through resume.
-fn write_export(path: &std::path::Path, session_id: &str, model: &str, events: &[TurnEvent]) {
+fn write_export(path: &std::path::Path, session_id: &str, model: &str, events: &[SessionLogEntry]) {
     let doc = serde_json::json!({
         "session_id": session_id,
         "model": model,
@@ -19,19 +19,19 @@ fn write_export(path: &std::path::Path, session_id: &str, model: &str, events: &
     std::fs::write(path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
 }
 
-fn two_events(sid: SessionId) -> Vec<TurnEvent> {
-    let mk = |kind: TurnEventKind| TurnEvent {
+fn two_events(sid: SessionId) -> Vec<SessionLogEntry> {
+    let mk = |kind: SessionEvent| SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     };
     vec![
-        mk(TurnEventKind::UserInput {
+        mk(SessionEvent::UserInput {
             text: "resume-unit-prompt".into(),
         }),
-        mk(TurnEventKind::AssistantMessage {
+        mk(SessionEvent::AssistantMessage {
             text: "resume-unit-reply".into(),
             thinking: None,
         }),
@@ -171,8 +171,8 @@ fn test_fork_chain_propagates_history() {
     );
 
     // Build export B from B's durable log (what /export does at runtime):
-    // each line is a TurnEvent; repackage with B's sid.
-    let events_b: Vec<TurnEvent> = log_b
+    // each line is a SessionLogEntry; repackage with B's sid.
+    let events_b: Vec<SessionLogEntry> = log_b
         .lines()
         .filter(|l| !l.is_empty())
         .map(|l| serde_json::from_str(l).expect("log line deserializes"))

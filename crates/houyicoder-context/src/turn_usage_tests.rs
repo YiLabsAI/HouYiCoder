@@ -6,15 +6,15 @@
 
 #![cfg(test)]
 
-use crate::{EventId, SessionId, TurnEvent, TurnEventKind};
+use crate::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
-fn event(session: SessionId, id: EventId, kind: TurnEventKind) -> TurnEvent {
-    TurnEvent {
+fn event(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
         id,
         session,
         ts: 0,
         prev_hash: None,
-        kind,
+        event: kind,
     }
 }
 
@@ -27,7 +27,7 @@ fn test_effort_absent_defaults_none() {
     let e = event(
         s,
         EventId::new(),
-        TurnEventKind::TurnUsage {
+        SessionEvent::TurnUsage {
             turn: 1,
             call_in_turn: 1,
             input_tokens: 100,
@@ -44,9 +44,9 @@ fn test_effort_absent_defaults_none() {
     // Strip the effort field to mimic a log written before the field existed.
     let legacy = json.replace(r#","effort":"high""#, "");
     assert!(!legacy.contains("effort"), "effort stripped: {legacy}");
-    let back: TurnEvent = serde_json::from_str(&legacy).expect("deserialize");
-    match back.kind {
-        TurnEventKind::TurnUsage { effort, .. } => {
+    let back: SessionLogEntry = serde_json::from_str(&legacy).expect("deserialize");
+    match back.event {
+        SessionEvent::TurnUsage { effort, .. } => {
             assert!(effort.is_none(), "absent effort => None, not a default");
         }
         _ => unreachable!(),
@@ -61,7 +61,7 @@ fn test_usage_effort_round_trips() {
         let e = event(
             s,
             EventId::new(),
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 1,
                 call_in_turn: 1,
                 input_tokens: 0,
@@ -75,7 +75,7 @@ fn test_usage_effort_round_trips() {
             },
         );
         let json = serde_json::to_string(&e).expect("serialize");
-        let back: TurnEvent = serde_json::from_str(&json).expect("deserialize");
+        let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, e);
     }
 }
@@ -85,6 +85,6 @@ fn test_usage_effort_round_trips() {
 #[test]
 fn test_unknown_type_deserializes() {
     let json = serde_json::json!({"type": "Garbage", "text": "x"});
-    let kind: TurnEventKind = serde_json::from_value(json).unwrap();
-    assert!(matches!(kind, TurnEventKind::Unknown));
+    let kind: SessionEvent = serde_json::from_value(json).unwrap();
+    assert!(matches!(kind, SessionEvent::Unknown));
 }

@@ -344,8 +344,8 @@ async fn test_deny_verdict_completes_run() {
         .iter()
         .any(|ev| {
             matches!(
-                ev.kind,
-                houyicoder_context::TurnEventKind::PermissionDecision {
+                ev.event,
+                houyicoder_context::SessionEvent::PermissionDecision {
                     verdict: houyicoder_context::PermissionVerdict::Denied,
                     ..
                 }

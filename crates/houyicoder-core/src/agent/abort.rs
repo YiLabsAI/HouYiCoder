@@ -14,7 +14,7 @@
 
 use std::sync::atomic::Ordering;
 
-use houyicoder_context::{SessionId, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionId};
 
 use crate::agent::{RunError, Runner};
 
@@ -121,7 +121,7 @@ impl Runner {
         let events = self.store.replay(session).await?;
         let n = events
             .iter()
-            .filter(|e| matches!(e.kind, TurnEventKind::AssistantMessage { .. }))
+            .filter(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }))
             .count() as u32;
         Ok(n)
     }

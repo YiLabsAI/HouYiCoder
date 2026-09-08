@@ -20,7 +20,7 @@ use crate::composition::SessionHost;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::projection::parse_approval_decision;
 use crate::server::{Server, ServerIo};
-use houyicoder_context::{EventId, PermissionVerdict, TurnEvent, TurnEventKind};
+use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionLogEntry};
 
 impl Server {
     /// Build a server re-hydrated from a session host: the runner + the shared
@@ -201,12 +201,12 @@ pub(crate) async fn resume_pending(
             } else {
                 PermissionVerdict::Denied
             };
-            let audit = TurnEvent {
+            let audit = SessionLogEntry {
                 id: EventId::new(),
                 session: server.session,
                 ts: super::now_millis(),
                 prev_hash: None,
-                kind: TurnEventKind::PermissionDecision {
+                event: SessionEvent::PermissionDecision {
                     call_id: ask_perm.call_id.clone(),
                     tool: ask_perm.tool.clone(),
                     verdict,

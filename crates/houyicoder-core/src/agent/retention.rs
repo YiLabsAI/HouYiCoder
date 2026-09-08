@@ -27,7 +27,7 @@
 //! when the cache is already dead) and TTL, using the provider
 //! microcompact vocabulary (trigger/keep/clear_at_least).
 
-use houyicoder_context::{BlockHash, ContextBackend, TurnEvent, TurnEventKind};
+use houyicoder_context::{BlockHash, ContextBackend, SessionEvent, SessionLogEntry};
 
 /// A resource key for supersession: a later tool call for the same resource
 /// supersedes the earlier result. The key is the file path for file tools +
@@ -61,18 +61,18 @@ fn is_mutation(tool: &str) -> bool {
 /// or is the same tool (a re-read, a re-run — the newer result wins). The
 /// result's own ToolCall is found by scanning backward for the call_id.
 /// A superseded result is prioritized for eviction regardless of age.
-pub(super) fn superseded_by_later(events: &[TurnEvent], i: usize) -> bool {
-    let TurnEventKind::ToolResult { call_id, .. } = &events[i].kind else {
+pub(super) fn superseded_by_later(events: &[SessionLogEntry], i: usize) -> bool {
+    let SessionEvent::ToolResult { call_id, .. } = &events[i].event else {
         return false;
     };
     // Find the matching ToolCall (scan backward from the result) + its key.
     let mut own: Option<(&str, String)> = None;
     for ev in events[..i].iter().rev() {
-        if let TurnEventKind::ToolCall {
+        if let SessionEvent::ToolCall {
             call_id: cid,
             tool,
             input,
-        } = &ev.kind
+        } = &ev.event
             && cid == call_id
         {
             own = resource_key(tool, input).map(|k| (tool.as_str(), k));
@@ -82,8 +82,8 @@ pub(super) fn superseded_by_later(events: &[TurnEvent], i: usize) -> bool {
     let Some((own_tool, key)) = own else {
         return false; // not resource-keyed, never superseded by this rule
     };
-    events[i + 1..].iter().any(|ev| match &ev.kind {
-        TurnEventKind::ToolCall { tool, input, .. } => {
+    events[i + 1..].iter().any(|ev| match &ev.event {
+        SessionEvent::ToolCall { tool, input, .. } => {
             let Some(later_key) = resource_key(tool, input) else {
                 return false;
             };

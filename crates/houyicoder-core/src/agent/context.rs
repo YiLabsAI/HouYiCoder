@@ -5,7 +5,7 @@
 //! measurability; here it is one type so /context can break down what the
 //! model will see and the agent loop can size it pre-flight.
 //!
-//! Skeleton (M0 sub-tasks 1-2): defines Section / ServedView / ContextBuilder
+//! Skeleton: defines Section / ServedView / ContextBuilder
 //! plus a local tiktoken tokenizer. The Messages section reuses the flat event
 //! projection; SystemPrompt / Tools / Memory / Skills sections fill in
 //! incrementally (memory provider, AGENTS.md injection, tool schemas)
@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use houyicoder_context::{
-    CheckpointManifest, MemoryEntry, TurnEvent, TurnEventKind, memory_age_days, memory_age_label,
-    memory_freshness_text,
+    CheckpointManifest, MemoryEntry, SessionEvent, SessionLogEntry, memory_age_days,
+    memory_age_label, memory_freshness_text,
 };
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
 
@@ -314,7 +314,7 @@ impl ContextBuilder {
     /// Build the served view from a session's event log. The system prompt is
     /// assembled from sections (byte-stable across turns unless the memory file
     /// changes); the Messages section is the flat projection of the event log.
-    pub fn build(&self, events: &[TurnEvent]) -> ServedView {
+    pub fn build(&self, events: &[SessionLogEntry]) -> ServedView {
         self.build_with_manifest(events, None, None, &[], None)
     }
 
@@ -334,7 +334,7 @@ impl ContextBuilder {
     /// served view (for /context); it does not inject anything.
     pub fn build_with_manifest(
         &self,
-        events: &[TurnEvent],
+        events: &[SessionLogEntry],
         manifest: Option<&CheckpointManifest>,
         backend: Option<&dyn houyicoder_context::ContextBackend>,
         tool_defs: &[houyicoder_protocol::llm::ToolDef],
@@ -376,12 +376,12 @@ impl ContextBuilder {
         let mut mem_items = Vec::new();
         let mut skill_tokens = 0u32;
         for ev in &filtered {
-            match &ev.kind {
-                TurnEventKind::MemoryRecall { text, keys, .. } => {
+            match &ev.event {
+                SessionEvent::MemoryRecall { text, keys, .. } => {
                     mem_tokens += self.tokenizer.count(text);
                     mem_items.extend(keys.iter().cloned());
                 }
-                TurnEventKind::SkillListing { text, .. } => {
+                SessionEvent::SkillListing { text, .. } => {
                     skill_tokens += self.tokenizer.count(text);
                 }
                 _ => {}

@@ -10,7 +10,7 @@ use super::tests::length::ScriptRawProvider;
 use super::tests::{HangingProvider, runner_with};
 use super::*;
 use crate::provider::test_support::FakeProvider;
-use houyicoder_context::TurnEventKind;
+use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, LlmEvent, OutputItem, Usage};
 
 fn usage_response() -> CompletionResponse {
@@ -40,10 +40,10 @@ async fn test_turn_usage_records_cost() {
     let events = runner.store().replay(session).await.expect("replay");
     let usage_ev = events
         .iter()
-        .find(|e| matches!(e.kind, TurnEventKind::TurnUsage { .. }))
+        .find(|e| matches!(e.event, SessionEvent::TurnUsage { .. }))
         .expect("a TurnUsage event lands per turn");
-    match &usage_ev.kind {
-        TurnEventKind::TurnUsage {
+    match &usage_ev.event {
+        SessionEvent::TurnUsage {
             turn,
             call_in_turn,
             input_tokens,
@@ -121,7 +121,7 @@ async fn test_usage_one_per_turn() {
     let events = runner.store().replay(session).await.expect("replay");
     let count = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::TurnUsage { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::TurnUsage { .. }))
         .count();
     assert_eq!(count, 2, "one TurnUsage per model call, not {count}");
 }
@@ -186,9 +186,9 @@ async fn test_recovery_retry_records_usage() {
     let session = SessionId::new();
     runner.run(session, "hi".into()).await.unwrap();
     let events = runner.store().replay(session).await.expect("replay");
-    let turn_usages: Vec<&houyicoder_context::TurnEvent> = events
+    let turn_usages: Vec<&houyicoder_context::SessionLogEntry> = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::TurnUsage { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::TurnUsage { .. }))
         .collect();
     assert_eq!(
         turn_usages.len(),
@@ -198,8 +198,8 @@ async fn test_recovery_retry_records_usage() {
     // First TurnUsage is the retry (same logical turn 1, call_in_turn 1).
     // Both calls share turn=1 — the fix for the turn_count semantic: a
     // length-recovery retry is the SAME turn, not a new turn.
-    match &turn_usages[0].kind {
-        TurnEventKind::TurnUsage {
+    match &turn_usages[0].event {
+        SessionEvent::TurnUsage {
             turn,
             call_in_turn,
             input_tokens,
@@ -214,8 +214,8 @@ async fn test_recovery_retry_records_usage() {
         _ => unreachable!(),
     }
     // Second is the terminal success (turn 1, call_in_turn 2, recovery false).
-    match &turn_usages[1].kind {
-        TurnEventKind::TurnUsage {
+    match &turn_usages[1].event {
+        SessionEvent::TurnUsage {
             turn,
             call_in_turn,
             input_tokens,
@@ -262,7 +262,7 @@ async fn test_cancelled_records_no_usage() {
     let events = runner.store().replay(session).await.expect("replay");
     let turn_usages = events
         .iter()
-        .filter(|e| matches!(e.kind, TurnEventKind::TurnUsage { .. }))
+        .filter(|e| matches!(e.event, SessionEvent::TurnUsage { .. }))
         .count();
     assert_eq!(turn_usages, 0, "cancelled call must record no TurnUsage");
 }
@@ -294,10 +294,10 @@ async fn test_omitted_usage_served_fallback() {
     let events = runner.store().replay(session).await.expect("replay");
     let usage_ev = events
         .iter()
-        .find(|e| matches!(e.kind, TurnEventKind::TurnUsage { .. }))
+        .find(|e| matches!(e.event, SessionEvent::TurnUsage { .. }))
         .expect("a TurnUsage event lands per turn");
-    match &usage_ev.kind {
-        TurnEventKind::TurnUsage { input_tokens, .. } => {
+    match &usage_ev.event {
+        SessionEvent::TurnUsage { input_tokens, .. } => {
             assert!(
                 *input_tokens > 0,
                 "omitted usage must fall back to the served token count, got {input_tokens}"

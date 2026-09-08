@@ -1,6 +1,6 @@
 //! The append-only session log port: the engine-facing contract for event
 //! logging, replay, and cursor (checkpoint) support. Signatures reference
-//! context types (TurnEvent, ContextSnapshot). The concrete facade (hash
+//! context types (SessionLogEntry, ContextSnapshot). The concrete facade (hash
 //! chain, delta counter, trajectory mirror) lives in the session crate; the
 //! engine depends on this trait so it does not depend on the session crate
 //! directly.
@@ -8,7 +8,7 @@
 use houyicoder_async::PFut;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
-    SessionId, TurnEvent,
+    SessionId, SessionLogEntry,
 };
 
 /// The engine-facing session log. Object-safe (PFut) so the engine holds
@@ -19,10 +19,10 @@ use houyicoder_context::{
 pub trait SessionLog: Send + Sync {
     /// Append an event to the lossless log. The facade sets prev_hash; the
     /// backend stores it verbatim.
-    fn append(&self, event: TurnEvent) -> PFut<'_, Result<EventId, ContextError>>;
+    fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>>;
 
     /// Read the full event log for a session in append order.
-    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>>;
+    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>>;
 
     /// Assemble the served context view: the full replay plus the latest
     /// checkpoint manifest, so the caller can apply the disposition plan.
@@ -30,7 +30,7 @@ pub trait SessionLog: Send + Sync {
 
     /// The finalized events in append order (sync, in-memory mirror). Empty
     /// until events are appended this process for the session.
-    fn trajectory_snapshot(&self, session: SessionId) -> Vec<TurnEvent>;
+    fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry>;
 
     /// Drop the in-memory trajectory mirror for a session. The backend log
     /// is untouched.

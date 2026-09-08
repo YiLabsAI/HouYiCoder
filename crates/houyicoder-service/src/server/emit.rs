@@ -6,7 +6,7 @@
 use std::sync::atomic::Ordering;
 
 use crate::projection::{project_acpx_context, project_session_update};
-use houyicoder_context::TurnEvent;
+use houyicoder_context::SessionLogEntry;
 use houyicoder_protocol::envelope::{
     EventEnvelope, EventSeq, RequestId, ResponseEnvelope, ResponsePayload, ServerFrame,
 };
@@ -27,13 +27,13 @@ impl Server {
     pub(super) async fn push_turn_event(
         &mut self,
         io: &mut ServerIo,
-        ev: &TurnEvent,
+        ev: &SessionLogEntry,
     ) -> Result<(), WireError> {
-        if let Some(update) = project_session_update(&ev.kind) {
+        if let Some(update) = project_session_update(&ev.event) {
             self.send_event(io, FrontendEventKind::SessionUpdate { update })
                 .await?;
         }
-        if let Some(notification) = project_acpx_context(&ev.kind) {
+        if let Some(notification) = project_acpx_context(&ev.event) {
             self.send_event(io, FrontendEventKind::Acpx { notification })
                 .await?;
         }
@@ -56,10 +56,10 @@ impl Server {
         let events = self.runner.store().replay(sid).await.unwrap_or_default();
         let mut frames = Vec::with_capacity(events.len());
         for ev in &events {
-            if let Some(update) = project_session_update(&ev.kind) {
+            if let Some(update) = project_session_update(&ev.event) {
                 frames.push(houyicoder_protocol::envelope::ChildTranscriptFrame::Session(update));
             }
-            if let Some(notification) = project_acpx_context(&ev.kind) {
+            if let Some(notification) = project_acpx_context(&ev.event) {
                 frames.push(houyicoder_protocol::envelope::ChildTranscriptFrame::Acpx(
                     notification,
                 ));

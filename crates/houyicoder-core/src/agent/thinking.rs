@@ -24,19 +24,19 @@ pub fn thinking_brief(text: &str) -> String {
     brief
 }
 
-use houyicoder_context::{TurnEvent, TurnEventKind};
+use houyicoder_context::{SessionEvent, SessionLogEntry};
 
 /// Extract the current turn's reasoning: scan from the last UserInput event
 /// onward so a Ctrl+O expand shows only this turn's chain of thought, not a
 /// concatenation of every prior turn's reasoning.
-pub fn turn_reasoning(events: &[TurnEvent]) -> Option<String> {
+pub fn turn_reasoning(events: &[SessionLogEntry]) -> Option<String> {
     let last_user = events
         .iter()
-        .rposition(|e| matches!(e.kind, TurnEventKind::UserInput { .. }));
+        .rposition(|e| matches!(e.event, SessionEvent::UserInput { .. }));
     let start = last_user.map(|i| i + 1).unwrap_or(0);
     let mut r = String::new();
     for e in &events[start..] {
-        if let TurnEventKind::Reasoning { text } = &e.kind {
+        if let SessionEvent::Reasoning { text } = &e.event {
             r.push_str(text);
         }
     }
@@ -47,15 +47,15 @@ pub fn turn_reasoning(events: &[TurnEvent]) -> Option<String> {
 /// the folded ThoughtFor row surfaces ("ran 3 tools (2 bash, 1 grep)").
 /// Scans from the last UserInput onward so only this turn's tool calls land
 /// in the summary. Returns None when the turn ran no tools.
-pub fn turn_tool_summary(events: &[TurnEvent]) -> Option<String> {
+pub fn turn_tool_summary(events: &[SessionLogEntry]) -> Option<String> {
     let last_user = events
         .iter()
-        .rposition(|e| matches!(e.kind, TurnEventKind::UserInput { .. }));
+        .rposition(|e| matches!(e.event, SessionEvent::UserInput { .. }));
     let start = last_user.map(|i| i + 1).unwrap_or(0);
     let mut counts: Vec<(String, u32)> = Vec::new();
     let mut total = 0u32;
     for e in &events[start..] {
-        if let TurnEventKind::ToolCall { tool, .. } = &e.kind {
+        if let SessionEvent::ToolCall { tool, .. } = &e.event {
             if let Some(slot) = counts.iter_mut().find(|(t, _)| t == tool) {
                 slot.1 += 1;
             } else {
@@ -78,7 +78,7 @@ mod tests {
     use super::super::{RunOutcome, Runner, RunnerConfig, ToolRegistry};
     use super::*;
     use crate::provider::test_support::FakeProvider;
-    use houyicoder_context::{SessionId, TurnEventKind};
+    use houyicoder_context::{SessionEvent, SessionId};
     use houyicoder_memory::InMemoryBackend;
     use houyicoder_protocol::llm::Usage;
     use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
@@ -130,25 +130,25 @@ mod tests {
         // Ctrl+O expands only the current turn's reasoning, not a
         // concatenation of every prior turn's. The last UserInput marks the
         // turn boundary; reasoning before it must not leak into the expand.
-        use houyicoder_context::{EventId, SessionId, TurnEvent};
-        let ev = |kind| TurnEvent {
+        use houyicoder_context::{EventId, SessionId, SessionLogEntry};
+        let ev = |kind| SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         };
         let events = vec![
-            ev(TurnEventKind::UserInput {
+            ev(SessionEvent::UserInput {
                 text: "first".into(),
             }),
-            ev(TurnEventKind::Reasoning {
+            ev(SessionEvent::Reasoning {
                 text: "first-thoughts".into(),
             }),
-            ev(TurnEventKind::UserInput {
+            ev(SessionEvent::UserInput {
                 text: "second".into(),
             }),
-            ev(TurnEventKind::Reasoning {
+            ev(SessionEvent::Reasoning {
                 text: "second-thoughts".into(),
             }),
         ];
@@ -165,32 +165,32 @@ mod tests {
         // The folded ThoughtFor row surfaces "ran N tools (...)" for the
         // current turn only (last UserInput onward), grouped + sorted by
         // count, so prior turns' tool calls do not leak.
-        use houyicoder_context::{EventId, SessionId, TurnEvent};
-        let ev = |kind| TurnEvent {
+        use houyicoder_context::{EventId, SessionId, SessionLogEntry};
+        let ev = |kind| SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         };
         let events = vec![
-            ev(TurnEventKind::UserInput {
+            ev(SessionEvent::UserInput {
                 text: "first".into(),
             }),
-            ev(TurnEventKind::ToolCall {
+            ev(SessionEvent::ToolCall {
                 call_id: "c0".into(),
                 tool: "bash".into(),
                 input: serde_json::json!({}),
             }),
-            ev(TurnEventKind::UserInput {
+            ev(SessionEvent::UserInput {
                 text: "second".into(),
             }),
-            ev(TurnEventKind::ToolCall {
+            ev(SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "grep".into(),
                 input: serde_json::json!({}),
             }),
-            ev(TurnEventKind::ToolCall {
+            ev(SessionEvent::ToolCall {
                 call_id: "c2".into(),
                 tool: "bash".into(),
                 input: serde_json::json!({}),
@@ -205,15 +205,15 @@ mod tests {
 
     #[test]
     fn test_turn_tool_summary_none() {
-        use houyicoder_context::{EventId, SessionId, TurnEvent};
-        let ev = |kind| TurnEvent {
+        use houyicoder_context::{EventId, SessionId, SessionLogEntry};
+        let ev = |kind| SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         };
-        let events = vec![ev(TurnEventKind::UserInput { text: "x".into() })];
+        let events = vec![ev(SessionEvent::UserInput { text: "x".into() })];
         assert!(
             turn_tool_summary(&events).is_none(),
             "no tools → no summary"
@@ -253,8 +253,8 @@ mod tests {
         let result = runner.run(session, "hi".into()).await.unwrap();
         assert!(matches!(result.outcome, RunOutcome::FinalOutput(t) if t == "answer"));
         let events = runner.store().replay(session).await.expect("replay");
-        let msg = events.iter().find_map(|e| match &e.kind {
-            TurnEventKind::AssistantMessage { text, thinking } => Some((text, thinking)),
+        let msg = events.iter().find_map(|e| match &e.event {
+            SessionEvent::AssistantMessage { text, thinking } => Some((text, thinking)),
             _ => None,
         });
         let (text, thinking) = msg.expect("AssistantMessage exists");
@@ -265,7 +265,7 @@ mod tests {
         );
         let reasoning_n = events
             .iter()
-            .filter(|e| matches!(e.kind, TurnEventKind::Reasoning { .. }))
+            .filter(|e| matches!(e.event, SessionEvent::Reasoning { .. }))
             .count();
         // The per-delta reasoning chunks join into ONE Reasoning event (one
         // thinking row in the transcript), not one per delta — a per-delta
@@ -280,8 +280,8 @@ mod tests {
         let session = SessionId::new();
         runner.run(session, "hi".into()).await.unwrap();
         let events = runner.store().replay(session).await.expect("replay");
-        let msg = events.iter().find_map(|e| match &e.kind {
-            TurnEventKind::AssistantMessage { thinking, .. } => thinking.clone(),
+        let msg = events.iter().find_map(|e| match &e.event {
+            SessionEvent::AssistantMessage { thinking, .. } => thinking.clone(),
             _ => None,
         });
         assert!(msg.is_none(), "thinking must be None without reasoning");

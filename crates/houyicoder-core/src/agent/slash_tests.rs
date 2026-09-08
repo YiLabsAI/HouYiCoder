@@ -282,7 +282,7 @@ async fn test_resolve_noop_without_registry() {
 /// run() entry integration (resolve + append SkillBody).
 #[tokio::test]
 async fn test_run_lands_skill_body() {
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     let runner = runner_with_slash();
     let session = SessionId::new();
     runner
@@ -291,8 +291,8 @@ async fn test_run_lands_skill_body() {
         .expect("run completes");
     let view = runner.store().current_view(session).await.unwrap();
     // The raw @skill: text is the UserInput (what the user typed).
-    let user_text = view.events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::UserInput { text } => Some(text.clone()),
+    let user_text = view.events.iter().find_map(|e| match &e.event {
+        SessionEvent::UserInput { text } => Some(text.clone()),
         _ => None,
     });
     assert_eq!(
@@ -302,8 +302,8 @@ async fn test_run_lands_skill_body() {
     );
     // The prepared body lands as a durable SkillBody (not a MetaUser, so
     // it survives a compaction boundary).
-    let body = view.events.iter().find_map(|e| match &e.kind {
-        TurnEventKind::SkillBody {
+    let body = view.events.iter().find_map(|e| match &e.event {
+        SessionEvent::SkillBody {
             skill_name,
             content,
             ..
@@ -324,7 +324,7 @@ async fn test_run_lands_skill_body() {
 /// tests with no live sink).
 #[tokio::test]
 async fn test_run_refused_skips_model() {
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     let runner = runner_with_slash();
     let session = SessionId::new();
     let result = runner
@@ -339,14 +339,14 @@ async fn test_run_refused_skips_model() {
     let view = runner.store().current_view(session).await.unwrap();
     // The raw @skill: text is kept (the user sees what they typed).
     assert!(view.events.iter().any(|e| matches!(
-        e.kind,
-        TurnEventKind::UserInput { ref text } if text == "@skill:secret"
+        e.event,
+        SessionEvent::UserInput { ref text } if text == "@skill:secret"
     )));
     // No SkillBody + no assistant message: the model never ran.
     assert!(
         !view.events.iter().any(|e| matches!(
-            e.kind,
-            TurnEventKind::SkillBody { .. } | TurnEventKind::AssistantMessage { .. }
+            e.event,
+            SessionEvent::SkillBody { .. } | SessionEvent::AssistantMessage { .. }
         )),
         "refusal skips the model (no SkillBody, no assistant message)"
     );

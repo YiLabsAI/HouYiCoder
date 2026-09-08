@@ -1,10 +1,10 @@
 //! The storage interface: ContextBackend trait + ContextError. Split from
-//! lib.rs so the wire types (TurnEvent / SessionId / ...) and the storage
+//! lib.rs so the wire types (SessionLogEntry / SessionId / ...) and the storage
 //! interface live in separate modules, each under the size gate.
 
 use houyicoder_async::PFut;
 
-use crate::{BlockHash, CheckpointId, CheckpointManifest, EventId, SessionId, TurnEvent};
+use crate::{BlockHash, CheckpointId, CheckpointManifest, EventId, SessionId, SessionLogEntry};
 
 /// A lenient whole-log read: the parsed events plus a count of lines
 /// skipped (corrupt JSON). The search snapshot uses this so a single bad
@@ -12,7 +12,7 @@ use crate::{BlockHash, CheckpointId, CheckpointManifest, EventId, SessionId, Tur
 /// stays separate (replay errors on a bad line).
 #[derive(Debug, Default, Clone)]
 pub struct LenientRead {
-    pub events: Vec<TurnEvent>,
+    pub events: Vec<SessionLogEntry>,
     pub skipped: usize,
 }
 
@@ -80,7 +80,7 @@ impl std::error::Error for ContextError {}
 pub trait ContextBackend: Send + Sync {
     /// Append one event. The id is the caller's; dedup is the backend's
     /// (a duplicate id is a no-op, not an error — main-chain invariant).
-    fn append(&self, event: TurnEvent) -> PFut<'_, Result<EventId, ContextError>>;
+    fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>>;
 
     /// Read events whose id falls in [from, to), in append order. None bounds
     /// mean open-ended. The log is append-ordered; ids are monotonic in
@@ -91,10 +91,10 @@ pub trait ContextBackend: Send + Sync {
         session: SessionId,
         from: Option<EventId>,
         to: Option<EventId>,
-    ) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>>;
+    ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>>;
 
     /// Read the full event log for a session in append (replay) order.
-    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<TurnEvent>, ContextError>>;
+    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>>;
 
     /// Persist a compaction plan + summary. Append-only: a new checkpoint does
     /// not delete earlier ones (rewind points).
@@ -140,7 +140,7 @@ pub trait ContextBackend: Send + Sync {
     /// so it cannot drive the async replay future. Strict: a corrupt line
     /// errors (the lenient read is the default below, not this).
     /// Default Unsupported (backends with no on-disk log).
-    fn read_log(&self, _session: SessionId) -> Result<Vec<TurnEvent>, ContextError> {
+    fn read_log(&self, _session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
         Err(ContextError::Unsupported)
     }
 

@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
-use houyicoder_core::{EventId, SessionId, TurnEvent, TurnEventKind};
+use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 /// --resume <sid> re-opens an existing session: the sid is REUSED (not a
 /// fork), the model is restored from the sidecar, the seeded history stays,
@@ -240,12 +240,12 @@ fn test_continue_rejects_cwd_session() {
 fn test_sid_deleted_cwd_degrades() {
     let sessions_dir = fresh_temp_dir("sessions-cwd-deleted");
     let sid = "66666666-6666-6666-6666-666666666666";
-    let event = TurnEvent {
+    let event = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::from_display_string(sid).unwrap(),
         ts: 0,
         prev_hash: None,
-        kind: TurnEventKind::UserInput {
+        event: SessionEvent::UserInput {
             text: "cwd-deleted session".into(),
         },
     };

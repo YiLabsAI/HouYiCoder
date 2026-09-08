@@ -11,7 +11,7 @@ async fn test_externalizes_large_tool_result() {
     // raw is in the CAS; the turn-group projection materializes it on
     // demand. This is the wiring that makes the 3-tier retention policy
     // fire on real tool outputs, not just simulated markers in tests.
-    use houyicoder_context::{BlockHash, TurnEventKind};
+    use houyicoder_context::{BlockHash, SessionEvent};
     use houyicoder_protocol::llm::InputItem;
     let p = Arc::new(FakeProvider::text("done"));
     let runner = runner_with(p, ToolRegistry::new());
@@ -23,7 +23,7 @@ async fn test_externalizes_large_tool_result() {
             .store()
             .append(super::append::new_event(
                 session,
-                TurnEventKind::ToolCall {
+                SessionEvent::ToolCall {
                     call_id: cid.into(),
                     tool: "bash".into(),
                     input: serde_json::json!({}),
@@ -44,10 +44,10 @@ async fn test_externalizes_large_tool_result() {
     let events = runner.store().replay(session).await.unwrap();
     let tr = events
         .iter()
-        .find(|e| matches!(&e.kind, TurnEventKind::ToolResult { call_id, .. } if call_id == "c1"))
+        .find(|e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == "c1"))
         .expect("tool result appended");
-    let output = match &tr.kind {
-        TurnEventKind::ToolResult { output, .. } => output,
+    let output = match &tr.event {
+        SessionEvent::ToolResult { output, .. } => output,
         _ => unreachable!(),
     };
     let hash = output["data"]
@@ -83,9 +83,9 @@ async fn test_externalizes_large_tool_result() {
     let events = runner.store().replay(session).await.unwrap();
     let small = events
         .iter()
-        .find(|e| matches!(&e.kind, TurnEventKind::ToolResult { call_id, .. } if call_id == "c2"))
+        .find(|e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == "c2"))
         .expect("small tool result appended");
-    if let TurnEventKind::ToolResult { output, .. } = &small.kind {
+    if let SessionEvent::ToolResult { output, .. } = &small.event {
         assert!(
             output.get("block_ref").is_none(),
             "small output stays raw, not externalized"
@@ -108,7 +108,7 @@ async fn test_externalizes_large_tool_result() {
 async fn test_isolate_reduces_large_output() {
     // With a tool-output reducer wired, the isolate stage reduces the preview
     // (strips ANSI for bash) + tags it as data. The raw stays in the CAS.
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     let p = Arc::new(FakeProvider::text("done"));
     let runner = runner_with(p, ToolRegistry::new())
         .with_reducer(Arc::new(crate::agent::reducer::HotPathReducer));
@@ -117,7 +117,7 @@ async fn test_isolate_reduces_large_output() {
         .store()
         .append(super::append::new_event(
             session,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "cr".into(),
                 tool: "bash".into(),
                 input: serde_json::json!({}),
@@ -134,9 +134,9 @@ async fn test_isolate_reduces_large_output() {
     let events = runner.store().replay(session).await.unwrap();
     let tr = events
         .iter()
-        .find(|e| matches!(&e.kind, TurnEventKind::ToolResult { call_id, .. } if call_id == "cr"))
+        .find(|e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == "cr"))
         .expect("tool result appended");
-    let TurnEventKind::ToolResult { output, .. } = &tr.kind else {
+    let SessionEvent::ToolResult { output, .. } = &tr.event else {
         unreachable!()
     };
     // The field marker carries a reduced (ansi-stripped) preview + a
@@ -168,7 +168,7 @@ async fn test_isolate_reduces_large_output() {
 /// (whole-marker in the event, full restore on materialize) must not drift.
 #[tokio::test]
 async fn test_blob_result_whole_externalize() {
-    use houyicoder_context::TurnEventKind;
+    use houyicoder_context::SessionEvent;
     let p = Arc::new(FakeProvider::text("done"));
     let runner = runner_with(p, ToolRegistry::new());
     let session = SessionId::new();
@@ -176,7 +176,7 @@ async fn test_blob_result_whole_externalize() {
         .store()
         .append(super::append::new_event(
             session,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "cg".into(),
                 tool: "grep".into(),
                 input: serde_json::json!({}),
@@ -195,9 +195,9 @@ async fn test_blob_result_whole_externalize() {
     let events = runner.store().replay(session).await.unwrap();
     let tr = events
         .iter()
-        .find(|e| matches!(&e.kind, TurnEventKind::ToolResult { call_id, .. } if call_id == "cg"))
+        .find(|e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == "cg"))
         .expect("tool result appended");
-    let TurnEventKind::ToolResult { output, .. } = &tr.kind else {
+    let SessionEvent::ToolResult { output, .. } = &tr.event else {
         unreachable!()
     };
     assert!(

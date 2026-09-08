@@ -7,7 +7,7 @@
 //! (materialize/externalize) lives in retention. This module owns only the
 //! manifest-application seam.
 
-use houyicoder_context::{ContextBackend, Disposition, EventId, TurnEvent, TurnEventKind};
+use houyicoder_context::{ContextBackend, Disposition, EventId, SessionEvent, SessionLogEntry};
 
 /// Apply a CheckpointManifest to an event log, producing the filtered event
 /// sequence for projection. This is the Select stage's plan-application step
@@ -35,10 +35,10 @@ use houyicoder_context::{ContextBackend, Disposition, EventId, TurnEvent, TurnEv
 /// share a fate) is structural: the manifest builder groups one API round
 /// per TurnGroup, so the pair can never split across dispositions.
 pub fn apply_manifest(
-    events: &[TurnEvent],
+    events: &[SessionLogEntry],
     manifest: &houyicoder_context::CheckpointManifest,
     _backend: Option<&dyn ContextBackend>,
-) -> Vec<TurnEvent> {
+) -> Vec<SessionLogEntry> {
     use std::collections::HashMap;
 
     // Flatten the per-turn-group plan into an event id to disposition lookup.
@@ -49,12 +49,12 @@ pub fn apply_manifest(
         .iter()
         .flat_map(|g| g.event_ids.iter().map(|id| (*id, g.disposition)))
         .collect();
-    let mut result: Vec<TurnEvent> = Vec::with_capacity(events.len());
+    let mut result: Vec<SessionLogEntry> = Vec::with_capacity(events.len());
     let mut summary_injected = false;
     let mut summary_text = manifest.summary.clone();
 
     for event in events {
-        if matches!(event.kind, TurnEventKind::AssistantTextDelta { .. }) {
+        if matches!(event.event, SessionEvent::AssistantTextDelta { .. }) {
             continue;
         }
         let disposition = plan
@@ -69,12 +69,12 @@ pub fn apply_manifest(
                 if !summary_injected {
                     summary_injected = true;
                     if let Some(text) = summary_text.take() {
-                        result.push(TurnEvent {
+                        result.push(SessionLogEntry {
                             id: EventId::new(),
                             session: event.session,
                             ts: event.ts,
                             prev_hash: None,
-                            kind: TurnEventKind::UserInput { text },
+                            event: SessionEvent::UserInput { text },
                         });
                     }
                 }
@@ -98,41 +98,41 @@ mod tests {
     use super::super::turn_group::project_input_items;
     use super::*;
     use houyicoder_context::{
-        BlockHash, CheckpointId, ContextError, EventId, SessionId, TurnEvent, TurnEventKind,
+        BlockHash, CheckpointId, ContextError, EventId, SessionEvent, SessionId, SessionLogEntry,
     };
     use houyicoder_protocol::llm::InputItem;
 
-    fn ev(id: EventId, session: SessionId, kind: TurnEventKind) -> TurnEvent {
-        TurnEvent {
+    fn ev(id: EventId, session: SessionId, kind: SessionEvent) -> SessionLogEntry {
+        SessionLogEntry {
             id,
             session,
             ts: 0,
             prev_hash: None,
-            kind,
+            event: kind,
         }
     }
 
-    fn user(text: &str) -> TurnEventKind {
-        TurnEventKind::UserInput { text: text.into() }
+    fn user(text: &str) -> SessionEvent {
+        SessionEvent::UserInput { text: text.into() }
     }
 
-    fn assistant(text: &str) -> TurnEventKind {
-        TurnEventKind::AssistantMessage {
+    fn assistant(text: &str) -> SessionEvent {
+        SessionEvent::AssistantMessage {
             text: text.into(),
             thinking: None,
         }
     }
 
-    fn call(cid: &str, tool: &str) -> TurnEventKind {
-        TurnEventKind::ToolCall {
+    fn call(cid: &str, tool: &str) -> SessionEvent {
+        SessionEvent::ToolCall {
             call_id: cid.into(),
             tool: tool.into(),
             input: serde_json::json!({}),
         }
     }
 
-    fn result(cid: &str, output: serde_json::Value) -> TurnEventKind {
-        TurnEventKind::tool_result(cid, output)
+    fn result(cid: &str, output: serde_json::Value) -> SessionEvent {
+        SessionEvent::tool_result(cid, output)
     }
     fn ids(n: usize) -> Vec<EventId> {
         (0..n).map(|_| EventId::new()).collect()
@@ -140,16 +140,16 @@ mod tests {
 
     /// Verify every ToolResult in the slice has a matching ToolCall in the
     /// same slice (the pair invariant the projection debug_assert guards).
-    fn pairs_intact(events: &[TurnEvent]) -> bool {
+    fn pairs_intact(events: &[SessionLogEntry]) -> bool {
         let calls: std::collections::HashSet<&str> = events
             .iter()
-            .filter_map(|e| match &e.kind {
-                TurnEventKind::ToolCall { call_id, .. } => Some(call_id.as_str()),
+            .filter_map(|e| match &e.event {
+                SessionEvent::ToolCall { call_id, .. } => Some(call_id.as_str()),
                 _ => None,
             })
             .collect();
-        events.iter().all(|e| match &e.kind {
-            TurnEventKind::ToolResult { call_id, .. } => calls.contains(call_id.as_str()),
+        events.iter().all(|e| match &e.event {
+            SessionEvent::ToolResult { call_id, .. } => calls.contains(call_id.as_str()),
             _ => true,
         })
     }
@@ -202,9 +202,9 @@ mod tests {
         // Summary UserInput + the one verbatim assistant turn = 2 items.
         assert_eq!(result.len(), 2);
         // First item is the injected summary (a UserInput).
-        assert!(matches!(result[0].kind, TurnEventKind::UserInput { .. }));
+        assert!(matches!(result[0].event, SessionEvent::UserInput { .. }));
         // The summary text comes from the manifest.
-        if let TurnEventKind::UserInput { text } = &result[0].kind {
+        if let SessionEvent::UserInput { text } = &result[0].event {
             assert_eq!(
                 text,
                 manifest.summary.as_ref().unwrap(),
@@ -252,9 +252,9 @@ mod tests {
         let filtered = apply_manifest(&events, &manifest, Some(&backend as &dyn ContextBackend));
         // The marker-bearing result stays in the verbatim tail, unchanged.
         let tr = filtered.iter().find(
-            |e| matches!(&e.kind, TurnEventKind::ToolResult { call_id, .. } if call_id == "c1"),
+            |e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == "c1"),
         );
-        if let TurnEventKind::ToolResult { output, .. } = &tr.expect("tr in view").kind {
+        if let SessionEvent::ToolResult { output, .. } = &tr.expect("tr in view").event {
             assert_eq!(
                 output, &marker,
                 "apply_manifest keeps the block_ref marker verbatim"
@@ -281,7 +281,7 @@ mod tests {
         impl houyicoder_context::ContextBackend for StubBackend {
             fn append(
                 &self,
-                _: TurnEvent,
+                _: SessionLogEntry,
             ) -> houyicoder_async::PFut<'_, Result<EventId, ContextError>> {
                 Box::pin(async move { Err(ContextError::Unsupported) })
             }
@@ -290,13 +290,15 @@ mod tests {
                 _: SessionId,
                 _: Option<EventId>,
                 _: Option<EventId>,
-            ) -> houyicoder_async::PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+            ) -> houyicoder_async::PFut<'_, Result<Vec<SessionLogEntry>, ContextError>>
+            {
                 Box::pin(async move { Ok(Vec::new()) })
             }
             fn replay(
                 &self,
                 _: SessionId,
-            ) -> houyicoder_async::PFut<'_, Result<Vec<TurnEvent>, ContextError>> {
+            ) -> houyicoder_async::PFut<'_, Result<Vec<SessionLogEntry>, ContextError>>
+            {
                 Box::pin(async move { Ok(Vec::new()) })
             }
             fn write_checkpoint(
@@ -447,18 +449,18 @@ mod tests {
         // The big pair is Summarized (both dropped); the small pair is
         // Verbatim (both kept) — integral fate, no orphan.
         assert!(
-            result.iter().any(|e| matches!(&e.kind,
-                TurnEventKind::ToolCall { call_id, .. } if call_id == "sm")),
+            result.iter().any(|e| matches!(&e.event,
+                SessionEvent::ToolCall { call_id, .. } if call_id == "sm")),
             "small pair tool_call kept in verbatim tail"
         );
         assert!(
-            result.iter().any(|e| matches!(&e.kind,
-                TurnEventKind::ToolResult { call_id, .. } if call_id == "sm")),
+            result.iter().any(|e| matches!(&e.event,
+                SessionEvent::ToolResult { call_id, .. } if call_id == "sm")),
             "small pair tool_result kept in verbatim tail"
         );
         assert!(
-            !result.iter().any(|e| matches!(&e.kind,
-                TurnEventKind::ToolCall { call_id, .. } if call_id == "big")),
+            !result.iter().any(|e| matches!(&e.event,
+                SessionEvent::ToolCall { call_id, .. } if call_id == "big")),
             "big pair tool_call dropped with its group"
         );
         // Also verify project_input_items does not trip its debug_assert.
@@ -517,21 +519,21 @@ mod tests {
         assert!(pairs_intact(&result));
         // Exactly one summary UserInput injected.
         let summary_count = result.iter().filter(|e| {
-            matches!(&e.kind, TurnEventKind::UserInput { text } if text == manifest.summary.as_ref().unwrap())
+            matches!(&e.event, SessionEvent::UserInput { text } if text == manifest.summary.as_ref().unwrap())
         }).count();
         assert_eq!(summary_count, 1, "exactly one summary injected");
         // The big tool pair (c0) is Summarized — dropped with its group.
         assert!(
-            !result.iter().any(|e| matches!(&e.kind,
-                TurnEventKind::ToolResult { call_id, .. } if call_id == "c0")),
+            !result.iter().any(|e| matches!(&e.event,
+                SessionEvent::ToolResult { call_id, .. } if call_id == "c0")),
             "summarized big result dropped with its group"
         );
         // The small tool pair (c1) in the verbatim tail keeps its raw output.
         let small_tr = result.iter().find(
-            |e| matches!(&e.kind, TurnEventKind::ToolResult { call_id, .. } if call_id == "c1"),
+            |e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == "c1"),
         );
-        if let Some(TurnEvent {
-            kind: TurnEventKind::ToolResult { output, .. },
+        if let Some(SessionLogEntry {
+            event: SessionEvent::ToolResult { output, .. },
             ..
         }) = small_tr
         {

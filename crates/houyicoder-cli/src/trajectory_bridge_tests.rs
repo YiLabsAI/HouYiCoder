@@ -6,15 +6,15 @@
 //! these tests).
 
 use super::*;
-use houyicoder_context::{EventId, TurnEvent};
+use houyicoder_context::{EventId, SessionLogEntry};
 
-fn ev(ts: u64, kind: TurnEventKind) -> TurnEvent {
-    TurnEvent {
+fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts,
         prev_hash: None,
-        kind,
+        event: kind,
     }
 }
 
@@ -26,20 +26,20 @@ fn test_project_groups_turn_started() {
     let events = vec![
         ev(
             100,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "hello".into(),
             },
         ),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "echo".into(),
                 input: serde_json::json!({"x": 1}),
@@ -47,7 +47,7 @@ fn test_project_groups_turn_started() {
         ),
         ev(
             120,
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: "c1".into(),
                 output: serde_json::json!({"echo": 1}),
                 duration_ms: 50,
@@ -55,7 +55,7 @@ fn test_project_groups_turn_started() {
         ),
         ev(
             130,
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 1,
                 call_in_turn: 1,
                 input_tokens: 1000,
@@ -70,21 +70,21 @@ fn test_project_groups_turn_started() {
         ),
         ev(
             200,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "hi".into(),
                 thinking: None,
             },
         ),
         ev(
             210,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 2,
                 call_in_turn: 0,
             },
         ),
         ev(
             220,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "c2".into(),
                 tool: "echo".into(),
                 input: serde_json::json!({}),
@@ -92,7 +92,7 @@ fn test_project_groups_turn_started() {
         ),
         ev(
             230,
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: "c2".into(),
                 output: serde_json::json!({"error": "boom"}),
                 duration_ms: 10,
@@ -100,7 +100,7 @@ fn test_project_groups_turn_started() {
         ),
         ev(
             240,
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 2,
                 call_in_turn: 1,
                 input_tokens: 2000,
@@ -153,20 +153,20 @@ fn test_multi_iteration_produces_turns() {
     let events = vec![
         ev(
             100,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "fix the bug".into(),
             },
         ),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             120,
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 1,
                 call_in_turn: 1,
                 input_tokens: 3200,
@@ -181,14 +181,14 @@ fn test_multi_iteration_produces_turns() {
         ),
         ev(
             300,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 2,
                 call_in_turn: 0,
             },
         ),
         ev(
             320,
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 2,
                 call_in_turn: 1,
                 input_tokens: 5000,
@@ -203,14 +203,14 @@ fn test_multi_iteration_produces_turns() {
         ),
         ev(
             500,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 3,
                 call_in_turn: 0,
             },
         ),
         ev(
             520,
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 3,
                 call_in_turn: 1,
                 input_tokens: 8000,
@@ -256,27 +256,27 @@ fn test_recovery_retry_same_turn() {
     let events = vec![
         ev(
             100,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "long reply".into(),
             },
         ),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "partial".into(),
                 thinking: None,
             },
         ),
         ev(
             120,
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 1,
                 call_in_turn: 1,
                 input_tokens: 1000,
@@ -291,14 +291,14 @@ fn test_recovery_retry_same_turn() {
         ),
         ev(
             130,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: " done".into(),
                 thinking: None,
             },
         ),
         ev(
             140,
-            TurnEventKind::TurnUsage {
+            SessionEvent::TurnUsage {
                 turn: 1,
                 call_in_turn: 2,
                 input_tokens: 4000,
@@ -334,20 +334,20 @@ fn test_tokens_none_no_usage() {
     let events = vec![
         ev(
             100,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "hello".into(),
             },
         ),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "partial".into(),
                 thinking: None,
             },
@@ -386,26 +386,26 @@ fn test_project_reasoning_carries_thinking() {
     let events = vec![
         ev(
             100,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "explain".into(),
             },
         ),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::Reasoning {
+            SessionEvent::Reasoning {
                 text: "let me think...".into(),
             },
         ),
         ev(
             120,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "answer".into(),
                 thinking: Some("let me think...".into()),
             },
@@ -437,17 +437,17 @@ fn test_project_reasoning_carries_thinking() {
 #[test]
 fn test_cancelled_turn_omits_tokens() {
     let events = vec![
-        ev(0, TurnEventKind::UserInput { text: "hi".into() }),
+        ev(0, SessionEvent::UserInput { text: "hi".into() }),
         ev(
             1,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             2,
-            TurnEventKind::AssistantMessage {
+            SessionEvent::AssistantMessage {
                 text: "partial...".into(),
                 thinking: None,
             },
@@ -480,17 +480,17 @@ fn test_cancelled_turn_omits_tokens() {
 #[test]
 fn test_tool_result_extracts_body() {
     let events = vec![
-        ev(100, TurnEventKind::UserInput { text: "go".into() }),
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "bash".into(),
                 input: serde_json::json!({"command": "false"}),
@@ -498,7 +498,7 @@ fn test_tool_result_extracts_body() {
         ),
         ev(
             120,
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: "c1".into(),
                 output: serde_json::json!({
                     "stdout": "",
@@ -546,17 +546,17 @@ fn test_tool_result_extracts_body() {
 #[test]
 fn test_failed_bash_counted() {
     let events = vec![
-        ev(100, TurnEventKind::UserInput { text: "go".into() }),
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "bash".into(),
                 input: serde_json::json!({"command": "false"}),
@@ -565,7 +565,7 @@ fn test_failed_bash_counted() {
         // The exact shape the bash tool emits on a failure: no error key.
         ev(
             120,
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: "c1".into(),
                 output: serde_json::json!({
                     "stdout": "", "stderr": "", "exit_code": 1, "success": false,
@@ -596,17 +596,17 @@ fn test_failed_bash_counted() {
 #[test]
 fn test_grep_nomatch_ok() {
     let events = vec![
-        ev(100, TurnEventKind::UserInput { text: "go".into() }),
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "bash".into(),
                 input: serde_json::json!({"command": "grep needle haystack.txt"}),
@@ -614,7 +614,7 @@ fn test_grep_nomatch_ok() {
         ),
         ev(
             120,
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: "c1".into(),
                 output: serde_json::json!({
                     "stdout": "", "stderr": "", "exit_code": 1, "success": false,
@@ -643,17 +643,17 @@ fn test_grep_nomatch_ok() {
 #[test]
 fn test_error_key_counted() {
     let events = vec![
-        ev(100, TurnEventKind::UserInput { text: "go".into() }),
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::ToolCall {
+            SessionEvent::ToolCall {
                 call_id: "c1".into(),
                 tool: "read".into(),
                 input: serde_json::json!({"path": "/nope"}),
@@ -661,7 +661,7 @@ fn test_error_key_counted() {
         ),
         ev(
             120,
-            TurnEventKind::ToolResult {
+            SessionEvent::ToolResult {
                 call_id: "c1".into(),
                 output: serde_json::json!({"error": "permission denied"}),
                 duration_ms: 1,
@@ -682,26 +682,26 @@ fn test_meta_user_excluded() {
     let events = vec![
         ev(
             100,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "hello".into(),
             },
         ),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::MetaUser {
+            SessionEvent::MetaUser {
                 text: "Note: you just called bash with the same input earlier".into(),
             },
         ),
         ev(
             120,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 2,
                 call_in_turn: 0,
             },
@@ -749,20 +749,20 @@ fn test_memory_recall_excluded() {
     let events = vec![
         ev(
             100,
-            TurnEventKind::UserInput {
+            SessionEvent::UserInput {
                 text: "fix the bug".into(),
             },
         ),
         ev(
             105,
-            TurnEventKind::TurnStarted {
+            SessionEvent::TurnStarted {
                 turn: 1,
                 call_in_turn: 0,
             },
         ),
         ev(
             110,
-            TurnEventKind::MemoryRecall {
+            SessionEvent::MemoryRecall {
                 text: "remembered: always run tests".into(),
                 keys: vec![],
                 bytes: 42,
