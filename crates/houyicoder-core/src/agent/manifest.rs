@@ -408,22 +408,11 @@ fn apply_token_ceiling(
     boundary
 }
 
-/// Best-effort token estimate for an arbitrary event span, constructing the
-/// shared tokenizer once. Used by the compaction path to capture pre/post
-/// compact token counts for the PreCompact/PostCompact payloads + the wire
-/// reply. AssistantTextDelta is skipped (same double-count rationale as
-/// estimate_tokens).
-pub(crate) fn estimate_span_tokens(events: &[SessionLogEntry]) -> usize {
-    let tokenizer = super::context::Tokenizer::new();
-    estimate_tokens(events, &tokenizer)
+/// Estimate model-visible payload tokens without materializing external blocks.
+pub(crate) fn estimate_transcript_tokens(events: &[SessionLogEntry]) -> u64 {
+    estimate_tokens(events, &super::context::Tokenizer::new()) as u64
 }
 
-/// Token estimate for a span, using the same tiktoken BPE the served view
-/// uses (Tokenizer::new picks the real BPE in production, the char/4 fast
-/// path under the test flag — so the estimate and the served-view count
-/// share one tokenizer, never two). AssistantTextDelta is skipped — it is
-/// not in the served view (projection subsumes it into the
-/// AssistantMessage), so counting it would double-count the assistant text.
 fn estimate_tokens(events: &[SessionLogEntry], tokenizer: &super::context::Tokenizer) -> usize {
     events
         .iter()
@@ -431,15 +420,14 @@ fn estimate_tokens(events: &[SessionLogEntry], tokenizer: &super::context::Token
         .sum()
 }
 
-/// Token estimate for one event. Each text-bearing field is counted with
-/// the shared tokenizer; JSON tool inputs/outputs are counted as their
-/// serialized form (the form the served view carries). Reasoning is
-/// counted here even though projection skips it — the estimate gauges the
-/// raw span the model would see if not compressed, and reasoning is part
-/// of that. The three counts (served, estimate, cache key) stay separate
-/// by design: served excludes reasoning, estimate includes it, cache key
-/// excludes it (the system prompt is byte-stable, reasoning is in the
-/// message stream).
+/// Estimate one event's model-visible payload without assembly side effects.
+///
+/// Counts what the model sees after projection: user/assistant text, tool
+/// names and inputs, tool results, skill bodies, injected notifications.
+/// Reasoning, summaries, and lifecycle markers are excluded because
+/// projection skips them. Shared by the compaction pre/post measurement
+/// and by apply_token_ceiling, so the verbatim-tail boundary is placed
+/// against the same model-visible token budget the estimator reports.
 fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &super::context::Tokenizer) -> usize {
     let count = |s: &str| tokenizer.count(s) as usize;
     match &event.event {
@@ -448,29 +436,30 @@ fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &super::context::To
         | SessionEvent::MidTurnInput { text }
         | SessionEvent::MemoryRecall { text, .. }
         | SessionEvent::SkillListing { text, .. } => count(text),
-        SessionEvent::SkillBody { content, .. } => count(content),
-        SessionEvent::RewardObservation { .. } => 0,
-        SessionEvent::Unknown => 0,
-        SessionEvent::AssistantMessage { text, thinking } => {
-            count(text) + thinking.as_ref().map(|t| count(t)).unwrap_or(0)
-        }
+        SessionEvent::SkillBody {
+            skill_name,
+            content,
+            ..
+        } => count(skill_name) + count(content),
+        SessionEvent::RewardObservation { .. } | SessionEvent::Unknown => 0,
+        SessionEvent::AssistantMessage { text, .. } => count(text),
         SessionEvent::AssistantTextDelta { .. } => 0,
-        SessionEvent::ToolCall { input, .. } => count(&input.to_string()),
+        SessionEvent::ToolCall { tool, input, .. } => count(tool) + count(&input.to_string()),
         SessionEvent::ToolResult { output, .. } => count(&output.to_string()),
-        SessionEvent::Reasoning { text } => count(text),
-        SessionEvent::CompactionBoundary { .. } => 0,
-        SessionEvent::CacheBreak { .. } => 0,
-        SessionEvent::Summary { text } => count(text),
-        SessionEvent::PermissionDecision { .. } => 0,
-        SessionEvent::TurnAborted { reason } => count(reason),
+        SessionEvent::Reasoning { .. }
+        | SessionEvent::CompactionBoundary { .. }
+        | SessionEvent::CacheBreak { .. }
+        | SessionEvent::Summary { .. }
+        | SessionEvent::PermissionDecision { .. }
+        | SessionEvent::TurnAborted { .. } => 0,
         SessionEvent::TruncationVerdict { .. } => 0,
         SessionEvent::WorktreeEnter { .. } | SessionEvent::WorktreeExit { .. } => 0,
+        SessionEvent::NotificationInjected { summary, .. } => count(summary),
         SessionEvent::TurnUsage { .. }
         | SessionEvent::HookSignal { .. }
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::SubagentSpawn { .. }
-        | SessionEvent::SubagentReturn { .. }
-        | SessionEvent::NotificationInjected { .. } => 0,
+        | SessionEvent::SubagentReturn { .. } => 0,
     }
 }
 

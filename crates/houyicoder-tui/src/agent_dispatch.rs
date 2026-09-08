@@ -248,7 +248,9 @@ impl App {
                 // the user-facing outcome.
                 let line = if reply.made_progress {
                     let tokens = match (reply.pre_compact_tokens, reply.post_compact_tokens) {
-                        (Some(pre), Some(post)) => format!(" · {pre} → {post} tokens"),
+                        (Some(pre), Some(post)) => {
+                            format!(" · {pre} → {post} estimated tokens")
+                        }
                         _ => String::new(),
                     };
                     format!("Compacted {} events{}", reply.folded_count, tokens)

@@ -1,15 +1,7 @@
-//! ContextBuilder: compose the served view per section (SystemPrompt / Tools /
-//! Memory / Skills / Messages), each measurable. This is the unified
-//! composition point — system prompt assembly + user-context prepend + the
-//! query-loop projection + the API normalize stage — with per-section
-//! measurability; here it is one type so /context can break down what the
-//! model will see and the agent loop can size it pre-flight.
+//! Builds and measures provider-facing model context.
 //!
-//! Skeleton: defines Section / ServedView / ContextBuilder
-//! plus a local tiktoken tokenizer. The Messages section reuses the flat event
-//! projection; SystemPrompt / Tools / Memory / Skills sections fill in
-//! incrementally (memory provider, AGENTS.md injection, tool schemas)
-//! in later slices. Token counts come from tiktoken, not chars/4.
+//! Checkpoint selection and retention precede message assembly. The resulting
+//! section measurements drive pre-flight limits and the /context view.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -25,15 +17,10 @@ use super::retention;
 use super::selection;
 use super::turn_group;
 
-/// Token budget for per-turn memory recall. Keeps the recalled-memory
-/// attachment bounded so it never dominates the served view. Five entries at
-/// roughly 400 tokens each fit comfortably; the recall ranker truncates to
-/// five before packing against this budget. Pub(crate) so the turn-entry
-/// recall step in the runner references one source.
+/// Per-turn recall budget shared by retrieval and context assembly.
 pub(crate) const MEMORY_RECALL_BUDGET: usize = 2000;
 
-/// A measurable section of the served view. /context renders one row per
-/// section kind; the agent loop sums the tokens for a pre-flight size check.
+/// Measured section of the model context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
     pub kind: SectionKind,
@@ -42,9 +29,7 @@ pub struct Section {
     pub items: Vec<String>,
 }
 
-/// The five sections of the served view. Memory here is the always-on identity
-/// (AGENTS.md style) plus recalled memory entries; Skills are the skill
-/// frontmatter the model sees.
+/// Sections contributing to the model's context window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionKind {
     SystemPrompt,
@@ -65,8 +50,7 @@ impl SectionKind {
         }
     }
 
-    /// The 256-color hint the /context grid uses for this section. Matches the
-    /// stub palette so the real breakdown renders in the same colors.
+    /// Palette index for the /context grid.
     pub fn color_hint(self) -> u8 {
         match self {
             SectionKind::SystemPrompt => 244,
@@ -78,11 +62,7 @@ impl SectionKind {
     }
 }
 
-/// The assembled view served to the provider: the system prompt, the tool
-/// declarations, the projected message history, and a per-section breakdown for
-/// /context. The breakdown carries the token count of each section so the
-/// served view is measured before it is sent (built into composition, not a
-/// separate after-the-fact analyzer).
+/// Provider-facing context with pre-flight section measurements.
 #[derive(Debug, Clone, Default)]
 pub struct ServedView {
     pub system: String,
@@ -92,17 +72,12 @@ pub struct ServedView {
 }
 
 impl ServedView {
-    /// Total served tokens across all sections (pre-flight size).
+    /// Total tokens across all context sections.
     pub fn token_count(&self) -> u32 {
         self.sections.iter().map(|s| s.tokens).sum()
     }
 
-    /// Build the /context breakdown from the served sections: one category per
-    /// section kind (label + color + tokens) plus a trailing Free-space category
-    /// for the unused window, and a proportional grid. The host renders this
-    /// directly — no chars/4 estimate, the real per-section token counts from
-    /// the assembled view. Category + grid shape, measured pre-flight
-    /// (before the call) rather than after.
+    /// Build the /context categories and proportional grid.
     pub fn breakdown(&self, model: &str, context_window: u32) -> ContextBreakdown {
         let total: u32 = self.token_count();
         let mut categories: Vec<CategoryBreakdown> = self
@@ -146,37 +121,26 @@ impl ServedView {
     }
 }
 
-/// Local tokenizer (tiktoken) for pre-flight section + served-view sizing. A
-/// local BPE keeps /context precise and offline-robust (no API call, no
-/// chars/4 CJK error). Approximate for non-tiktoken-native models, but
-/// consistent.
+/// Local BPE tokenizer for deterministic pre-flight measurement.
 pub struct Tokenizer {
     bpe: Option<&'static tiktoken_rs::CoreBPE>,
 }
 
-// The BPE vocab is built once and shared across all Tokenizer instances: the
-// encoder is read-only after construction and encode_ordinary takes &self, so
-// a static reference is safe and avoids rebuilding the ~300 ms table per call.
+// The immutable BPE table is shared because construction is expensive.
 static BPE: std::sync::OnceLock<tiktoken_rs::CoreBPE> = std::sync::OnceLock::new();
 
 impl Tokenizer {
     pub fn new() -> Self {
-        // Under HOUYICODER_FAST_TOKENS (set by run_tests.py for the test run)
-        // skip the ~300ms BPE load and use a char-based estimate: tests do not
-        // assert on token counts (they assert turns/outcomes), and the load is
-        // paid per binary otherwise. Production never sets the env -> real BPE.
+        // The test harness bypasses BPE construction unless accuracy is under test.
         if std::env::var("HOUYICODER_FAST_TOKENS").is_ok() {
             return Self { bpe: None };
         }
         Self::real()
     }
 
-    /// Real tiktoken BPE, always loaded. Used by the accuracy tests that
-    /// assert on token counts (CJK undercount etc.) regardless of the fast
-    /// env flag.
+    /// Construct with the real BPE regardless of the test fast path.
     pub fn real() -> Self {
-        // o200k (the newer encoding) is the better code-aware default; cl100k
-        // is the fallback if o200k is unavailable on this build.
+        // Prefer the newer code-aware vocabulary, with a bundled fallback.
         let bpe = BPE.get_or_init(|| {
             tiktoken_rs::o200k_base()
                 .or_else(|_| tiktoken_rs::cl100k_base())
@@ -225,25 +189,14 @@ impl Default for Tokenizer {
     }
 }
 
-/// Compose the served view for a turn. The skeleton reuses the flat event
-/// projection for the Messages section; the SystemPrompt section is assembled
-/// from an identity + project-context (AGENTS.md) walk-up + tool-docs + env
-/// stub. Tools / Memory / Skills sections fill in incrementally in later
-/// slices.
+/// Assembles model context from durable events and runtime capabilities.
 pub struct ContextBuilder {
     tokenizer: Tokenizer,
-    /// Interior-mutable so a worktree session can switch the project-context
-    /// walk-up cwd at runtime through a shared Arc<Runner> (the worktree
-    /// feature narrows the fence and repoints the cwd to the worktree path).
+    /// Runtime cwd shared with worktree switching.
     cwd: Arc<RwLock<PathBuf>>,
-    /// The most recently built served view, cached so the host can render
-    /// /context from the exact view the model saw (no separate analyzer pass).
+    /// Last model context retained for /context inspection.
     last_served: Mutex<Option<ServedView>>,
-    /// The retention policy for the served view's block_ref ToolResults. When
-    /// set, the cache-liveness policy holds per-block decisions stable while
-    /// the cached prefix is live; unset falls back to the age-based 3-tier
-    /// (tests + the stub path). Interior-mutable so the Runner can install it
-    /// post-construction with the shared cached-prefix state.
+    /// Retention policy shared with cached-prefix liveness.
     retention_policy: Mutex<Option<Arc<dyn retention::RetentionPolicy>>>,
     /// The agent directory section (deterministic list of registered agent
     /// types the model may delegate to), injected into the system prompt so
@@ -311,27 +264,15 @@ impl ContextBuilder {
         Arc::clone(&self.cwd)
     }
 
-    /// Build the served view from a session's event log. The system prompt is
-    /// assembled from sections (byte-stable across turns unless the memory file
-    /// changes); the Messages section is the flat projection of the event log.
+    /// Build a served view without a checkpoint manifest.
     pub fn build(&self, events: &[SessionLogEntry]) -> ServedView {
         self.build_with_manifest(events, None, None, &[], None)
     }
 
-    /// Build the served view, optionally applying a CheckpointManifest to the
-    /// event log before projection. When manifest is None, the behavior is
-    /// identical to build() (full replay, no plan applied). When Some, the
-    /// manifest's per-event Disposition is applied: Verbatim events stay,
-    /// Summarized events fold into the summary, Referenced ToolResult outputs
-    /// are externalized to the CAS (when a backend is provided) or kept
-    /// as-is (fail-closed). This is the Select stage's plan-application step.
+    /// Build the provider-facing view and its context breakdown.
     ///
-    /// The system prompt is the frozen identity/project prompt with no recalled
-    /// memory in it — memory lands as a durable memory-recall attachment in the
-    /// message stream (merged into the user turn by the projection), so the
-    /// system prompt stays byte-stable across turns for prompt-cache. The
-    /// Memory section here only measures the attachment tokens already in the
-    /// served view (for /context); it does not inject anything.
+    /// The manifest selects transcript events before assembly. Recalled memory
+    /// remains in the message stream so the system prompt stays cache-stable.
     pub fn build_with_manifest(
         &self,
         events: &[SessionLogEntry],
@@ -341,24 +282,14 @@ impl ContextBuilder {
         memory_index: Option<&str>,
     ) -> ServedView {
         let filtered = match manifest {
-            Some(m) => selection::apply_manifest(events, m, backend),
+            Some(manifest) => selection::apply_manifest(events, manifest, backend),
             None => events.to_vec(),
         };
-        // When the cache-liveness policy is installed, serve with it + the
-        // current wall clock so per-block decisions stay stable while the
-        // cached prefix is live. Otherwise the age-based default applies
-        // (now=0 never reports a live cache, so no stability is held).
-        let messages = match self.retention_policy.lock().ok().and_then(|g| g.clone()) {
-            Some(policy) => {
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                turn_group::assemble_model_input_with(&filtered, backend, &*policy, now_ms)
-            }
-            None => turn_group::assemble_model_input(&filtered, backend),
-        };
-        let msg_tokens: u32 = messages.iter().map(|m| self.tokenizer.count_input(m)).sum();
+        let messages = self.assemble_messages(&filtered, backend);
+        let msg_tokens: u32 = messages
+            .iter()
+            .map(|message| self.tokenizer.count_input(message))
+            .sum();
 
         let cwd = self.cwd.read().expect("cwd lock").clone();
         let agent_directory = self.agent_directory.lock().ok().and_then(|g| g.clone());
@@ -368,10 +299,7 @@ impl ContextBuilder {
             agent_directory.as_deref(),
         );
 
-        // Measure the recalled-memory attachment already in the served view:
-        // the memory-recall events the turn-entry step appended, which the
-        // projection merged into the user turn. Recomputed from the projection
-        // so /context reflects what the model sees without a second recall.
+        // Attribute attachments already merged into the assembled messages.
         let mut mem_tokens = 0u32;
         let mut mem_items = Vec::new();
         let mut skill_tokens = 0u32;
@@ -388,11 +316,7 @@ impl ContextBuilder {
             }
         }
 
-        // The memory + skill-listing text is merged into the user message by
-        // the projection, so it is already counted in msg_tokens. Attribute
-        // each to its own section and subtract from Messages so the section
-        // totals do not double-count — otherwise the pre-flight compress
-        // threshold trips about an attachment's worth of tokens early.
+        // Subtract attachments from Messages to keep section totals disjoint.
         let messages_section = Section {
             kind: SectionKind::Messages,
             tokens: msg_tokens
@@ -401,11 +325,7 @@ impl ContextBuilder {
             items: message_previews(&messages),
         };
 
-        // Tool schemas occupy context window (sent as a separate API param
-        // but the window budget counts them). Count them here so the
-        // pre-flight gate does not underestimate by 3-8k/turn — a tool-heavy
-        // session tripped the gate late because tool_defs were invisible to
-        // token_count (R11a).
+        // Tool schemas consume context despite traveling outside messages.
         let tool_tokens: u32 = tool_defs
             .iter()
             .map(|td| {
@@ -458,13 +378,31 @@ impl ContextBuilder {
             messages,
             sections,
         };
-        // Cache the built view so /context renders exactly what the model saw
-        // without a separate analyzer pass — measurement is built into
-        // composition, not a separate after-the-fact analyzer.
+        // /context must report the exact view sent to the provider.
         if let Ok(mut g) = self.last_served.lock() {
             *g = Some(served.clone());
         }
         served
+    }
+
+    fn assemble_messages(
+        &self,
+        events: &[SessionLogEntry],
+        backend: Option<&dyn houyicoder_context::ContextBackend>,
+    ) -> Vec<InputItem> {
+        let policy = self
+            .retention_policy
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+        let Some(policy) = policy else {
+            return turn_group::assemble_model_input(events, backend);
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        turn_group::assemble_model_input_with(events, backend, &*policy, now_ms)
     }
 
     /// The most recently built served view, so the host can render /context
@@ -509,20 +447,10 @@ fn preview(s: &str) -> String {
     t
 }
 
-/// Render recalled entries into a system-reminder-wrapped attachment the
-/// turn-entry step appends as a memory-recall event. The wrapper marks the
-/// content as injected context (transient, not a user instruction) so the
-/// model treats it as transient context; the projection then merges this
-/// text into the turn's user message so one user turn carries the query
-/// plus its recalled-memory attachment.
+/// Render recalled memories as untrusted model context.
 ///
-/// Each entry renders as a manifest header in scan format: dash, type tag
-/// in brackets, key, age in parentheses, then the one-line description
-/// hook. The body content follows (phase-three read — the model gets usable
-/// context with no second disk read; a path-only return would force a
-/// second read). Entries older than a day get a
-/// staleness caveat so the model verifies against current code rather than
-/// asserting stale file:line claims as fact.
+/// Entries include source, age, description, content, and a freshness warning
+/// when current code should be rechecked.
 pub(crate) fn render_recall_text(entries: &[MemoryEntry]) -> String {
     if entries.is_empty() {
         return String::new();
@@ -566,24 +494,12 @@ pub(crate) fn render_recall_text(entries: &[MemoryEntry]) -> String {
     text
 }
 
-// ===== /context breakdown (interface-first) =====
-// The data the /context viz renders. Decoupled from core: a stub mock fills it
-// now; the real ContextBuilder produces it once the served view is sectioned.
-// Grid construction: read directly + 7-dim review-fixed: cache is a
-// breakpoint index not per-category; tiktoken is local-estimated not
-// precise; glyphs are real Unicode in the ratatui render.
-
-// The context grid types + build_grid live in protocol (the wire crate) —
-// they are serialized + sent to clients. Core's copies were verbatim
-// duplicates (same fields, fewer derives); protocol is the canonical owner.
-// Re-export so callers of crate::agent::context::* still resolve.
+// Protocol owns the serialized context breakdown types.
 pub use houyicoder_protocol::frontend::context::{
     CategoryBreakdown, ContextBreakdown, GridSquare, build_grid,
 };
 
-/// A canned ContextBreakdown for the no-runner / preview path so the /context
-/// viz renders a real-shaped grid before the real ContextBuilder is wired. The
-/// numbers reflect a typical session footprint; the grid is built via build_grid.
+/// Representative /context data for paths without a runner.
 pub fn stub_breakdown() -> ContextBreakdown {
     let window: u32 = 200_000;
     let cats: Vec<CategoryBreakdown> = vec![

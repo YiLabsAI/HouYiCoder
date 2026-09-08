@@ -91,8 +91,7 @@ async fn test_manifest_fallback_threads_instructions() {
     );
 }
 
-/// A hook that returns a fixed verdict for a fixed event. Like the
-/// FixedHook in hook_tests.rs but kept local so the test is self-contained.
+/// Hook fixture with a fixed verdict.
 struct FixedHook {
     name: String,
     events: Vec<HookEvent>,
@@ -114,10 +113,7 @@ impl Hook for FixedHook {
     }
 }
 
-/// A summarizer that records the custom_instructions it was called with so
-/// the PreCompact return-channel test can assert the Inject output reached the
-/// summarizer prompt. Returns a canned summary so the manifest's summary
-/// field is populated + PostCompact has a non-empty compact_summary.
+/// Summarizer fixture that captures injected instructions.
 struct CapturingSummarizer {
     seen: Mutex<Option<String>>,
 }
@@ -151,9 +147,7 @@ impl Summarizer for CapturingSummarizer {
     }
 }
 
-/// Build a runner over an in-memory store with a capturing summarizer + an
-/// optional hook registry. The store is pre-populated with 6 assistant turns
-/// so the default tail_turns=4 folds 2 (compaction makes progress).
+/// Build a runner with deterministic summary and hook fixtures.
 fn build_runner(
     store: Arc<SessionStore>,
     summarizer: Arc<CapturingSummarizer>,
@@ -175,9 +169,7 @@ fn build_runner(
     runner
 }
 
-/// Wrap the Arc<CapturingSummarizer> so it can be a Box<dyn Summarizer> on the
-/// runner without giving up the test's handle to the inner Mutex (the runner
-/// stores the Box; the test keeps the Arc to read what was captured).
+/// Trait-object wrapper retaining the test's shared capture handle.
 struct CapturingSummarizerWrapper(Arc<CapturingSummarizer>);
 
 impl Summarizer for CapturingSummarizerWrapper {
@@ -228,10 +220,7 @@ async fn append_events(store: &SessionStore, events: &[SessionLogEntry]) {
     }
 }
 
-/// PreCompact fires before the summarizer and its Inject verdict output
-/// becomes the custom summarization instructions (the return channel). The
-/// capturing summarizer sees the merged instructions; a PreCompact HookSignal
-/// is appended to the durable log.
+/// PreCompact injection reaches the summarizer and durable audit log.
 #[tokio::test]
 async fn test_precompress_fires_return_channel() {
     let (s, events) = six_turn_session();
@@ -247,14 +236,11 @@ async fn test_precompress_fires_return_channel() {
     let runner = build_runner(store.clone(), Arc::clone(&capturing), Some(reg));
     let outcome = runner.compact(s).await.expect("compact runs");
     assert!(outcome.made_progress, "compaction made progress");
-    // The return channel: the Inject output reached the summarizer as custom
-    // instructions.
     assert_eq!(
         capturing.seen().as_deref(),
         Some("focus on the API design"),
         "PreCompact Inject output threaded into summarizer"
     );
-    // A PreCompact HookSignal is in the durable log.
     let replay = store.replay(s).await.unwrap();
     assert!(
         replay.iter().any(|e| matches!(
@@ -268,9 +254,7 @@ async fn test_precompress_fires_return_channel() {
     );
 }
 
-/// A Deny verdict on PreCompact does NOT abort compaction — denying
-/// compaction would brick the session on overflow. Compaction
-/// proceeds: a CompactionBoundary + Summary land in the log.
+/// PreCompact denial cannot block overflow recovery.
 #[tokio::test]
 async fn test_precompact_no_deny_path() {
     let (s, events) = six_turn_session();
@@ -301,9 +285,7 @@ async fn test_precompact_no_deny_path() {
     );
 }
 
-/// PostCompact fires after the summary commits, carrying the summary text.
-/// The durable log carries a PostCompact HookSignal after the
-/// CompactionBoundary + Summary events.
+/// PostCompact audit follows the committed boundary.
 #[tokio::test]
 async fn test_postcompact_fires_with_summary() {
     let (s, events) = six_turn_session();
@@ -319,7 +301,6 @@ async fn test_postcompact_fires_with_summary() {
     let runner = build_runner(store.clone(), Arc::clone(&capturing), Some(reg));
     let outcome = runner.compact(s).await.expect("compact runs");
     let replay = store.replay(s).await.unwrap();
-    // PostCompact fires after CompactionBoundary + Summary.
     let boundary_idx = replay
         .iter()
         .position(|e| matches!(&e.event, SessionEvent::CompactionBoundary { .. }))
@@ -350,17 +331,28 @@ async fn test_postcompact_fires_with_summary() {
             }
         )
     });
-    // The HookSignal carries the verdict kind + reason; the summary text
-    // rides the payload at dispatch time (the signal records the outcome,
-    // not the payload). This asserts the signal landed, which is the
-    // observable the durable record carries.
     assert!(post_signal.is_some(), "PostCompact signal recorded");
     assert!(outcome.made_progress);
 }
 
-/// The auto path (Runner::compress) shares the same fire sequence: PreCompact
-/// with trigger=Auto fires before the summarizer. Pins the unification so a
-/// later refactor cannot drop the auto path's hook fire.
+/// Recompacting unchanged model input reuses the prior post measurement.
+#[tokio::test]
+async fn test_recompact_reuses_measurement() {
+    let (session, events) = six_turn_session();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    append_events(&store, &events).await;
+    let summarizer = Arc::new(CapturingSummarizer::new());
+    let runner = build_runner(store, summarizer, None);
+
+    let first = runner.compact(session).await.expect("first compact");
+    let second = runner.compact(session).await.expect("second compact");
+
+    assert_eq!(
+        second.pre_compact_tokens, first.post_compact_tokens,
+        "unchanged model input keeps the previous post measurement"
+    );
+}
+
 #[tokio::test]
 async fn test_auto_path_fires_precompact() {
     let (s, events) = six_turn_session();

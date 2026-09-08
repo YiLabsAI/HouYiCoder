@@ -1,6 +1,4 @@
-//! Tests for the context module, split out of context.rs so the source file
-//! stays under the file-size gate. The #[path] include in context.rs pulls
-//! this in for the test build only.
+//! Context assembly and token-accounting tests.
 use super::*;
 use houyicoder_context::{
     EventId, MemoryEntry, MemorySource, SessionEvent, SessionId, SessionLogEntry,
@@ -17,9 +15,7 @@ fn test_tokenizer_counts_text() {
 
 #[test]
 fn test_tokenizer_no_cjk_undercount() {
-    // The anti-pattern this replaces is chars/4, which undercounts CJK by
-    // roughly 4x. A CJK string's tiktoken count must exceed its char count
-    // (each CJK char is typically 1-2 tokens, never 0.25).
+    // CJK must not regress to the inaccurate chars-per-token fallback.
     let t = Tokenizer::real();
     let cjk = "\u{4f60}\u{597d}\u{4e16}\u{754c}";
     let n = t.count(cjk);
@@ -31,19 +27,8 @@ fn test_tokenizer_no_cjk_undercount() {
 
 #[test]
 fn test_tokenizer_exact_counts() {
-    // Exact counts on reference strings pin the bundled BPE tables: any
-    // tokenizer change that shifts tokenization fails loudly here instead of
-    // drifting through the /context budget math unnoticed. The cases divide
-    // two jobs, so prune with care:
-    //
-    // - All four pin the o200k table itself (a table change moves a count).
-    // - Only the CJK and the mixed strings detect a silent o200k -> cl100k
-    //   fallback: they count differently under the two encodings (cl100k
-    //   yields 5 and 11 here). The two ASCII strings count identically under
-    //   both encodings, so they alone cannot catch a fallback.
-    //
-    // When a number legitimately changes, re-baseline deliberately and check
-    // the /context sizing impact before accepting.
+    // Mixed and CJK cases distinguish the intended BPE table from fallback
+    // encodings; ASCII cases pin general table drift.
     let t = Tokenizer::real();
     let cases = [
         ("hello world", 2),

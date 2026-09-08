@@ -1,44 +1,22 @@
-//! Manual + auto compaction with PreCompact/PostCompact hook fire. The
-//! single entry point compact_internal unifies the manual /compact path and
-//! the auto overflow path so both fire the same hooks and both run the
-//! before-compact marker extraction. Split from append.rs / builder.rs so
-//! each stays under the file-size gate.
+//! Manual and automatic session compaction.
 //!
-//! Auto-compact suppress: a deterministic compact failure raises a
-//! reason-scoped suppress level so a transient blip only skips one turn
-//! (self-heals at the next turn start) while a fatal cause stays suppressed
-//! until a context-budget change clears it — preventing flapping. Manual
-//! /compact bypasses suppress (the user asked). The overflow guard stays
-//! fail-closed regardless; suppress only gates the proactive economy path +
-//! the retry decision.
-//!
-//! Hook fire model: PreCompact fires before the summarizer and is
-//! non-blocking — a hook cannot deny compaction (that would brick the
-//! session on overflow). Its return channel is the Inject verdict: hook
-//! output becomes custom summarization instructions merged into the
-//! summarizer prompt. PostCompact fires after the summary commits, with the
-//! summary text, and is non-blocking. The trigger (manual / auto) rides
-//! both payloads so a hook can behave differently for a user-initiated
-//! compact versus an automatic one.
+//! Both paths share hooks, marker extraction, manifest persistence, and
+//! provider-facing measurements. Hooks cannot block compaction. Automatic
+//! retries use reason-scoped suppression; manual requests bypass it.
 
 use houyicoder_context::SessionId;
 
 use super::hook::{CompactTrigger, HookContext, HookEvent, HookPayload, HookVerdict, arbitrate};
 use super::lifecycle::{commit_manifest, extract_precompact_markers};
-use super::manifest::{CompressPolicy, build_manifest, estimate_span_tokens};
+use super::manifest::{CompressPolicy, build_manifest, estimate_transcript_tokens};
+use super::selection;
 use super::{RunError, Runner};
 use houyicoder_context::Disposition;
 
-/// After this many consecutive transient (Other-class) auto-compact failures,
-/// the suppress promotes to Sticky so a persistently-failing transient cause
-/// stops retrying every turn. A fatal cause (Schema/StillOver) is Sticky on
-/// the first failure, so the streak only applies to the self-healing path.
+/// Consecutive transient failures become sticky to prevent retry churn.
 const MAX_CONSECUTIVE_OTHER_FAILURES: u32 = 3;
 
-/// The auto-compact suppression level. Stored as a u8 behind an atomic so
-/// the pre-flight economy gate + the turn-start self-heal read/write it
-/// lock-free. None is the steady state; the others are set by a
-/// deterministic compact failure + cleared by the matching recovery.
+/// Lock-free suppression state for automatic compaction retries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CompactSuppress {
@@ -72,11 +50,7 @@ impl CompactSuppress {
     }
 }
 
-/// Why auto-compact was suppressed. Maps a failure cause to a scope so a
-/// transient blip does not sticky-block and a fatal cause does not
-/// retry-pointlessly. The provider summarizer falls back to heuristic, so a
-/// provider error rarely fails compact; the dominant failures are storage
-/// I/O, a corrupt log, and a no-progress compact that is still over-window.
+/// Failure category controlling automatic retry scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SuppressReason {
     /// Storage I/O (transient): optimistic per-turn retry.
@@ -156,57 +130,37 @@ impl Runner {
     }
 }
 
-/// The outcome of a compaction, carried to the wire reply. Wraps the
-/// CompressResult (manifest + folded count + made-progress flag) with the
-/// pre/post token estimates captured around the summarizer call so the
-/// reply can show the token drop.
+/// Compaction result and selected-transcript token estimates.
 pub struct CompactOutcome {
     pub made_progress: bool,
     pub folded_count: usize,
     pub manifest_id: houyicoder_context::CheckpointId,
     pub pre_compact_tokens: u64,
     pub post_compact_tokens: u64,
-    /// Recall rate since the previous compaction: conversation_search matches
-    /// that landed in the folded (Summarized) span, divided by this
-    /// compaction's folded count. None when no recall was measured (no folded
-    /// events, or no conversation_search fired since the last compaction). An
-    /// instrumentation signal, not a correctness gate.
+    /// Folded-span recalls divided by events folded in this compaction.
     pub recall_rate: Option<f64>,
-    /// Conflict rate: file paths the LLM summary fabricated (mentioned a
-    /// touched file that was never touched) over the backbone's ground-truth
-    /// file-touch set. None when no summary was produced (nothing to merge).
-    /// A free measurement under v1's add-only coexistence: the v2 signal for
-    /// shrinking the LLM path to only the non-rederivable part.
+    /// Summary-only file paths divided by the backbone's touched-file set.
     pub conflict_rate: Option<f64>,
 }
 
 impl Runner {
-    /// Drive a compaction of the session: replay the event log, fire
-    /// PreCompact, run before-compact marker extraction, build + commit a
-    /// manifest with the (hook-injected) custom instructions, then fire
-    /// PostCompact. The trigger labels the path (manual /compact or auto
-    /// overflow). Returns the outcome for the wire reply; the served view
-    /// picks up the manifest on the next turn's build_with_manifest.
+    /// Compact a session through the shared manual and automatic pipeline.
     #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
     pub(crate) async fn compact_internal(
         &self,
         session: SessionId,
         trigger: CompactTrigger,
     ) -> Result<CompactOutcome, RunError> {
-        let events = self.store.replay(session).await?;
-        let pre_compact_tokens = estimate_span_tokens(&events) as u64;
+        let current = self.store.current_view(session).await?;
+        let pre_compact_tokens =
+            estimate_selected_transcript(&current.events, current.manifest.as_ref());
+        let events = current.events;
 
-        // 1. PreCompact: non-blocking. The return channel is Inject verdicts —
-        //    hook output becomes custom summarization instructions. A Deny
-        //    verdict is NOT honored for compact (denying compaction would
-        //    brick the session on overflow); other verdicts are recorded as
-        //    observations + always proceed.
+        // Hooks may steer summarization but cannot block overflow recovery.
         let custom_instructions = self
             .fire_pre_compact(session, trigger, events.len(), pre_compact_tokens as usize)
             .await;
 
-        // 2. Build the manifest with the merged custom instructions. Built
-        //    once here so marker extraction + commit share one manifest.
         let policy = CompressPolicy::default();
         let mut manifest = build_manifest(
             &events,
@@ -222,12 +176,7 @@ impl Runner {
             .map(|g| g.event_ids.len())
             .sum::<usize>();
 
-        // Snapshot the recall meter (swaps to 0 so the next interval starts
-        // clean): how many conversation_search matches landed in the folded
-        // span since the previous compaction. The rate normalizes by this
-        // compaction's folded count so a folded-detail recall shows a
-        // non-zero rate on the next report. None when nothing was folded or
-        // no recall fired this interval.
+        // Swapping starts a fresh recall interval for the next compaction.
         let recalls = self
             .recall_meter
             .swap(0, std::sync::atomic::Ordering::Relaxed);
@@ -237,13 +186,8 @@ impl Runner {
             None
         };
 
-        // Re-derivable backbone (v1 add-only): derive the structured block
-        // from the folded events + the workspace probe, then merge it after
-        // the LLM summary. The merged summary replaces the manifest's summary
-        // so the committed checkpoint + the served view carry both the LLM
-        // narrative + the authoritative derived-from-log block. The conflict
-        // rate measures LLM fabrications against the backbone's ground-truth
-        // file set. None when no LLM summary was produced (nothing to merge).
+        // The deterministic backbone preserves facts independently of the LLM
+        // summary and exposes fabricated file references as a metric.
         let folded_ids: std::collections::HashSet<houyicoder_context::EventId> = manifest
             .plan
             .iter()
@@ -261,10 +205,7 @@ impl Runner {
             None => None,
         };
 
-        // 3. Before-compact marker extraction over the manifest's Summarized
-        //    span: deterministic, no model. Saves unsolved-problem + key-
-        //    decision markers to the auto scope so key facts survive the
-        //    fold. Best-effort: a write failure logs and continues.
+        // Marker persistence is best-effort; failure must not block compaction.
         if let Some(memory) = &self.memory {
             let existing: std::collections::HashSet<String> =
                 memory.list_memories().into_iter().map(|s| s.key).collect();
@@ -278,16 +219,12 @@ impl Runner {
             }
         }
 
-        // 4. Commit: write_checkpoint + CompactionBoundary + Summary events.
         let summary = manifest.summary.clone().unwrap_or_default();
         let manifest_id = manifest.id;
         let result = match commit_manifest(&*self.store, session, &manifest).await {
             Ok(r) => r,
             Err(e) => {
-                // A deterministic compact failure suppresses the auto path by
-                // reason (manual /compact bypasses: its failure must not
-                // poison the auto gates). The replay error above propagates
-                // as-is — only the commit failure classifies here.
+                // Manual failures must not suppress later automatic recovery.
                 if trigger == CompactTrigger::Auto {
                     let reason = match &e {
                         houyicoder_context::ContextError::Corrupt(_) => {
@@ -300,44 +237,18 @@ impl Runner {
                 return Err(RunError::from(e));
             }
         };
-        // A successful compact clears any prior suppress (the view shrank;
-        // auto-compact may fire again) + resets the transient-failure streak.
         self.set_compact_suppress(super::compact::CompactSuppress::None);
         self.compact_consecutive_failures
             .store(0, std::sync::atomic::Ordering::Relaxed);
-        // A compaction rewrites the served view from the manifest, so the
-        // prior provider-reported input tokens are no longer a valid floor
-        // for effective_served_tokens. Clear the stale observation so the
-        // pre-flight / overflow gate reads the post-compact estimate, not
-        // the pre-compact value (which would false-trip the gate on a view
-        // that is now well under threshold).
+        // The pre-compact provider count cannot floor the rebuilt view.
         if let Ok(mut ol) = self.observability.lock() {
             ol.clear_last_turn_delta();
         }
-        // A compact rewrites the provider-facing transcript, so the prior
-        // cached prefix is no longer a cache baseline: bump the generation +
-        // clear the per-block retention decisions so the next serve recomputes
-        // against the new prefix.
+        // The rebuilt transcript invalidates the prior cache baseline.
         self.cached_prefix.invalidate();
 
-        // 5. Post-compact token estimate: the verbatim tail + the summary.
-        //    Best-effort: re-estimate the events the manifest keeps verbatim.
-        let verbatim_ids: std::collections::HashSet<&houyicoder_context::EventId> = manifest
-            .plan
-            .iter()
-            .filter(|g| g.disposition == Disposition::Verbatim)
-            .flat_map(|g| g.event_ids.iter())
-            .collect();
-        let post_events: Vec<houyicoder_context::SessionLogEntry> = events
-            .iter()
-            .filter(|e| verbatim_ids.contains(&e.id))
-            .cloned()
-            .collect();
-        let mut post_compact_tokens = estimate_span_tokens(&post_events) as u64;
-        post_compact_tokens += estimate_span_tokens_summary(&summary);
+        let post_compact_tokens = estimate_selected_transcript(&events, Some(&manifest));
 
-        // 6. PostCompact: non-blocking, carries the summary text + the
-        //    structured metrics. Observations recorded; no flow control.
         let compression_ratio = if pre_compact_tokens > 0 {
             post_compact_tokens as f64 / pre_compact_tokens as f64
         } else {
@@ -441,16 +352,15 @@ impl Runner {
     }
 }
 
-/// Estimate the token footprint of a summary string. Reuses the shared
-/// tokenizer so the post-compact estimate uses the same BPE as the
-/// pre-compact estimate_span_tokens path; a summary is plain text, so a
-/// direct Tokenizer::count over the string is the honest count (not a
-/// chars/4 floor that over-counts CJK and under-counts code).
-fn estimate_span_tokens_summary(summary: &str) -> u64 {
-    if summary.is_empty() {
-        return 0;
-    }
-    super::context::Tokenizer::new().count(summary) as u64
+fn estimate_selected_transcript(
+    events: &[houyicoder_context::SessionLogEntry],
+    manifest: Option<&houyicoder_context::CheckpointManifest>,
+) -> u64 {
+    let selected = match manifest {
+        Some(manifest) => selection::apply_manifest(events, manifest, None),
+        None => events.to_vec(),
+    };
+    estimate_transcript_tokens(&selected)
 }
 
 #[cfg(test)]

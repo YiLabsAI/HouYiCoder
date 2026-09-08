@@ -304,14 +304,10 @@ async fn test_heuristic_summarizer_nonempty() {
     assert!(summary.contains("1"));
 }
 
-/// Reasoning is counted in the compress estimate (it gauges the raw span
-/// the model would see if not compressed) but excluded from the served
-/// view (projection skips Reasoning). The three counts stay separate:
-/// served excludes reasoning, estimate includes it, cache key excludes it.
 #[test]
-fn test_reasoning_counted_in_estimate() {
+fn test_reasoning_skipped_in_estimate() {
     let tokenizer = Tokenizer::new();
-    let ev = SessionLogEntry {
+    let event = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
@@ -320,45 +316,11 @@ fn test_reasoning_counted_in_estimate() {
             text: "let me think carefully".into(),
         },
     };
-    assert!(
-        estimate_event_tokens(&ev, &tokenizer) > 0,
-        "reasoning counted in the compress estimate"
-    );
-    let events = vec![
-        SessionLogEntry {
-            id: EventId::new(),
-            session: SessionId::new(),
-            ts: 0,
-            prev_hash: None,
-            event: SessionEvent::UserInput { text: "hi".into() },
-        },
-        ev,
-        SessionLogEntry {
-            id: EventId::new(),
-            session: SessionId::new(),
-            ts: 0,
-            prev_hash: None,
-            event: SessionEvent::AssistantMessage {
-                text: "hello".into(),
-                thinking: None,
-            },
-        },
-    ];
-    let items = super::super::turn_group::assemble_model_input(&events, None);
-    assert!(
-        items.iter().all(|i| !matches!(i,
-                houyicoder_protocol::llm::InputItem::Assistant { content, .. }
-                if content.contains("think carefully"))),
-        "reasoning text never reaches the served view"
-    );
+    assert_eq!(estimate_event_tokens(&event, &tokenizer), 0);
 }
 
-/// The manifest estimate and the served view share one tokenizer: the
-/// same text yields the same count under both paths. A regression that
-/// reintroduced a bytes/4 estimate in the manifest would diverge from
-/// the served-view count on CJK (which bytes/4 undercounts ~4x).
 #[test]
-fn test_manifest_shares_served_tokenizer() {
+fn test_manifest_shares_model_tokenizer() {
     let tokenizer = Tokenizer::new();
     let cjk = "你好世界 this is mixed content";
     let ev = SessionLogEntry {
@@ -369,16 +331,10 @@ fn test_manifest_shares_served_tokenizer() {
         event: SessionEvent::UserInput { text: cjk.into() },
     };
     let estimate = estimate_event_tokens(&ev, &tokenizer);
-    let served = tokenizer.count(cjk) as usize;
-    assert_eq!(
-        estimate, served,
-        "manifest estimate and served view share one tokenizer (CJK diverges under bytes/4)"
-    );
+    let model_count = tokenizer.count(cjk) as usize;
+    assert_eq!(estimate, model_count);
 }
 
-/// estimate_event_tokens counts every text-bearing kind via the shared
-/// tokenizer and returns 0 for the non-text audit kinds. Pins each branch
-/// so a refactor that drops a kind or reverts to bytes/4 is caught.
 #[test]
 fn test_estimate_counts_each_kind() {
     let tokenizer = Tokenizer::new();
@@ -436,23 +392,25 @@ fn test_estimate_counts_each_kind() {
         0,
         "PermissionDecision is non-text"
     );
-    assert!(
+    assert_eq!(
         estimate_event_tokens(
             &mk(Summary {
                 text: "old turns".into()
             }),
             &tokenizer
-        ) > 0,
-        "Summary text counted"
+        ),
+        0,
+        "durable Summary is replaced by the manifest projection"
     );
-    assert!(
+    assert_eq!(
         estimate_event_tokens(
             &mk(TurnAborted {
                 reason: "timeout".into()
             }),
             &tokenizer
-        ) > 0,
-        "TurnAborted reason counted"
+        ),
+        0,
+        "TurnAborted is not model input"
     );
     assert_eq!(
         estimate_event_tokens(&mk(Unknown), &tokenizer),

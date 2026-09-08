@@ -1,14 +1,8 @@
-//! The wire form of a manual /compact result, returned to the frontend so
-//! the TUI renders the outcome (events folded, manifest id, pre/post token
-//! estimates) without importing the engine or context crate. Mirrors the
-//! engine CompressResult + the pre/post token counts the compaction path
-//! captures around the summarizer call.
+//! Wire result for manual session compaction.
 
 use serde::{Deserialize, Serialize};
 
-/// The outcome of a manual /compact over the wire. The frontend renders a
-/// one-line summary (progress made, events folded, pre-to-post token drop)
-/// and surfaces the manifest id so a later /rewind can target the checkpoint.
+/// Manual compaction outcome exposed to protocol clients.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompactReply {
@@ -19,11 +13,11 @@ pub struct CompactReply {
     pub folded_count: u64,
     /// The persisted checkpoint manifest id (a /rewind target).
     pub manifest_id: String,
-    /// Token estimate of the served window before compaction. None when the
-    /// estimate was unavailable (no tokenizer, empty session).
+    /// Selected transcript estimate before compaction. None when the
+    /// engine did not measure (the engine currently always provides a value).
     pub pre_compact_tokens: Option<u64>,
-    /// Token estimate of the served window after compaction (verbatim tail +
-    /// summary). None when unavailable.
+    /// Selected transcript estimate after compaction. None when the
+    /// engine did not measure (the engine currently always provides a value).
     pub post_compact_tokens: Option<u64>,
     /// Recall rate since the previous compaction: conversation_search matches
     /// that landed in the folded span, divided by this compaction's folded
@@ -81,7 +75,6 @@ mod tests {
     fn test_reply_round_trips() {
         let reply = CompactReply::new(true, 12, "ckpt_abc", Some(8000), Some(3000));
         let json = serde_json::to_string(&reply).expect("serialize");
-        // camelCase wire fields, not snake_case.
         assert!(json.contains("madeProgress"), "camelCase in {json}");
         assert!(json.contains("foldedCount"), "camelCase in {json}");
         assert!(json.contains("manifestId"), "camelCase in {json}");
