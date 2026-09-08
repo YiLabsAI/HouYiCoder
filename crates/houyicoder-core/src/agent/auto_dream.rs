@@ -34,10 +34,9 @@ use houyicoder_context::{MemoryRecallStats, MemorySummary, SessionId};
 use tokio::task::JoinHandle;
 
 use super::runner_config::RunnerConfig;
-use super::tools::memory_add::MemoryAddTool;
-use super::tools::memory_delete::DeleteMemoryTool;
-use super::tools::memory_promote_demote::{DemoteMemoryTool, PromoteMemoryTool};
-use super::tools::memory_show::ShowMemoryTool;
+use super::tools::{
+    DeleteMemoryTool, DemoteMemoryTool, MemoryAddTool, PromoteMemoryTool, ShowMemoryTool,
+};
 use super::{RunError, RunResult, Runner, ToolRegistry};
 
 const LOCK_FILE: &str = ".consolidate-lock";

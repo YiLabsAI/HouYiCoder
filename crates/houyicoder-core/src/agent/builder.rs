@@ -119,7 +119,7 @@ impl Runner {
         // covers the forked-extract runner for free (it also calls
         // with_memory).
         self.tools.register(Arc::new(
-            super::tools::memory_add::MemoryAddTool::new(provider.clone())
+            super::tools::MemoryAddTool::new(provider.clone())
                 .with_origin(houyicoder_context::MemoryOrigin::MainAgent),
         ));
         self.memory = Some(provider);
@@ -136,7 +136,7 @@ impl Runner {
         counter: Arc<std::sync::atomic::AtomicU32>,
     ) -> Self {
         self.tools.register(Arc::new(
-            super::tools::memory_add::MemoryAddTool::new(provider.clone())
+            super::tools::MemoryAddTool::new(provider.clone())
                 .with_counter(counter)
                 .with_origin(houyicoder_context::MemoryOrigin::Extractor),
         ));

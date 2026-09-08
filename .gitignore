@@ -70,4 +70,7 @@ scripts/hook_commit_gate.py
 scripts/rules/sdd.py
 .commit-lint-words
 
+# Agent memory (runtime artifact, not project source)
+agent.md
+
 

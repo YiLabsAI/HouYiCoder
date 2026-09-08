@@ -272,8 +272,7 @@ async fn test_exit_without_session_noop() {
 
 #[tokio::test]
 async fn test_tools_execute_through_controller() {
-    use crate::agent::tools::worktree_enter::EnterWorktreeTool;
-    use crate::agent::tools::worktree_exit::ExitWorktreeTool;
+    use crate::agent::tools::{EnterWorktreeTool, ExitWorktreeTool};
     use houyicoder_api::tool::{Tool, ToolCtx};
     use serde_json::json;
 
