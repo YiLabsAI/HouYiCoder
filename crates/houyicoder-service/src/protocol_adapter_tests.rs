@@ -1,13 +1,9 @@
 use super::*;
 use houyicoder_context::PermissionVerdict;
 
-/// Every engine turn-event kind maps to exactly one stream — a
-/// session/update variant or an acpx/context notification — except
-/// streaming assistant deltas, which map to neither: a delta is the
-/// live audit trail subsumed by the authoritative AssistantMessage at
-/// turn end, so neither stream carries it (the live preview rides the
-/// shared live sink, not the wire). A new kind that fails to map surfaces
-/// here, not in production.
+/// Every durable turn-event kind maps to a session update, an ACPX
+/// notification, or neither. Streaming deltas are transient runtime events;
+/// their durable projection is the authoritative AssistantMessage at turn end.
 #[test]
 fn test_every_kind_maps() {
     let cases: Vec<(SessionEvent, bool, bool)> = vec![

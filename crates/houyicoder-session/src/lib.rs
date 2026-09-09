@@ -175,7 +175,7 @@ impl SessionStore {
                 .or_default()
                 .push(event.clone());
             if let Some(n) = &self.append_notify {
-                n.notify_waiters();
+                n.notify_one();
             }
             return Ok(event.id);
         }
@@ -208,18 +208,12 @@ impl SessionStore {
             .entry(session)
             .or_default()
             .push(finalized);
-        // Wake a mid-run draining host (route B) so the new durable event
-        // pushes without waiting for the run future to resolve.
-        // notify_waiters (not notify_one): notify_one stores a permit when no
-        // waiter is parked, so the next notified() returns immediately --
-        // which causes a busy-loop (push_new_events → loop → notified()
-        // ready → push_new_events → ...) that starves the select's
-        // io.next_frame branch (where AbortRun arrives). notify_waiters
-        // drops the wake when no waiter is parked; the new event is caught
-        // by the next append's wake or the post-run drain (push_new_events
-        // re-scans from a cursor, so a lost wake does not lose data).
+        // Retain one wake permit when the host is polling the run future, so
+        // the durable event cannot remain invisible until the run completes.
+        // Notify coalesces surplus permits; draining from a cursor publishes
+        // every event covered by that wake without a loop per append.
         if let Some(n) = &self.append_notify {
-            n.notify_waiters();
+            n.notify_one();
         }
         Ok(id)
     }
@@ -235,6 +229,16 @@ impl SessionStore {
             .expect("trajectory mutex poisoned")
             .get(&session)
             .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Clone only the finalized suffix beginning at start.
+    pub fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
+        self.trajectory
+            .lock()
+            .expect("trajectory mutex poisoned")
+            .get(&session)
+            .map(|events| events.get(start..).unwrap_or_default().to_vec())
             .unwrap_or_default()
     }
 
@@ -589,6 +593,9 @@ impl houyicoder_api::session::SessionLog for SessionStore {
     }
     fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
         Self::trajectory_snapshot(self, session)
+    }
+    fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
+        Self::trajectory_since(self, session, start)
     }
     fn reset_trajectory(&self, session: SessionId) {
         Self::reset_trajectory(self, session);

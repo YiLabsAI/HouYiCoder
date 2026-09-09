@@ -1,51 +1,93 @@
-//! Server frame emission: push durable turn events + send typed
-//! responses/events on the monotonic seq stream. Extracted from server.rs on
-//! size grounds; lives as a child module so an impl block here reaches the
-//! Server fields (descendant modules see ancestor private fields).
-
-use std::sync::atomic::Ordering;
+//! Sequenced projection and frame emission for one server connection.
 
 use crate::protocol_adapter::{map_acpx_notification, map_session_update};
-use houyicoder_context::SessionLogEntry;
+use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_protocol::envelope::{
-    EventEnvelope, EventSeq, RequestId, ResponseEnvelope, ResponsePayload, ServerFrame,
+    EventEnvelope, RequestId, ResponseEnvelope, ResponsePayload, ServerFrame,
 };
 use houyicoder_protocol::framing::{FrameError, encode};
-use houyicoder_protocol::frontend::FrontendEventKind;
+use houyicoder_protocol::frontend::{FrontendEvent, PendingInputId, QueuedInput};
 use houyicoder_protocol::wire::WireError;
 
 use super::{Server, ServerIo};
 
 impl Server {
-    /// Forward one engine turn event as a typed wire frame. A kind the base
-    /// protocol has a standard session/update variant for projects to a
-    /// SessionUpdate; a kind with no base counterpart (compaction boundary,
-    /// summary, meta user, permission decision) projects to an acpx/context/*
-    /// extension notification. The two are orthogonal streams the client
-    /// routes by the FrontendEventKind tag, so neither carries opaque engine
-    /// JSON — the frontend never imports engine types.
-    pub(super) async fn push_turn_event(
-        &mut self,
-        io: &mut ServerIo,
-        ev: &SessionLogEntry,
-    ) -> Result<(), WireError> {
-        if let Some(update) = map_session_update(&ev.event) {
-            self.send_event(io, FrontendEventKind::SessionUpdate { update })
-                .await?;
+    fn project_turn_event(event: &SessionLogEntry) -> Vec<FrontendEvent> {
+        let mut projected = Vec::with_capacity(3);
+        if let Some(update) = map_session_update(&event.event) {
+            projected.push(FrontendEvent::SessionUpdate { update });
         }
-        if let Some(notification) = map_acpx_notification(&ev.event) {
-            self.send_event(io, FrontendEventKind::Acpx { notification })
-                .await?;
+        if let Some(notification) = map_acpx_notification(&event.event) {
+            projected.push(FrontendEvent::Acpx { notification });
+        }
+        if let SessionEvent::MidTurnInput {
+            text,
+            pending_input_id: Some(id),
+        } = &event.event
+        {
+            projected.push(FrontendEvent::QueuedInputCommitted {
+                inputs: vec![QueuedInput {
+                    id: PendingInputId(*id),
+                    text: text.clone(),
+                }],
+            });
+        }
+        projected
+    }
+
+    /// Sequence and send every event currently available for this session.
+    /// The sequencer holds its producer lock while reading the durable cursor
+    /// and draining runtime events, so a delta emitted after an append remains
+    /// behind that append's projections.
+    pub(super) async fn flush_events(&mut self, io: &mut ServerIo) -> Result<(), WireError> {
+        let runner = self.runner.clone();
+        let session = self.session;
+        let sequencer = self.event_sequencer.clone();
+        let frames = sequencer.sequence_available(move |cursor| {
+            runner
+                .store()
+                .trajectory_since(session, cursor)
+                .iter()
+                .map(Self::project_turn_event)
+                .collect()
+        });
+        for frame in frames {
+            self.send_event_envelope(io, &frame).await?;
         }
         Ok(())
     }
 
-    /// Project a fetched child session's turn events to the same session/update
-    /// and acpx frame stream the parent accumulates. The TUI projects the
-    /// result through the same pipeline as its own. Mirrors push_turn_event's
-    /// dual projection. A sync child is terminal at expand time, so this is a
-    /// one-shot snapshot; a missing or unreadable child log returns an empty
-    /// list the TUI surfaces as an unavailable line.
+    /// Replay reliable history requested by Hello, then send events that
+    /// accumulated while no connection was active.
+    pub(super) async fn replay_events(&mut self, io: &mut ServerIo) -> Result<(), WireError> {
+        let runner = self.runner.clone();
+        let session = self.session;
+        let sequencer = self.event_sequencer.clone();
+        let replay = sequencer.prepare_replay(self.replay_after, move |cursor| {
+            runner
+                .store()
+                .trajectory_since(session, cursor)
+                .iter()
+                .map(Self::project_turn_event)
+                .collect()
+        });
+        for frame in replay {
+            self.send_event_envelope(io, &frame).await?;
+        }
+        self.flush_events(io).await
+    }
+
+    async fn send_event_envelope(
+        &mut self,
+        io: &mut ServerIo,
+        frame: &EventEnvelope,
+    ) -> Result<(), WireError> {
+        self.send_typed(io, &ServerFrame::Event(frame.clone()))
+            .await
+    }
+
+    /// Project a fetched child session's turn events through the same adapters
+    /// used by the parent transcript.
     pub(super) async fn child_transcript_frames(
         &self,
         child_sid: &houyicoder_protocol::frontend::SessionId,
@@ -55,47 +97,17 @@ impl Server {
         };
         let events = self.runner.store().replay(sid).await.unwrap_or_default();
         let mut frames = Vec::with_capacity(events.len());
-        for ev in &events {
-            if let Some(update) = map_session_update(&ev.event) {
+        for event in &events {
+            if let Some(update) = map_session_update(&event.event) {
                 frames.push(houyicoder_protocol::envelope::ChildTranscriptFrame::Session(update));
             }
-            if let Some(notification) = map_acpx_notification(&ev.event) {
+            if let Some(notification) = map_acpx_notification(&event.event) {
                 frames.push(houyicoder_protocol::envelope::ChildTranscriptFrame::Acpx(
                     notification,
                 ));
             }
         }
         frames
-    }
-
-    /// Drain durable events appended since the last push: snapshot the
-    /// trajectory, skip the already-pushed prefix, push each new event,
-    /// advance the cursor. Shared by the post-resolve outer loop, the
-    /// serve-start replay, and the mid-run notify branch so a tool-call
-    /// frame ships while the run is still in flight. Idempotent — a spurious
-    /// wake re-runs the cursor with nothing new to skip; never assert "new
-    /// events must exist" on wake.
-    pub(super) async fn push_new_events(&mut self, io: &mut ServerIo) -> Result<(), WireError> {
-        let events = self.runner.store().trajectory_snapshot(self.session);
-        for ev in events.iter().skip(self.pushed_count) {
-            self.push_turn_event(io, ev).await?;
-        }
-        self.pushed_count = events.len();
-        Ok(())
-    }
-
-    /// Send an event on the monotonic seq stream. Each event gets the next
-    /// seq so a reconnecting client can resume from the last it processed.
-    /// The seq is minted from the shared atomic the live delta sink also
-    /// draws from, so live deltas and durable events share one stream.
-    pub(super) async fn send_event(
-        &mut self,
-        io: &mut ServerIo,
-        kind: FrontendEventKind,
-    ) -> Result<(), WireError> {
-        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
-        let frame = ServerFrame::Event(EventEnvelope::new(EventSeq(seq), kind));
-        self.send_typed(io, &frame).await
     }
 
     /// Send a response paired to a request by id.
@@ -109,16 +121,12 @@ impl Server {
         self.send_typed(io, &frame).await
     }
 
-    /// Send a wire error as a response with no correlation. Used when a frame
-    /// could not be paired to a req_id (bad framing) so the host still learns
-    /// the failure.
+    /// Send a wire error as an unpaired response.
     pub(super) async fn send_wire_error(
         &mut self,
         io: &mut ServerIo,
         err: WireError,
     ) -> Result<(), WireError> {
-        // Correlation unknown: use a sentinel req_id the client treats as
-        // out-of-band. The client logs it rather than pairing to a request.
         self.send_response(io, RequestId(u64::MAX), ResponsePayload::Error(err))
             .await
     }
@@ -134,11 +142,10 @@ impl Server {
     }
 }
 
-/// Map a frame encoding failure to a wire error at the boundary.
-fn frame_to_wire(e: FrameError) -> WireError {
+fn frame_to_wire(error: FrameError) -> WireError {
     WireError::new(
         houyicoder_protocol::wire::WireErrorKind::InvalidFrame,
-        e.to_string(),
+        error.to_string(),
         false,
     )
 }

@@ -4,18 +4,9 @@
 //! session_tests so that file stays under the size gate. Inherits the test
 //! harness (SessionHost, serve_session, NoopTool, runner_with_noop) via the
 //! parent tests module.
-//!
-//! Placement note: these drive a real Server + serve loop + wire frames, so
-//! by the AGENTS.md classification gate they are integration tests that
-//! belong in tests/ rather than src/ inline. They are kept inline (inherited
-//! from session_tests, not a new choice) to reuse the parent's private
-//! harness. The size-gate split that produced this file pointed at "tests on
-//! the wrong side"; splitting silenced that signal rather than heeding it.
-//! A future refactor should move the shared harness to a test-support module
-//! under tests/ so these can move with it.
 
 use super::*;
-use std::sync::atomic::AtomicU64;
+use tokio::sync::Notify;
 
 /// A provider whose first stream is pending (the run hangs mid-stream so a
 /// cancel can land), then returns scripted responses for later calls. For the
@@ -25,12 +16,14 @@ use std::sync::atomic::AtomicU64;
 struct HangFirstThenScript {
     responses: Mutex<VecDeque<CompletionResponse>>,
     hung: std::sync::atomic::AtomicBool,
+    entered: Arc<Notify>,
 }
 impl HangFirstThenScript {
-    fn new(responses: Vec<CompletionResponse>) -> Self {
+    fn new(responses: Vec<CompletionResponse>, entered: Arc<Notify>) -> Self {
         Self {
             responses: Mutex::new(responses.into_iter().collect()),
             hung: std::sync::atomic::AtomicBool::new(false),
+            entered,
         }
     }
 }
@@ -50,6 +43,7 @@ impl ModelProvider for HangFirstThenScript {
     ) -> PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>> {
         let first = !self.hung.swap(true, std::sync::atomic::Ordering::SeqCst);
         if first {
+            self.entered.notify_one();
             // Pure pending: the run stays mid-stream until the cancel fires
             // the run token, which makes model_call_stream return None.
             return Box::pin(futures::stream::pending());
@@ -94,8 +88,11 @@ async fn test_inject_cancel_run_clear() {
         usage: Usage::default(),
         model: "test".into(),
     };
-    let provider: Arc<dyn ModelProvider> =
-        Arc::new(HangFirstThenScript::new(vec![run2_first, run2_second]));
+    let entered = Arc::new(Notify::new());
+    let provider: Arc<dyn ModelProvider> = Arc::new(HangFirstThenScript::new(
+        vec![run2_first, run2_second],
+        entered.clone(),
+    ));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(NoopTool));
     let runner = Arc::new(Runner::with_shared_store(
@@ -110,9 +107,15 @@ async fn test_inject_cancel_run_clear() {
         },
     ));
     let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner.clone(), next_seq, gate);
+    host.insert(
+        session,
+        runner.clone(),
+        event_sequencer,
+        gate,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
@@ -142,10 +145,7 @@ async fn test_inject_cancel_run_clear() {
         )
         .await
         .expect("send run 1");
-    // Let the run enter the pending stream before the inject + cancel land.
-    for _ in 0..10 {
-        tokio::task::yield_now().await;
-    }
+    entered.notified().await;
     // Inject mid-run: the mid-run select enqueues the text for the next turn
     // boundary (which the abort never reaches).
     client
@@ -178,7 +178,7 @@ async fn test_inject_cancel_run_clear() {
     assert!(run1_done, "run 1 resolved on cancel");
 
     // Run 2: a tool-call turn (RunAgain) then final. Turn 2 drains the
-    // server queue. If the orphan survived the interrupt, QueueConsumed
+    // server queue. If the orphan survived the interrupt, QueuedInputCommitted
     // reports it here.
     let run2_id = RequestId(2);
     client
@@ -201,9 +201,9 @@ async fn test_inject_cancel_run_clear() {
             ServerFrame::Event(ev) => {
                 if matches!(
                     ev.payload,
-                    houyicoder_protocol::frontend::FrontendEventKind::QueueConsumed {
-                        ref texts
-                    } if texts.contains(&"orphan note".to_string())
+                    houyicoder_protocol::frontend::FrontendEvent::QueuedInputCommitted {
+                        ref inputs
+                    } if inputs.iter().any(|input| input.text == "orphan note")
                 ) {
                     orphan_replayed = true;
                 }
@@ -276,7 +276,7 @@ async fn test_inject_reset_run_clear() {
     }
 
     // Run: a tool-call turn (RunAgain) then final. Turn 2 drains the server
-    // queue. If the pre-clear text survived the reset, QueueConsumed reports
+    // queue. If the pre-clear text survived the reset, QueuedInputCommitted reports
     // it here.
     let req_id = RequestId(8);
     client
@@ -299,9 +299,9 @@ async fn test_inject_reset_run_clear() {
             ServerFrame::Event(ev) => {
                 if matches!(
                     ev.payload,
-                    houyicoder_protocol::frontend::FrontendEventKind::QueueConsumed {
-                        ref texts
-                    } if texts.contains(&"pre-clear note".to_string())
+                    houyicoder_protocol::frontend::FrontendEvent::QueuedInputCommitted {
+                        ref inputs
+                    } if inputs.iter().any(|input| input.text == "pre-clear note")
                 ) {
                     orphan_replayed = true;
                 }

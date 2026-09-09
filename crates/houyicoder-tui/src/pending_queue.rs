@@ -1,41 +1,19 @@
-//! The unified pending queue: user messages and slash commands (local-only,
-//! never sent to the model). A state-changing command submitted mid-run is
-//! enqueued + drained FIFO at idle. Resume/clear invalidate the server
-//! injection buffer; rewind/undo are deferred for FIFO only.
-//! Single-copy invariant: at most one item holds a live server copy.
-//! promote_next_pending swaps the head ParkedMessage to Message + InjectUser;
-//! enqueue promotes only when the queue was empty; QueueConsumed or spawn_run
-//! promotes the next, so an Esc recall races at most one server copy.
+//! Pending user input and deferred session commands.
+//!
+//! Queue order is local. At most one input is mirrored to the active runner.
+
+use houyicoder_protocol::frontend::QueuedInput;
 
 use crate::run_control::ClientCommand;
 use crate::state::App;
 
-/// One queued item. The host pending queue is the single truth source for
-/// ordering; the server runner queue is only the current run's injection
-/// buffer. A Message holds the single live server copy (InjectUser'd,
-/// consumed mid-turn via QueueConsumed or drained as a follow-up run); a
-/// ParkedMessage has NO server copy -- enqueued behind a non-empty queue
-/// (the single-copy invariant parks every item past the live head), enqueued
-/// behind a Command barrier, or orphaned by a copy-invalidating event (any
-/// non-final run end -- interrupt, max-turns, verify-failed, handoff, error
-/// -- a /clear reset, or a swap clears the server queue, so an InjectUser'd
-/// message loses its copy). A slash command is purely local (drained to
-/// local dispatch, never sent to the model).
-#[derive(Debug, Clone, PartialEq)]
+/// One item awaiting commitment or local command execution.
+#[derive(Debug, Clone)]
 pub enum PendingItem {
-    /// A user message with a live server copy (InjectUser'd to the server
-    /// runner queue). Consumed mid-turn via QueueConsumed (removed from the
-    /// copy) or drained as a follow-up run (QueueRemove + spawn_run) on a
-    /// clean run end (FinalOutput) — the user got their answer, so drain FIFO.
-    Message(String),
-    /// A user message with NO server copy. Enqueued behind a non-empty
-    /// queue (the single-copy invariant parks every item past the live
-    /// head), enqueued behind a Command barrier, or a former Message
-    /// whose copy a non-final run end, /clear, or swap invalidated.
-    /// Drained as a follow-up run (spawn_run only -- no QueueRemove, there
-    /// is no copy to drop) on a clean run end. Recall/delete send no wire
-    /// QueueRemove for it.
-    ParkedMessage(String),
+    /// User input mirrored to the active runner.
+    Message(QueuedInput),
+    /// User input held only by the frontend.
+    ParkedMessage(QueuedInput),
     /// A slash command's raw text, including the leading slash (e.g.
     /// "/resume <sid>", "/clear"). Stored verbatim so recall
     /// (pop_queued_to_input) re-fills the input box with the exact
@@ -43,13 +21,23 @@ pub enum PendingItem {
     Command(String),
 }
 
+impl PartialEq for PendingItem {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Message(a), Self::Message(b))
+            | (Self::ParkedMessage(a), Self::ParkedMessage(b)) => a.text == b.text,
+            (Self::Command(a), Self::Command(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 impl PendingItem {
     /// The text to show in the queue strip: the message body, or the
     /// command text (with the slash the user typed).
     pub fn display(&self) -> &str {
         match self {
-            PendingItem::Message(t) => t,
-            PendingItem::ParkedMessage(t) => t,
+            PendingItem::Message(input) | PendingItem::ParkedMessage(input) => &input.text,
             PendingItem::Command(t) => t,
         }
     }
@@ -93,6 +81,23 @@ pub fn command_first_token_is(raw: &str, token: &str) -> bool {
 }
 
 impl App {
+    /// Remove one queued item and transfer the active runner copy to the next
+    /// eligible head. QueueRemove is sent before the successor is injected.
+    pub(crate) fn remove_pending_at(&mut self, index: usize) -> Option<PendingItem> {
+        if index >= self.pending.len() {
+            return None;
+        }
+        let item = self.pending.remove(index);
+        if let PendingItem::Message(input) = &item {
+            self.send_cmd(ClientCommand::QueueRemove {
+                session_id: self.session_id.clone(),
+                id: input.id,
+            });
+        }
+        self.promote_next_pending();
+        Some(item)
+    }
+
     /// Promote a parked head into the live-copy slot: swap to Message +
     /// InjectUser. A Message head already holds the copy; a Command head
     /// is a barrier (never promote past it). No-op when idle -- idle_drain
@@ -102,18 +107,18 @@ impl App {
         if !self.agent_busy {
             return;
         }
-        let Some(text) = self.pending.first_mut().and_then(|slot| match slot {
-            PendingItem::ParkedMessage(t) => {
-                let text = t.clone();
-                *slot = PendingItem::Message(text.clone());
-                Some(text)
+        let Some(input) = self.pending.first_mut().and_then(|slot| match slot {
+            PendingItem::ParkedMessage(input) => {
+                let input = input.clone();
+                *slot = PendingItem::Message(input.clone());
+                Some(input)
             }
             _ => None,
         }) else {
             return;
         };
         let session_id = self.session_id.clone();
-        self.send_cmd(ClientCommand::InjectUser { session_id, text });
+        self.send_cmd(ClientCommand::InjectUser { session_id, input });
     }
 
     /// Dispatch a slash command's raw text (with the leading slash) without

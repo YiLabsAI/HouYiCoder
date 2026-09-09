@@ -488,7 +488,7 @@ fn test_drops_non_resume_commands() {
 
 /// A clean run end with N queued Messages batches: the head spawns a fresh
 /// run + the rest are InjectUser'd into it (one run, N messages). The rest
-/// stay in pending (Message) until QueueConsumed removes them when the
+/// stay in pending (Message) until QueuedInputCommitted removes them when the
 /// drive_loop drains them at the next turn boundary. Stops at a non-Message.
 #[test]
 fn test_clean_end_drains_messages() {
@@ -507,7 +507,7 @@ fn test_clean_end_drains_messages() {
             PendingItem::Message("m2".into()),
             PendingItem::Message("m3".into()),
         ],
-        "rest stay in pending (InjectUser'd into the new run; QueueConsumed \
+        "rest stay in pending (InjectUser'd into the new run; QueuedInputCommitted \
          removes them when the drive_loop drains at the next turn boundary)"
     );
 }
@@ -534,7 +534,7 @@ fn test_batch_stops_at_command() {
             PendingItem::Command("/clear".into()),
             PendingItem::Message("m3".into()),
         ],
-        "m2 InjectUser'd (stays for QueueConsumed); /clear + m3 untouched \
+        "m2 InjectUser'd (stays for QueuedInputCommitted); /clear + m3 untouched \
          (batch stops at the Command)"
     );
 }

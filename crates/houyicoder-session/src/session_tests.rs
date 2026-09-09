@@ -56,6 +56,27 @@ async fn test_append_sets_hash_chain() {
 }
 
 #[tokio::test]
+async fn test_wakeup_retained() {
+    let signal = Arc::new(tokio::sync::Notify::new());
+    let store =
+        SessionStore::new(Box::new(InMemoryBackend::new())).with_append_notify(signal.clone());
+    let session = SessionId::new();
+    store
+        .append(evt(
+            session,
+            EventId::new(),
+            SessionEvent::UserInput {
+                text: "queued".into(),
+            },
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_millis(20), signal.notified())
+        .await
+        .expect("an append remains observable when the receiver polls after it");
+}
+
+#[tokio::test]
 async fn test_trajectory_keeps_order() {
     let store = SessionStore::new(Box::new(InMemoryBackend::new()));
     let s = SessionId::new();

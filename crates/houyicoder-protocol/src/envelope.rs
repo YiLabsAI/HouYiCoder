@@ -56,11 +56,11 @@ impl ResumeFrom {
 #[non_exhaustive]
 pub struct EventEnvelope {
     pub seq: EventSeq,
-    pub payload: crate::frontend::FrontendEventKind,
+    pub payload: crate::frontend::FrontendEvent,
 }
 
 impl EventEnvelope {
-    pub fn new(seq: EventSeq, payload: crate::frontend::FrontendEventKind) -> Self {
+    pub fn new(seq: EventSeq, payload: crate::frontend::FrontendEvent) -> Self {
         Self { seq, payload }
     }
 }

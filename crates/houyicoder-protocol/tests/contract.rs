@@ -14,7 +14,7 @@ use houyicoder_protocol::envelope::{
 };
 use houyicoder_protocol::framing::{FrameDecoder, encode};
 use houyicoder_protocol::frontend::{
-    FrontendEventKind, FrontendRequest, SessionId,
+    FrontendEvent, FrontendRequest, SessionId,
     run::{ApprovalDecision, ApprovalRequest, ContentBlock},
 };
 use houyicoder_protocol::handshake::{Hello, PROTOCOL_VERSION, negotiate};
@@ -77,7 +77,7 @@ fn test_hello_round_trips_negotiates() {
     let wrong = Hello {
         protocol_version: PROTOCOL_VERSION + 1,
         capabilities: local.capabilities.clone(),
-        last_event_count: None,
+        last_event_seq: None,
     };
     let err = negotiate(&local, &wrong).expect_err("mismatch must fail");
     assert_eq!(err.kind, WireErrorKind::ProtocolVersion);
@@ -130,7 +130,7 @@ fn test_request_envelope_round_trips() {
 fn test_event_envelope_round_trips() {
     let evt = EventEnvelope::new(
         EventSeq(7),
-        FrontendEventKind::Message {
+        FrontendEvent::Message {
             delta: "hello world".to_string(),
         },
     );

@@ -253,10 +253,9 @@ fn run_serve(
     use houyicoder_service::lifecycle::SessionLeaseStore;
     use houyicoder_service::uds;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
 
     let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
-    let bundle = build_runner(production_runner(project, provider));
+    let mut bundle = build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
@@ -277,14 +276,26 @@ fn run_serve(
     // Remove a stale socket file at the path so a fresh bind does not fail on
     // a previous process that crashed without cleanup.
     std::fs::remove_file(&socket_path).ok();
-    let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    let next_seq = Arc::new(AtomicU64::new(0));
-    let gate: Arc<dyn ModeGate> = bundle.gate;
-    let session = bundle.session;
-    host.insert(session, Arc::new(bundle.runner), next_seq, gate);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+    let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
+    let event_sequencer = houyicoder_service::server::EventSequencer::new();
+    event_sequencer.install_on(&mut bundle.runner);
+    houyicoder_service::composition::fleet_status_relay::spawn(
+        bundle.bus.clone(),
+        event_sequencer.clone(),
+        runtime.handle().clone(),
+    );
+    let gate: Arc<dyn ModeGate> = bundle.gate;
+    let session = bundle.session;
+    host.insert(
+        session,
+        Arc::new(bundle.runner),
+        event_sequencer,
+        gate,
+        bundle.append_notify,
+    );
     runtime.block_on(async move {
         housekeeping::fire_after_bundle(session);
         if let Err(e) = uds::listen_uds(host, session, &socket_path).await {
@@ -649,16 +660,10 @@ pub(crate) fn assemble_bundle(
     }
 }
 
-/// Pair an in-memory protocol server + client around a runner. Installs the
-/// live delta sink before Arc-ing (set_live_sink takes &mut self): the sink
-/// streams token-level deltas onto the wire as acpx/llm/* notifications during
-/// the server's run, so streaming rides the wire (not a shared runner handle)
-/// and the TUI never imports the ports live types. The shared event-seq
-/// counter is created here and passed to both the sink and the server so live
-/// deltas and durable turn events share one monotonic seq stream. Both ends
-/// share one futures mpsc channel pair. The server is spawned on the shared
-/// runtime the TUI owns; the client is returned un-connected (the TUI driver
-/// task performs the Hello handshake on spawn).
+/// Pair an in-memory protocol server and client around a runner. The session
+/// event sequencer receives runtime events before the runner is shared, then
+/// becomes the sole ordering authority for durable projections, model deltas,
+/// and fleet status. The server is the only carrier writer.
 #[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
 fn pair_inproc_server(
     mut runner: Runner,
@@ -672,8 +677,8 @@ fn pair_inproc_server(
 ) -> (Arc<Runner>, Client, Vec<String>) {
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
-    let next_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    houyicoder_service::server::install_live_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
+    let event_sequencer = houyicoder_service::server::EventSequencer::new();
+    event_sequencer.install_on(&mut runner);
     // The server shares the bus so a child's permission ask (published while
     // the parent run is parked on the child) reaches the wire-approval flow.
     let server_bus = bus.clone();
@@ -681,8 +686,7 @@ fn pair_inproc_server(
     // the TUI footer renders without a direct engine-bus dependency.
     houyicoder_service::composition::fleet_status_relay::spawn(
         bus,
-        s2c_tx.clone(),
-        next_seq.clone(),
+        event_sequencer.clone(),
         houyicoder_tui::composition::shared_runtime()
             .handle()
             .clone(),
@@ -719,9 +723,10 @@ fn pair_inproc_server(
     // session is threaded in too so the /permissions Workspace verbs can
     // extend the fence at runtime (the same Arc the tools' exec path holds).
     let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
-    let mut server = Server::new_with_shared_seq(runner.clone(), session, gate_dyn, next_seq)
-        .with_append_notify(append_notify)
-        .with_bus(server_bus);
+    let mut server =
+        Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer)
+            .with_append_notify(append_notify)
+            .with_bus(server_bus);
     if let Some(s) = sandbox_session {
         server = server.with_session(s);
     }

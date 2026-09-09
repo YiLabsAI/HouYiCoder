@@ -31,14 +31,15 @@ fn pair_inproc(
 ) -> (Arc<Runner>, Client) {
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
-    let next_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    houyicoder_service::server::install_live_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
+    let event_sequencer = houyicoder_service::server::EventSequencer::new();
+    event_sequencer.install_on(&mut runner);
     let runner = Arc::new(runner);
     let server_io = ServerIo::new(s2c_tx, c2s_rx);
     // The server takes the composition's gate so wire mode/rule writes reach
     // the gate the GuardedTool wrappers actually use.
     let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
-    let server = Server::new_with_shared_seq(runner.clone(), session, gate_dyn, next_seq);
+    let server =
+        Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer);
     let runtime = houyicoder_tui::composition::shared_runtime();
     runtime.spawn(async move {
         let _serve = server.serve(server_io).await;

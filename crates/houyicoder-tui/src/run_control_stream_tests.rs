@@ -301,7 +301,7 @@ impl Tool for EchoTool {
 /// the injected head reaches the server, so the run ends without consuming
 /// it. The tail must not be lost -- it stays pending for the next
 /// idle_drain. Drives the real wire path (InjectUser -> drive_loop drain
-/// -> QueueConsumed -> host remove -> promote next), not just host state.
+/// -> QueuedInputCommitted -> host remove -> promote next), not just host state.
 #[test]
 fn test_batch_consumes_via_drain() {
     let provider = Arc::new(FakeProvider::new(vec![

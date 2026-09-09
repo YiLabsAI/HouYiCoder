@@ -32,6 +32,15 @@ pub trait SessionLog: Send + Sync {
     /// until events are appended this process for the session.
     fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry>;
 
+    /// Clone the finalized suffix beginning at start from the in-memory mirror.
+    /// Implementations should avoid cloning the already-consumed prefix.
+    fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
+        self.trajectory_snapshot(session)
+            .into_iter()
+            .skip(start)
+            .collect()
+    }
+
     /// Drop the in-memory trajectory mirror for a session. The backend log
     /// is untouched.
     fn reset_trajectory(&self, session: SessionId);

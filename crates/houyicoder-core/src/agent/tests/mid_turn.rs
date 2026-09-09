@@ -35,7 +35,9 @@ impl Tool for QueuingTool {
         _input: serde_json::Value,
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
-            r.enqueue_input(self.msg.clone());
+            r.enqueue_input(houyicoder_protocol::frontend::QueuedInput::new(
+                self.msg.clone(),
+            ));
         }
         Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
     }
@@ -229,8 +231,9 @@ impl Tool for RemoveAfterEnqueueTool {
         _input: serde_json::Value,
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
-            r.enqueue_input(self.msg.clone());
-            r.remove_input(&self.msg);
+            let input = houyicoder_protocol::frontend::QueuedInput::new(self.msg.clone());
+            r.enqueue_input(input.clone());
+            r.remove_input(input.id);
         }
         Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
     }
@@ -440,7 +443,9 @@ impl Tool for EnqueueBothTool {
         _input: serde_json::Value,
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
-            r.enqueue_input(self.user_msg.clone());
+            r.enqueue_input(houyicoder_protocol::frontend::QueuedInput::new(
+                self.user_msg.clone(),
+            ));
             r.enqueue_notification("test-child".into(), self.notification.clone());
         }
         Box::pin(async move { Ok(serde_json::json!({"queued": true})) })

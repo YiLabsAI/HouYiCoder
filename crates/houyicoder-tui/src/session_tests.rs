@@ -8,25 +8,23 @@ fn sid() -> houyicoder_protocol::frontend::SessionId {
 /// server's handle_session_notification reads, else mid-turn injection
 /// silently no-ops.
 #[test]
-fn test_inject_notif_shape_matches() {
-    let n = inject_notification(&sid(), "also check the logs");
+fn test_inject_shape() {
+    let input = houyicoder_protocol::frontend::QueuedInput::new("also check the logs");
+    let n = inject_notification(&sid(), &input);
     assert_eq!(n.method, "session/inject");
     let p = n.params.expect("params present");
-    assert_eq!(
-        p.get("text").and_then(|v| v.as_str()),
-        Some("also check the logs")
-    );
+    assert_eq!(p.get("input"), Some(&serde_json::json!(input)));
     assert_eq!(p.get("sessionId").and_then(|v| v.as_str()), Some("s1"));
 }
 
-/// The queue_remove notification's method + params must match what the
-/// server reads to drop a queued message by text.
+/// The queue_remove notification carries the exact queue identity.
 #[test]
-fn test_queue_remove_notif_shape() {
-    let n = queue_remove_notification(&sid(), "stale item");
+fn test_remove_shape() {
+    let id = houyicoder_protocol::frontend::PendingInputId(42);
+    let n = queue_remove_notification(&sid(), id);
     assert_eq!(n.method, "session/queue_remove");
     let p = n.params.expect("params present");
-    assert_eq!(p.get("text").and_then(|v| v.as_str()), Some("stale item"));
+    assert_eq!(p.get("id"), Some(&serde_json::json!(id)));
 }
 
 /// The inject_child notification's method + params must match what the
@@ -289,7 +287,7 @@ async fn test_drive_translates_agent_status() {
     use houyicoder_async::PFut;
     use houyicoder_client::Transport;
     use houyicoder_protocol::envelope::{EventEnvelope, EventSeq, ServerFrame};
-    use houyicoder_protocol::frontend::event_kind::FrontendEventKind;
+    use houyicoder_protocol::frontend::event::FrontendEvent;
     use houyicoder_protocol::handshake::Hello;
     use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
@@ -314,7 +312,7 @@ async fn test_drive_translates_agent_status() {
                 2 => {
                     let frame = ServerFrame::Event(EventEnvelope::new(
                         EventSeq(0),
-                        FrontendEventKind::AgentStatus {
+                        FrontendEvent::AgentStatus {
                             agent_id: "c1".into(),
                             subagent_type: "explore".into(),
                             turn: 2,

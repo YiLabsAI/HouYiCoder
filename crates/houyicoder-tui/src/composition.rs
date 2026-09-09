@@ -109,14 +109,9 @@ fn cwd_string() -> String {
 }
 
 /// Wire a working-surface App to the wired bundle the composition root built.
-/// Spawns the long-lived client-driver task (it owns the protocol client,
-/// performs the Hello handshake, and drains server frames, shipping streamed
-/// deltas forwarded from the shared runner's live sink, mid-turn permission
-/// asks, and the final outcome as AgentMessage on the agent channel). The
-/// driver + the server task share the one Arc<Runner> the composition root
-/// built, so the live sink fires during the server's run without wire
-/// streaming. Lands on the Login screen like app(), so the login flow is
-/// unchanged.
+/// Spawns the long-lived client driver, which owns the protocol client,
+/// performs Hello, and routes ordered server frames onto the agent channel.
+/// Lands on the Login screen like app(), so the login flow is unchanged.
 pub fn build_app(bundle: RunnerBundle) -> App {
     let mut app = app();
     let RunnerBundle {
@@ -343,15 +338,9 @@ pub fn build_app_for_test(project: Option<String>) -> App {
     })
 }
 
-/// Pair an in-memory server + client around a runner, install the live delta
-/// sink, spawn the server on the shared runtime, and return the shared runner
-/// handle plus the un-connected client. Test-only composition helper: the
-/// production equivalent lives in the CLI bin (the layering-compliant
-/// composition root; service cannot be a runtime dep of the TUI). The delta
-/// sink streams acpx/llm/* notifications onto the wire during the server's
-/// run (installed before Arc so the server task and any holder share one
-/// runner); the shared event-seq counter keeps live deltas and durable turn
-/// events on one monotonic seq stream.
+/// Pair an in-memory server and client around a runner. The test-only helper
+/// installs one event sequencer before sharing the runner and gives the same
+/// sequencer to the server, matching the CLI composition root.
 #[cfg(test)]
 pub fn pair_inproc_server(
     runner: Runner,
@@ -385,14 +374,13 @@ pub fn pair_inproc_server_tracked(
 ) {
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
-    let next_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    houyicoder_service::server::install_live_sink(&mut runner, s2c_tx.clone(), next_seq.clone());
+    let event_sequencer = houyicoder_service::server::EventSequencer::new();
+    event_sequencer.install_on(&mut runner);
     // Fleet status relay: translate bus child status into AgentStatus wire
     // frames so the TUI footer renders without touching the engine bus.
     houyicoder_service::composition::fleet_status_relay::spawn(
         bus,
-        s2c_tx.clone(),
-        next_seq.clone(),
+        event_sequencer.clone(),
         shared_runtime().handle().clone(),
     );
     // Drain startup warnings synchronously before the runner is shared so the
@@ -402,11 +390,11 @@ pub fn pair_inproc_server_tracked(
     let runner = Arc::new(runner);
     let server_io = houyicoder_service::server::ServerIo::new(s2c_tx, c2s_rx);
     let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
-    let server = houyicoder_service::server::Server::new_with_shared_seq(
+    let server = houyicoder_service::server::Server::new_with_event_sequencer(
         runner.clone(),
         session,
         gate_dyn,
-        next_seq,
+        event_sequencer,
     )
     .with_append_notify(append_notify);
     let runtime = shared_runtime();

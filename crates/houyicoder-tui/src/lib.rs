@@ -53,11 +53,9 @@ mod ask_question_render_tests;
 #[cfg(test)]
 mod ask_question_tests;
 #[cfg(test)]
-mod drain_flow_tests;
+mod development_cycle_tests;
 #[cfg(test)]
 mod export_command_tests;
-#[cfg(test)]
-mod flow_tests;
 #[cfg(test)]
 #[path = "interact_memory_tests.rs"]
 mod interact_memory_tests;
@@ -69,6 +67,10 @@ mod jump_pill_tests;
 mod permission_render_tests;
 #[cfg(test)]
 mod permission_tests;
+#[cfg(test)]
+mod queue_sync_tests;
+#[cfg(test)]
+mod queue_view_tests;
 #[cfg(test)]
 mod render_invariant_tests;
 #[path = "resume_picker_tests.rs"]

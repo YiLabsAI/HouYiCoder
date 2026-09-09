@@ -202,7 +202,7 @@ fn event_byte_len(event: &SessionLogEntry) -> usize {
     match &event.event {
         SessionEvent::UserInput { text }
         | SessionEvent::MetaUser { text }
-        | SessionEvent::MidTurnInput { text }
+        | SessionEvent::MidTurnInput { text, .. }
         | SessionEvent::MemoryRecall { text, .. }
         | SessionEvent::SkillListing { text, .. } => text.len(),
         SessionEvent::SkillBody { content, .. } => content.len(),

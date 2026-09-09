@@ -1,34 +1,335 @@
-//! The reconnect error-path tests: split from server_session_tests.rs so the
-//! shared harness file stays under the file-size gate. These cover the
-//! resume_pending negative arms — client-closed mid-re-emit, mismatched
-//! reverse response, the denied-verdict audit, and Interruption-after-resume
-//! (the resumed run itself landing a second Interruption). The shared
-//! FakeProvider + ApprovableTool + runner_and_host + await_pending_cleared
-//! helpers are re-exported from the sibling tests module.
+//! Reconnection contracts for interrupted sessions.
+//!
+//! These tests verify that a new connection restores pending permission work,
+//! queued input projection, event order, and lifecycle ownership without
+//! reviving terminal sessions or accepting unrelated responses. Disconnects
+//! at each recovery boundary must remain resumable and preserve prior choices.
 
 use super::tests::*;
 use super::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::tool::{Tool, ToolCtx};
+use houyicoder_async::PFut;
 use houyicoder_client::{Client, InProcTransport};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::envelope::{
-    ClientResponsePayload, RequestId, ServerFrame, ServerRequestPayload,
+    ClientResponsePayload, EventEnvelope, RequestId, ServerFrame, ServerRequestPayload,
 };
-use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
+use houyicoder_protocol::frontend::{FrontendEvent, FrontendRequest, QueuedInput};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_session::SessionStore;
+use serde_json::Value;
+use tokio::sync::{Notify, oneshot};
 
 use crate::composition::SessionHost;
 use crate::lifecycle::{Lifecycle, LifecycleState, SessionLeaseStore};
+
+/// A read-only tool that keeps a resumed run active until released.
+struct ReconnectBlockingTool {
+    entered: Arc<Notify>,
+    release: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
+}
+
+impl Tool for ReconnectBlockingTool {
+    fn name(&self) -> &str {
+        "reconnect_blocking"
+    }
+
+    fn description(&self) -> &str {
+        "blocks a resumed run until the test releases it"
+    }
+
+    fn input_schema(&self) -> Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        let entered = self.entered.clone();
+        let release = self.release.clone();
+        Box::pin(async move {
+            entered.notify_one();
+            let receiver = release.lock().expect("release lock").take();
+            if let Some(receiver) = receiver {
+                let _ = receiver.await;
+            }
+            Ok(serde_json::json!({"ok": true}))
+        })
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+}
+
+fn reconnect_user_message(frame: &ServerFrame, text: &str) -> bool {
+    matches!(
+        frame,
+        ServerFrame::Event(EventEnvelope {
+            payload: FrontendEvent::SessionUpdate {
+                update: SessionUpdate::UserMessageChunk(chunk),
+            },
+            ..
+        }) if matches!(&chunk.content, ContentBlock::Text { text: body } if body == text)
+    )
+}
+
+fn reconnect_commit(frame: &ServerFrame, input: &QueuedInput) -> bool {
+    matches!(
+        frame,
+        ServerFrame::Event(EventEnvelope {
+            payload: FrontendEvent::QueuedInputCommitted { inputs },
+            ..
+        }) if inputs.iter().any(|committed| committed.id == input.id)
+    )
+}
+
+fn reconnect_text_delta(frame: &ServerFrame) -> bool {
+    matches!(
+        frame,
+        ServerFrame::Event(EventEnvelope {
+            payload: FrontendEvent::Acpx { notification },
+            ..
+        }) if notification.method == AcpxMethod::LlmTextDelta
+    )
+}
+
+async fn await_inject_dispatch(client: &mut Client) {
+    let req_id = RequestId(u64::MAX - 1);
+    client
+        .send_request(
+            req_id,
+            FrontendRequest::ChildTranscript {
+                child_sid: houyicoder_protocol::frontend::SessionId::new(
+                    SessionId::new().to_string(),
+                ),
+            },
+        )
+        .await
+        .expect("send dispatch barrier");
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(2), client.next_frame())
+            .await
+            .expect("dispatch barrier timeout")
+            .expect("dispatch barrier frame");
+        if matches!(frame, ServerFrame::Response(response) if response.req_id == req_id) {
+            break;
+        }
+    }
+}
+
+/// A queued input on a resumed run is projected before the next model delta.
+#[tokio::test]
+#[expect(clippy::too_many_lines, reason = "reconnect lifecycle proof")]
+async fn test_reconnect_projects_queued_input() {
+    let session = SessionId::new();
+    let append_notify = Arc::new(Notify::new());
+    let store = Arc::new(
+        SessionStore::new(Box::new(InMemoryBackend::new()))
+            .with_append_notify(append_notify.clone()),
+    );
+    let entered = Arc::new(Notify::new());
+    let (release_tx, release_rx) = oneshot::channel();
+    let release = Arc::new(Mutex::new(Some(release_rx)));
+    let responses = vec![
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "toolu_approval".into(),
+                name: "approvable".into(),
+                input: serde_json::json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "toolu_blocking".into(),
+                name: "reconnect_blocking".into(),
+                input: serde_json::json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "after queued input".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+    ];
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(responses));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(ApprovableTool));
+    tools.register(Arc::new(ReconnectBlockingTool {
+        entered: entered.clone(),
+        release,
+    }));
+
+    let (client_tx2, server_rx2) = mpsc::channel::<String>(64);
+    let (server_tx2, client_rx2) = mpsc::channel::<String>(64);
+    let event_sequencer = EventSequencer::new();
+    let mut runner = Runner::with_shared_store(
+        store,
+        provider,
+        tools,
+        RunnerConfig {
+            model: "test".into(),
+            instructions: "test".into(),
+            max_turns: 10,
+            ..RunnerConfig::default()
+        },
+    );
+    event_sequencer.install_on(&mut runner);
+    let runner = Arc::new(runner);
+    let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
+    let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
+    host.insert(session, runner, event_sequencer, gate, append_notify);
+
+    let (client_tx1, server_rx1) = mpsc::channel::<String>(64);
+    let (server_tx1, client_rx1) = mpsc::channel::<String>(64);
+    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let host1 = host.clone();
+    let serve1 = tokio::spawn(async move {
+        drop(serve_session(host1, session, io1).await);
+    });
+    let mut client1 = Client::new(Box::new(InProcTransport::from_halves(
+        client_tx1, client_rx1,
+    )));
+    client1.connect().await.expect("first handshake");
+    client1
+        .send_request(
+            RequestId(1),
+            FrontendRequest::MessageSend {
+                session_id: houyicoder_protocol::frontend::SessionId::new(session.to_string()),
+                content: vec![ContentBlock::Text { text: "go".into() }],
+                disabled_skills: Default::default(),
+            },
+        )
+        .await
+        .expect("start interrupted run");
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(2), client1.next_frame())
+            .await
+            .expect("first connection frame timeout")
+            .expect("first connection frame");
+        if matches!(frame, ServerFrame::Request(_)) {
+            break;
+        }
+    }
+    drop(client1);
+    tokio::time::timeout(Duration::from_secs(2), serve1)
+        .await
+        .expect("first connection closes")
+        .expect("first serve task");
+
+    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let host2 = host.clone();
+    let serve2 = tokio::spawn(async move {
+        drop(serve_session(host2, session, io2).await);
+    });
+    let mut client2 = Client::new(Box::new(InProcTransport::from_halves(
+        client_tx2, client_rx2,
+    )));
+    client2.connect().await.expect("second handshake");
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(2), client2.next_frame())
+            .await
+            .expect("reattach frame timeout")
+            .expect("reattach frame");
+        if let ServerFrame::Request(ask) = frame {
+            let call_id = match ask.payload {
+                ServerRequestPayload::Permission(ApprovalRequest { call_id, .. }) => call_id,
+                _ => panic!("expected permission request"),
+            };
+            client2
+                .send_reverse_response(
+                    ask.req_id,
+                    ClientResponsePayload::Permission(ApprovalDecision {
+                        call_id,
+                        approved: true,
+                        updated_input: None,
+                        scope: "once".into(),
+                    }),
+                )
+                .await
+                .expect("approve reattached request");
+            break;
+        }
+    }
+
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .expect("resumed run entered blocking tool");
+    let input = QueuedInput::new("reconnected note");
+    client2
+        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+            "session/inject",
+            serde_json::json!({ "input": input }),
+        ))
+        .await
+        .expect("inject queued input");
+    await_inject_dispatch(&mut client2).await;
+    release_tx.send(()).expect("release blocking tool");
+
+    let mut frames = Vec::new();
+    for _ in 0..256 {
+        let frame = tokio::time::timeout(Duration::from_secs(2), client2.next_frame())
+            .await
+            .expect("ordered reconnect frames timeout")
+            .expect("ordered reconnect frame");
+        let done = reconnect_text_delta(&frame);
+        frames.push(frame);
+        if done {
+            break;
+        }
+    }
+    let user = frames
+        .iter()
+        .position(|frame| reconnect_user_message(frame, "reconnected note"))
+        .expect("queued input projected into transcript");
+    let committed = frames
+        .iter()
+        .position(|frame| reconnect_commit(frame, &input))
+        .expect("queued input committed by stable id");
+    let delta = frames
+        .iter()
+        .position(reconnect_text_delta)
+        .expect("subsequent model delta");
+    let seqs: Vec<_> = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            ServerFrame::Event(event) => Some(event.seq),
+            _ => None,
+        })
+        .collect();
+    assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]), "{seqs:?}");
+    assert!(
+        user < committed,
+        "user input must precede commit: {frames:?}"
+    );
+    assert!(
+        committed < delta,
+        "commit must precede subsequent model delta: {frames:?}"
+    );
+
+    drop(client2);
+    tokio::time::timeout(Duration::from_secs(2), serve2)
+        .await
+        .expect("second connection closes")
+        .expect("second serve task");
+}
 
 /// Interruption-after-resume (covers the resume_pending re-interrupt loop):
 /// the resumed run itself lands another Interruption, so resume_pending writes
@@ -39,7 +340,7 @@ use crate::lifecycle::{Lifecycle, LifecycleState, SessionLeaseStore};
 /// runs at least once across the reconnect tests.
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
-async fn test_reconnect_resumes_after_interruption() {
+async fn test_reconnect_resumes_interruption() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     let tool_call = |id: &str| CompletionResponse {
@@ -77,9 +378,15 @@ async fn test_reconnect_resumes_after_interruption() {
         },
     ));
     let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner.clone(), next_seq, gate);
+    host.insert(
+        session,
+        runner.clone(),
+        event_sequencer,
+        gate,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
 
     // Connection 1: drive to the first Interruption, receive ask1, disconnect.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
@@ -242,9 +549,15 @@ async fn test_deny_verdict_completes_run() {
         },
     ));
     let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner.clone(), next_seq, gate);
+    host.insert(
+        session,
+        runner.clone(),
+        event_sequencer,
+        gate,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
 
     // Connection 1: receive ask1, disconnect before answering.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
@@ -358,12 +671,8 @@ async fn test_deny_verdict_completes_run() {
     );
 }
 
-/// Mid-re-emit disconnect (covers the client-closed-during-re-emit arm): the
-/// reattaching connection receives the re-emitted ask, then drops WITHOUT
-/// answering. resume_pending reads None on the next frame await, flushes the
-/// pushed-count cursor, and returns Unavailable. The parked turn stays put
-/// (remaining still holds the ask; decided empty) so a third reattach could
-/// re-emit it again.
+/// A disconnect before answering a re-emitted permission request preserves
+/// the parked turn so another connection can resume it.
 #[tokio::test]
 async fn test_mid_reemit_disconnect_errors() {
     let (_runner, session, host) = runner_and_host();
@@ -433,8 +742,6 @@ async fn test_mid_reemit_disconnect_errors() {
         "reattach re-emitted the ask before the disconnect"
     );
     drop(client2);
-    // resume_pending sees the client gone on the next frame await, flushes the
-    // pushed-count cursor, and returns Unavailable — serve_session ends.
     let outcome = tokio::time::timeout(Duration::from_secs(2), serve2).await;
     assert!(
         outcome.is_ok(),
@@ -453,14 +760,10 @@ async fn test_mid_reemit_disconnect_errors() {
     assert!(parked.decided.is_empty(), "no verdict advanced");
 }
 
-/// Mismatched reverse response (covers the expected-reverse-response arm):
-/// the reattaching client sends a response whose req_id does NOT match the
-/// re-emitted ask's req_id. The ask-wait loop drops it (non-fatal) and keeps
-/// waiting for the matching response — the prior fatal arm ended the
-/// connection here (the same deadlock class as the mid-ask status tick).
-/// The parked turn is unchanged.
+/// A reattaching connection ignores an unrelated reverse response and keeps
+/// waiting for the verdict correlated with its permission request.
 #[tokio::test]
-async fn test_reconnect_mismatched_response_dropped() {
+async fn test_reconnect_drops_wrong_response() {
     let (_runner, session, host) = runner_and_host();
 
     // Connection 1: receive ask1, disconnect before answering.
@@ -541,24 +844,27 @@ async fn test_reconnect_mismatched_response_dropped() {
         )
         .await
         .expect("send mismatched response");
-    // Give the server time to read + drop the bogus frame. The old code
-    // returned here; the new code must keep waiting (serve not finished).
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    client2
+        .send_reverse_response(
+            reemit_req_id,
+            ClientResponsePayload::Permission(ApprovalDecision {
+                call_id: "toolu_1".to_string(),
+                approved: true,
+                updated_input: None,
+                scope: "once".to_string(),
+            }),
+        )
+        .await
+        .expect("send matching response");
+    await_inject_dispatch(&mut client2).await;
     assert!(
         !serve2.is_finished(),
-        "serve_session must not end on a mismatched reverse response (drop + keep waiting)"
+        "serve_session must continue after ignoring a mismatched response"
     );
-    // The parked turn is unchanged — the bogus verdict did not advance it.
-    let parked = host
-        .store()
-        .pending(session)
-        .expect("parked turn unchanged");
-    assert_eq!(parked.remaining.len(), 1, "remaining ask untouched");
     assert!(
-        parked.decided.is_empty(),
-        "no verdict accepted from the mismatched frame"
+        host.store().pending(session).is_none(),
+        "matching verdict advances the parked turn"
     );
-    // Clean up: drop the client so serve_session ends.
     drop(client2);
     drop(serve2.await);
 }

@@ -101,7 +101,7 @@ pub enum SessionEvent {
         text: String,
     },
     /// A user message the human queued while a run was in flight, drained +
-    /// appended at the next turn boundary (Path A — mid-turn injection).
+    /// appended at the next turn boundary.
     /// The durable text is the user's bare input (the transcript shows it
     /// verbatim, like UserInput). The model-input projection wraps it with a
     /// framing note so the model reads it as a mid-work interjection
@@ -110,6 +110,10 @@ pub enum SessionEvent {
     #[serde(rename = "MidTurnInput")]
     MidTurnInput {
         text: String,
+        /// Frontend queue identity when this input originated there. Absent
+        /// for legacy logs and internal steering messages.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending_input_id: Option<u64>,
     },
     /// A per-turn recall of memory entries the runner injects as a user-role
     /// system-reminder attachment at the conversation tail, not authored by

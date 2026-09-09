@@ -22,7 +22,6 @@ use houyicoder_protocol::frontend::SlashCommand;
 use crate::composition::{RunnerBundle, build_app};
 use crate::keys;
 use crate::notifications::{NotifKind, Notification, copy_toast};
-use crate::pending_queue::PendingItem;
 use crate::run_control::ClientCommand;
 use crate::selection::get_clipboard_path;
 use crate::selection::surface::{
@@ -218,13 +217,10 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
             // Footer queue strip: click a previewed item to recall it into
-            // the input box, or click the +N / summary row to pull the whole
-            // queue back in order (same as Esc recall).
-            let qrect = app.queue_rect.get();
+            // the input box, or click the +N / summary row to open the queue
+            // pane (non-destructive — does not recall all items).
+            let qrect = app.queue_view.strip_rect.get();
             if qrect.width > 0 && qrect.height > 0 && in_rect(qrect, m.column, m.row) {
-                // Match draw_strip's filtered count: items with an empty
-                // display are not drawn, so the clickable row count + the
-                // overflow threshold must use the same filter.
                 let n = app
                     .pending
                     .iter()
@@ -235,14 +231,12 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 }
                 let row = (m.row - qrect.y) as usize;
                 if qrect.height <= 1 {
-                    app.pop_queued_to_input();
+                    app.pane = Pane::Queue;
+                    app.queue_view.cursor = 0;
                     return;
                 }
                 let shown = if n > 2 { 1 } else { cmp::min(n, 2) } as usize;
                 if row < shown {
-                    // Map the filtered row back to the pending index:
-                    // draw_strip skips items with an empty display, so row N
-                    // in the strip is not necessarily pending[N].
                     let Some(idx) = app
                         .pending
                         .iter()
@@ -253,21 +247,13 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     else {
                         return;
                     };
-                    let item = app.pending.remove(idx);
-                    // A recalled Message has a live server copy: drop it over the
-                    // wire so a follow-up run does not re-inject it. Parked and
-                    // Command have no server copy.
-                    if let PendingItem::Message(text) = &item {
-                        app.send_cmd(ClientCommand::QueueRemove {
-                            session_id: app.session_id.clone(),
-                            text: text.clone(),
-                        });
-                    }
-                    // Merge with any in-progress draft (same as Esc recall)
-                    // rather than overwriting it.
+                    let Some(item) = app.remove_pending_at(idx) else {
+                        return;
+                    };
                     app.merge_recalled_text(item.display().to_string());
                 } else {
-                    app.pop_queued_to_input();
+                    app.pane = Pane::Queue;
+                    app.queue_view.cursor = 0;
                 }
                 return;
             }

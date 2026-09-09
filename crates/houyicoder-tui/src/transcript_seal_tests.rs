@@ -1,5 +1,5 @@
 //! Seal tests for the per-frame transcript rebuild (the TUI half of the
-//! tool-batch-display fix). route B ships durable frames mid-run; the Frame
+//! tool-batch-display fix). Durable frames arrive while a run is active; the Frame
 //! arm calls rebuild_transcript per-frame so each frame renders immediately,
 //! not only at the next PermissionAsk/Done. rebuild_transcript's dual cursor
 //! (sealed_frames_end + sealed_transcript_len) bounds per-frame cost to the

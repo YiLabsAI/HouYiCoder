@@ -543,10 +543,7 @@ impl Server {
                 // source; the server queue is the current run's buffer only.
                 self.runner.clear_input_queue();
                 self.runner.clear_notifications();
-                // The trajectory cursor tracks how many events this client has
-                // seen; a reset clears the log, so the cursor rewinds to zero
-                // (the next run replays from a fresh log).
-                self.pushed_count = 0;
+                self.event_sequencer.reset_projection();
                 self.send_response(io, req_id, ResponsePayload::Ack).await
             }
             // Unsupported verb for the current handler set; acknowledge so the

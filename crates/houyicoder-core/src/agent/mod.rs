@@ -297,31 +297,15 @@ pub struct Runner {
     /// path.
     auto_memory: Arc<std::sync::atomic::AtomicBool>,
     auto_dream: Arc<std::sync::atomic::AtomicBool>,
-    /// The mid-turn injection queue: user messages the host submitted while a
-    /// run is in flight. The drive loop drains it at each turn boundary (after
-    /// a tool resolves, before the next model call) and appends each as a user
-    /// message so the model sees the interjection on its next call + responds +
-    /// resumes the in-flight task — the turn-boundary injection (a queued
-    /// message fed into the same turn's next request, finer than the
-    /// run-boundary queue the host also keeps for inputs that land after a run
-    /// ends). Single source of truth: the queue lives here on the host (where
-    /// the loop polls it), never on the guest — guests do not share the host
-    /// heap. The frontend keeps a derived copy (its run-boundary queue) +
-    /// reconciles it from the user-message stream (no second source of truth,
-    /// no ack channel). std Mutex: drain is non-blocking, no await under the
-    /// lock.
-    queued_input: std::sync::Mutex<std::collections::VecDeque<String>>,
-    /// Lower-priority notifications (an async child completed). Drained at a
-    /// turn boundary only after queued_input is empty, so a user interjection
-    /// always lands before a notification that queued at the same instant —
-    /// notifications never starve user input. std Mutex: drain is non-blocking,
-    /// no await under the lock.
+    /// Mid-turn user interjections plus the identities the drive loop
+    /// committed at a turn boundary, so the frontend can drop exact items
+    /// from its mirror. Single source of truth on the host; the frontend
+    /// keeps only a derived copy.
+    input_queue: input_queue::InputQueue,
+    /// Lower-priority child-completion notifications. Drained only after
+    /// input_queue is empty, so user input never starves. std Mutex: drain
+    /// is non-blocking, no await under the lock.
     queued_notifications: std::sync::Mutex<std::collections::VecDeque<(String, String)>>,
-    /// Texts the drive loop drained from queued_input this run. The host
-    /// reads + clears it at run end so it can tell the frontend which queued
-    /// messages were injected (the frontend removes them from its copy).
-    /// Per-run: take_consumed_input drains, so a fresh run starts empty.
-    consumed_input: std::sync::Mutex<Vec<String>>,
     /// Redundant-call detector — a harness self-evolution observer,
     /// independent of the user hook registry (which early-returns when no
     /// hooks are configured). check_batch runs before arbitrate_pre_tool_use
@@ -668,11 +652,9 @@ impl Runner {
     /// then re-runs memory recall + skill listing for the injected query.
     /// Notifications defer to user input — drained only when the user queue is
     /// empty — so a notification never jumps ahead of a pending user message.
-    async fn drain_turn_boundary(&self, session: SessionId) -> Result<(), RunError> {
-        let pending_user: Vec<String> = {
-            let mut q = self.queued_input.lock().expect("queued_input lock");
-            q.drain(..).collect()
-        };
+    async fn drain_turn_boundary(&self, session: SessionId) -> Result<bool, RunError> {
+        let pending_user: Vec<houyicoder_protocol::frontend::QueuedInput> =
+            self.drain_pending_input();
         let inbox_pending = self.drain_inbox();
         // Notifications are lower priority than a user interjection: drain
         // them only when no user input is pending, so a notification that
@@ -690,17 +672,12 @@ impl Runner {
         let had_pending = !pending_user.is_empty()
             || !inbox_pending.is_empty()
             || !pending_notifications.is_empty();
-        if !pending_user.is_empty() {
-            self.consumed_input
-                .lock()
-                .expect("consumed_input lock")
-                .extend(pending_user.iter().cloned());
-        }
-        for msg in pending_user {
-            self.append_mid_turn_input(session, msg).await?;
+        for input in pending_user {
+            self.append_mid_turn_input(session, input.text, Some(input.id.0))
+                .await?;
         }
         for msg in inbox_pending {
-            self.append_mid_turn_input(session, msg).await?;
+            self.append_mid_turn_input(session, msg, None).await?;
         }
         // A child-completion notification is a distinct boundary from a user
         // interjection: it records which child finished (NotificationInjected,
@@ -722,7 +699,7 @@ impl Runner {
             // the run.
             self.inject_skill_listing_and_body(session).await?;
         }
-        Ok(())
+        Ok(had_pending)
     }
 }
 

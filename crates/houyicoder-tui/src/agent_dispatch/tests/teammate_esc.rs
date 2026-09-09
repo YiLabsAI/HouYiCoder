@@ -458,3 +458,28 @@ fn test_completed_child_unavailable() {
         "a completed child with empty frames reads as a real fetch failure"
     );
 }
+
+/// While a teammate view is open, a submit steers to the viewed child rather
+/// than starting a parent turn or queuing input on the parent.
+#[test]
+fn test_teammate_submit_steers() {
+    use crate::records::{TeammateView, TranscriptLine};
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    app.spawn_run("focus on auth".into());
+    assert!(!app.agent_busy, "steering does not start a parent run");
+    assert!(
+        !app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(_))),
+        "no parent echo for a steering submit"
+    );
+    assert!(
+        app.pending.is_empty(),
+        "steering does not queue on the parent"
+    );
+}

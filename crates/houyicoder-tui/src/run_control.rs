@@ -82,7 +82,8 @@ impl App {
         // Active turns park new input locally. Promotion keeps at most one
         // server-side copy while preserving queue order.
         if self.agent_busy {
-            self.pending.push(PendingItem::ParkedMessage(input.clone()));
+            self.pending
+                .push(PendingItem::ParkedMessage(input.clone().into()));
             self.promote_next_pending();
             return;
         }
@@ -127,14 +128,14 @@ impl App {
                 let session_id = self.session_id.clone();
                 self.send_cmd(ClientCommand::QueueRemove {
                     session_id,
-                    text: head.clone(),
+                    id: head.id,
                 });
-                self.spawn_run(head);
+                self.spawn_run(head.text);
                 self.promote_next_pending();
                 true
             }
-            PendingItem::ParkedMessage(text) => {
-                self.spawn_run(text);
+            PendingItem::ParkedMessage(input) => {
+                self.spawn_run(input.text);
                 self.promote_next_pending();
                 true
             }
@@ -353,6 +354,40 @@ impl App {
         });
     }
 
+    /// Recall the queued item at the cursor position into the input box.
+    /// Sends QueueRemove for a live server copy. Leaves other items queued.
+    pub fn recall_queued_at_cursor(&mut self) {
+        let idx = self
+            .queue_view
+            .cursor
+            .min(self.pending.len().saturating_sub(1));
+        if idx >= self.pending.len() {
+            return;
+        }
+        let Some(item) = self.remove_pending_at(idx) else {
+            return;
+        };
+        self.queue_view
+            .clamp(self.pending.len().max(self.queue_view.cursor));
+        self.merge_recalled_text(item.display().to_string());
+    }
+
+    /// Delete the queued item at the cursor position without recalling it.
+    /// Sends QueueRemove for a live server copy.
+    pub fn delete_queued_at_cursor(&mut self) {
+        let idx = self
+            .queue_view
+            .cursor
+            .min(self.pending.len().saturating_sub(1));
+        if idx >= self.pending.len() {
+            return;
+        }
+        if self.remove_pending_at(idx).is_none() {
+            return;
+        }
+        self.queue_view.clamp(self.pending.len());
+    }
+
     /// Recall queued messages into the input box before the current draft.
     /// Commands remain queued, and server-side message copies are removed.
     pub fn pop_queued_to_input(&mut self) {
@@ -360,7 +395,9 @@ impl App {
             .pending
             .iter()
             .filter_map(|it| match it {
-                PendingItem::Message(t) | PendingItem::ParkedMessage(t) => Some(t.clone()),
+                PendingItem::Message(input) | PendingItem::ParkedMessage(input) => {
+                    Some(input.text.clone())
+                }
                 PendingItem::Command(_) => None,
             })
             .collect();
@@ -371,10 +408,10 @@ impl App {
         let mut keep: Vec<PendingItem> = Vec::new();
         for it in std::mem::take(&mut self.pending) {
             match &it {
-                PendingItem::Message(text) => {
+                PendingItem::Message(input) => {
                     self.send_cmd(ClientCommand::QueueRemove {
                         session_id: self.session_id.clone(),
-                        text: text.clone(),
+                        id: input.id,
                     });
                 }
                 PendingItem::ParkedMessage(_) => {}
@@ -448,8 +485,4 @@ mod agent_dispatch;
 
 #[cfg(test)]
 #[path = "run_control_tests.rs"]
-mod run_control_tests;
-
-#[cfg(test)]
-#[path = "spawn_run_queue_tests.rs"]
-mod spawn_run_queue_tests;
+pub(crate) mod run_control_tests;

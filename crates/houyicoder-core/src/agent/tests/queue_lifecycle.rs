@@ -30,7 +30,7 @@ async fn test_interrupt_clears_queued_input() {
     for _ in 0..5 {
         tokio::task::yield_now().await;
     }
-    runner.enqueue_input("m1".into());
+    runner.enqueue_input(houyicoder_protocol::frontend::QueuedInput::new("m1"));
     runner.abort();
     let result = task.await.expect("run task").expect("run ok");
     assert!(

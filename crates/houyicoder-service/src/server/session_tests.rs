@@ -131,9 +131,15 @@ pub fn runner_and_host() -> (Arc<Runner>, SessionId, Arc<SessionHost>) {
         },
     ));
     let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner.clone(), next_seq, gate);
+    host.insert(
+        session,
+        runner.clone(),
+        event_sequencer,
+        gate,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
     (runner, session, host)
 }
 
@@ -395,9 +401,15 @@ async fn test_reconnect_batch_preserves_decided() {
         },
     ));
     let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner.clone(), next_seq, gate);
+    host.insert(
+        session,
+        runner.clone(),
+        event_sequencer,
+        gate,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
 
     // Connection 1: answer a1, then disconnect when a2 arrives.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
@@ -582,16 +594,22 @@ fn runner_with_noop() -> (Arc<Runner>, SessionId, Arc<SessionHost>) {
         },
     ));
     let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner.clone(), next_seq, gate);
+    host.insert(
+        session,
+        runner.clone(),
+        event_sequencer,
+        gate,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
     (runner, session, host)
 }
 
 /// A session/inject notification that lands between runs (no active run) is
 /// enqueued for the next run; the next run's drive loop drains it at the
 /// RunAgain boundary + the server reports the consumed text back as a
-/// QueueConsumed event so the frontend can drop it from its mirror.
+/// QueuedInputCommitted event so the frontend can drop it from its mirror.
 #[tokio::test]
 async fn test_between_runs_inject_drains() {
     let (_runner, session, host) = runner_with_noop();
@@ -634,17 +652,17 @@ async fn test_between_runs_inject_drains() {
         .expect("send message");
 
     let mut got_run_ok = false;
-    let mut got_consumed = false;
+    let mut got_commit = false;
     for _ in 0..64 {
         match client.next_frame().await.expect("server frame") {
             ServerFrame::Event(ev) => {
                 if matches!(
                     ev.payload,
-                    houyicoder_protocol::frontend::FrontendEventKind::QueueConsumed {
-                        ref texts
-                    } if texts == &vec!["extra note".to_string()]
+                    houyicoder_protocol::frontend::FrontendEvent::QueuedInputCommitted {
+                        ref inputs
+                    } if inputs.iter().any(|input| input.text == "extra note")
                 ) {
-                    got_consumed = true;
+                    got_commit = true;
                 }
             }
             ServerFrame::Response(resp) if resp.req_id == req_id => {
@@ -656,14 +674,14 @@ async fn test_between_runs_inject_drains() {
     }
     assert!(got_run_ok, "run completed");
     assert!(
-        got_consumed,
-        "QueueConsumed event reported the injected text",
+        got_commit,
+        "QueuedInputCommitted event reported the injected text",
     );
 }
 
 /// A session/inject notification sent WHILE the run is mid-flight is caught
 /// by the mid-run select + enqueued; the drive loop drains it at the next
-/// RunAgain boundary + the server reports the consumed text via QueueConsumed.
+/// RunAgain boundary + the server reports the consumed text via QueuedInputCommitted.
 /// The NoopTool sleeps briefly so the run stays mid-flight across the tool
 /// call, giving the inject notification a window to arrive during the select.
 pub struct SleepNoopTool;
@@ -691,7 +709,7 @@ impl Tool for SleepNoopTool {
 
 /// A session/inject sent mid-run is caught by the mid-run select arm +
 /// drained at the RunAgain boundary; the server reports the consumed text
-/// back as a QueueConsumed event.
+/// back as a QueuedInputCommitted event.
 #[tokio::test]
 async fn test_during_run_inject_caught() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -727,9 +745,15 @@ async fn test_during_run_inject_caught() {
         },
     ));
     let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner.clone(), next_seq, gate);
+    host.insert(
+        session,
+        runner.clone(),
+        event_sequencer,
+        gate,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
@@ -770,17 +794,17 @@ async fn test_during_run_inject_caught() {
         .expect("send inject");
 
     let mut got_run_ok = false;
-    let mut got_consumed = false;
+    let mut got_commit = false;
     for _ in 0..64 {
         match client.next_frame().await.expect("server frame") {
             ServerFrame::Event(ev) => {
                 if matches!(
                     ev.payload,
-                    houyicoder_protocol::frontend::FrontendEventKind::QueueConsumed {
-                        ref texts
-                    } if texts == &vec!["mid note".to_string()]
+                    houyicoder_protocol::frontend::FrontendEvent::QueuedInputCommitted {
+                        ref inputs
+                    } if inputs.iter().any(|input| input.text == "mid note")
                 ) {
-                    got_consumed = true;
+                    got_commit = true;
                 }
             }
             ServerFrame::Response(resp) if resp.req_id == req_id => {
@@ -792,8 +816,8 @@ async fn test_during_run_inject_caught() {
     }
     assert!(got_run_ok, "run completed");
     assert!(
-        got_consumed,
-        "QueueConsumed event reported the mid-run inject"
+        got_commit,
+        "QueuedInputCommitted event reported the mid-run inject"
     );
 }
 

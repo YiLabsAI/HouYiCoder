@@ -150,19 +150,13 @@ impl App {
                     );
                 }
             }
-            AgentMessage::QueueConsumed { texts } => {
-                // Drop consumed messages from the pending copy (FIFO + text
-                // match), then promote the next parked head: the
-                // single-copy invariant frees the slot the consumed item
-                // held, so the next queued message gets its single live
-                // copy + the run keeps draining the queue one turn
-                // boundary at a time.
-                for text in texts {
-                    if let Some(pos) = self
-                        .pending
-                        .iter()
-                        .position(|it| matches!(it, PendingItem::Message(t) if t == &text))
-                    {
+            AgentMessage::QueuedInputCommitted { inputs } => {
+                // Remove exact committed inputs before promoting the next head.
+                // Stable identity prevents a delayed event from removing newer text.
+                for input in inputs {
+                    if let Some(pos) = self.pending.iter().position(
+                        |it| matches!(it, PendingItem::Message(current) if current.id == input.id),
+                    ) {
                         self.pending.remove(pos);
                     }
                 }

@@ -19,7 +19,8 @@ use ratatui::{
 use crate::state::{App, Pane, ViewportMode};
 use crate::view::{
     artifact, capability, hooks_pane, input_bar, memory_pane, model_pane, palette, queue_overlay,
-    resume_picker, skill_picker, skills_pane, status, toast, trajectory_pane, worktree_pane,
+    queue_pane, resume_picker, skill_picker, skills_pane, status, toast, trajectory_pane,
+    worktree_pane,
 };
 
 mod flat_transcript;
@@ -61,7 +62,7 @@ fn pane_hides_status(app: &App) -> bool {
 /// the 1-line status bar, and the input box pinned to the bottom. No progress
 /// header or pane-tab strip; the status bar carries the progress bar.
 fn draw_working(f: &mut Frame, app: &App) {
-    app.queue_rect.set(Rect::new(0, 0, 0, 0));
+    app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.last_terminal_rows.set(f.area().height);
@@ -88,7 +89,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_pill::want(app));
     app.fleet.granted.set(footer.fleet);
     app.fleet.rect.set(Rect::new(0, 0, 0, 0));
-    let layout = build_working_layout(app, input_h, footer.queue, footer.fleet);
+    let layout = build_working_layout(app, f.area().width, input_h, footer.queue, footer.fleet);
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints(layout.constraints)
@@ -193,7 +194,13 @@ struct LayoutSlots {
 /// the transcript is the fixed Min(1) remainder. Indices are positions in the
 /// returned constraints vec, so the caller splits once and indexes by them.
 #[allow(clippy::too_many_lines)]
-fn build_working_layout(app: &App, input_h: u16, queue_h: u16, fleet_h: u16) -> WorkingLayout {
+fn build_working_layout(
+    app: &App,
+    width: u16,
+    input_h: u16,
+    queue_h: u16,
+    fleet_h: u16,
+) -> WorkingLayout {
     let mut constraints: Vec<Constraint> = vec![];
     let banner_h = if app.teammate_view.is_some() {
         3u16
@@ -208,9 +215,11 @@ fn build_working_layout(app: &App, input_h: u16, queue_h: u16, fleet_h: u16) -> 
     };
     constraints.push(Constraint::Min(1));
     let transcript_idx = constraints.len() - 1;
-    // The entitlement card shows the triggering command plus the denied
-    // services, so it needs more body rows than a plain tool-approval card.
-    let approval_h = if app.approval.is_some() { 16u16 } else { 0u16 };
+    let approval_h = app
+        .approval
+        .as_ref()
+        .map(|approval| super::approval::card_height(approval, width))
+        .unwrap_or(0);
     let ask_h = if let Some(aq) = app.ask_question.as_ref() {
         aq.card_height()
     } else {
@@ -271,7 +280,7 @@ fn build_working_layout(app: &App, input_h: u16, queue_h: u16, fleet_h: u16) -> 
 /// draw_diff_full and focus_titled_block). The status bar carries the
 /// actionable keys (a/r/i) plus the progress bar.
 fn draw_focus(f: &mut Frame, app: &App) {
-    app.queue_rect.set(Rect::new(0, 0, 0, 0));
+    app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.last_terminal_rows.set(f.area().height);
@@ -302,7 +311,7 @@ fn draw_focus(f: &mut Frame, app: &App) {
 /// reading, with a 1-line overlay status bar showing the line position plus
 /// search/tail hints.
 fn draw_scroll(f: &mut Frame, app: &App) {
-    app.queue_rect.set(Rect::new(0, 0, 0, 0));
+    app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.last_terminal_rows.set(f.area().height);
@@ -351,6 +360,7 @@ fn draw_focus_main(f: &mut Frame, area: Rect, app: &App) {
         Pane::Skills => draw_skills_pane(f, area, app),
         Pane::Model => draw_model_pane(f, area, app),
         Pane::Agents => draw_agents_pane(f, area, app),
+        Pane::Queue => draw_queue_pane(f, area, app),
         _ => capability::draw(f, area, app),
     }
 }
@@ -435,6 +445,13 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // above, the live fleet or the registered directory below.
     if matches!(app.pane, Pane::Agents) {
         draw_agents_pane(f, area, app);
+        return;
+    }
+    // The queue pane renders inline (the Pane primitive): transcript tail
+    // above, the queued-item list below. Opened by clicking the collapsed
+    // +N more strip, not by a slash command.
+    if matches!(app.pane, Pane::Queue) {
+        draw_queue_pane(f, area, app);
         return;
     }
     if app.session.is_some() {
@@ -573,6 +590,14 @@ fn draw_memory_pane(f: &mut Frame, area: Rect, app: &App) {
 /// Default height /memory asks for: a header + an 8-row list + 2 toggle rows
 /// + a footer hint. Capped at half the main area by the caller.
 const MEMORY_PANE_HEIGHT: u16 = 16;
+
+/// Render the queue pane: transcript tail above, the queued-item list in
+/// the lower band. Opened by clicking the collapsed +N more strip.
+fn draw_queue_pane(f: &mut Frame, area: Rect, app: &App) {
+    draw_command_pane(f, area, app, QUEUE_PANE_HEIGHT, queue_pane::draw_content);
+}
+
+const QUEUE_PANE_HEIGHT: u16 = 12;
 
 /// Render the /worktrees pane: transcript tail above, the linked-worktree
 /// list in the lower band. Shares the draw_command_pane template with

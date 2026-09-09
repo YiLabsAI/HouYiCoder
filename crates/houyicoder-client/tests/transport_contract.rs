@@ -8,10 +8,12 @@
 //! them unchanged — the test is written against the transport trait so a
 //! second carrier drops in.
 
-use houyicoder_client::{InProcTransport, Transport};
-use houyicoder_protocol::envelope::{EventEnvelope, EventSeq, RequestEnvelope, RequestId};
+use houyicoder_client::{Client, InProcTransport, Transport};
+use houyicoder_protocol::envelope::{
+    EventEnvelope, EventSeq, RequestEnvelope, RequestId, ResumeFrom,
+};
 use houyicoder_protocol::framing::{FrameDecoder, encode};
-use houyicoder_protocol::frontend::{FrontendEventKind, FrontendRequest};
+use houyicoder_protocol::frontend::{FrontendEvent, FrontendRequest};
 use houyicoder_protocol::handshake::{Hello, PROTOCOL_VERSION, negotiate};
 use houyicoder_protocol::wire::WireErrorKind;
 
@@ -63,7 +65,7 @@ async fn run_protocol_round(transport_a: &mut dyn Transport, transport_b: &mut d
     // decodes it. The seq must survive so a can track its resume cursor.
     let event = EventEnvelope::new(
         EventSeq(7),
-        FrontendEventKind::Message {
+        FrontendEvent::Message {
             delta: "hello world".to_string(),
         },
     );
@@ -76,7 +78,7 @@ async fn run_protocol_round(transport_a: &mut dyn Transport, transport_b: &mut d
         .expect("a recv event");
     assert_eq!(recv_event.seq, EventSeq(7));
     match recv_event.payload {
-        FrontendEventKind::Message { delta } => assert_eq!(delta, "hello world"),
+        FrontendEvent::Message { delta } => assert_eq!(delta, "hello world"),
         other => panic!("expected Message event, got {other:?}"),
     }
 }
@@ -106,6 +108,26 @@ where
 async fn test_in_proc_round_trips() {
     let (mut a, mut b) = InProcTransport::pair(8);
     run_protocol_round(&mut a, &mut b).await;
+}
+
+#[tokio::test]
+async fn test_replacement_resumes_cursor() {
+    let (transport, mut peer) = InProcTransport::pair(4);
+    let resume = ResumeFrom::after(EventSeq(7));
+    let mut client = Client::with_resume(Box::new(transport), resume);
+    let peer_handshake = async {
+        let hello = recv_typed::<Hello>(&mut peer)
+            .await
+            .expect("receive resumed hello");
+        assert_eq!(hello.last_event_seq, Some(EventSeq(7)));
+        peer.send_frame(&encode(&Hello::local()).expect("encode hello"))
+            .await
+            .expect("send hello");
+    };
+
+    let (connected, ()) = tokio::join!(client.connect(), peer_handshake);
+    connected.expect("replacement handshake");
+    assert_eq!(client.resume_cursor(), resume);
 }
 
 /// A closed peer surfaces as a clean close (None) or an Unavailable wire

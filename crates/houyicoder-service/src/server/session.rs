@@ -5,7 +5,6 @@
 //! the parent's privates).
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
@@ -19,36 +18,33 @@ use houyicoder_protocol::wire::{WireError, WireErrorKind};
 use crate::composition::SessionHost;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::protocol_adapter::parse_approval_decision;
-use crate::server::{Server, ServerIo};
+use crate::server::{EventSequencer, Server, ServerIo};
 use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionLogEntry};
 
 impl Server {
-    /// Build a server re-hydrated from a session host: the runner + the shared
-    /// seq counter + the pushed-event cursor come from the host's live handle
-    /// (so they survive a prior connection's disconnect), and the host
-    /// reference is retained so the run path can write the parked PendingTurn
-    /// and the disconnect paths can flush pushed_count back. serve_session is
-    /// the only caller; the single-shot constructors leave host None.
+    /// Build a server re-hydrated from a session host. The runner and event
+    /// sequencer retain their state across connection changes; the host keeps
+    /// permission interruptions available for the next attachment.
     pub(crate) fn new_for_resume(
         runner: Arc<Runner>,
         session: SessionId,
-        next_seq: Arc<AtomicU64>,
-        pushed_count: usize,
+        event_sequencer: EventSequencer,
         gate: Arc<dyn houyicoder_permission::ModeGate>,
         host: Arc<SessionHost>,
+        append_notify: Arc<tokio::sync::Notify>,
     ) -> Self {
         Self {
             runner,
             session,
-            next_seq,
+            event_sequencer,
+            replay_after: None,
             next_req_id: 0,
-            pushed_count,
             gate,
             sandbox_session: None,
             host: Some(host),
             settings_path: houyicoder_config::settings_path(),
             project_path: None,
-            append_notify: None,
+            append_notify: Some(append_notify),
             descriptor_store: None,
             diagnostics: crate::diagnostics::handle(),
             // Resume path does not wire the bus yet; a reconnecting session
@@ -59,7 +55,7 @@ impl Server {
     }
 
     /// Share the store's Append Notify so the serve select drains durable
-    /// events mid-run (route B). The same Arc<Notify> is fed to the store
+    /// events mid-run. The same Arc<Notify> is fed to the store
     /// impl at the composition root; the store fires notify_one per append
     /// and this select's notified() branch wakes to push the new event
     /// without waiting for the run future to resolve.
@@ -145,7 +141,6 @@ pub(crate) async fn resume_pending(
                 let frame = match io.next_frame().await {
                     Some(f) => f,
                     None => {
-                        server.flush_pushed_count();
                         return Err(WireError::new(
                             WireErrorKind::Unavailable,
                             "client closed mid-re-emit",
@@ -249,22 +244,28 @@ pub(crate) async fn resume_pending(
             .map(|d| parse_approval_decision(d.clone()))
             .collect();
         let result = {
-            let resume_fut = server.runner.resume(server.session, &decisions);
+            let runner = Arc::clone(&server.runner);
+            let resume_fut = runner.resume(server.session, &decisions);
             tokio::pin!(resume_fut);
             loop {
+                let notify_fut = match &server.append_notify {
+                    Some(n) => futures::future::Either::Left(n.notified()),
+                    None => futures::future::Either::Right(futures::future::pending::<()>()),
+                };
+                let event_fut = server.event_sequencer.notified();
                 tokio::select! {
-                    biased;
                     r = &mut resume_fut => break r,
                     frame = io.next_frame() => match frame {
                         Some(f) => {
-                            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&f)
-                                && notif.method == "session/cancel"
+                            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&f) {
+                                server.handle_session_notification(&notif);
+                            } else if let Ok(ClientFrame::Request(req)) =
+                                serde_json::from_str::<ClientFrame>(&f)
                             {
-                                server.runner.abort();
+                                server.handle_request_during_run(io, req).await;
                             }
                         }
                         None => {
-                            server.flush_pushed_count();
                             return Err(WireError::new(
                                 WireErrorKind::Unavailable,
                                 "client closed mid-resume",
@@ -272,17 +273,12 @@ pub(crate) async fn resume_pending(
                             ));
                         }
                     },
+                    _ = notify_fut => server.flush_events(io).await?,
+                    _ = event_fut => server.flush_events(io).await?,
                 }
             }
         };
-        // Push the trajectory events the resume produced (post-resume tool
-        // results, the final assistant message, etc.) skipping the prefix the
-        // prior connection already saw.
-        let events = server.runner.store().trajectory_snapshot(server.session);
-        for ev in events.iter().skip(server.pushed_count) {
-            server.push_turn_event(io, ev).await?;
-        }
-        server.pushed_count = events.len();
+        server.flush_events(io).await?;
         match result {
             Ok(run) => match run.outcome {
                 houyicoder_core::agent::RunOutcome::Interruption(more) => {
@@ -314,24 +310,10 @@ pub(crate) async fn resume_pending(
     }
 }
 
-/// Drive one connection against a session hosted by a SessionHost. Rebuilds a
-/// Server from the host's live handle (so the Arc<Runner> + the shared seq
-/// counter + the pushed-event cursor survive a prior connection's
-/// disconnect), then runs serve. On disconnect the host retains everything —
-/// a reattaching connection calls this again and resumes. serve calls
-/// resume_pending after the handshake so a reattach re-emits a parked ask
-/// before the client sends anything. Returns Unavailable when no live runner
-/// is registered for the session (cross-process reconnect without a
-/// checkpoint is the deferred Gap B).
-/// Drive one connection against a session hosted by a SessionHost. Rebuilds a
-/// Server from the host's live handle (so the Arc<Runner> + the shared seq
-/// counter + the pushed-event cursor survive a prior connection's
-/// disconnect), then runs serve. On disconnect the host retains everything —
-/// a reattaching connection calls this again and resumes. serve calls
-/// resume_pending after the handshake so a reattach re-emits a parked ask
-/// before the client sends anything. Returns Unavailable when no live runner
-/// is registered for the session (cross-process reconnect without a
-/// checkpoint is the deferred Gap B).
+/// Drive one connection against a hosted session. The runner, reliable event
+/// journal, sequence allocator, and durable cursor survive disconnect while
+/// each attachment supplies a new carrier. A parked permission turn resumes
+/// after reliable history replay.
 ///
 /// Lease guard: a terminal session (Cancelled or Shutdown) refuses reattach —
 /// the run was aborted or handed off, so there is nothing to re-emit. A
@@ -370,10 +352,10 @@ pub(crate) async fn serve_session(
     let server = Server::new_for_resume(
         handle.runner,
         session,
-        handle.next_seq,
-        handle.pushed_count,
+        handle.event_sequencer,
         handle.gate,
         host.clone(),
+        handle.append_notify,
     );
     let result = server.serve(io).await;
     // Release the lease: a clean exit or a disconnect both leave the session

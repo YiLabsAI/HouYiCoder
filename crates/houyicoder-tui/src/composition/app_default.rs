@@ -20,7 +20,7 @@ use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
-use crate::state::{LiveBlock, MemoryScopeTab, StatusTab, TrustChoice};
+use crate::state::{LiveBlock, MemoryScopeTab, QueueViewState, StatusTab, TrustChoice};
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub fn app() -> App {
@@ -94,6 +94,7 @@ pub fn app() -> App {
         },
         memory_scope_tab: MemoryScopeTab::All,
         memory_list: ListPaneState::default(),
+        queue_view: QueueViewState::default(),
         worktree_entries: Vec::new(),
         worktree_list: ListPaneState::default(),
         worktree_level: Cell::new(0),
@@ -145,7 +146,6 @@ pub fn app() -> App {
         pending: Vec::new(),
         selection: Selection::default(),
         transcript_rect: Cell::new(Rect::new(0, 0, 0, 0)),
-        queue_rect: Cell::new(Rect::new(0, 0, 0, 0)),
         jump_pill_rect: Cell::new(Rect::new(0, 0, 0, 0)),
         last_transcript_rows: RefCell::new(Vec::new()),
         last_all_rows: RefCell::new(Vec::new()),

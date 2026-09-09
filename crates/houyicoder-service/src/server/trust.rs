@@ -58,7 +58,6 @@ impl Server {
             let frame = match io.next_frame().await {
                 Some(f) => f,
                 None => {
-                    self.flush_pushed_count();
                     return Err(WireError::new(
                         WireErrorKind::Unavailable,
                         "client closed mid-trust-prompt",

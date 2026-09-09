@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// The wire protocol version. Bumped only on a breaking change to the
 /// message set or framing; a peer that sees a different version fails the
 /// handshake rather than guessing.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.
@@ -24,26 +24,18 @@ pub struct Capabilities {
     pub detach: bool,
 }
 
-/// The Hello frame: protocol version plus advertised capabilities. Both ends
-/// send this as their first frame; the handshake succeeds when versions match
-/// and each side's required capabilities are met by the other. A client
-/// additionally declares how many trajectory events it has already rendered
-/// (last_event_count) so a fresh or reconnecting client gets only the events it
-/// missed replayed, not the whole transcript again; None means a fresh client
-/// that wants the full transcript from the start.
+/// The Hello frame: protocol version, capabilities, and the client's event
+/// replay cursor. A fresh client requests the complete reliable journal; a
+/// reconnecting client resumes after its highest processed sequence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     pub protocol_version: u16,
     pub capabilities: Capabilities,
-    /// The count of trajectory events the client has already rendered. The
-    /// server uses it as the replay start index (skip this many events from
-    /// the current trajectory snapshot) because the trajectory mirror is
-    /// append-only with no per-event seq the server could map a client seq to.
-    /// A reconnecting client gets only what it missed; None means a fresh
-    /// client that wants the whole transcript. Default None keeps the field
-    /// backward-compatible with peers that predate it.
+    /// The highest event sequence processed by this client. New peers use this
+    /// cursor because one trajectory entry may project zero, one, or multiple
+    /// wire events. None requests the complete reliable event journal.
     #[serde(default)]
-    pub last_event_count: Option<u64>,
+    pub last_event_seq: Option<crate::envelope::EventSeq>,
 }
 
 impl Hello {
@@ -56,7 +48,7 @@ impl Hello {
                 cas: false,
                 detach: false,
             },
-            last_event_count: None,
+            last_event_seq: None,
         }
     }
 }
@@ -106,7 +98,7 @@ mod tests {
         let peer = Hello {
             protocol_version: PROTOCOL_VERSION + 1,
             capabilities: Capabilities::default(),
-            last_event_count: None,
+            last_event_seq: None,
         };
         let err = negotiate(&local, &peer).expect_err("mismatch fails");
         assert_eq!(err.kind, WireErrorKind::ProtocolVersion);

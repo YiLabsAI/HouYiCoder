@@ -5,10 +5,10 @@
 //! event types leak through.
 
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunError, RunResult,
 };
+use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as WireSessionId};
 use houyicoder_protocol::llm::EffortLevel;
 use std::time::{Duration, Instant};
 
@@ -214,12 +214,10 @@ pub enum AgentMessage {
         elapsed_secs: u64,
         lines: Option<u64>,
     },
-    /// Texts the runner drained from its mid-turn injection queue this run.
-    /// Each consumed message is removed from the pending-input copy (FIFO +
-    /// text match) — a consumed message is no longer pending, so the queue
-    /// view + the run-boundary drain stay accurate (no double-spawn at run
-    /// end).
-    QueueConsumed { texts: Vec<String> },
+    /// Identified inputs the runner drained from its mid-turn injection queue.
+    /// Each acknowledgement removes only the matching pending item, so delayed
+    /// delivery cannot remove a newer input with the same text.
+    QueuedInputCommitted { inputs: Vec<QueuedInput> },
     /// A runtime notice the agent loop wants surfaced as a system line (e.g.
     /// a provider rejected an over-long request without naming its limit,
     /// pointing the user at the catalog override). The host renders the
@@ -574,11 +572,10 @@ pub enum ClientCommand {
     /// next call + resumes the current task (not a separate follow-up run).
     /// If the run ends before the next turn boundary, the message stays
     /// queued + the host's run-boundary queue drains it as a follow-up run.
-    /// Fire-and-forget notification (no reply). Carries the text since the
-    /// host's queue + the frontend pending copy reconcile by text (FIFO).
+    /// Fire-and-forget notification carrying stable queue identity.
     InjectUser {
         session_id: WireSessionId,
-        text: String,
+        input: QueuedInput,
     },
     /// Steer a running child the user is viewing (teammate view): route the
     /// text into the child's bus inbox rather than starting a parent turn. The
@@ -605,13 +602,11 @@ pub enum ClientCommand {
     KillChild {
         child_sid: String,
     },
-    /// Remove a queued message by text (the overlay-delete path, or popping
-    /// the head to start a follow-up run so the new run does not re-inject
-    /// it). The server drops the first queue entry whose text matches;
-    /// no-op when it was already drained. Fire-and-forget notification.
+    /// Remove one identified queued message. A delayed removal is a no-op when
+    /// that exact item was already drained, even if equal text was re-enqueued.
     QueueRemove {
         session_id: WireSessionId,
-        text: String,
+        id: PendingInputId,
     },
     /// Reset the server's cumulative usage + trajectory for the session (the
     /// /clear command). Fire-and-forget; the ack is ignored — the host

@@ -276,6 +276,26 @@ fn test_unknown_slash_is_message() {
     assert!(echoed, "the unknown /-prefix must echo as a User message");
 }
 
+/// Every known slash command leaves a visible User turn before its response.
+#[test]
+fn test_command_echoes_user_turn() {
+    let mut app = working_app();
+    app.input.set("/debug".to_string());
+    app.submit_input();
+    let echoed = app
+        .transcript
+        .iter()
+        .any(|l| matches!(l, TranscriptLine::User(s) if s == "/debug"));
+    assert!(
+        echoed,
+        "/debug must echo as a User turn before its response"
+    );
+    assert!(
+        matches!(app.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
+        "the debug response should follow the echoed command"
+    );
+}
+
 /// A leading-slash path (interior slash) is free text, not a command:
 /// it must not error as "unknown command" and must echo as a User turn.
 #[test]

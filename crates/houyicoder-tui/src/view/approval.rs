@@ -23,7 +23,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
     f.render_widget(Clear, area);
-    let chunks = split_card(area, a.two_option_card());
+    let args_height = args_height(a, area.width);
+    let reason_height = reason_height(a, area.width);
+    let chunks = split_card(area, a.two_option_card(), args_height, reason_height);
 
     // Top separator: full-width thin horizontal rule.
     let sep: String = "─".repeat(area.width as usize);
@@ -36,12 +38,13 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // ask was routed up from a delegation so the user can tell a child's ask
     // from the parent's own tool call. An entitlement ask renders its own
     // title — it is not a tool call but a deny-log discovery.
+    let title = approval_title(&a.tool);
     let header = if a.is_entitlement() {
         " Sandbox entitlement".to_string()
     } else {
         match &a.delegation {
-            Some(d) => format!(" {} · {} command", d.subagent_type, cap_first(&a.tool)),
-            None => format!(" {} command", cap_first(&a.tool)),
+            Some(d) => format!(" {} · {title}", d.subagent_type),
+            None => format!(" {title}"),
         }
     };
     f.render_widget(
@@ -96,35 +99,80 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 /// third option slot entirely; a three-option card keeps it. No fixed gap
 /// rows — widgets carry their own visual separation. Reason is Min(1) so
 /// it grows only when a containment note is present.
-fn split_card(area: Rect, two_option: bool) -> std::rc::Rc<[Rect]> {
+fn split_card(
+    area: Rect,
+    two_option: bool,
+    args_height: u16,
+    reason_height: u16,
+) -> std::rc::Rc<[Rect]> {
     let constraints = if two_option {
         vec![
-            Constraint::Length(1), // [0] separator
-            Constraint::Length(1), // [1] header
-            Constraint::Min(1),    // [2] args
-            Constraint::Min(1),    // [3] reason
-            Constraint::Length(1), // [4] question
-            Constraint::Length(1), // [5] option 1
-            Constraint::Length(1), // [6] option 2
-            Constraint::Length(1), // [7] hint
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(args_height),
+            Constraint::Length(reason_height),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
         ]
     } else {
         vec![
-            Constraint::Length(1), // [0] separator
-            Constraint::Length(1), // [1] header
-            Constraint::Min(1),    // [2] args
-            Constraint::Min(1),    // [3] reason
-            Constraint::Length(1), // [4] question
-            Constraint::Length(1), // [5] option 1
-            Constraint::Length(1), // [6] option 2
-            Constraint::Length(1), // [7] option 3
-            Constraint::Length(1), // [8] hint
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(args_height),
+            Constraint::Length(reason_height),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
         ]
     };
     Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(area)
+}
+
+pub(super) fn card_height(a: &crate::state::Approval, width: u16) -> u16 {
+    let fixed = if a.two_option_card() { 6 } else { 7 };
+    fixed + args_height(a, width) + reason_height(a, width)
+}
+
+fn args_height(a: &crate::state::Approval, width: u16) -> u16 {
+    let parsed = serde_json::from_str::<Value>(&a.args).ok();
+    let lines = if a.is_entitlement() {
+        entitlement_detail(&a.args, parsed.as_ref())
+    } else if let Some(lines) = parsed.as_ref().and_then(|v| diff_preview(&a.tool, v)) {
+        lines
+    } else {
+        vec![Line::from(format!(
+            "   {}",
+            args_command(&a.tool, parsed.as_ref(), &a.args)
+        ))]
+    };
+    lines
+        .iter()
+        .map(|line| wrapped_height(&line.to_string(), width))
+        .sum::<u16>()
+        .max(1)
+}
+
+fn reason_height(a: &crate::state::Approval, width: u16) -> u16 {
+    let detail = format!(" {}: {}", source_label(a), a.reason);
+    let mut rows = wrapped_height(&detail, width);
+    if let Some(note) = &a.containment_note {
+        rows = rows.saturating_add(wrapped_height(&format!(" {note}"), width));
+    }
+    rows.max(1)
+}
+
+fn wrapped_height(text: &str, width: u16) -> u16 {
+    text.split('\n')
+        .map(|line| super::line_wrap::wrap_line(line, width as usize).len() as u16)
+        .sum::<u16>()
+        .max(1)
 }
 
 /// Render the command/args block. For edit/multiedit, render a colored
@@ -297,17 +345,27 @@ fn source_label(a: &crate::state::Approval) -> &'static str {
 /// Long commands are tail-truncated so the reason and option lines below
 /// stay visible in the card's bounded area.
 fn args_command(tool: &str, value: Option<&Value>, raw: &str) -> String {
-    let cmd = if let Some(v) = value {
-        if let Some(c) = v.get("command").and_then(|c| c.as_str()) {
-            c.to_string()
-        } else {
-            v.to_string()
-        }
-    } else {
-        let _ = tool;
-        raw.to_string()
+    let field = match tool.to_ascii_lowercase().as_str() {
+        "read" | "write" | "edit" | "multiedit" | "patch" | "str_replace" => "path",
+        _ => "command",
     };
-    truncate_tail(&cmd, 80)
+    let text = value
+        .and_then(|v| v.get(field))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| value.map(Value::to_string))
+        .unwrap_or_else(|| raw.to_string());
+    truncate_tail(&text, 80)
+}
+
+fn approval_title(tool: &str) -> String {
+    let noun = match tool.to_ascii_lowercase().as_str() {
+        "read" => "Read file",
+        "write" => "Write file",
+        "edit" | "multiedit" | "patch" | "str_replace" => "Edit file",
+        _ => return format!("{} command", cap_first(tool)),
+    };
+    noun.to_string()
 }
 
 /// Truncate a string to at most max bytes of the tail, prefixing an

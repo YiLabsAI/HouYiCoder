@@ -118,9 +118,16 @@ impl Runner {
         &self,
         session: SessionId,
         text: String,
+        pending_input_id: Option<u64>,
     ) -> Result<(), RunError> {
         self.store
-            .append(new_event(session, SessionEvent::MidTurnInput { text }))
+            .append(new_event(
+                session,
+                SessionEvent::MidTurnInput {
+                    text,
+                    pending_input_id,
+                },
+            ))
             .await?;
         Ok(())
     }

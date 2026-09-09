@@ -299,6 +299,69 @@ fn test_two_option_card_compact() {
     );
 }
 
+/// A short protected-path Read ask uses its natural content height. The path,
+/// reason, and question stay adjacent instead of splitting surplus card rows.
+#[test]
+fn test_read_card_compact() {
+    use houyicoder_protocol::frontend::permission::AskSource;
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.approval = Some(crate::state::Approval {
+        tool: "read".into(),
+        args: r#"{"path":"/repo/.houyicoder/bash-output/out.log","max_bytes":5000}"#.into(),
+        reason: "accessing a protected path needs confirmation".into(),
+        source: Some(AskSource::SystemSafety),
+        selected: 0,
+        call_id: String::new(),
+        options: Vec::new(),
+        ..Default::default()
+    });
+    let out = render_text(&app, 80, 24);
+    let lines: Vec<&str> = out.lines().collect();
+    let positions = [
+        lines
+            .iter()
+            .position(|line| line.contains("Read file"))
+            .expect("header"),
+        lines
+            .iter()
+            .position(|line| line.contains("/repo/.houyicoder/bash-output/out.log"))
+            .expect("path"),
+        lines
+            .iter()
+            .position(|line| line.contains("Protected path:"))
+            .expect("reason"),
+        lines
+            .iter()
+            .position(|line| line.contains("Do you want to proceed?"))
+            .expect("question"),
+        lines
+            .iter()
+            .position(|line| line.contains("1. Yes"))
+            .expect("yes"),
+        lines
+            .iter()
+            .position(|line| line.contains("2. No"))
+            .expect("no"),
+        lines
+            .iter()
+            .position(|line| line.contains("Esc cancel"))
+            .expect("hint"),
+    ];
+    for pair in positions.windows(2) {
+        assert_eq!(pair[1], pair[0] + 1, "card rows must be adjacent:\n{out}");
+    }
+    assert_eq!(
+        app.approval_rect.get().height,
+        8,
+        "separator plus seven content rows"
+    );
+    assert!(
+        !out.contains("max_bytes"),
+        "secondary JSON fields stay out of the path summary:\n{out}"
+    );
+}
+
 /// A long command in the args block is tail-truncated so the reason
 /// and option lines below stay visible in the card's bounded area.
 #[test]

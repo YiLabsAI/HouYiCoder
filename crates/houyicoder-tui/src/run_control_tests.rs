@@ -42,10 +42,10 @@ fn agent_msg(text: &str) -> TranscriptFrame {
 /// network. tools lets the test register approval-requiring tools. Matches the
 /// production composition root: the runner is shared (Arc) between the server
 /// task and the TUI, and the driver task owns the client.
-pub(super) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> App {
+pub(crate) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> App {
     // Attach the append-notify to the store (production wiring): without it
     // the store never wakes the server's mid-run drain, so every event
-    // (frames + QueueConsumed) would land only post-resolve and a mid-run
+    // (frames + QueuedInputCommitted) would land only post-resolve and a mid-run
     // chain test would see the whole run as one end-of-run batch.
     let append_notify = Arc::new(tokio::sync::Notify::new());
     let store = Arc::new(

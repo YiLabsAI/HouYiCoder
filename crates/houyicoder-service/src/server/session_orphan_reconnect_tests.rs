@@ -8,7 +8,6 @@
 use super::tests::*;
 use super::*;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
@@ -104,9 +103,15 @@ async fn test_disconnect_orphan_repaired() {
         },
     ));
     let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner.clone(), next_seq, gate);
+    host.insert(
+        session,
+        runner.clone(),
+        event_sequencer,
+        gate,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
 
     // Connection 1: send "go" → run starts → provider emits ToolCall(c1) →
     // BlockingTool executes + never returns. Poll the durable store (not the

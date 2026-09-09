@@ -1,15 +1,16 @@
-//! Drain-flow tests: the event loop's idle drain (continuous-state polling +
-//! consumptive idempotency). A queued item auto-sends on a clean run end
-//! (FinalOutput) — the user got their answer, drain FIFO. An interrupt/error
-//! parks it for the user to pop to the input box via Esc + edit before
-//! re-sending; a redirect on interrupt should not auto-fire the pending input.
+//! Queue synchronization tests for enqueue, promotion, identity-based commit,
+//! run-end drain, interruption demotion, strict ordering, and command barriers.
 
 #![cfg(test)]
 
 use crate::pending_queue::PendingItem;
+use crate::run_control::run_control_tests::app_with_provider;
+use houyicoder_core::agent::ToolRegistry;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ContentBlock, RunOutcome, RunResult, StopReason};
 use houyicoder_protocol::llm::Usage;
+use houyicoder_provider::FakeProvider;
+use std::sync::Arc;
 
 use crate::agent_message::AgentMessage;
 use crate::composition;
@@ -356,5 +357,129 @@ fn test_parked_head_drains_first() {
         app.pending,
         vec![PendingItem::Command("/resume sid-b".into())],
         "Command stays for the next drain (strict FIFO, parked head)"
+    );
+}
+
+/// Enqueueing input preserves the active run request identity.
+#[test]
+fn test_busy_reqid_stable() {
+    let p = Arc::new(FakeProvider::text("ok"));
+    let mut app = app_with_provider(p, ToolRegistry::new());
+    // Simulate an in-flight run with its request identifier tracked.
+    app.agent_busy = true;
+    let in_flight = houyicoder_protocol::envelope::RequestId(42);
+    app.active_run_req_id.set(Some(in_flight));
+    // A second Enter while busy takes the queue path.
+    app.spawn_run("second".into());
+    assert_eq!(
+        app.active_run_req_id.get(),
+        Some(in_flight),
+        "queue path must not overwrite the in-flight run's req_id"
+    );
+    assert_eq!(app.pending.len(), 1, "second input queued");
+    assert_eq!(app.pending[0], PendingItem::Message("second".into()));
+}
+
+/// Only the queue head may hold a server-side copy.
+#[test]
+fn test_parked_head_promotes() {
+    let p = Arc::new(FakeProvider::text("ok"));
+    let mut app = app_with_provider(p, ToolRegistry::new());
+    app.agent_busy = true;
+    // A parked head carried across a swap is promoted in the current run.
+    app.pending
+        .push(PendingItem::ParkedMessage("carried".into()));
+    app.spawn_run("newcomer".into());
+    assert_eq!(
+        app.pending[0],
+        PendingItem::Message("carried".into()),
+        "the parked head is promoted when a run is in flight"
+    );
+    assert_eq!(
+        app.pending[1],
+        PendingItem::ParkedMessage("newcomer".into()),
+        "the newcomer parks behind the live head; one live copy"
+    );
+    // A Message head already holds the copy, so the newcomer still parks.
+    let mut app2 = app_with_provider(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
+    app2.agent_busy = true;
+    app2.pending.push(PendingItem::Message("injected".into()));
+    app2.spawn_run("newcomer".into());
+    assert_eq!(
+        app2.pending[1],
+        PendingItem::ParkedMessage("newcomer".into()),
+        "a Message head holds the copy; the newcomer parks so only one races"
+    );
+}
+
+/// Committing the live head promotes the next pending input.
+#[test]
+fn test_commit_promotes_next() {
+    let p = Arc::new(FakeProvider::text("ok"));
+    let mut app = app_with_provider(p, ToolRegistry::new());
+    app.agent_busy = true;
+    let committed = houyicoder_protocol::frontend::QueuedInput::new("a");
+    app.pending.push(PendingItem::Message(committed.clone()));
+    app.pending.push(PendingItem::ParkedMessage("b".into()));
+    app.handle_agent_message(AgentMessage::QueuedInputCommitted {
+        inputs: vec![committed],
+    });
+    assert_eq!(
+        app.pending,
+        vec![PendingItem::Message("b".into())],
+        "b promoted into the live-copy slot after a was committed"
+    );
+    assert_eq!(app.pending.len(), 1, "only b remains, live");
+}
+
+/// A delayed commit cannot remove a newer input with equal text.
+#[test]
+fn test_commit_identity() {
+    let mut app = app_with_provider(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
+    app.agent_busy = true;
+    let old = houyicoder_protocol::frontend::QueuedInput::new("same");
+    let new = houyicoder_protocol::frontend::QueuedInput::new("same");
+    app.pending.push(PendingItem::Message(new.clone()));
+
+    app.handle_agent_message(AgentMessage::QueuedInputCommitted { inputs: vec![old] });
+
+    let PendingItem::Message(remaining) = &app.pending[0] else {
+        panic!("new input must remain live");
+    };
+    assert_eq!(remaining.id, new.id);
+}
+
+/// While a run is busy, a submit copies the input to the pending queue and
+/// sends it for mid-turn injection. A second submit appends in queue order.
+#[test]
+fn test_busy_submit_mirrors_queue() {
+    let mut app = working();
+    app.agent_busy = true;
+    app.spawn_run("first interjection".into());
+    assert_eq!(
+        app.pending,
+        vec![PendingItem::Message("first interjection".into())],
+        "busy submit lands in the queue",
+    );
+    // A second submit while still busy appends in first-in, first-out order.
+    app.spawn_run("second interjection".into());
+    assert_eq!(app.pending.len(), 2, "FIFO queue order");
+}
+
+/// A QueuedInputCommitted event removes the exact identified entry from the
+/// pending copy, keeping queue state and run-end draining accurate.
+#[test]
+fn test_consumed_removes_from_mirror() {
+    let mut app = working();
+    let consumed = houyicoder_protocol::frontend::QueuedInput::new("alpha");
+    app.pending.push(PendingItem::Message(consumed.clone()));
+    app.pending.push(PendingItem::Message("beta".into()));
+    app.handle_agent_message(AgentMessage::QueuedInputCommitted {
+        inputs: vec![consumed],
+    });
+    assert_eq!(
+        app.pending,
+        vec![PendingItem::Message("beta".into())],
+        "consumed entry removed from the copy",
     );
 }

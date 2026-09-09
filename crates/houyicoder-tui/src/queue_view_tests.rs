@@ -1,17 +1,13 @@
-//! Interaction tests for the flow-completion features: task auto-start into
-//! design, the convergence rework loop (review->implement, verify->implement),
-//! rewind un-approve + targeted rewind, and the verify failure path. Each test
-//! renders the App and asserts on real output.
+//! Queue interface tests for recall actions, footer rendering, and the queue pane.
 
 #![cfg(test)]
 
 use crate::pending_queue::PendingItem;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use houyicoder_protocol::frontend::SlashCommand;
 use ratatui::style::Color;
 
 use crate::composition;
-use crate::state::{Divergence, Pane, Screen, Stage, TranscriptLine};
+use crate::state::{Pane, Screen, Stage};
 use crate::test_support::{render_buffer, render_text};
 
 fn working() -> crate::state::App {
@@ -155,45 +151,6 @@ fn test_recall_then_clear_loses() {
     );
 }
 
-#[test]
-fn test_auto_start_task_enters() {
-    let mut app = working();
-    app.input.set("fix the login bug".to_string());
-    app.submit_input();
-    assert_eq!(app.stage, Stage::Design, "task should auto-start design");
-    assert_eq!(app.pane, Pane::Spec);
-    assert!(
-        matches!(
-            app.transcript.last(),
-            Some(TranscriptLine::System(s)) if s.contains("drafting design")
-        ),
-        "should log the design-draft transition"
-    );
-}
-
-/// Every submission — including slash commands — must leave a visible User
-/// turn in the transcript before its response, so issuing /context or /debug
-/// is a real interaction record, not a side-channel that only shows the
-/// result.
-#[test]
-fn test_command_echoes_user_turn() {
-    let mut app = working();
-    app.input.set("/debug".to_string());
-    app.submit_input();
-    let echoed = app
-        .transcript
-        .iter()
-        .any(|l| matches!(l, TranscriptLine::User(s) if s == "/debug"));
-    assert!(
-        echoed,
-        "/debug must echo as a User turn before its response"
-    );
-    assert!(
-        matches!(app.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
-        "the debug response should follow the echoed command"
-    );
-}
-
 /// Queued inputs render in the bounded footer strip above the input box (not
 /// as transcript tail rows), so a long queue never eats the interaction view.
 /// Regression guard for the strip going invisible (budget=0 or wrong mode).
@@ -232,7 +189,8 @@ fn test_queue_strip_renders() {
     let mut app = working();
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("fix the bug".into()));
-    app.pending.push(PendingItem::Message("run tests".into()));
+    app.pending
+        .push(PendingItem::ParkedMessage("run tests".into()));
     let out = render(&app);
     assert!(
         out.contains("→ next"),
@@ -245,6 +203,25 @@ fn test_queue_strip_renders() {
     assert!(
         out.contains("fix the bug") && out.contains("run tests"),
         "both queued items previewed, got:\n{out}"
+    );
+}
+
+#[test]
+fn test_multiline_preview() {
+    let mut app = working();
+    app.agent_busy = true;
+    app.pending.push(PendingItem::Message(
+        "first line\nsecond line\nthird line".into(),
+    ));
+    let out = render(&app);
+    assert!(
+        out.contains("first line"),
+        "first line remains visible:\n{out}"
+    );
+    assert!(out.contains("+2 lines"), "hidden lines are counted:\n{out}");
+    assert!(
+        !out.contains("second line"),
+        "preview stays on one row:\n{out}"
     );
 }
 
@@ -268,109 +245,6 @@ fn test_queue_strip_in_focus() {
     );
 }
 
-#[test]
-fn test_rewind_unapproves_artifact() {
-    let mut app = working();
-    app.run_command(SlashCommand::Spec);
-    app.approve_in_pane(); // spec approved -> plan
-    assert!(app.spec_artifact.approved);
-    app.run_command(SlashCommand::Rewind);
-    assert_eq!(app.stage, Stage::Design);
-    assert!(
-        !app.spec_artifact.approved,
-        "rewind should un-approve the spec artifact"
-    );
-    assert!(
-        matches!(
-            app.transcript.last(),
-            Some(TranscriptLine::System(s)) if s.contains("un-approved")
-        ),
-        "should log the un-approve note"
-    );
-}
-
-#[test]
-fn test_rewind_targeted_to_named() {
-    let mut app = working();
-    app.run_command(SlashCommand::Spec);
-    app.approve_in_pane(); // -> plan
-    app.approve_in_pane(); // -> implement
-    app.input.set("/rewind spec".to_string());
-    app.submit_input();
-    assert_eq!(app.stage, Stage::Design, "targeted rewind to design");
-    assert!(!app.spec_artifact.approved);
-}
-
-#[test]
-fn test_rework_real_finding() {
-    let mut app = working();
-    app.run_command(SlashCommand::Spec);
-    app.approve_in_pane(); // design -> implement
-    // approve all 3 changes; auto-advance walks pending changes in order and
-    // trips the all-approved transition to verify.
-    for _ in 0..3 {
-        app.approve_in_pane();
-    }
-    assert_eq!(app.stage, Stage::Verify);
-    // focus the real security finding (S-2 is verdict real)
-    while app.review.current().is_none_or(|f| f.verdict != "real") {
-        app.navigate_pane(true);
-        if app.review.focus == 0 {
-            break;
-        }
-    }
-    app.rework_in_pane();
-    assert_eq!(
-        app.stage,
-        Stage::Implementing,
-        "rework from review should go back to implementing"
-    );
-    assert_eq!(app.pane, Pane::Diff);
-    assert_eq!(
-        app.spec_clauses
-            .iter()
-            .find(|c| c.id == "clause-2")
-            .map(|c| c.status),
-        Some(Divergence::Partial),
-        "real finding's clause should regress to partial"
-    );
-}
-
-#[test]
-fn test_verify_fail_rework() {
-    let mut app = working();
-    app.run_command(SlashCommand::Spec);
-    app.approve_in_pane(); // design -> implement
-    // approve all 3 changes (auto-advance) -> verify, then all 3 findings
-    // (review phase, navigate between findings) -> machine-check phase.
-    for _ in 0..3 {
-        app.approve_in_pane();
-    }
-    for _ in 0..3 {
-        app.approve_in_pane();
-        app.navigate_pane(true);
-    }
-    assert_eq!(app.stage, Stage::Verify);
-    // Simulate a failed verify directly (no /verify-fail test hook in the
-    // production dispatcher): the rework path is what matters, not the
-    // trigger. verify_result.passed is the field the gate reads.
-    app.verify_result.passed = false;
-    app.verify_result.checks = crate::composition::failing_checks();
-    assert!(!app.verify_result.passed);
-    // 'a' cannot complete on failure
-    app.approve_in_pane();
-    assert_eq!(app.stage, Stage::Verify, "cannot complete on failed checks");
-    // 'r' rework -> back to implementing
-    app.rework_in_pane();
-    assert_eq!(
-        app.stage,
-        Stage::Implementing,
-        "verify rework should go back to implementing"
-    );
-    let out = render(&app);
-    println!("--- after verify rework ---\n{out}\n--- end ---");
-}
-
 /// A click on a footer-strip preview item recalls that item into the input:
 /// removed from the queue, loaded to the input.
 #[test]
@@ -378,9 +252,9 @@ fn test_click_footer_recalls_item() {
     let mut app = working();
     app.pending.push(PendingItem::Message("first task".into()));
     app.pending.push(PendingItem::Message("second task".into()));
-    // Render so queue_rect is stashed.
+    // Render so queue_view.strip_rect is stashed.
     render_buffer(&app, 100, 28);
-    let qrect = app.queue_rect.get();
+    let qrect = app.queue_view.strip_rect.get();
     assert!(qrect.height > 0, "queue strip rendered with a rect");
     // Click the first item row (row 0 inside the strip).
     let click = mouse_at(qrect.x + 2, qrect.y);
@@ -406,7 +280,7 @@ fn test_click_second_row_recalls() {
     app.pending.push(PendingItem::Message("first task".into()));
     app.pending.push(PendingItem::Message("second task".into()));
     render_buffer(&app, 100, 28);
-    let qrect = app.queue_rect.get();
+    let qrect = app.queue_view.strip_rect.get();
     assert!(qrect.height >= 2, "two-item queue gets two rows");
     let click = mouse_at(qrect.x + 2, qrect.y + 1);
     crate::app::handle_mouse(&mut app, click);
@@ -512,23 +386,36 @@ fn test_queue_next_row() {
 }
 
 /// A click on the +N more row (or the one-line summary on small windows)
-/// pulls the whole queue back into the input box in order — same as Esc
-/// recall, not a single-item recall.
+/// opens the queue pane — a non-destructive browse action, not a
+/// recall-all. The queue items stay pending; the pane lets the user pick
+/// one to recall or use R for explicit recall-all.
 #[test]
-fn test_click_more_recalls_all() {
+fn test_click_more_opens_queue() {
     let mut app = working();
     app.pending.push(PendingItem::Message("a".into()));
     app.pending.push(PendingItem::Message("b".into()));
     app.pending.push(PendingItem::Message("c".into()));
     app.pending.push(PendingItem::Message("d".into()));
     render_buffer(&app, 100, 28);
-    let qrect = app.queue_rect.get();
+    let qrect = app.queue_view.strip_rect.get();
     assert!(qrect.height >= 2, "strip has the head row + a +N row");
     let more_row = qrect.y + 1;
     let click = mouse_at(qrect.x + 2, more_row);
     crate::app::handle_mouse(&mut app, click);
-    assert_eq!(app.input.value(), "a\nb\nc\nd", "+N row pulls all in order");
-    assert!(app.pending.is_empty(), "queue drained on +N click");
+    assert_eq!(
+        app.pane,
+        crate::state::Pane::Queue,
+        "+N row opens the queue pane"
+    );
+    assert_eq!(
+        app.pending.len(),
+        4,
+        "queue items are not drained by opening the pane"
+    );
+    assert!(
+        app.input.value().is_empty(),
+        "input box is not filled by opening the pane"
+    );
 }
 
 fn mouse_at(x: u16, y: u16) -> MouseEvent {
@@ -540,68 +427,163 @@ fn mouse_at(x: u16, y: u16) -> MouseEvent {
     }
 }
 
-// --- mid-turn injection (session/inject + session/queue_remove wires) ---
-
-use crate::agent_message::AgentMessage;
-
-/// While a run is busy, a submit copies the input to pending (the
-/// queue view) + ships a session/inject so the host enqueues it for mid-turn
-/// injection. The pending copy is what the strip renders + what the run-end
-/// drain spawns if the run ends before the next turn boundary consumes it.
+/// Enter in the queue pane recalls only the selected item, not all.
 #[test]
-fn test_busy_submit_mirrors_queue() {
+fn test_pane_enter_recalls_one() {
     let mut app = working();
-    app.agent_busy = true;
-    app.spawn_run("first interjection".into());
-    assert_eq!(
-        app.pending,
-        vec![PendingItem::Message("first interjection".into())],
-        "busy submit lands in the queue",
-    );
-    // A second submit while still busy appends (FIFO).
-    app.spawn_run("second interjection".into());
-    assert_eq!(app.pending.len(), 2, "FIFO queue order");
-}
-
-/// While a teammate view is open, a submit steers to the viewed child rather
-/// than starting a parent turn: no parent run starts (agent_busy stays false)
-/// and no parent transcript echo lands.
-#[test]
-fn test_teammate_submit_steers() {
-    let mut app = working();
-    app.teammate_view = Some(crate::records::TeammateView {
-        child_sid: "c1".into(),
-        ..Default::default()
-    });
-    app.spawn_run("focus on auth".into());
-    assert!(!app.agent_busy, "steering does not start a parent run");
-    assert!(
-        !app.transcript
-            .iter()
-            .any(|l| matches!(l, TranscriptLine::User(_))),
-        "no parent echo for a steering submit"
-    );
-    assert!(
-        app.pending.is_empty(),
-        "steering does not queue on the parent"
-    );
-}
-
-/// A QueueConsumed event (the host reports which queued texts the drive loop
-/// injected this run) removes the matching entry from the pending copy — a consumed
-/// message is no longer pending, so the queue view + run-end drain stay
-/// accurate (no double-spawn at run end).
-#[test]
-fn test_consumed_removes_from_mirror() {
-    let mut app = working();
+    app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("alpha".into()));
     app.pending.push(PendingItem::Message("beta".into()));
-    app.handle_agent_message(AgentMessage::QueueConsumed {
-        texts: vec!["alpha".to_string()],
-    });
+    app.queue_view.cursor = 1;
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        app.input.value(),
+        "beta",
+        "only the selected item is recalled"
+    );
+    assert_eq!(
+        app.pending,
+        vec![PendingItem::Message("alpha".into())],
+        "the other item stays queued",
+    );
+    assert_eq!(app.pane, Pane::Transcript, "pane closes after recall");
+}
+
+/// R in the queue pane recalls all items (explicit bulk action).
+#[test]
+fn test_pane_r_recalls_all() {
+    let mut app = working();
+    app.pane = Pane::Queue;
+    app.pending.push(PendingItem::Message("a".into()));
+    app.pending.push(PendingItem::Message("b".into()));
+    app.pending.push(PendingItem::Message("c".into()));
+    crate::keys::handle_working(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.input.value(), "a\nb\nc", "all items recalled in order");
+    assert!(app.pending.is_empty(), "queue drained");
+    assert_eq!(app.pane, Pane::Transcript, "pane closes after recall-all");
+}
+
+/// d in the queue pane deletes the selected item without recalling it.
+#[test]
+fn test_pane_d_deletes_one() {
+    let mut app = working();
+    app.pane = Pane::Queue;
+    app.pending.push(PendingItem::Message("alpha".into()));
+    app.pending.push(PendingItem::Message("beta".into()));
+    app.queue_view.cursor = 0;
+    crate::keys::handle_working(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    );
+    assert!(app.input.value().is_empty(), "input not filled on delete");
     assert_eq!(
         app.pending,
         vec![PendingItem::Message("beta".into())],
-        "consumed entry removed from the copy",
+        "only the selected item is removed",
     );
+    assert_eq!(app.pane, Pane::Queue, "pane stays open after delete");
+}
+
+#[test]
+fn test_pane_recall_promotes_next() {
+    let mut app = working();
+    app.agent_busy = true;
+    app.pane = Pane::Queue;
+    app.pending.push(PendingItem::Message("first".into()));
+    app.pending
+        .push(PendingItem::ParkedMessage("second".into()));
+
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(app.pending, vec![PendingItem::Message("second".into())]);
+}
+
+#[test]
+fn test_pane_delete_promotes_next() {
+    let mut app = working();
+    app.agent_busy = true;
+    app.pane = Pane::Queue;
+    app.pending.push(PendingItem::Message("first".into()));
+    app.pending
+        .push(PendingItem::ParkedMessage("second".into()));
+
+    crate::keys::handle_working(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    );
+
+    assert_eq!(app.pending, vec![PendingItem::Message("second".into())]);
+}
+
+#[test]
+fn test_strip_recall_promotes_next() {
+    let mut app = working();
+    app.agent_busy = true;
+    app.pending.push(PendingItem::Message("first".into()));
+    app.pending
+        .push(PendingItem::ParkedMessage("second".into()));
+    render_buffer(&app, 100, 28);
+    let qrect = app.queue_view.strip_rect.get();
+
+    crate::app::handle_mouse(&mut app, mouse_at(qrect.x + 2, qrect.y));
+
+    assert_eq!(app.pending, vec![PendingItem::Message("second".into())]);
+}
+
+/// Esc closes the queue pane without recalling anything.
+#[test]
+fn test_queue_pane_esc_closes() {
+    let mut app = working();
+    app.pane = Pane::Queue;
+    app.pending.push(PendingItem::Message("alpha".into()));
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.pane, Pane::Transcript, "Esc closes the pane");
+    assert_eq!(app.pending.len(), 1, "queue items are not touched");
+}
+
+/// The queue pane renders one bounded row per logical item, with a
+/// hidden-line count for multiline messages.
+#[test]
+fn test_queue_pane_multiline_preview() {
+    let mut app = working();
+    app.pane = Pane::Queue;
+    app.pending.push(PendingItem::Message(
+        "line one\nline two\nline three".into(),
+    ));
+    app.pending.push(PendingItem::Message("short".into()));
+    let text = render_text(&app, 80, 28);
+    assert!(text.contains("line one"), "first line shown");
+    assert!(text.contains("+2 lines"), "hidden line count shown");
+    assert!(text.contains("short"), "single-line item shown");
+}
+
+/// The queue pane renders without panic at a narrow terminal width.
+#[test]
+fn test_queue_pane_narrow_terminal() {
+    let mut app = working();
+    app.pane = Pane::Queue;
+    app.pending.push(PendingItem::Message(
+        "a somewhat long queued message".into(),
+    ));
+    app.pending.push(PendingItem::Message("b".into()));
+    let text = render_text(&app, 40, 20);
+    assert!(text.contains("queue"), "header renders at narrow width");
+}
+
+/// Up/Down navigate the queue pane cursor.
+#[test]
+fn test_queue_pane_nav() {
+    let mut app = working();
+    app.pane = Pane::Queue;
+    app.pending.push(PendingItem::Message("a".into()));
+    app.pending.push(PendingItem::Message("b".into()));
+    app.pending.push(PendingItem::Message("c".into()));
+    app.queue_view.cursor = 0;
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.queue_view.cursor, 1, "Down moves cursor");
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.queue_view.cursor, 0, "Up moves cursor back");
 }

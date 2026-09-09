@@ -49,6 +49,7 @@ pub(crate) fn pane_replaces_input(pane: Pane) -> bool {
             | Pane::Resume
             | Pane::Skills
             | Pane::Agents
+            | Pane::Queue
     )
 }
 

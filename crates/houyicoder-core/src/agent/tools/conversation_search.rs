@@ -208,7 +208,7 @@ async fn folded_event_ids(store: &Arc<dyn SessionLog>, session: SessionId) -> Ve
 fn event_search_text(event: &SessionLogEntry) -> Option<String> {
     let text = match &event.event {
         SessionEvent::UserInput { text } => text.clone(),
-        SessionEvent::MidTurnInput { text } => text.clone(),
+        SessionEvent::MidTurnInput { text, .. } => text.clone(),
         SessionEvent::MetaUser { text } => text.clone(),
         SessionEvent::MemoryRecall { text, .. } => text.clone(),
         SessionEvent::SkillListing { text, .. } => text.clone(),

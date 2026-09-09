@@ -16,7 +16,6 @@
 #![allow(dead_code)] // pub server type consumed by other crates and tests; locally unused
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use houyicoder_async::bus::MessageBus;
 use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, permission_request_topic};
@@ -28,16 +27,13 @@ use crate::protocol_adapter::{map_run_error, map_run_result};
 
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
-use houyicoder_protocol::envelope::{ClientFrame, RequestId, ResponsePayload};
-use houyicoder_protocol::frontend::FrontendEventKind;
+use houyicoder_protocol::envelope::{ClientFrame, EventSeq, RequestId, ResponsePayload};
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::handshake::{Hello, Negotiated, negotiate};
 use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
-/// The live sink installer lives in a child module so this file stays
-/// under the size gate.
-mod live_sink;
-pub use live_sink::install_live_sink;
+mod event_sequencer;
+pub use event_sequencer::EventSequencer;
 
 /// The raw frame I/O lives in a child module so this file stays under the
 /// size gate.
@@ -75,28 +71,25 @@ mod emit;
 /// drives, plus the monotonic event seq counter. serve runs the handshake
 /// then the request loop until the client disconnects or a fatal frame error
 /// surfaces.
+enum ServeWake {
+    Frame(Option<String>),
+    Event,
+}
+
 pub struct Server {
     runner: Arc<Runner>,
     session: SessionId,
-    /// The monotonic event seq counter. Shared with the live delta sink (the
-    /// runner fires deltas during a run; the sink fetch_adds from this same
-    /// counter so live deltas and durable turn events share one monotonic seq
-    /// stream a reconnecting client resumes from). Arc-atomic so the sink and
-    /// the server share one source without a mutable borrow crossing the run
-    /// future.
-    next_seq: Arc<AtomicU64>,
+    /// Session-scoped event ordering, reliable replay, and trajectory cursor.
+    /// Every event producer submits typed values here; this Server is the only
+    /// code that assigns sequence numbers and writes them to the carrier.
+    event_sequencer: EventSequencer,
+    /// The highest event sequence reported by this connection during Hello.
+    /// None requests the complete reliable journal.
+    replay_after: Option<EventSeq>,
     /// The next reverse-request id the server mints for a mid-turn permission
     /// ask. Distinct from the event seq so the two correlation axes never
     /// collide.
     next_req_id: u64,
-    /// How many session events the server has already pushed to this client.
-    /// A resumed run appends more events to the same log; without this cursor
-    /// the replay-after-resume would re-send the whole log each loop. The
-    /// trajectory mirror is append-ordered, so a count cursor skips exactly the
-    /// pushed prefix. Invariant: the mirror must stay append-only (compaction
-    /// appends a boundary event, never rewrites the prefix) or switch to a
-    /// seq-id cursor.
-    pushed_count: usize,
     /// The permission mode gate. The server reads current() + rules() for
     /// the /mode and /rules wire requests so the TUI does not import the
     /// permission crate directly.
@@ -107,9 +100,8 @@ pub struct Server {
     /// (tool allow/ask/deny) concern, not path access.
     sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
     /// The session-indexed host a reattaching connection re-hydrates from.
-    /// None on the single-shot path (serve behaves as before); Some when
-    /// serve_session built this Server — the run path writes the parked
-    /// PendingTurn, disconnect flushes pushed_count, serve-start re-emits.
+    /// None on the single-shot path; Some when serve_session built this Server
+    /// so permission interruptions survive a connection change.
     host: Option<Arc<SessionHost>>,
     /// The settings file path the /memory toggle handler persists to. Tests
     /// override it with a temp path so a flip never touches the real file.
@@ -120,8 +112,8 @@ pub struct Server {
     project_path: Option<std::path::PathBuf>,
     /// Optional Append Notify shared with the runner's store: the store fires
     /// notify_one per append, this select's notified() branch wakes to drain
-    /// mid-run so a tool-call frame ships while the run is still in flight
-    /// (route B). None = the branch awaits a never-resolving pending future,
+    /// mid-run so a tool-call frame ships while the run is still in flight.
+    /// None = the branch awaits a never-resolving pending future,
     /// so behavior is exactly today's (events push only at run resolve). The
     /// composition root shares one Arc<Notify> between the store impl + here.
     append_notify: Option<Arc<Notify>>,
@@ -143,31 +135,28 @@ pub(crate) mod child_permission;
 pub(crate) mod session;
 
 impl Server {
-    /// Build a server with a fresh internal event-seq counter. Use
-    /// new_with_shared_seq when a live delta sink must share the seq stream.
+    /// Build a server with a fresh session event sequencer.
     pub fn new(
         runner: Arc<Runner>,
         session: SessionId,
         gate: Arc<dyn houyicoder_permission::ModeGate>,
     ) -> Self {
-        Self::new_with_shared_seq(runner, session, gate, Arc::new(AtomicU64::new(0)))
+        Self::new_with_event_sequencer(runner, session, gate, EventSequencer::new())
     }
 
-    /// Build a server bound to one runner + session + gate + the shared
-    /// event-seq counter (also held by the live delta sink, so deltas and
-    /// durable events share one monotonic stream).
-    pub fn new_with_shared_seq(
+    /// Build a server bound to one runner, session, gate, and event sequencer.
+    pub fn new_with_event_sequencer(
         runner: Arc<Runner>,
         session: SessionId,
         gate: Arc<dyn houyicoder_permission::ModeGate>,
-        next_seq: Arc<AtomicU64>,
+        event_sequencer: EventSequencer,
     ) -> Self {
         Self {
             runner,
             session,
-            next_seq,
+            event_sequencer,
+            replay_after: None,
             next_req_id: 0,
-            pushed_count: 0,
             gate,
             sandbox_session: None,
             host: None,
@@ -223,17 +212,6 @@ impl Server {
         let id = RequestId(self.next_req_id);
         self.next_req_id += 1;
         id
-    }
-
-    /// Write the pushed-event cursor back into the session host so a
-    /// reattaching connection does not re-send the trajectory log the prior
-    /// client already saw. No-op on the single-shot path (host None). Called
-    /// at every disconnect return path so a mid-run or mid-permission
-    /// disconnect retains the cursor alongside the parked PendingTurn.
-    fn flush_pushed_count(&self) {
-        if let Some(host) = &self.host {
-            host.set_pushed_count(self.session, self.pushed_count);
-        }
     }
 
     /// Apply a Yes-don't-ask consent when the client approves a tool call with
@@ -311,19 +289,6 @@ impl Server {
             .await
     }
 
-    /// Drain consumed input texts and send QueueConsumed to the frontend.
-    /// Called from both the store-notify branch (mid-run) and the outer
-    /// loop (post-resolve) so the frontend mirror drops consumed texts
-    /// without waiting for the run to resolve.
-    async fn flush_consumed_input(&mut self, io: &mut ServerIo) -> Result<(), WireError> {
-        let consumed = self.runner.take_consumed_input();
-        if !consumed.is_empty() {
-            self.send_event(io, FrontendEventKind::QueueConsumed { texts: consumed })
-                .await?;
-        }
-        Ok(())
-    }
-
     /// Run the connection: handshake, then receive request frames until the
     /// client closes. Each request is dispatched; events the run produces are
     /// pushed on the seq stream and the run outcome returns as a response on
@@ -342,25 +307,30 @@ impl Server {
         // not the fail-closed default the registrar was built with.
         let trust = self.ensure_trust(&mut io).await?;
         self.runner.set_trust(trust);
-        // A reattaching connection may find a parked PendingTurn in the host
-        // store (the prior connection disconnected mid-permission). Re-emit
-        // the remaining asks + resume before entering the frame loop. No-op
-        // on the single-shot path (host None) or when no turn is parked.
+        self.replay_events(&mut io).await?;
+        // A reattaching connection may find a parked permission turn after its
+        // reliable history has replayed. Resume it against the same sequencer.
         session::resume_pending(&mut self, &mut io).await?;
-        // Ship durable events that predate this connection: a resumed
-        // session's seeded/loaded history (restore_trajectory backfilled the
-        // mirror at composition), or a reattach's missed-while-disconnected
-        // delta. pushed_count starts at 0 on a fresh server, so this replays
-        // the full trajectory; resume_pending already advanced it for the
-        // parked-turn case, making this a no-op there. The client's frame
-        // stream carries the history so the working screen renders it, not
-        // just the status bar.
-        self.push_new_events(&mut io).await?;
         loop {
-            let Some(frame) = io.next_frame().await else {
-                // Clean client disconnect.
-                self.flush_pushed_count();
-                return Ok(());
+            let wake = {
+                let append_fut = match &self.append_notify {
+                    Some(notify) => futures::future::Either::Left(notify.notified()),
+                    None => futures::future::Either::Right(futures::future::pending::<()>()),
+                };
+                let event_fut = self.event_sequencer.notified();
+                tokio::select! {
+                    frame = io.next_frame() => ServeWake::Frame(frame),
+                    _ = append_fut => ServeWake::Event,
+                    _ = event_fut => ServeWake::Event,
+                }
+            };
+            let frame = match wake {
+                ServeWake::Event => {
+                    self.flush_events(&mut io).await?;
+                    continue;
+                }
+                ServeWake::Frame(Some(frame)) => frame,
+                ServeWake::Frame(None) => return Ok(()),
             };
             // A session/* notification between runs: session/inject enqueues
             // a message for the next run's mid-turn drain (a submit that
@@ -453,7 +423,6 @@ impl Server {
         // the peer's Hello and validate it.
         self.send_typed(io, &local).await?;
         let Some(frame) = io.next_frame().await else {
-            self.flush_pushed_count();
             return Err(WireError::new(
                 WireErrorKind::Unavailable,
                 "client closed before hello",
@@ -462,14 +431,7 @@ impl Server {
         };
         let peer: Hello = serde_json::from_str(&frame)
             .map_err(|e| WireError::new(WireErrorKind::InvalidFrame, e.to_string(), false))?;
-        // A client-declared replay cursor overrides the holder-side pushed
-        // count: a fresh client (count 0) gets the whole trajectory replayed,
-        // a reconnecting client gets only what it missed. None means the
-        // client does not track the count, so the holder-side cursor (the
-        // prior connection's pushed count) stands.
-        if let Some(count) = peer.last_event_count {
-            self.pushed_count = count as usize;
-        }
+        self.replay_after = peer.last_event_seq;
         negotiate(&local, &peer)
     }
 
@@ -512,8 +474,8 @@ impl Server {
             .collect();
         let mut result = {
             // Clone the Arc so run_fut borrows the local clone, not self.runner
-            // — this frees self for the select's notify branch to drain mid-run
-            // (route B). Without it run_fut would hold &self.runner and the
+            // — this frees self for the select's notify branch to drain mid-run.
+            // Without it run_fut would hold &self.runner and the
             // notify branch could not take &mut self to push new events.
             let runner = Arc::clone(&self.runner);
             let run_fut = runner.run(self.session, text);
@@ -524,15 +486,16 @@ impl Server {
                 .as_ref()
                 .map(|b| b.subscribe(permission_request_topic()));
             loop {
-                // Either the shared store Notify (route B mid-run drain) or a
+                // Either the shared store notification or a
                 // never-resolving pending future when no Notify is wired (None
                 // => behavior is exactly today's: events push only at resolve).
                 let notify_fut = match &self.append_notify {
                     Some(n) => futures::future::Either::Left(n.notified()),
                     None => futures::future::Either::Right(futures::future::pending::<()>()),
                 };
+                let event_fut = self.event_sequencer.notified();
                 // Child permission ask published on the bus while this run is
-                // parked on a child. None => the branch never resolves.
+                // parked on a child. None means the branch never resolves.
                 let perm_fut = match &mut perm_rx {
                     Some(rx) => futures::future::Either::Left(rx.recv()),
                     None => futures::future::Either::Right(futures::future::pending::<
@@ -540,7 +503,6 @@ impl Server {
                     >()),
                 };
                 tokio::select! {
-                    biased;
                     r = &mut run_fut => break r,
                     frame = io.next_frame() => match frame {
                         Some(f) => {
@@ -563,7 +525,6 @@ impl Server {
                             }
                         }
                         None => {
-                            self.flush_pushed_count();
                             return Err(WireError::new(
                                 WireErrorKind::Unavailable,
                                 "client closed mid-run",
@@ -571,26 +532,8 @@ impl Server {
                             ));
                         }
                     },
-                    _ = notify_fut => {
-                        // A store append landed mid-run: drain the new durable
-                        // events so a tool-call frame ships while the run is
-                        // still in flight. push_new_events is the shared
-                        // cursor drain the post-resolve outer loop also uses;
-                        // spurious wakes (a background extract/dream fork on
-                        // the same store) just re-run the cursor with nothing
-                        // new to skip — no correctness impact, never assert
-                        // "new events must exist" here.
-                        self.push_new_events(io).await?;
-                        // A turn-boundary drain just consumed queued input
-                        // (append_mid_turn_input wakes this branch on its
-                        // store write). Flush the consumed texts now so the
-                        // frontend mirror drops them at the next poll, not
-                        // at run end — a long auto-approve run would
-                        // otherwise hold the queue strip stale for its
-                        // entire duration.
-                        self.flush_consumed_input(io).await?;
-                        tokio::task::yield_now().await;
-                    },
+                    _ = notify_fut => self.flush_events(io).await?,
+                    _ = event_fut => self.flush_events(io).await?,
                     req = perm_fut => {
                         if let Ok(msg) = req
                             && let Err(e) = child_permission::handle(self, io, msg).await
@@ -602,20 +545,7 @@ impl Server {
             }
         };
         loop {
-            // Push only the events appended since the last push so a resumed
-            // run does not re-send the events the client already saw. The
-            // trajectory mirror is append-ordered and in-process, so the
-            // count cursor skips exactly the already-pushed prefix; a run
-            // that resumes after a permission ask lands only its new events
-            // (the audit verdict + the post-resume tool results), not a
-            // duplicate of the pre-ask stream.
-            self.push_new_events(io).await?;
-            // Flush the mid-turn queue's consumed texts so the frontend can
-            // drop them from its mirror (a consumed message is no longer
-            // pending). Sent at every outer-loop iteration — Interruption +
-            // terminal — so the mirror reconciles incrementally, never
-            // stranding a consumed item or double-spawning it at run end.
-            self.flush_consumed_input(io).await?;
+            self.flush_events(io).await?;
             match result {
                 Ok(run) => match run.outcome {
                     houyicoder_core::agent::RunOutcome::Interruption(approvals) => {
@@ -662,11 +592,20 @@ impl Server {
                             host.store().set_pending(self.session, None);
                         }
                         result = {
-                            let resume_fut = self.runner.resume(self.session, &decisions);
+                            let runner = Arc::clone(&self.runner);
+                            let resume_fut = runner.resume(self.session, &decisions);
                             tokio::pin!(resume_fut);
                             loop {
+                                let notify_fut = match &self.append_notify {
+                                    Some(notify) => {
+                                        futures::future::Either::Left(notify.notified())
+                                    }
+                                    None => futures::future::Either::Right(
+                                        futures::future::pending::<()>(),
+                                    ),
+                                };
+                                let event_fut = self.event_sequencer.notified();
                                 tokio::select! {
-                                    biased;
                                     r = &mut resume_fut => break r,
                                     frame = io.next_frame() => match frame {
                                         Some(f) => {
@@ -688,7 +627,6 @@ impl Server {
                                             }
                                         }
                                         None => {
-                                            self.flush_pushed_count();
                                             return Err(WireError::new(
                                                 WireErrorKind::Unavailable,
                                                 "client closed mid-resume",
@@ -696,6 +634,8 @@ impl Server {
                                             ));
                                         }
                                     },
+                                    _ = notify_fut => self.flush_events(io).await?,
+                                    _ = event_fut => self.flush_events(io).await?,
                                 }
                             }
                         };

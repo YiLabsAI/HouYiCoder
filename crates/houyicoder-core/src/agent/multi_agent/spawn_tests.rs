@@ -439,7 +439,7 @@ async fn test_inbox_drained_at_boundary() {
     let events = store.trajectory_snapshot(handle.session);
     assert!(
         events.iter().any(|e| matches!(&e.event,
-                SessionEvent::MidTurnInput { text } if text == "steer here")),
+                SessionEvent::MidTurnInput { text, .. } if text == "steer here")),
         "inbox text drained at the turn boundary as a MidTurnInput event"
     );
 }

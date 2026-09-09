@@ -296,6 +296,28 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Esc if app.pane == Pane::Agents => {
             app.pane = Pane::Transcript;
         }
+        // Queue pane: Up/Down navigate, Enter recalls the selected item,
+        // R recalls all, d deletes the selected item, Esc closes.
+        KeyCode::Esc if app.pane == Pane::Queue => {
+            app.pane = Pane::Transcript;
+        }
+        KeyCode::Up if app.pane == Pane::Queue => {
+            app.queue_view.move_cursor(-1, app.pending.len());
+        }
+        KeyCode::Down if app.pane == Pane::Queue => {
+            app.queue_view.move_cursor(1, app.pending.len());
+        }
+        KeyCode::Enter if app.pane == Pane::Queue && app.input.is_empty() => {
+            app.recall_queued_at_cursor();
+            app.pane = Pane::Transcript;
+        }
+        KeyCode::Char('R') if app.pane == Pane::Queue && app.input.is_empty() => {
+            app.pop_queued_to_input();
+            app.pane = Pane::Transcript;
+        }
+        KeyCode::Char('d') if app.pane == Pane::Queue && app.input.is_empty() => {
+            app.delete_queued_at_cursor();
+        }
         KeyCode::Esc if app.pane == Pane::Hooks => {
             if app.hooks_level.get() > 0 {
                 app.hooks_level.set(0);

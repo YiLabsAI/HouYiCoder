@@ -7,8 +7,8 @@
 //! memory, worktree, containment and resume each own their peer tests.
 use super::*;
 use crate::lifecycle::SessionLeaseStore;
-use crate::server::Server;
-use std::sync::atomic::AtomicU64;
+use crate::server::{EventSequencer, Server};
+use houyicoder_protocol::frontend::FrontendEvent;
 #[test]
 fn test_degrade_passes_success_through() {
     let kept: Option<u8> = degrade_with_notice(Ok::<u8, String>(7), "unused", "unused");
@@ -59,15 +59,12 @@ fn minimal_runner() -> Runner {
     )
 }
 
-/// Inserting a live runner into the host, then cloning the handle, returns
-/// the same Arc<Runner> + the shared seq counter + the gate. set_pushed_count
-/// round-trips through the handle so a disconnect flush survives. No live
-/// runner is returned for a session the host never held.
+/// A cloned host handle retains the same runner and event sequencer.
 #[test]
 fn test_host_clones_runner_handle() {
     let session = SessionId::new();
     let runner = Arc::new(minimal_runner());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
 
     let host = SessionHost::new(SessionLeaseStore::new());
@@ -75,53 +72,58 @@ fn test_host_clones_runner_handle() {
         host.clone_handle(session).is_none(),
         "no handle before insert",
     );
-    host.insert(session, runner.clone(), next_seq.clone(), gate.clone());
+    host.insert(
+        session,
+        runner.clone(),
+        event_sequencer.clone(),
+        gate.clone(),
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
 
     let handle = host.clone_handle(session).expect("handle after insert");
     assert!(
         Arc::ptr_eq(&handle.runner, &runner),
         "clone_handle returns the same runner Arc",
     );
-    assert!(Arc::ptr_eq(&handle.next_seq, &next_seq));
-    assert_eq!(handle.pushed_count, 0, "starts at zero pushed events");
-
-    host.set_pushed_count(session, 7);
+    drop(
+        handle
+            .event_sequencer
+            .sequence_reliable(FrontendEvent::SystemLine {
+                text: "shared".into(),
+            }),
+    );
     assert_eq!(
-        host.clone_handle(session).unwrap().pushed_count,
-        7,
-        "set_pushed_count round-trips through the handle",
+        event_sequencer.next_seq(),
+        1,
+        "cloned handle shares the sequencer state",
     );
 }
 
-/// new_for_resume rebuilds a Server from the host's live handle so the
-/// runner + the shared seq counter + the pushed-event cursor survive a
-/// prior connection's disconnect. The host reference is retained (host is
-/// Some) so the run path can write the parked PendingTurn later.
+/// new_for_resume rebuilds a Server from the retained session state.
 #[test]
 fn test_new_for_resume_hydrates() {
     let session = SessionId::new();
     let runner = Arc::new(minimal_runner());
-    let next_seq = Arc::new(AtomicU64::new(0));
+    let event_sequencer = EventSequencer::new();
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
 
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner, next_seq, gate);
+    host.insert(
+        session,
+        runner,
+        event_sequencer,
+        gate,
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+    );
 
     let handle = host.clone_handle(session).expect("handle present");
-    // The call itself re-hydrates a Server from the host's live handle;
-    // the runner Arc + the shared seq counter + the pushed-event cursor
-    // flow in from the handle, and the host reference is retained so the
-    // run path can write the parked PendingTurn later. (Server's fields
-    // are private to the server module; the call covering the body is the
-    // assertion here — a behavior-level check lands with the reconnect
-    // test that drives serve_session end-to-end.)
     let _server = Server::new_for_resume(
         handle.runner,
         session,
-        handle.next_seq,
-        handle.pushed_count,
+        handle.event_sequencer,
         handle.gate,
         host,
+        handle.append_notify,
     );
 }
 

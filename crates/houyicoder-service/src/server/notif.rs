@@ -57,12 +57,11 @@ impl Server {
 
     /// Handle a session/* JSON-RPC notification received mid-run or
     /// between runs. session/cancel aborts the in-flight run; session/inject
-    /// enqueues a user message for mid-turn injection (the drive loop drains
-    /// it at the next turn boundary); session/queue_remove drops a queued
-    /// message by text (overlay delete, or the frontend popping the head to
-    /// start a follow-up run so the new run does not re-inject it). All three
-    /// are fire-and-forget (no reply) — the effect shows up in the run's
-    /// outcome + transcript. No-op when the text is not in the queue.
+    /// enqueues an identified user message for mid-turn injection; the drive
+    /// loop drains it at the next turn boundary. session/queue_remove drops
+    /// only the identified item, so equal message text is unambiguous. All
+    /// three are fire-and-forget; effects appear in the run outcome and
+    /// transcript. Legacy text-only injection remains accepted.
     pub(super) fn handle_session_notification(
         &self,
         notif: &houyicoder_protocol::acp_wire::AcpNotification,
@@ -70,25 +69,33 @@ impl Server {
         match notif.method.as_str() {
             "session/cancel" => self.runner.abort(),
             "session/inject" => {
-                let text = notif
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("text"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if !text.is_empty() {
-                    self.runner.enqueue_input(text);
+                let input = notif.params.as_ref().and_then(|params| {
+                    params
+                        .get("input")
+                        .and_then(|value| serde_json::from_value(value.clone()).ok())
+                        .or_else(|| {
+                            params
+                                .get("text")
+                                .and_then(|value| value.as_str())
+                                .filter(|text| !text.is_empty())
+                                .map(houyicoder_protocol::frontend::QueuedInput::new)
+                        })
+                });
+                if let Some(input) = input {
+                    self.runner.enqueue_input(input);
                 }
             }
             "session/queue_remove" => {
-                if let Some(text) = notif
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("text"))
-                    .and_then(|v| v.as_str())
+                let Some(params) = notif.params.as_ref() else {
+                    return;
+                };
+                if let Some(id) = params
+                    .get("id")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
                 {
-                    self.runner.remove_input(text);
+                    self.runner.remove_input(id);
+                } else if let Some(text) = params.get("text").and_then(|value| value.as_str()) {
+                    self.runner.remove_input_by_text(text);
                 }
             }
             "session/inject_child" => {

@@ -22,12 +22,6 @@ pub struct Client {
     transport: Box<dyn Transport>,
     /// The highest event seq the client has processed, for resume on reconnect.
     resume: ResumeFrom,
-    /// The count of trajectory events the client has rendered. Reported in the
-    /// Hello handshake so the server skips this many events from the current
-    /// trajectory snapshot (the mirror is append-only with no per-event seq
-    /// the server could map a client seq to, so a count is the cursor). A fresh
-    /// client reports 0 to get the whole transcript.
-    events_seen: u64,
     /// The next req_id to mint. Caller-supplied ids are also accepted; the
     /// counter is a convenience for callers that do not track their own.
     next_req_id: u64,
@@ -37,10 +31,15 @@ impl Client {
     /// Build a client over a transport. The transport is consumed; the client
     /// owns it for the connection lifetime.
     pub fn new(transport: Box<dyn Transport>) -> Self {
+        Self::with_resume(transport, ResumeFrom::from_start())
+    }
+
+    /// Build a replacement connection that resumes after a prior client's
+    /// highest processed event sequence.
+    pub fn with_resume(transport: Box<dyn Transport>, resume: ResumeFrom) -> Self {
         Self {
             transport,
-            resume: ResumeFrom::from_start(),
-            events_seen: 0,
+            resume,
             next_req_id: 1,
         }
     }
@@ -51,7 +50,7 @@ impl Client {
     /// non-retriable.
     pub async fn connect(&mut self) -> Result<Negotiated, WireError> {
         let local = Hello {
-            last_event_count: Some(self.events_seen),
+            last_event_seq: self.resume.0,
             ..Hello::local()
         };
         self.send_typed(&local).await?;
@@ -123,7 +122,6 @@ impl Client {
             && ev.seq.0 >= self.resume.0.map(|s| s.0).unwrap_or(0)
         {
             self.resume = ResumeFrom::after(ev.seq);
-            self.events_seen = self.events_seen.saturating_add(1);
         }
         Ok(decoded)
     }

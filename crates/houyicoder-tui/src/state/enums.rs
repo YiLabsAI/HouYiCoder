@@ -265,6 +265,11 @@ pub enum Pane {
     Model,
     /// The /tools pane: registered tool list.
     Tools,
+    /// The queue pane: queued user inputs submitted while a run was in
+    /// flight. Up / Down navigate, Enter recalls the selected item, Esc
+    /// closes. A collapsed +N more strip click opens this pane rather than
+    /// destructively recalling all items.
+    Queue,
 }
 
 /// Storage-scope filter the /memory pane cycles through. All shows every
@@ -347,6 +352,7 @@ impl Pane {
             Self::Skills => "skills",
             Self::Model => "model",
             Self::Tools => "tools",
+            Self::Queue => "queue",
         }
     }
 

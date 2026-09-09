@@ -10,11 +10,11 @@ use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
     ClientResponsePayload, RequestId, ResponsePayload, ServerFrame, ServerRequestPayload,
 };
-use houyicoder_protocol::frontend::FrontendEventKind;
+use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_protocol::frontend::FrontendRequest;
-use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_protocol::frontend::run::RunError;
 use houyicoder_protocol::frontend::trust::TrustAccept;
+use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as WireSessionId};
 
 use crate::agent_message::{AgentMessage, ClientCommand};
 use crate::transcript::TranscriptFrame;
@@ -346,15 +346,14 @@ async fn drive_client(
                     );
                     outbound.push_back(Outbound::Notification(notif));
                 }
-                Some(ClientCommand::InjectUser { session_id, text }) => {
+                Some(ClientCommand::InjectUser { session_id, input }) => {
                     // A session/inject notification: the server enqueues the
-                    // text on the runner for mid-turn injection. No reply;
-                    // the message shows up in the transcript once the drive
-                    // loop drains it at the next turn boundary, or runs as a
-                    // follow-up if the run ends first.
+                    // identified input for mid-turn injection. No reply; the
+                    // message shows up in the transcript once the drive loop
+                    // drains it, or runs as a follow-up if the run ends first.
                     outbound.push_back(Outbound::Notification(inject_notification(
                         &session_id,
-                        &text,
+                        &input,
                     )));
                 }
                 Some(ClientCommand::InjectToChild { child_sid, text }) => {
@@ -390,12 +389,12 @@ async fn drive_client(
                     // publishes and retires its pill row. No reply.
                     outbound.push_back(Outbound::Notification(kill_all_notification()));
                 }
-                Some(ClientCommand::QueueRemove { session_id, text }) => {
-                    // A session/queue_remove notification: the server drops
-                    // the first queued message whose text matches. No reply.
+                Some(ClientCommand::QueueRemove { session_id, id }) => {
+                    // A session/queue_remove notification drops only the exact
+                    // identified queue item. No reply.
                     outbound.push_back(Outbound::Notification(queue_remove_notification(
                         &session_id,
-                        &text,
+                        id,
                     )));
                 }
                 Some(ClientCommand::SessionReset {
@@ -417,11 +416,11 @@ async fn drive_client(
             },
             frame = client.next_frame() => match frame {
                 Ok(ServerFrame::Event(ev)) => match ev.payload {
-                    FrontendEventKind::SessionUpdate { update } => {
+                    FrontendEvent::SessionUpdate { update } => {
                         let _send = agent_tx
                             .send(AgentMessage::Frame(TranscriptFrame::Session(update)));
                     }
-                    FrontendEventKind::Acpx { notification } => {
+                    FrontendEvent::Acpx { notification } => {
                         // Token-level deltas ride the acpx/llm/* stream as
                         // live preview; the authoritative AssistantMessage
                         // / Reasoning durable event replaces the accumulated
@@ -473,19 +472,19 @@ async fn drive_client(
                             }
                         }
                     }
-                    FrontendEventKind::QueueConsumed { texts } => {
-                        let _send = agent_tx.send(AgentMessage::QueueConsumed { texts });
+                    FrontendEvent::QueuedInputCommitted { inputs } => {
+                        let _send = agent_tx.send(AgentMessage::QueuedInputCommitted { inputs });
                     }
-                    FrontendEventKind::MemorySaved { count, kind } => {
+                    FrontendEvent::MemorySaved { count, kind } => {
                         let _send = agent_tx.send(AgentMessage::MemorySaved {
                             count,
                             kind,
                         });
                     }
-                    FrontendEventKind::SystemLine { text } => {
+                    FrontendEvent::SystemLine { text } => {
                         let _send = agent_tx.send(AgentMessage::SystemLine { text });
                     }
-                    FrontendEventKind::AgentStatus {
+                    FrontendEvent::AgentStatus {
                         agent_id,
                         subagent_type,
                         turn,
@@ -647,14 +646,11 @@ async fn drive_client(
     }
 }
 
-/// Build a session/inject notification. Pure so the wire shape (method +
-/// params the server's handle_session_notification reads) is unit-testable:
-/// a typo here would make mid-turn injection silently no-op (the server
-/// would not match the method or find the text param).
-fn inject_notification(session_id: &WireSessionId, text: &str) -> AcpNotification {
+/// Build a session/inject notification with stable queue identity.
+fn inject_notification(session_id: &WireSessionId, input: &QueuedInput) -> AcpNotification {
     AcpNotification::new(
         "session/inject",
-        serde_json::json!({ "sessionId": session_id.0, "text": text }),
+        serde_json::json!({ "sessionId": session_id.0, "input": input }),
     )
 }
 
@@ -678,12 +674,11 @@ fn cancel_child_turn_notification(child_sid: &str) -> AcpNotification {
     )
 }
 
-/// Build a session/queue_remove notification. Pure for the same reason:
-/// the wire shape must match what the server reads to drop a queued message.
-fn queue_remove_notification(session_id: &WireSessionId, text: &str) -> AcpNotification {
+/// Build a session/queue_remove notification for one exact queue item.
+fn queue_remove_notification(session_id: &WireSessionId, id: PendingInputId) -> AcpNotification {
     AcpNotification::new(
         "session/queue_remove",
-        serde_json::json!({ "sessionId": session_id.0, "text": text }),
+        serde_json::json!({ "sessionId": session_id.0, "id": id }),
     )
 }
 

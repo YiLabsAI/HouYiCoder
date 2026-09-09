@@ -1,25 +1,15 @@
-//! Frontend event types: the wire payload the engine sends the frontend
-//! per streamed notification. Extracted from the frontend module root so
-//! the root stays under the size gate.
+//! Events emitted by the daemon to a connected frontend.
 
 use serde::{Deserialize, Serialize};
 
 use super::memory::MemorySavedKind;
+use super::queue::QueuedInput;
 use super::session_update::SessionUpdate;
 
-/// daemon -> frontend events (streaming notifications). Dedup by event id so
-/// multi-agent output never duplicates on screen: several agents streaming at
-/// once can deliver the same event twice, and the id is what makes the second
-/// one droppable.
-#[derive(Debug, Clone)]
-pub struct FrontendEvent {
-    pub id: String,
-    pub kind: FrontendEventKind,
-}
-
+/// One event emitted by the daemon to a connected frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
-pub enum FrontendEventKind {
+pub enum FrontendEvent {
     Message {
         delta: String,
     },
@@ -74,11 +64,11 @@ pub enum FrontendEventKind {
     Acpx {
         notification: crate::acpx::AcpxNotification,
     },
-    /// The texts the runner drained from its mid-turn injection queue this
-    /// run. Sent at run end so the frontend can remove them from its queue
-    /// mirror. Reliable (durable, sent once per run before the outcome).
-    QueueConsumed {
-        texts: Vec<String>,
+    /// Queued inputs durably committed to the session at a turn boundary.
+    #[serde(rename = "QueueConsumed")]
+    QueuedInputCommitted {
+        #[serde(rename = "texts")]
+        inputs: Vec<QueuedInput>,
     },
     /// A background memory task (extract or dream) wrote the given count of
     /// entries this pass. Fired once per pass on completion, after the run
@@ -107,4 +97,26 @@ pub enum FrontendEventKind {
         last_activity: Option<String>,
         completed: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_commit_wire_compat() {
+        let event = FrontendEvent::QueuedInputCommitted {
+            inputs: vec![QueuedInput::new("next")],
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert!(value.get("QueueConsumed").is_some());
+        assert!(value["QueueConsumed"].get("texts").is_some());
+
+        let legacy = serde_json::json!({"QueueConsumed": {"texts": ["next"]}});
+        let decoded: FrontendEvent = serde_json::from_value(legacy).unwrap();
+        let FrontendEvent::QueuedInputCommitted { inputs } = decoded else {
+            panic!("queued input commit");
+        };
+        assert_eq!(inputs[0].text, "next");
+    }
 }

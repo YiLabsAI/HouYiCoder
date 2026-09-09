@@ -85,6 +85,32 @@ pub use crate::run_control::AgentMessage;
 
 pub use crate::state::enums::*;
 
+/// Selection and hit-test geometry for the queued-input interface.
+#[derive(Default)]
+pub struct QueueViewState {
+    /// Selected row in the queue pane.
+    pub cursor: usize,
+    /// Last-rendered queued-input footer strip rectangle.
+    pub strip_rect: Cell<Rect>,
+}
+
+impl QueueViewState {
+    /// Clamp the selected row to the current queue length.
+    pub(crate) fn clamp(&mut self, len: usize) {
+        self.cursor = self.cursor.min(len.saturating_sub(1));
+    }
+
+    /// Move the selected row by a signed delta within the queue bounds.
+    pub(crate) fn move_cursor(&mut self, delta: i32, len: usize) {
+        if len == 0 {
+            self.cursor = 0;
+            return;
+        }
+        let cursor = self.cursor.min(len - 1) as i32;
+        self.cursor = (cursor + delta).clamp(0, (len - 1) as i32) as usize;
+    }
+}
+
 /// The full TUI state. Owned by the app loop; read by the view module. The
 /// palette, console, and review-queue concerns are delegated to focused
 /// sub-structs (PaletteState, ConsoleState, ReviewQueue); the remaining
@@ -256,6 +282,8 @@ pub struct App {
     /// length. The query composes with the scope tab (both must match).
     /// Adopted from ListPaneState (the worktree pane was the first adopter).
     pub memory_list: ListPaneState,
+    /// Selection and hit-test state for the queued-input interface.
+    pub queue_view: QueueViewState,
     /// The linked-worktree rows for the /worktrees pane. Refreshed from
     /// parse_worktrees on pane-open. Empty until the user opens the pane (no
     /// background poll — the list is cheap and the pane is one-shot).
@@ -413,10 +441,6 @@ pub struct App {
     /// Last-rendered transcript rect (screen coords), stashed by the draw
     /// pass so the mouse handler can map a click cell to a transcript row.
     pub transcript_rect: Cell<Rect>,
-    /// Last-rendered queued-input footer strip rect (screen coords), stashed
-    /// by the draw pass so the mouse handler can map a click to a queued item
-    /// (click to recall into the input box for editing).
-    pub queue_rect: Cell<Rect>,
     /// Last-rendered "jump to bottom" pill rect; hit-tested before the
     /// transcript surface. Zero rect when hidden.
     pub jump_pill_rect: Cell<Rect>,

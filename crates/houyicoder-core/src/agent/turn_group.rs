@@ -108,7 +108,7 @@ pub fn assemble_model_input_with(
             // reads "continue the task + address", not a fresh instruction
             // that drops the in-flight task. The bare text stays in the
             // durable log + transcript; the framing is model-only.
-            SessionEvent::MidTurnInput { text } => {
+            SessionEvent::MidTurnInput { text, .. } => {
                 let framed = format!(
                     "[The user sent this message while you were working. \
                      Continue your current task and address it when natural.]\n\

@@ -66,7 +66,6 @@ use houyicoder_session::SessionStore;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::RwLock;
-use std::sync::atomic::AtomicU64;
 
 /// Give up on a capability, and say so, returning the absence as None.
 /// Every degradation point routes through one function so the decision
@@ -682,19 +681,14 @@ fn provider_or_stub(
     }
 }
 
-/// The live-runner + cursor state a session retains across a client
-/// disconnect. Held by SessionHost keyed by session id. The runner is
-/// Arc-shared so a new serve on a reattaching connection resumes against
-/// the same in-memory Runner (its SessionLog holds the parked tool calls);
-/// next_seq is the same Arc the live delta sink fetch_adds from, so the
-/// monotonic seq stream a reconnecting client resumes from survives; and
-/// pushed_count is the trajectory cursor (MVP: same-client-reattach
-/// semantics — a fresh-client full-replay cursor lands with the UDS cut).
+/// Runner and event-stream state retained across client connections. The
+/// sequencer preserves reliable history, sequence allocation, and the durable
+/// projection cursor while each attachment supplies a new carrier.
 struct LiveRunnerHandle {
     runner: Arc<Runner>,
-    next_seq: Arc<AtomicU64>,
-    pushed_count: usize,
+    event_sequencer: crate::server::EventSequencer,
     gate: Arc<dyn ModeGate>,
+    append_notify: Arc<Notify>,
 }
 
 /// The session-indexed host a reattaching connection re-hydrates from. Holds
@@ -722,32 +716,28 @@ impl SessionHost {
         }
     }
 
-    /// Register a live runner + its shared seq counter + gate for a session.
-    /// The composition root calls this once when it spawns a runner; the
-    /// pushed_count starts at zero (no events pushed to any client yet).
+    /// Register a runner and its session-scoped event sequencer.
     pub fn insert(
         &self,
         session: SessionId,
         runner: Arc<Runner>,
-        next_seq: Arc<AtomicU64>,
+        event_sequencer: crate::server::EventSequencer,
         gate: Arc<dyn ModeGate>,
+        append_notify: Arc<Notify>,
     ) {
         self.runners.lock().expect("host lock").insert(
             session,
             LiveRunnerHandle {
                 runner,
-                next_seq,
-                pushed_count: 0,
+                event_sequencer,
                 gate,
+                append_notify,
             },
         );
     }
 
-    /// Clone the live handle for a session (the runner Arc, the shared seq
-    /// counter, the pushed-event cursor, the gate) so a reattaching serve can
-    /// rebuild a Server without the host surrendering its own clone. None when
-    /// no live runner is registered for the session (cross-process reconnect
-    /// without a checkpoint is the deferred Gap B).
+    /// Clone the runner, sequencer, gate, and append notification needed by a
+    /// reattaching connection. None when the session is not registered.
     pub(crate) fn clone_handle(&self, session: SessionId) -> Option<RunnerHandleClone> {
         self.runners
             .lock()
@@ -755,9 +745,9 @@ impl SessionHost {
             .get(&session)
             .map(|h| RunnerHandleClone {
                 runner: h.runner.clone(),
-                next_seq: h.next_seq.clone(),
-                pushed_count: h.pushed_count,
+                event_sequencer: h.event_sequencer.clone(),
                 gate: h.gate.clone(),
+                append_notify: h.append_notify.clone(),
             })
     }
 
@@ -768,15 +758,6 @@ impl SessionHost {
     pub(crate) fn store(&self) -> &crate::lifecycle::SessionLeaseStore {
         &self.store
     }
-
-    /// Write the pushed-event cursor back into the session's live handle. The
-    /// disconnect paths in serve flush this so a reattaching connection does
-    /// not re-send the trajectory log the prior client already saw.
-    pub(crate) fn set_pushed_count(&self, session: SessionId, count: usize) {
-        if let Some(h) = self.runners.lock().expect("host lock").get_mut(&session) {
-            h.pushed_count = count;
-        }
-    }
 }
 
 /// A cloned snapshot of a session's live handle. pub(crate) so the
@@ -784,9 +765,9 @@ impl SessionHost {
 /// host exposing its internal LiveRunnerHandle.
 pub(crate) struct RunnerHandleClone {
     pub(crate) runner: Arc<Runner>,
-    pub(crate) next_seq: Arc<AtomicU64>,
-    pub(crate) pushed_count: usize,
+    pub(crate) event_sequencer: crate::server::EventSequencer,
     pub(crate) gate: Arc<dyn ModeGate>,
+    pub(crate) append_notify: Arc<Notify>,
 }
 #[cfg(test)]
 #[path = "composition_tests.rs"]

@@ -104,7 +104,7 @@ fn build_trajectory_event(
         SessionEvent::UserInput { text } => {
             ("user", preview(text), None, Some(text.clone()), None, 0)
         }
-        SessionEvent::MidTurnInput { text } => {
+        SessionEvent::MidTurnInput { text, .. } => {
             ("user", preview(text), None, Some(text.clone()), None, 0)
         }
         SessionEvent::AssistantMessage { text, thinking } => {

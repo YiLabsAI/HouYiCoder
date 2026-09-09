@@ -433,7 +433,7 @@ fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &super::context::To
     match &event.event {
         SessionEvent::UserInput { text }
         | SessionEvent::MetaUser { text }
-        | SessionEvent::MidTurnInput { text }
+        | SessionEvent::MidTurnInput { text, .. }
         | SessionEvent::MemoryRecall { text, .. }
         | SessionEvent::SkillListing { text, .. } => count(text),
         SessionEvent::SkillBody {

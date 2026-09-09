@@ -439,7 +439,9 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
     }
     Some(match kind {
         SessionEvent::UserInput { text } => SessionUpdate::UserMessageChunk(text_chunk(text)),
-        SessionEvent::MidTurnInput { text } => SessionUpdate::UserMessageChunk(text_chunk(text)),
+        SessionEvent::MidTurnInput { text, .. } => {
+            SessionUpdate::UserMessageChunk(text_chunk(text))
+        }
         // A child-completion notification surfaces in the transcript so the
         // user sees what the model was told (the durable kind distinguishes
         // it from a user interjection; the visual chunk is the text summary).
