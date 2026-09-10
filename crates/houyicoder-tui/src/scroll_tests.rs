@@ -164,9 +164,8 @@ fn test_subagent_expand_pins() {
     );
 }
 
-/// The input caret (invert) hides when the terminal loses focus and re-shows
-/// on refocus. The native cursor stays hidden + parked at the caret
-/// (set_cursor_position) so IME preedit still lands correctly.
+/// The painted input caret hides when the terminal loses focus and returns on
+/// refocus while the native cursor remains hidden.
 #[test]
 fn test_focus_lost_hides_caret() {
     use crossterm::event::Event;
@@ -184,6 +183,10 @@ fn test_focus_lost_hides_caret() {
     assert!(
         has_white(&buf),
         "caret should be inverted (bg White) when focused"
+    );
+    assert!(
+        app.native_cursor_position.get().is_some(),
+        "draw publishes the hidden cursor position for input methods"
     );
     // FocusLost event hides the caret.
     assert!(crate::app::handle_event(&mut app, Event::FocusLost).unwrap());

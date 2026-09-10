@@ -1,17 +1,10 @@
-//! Flat transcript rendering for the byte-window search view. Matches
-//! draw_transcript's per-line rendering (the row layer) but skips the slot
-//! layer (display_slots + fold grouping): a byte window materializes one
-//! screen at a time, so there is no whole-vec fold object to collapse and no
-//! collapse handle that could point at a global row. The slot layer's job is
-//! absent here, not duplicated -- this is the correct model for a windowed
-//! view, not a parallel render path. Row-layer rendering (highlight, result
-//! body, diff, the spacer logic) is shared with the live path via
-//! push_line_rows + highlighted_line.
+//! Rendering for a bounded history window loaded from a large session log.
 //!
-//! Owns its own scroll state (window_scroll) and publishes its own row count
-//! there, so it never touches TranscriptScroll/display_slots/total or the five
-//! consumers that read them. The flat count==render pair (flat_display_rows +
-//! flat_row_of_line) walks the same lines + spacer rule this render path emits.
+//! The window has no global fold groups because only one byte range is loaded.
+//! Per-line styling and spacing are shared with the main transcript renderer.
+//!
+//! WindowScroll owns its row count and position independently from the active
+//! conversation.
 
 use ratatui::{
     Frame,
@@ -24,21 +17,11 @@ use ratatui::{
 use crate::records::ToolOutcome;
 use crate::state::App;
 use crate::view::markers::{diff_row, styled_row};
-use crate::view::working::working_transcript::{highlighted_line, push_line_rows};
+use crate::view::working::transcript::{highlighted_line, push_line_rows, user_row};
 
-/// The flat window render: walk the active transcript (the loaded window's
-/// lines) directly, emit one row set, publish window_scroll, slice the
-/// viewport, apply search highlighting. No live tail (the window is a frozen
-/// snapshot of the log -- no spinner, no streaming assistant row, no checklist
-/// tail; those belong to the live Working surface).
-//
-// too_many_lines + cognitive_complexity: this is a render loop -- emit
-// rows, publish scroll state, slice, highlight. Splitting it (row-build vs
-// highlight) would scatter the count==render invariant across two functions
-// and make the flat-walk parity harder to hold. It is the simplified isomorph
-// of draw_transcript (same shape minus the fold slot layer); keep them
-// structurally parallel.
-pub(super) fn draw_flat_transcript(f: &mut Frame, area: Rect, app: &App) {
+/// Render the loaded history range with independent scrolling and search
+/// highlighting. Dynamic conversation-tail rows are intentionally absent.
+pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     // Pump one index chunk per frame while the G full-scan builds (keeps the
     // UI responsive + lets Esc interrupt). Done before rendering so the
     // progress cells the status bar reads are current for this frame.
@@ -50,7 +33,7 @@ pub(super) fn draw_flat_transcript(f: &mut Frame, area: Rect, app: &App) {
     const DIFF_DEL: u8 = crate::selection::TAG_DIFF_DEL;
     const DIFF_HUNK: u8 = crate::selection::TAG_DIFF_HUNK;
     const DIFF_CTX: u8 = crate::selection::TAG_DIFF_CTX;
-    let mut sink = super::row_sink::RowSink::default();
+    let mut sink = super::row_buffer::RowBuffer::default();
     // No slot layer: each line is its own row set. grp is None -- the window
     // has no fold groups, so the enclosing group stays None throughout.
     for line in app.active_transcript() {
@@ -81,7 +64,7 @@ pub(super) fn draw_flat_transcript(f: &mut Frame, area: Rect, app: &App) {
 
     let inner = area;
     app.transcript_rect.set(inner);
-    // The count path (flat_row_of_line) soft-wraps to the same width the
+    // The count path (history_row_of_line) soft-wraps to the same width the
     // render path just used -- count == render holds for the window too.
     app.last_transcript_width.set(inner.width);
     *app.last_transcript_rows.borrow_mut() =
@@ -100,10 +83,10 @@ pub(super) fn draw_flat_transcript(f: &mut Frame, area: Rect, app: &App) {
     // The focused match's line spans multiple screen rows in verbose (a tool
     // body expands). Mark [start, start+rows) current so highlighted_line
     // paints yellow on every query occurrence in the focused line. Flat row
-    // math (flat_row_of_line + line_display_rows), not the fold path.
+    // math (history_row_of_line + line_display_rows), not the fold path.
     let focused_range = if app.search.active && !q.is_empty() {
         app.search.focused_line().map(|i| {
-            let start = app.flat_row_of_line(i);
+            let start = app.history_row_of_line(i);
             let rows = app.line_display_rows(&app.active_transcript()[i]);
             start..start + rows
         })
@@ -129,7 +112,7 @@ pub(super) fn draw_flat_transcript(f: &mut Frame, area: Rect, app: &App) {
                     }
                 }
                 None => match *tag {
-                    USER => highlighted_line(r, &q, is_current),
+                    USER => user_row(r, &q, is_current, inner.width),
                     SYSTEM => highlighted_line(r, &q, is_current).style(dim),
                     DIFF_ADD | DIFF_DEL | DIFF_HUNK | DIFF_CTX => {
                         diff_row(r, *tag, inner.width, None)

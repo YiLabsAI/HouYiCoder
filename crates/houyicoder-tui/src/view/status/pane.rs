@@ -56,7 +56,7 @@ fn draw_tab_body(f: &mut Frame, tab: StatusTab, area: Rect, app: &App) {
                 &snap,
                 &app.session_id,
                 &app.status.sandbox,
-                &app.todos_cache,
+                &app.todos.items,
             )
         }
         StatusTab::Config => render_config(app),

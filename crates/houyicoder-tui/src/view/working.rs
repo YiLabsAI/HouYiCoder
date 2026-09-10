@@ -23,13 +23,13 @@ use crate::view::{
     worktree_pane,
 };
 
-mod flat_transcript;
+mod delegation_rows;
 pub(crate) mod fleet_pill;
 mod footer_budget;
-mod live_rows;
-mod row_sink;
-mod subagent_render;
-mod working_transcript;
+mod history_window;
+mod row_buffer;
+mod tail_rows;
+mod transcript;
 
 /// Render the working surface, dispatching on the viewport mode so the chrome
 /// budget tracks the user's cognitive mode. The slash palette and inline
@@ -335,9 +335,9 @@ fn draw_scroll(f: &mut Frame, app: &App) {
     // not touch TranscriptScroll/display_slots/total. Under threshold, the
     // whole-log snapshot renders through the standard slot-based path.
     if app.window_mode {
-        flat_transcript::draw_flat_transcript(f, outer[0], app);
+        history_window::draw_history_window(f, outer[0], app);
     } else {
-        working_transcript::draw_transcript(f, outer[0], app);
+        transcript::draw_transcript(f, outer[0], app);
     }
     if let Some(i) = queue_idx {
         queue_overlay::draw_strip(f, outer[i], app);
@@ -350,7 +350,7 @@ fn draw_scroll(f: &mut Frame, app: &App) {
 fn draw_focus_main(f: &mut Frame, area: Rect, app: &App) {
     match app.pane {
         Pane::Diff => capability::draw_diff_full(f, area, app),
-        Pane::Transcript => working_transcript::draw_transcript(f, area, app),
+        Pane::Transcript => transcript::draw_transcript(f, area, app),
         Pane::Memory => draw_memory_pane(f, area, app),
         Pane::Worktree => draw_worktree_pane(f, area, app),
         Pane::Trajectory => draw_trajectory_pane(f, area, app),
@@ -463,7 +463,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
             artifact::draw(f, area, app);
             return;
         }
-        working_transcript::draw_transcript(f, area, app);
+        transcript::draw_transcript(f, area, app);
         return;
     }
     if matches!(app.pane, Pane::Diff) {
@@ -471,7 +471,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
     if matches!(app.pane, Pane::Transcript) {
-        working_transcript::draw_transcript(f, area, app);
+        transcript::draw_transcript(f, area, app);
         return;
     }
     if matches!(app.pane, Pane::Artifact) {
@@ -482,7 +482,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
-    working_transcript::draw_transcript(f, cols[0], app);
+    transcript::draw_transcript(f, cols[0], app);
     capability::draw(f, cols[1], app);
 }
 
@@ -500,7 +500,7 @@ where
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(pane_h)])
         .split(area);
-    working_transcript::draw_transcript(f, chunks[0], app);
+    transcript::draw_transcript(f, chunks[0], app);
     crate::view::pane::render(f, chunks[1], Color::Cyan, |f, inner| {
         content(f, inner, app);
         stash_pane_rows(f, inner, app);

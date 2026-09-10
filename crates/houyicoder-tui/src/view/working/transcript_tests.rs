@@ -1,5 +1,4 @@
-//! Tests for the working transcript pane, split out so the render file stays
-//! under the size gate. Declared via a path attribute from working_transcript.
+//! Transcript surface rendering tests.
 use crate::records::TranscriptLine;
 use crate::test_support::render_text;
 use crate::test_support::working_app;
@@ -249,12 +248,12 @@ fn test_spinner_keeps_blank_above() {
     );
 }
 
-/// While a teammate view is open, the parent's live streaming text must not
-/// leak into the child's view. build_live_rows suppresses all live rows
+/// While a teammate view is open, the parent's streaming text must not leak
+/// into the child's view. build_tail_rows suppresses all tail rows
 /// when teammate_view is Some, so even with live_active + non-empty
 /// live_assistant_text the result is zero rows.
 #[test]
-fn test_view_hides_live_rows() {
+fn test_view_hides_tail() {
     use crate::records::TeammateView;
     let mut app = crate::test_support::working_app();
     app.live_active = true;
@@ -265,7 +264,7 @@ fn test_view_hides_live_rows() {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    let live = super::super::live_rows::build_live_rows(
+    let live = super::super::tail_rows::build_tail_rows(
         ratatui::layout::Rect::new(0, 0, 80, 24),
         &app,
         false,

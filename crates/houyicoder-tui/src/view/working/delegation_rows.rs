@@ -1,11 +1,9 @@
-//! Inline render of a sub-agent delegation as a fold-group in the parent
-//! flow. Split from working_transcript so the row builder stays under the
-//! size gate.
+//! Folded and expanded rows for a delegation in the parent transcript.
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use super::row_sink::{Row, RowSink};
+use super::row_buffer::{Row, RowBuffer};
 use crate::records::TranscriptLine;
 use crate::state::App;
 use crate::view::badge_color;
@@ -28,12 +26,12 @@ pub(crate) struct Delegation<'a> {
 /// transcript rebuild. The parent message list is never swapped out. The
 /// badge color, when set, tints the summary header so multiple delegations
 /// are distinguishable at a glance.
-pub(crate) fn push_subagent_rows(
+pub(crate) fn push_delegation_rows(
     d: &Delegation<'_>,
     grp: Option<&str>,
     width: u16,
     app: &App,
-    sink: &mut RowSink,
+    sink: &mut RowBuffer,
 ) {
     const SYSTEM: u8 = crate::selection::TAG_SYSTEM;
     let Delegation {
@@ -81,7 +79,7 @@ pub(crate) fn push_subagent_rows(
     }
     sink.within_subagent(|sink| {
         for child in folded_transcript {
-            super::working_transcript::push_line_rows(child, Some(child_sid), width, app, sink);
+            super::transcript::push_line_rows(child, Some(child_sid), width, app, sink);
         }
     });
 }

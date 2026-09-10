@@ -1,4 +1,4 @@
-//! One rendered transcript row and the sink that collects rows.
+//! Transcript rows and their aligned metadata buffer.
 //!
 //! The draw pass publishes six arrays that consumers read by row index, so a
 //! row missing from one of them shifts every later row's metadata onto the
@@ -92,7 +92,7 @@ pub(super) type RowParts = (
 
 /// Collects rows into the arrays the draw pass publishes.
 #[derive(Default)]
-pub(super) struct RowSink {
+pub(super) struct RowBuffer {
     rows: Vec<(u8, String, Option<ToolOutcome>)>,
     callids: Vec<Option<String>>,
     fold_keys: Vec<Option<String>>,
@@ -102,7 +102,7 @@ pub(super) struct RowSink {
     in_subagent: bool,
 }
 
-impl RowSink {
+impl RowBuffer {
     /// True while emitting the rows of an expanded delegation. Row builders
     /// read it to leave out their own expand affordances: a delegation's
     /// block is already one expanded thing, and every row inside advertising

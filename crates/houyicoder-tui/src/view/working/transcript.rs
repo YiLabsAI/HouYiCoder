@@ -1,10 +1,7 @@
-//! Transcript pane rendering for the working surface, extracted from
-//! working.rs so the layout file stays under the size gate. Renders the
-//! transcript rows (user / agent / tool results / structured diffs / fold
-//! groups / the session checklist) with per-row styling, selection tags,
-//! inline search highlighting, Ctrl+O expand, and the structured-diff
-//! layout (line-numbered green/red bars + word-level highlights + a dim
-//! "..." between hunks).
+//! Main conversation transcript renderer.
+//!
+//! Builds selectable rows for user, agent, tool, diff, delegation, and
+//! checklist content, then applies scrolling, search, and expansion state.
 
 use ratatui::{
     Frame,
@@ -14,8 +11,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::live_rows::build_live_rows;
-use super::row_sink::{Row, RowParts, RowSink};
+use super::row_buffer::{Row, RowBuffer, RowParts};
+use super::tail_rows::build_tail_rows;
 use crate::records::ToolOutcome;
 use crate::state::App;
 use crate::state::ViewportMode;
@@ -95,7 +92,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // Every frame: combine cached slots rows + fresh live rows (live text,
     // spinner, todos). Live rows are cheap (a few rows at most).
     let total_slots = app.display_rows_cache.borrow().len();
-    let live = build_live_rows(area, app, total_slots > 0);
+    let live = build_tail_rows(area, app, total_slots > 0);
 
     let cap = area.height as usize;
     app.transcript_scroll.cap.set(cap);
@@ -241,7 +238,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
                 }
                 None => match *tag {
                     SPINNER => spinner_line(r, spin_elapsed, spin_intensity, tool_active),
-                    USER => highlighted_line(r, &q, is_current),
+                    USER => user_row(r, &q, is_current, inner.width),
                     SYSTEM => highlighted_line(r, &q, is_current).style(if in_expanded {
                         user_bg
                     } else {
@@ -358,8 +355,8 @@ fn rendered_tool_rows(
 }
 
 /// Emit the rendered rows for one transcript line (the row layer). Shared
-/// by the slot-based live render (draw_transcript) and the flat window render
-/// (draw_flat_transcript): the slot layer (fold grouping + collapse handles)
+/// by the transcript surface and bounded history window. The slot layer
+/// (fold grouping + collapse handles)
 /// is the caller's job -- this only does per-line rendering + the leading
 /// spacer. The flat window view calls this with grp = None (no fold), so it
 /// never touches display_slots/TranscriptScroll/total. Returns false for a
@@ -370,7 +367,7 @@ pub(crate) fn push_line_rows(
     grp: Option<&str>,
     width: u16,
     app: &App,
-    sink: &mut RowSink,
+    sink: &mut RowBuffer,
 ) -> bool {
     use crate::records::TranscriptLine;
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
@@ -450,14 +447,14 @@ pub(crate) fn push_line_rows(
         color,
     } = line
     {
-        let delegation = super::subagent_render::Delegation {
+        let delegation = super::delegation_rows::Delegation {
             child_sid,
             subagent_type,
             summary,
             folded_transcript,
             color: color.as_deref(),
         };
-        super::subagent_render::push_subagent_rows(&delegation, grp, width, app, sink);
+        super::delegation_rows::push_delegation_rows(&delegation, grp, width, app, sink);
         return true;
     }
     if let TranscriptLine::Agent(text) = line {
@@ -582,6 +579,19 @@ pub(crate) fn highlighted_line(row: &str, query: &str, current: bool) -> Line<'s
     Line::from(spans)
 }
 
+/// Render a user row as one complete background band. Explicit padding keeps
+/// wide-character continuation cells connected to the band during scrolling.
+pub(crate) fn user_row(row: &str, query: &str, current: bool, width: u16) -> Line<'static> {
+    let style = Style::new().bg(Color::Indexed(238));
+    let mut line = highlighted_line(row, query, current).style(style);
+    let used = unicode_width::UnicodeWidthStr::width(row);
+    let padding = (width as usize).saturating_sub(used);
+    if padding > 0 {
+        line.spans.push(Span::styled(" ".repeat(padding), style));
+    }
+    line
+}
+
 /// Order-independent content hash of a string set: XOR each element's stable
 /// byte hash so the result does not depend on HashSet iteration order. Replaces
 /// the .len() proxy for the slots-version cache key -- .len() collided on
@@ -674,7 +684,7 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
     const FOLD: u8 = crate::selection::TAG_FOLD;
 
-    let mut sink = RowSink::default();
+    let mut sink = RowBuffer::default();
 
     let slots = crate::fold::display_slots(
         app.active_transcript(),
@@ -721,5 +731,5 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
 }
 
 #[cfg(test)]
-#[path = "working_transcript_tests.rs"]
+#[path = "transcript_tests.rs"]
 mod tests;

@@ -2,7 +2,7 @@
 //! Screen-specific behavior remains in the view and key modules.
 
 use crossterm::{
-    cursor::{Hide, SetCursorStyle, Show},
+    cursor::{Hide, MoveTo, SetCursorStyle, Show},
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
         EnableFocusChange, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
@@ -42,13 +42,7 @@ pub fn run_with_runner(
     resume_builder: Option<ResumeBuilder>,
 ) -> io::Result<Option<String>> {
     enable_raw_mode()?;
-    execute!(
-        stdout(),
-        EnterAlternateScreen,
-        EnableBracketedPaste,
-        Hide,
-        SetCursorStyle::BlinkingBlock
-    )?;
+    execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste, Hide)?;
     execute!(stdout(), EnableFocusChange)?;
     assert_mouse_modes()?;
     let backend = CrosstermBackend::new(stdout());
@@ -82,19 +76,27 @@ pub fn run_with_runner(
         if app.fleet.retire_completed(retain_viewed) {
             dirty = true;
         }
-        if app.fleet.tick_elapsed(Instant::now()) {
+        let now = Instant::now();
+        if app.fleet.tick_elapsed(now) {
             dirty = true;
         }
-        if app.notifications.tick(Instant::now()) {
+        if app.notifications.tick(now) {
+            dirty = true;
+        }
+        if app.todos.prune(now) {
             dirty = true;
         }
         if dirty || app.agent_busy {
-            // Extend projected history before rendering its scroll position.
-            app.ensure_projected_above();
+            // Load older history before rendering its scroll position.
+            app.load_older_frames();
+            app.native_cursor_position.set(None);
             terminal.draw(|f| {
                 view::draw(f, &app);
                 apply_selection_overlay(f, &app);
             })?;
+            if let Some((x, y)) = app.native_cursor_position.get() {
+                execute!(stdout(), MoveTo(x, y), Hide)?;
+            }
             dirty = false;
         }
         if event::poll(Duration::from_millis(100))? && handle_event(&mut app, event::read()?)? {

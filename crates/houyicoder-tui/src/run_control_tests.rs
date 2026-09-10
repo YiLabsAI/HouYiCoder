@@ -975,10 +975,6 @@ fn test_startup_handshake_empty_timeout() {
 #[path = "interrupted_turn_tests.rs"]
 mod interrupted_turn_tests;
 #[cfg(test)]
-#[path = "rebuild_cap_tests.rs"]
-mod rebuild_cap_tests;
-
-#[cfg(test)]
 #[path = "run_control_stream_tests.rs"]
 mod run_control_stream_tests;
 

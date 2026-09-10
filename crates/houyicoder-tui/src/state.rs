@@ -38,7 +38,7 @@ use crate::review_queue::ReviewQueue;
 use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::Session;
-use crate::todo_view::TodoView;
+use crate::todo_view::TodoState;
 use crate::transcript::TranscriptFrame;
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
@@ -130,21 +130,13 @@ pub struct App {
     /// skip-set). Backed by a JSONL file at the config home.
     pub history: HistoryNav,
     pub transcript: Vec<TranscriptLine>,
-    /// The durable wire frame history, owned by App (not the driver). The
-    /// driver ships one Frame per server frame; App pushes here and the
-    /// transcript projection reads from it. The source of truth for the
-    /// session history.
+    /// The durable wire frame history, owned by App. Incoming frames append
+    /// here before the transcript is rebuilt.
     pub frames: Vec<TranscriptFrame>,
-    /// Seal cursor (frames side): frames[..sealed_frames_end] are already
-    /// projected into transcript[..sealed_transcript_len] and are immutable
-    /// for the current turn. The mid-run rebuild re-projects only
-    /// frames[sealed_frames_end..] so per-frame cost is O(current turn), not
-    /// O(whole history). Reset by rewind (frames truncate) + turn boundary.
-    pub sealed_frames_end: usize,
-    /// Seal cursor (transcript side): the prefix length that tracks
-    /// frames[..sealed_frames_end] (frame-derived + TUI-only lines). The
-    /// mid-run rebuild merges only transcript[sealed_transcript_len..].
-    pub sealed_transcript_len: usize,
+    /// End of the frame prefix reused while the current turn grows.
+    pub stable_frame_end: usize,
+    /// End of the transcript prefix corresponding to stable_frame_end.
+    pub stable_line_end: usize,
     /// Verdict cursor: acpx permission_decision frames are deserialized once
     /// and appended to verdict_log_cache as they cross this cursor. Avoids
     /// re-deserializing the whole history per rebuild (per-frame now). Reset
@@ -364,15 +356,8 @@ pub struct App {
     pub cumulative_tokens: u64,
     /// Cumulative model-call steps across all turns.
     pub cumulative_steps: u32,
-    /// The session checklist from the wire stream. Last-write-wins; rebuilt
-    /// from the full frame list each batch.
-    pub todos_cache: Vec<TodoView>,
-    /// Whether the collapsed checklist is force-expanded inline.
-    pub todo_expanded: bool,
-    /// When each checklist item transitioned to Completed, keyed by content.
-    /// Drives the 30-second recent-completed visibility window in the
-    /// collapsed checklist. Updated in accumulate_wire_state.
-    pub todo_completion_at: HashMap<String, Instant>,
+    /// Session checklist content, expansion, and completion lifecycle.
+    pub todos: TodoState,
     /// Last terminal height seen by the draw pass, stashed for height-aware
     /// checklist rendering. Interior-mutable for draw-borrow updates.
     pub last_terminal_rows: Cell<u16>,
@@ -555,6 +540,8 @@ pub struct App {
     /// key handlers for cursor up/down in wrapped space). Interior-mutable so
     /// the draw borrow of App can update it without going through &mut.
     pub last_cols: Cell<usize>,
+    /// Hidden hardware cursor position used by terminal input methods.
+    pub native_cursor_position: Cell<Option<(u16, u16)>>,
     /// The permission mode cache, wire-typed. Seeded once on the first idle
     /// poll (so the status-bar pill renders from session start), then updated
     /// by the PermissionMode / PermissionCycleMode responses the server ships
@@ -618,7 +605,7 @@ pub struct App {
     pub hooks_level: Cell<u8>,
     /// The selected event index in the /hooks Level-0 list.
     pub hooks_sel: Cell<usize>,
-    pub projected_from_frame: Cell<usize>,
+    pub loaded_from_frame: Cell<usize>,
     /// The current model tier label in the /model pane. The active row renders
     /// with a check; the provider model id updates on select.
     pub model_tier: String,

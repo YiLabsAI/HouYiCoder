@@ -104,15 +104,15 @@ fn test_initial_projection_skips_stamps() {
         ("current", "in_progress"),
     ])));
     app.handle_agent_message(done_msg());
-    assert!(app.todo_completion_at.is_empty());
+    assert!(app.todos.completion_at.is_empty());
     // A subsequent projection completing a new item stamps it.
     app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
         ("old work", "completed"),
         ("current", "completed"),
     ])));
     app.handle_agent_message(done_msg());
-    assert!(app.todo_completion_at.contains_key("current"));
-    assert!(!app.todo_completion_at.contains_key("old work"));
+    assert!(app.todos.completion_at.contains_key("current"));
+    assert!(!app.todos.completion_at.contains_key("old work"));
 }
 
 /// The toggle-state result (a read on pane-open or after a flip) applies
@@ -205,12 +205,10 @@ fn test_memory_list_respects_dismissal() {
     );
 }
 
-/// A background memory-saved event renders one system line with the verb
-/// the kind maps to (extract = Saved, dream = Improved) + a singular or
-/// plural noun. Pins the render wiring so a later refactor cannot drop it.
+/// Equal adjacent memory events render one notice.
 #[test]
-fn test_memory_saved_renders_notice() {
-    use crate::state::Screen;
+fn test_memory_notice_once() {
+    use crate::state::{Screen, TranscriptLine};
     use houyicoder_protocol::frontend::memory::MemorySavedKind;
     let mut app = crate::composition::app();
     app.screen = Screen::Working;
@@ -220,6 +218,16 @@ fn test_memory_saved_renders_notice() {
         count: 3,
         kind: MemorySavedKind::Extracted,
     });
+    app.handle_agent_message(AgentMessage::MemorySaved {
+        count: 3,
+        kind: MemorySavedKind::Extracted,
+    });
+    let notices = app
+        .transcript
+        .iter()
+        .filter(|line| matches!(line, TranscriptLine::System(text) if text == "Saved 3 memories"))
+        .count();
+    assert_eq!(notices, 1);
     let out = crate::test_support::render_text(&app, 80, 24);
     assert!(
         out.contains("Saved 3 memories"),

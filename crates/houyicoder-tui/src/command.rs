@@ -266,14 +266,12 @@ impl App {
     fn clear_session(&mut self) {
         self.transcript.clear();
         self.frames.clear();
-        // Reset the rebuild seal + verdict cursor too — otherwise the next
-        // rebuild's incremental path would index a stale prefix (today masked
-        // by the need_full rewind check, but make it explicit so a future
-        // batch-replay path can't trip a silent duplicate).
-        self.sealed_frames_end = 0;
-        self.sealed_transcript_len = 0;
+        // Reset cached boundaries before the next frame rebuild.
+        self.stable_frame_end = 0;
+        self.stable_line_end = 0;
         self.verdict_cursor = 0;
         self.verdict_log_cache.clear();
+        self.todos.clear();
         // Reset the server's cumulative usage tally + audit trajectory so
         // /context reflects the new session only. Fire-and-forget over the
         // wire; the host clears its local view in parallel.

@@ -207,11 +207,19 @@ fn test_clear_resets_session() {
     app.stage = Stage::Implementing;
     app.pane = Pane::Diff;
     app.spec_ctx.step = "implementing".to_string();
+    app.todos.set_cursor(4);
+    app.todos.items.push(crate::todo_view::TodoView {
+        content: "stale".into(),
+        status: crate::todo_view::TodoStatus::Pending,
+        active_form: None,
+    });
     app.run_command(SlashCommand::Clear);
     assert_eq!(app.stage, Stage::Idle);
     assert_eq!(app.spec_ctx.step, "idle");
     assert_eq!(app.pane, Pane::Transcript);
     assert_eq!(app.transcript.len(), 1);
+    assert_eq!(app.todos.cursor(), 0);
+    assert!(app.todos.items.is_empty());
 }
 
 #[test]

@@ -40,9 +40,10 @@ fn test_collapsed_renders_active_footer() {
         ("docs c", TodoStatus::Pending),
     ]);
     let mut app = working_app();
-    app.todos_cache = todos;
+    app.todos.items = todos;
     // A fresh completion timestamp keeps the done item visible (30s TTL).
-    app.todo_completion_at
+    app.todos
+        .completion_at
         .insert("setup".into(), std::time::Instant::now());
     let out = render_text(&app, 80, 24);
     // The active item uses the cyan glyph and the active-form label.
@@ -68,9 +69,10 @@ fn test_collapsed_no_footer_visible() {
         ("next", TodoStatus::Pending),
     ]);
     let mut app = working_app();
-    app.todos_cache = todos;
+    app.todos.items = todos;
     // A fresh completion timestamp keeps the done item visible (30s TTL).
-    app.todo_completion_at
+    app.todos
+        .completion_at
         .insert("done".into(), std::time::Instant::now());
     let out = render_text(&app, 80, 24);
     assert!(out.contains("✔"), "done glyph missing:\n{out}");
@@ -84,7 +86,7 @@ fn test_collapsed_no_footer_visible() {
 #[test]
 fn test_empty_checklist_no_block() {
     let mut app = working_app();
-    app.todos_cache = Vec::new();
+    app.todos.items = Vec::new();
     let out = render_text(&app, 80, 24);
     assert!(
         !out.contains("◼"),
@@ -96,11 +98,58 @@ fn test_empty_checklist_no_block() {
     );
 }
 
+/// Once every task's completion window expires, the entire transcript block
+/// retires instead of leaving a permanent gray completed-count summary.
+#[test]
+fn test_done_tasks_retire() {
+    let mut app = working_app();
+    app.todos.items = seeded_todos(&[
+        ("first", TodoStatus::Completed),
+        ("second", TodoStatus::Completed),
+    ]);
+    let old = std::time::Instant::now() - std::time::Duration::from_secs(31);
+    app.todos.completion_at.insert("first".into(), old);
+    app.todos.completion_at.insert("second".into(), old);
+
+    let out = render_text(&app, 80, 24);
+
+    assert!(
+        !out.contains("tasks ("),
+        "completed block must retire:\n{out}"
+    );
+    assert!(
+        !out.contains("completed"),
+        "gray summary must retire:\n{out}"
+    );
+}
+
+#[test]
+fn test_old_done_hidden() {
+    let mut app = working_app();
+    app.todos.items = seeded_todos(&[
+        ("finished", TodoStatus::Completed),
+        ("next", TodoStatus::Pending),
+    ]);
+    app.todos.completion_at.insert(
+        "finished".into(),
+        std::time::Instant::now() - std::time::Duration::from_secs(31),
+    );
+
+    let out = render_text(&app, 80, 24);
+
+    assert!(out.contains("next"), "pending task remains:\n{out}");
+    assert!(!out.contains("finished"), "old completion fades:\n{out}");
+    assert!(
+        !out.contains("+1 completed"),
+        "old completion is not summarized:\n{out}"
+    );
+}
+
 #[test]
 fn test_status_shows_session_tasks() {
     let todos = seeded_todos(&[("run tests", TodoStatus::InProgress)]);
     let mut app = working_app();
-    app.todos_cache = todos;
+    app.todos.items = todos;
     app.run_command(SlashCommand::Status);
     // /status opens a pane (the shared Pane template), not a transcript dump;
     // render the working surface to read the pane content. A tall-enough
@@ -121,7 +170,7 @@ fn test_status_shows_session_tasks() {
 #[test]
 fn test_status_no_tasks_section() {
     let mut app = working_app();
-    app.todos_cache = Vec::new();
+    app.todos.items = Vec::new();
     app.run_command(SlashCommand::Status);
     // A taller terminal so the status pane admits the full field set.
     let out = render_text(&app, 80, 40);

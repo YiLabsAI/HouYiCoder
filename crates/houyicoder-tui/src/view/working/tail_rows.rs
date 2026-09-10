@@ -1,17 +1,16 @@
-//! The per-frame live rows: streaming assistant text, the spinner, and the
-//! todo checklist. Built fresh every frame (cheap, bounded); distinct from
-//! the slots cache (the stable transcript rows). Extracted from
-//! working_transcript.rs on size grounds.
+//! Rows appended after stable transcript history: streaming assistant text,
+//! the activity indicator, and the checklist. This bounded tail is rebuilt on
+//! every draw.
 
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
-use super::row_sink::{Row, RowSink};
+use super::row_buffer::{Row, RowBuffer};
 use crate::records::ToolOutcome;
 use crate::state::App;
 
 #[derive(Default)]
-pub(super) struct LiveRows {
+pub(super) struct TailRows {
     pub rows: Vec<(u8, String, Option<ToolOutcome>)>,
     pub callids: Vec<Option<String>>,
     pub fold_keys: Vec<Option<String>>,
@@ -27,14 +26,14 @@ pub(super) struct LiveRows {
 /// slots cache or a prior live section) so sections do not run together. The
 /// has_slots flag threads whether the cached slots are non-empty so the first
 /// spacer guard works before any live row exists.
-pub(super) fn build_live_rows(area: Rect, app: &App, has_slots: bool) -> LiveRows {
+pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> TailRows {
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
     const SPINNER: u8 = crate::selection::TAG_SPINNER;
 
-    let mut sink = RowSink::default();
+    let mut sink = RowBuffer::default();
     // Each section is preceded by a spacer when anything sits above it,
     // whether that is the slots cache or an earlier live section.
-    let spacer_if_needed = |sink: &mut RowSink| {
+    let spacer_if_needed = |sink: &mut RowBuffer| {
         if has_slots || !sink.is_empty() {
             sink.push(Row::spacer());
         }
@@ -45,7 +44,7 @@ pub(super) fn build_live_rows(area: Rect, app: &App, has_slots: bool) -> LiveRow
     // transcript renders alone — the parent is not talking to the user
     // while they are viewing a child.
     if app.teammate_view.is_some() {
-        return LiveRows::default();
+        return TailRows::default();
     }
 
     if app.live_active && !app.live_assistant_text.is_empty() {
@@ -77,7 +76,7 @@ pub(super) fn build_live_rows(area: Rect, app: &App, has_slots: bool) -> LiveRow
 
     let all_rows = sink.text_rows();
     let (rows, callids, fold_keys, expanded_group, turn_ids, pre_rendered) = sink.into_parts();
-    LiveRows {
+    TailRows {
         rows,
         callids,
         fold_keys,

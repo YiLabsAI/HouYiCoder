@@ -159,8 +159,8 @@ pub(crate) fn handle_ctrl_o(app: &mut App) {
     if app.toggle_tail_expand() {
         return;
     }
-    if !app.todos_cache.is_empty() {
-        app.todo_expanded = !app.todo_expanded;
+    if !app.todos.items.is_empty() {
+        app.todos.expanded = !app.todos.expanded;
         return;
     }
     app.toggle_focused_result_expand();

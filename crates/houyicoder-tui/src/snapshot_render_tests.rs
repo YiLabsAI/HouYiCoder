@@ -21,7 +21,7 @@ use crate::test_support::MockSnapshot;
 /// self.transcript would desync by the snapshot/live delta. Asserts visible
 /// output (the snapshot content renders, the live content does not), not
 /// internal state. Mutation-verified: reverting each of the six read points
-/// (fold_aware_rows display_slots + line index, working_transcript
+/// (fold_aware_rows display_slots + line index, transcript renderer
 /// display_slots + line index + focused-range line) to self.transcript /
 /// app.transcript reddens this test one at a time.
 #[test]
@@ -326,9 +326,9 @@ fn test_snapshot_defaults_return_empty() {
     assert!(mock.event_count().is_none(), "default event_count is None");
 }
 
-/// Flat count==render invariant for the byte-window view: flat_display_rows
+/// Flat count==render invariant for the byte-window view: history_display_rows
 /// (the count path, which walks active_transcript + line_display_rows +
-/// spacer, no fold slots) must equal the row count draw_flat_transcript
+/// spacer, no fold slots) must equal the row count draw_history_window
 /// publishes to window_scroll.total. This is the window view's own
 /// count==render pair -- it does NOT share fold_aware_rows, so
 /// verbose_count_matches cannot cover it. The corpus carries a fold group
@@ -339,9 +339,9 @@ fn test_snapshot_defaults_return_empty() {
 /// push_line_rows + the spacer rule land in the walk.
 ///
 /// Mutation verification (per AGENTS.md): reverting any divergence between
-/// flat_walk's row count and draw_flat_transcript's row emission -- e.g.
-/// flat_walk counting a spacer draw_flat_transcript skips, flat_walk NOT
-/// skipping Thinking while the draw path does, or flat_walk dropping the
+/// history_walk's row count and draw_history_window's row emission -- e.g.
+/// history_walk counting a spacer draw_history_window skips, history_walk NOT
+/// skipping Thinking while the draw path does, or history_walk dropping the
 /// Interrupted no-spacer guard -- reddens this test at every width. Asserts
 /// the published total (visible-output-adjacent), not an
 /// internal flag.
@@ -356,7 +356,7 @@ fn test_flat_count_matches_render() {
         TranscriptLine::User("go".into()),
         // Interrupted is a child row of the message above (no blank spacer
         // before it) -- exercises the no-spacer-before-Interrupted rule both
-        // push_line_rows and flat_walk share, so a regression to that guard
+        // push_line_rows and history_walk share, so a regression to that guard
         // reddens this test.
         TranscriptLine::Interrupted,
         TranscriptLine::Thinking {
@@ -409,7 +409,7 @@ fn test_flat_count_matches_render() {
     assert!(app.window_mode, "test setup: window mode active");
     for w in [40u16, 80, 120] {
         let out = render_text(&app, w, 24);
-        let count = app.flat_display_rows();
+        let count = app.history_display_rows();
         let rendered = app.window_scroll.total.get();
         assert_eq!(
             count, rendered,

@@ -178,7 +178,7 @@ impl App {
     pub fn jump_to_focused_match(&mut self) {
         if let Some(idx) = self.search.focused_line() {
             if self.window_mode {
-                let row = self.flat_row_of_line(idx);
+                let row = self.history_row_of_line(idx);
                 self.window_scroll.jump_to(row);
             } else {
                 let row = self.transcript_row_of_line(idx);

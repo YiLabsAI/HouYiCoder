@@ -87,7 +87,7 @@ mod test_support;
 #[cfg(test)]
 mod todolist_verify_tests;
 #[cfg(test)]
-#[path = "transcript_seal_tests.rs"]
-mod transcript_seal_tests;
+#[path = "transcript_rebuild_tests.rs"]
+mod transcript_rebuild_tests;
 #[cfg(test)]
 mod viewport_tests;

@@ -108,7 +108,7 @@ impl App {
     pub(crate) fn live_trailing_row_count(&self, prefix_empty: bool) -> usize {
         // The parent's live rows (streaming text + spinner + todos) belong
         // to the parent view. Suppress them while a teammate view is open so
-        // the count matches the render path (build_live_rows early-returns
+        // the count matches the render path (build_tail_rows early-returns
         // empty on the same guard). Without this, count == render breaks
         // — the count path inflates by the parent's live rows while the
         // render path shows zero, desyncing scroll + fold-aware offsets.
@@ -156,14 +156,14 @@ impl App {
     }
 
     /// Walk the active transcript in FLAT order (no fold slots), summing
-    /// display rows + the blank spacer before each emitted line. The flat
-    /// window-render path's count==render pair: draw_flat_transcript emits
-    /// exactly these rows, so flat_display_rows == the rendered total +
-    /// flat_row_of_line(idx) == the row where idx starts. Matches fold_aware_rows
+    /// display rows + the blank spacer before each emitted line. The history
+    /// window's count and render paths emit
+    /// exactly these rows, so history_display_rows == the rendered total +
+    /// history_row_of_line(idx) == the row where idx starts. Matches fold_aware_rows
     /// minus the slot layer (fold grouping) -- the slot layer has no meaning
     /// when one screen is materialized at a time, so the window view skips it.
     /// Thinking is skipped (0 rows, no spacer), matching the draw path.
-    pub(crate) fn flat_walk(&self, target: Option<usize>) -> usize {
+    pub(crate) fn history_walk(&self, target: Option<usize>) -> usize {
         let transcript = self.active_transcript();
         let mut total = 0;
         let mut first = true;
@@ -191,13 +191,13 @@ impl App {
     /// Total display rows the active transcript renders in FLAT (window) mode.
     /// The count==render single source for the window view: the flat draw path
     /// publishes the same value to window_scroll.total.
-    pub(crate) fn flat_display_rows(&self) -> usize {
-        self.flat_walk(None)
+    pub(crate) fn history_display_rows(&self) -> usize {
+        self.history_walk(None)
     }
 
     /// The display-row index where transcript line idx starts in FLAT (window)
     /// mode. Used to jump the window scroll to a search match.
-    pub(crate) fn flat_row_of_line(&self, idx: usize) -> usize {
-        self.flat_walk(Some(idx))
+    pub(crate) fn history_row_of_line(&self, idx: usize) -> usize {
+        self.history_walk(Some(idx))
     }
 }

@@ -49,10 +49,7 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(block, area);
     let glyph_style = Style::new().fg(Color::Cyan);
     let body_style = Style::new().fg(Color::Reset);
-    // The invert caret hides when the terminal window is unfocused (a
-    // render-placeholder gates its invert cursor on terminalFocus).
-    // set_cursor_position still parks the hidden cursor at the caret so IME
-    // preedit lands correctly on refocus.
+    // The painted caret hides when the terminal window is unfocused.
     let cursor_style = if app.terminal_focused {
         Style::new().bg(Color::White).fg(Color::Black)
     } else {
@@ -109,18 +106,9 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines), inner);
-    // Park the terminal's physical cursor at the caret so the terminal
-    // renders IME preedit text at the caret (terminals draw preedit at the
-    // physical cursor position). The native cursor is hidden (Hide in
-    // app.rs), so this positions the hidden cursor only — it does not bring
-    // back a block cursor. Without this the cursor stays where ratatui left
-    // it (the last drawn cell) and the preedit drifts away from the caret.
-    // Prefix is 2 cols (the prompt glyph or its continuation indent). Clamp
-    // the row so a long paste (crow past the visible input height) does not
-    // park the cursor - and the IME preedit window - outside the input box.
-    let crow = (crow as u16).min(inner.height.saturating_sub(1));
-    f.set_cursor_position((
+    let row = (crow as u16).min(inner.height.saturating_sub(1));
+    app.native_cursor_position.set(Some((
         inner.x.saturating_add(2).saturating_add(ccol as u16),
-        inner.y.saturating_add(crow),
-    ));
+        inner.y.saturating_add(row),
+    )));
 }

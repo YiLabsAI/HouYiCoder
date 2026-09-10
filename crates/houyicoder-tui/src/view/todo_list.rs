@@ -37,12 +37,6 @@ fn glyph_for(status: TodoStatus) -> (&'static str, Color, bool) {
     }
 }
 
-/// How long a freshly completed item stays visible in the collapsed view
-/// before collapsing into the hidden summary. A recent-completed TTL:
-/// the user sees the green checkmark + strikethrough
-/// appear, then it fades into the count after 30 seconds.
-const RECENT_COMPLETED_TTL_SECS: u64 = 30;
-
 /// Maximum visible items in the collapsed view on a normal-sized terminal.
 /// Three slots: active (always first), a recent completed (progress signal),
 /// and the next pending (what is coming up). Deliberately smaller than an
@@ -75,7 +69,7 @@ fn visible_collapsed<'a>(
         t.status == TodoStatus::Completed
             && completion_at
                 .get(&t.content)
-                .is_some_and(|ts| now.duration_since(*ts).as_secs() < RECENT_COMPLETED_TTL_SECS)
+                .is_some_and(|ts| now.duration_since(*ts) < crate::todo_view::RECENT_COMPLETION_TTL)
     });
     for done in recent_done {
         if visible.len() >= max {
@@ -93,6 +87,19 @@ fn visible_collapsed<'a>(
 
 fn count_by_status(todos: &[TodoView], status: TodoStatus) -> usize {
     todos.iter().filter(|t| t.status == status).count()
+}
+
+fn recent_completion_count(todos: &[TodoView], completion_at: &HashMap<String, Instant>) -> usize {
+    let now = Instant::now();
+    todos
+        .iter()
+        .filter(|todo| {
+            todo.status == TodoStatus::Completed
+                && completion_at.get(&todo.content).is_some_and(|completed| {
+                    now.duration_since(*completed) < crate::todo_view::RECENT_COMPLETION_TTL
+                })
+        })
+        .count()
 }
 
 /// The label an item shows: the active-form phrasing for the in-progress item
@@ -171,13 +178,16 @@ fn hidden_summary(
 /// line keeps the glyph colors and strikethrough on screen. Empty when there
 /// is no checklist, so the caller adds no rows.
 pub fn render_rows(app: &App) -> Vec<(String, Line<'static>)> {
-    let todos = &app.todos_cache;
-    if todos.is_empty() {
+    let todos = &app.todos.items;
+    if todos.is_empty()
+        || (todos
+            .iter()
+            .all(|todo| todo.status == TodoStatus::Completed)
+            && recent_completion_count(todos, &app.todos.completion_at) == 0)
+    {
         return Vec::new();
     }
-    // Header counts the whole list. The all-completed one-line collapse is
-    // gone: the header already says "N done, 0 open", so the item detail
-    // survives instead of being replaced by a single green line.
+    // Header counts the whole list while recent completion rows remain visible.
     let done = count_by_status(todos, TodoStatus::Completed);
     let active = count_by_status(todos, TodoStatus::InProgress);
     let open = count_by_status(todos, TodoStatus::Pending);
@@ -193,10 +203,10 @@ pub fn render_rows(app: &App) -> Vec<(String, Line<'static>)> {
         Line::from(Span::styled(h, Style::default().fg(Color::DarkGray))),
     )];
     let term_rows = app.last_terminal_rows.get();
-    let body = if app.todo_expanded {
+    let body = if app.todos.expanded {
         render_expanded(todos, term_rows)
     } else {
-        render_collapsed(todos, &app.todo_completion_at, term_rows)
+        render_collapsed(todos, &app.todos.completion_at, term_rows)
     };
     out.extend(body);
     out
@@ -211,26 +221,24 @@ fn render_collapsed(
 ) -> Vec<(String, Line<'static>)> {
     let max = collapsed_max(term_rows);
     if max == 0 {
-        // Tiny terminal: only the hidden summary survives.
+        // Tiny terminal: only actionable or recently completed work counts.
         let hp = count_by_status(todos, TodoStatus::Pending);
-        let hc = count_by_status(todos, TodoStatus::Completed);
+        let hc = recent_completion_count(todos, completion_at);
         let ha = count_by_status(todos, TodoStatus::InProgress);
         return vec![(hidden_summary_body(hp, hc, ha), hidden_summary(hp, hc, ha))];
     }
     let visible = visible_collapsed(todos, completion_at, max);
-    let hidden = todos.len().saturating_sub(visible.len());
     let mut out: Vec<(String, Line<'static>)> = visible
         .iter()
         .map(|t| (item_plain(t), item_line(t)))
         .collect();
-    if hidden > 0 {
-        let vis = |s: TodoStatus| visible.iter().filter(|t| t.status == s).count();
-        let hp =
-            count_by_status(todos, TodoStatus::Pending).saturating_sub(vis(TodoStatus::Pending));
-        let hc = count_by_status(todos, TodoStatus::Completed)
-            .saturating_sub(vis(TodoStatus::Completed));
-        let ha = count_by_status(todos, TodoStatus::InProgress)
-            .saturating_sub(vis(TodoStatus::InProgress));
+    let vis = |s: TodoStatus| visible.iter().filter(|t| t.status == s).count();
+    let hp = count_by_status(todos, TodoStatus::Pending).saturating_sub(vis(TodoStatus::Pending));
+    let hc =
+        recent_completion_count(todos, completion_at).saturating_sub(vis(TodoStatus::Completed));
+    let ha =
+        count_by_status(todos, TodoStatus::InProgress).saturating_sub(vis(TodoStatus::InProgress));
+    if hp + hc + ha > 0 {
         out.push((hidden_summary_body(hp, hc, ha), hidden_summary(hp, hc, ha)));
     }
     out

@@ -676,7 +676,7 @@ fn test_todo_count_matches_render() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript = vec![TranscriptLine::User("go".to_string())];
-    app.todos_cache = vec![
+    app.todos.items = vec![
         item("a", TodoStatus::Completed),
         item("b", TodoStatus::InProgress),
         item("c", TodoStatus::Pending),
@@ -692,7 +692,7 @@ fn test_todo_count_matches_render() {
     );
 
     // Expanded: every item renders.
-    app.todo_expanded = true;
+    app.todos.expanded = true;
     let _out = render_text(&app, 80, 24);
     assert_eq!(
         app.transcript_display_rows(),
@@ -701,8 +701,8 @@ fn test_todo_count_matches_render() {
     );
 
     // All done: a single summary line.
-    app.todo_expanded = false;
-    app.todos_cache = vec![
+    app.todos.expanded = false;
+    app.todos.items = vec![
         item("a", TodoStatus::Completed),
         item("b", TodoStatus::Completed),
     ];
@@ -729,7 +729,7 @@ fn test_todo_rows_are_selectable() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript = vec![TranscriptLine::User("go".to_string())];
-    app.todos_cache = vec![
+    app.todos.items = vec![
         TodoView {
             content: "write code".into(),
             status: TodoStatus::InProgress,
@@ -1005,11 +1005,10 @@ fn test_fleet_click_selects() {
     assert!(app.teammate_view.is_none(), "one click does not drill in");
 }
 
-/// User text uses the prompt glyph rather than a cell background. Avoiding a
-/// background on wide glyph continuation cells prevents isolated gray blocks
-/// from reappearing when the transcript scrolls back over CJK prompts.
+/// A user message renders as one complete background band, including padding
+/// after CJK text, so the row remains distinct without isolated gray cells.
 #[test]
-fn test_cjk_no_background() {
+fn test_user_background_band() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::Screen;
@@ -1021,11 +1020,65 @@ fn test_cjk_no_background() {
     app.transcript = vec![TranscriptLine::User("中途插话到底有没有问题".into())];
     let buf = render_buffer(&app, 31, 12);
     let area = app.transcript_rect.get();
+    let user_y = (area.y..area.y + area.height)
+        .find(|y| {
+            buf.cell((area.x, *y))
+                .is_some_and(|cell| cell.symbol() == ">")
+        })
+        .expect("user row");
 
-    for y in area.y..area.y + area.height {
-        for x in area.x..area.x + area.width {
-            let cell = buf.cell((x, y)).expect("transcript cell");
-            assert_ne!(cell.style().bg, Some(Color::Indexed(238)));
-        }
-    }
+    let missing: Vec<_> = (area.x..area.x + area.width)
+        .filter(|x| {
+            let continuation = *x > area.x
+                && buf
+                    .cell((*x - 1, user_y))
+                    .is_some_and(|cell| unicode_width::UnicodeWidthStr::width(cell.symbol()) > 1);
+            !continuation
+                && buf
+                    .cell((*x, user_y))
+                    .is_none_or(|cell| cell.style().bg != Some(Color::Indexed(238)))
+        })
+        .collect();
+    assert!(missing.is_empty(), "background gaps at columns {missing:?}");
+}
+
+/// Removing a user row clears its background on the next terminal frame.
+#[test]
+fn test_user_background_clears() {
+    use crate::composition;
+    use crate::records::TranscriptLine;
+    use crate::state::Screen;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.transcript = vec![TranscriptLine::User("中途插话".into())];
+    let mut terminal = Terminal::new(TestBackend::new(31, 12)).expect("terminal");
+    terminal
+        .draw(|frame| crate::view::draw(frame, &app))
+        .expect("first draw");
+    let area = app.transcript_rect.get();
+    let user_y = (area.y..area.y + area.height)
+        .find(|y| {
+            terminal
+                .backend()
+                .buffer()
+                .cell((area.x, *y))
+                .is_some_and(|cell| cell.symbol() == ">")
+        })
+        .expect("user row");
+
+    app.transcript = vec![TranscriptLine::Agent("replacement".into())];
+    app.bump_transcript_version();
+    terminal
+        .draw(|frame| crate::view::draw(frame, &app))
+        .expect("second draw");
+
+    assert!((area.x..area.x + area.width).all(|x| {
+        terminal
+            .backend()
+            .buffer()
+            .cell((x, user_y))
+            .is_some_and(|cell| cell.style().bg != Some(ratatui::style::Color::Indexed(238)))
+    }));
 }

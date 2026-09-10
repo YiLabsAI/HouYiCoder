@@ -403,26 +403,7 @@ impl App {
                     self.pane = Pane::Memory;
                 }
             }
-            AgentMessage::MemorySaved { count, kind } => {
-                // A background memory task wrote the given count of entries
-                // this pass. Render one notice so the user sees the write
-                // without opening the memory pane. The kind names the verb
-                // (extract = Saved, dream = Improved); the count gets a
-                // singular/plural noun.
-                let verb = match kind {
-                    MemorySavedKind::Extracted => "Saved",
-                    MemorySavedKind::Consolidated => "Improved",
-                };
-                let plural = if count == 1 { "memory" } else { "memories" };
-                self.system_line(format!("{verb} {count} {plural}"));
-                // If the memory pane is open, its list is now stale (the
-                // background task just wrote). Re-request so the rows refresh.
-                if self.pane == Pane::Memory
-                    && let Some(req_id) = self.mint_request_id()
-                {
-                    self.send_cmd(ClientCommand::MemoryListQuery { req_id });
-                }
-            }
+            AgentMessage::MemorySaved { count, kind } => self.show_memory_saved(count, kind),
             AgentMessage::UndoResult { description } => match description {
                 Some(desc) => self.system_line(format!("undo: {desc}")),
                 None => self.system_line("undo: nothing to undo (stack empty)"),
@@ -516,18 +497,29 @@ impl App {
         }
     }
 
-    /// Absorb a run of durable frames into the history and re-project once.
-    /// The driver ships one Frame per durable server frame; App owns the
-    /// history. Frames must surface as they arrive rather than only at the
-    /// next PermissionAsk or Done, since durable frames ship mid-run.
-    ///
-    /// The projection runs once for the whole run of frames, not once per
-    /// frame. No draw happens between two messages of a single drain, so an
-    /// intermediate projection is never visible, and the count of frames a
-    /// drain hands over is unbounded: a resumed session replays its entire
-    /// history in one drain. Re-projecting per frame there costs the frame
-    /// count squared and stalls the first paint for minutes on a long
-    /// session.
+    fn show_memory_saved(&mut self, count: u32, kind: MemorySavedKind) {
+        let verb = match kind {
+            MemorySavedKind::Extracted => "Saved",
+            MemorySavedKind::Consolidated => "Improved",
+        };
+        let plural = if count == 1 { "memory" } else { "memories" };
+        let notice = format!("{verb} {count} {plural}");
+        if !self
+            .transcript
+            .last()
+            .is_some_and(|line| matches!(line, TranscriptLine::System(text) if text == &notice))
+        {
+            self.system_line(notice);
+        }
+        if self.pane == Pane::Memory
+            && let Some(req_id) = self.mint_request_id()
+        {
+            self.send_cmd(ClientCommand::MemoryListQuery { req_id });
+        }
+    }
+
+    /// Append a durable frame batch and rebuild the transcript once. Batching
+    /// keeps reconnect cost linear while still making mid-run frames visible.
     pub(crate) fn apply_frames(&mut self, frames: impl IntoIterator<Item = TranscriptFrame>) {
         let mut any = false;
         let mut assistant_committed = false;

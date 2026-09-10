@@ -27,7 +27,7 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 591
+STRUCT_FIELD_BASELINE = 590
 
 def evaluate(total, baseline=STRUCT_FIELD_BASELINE) -> int:
     """Pure strict-pin: 0 only when total == baseline. Growth (>) and

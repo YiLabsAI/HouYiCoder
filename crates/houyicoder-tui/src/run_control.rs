@@ -13,15 +13,15 @@ use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use crate::pending_queue::PendingItem;
 use crate::records::{Approval, AskQuestion, TranscriptLine};
 
-const MAX_PROJECT_FRAMES: usize = 500;
+const MAX_REBUILD_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;
 const MAX_AGENT_MESSAGES_PER_POLL: usize = 4096;
 use crate::state::App;
 use crate::state::enums::LiveBlock;
 use crate::transcript::{TranscriptFrame, chunk_text};
 
-#[path = "run_control/projection.rs"]
-mod projection;
+#[path = "run_control/transcript_rebuild.rs"]
+mod transcript_rebuild;
 
 pub use crate::agent_message::{AgentMessage, ClientCommand};
 
@@ -260,7 +260,7 @@ impl App {
     }
 
     /// Apply all available agent messages and return whether state changed.
-    /// Consecutive frames are projected as one batch to keep replay linear;
+    /// Consecutive frames rebuild the transcript as one batch;
     /// other messages first flush preceding frames to preserve order.
     pub fn poll_agent(&mut self) -> bool {
         let mut applied = false;

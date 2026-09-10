@@ -1,8 +1,4 @@
-//! Extracted inline-highlight tests, split from working_tests.rs so the
-//! parent stays under the file-size gate. These cover the inline search
-//! highlight helper; the new search view reuses the same helper.
-
-use super::working_transcript::highlighted_line;
+use super::transcript::highlighted_line;
 
 #[test]
 fn test_highlighted_no_query_white() {

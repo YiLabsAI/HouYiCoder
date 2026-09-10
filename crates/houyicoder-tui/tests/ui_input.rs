@@ -187,6 +187,23 @@ fn test_ctrl_u_clears_input() {
     );
 }
 
+/// The hardware cursor remains hidden during redraws. The input caret is a
+/// painted cell, so showing the native cursor would leave a visible movement
+/// trail while the alternate-screen buffer updates.
+#[test]
+#[ignore]
+fn test_native_cursor_hidden() {
+    let mut s = pty_session();
+    s.clear_output();
+    s.send_str("x");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        !s.output().contains("\u{1b}[?25h"),
+        "redraw must not show the hardware cursor:\n{}",
+        s.output()
+    );
+}
+
 /// Idle Esc leaves editor content intact. Ctrl+U is the explicit clear action,
 /// so a fast second Esc cannot erase text restored by an interruption.
 #[test]

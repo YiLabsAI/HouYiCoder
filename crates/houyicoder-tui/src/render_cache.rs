@@ -12,8 +12,7 @@
 //! Two independent 64-bit hashes (different seeds) make a collision need both
 //! to collide (~2^-128) — safe as an exact key without storing the source.
 //!
-//! Both the count path (state::line_display_rows) and the render path
-//! (working_transcript::draw_transcript) go through this cache, so a line is
+//! Both row counting and transcript rendering use this cache, so a line is
 //! parsed at most once per (content, width, expand) and reused across all
 //! frames and across transcript rebuilds. The count path reads the cached
 //! length without cloning; the render path clones the cached rows.
