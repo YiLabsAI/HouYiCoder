@@ -1,6 +1,6 @@
 //! Ambient queued-input strip render. Sits above the input box, read-only,
-//! showing pending items with state glyphs. See keys::handle_working for the
-//! dispatch and run_control::pop_queued_to_input for the Esc recall path.
+//! showing pending items with state glyphs. Clicking a visible item recalls it;
+//! the queue pane exposes selective and bulk actions.
 
 use ratatui::{
     Frame,
@@ -52,7 +52,7 @@ fn preview_text(text: &str, width: usize) -> String {
 /// ParkedMessage may still auto-run (queued behind the live head) or not
 /// (orphaned by an interrupt), and the type cannot tell those apart.
 /// Gate open (busy or clean idle): head Message -> "→ next", non-head ->
-/// "· n.". Gate closed (idle after a non-final end): all -> "⏸ held".
+/// "· queued". Gate closed (idle after a non-final end): all -> "⏸ held".
 pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<_> = app
         .pending
@@ -88,7 +88,7 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
             } else if i == 0 && matches!(item, PendingItem::Message(_)) {
                 ("→", "next".to_string())
             } else {
-                ("·", format!("{}.", i + 1))
+                ("·", "queued".to_string())
             };
             let prefix = format!("{glyph} {label}  ");
             let available =

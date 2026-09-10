@@ -102,7 +102,7 @@ impl App {
     /// InjectUser. A Message head already holds the copy; a Command head
     /// is a barrier (never promote past it). No-op when idle -- idle_drain
     /// spawns the head as a fresh run instead. One live copy at a time so
-    /// an Esc recall races at most one server copy.
+    /// an explicit recall races at most one server copy.
     pub(crate) fn promote_next_pending(&mut self) {
         if !self.agent_busy {
             return;

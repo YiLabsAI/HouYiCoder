@@ -94,27 +94,12 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         handle_focus(app, k);
         return;
     }
-    // the input box (merged with any draft). This fires after Esc1 interrupted
-    // (cancelling, agent_busy still true until Done) or when idle, so a
-    // second Esc recalls instead of re-aborting. Panes that own Esc (Memory,
-    // Artifact, /trajectory, ...) are gated out via pane_owns_esc so Esc
-    // closes or backs the pane first. Suppressed outside Working so a
-    // scroll/search Esc is not stolen.
-    if (app.cancelling || !app.agent_busy)
-        && app.viewport == ViewportMode::Working
-        && !app.pending.is_empty()
-        && k.code == KeyCode::Esc
-        && !pane_owns_esc(app.pane)
-    {
-        app.pop_queued_to_input();
-        return;
-    }
     // Esc while a run is in flight interrupts it and nothing else: the queue
-    // is left intact and the input draft is untouched. Fires only when not
-    // already cancelling (the first Esc); a subsequent Esc during the
-    // cancelling window is caught by the recall arm above (pending) or, with
-    // no pending, re-aborts here (idempotent -- a lost AbortRun gets a second
-    // chance). Panes that own Esc are gated out so Esc closes the pane first.
+    // is left intact and the input draft is untouched. Repeated Esc events
+    // remain idempotent abort requests instead of changing meaning while the
+    // asynchronous cancellation is pending. Queue recall is explicit through
+    // its strip or pane, so a delayed terminal event cannot move unsent input.
+    // Panes that own Esc are gated out so Esc closes the pane first.
     if app.agent_busy && k.code == KeyCode::Esc && !pane_owns_esc(app.pane) {
         tracing::debug!("abort_run (busy, queue left intact)");
         app.abort_run();

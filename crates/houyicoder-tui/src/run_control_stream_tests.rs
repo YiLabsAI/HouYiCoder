@@ -1,7 +1,7 @@
 //! Streaming tests split from run_control_tests.rs for the file-size gate.
-//! Reasoning + text streaming persistence, and the output-tail truncation
-//! guard. The two cover the live delta sink (ephemeral preview) versus the
-//! authoritative AssistantMessage frame that lands on Done.
+//! Reasoning and text streaming persistence, plus the output-tail truncation
+//! guard. These cover the ephemeral live preview and the authoritative
+//! AssistantMessage frame that supersedes it.
 use super::*;
 
 /// End-to-end: a provider returning OutputItem::Reasoning streams
@@ -55,8 +55,8 @@ fn test_reasoning_streams_and_persists() {
 /// Regression guard for output-tail truncation. A streamed reply must land in
 /// the transcript in full after Done — head and the last 4-char delta (the
 /// tail). The live delta sink ships each chunk via try_send on a bounded
-/// channel (an ephemeral preview the authoritative AssistantMessage frame
-/// replaces on Done), so the rebuild from frames must carry every token. A
+/// channel; the authoritative AssistantMessage frame replaces that preview,
+/// so the rebuild from frames must carry every token. A
 /// regression that drops the final chunk before the Finish event, or that lets
 /// the live preview be cleared without the authoritative frame landing first,
 /// would leave the tail missing. The reply is deliberately long (many deltas)
@@ -113,6 +113,57 @@ fn test_streamed_tail_survives_done() {
     );
 }
 
+/// The durable assistant frame retires its live preview immediately, before
+/// the run ends, so one paragraph cannot render both at its event position and
+/// again at the live transcript tail while a following tool remains active.
+#[test]
+fn test_durable_clears_preview() {
+    let mut app = composition::app();
+    app.live_active = true;
+    app.live_assistant_text = "same paragraph".into();
+
+    app.handle_agent_message(AgentMessage::Frame(agent_msg("same paragraph")));
+
+    assert!(app.live_assistant_text.is_empty());
+    assert!(!app.live_active);
+    assert_eq!(
+        app.transcript
+            .iter()
+            .filter(|line| matches!(line, TranscriptLine::Agent(text) if text == "same paragraph"))
+            .count(),
+        1
+    );
+}
+
+/// A durable response to a mid-turn user frame stays directly after that user
+/// frame instead of also appearing at the live tail.
+#[test]
+fn test_midturn_keeps_order() {
+    let mut app = composition::app();
+    app.handle_agent_message(AgentMessage::Frame(user_msg("original")));
+    app.handle_agent_message(AgentMessage::Frame(agent_msg("earlier work")));
+    app.handle_agent_message(AgentMessage::Frame(user_msg("interjection")));
+    app.live_active = true;
+    app.live_assistant_text = "response".into();
+
+    app.handle_agent_message(AgentMessage::Frame(agent_msg("response")));
+
+    let user = app
+        .transcript
+        .iter()
+        .position(|line| matches!(line, TranscriptLine::User(text) if text == "interjection"))
+        .expect("interjection line");
+    let responses: Vec<_> = app
+        .transcript
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| matches!(line, TranscriptLine::Agent(text) if text == "response"))
+        .collect();
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].0, user + 1);
+    assert!(app.live_assistant_text.is_empty());
+}
+
 /// Esc aborting a run that already produced real content (agent text landed)
 /// must surface a visible Interrupted row — the silent-Esc bug left no trace
 /// in the transcript. A dim one-line interrupt marker.
@@ -144,10 +195,14 @@ fn test_interrupted_content_shows_marker() {
 /// Esc aborting a run that produced no real content restores the input and
 /// surfaces both the input-restored row and the Interrupted marker.
 #[test]
-fn test_interrupted_no_content_restores() {
+fn test_interrupt_restores_input() {
     let mut app = composition::app();
     app.handle_agent_message(AgentMessage::Frame(user_msg("draft")));
     app.last_run_input = Some("draft".into());
+    app.pending
+        .push(crate::pending_queue::PendingItem::ParkedMessage(
+            "queued".into(),
+        ));
     let msg = AgentMessage::Done {
         result: Ok(RunResult {
             outcome: RunOutcome::Interrupted {
@@ -172,18 +227,91 @@ fn test_interrupted_no_content_restores() {
             .any(|l| matches!(l, TranscriptLine::Interrupted)),
         "restoring abort also lands the Interrupted marker"
     );
+    crate::keys::handle_working(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert_eq!(
+        app.input.value(),
+        "draft",
+        "a repeated Esc keeps the restore"
+    );
+    assert_eq!(app.pending.len(), 1, "Esc does not recall pending input");
 }
 
-/// Esc1 during a busy run interrupts (queue stays intact); Esc2 recalls the
-/// queue head into the input box (merged with any draft). The pop is the
-/// user's explicit recall, so the no-content restore on the subsequent
-/// Done(Interrupted) -- which re-fills the input with the aborted run's
-/// origin - must not clobber it: the queued text was already removed from
+/// A committed mid-turn input closes the original turn's rollback window.
+/// Interruption must preserve the committed user line rather than restoring
+/// the stale run origin.
+#[test]
+fn test_commit_blocks_restore() {
+    let mut app = composition::app();
+    app.handle_agent_message(AgentMessage::Frame(user_msg("origin")));
+    app.last_run_input = Some("origin".into());
+    let committed = houyicoder_protocol::frontend::QueuedInput::new("follow-up");
+    app.pending.push(crate::pending_queue::PendingItem::Message(
+        committed.clone(),
+    ));
+    app.handle_agent_message(AgentMessage::Frame(user_msg("follow-up")));
+    app.handle_agent_message(AgentMessage::QueuedInputCommitted {
+        inputs: vec![committed],
+    });
+
+    app.handle_agent_message(AgentMessage::Done {
+        result: Ok(RunResult {
+            outcome: RunOutcome::Interrupted {
+                reason: "user".into(),
+            },
+            turns: 0,
+            usage: Usage::default(),
+            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+        }),
+    });
+
+    assert!(app.input.is_empty(), "stale origin is not restored");
+    assert!(
+        app.transcript
+            .iter()
+            .any(|line| matches!(line, TranscriptLine::User(text) if text == "follow-up"))
+    );
+}
+
+/// Visible live output closes the rollback window even if interruption wins
+/// before the matching durable assistant frame reaches the frontend.
+#[test]
+fn test_live_blocks_restore() {
+    let mut app = composition::app();
+    app.handle_agent_message(AgentMessage::Frame(user_msg("origin")));
+    app.last_run_input = Some("origin".into());
+    app.handle_agent_message(AgentMessage::Delta {
+        text: "visible response".into(),
+    });
+
+    app.handle_agent_message(AgentMessage::Done {
+        result: Ok(RunResult {
+            outcome: RunOutcome::Interrupted {
+                reason: "user".into(),
+            },
+            turns: 0,
+            usage: Usage::default(),
+            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+        }),
+    });
+
+    assert!(app.input.is_empty(), "visible output prevents rollback");
+    assert!(app.last_run_input.is_none(), "rollback stash is cleared");
+}
+
+/// Esc during a busy run interrupts while an explicit queue action recalls
+/// the queued input. The no-content restore on the subsequent interruption
+/// must not clobber the recalled text because the queued item was removed from
 /// pending, so an overwrite would lose it entirely. Splitting interrupt
 /// from recall stops a panic double-press from wiping the just-recalled
 /// message.
 #[test]
-fn test_esc_pop_survives_interrupt() {
+fn test_recall_survives_interrupt() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
     app.agent_busy = true;
@@ -201,12 +329,11 @@ fn test_esc_pop_survives_interrupt() {
     crate::keys::handle_working(&mut app, esc);
     assert!(app.cancelling, "first Esc interrupts the run");
     assert!(!app.pending.is_empty(), "queue intact after the interrupt");
-    // Esc2: recall the queue head into the input box.
-    crate::keys::handle_working(&mut app, esc);
+    app.pop_queued_to_input();
     assert_eq!(
         app.input.value(),
         "zzsecond",
-        "second Esc recalls the queue head"
+        "explicit recall moves the queue head into the input"
     );
     // The aborted run settles Interrupted with no real content.
     app.handle_agent_message(AgentMessage::Done {
@@ -296,14 +423,11 @@ impl Tool for EchoTool {
     }
 }
 
-/// Fast provider, race lost: idle_drain spawns the first message and
-/// promotes exactly one parked head, but a fast provider returns before
-/// the injected head reaches the server, so the run ends without consuming
-/// it. The tail must not be lost -- it stays pending for the next
-/// idle_drain. Drives the real wire path (InjectUser -> drive_loop drain
-/// -> QueuedInputCommitted -> host remove -> promote next), not just host state.
+/// A fast provider races the first promoted injection. The server may consume
+/// the second item at its tool boundary or finish before it arrives, but the
+/// third item has no later boundary and must remain pending either way.
 #[test]
-fn test_batch_consumes_via_drain() {
+fn test_batch_keeps_tail() {
     let provider = Arc::new(FakeProvider::new(vec![
         CompletionResponse {
             output: vec![OutputItem::ToolCall {
@@ -355,8 +479,8 @@ fn test_batch_consumes_via_drain() {
     assert!(!app.agent_busy, "run reached Done");
     let texts: Vec<&str> = app.pending.iter().map(|it| it.display()).collect();
     assert!(
-        texts.contains(&"second") && texts.contains(&"third"),
-        "tail not lost (race lost, drained next idle_drain):\n{:?}",
+        matches!(texts.as_slice(), ["second", "third"] | ["third"]),
+        "the undrainable tail must remain in FIFO order: {:?}",
         app.pending
     );
 }

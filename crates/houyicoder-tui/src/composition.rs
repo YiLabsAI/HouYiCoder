@@ -207,9 +207,9 @@ impl App {
     /// branch's flaw). A queued item auto-sends ONLY when the prior run ended
     /// FinalOutput (a clean end) -- the user got their answer, so drain FIFO.
     /// An interrupt/error does NOT auto-send: the queued item stays parked for
-    /// the user to recall to the input box + edit + re-send. A redirect on
-    /// interrupt should not auto-fire the pending input — the user pops it
-    /// via Esc (busy-Esc abort+pop, or idle-Esc pop) + edits before re-sending.
+    /// the user to recall to the input box, edit, and re-send. A redirect on
+    /// interrupt must not auto-fire pending input; recall remains an explicit
+    /// queue strip or pane action.
     pub fn idle_drain(&mut self, resume_builder: Option<&ResumeBuilderRef>, dirty: &mut bool) {
         if !self.agent_busy && !self.reverse_request_in_flight() {
             self.try_swap_session(resume_builder, dirty);

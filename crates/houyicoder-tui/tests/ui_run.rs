@@ -23,7 +23,7 @@ const RUN_DELAY_MS: u64 = 3000;
 /// and renders the "input restored" system line.
 #[test]
 #[ignore]
-fn test_esc_aborts_restores_input() {
+fn test_esc_restores_input() {
     let mut s = pty_session_slow(RUN_DELAY_MS);
     s.send_str("hi");
     s.send_key(&Key::Enter);
@@ -41,6 +41,14 @@ fn test_esc_aborts_restores_input() {
     assert!(
         !s.output().contains("stub mode: no api key"),
         "the stub reply should not render after a pre-content abort:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_key(&Key::Esc);
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for("hi", RENDER_TIMEOUT),
+        "a repeated Esc must not erase the restored input:\n{}",
         s.output()
     );
 }

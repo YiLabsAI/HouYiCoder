@@ -380,12 +380,12 @@ pub struct App {
     /// Stashed so the count path soft-wraps to the same width render used
     /// (count == render). 0 before first render = do-not-wrap.
     pub last_transcript_width: Cell<u16>,
-    /// Transient assistant text accumulated from streamed deltas. Appended per
-    /// Delta message; cleared and replaced by the durable projection on Done.
+    /// Transient assistant text accumulated from streamed deltas. The first
+    /// durable assistant frame clears it; run completion is the fallback.
     /// Live preview only — the session log is the source of truth.
     pub live_assistant_text: String,
-    /// True while a streamed turn is in flight and live_assistant_text holds a
-    /// preview the Done message will replace. Drives the live-row render.
+    /// True while live_assistant_text holds a preview not yet superseded by
+    /// its durable assistant frame. Drives the live-row render.
     pub live_active: bool,
     /// Transient reasoning preview from streamed ReasoningDelta chunks.
     /// Cleared on Done. Held for the post-turn ThoughtFor summary, not
@@ -417,8 +417,8 @@ pub struct App {
     /// (Ns) after 2s, or (Ns · M lines) when lines is Some. Cleared when
     /// the tool result lands (retire_tool) + on Done.
     pub bash_progress: HashMap<String, BashProgress>,
-    /// The user input that started the in-flight run, so an abort with no
-    /// real content can restore it to the input box.
+    /// The original run input while it remains eligible for no-output rollback.
+    /// A committed mid-turn input or visible output closes this window.
     pub last_run_input: Option<String>,
     /// Pending approval requests from the last Interruption. The popup shows
     /// the first; the verdict applies to all (batch decide). Cleared on resume.

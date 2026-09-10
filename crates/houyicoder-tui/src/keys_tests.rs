@@ -140,8 +140,8 @@ fn test_model_pane_esc_closes() {
 
 /// The /skills pane Esc key closes back to the transcript, through the real
 /// entry point and while an agent runs. Calling the inner input handler
-/// skipped the abort and recall arms that Esc meets first, so the test passed
-/// while the key was in fact being taken to interrupt the running agent.
+/// skipped the abort arm that Esc meets first, so the test passed while the
+/// key was in fact being taken to interrupt the running agent.
 #[test]
 fn test_skills_pane_esc_closes() {
     let mut app = working_app();
@@ -764,68 +764,46 @@ fn test_review_rework_key_routes() {
     );
 }
 
-/// Esc while a run is in flight interrupts but leaves the queue intact: the
-/// head is NOT popped on the same press. A panic double-press used to
-/// abort+pop in one, then the second Esc fell through to clear-input and
-/// wiped the just-recalled message (abort sets cancelling but agent_busy
-/// stays true until Done). Now interrupt and recall are separate presses, so
-/// the common double-press is interrupt+recall, not interrupt+destroy.
+/// Repeated Esc while a run is in flight remains an idempotent abort and
+/// leaves queued input intact throughout the cancellation round trip.
 #[test]
-fn test_esc_double_press_safe() {
+fn test_repeated_esc_keeps() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
-    // Esc1: interrupt only. The queue still holds "task a"; input stays empty.
+    handle_working(&mut app, key(KeyCode::Esc));
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(
         app.pending
             .iter()
             .any(|p| matches!(p, PendingItem::Message(t) if t == "task a")),
-        "Esc1 interrupts without popping -- the queue keeps the message"
+        "repeated Esc keeps the queued message"
     );
-    assert!(app.input.is_empty(), "Esc1 does not touch the input box");
-    assert!(app.cancelling, "Esc1 set cancelling (abort in flight)");
-    // Esc2: recall. The head pops into the input. A double-press is safe now.
-    handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(
-        app.input.value(),
-        "task a",
-        "Esc2 recalls the queued message"
-    );
+    assert!(app.input.is_empty(), "Esc does not touch the input box");
+    assert!(app.cancelling, "Esc leaves cancellation in flight");
 }
 
-/// Recall merges the queued message with a half-typed draft instead of
-/// overwriting it: the queued message prepends, a newline separates, the
-/// cursor parks at the draft start. The prior pop overwrote the draft,
-/// destroying the user's half-typed text.
+/// Explicit queue recall merges a queued message with a half-typed draft
+/// instead of overwriting it.
 #[test]
-fn test_esc_recall_merges_draft() {
+fn test_recall_merges_draft() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
     app.input.set("half draft".into());
-    // Esc1: interrupt -- the draft is untouched (not cleared).
-    handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(
-        app.input.value(),
-        "half draft",
-        "Esc1 leaves the draft alone"
-    );
-    // Esc2: recall -- the queued message prepends, the draft survives.
-    handle_working(&mut app, key(KeyCode::Esc));
+    app.pane = Pane::Queue;
+    handle_working(&mut app, key(KeyCode::Char('R')));
     assert_eq!(
         app.input.value(),
         "task a\nhalf draft",
-        "Esc2 merges the queued message with the draft, not overwrites"
+        "explicit recall prepends the message without overwriting the draft"
     );
 }
 
-/// During the cancelling window (after Esc1 interrupted, agent_busy still
-/// true until Done), Esc on a pane with its own close (Memory) must close
-/// the pane, not pop the queue. The pop arm shares the busy-Esc arm's pane
-/// gate so the cancelling window does not steal the pane-close key.
+/// During the cancelling window, Esc on a pane with its own close must close
+/// the pane without changing the queued input.
 #[test]
 fn test_esc_cancelling_closes_pane() {
     use crate::pending_queue::PendingItem;
@@ -1070,15 +1048,12 @@ fn test_approval_nav_full_cycle() {
 }
 
 #[test]
-fn test_esc_idle_clears_input() {
-    // No runner wired, not busy: Esc must not abort (abort_run is a no-op
-    // with no runner) and must not crash or toggle quit. It falls through
-    // to the generic input Esc (clear input), which is empty here so no-op.
+fn test_esc_keeps_input() {
     let mut app = working_app();
-    app.input.clear();
+    app.input.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(!app.quit, "idle Esc must not quit");
-    assert!(app.input.is_empty(), "idle Esc on empty input is a no-op");
+    assert_eq!(app.input.value(), "draft", "Ctrl+U owns input clearing");
 }
 
 /// While a run is in flight, Esc interrupts and leaves the draft untouched.

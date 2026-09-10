@@ -151,12 +151,21 @@ impl App {
                 }
             }
             AgentMessage::QueuedInputCommitted { inputs } => {
+                // A committed mid-turn input makes the original submission no
+                // longer eligible for no-output rollback.
+                if !inputs.is_empty() {
+                    self.last_run_input = None;
+                }
                 // Remove exact committed inputs before promoting the next head.
                 // Stable identity prevents a delayed event from removing newer text.
                 for input in inputs {
-                    if let Some(pos) = self.pending.iter().position(
-                        |it| matches!(it, PendingItem::Message(current) if current.id == input.id),
-                    ) {
+                    if let Some(pos) = self.pending.iter().position(|it| {
+                        matches!(
+                            it,
+                            PendingItem::Message(current) | PendingItem::ParkedMessage(current)
+                                if current.id == input.id
+                        )
+                    }) {
                         self.pending.remove(pos);
                     }
                 }
@@ -521,15 +530,24 @@ impl App {
     /// session.
     pub(crate) fn apply_frames(&mut self, frames: impl IntoIterator<Item = TranscriptFrame>) {
         let mut any = false;
+        let mut assistant_committed = false;
         for frame in frames {
             if let Some(msg) = frame_log_msg(&frame) {
                 tracing::debug!(msg);
             }
+            assistant_committed |= matches!(
+                &frame,
+                TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(_))
+            );
             self.track_running_tool(&frame);
             self.frames.push(frame);
             any = true;
         }
         if any {
+            if assistant_committed {
+                self.live_assistant_text.clear();
+                self.live_active = false;
+            }
             self.rebuild_transcript();
         }
     }

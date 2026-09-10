@@ -241,7 +241,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
                 }
                 None => match *tag {
                     SPINNER => spinner_line(r, spin_elapsed, spin_intensity, tool_active),
-                    USER => highlighted_line(r, &q, is_current).style(user_bg),
+                    USER => highlighted_line(r, &q, is_current),
                     SYSTEM => highlighted_line(r, &q, is_current).style(if in_expanded {
                         user_bg
                     } else {

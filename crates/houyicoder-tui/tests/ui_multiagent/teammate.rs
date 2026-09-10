@@ -267,7 +267,7 @@ fn test_teammate_banner_plan() {
     );
 }
 
-// ---- batch 2: Esc interrupt + recall (the two-press model) ----
+// ---- batch 2: Esc interrupt and teammate controls ----
 
 /// The teammate-view banner carries the shift-arrow return hint, so the
 /// user knows how to exit the view without guessing.

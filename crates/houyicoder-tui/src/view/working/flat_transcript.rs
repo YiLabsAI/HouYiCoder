@@ -110,7 +110,6 @@ pub(super) fn draw_flat_transcript(f: &mut Frame, area: Rect, app: &App) {
     } else {
         None
     };
-    let user_bg = Style::new().bg(Color::Indexed(238));
     let dim = Style::new().fg(Color::DarkGray);
     let lines: Vec<Line> = visible
         .iter()
@@ -130,7 +129,7 @@ pub(super) fn draw_flat_transcript(f: &mut Frame, area: Rect, app: &App) {
                     }
                 }
                 None => match *tag {
-                    USER => highlighted_line(r, &q, is_current).style(user_bg),
+                    USER => highlighted_line(r, &q, is_current),
                     SYSTEM => highlighted_line(r, &q, is_current).style(dim),
                     DIFF_ADD | DIFF_DEL | DIFF_HUNK | DIFF_CTX => {
                         diff_row(r, *tag, inner.width, None)

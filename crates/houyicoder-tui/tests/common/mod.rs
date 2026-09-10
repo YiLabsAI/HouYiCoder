@@ -736,7 +736,7 @@ pub fn pty_session_with_home(repo: PathBuf, home: PathBuf, script_json: &str) ->
 
 /// Like pty_session_scripted, but the stub streams with an
 /// inter-chunk delay so a run stays in-flight long enough to drive mid-run
-/// keys (Esc interrupt, recall). Used by the multi-agent Esc tests.
+/// keys and queue-state transitions. Used by the multi-agent Esc tests.
 pub fn pty_session_slow_scripted(ms: u64, script_json: &str) -> PtySession {
     let sessions_dir = fresh_temp_dir("sessions");
     pty_session_inner(PtySession::launch_with_sessions_dir(

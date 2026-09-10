@@ -176,8 +176,8 @@ fn test_drain_command_dispatches_clear() {
 
 /// Single-copy invariant: a second message enqueued while busy parks (no
 /// server copy), so at most one item holds a live copy. The head holds it
-/// (Message); every item past it parks. An Esc recall then races a single
-/// copy, and the strip's "-> next" marks the sole live item.
+/// while every item past it parks. An explicit recall then races a single
+/// copy, and the strip marks the sole live item as next.
 #[test]
 fn test_second_enqueue_parks() {
     let mut app = working();
@@ -447,6 +447,28 @@ fn test_commit_identity() {
         panic!("new input must remain live");
     };
     assert_eq!(remaining.id, new.id);
+}
+
+/// A run can settle before the UI dispatches its preceding commit event. Run
+/// completion parks the mirror, but the stable commit still retires that item
+/// so it cannot be recalled and submitted a second time.
+#[test]
+fn test_commit_clears_parked() {
+    let mut app = working();
+    app.last_run_input = Some("origin".into());
+    let committed = houyicoder_protocol::frontend::QueuedInput::new("same");
+    app.pending
+        .push(PendingItem::ParkedMessage(committed.clone()));
+
+    app.handle_agent_message(AgentMessage::QueuedInputCommitted {
+        inputs: vec![committed],
+    });
+
+    assert!(app.pending.is_empty(), "committed parked mirror retires");
+    assert!(
+        app.last_run_input.is_none(),
+        "commit closes the original rollback window"
+    );
 }
 
 /// While a run is busy, a submit copies the input to the pending queue and

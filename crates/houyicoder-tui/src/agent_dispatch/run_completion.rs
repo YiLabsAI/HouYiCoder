@@ -11,6 +11,8 @@ use crate::transcript::{turn_reasoning, turn_tool_summary};
 
 impl super::App {
     pub(super) fn handle_run_completion(&mut self, result: Result<RunResult, RunError>) {
+        let had_live_output =
+            !self.live_assistant_text.is_empty() || !self.live_reasoning_text.is_empty();
         self.agent_busy = false;
         self.live_active = false;
         self.live_assistant_text.clear();
@@ -58,7 +60,8 @@ impl super::App {
                         tracing::debug!(reason, "interrupted");
                         let restored = match self.last_run_input.take() {
                             Some(text)
-                                if !should_preserve_interrupted_turn(&self.frames)
+                                if !had_live_output
+                                    && !should_preserve_interrupted_turn(&self.frames)
                                     && self.input.is_empty() =>
                             {
                                 // Remove the empty submission from transcript

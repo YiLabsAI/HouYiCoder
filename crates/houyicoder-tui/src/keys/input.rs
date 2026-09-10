@@ -141,12 +141,6 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Esc if app.pane == Pane::Artifact && app.input.is_empty() => {
             app.pane = Pane::Transcript;
         }
-        // Esc in the base working state (no overlay, no artifact edit): clear
-        // the input box if it has text, otherwise no-op. Gives Esc a concrete
-        // behavior instead of a dead key.
-        KeyCode::Esc if !app.input.is_empty() => {
-            app.input.clear();
-        }
         // In the /status pane, Tab cycles the sub-tab (Status, Config, Usage)
         // instead of the whole pane (the pane owns its tab bar).
         KeyCode::Tab if app.pane == Pane::Status => app.status_tab = app.status_tab.next(),
@@ -307,15 +301,15 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Down if app.pane == Pane::Queue => {
             app.queue_view.move_cursor(1, app.pending.len());
         }
-        KeyCode::Enter if app.pane == Pane::Queue && app.input.is_empty() => {
+        KeyCode::Enter if app.pane == Pane::Queue => {
             app.recall_queued_at_cursor();
             app.pane = Pane::Transcript;
         }
-        KeyCode::Char('R') if app.pane == Pane::Queue && app.input.is_empty() => {
+        KeyCode::Char('R') if app.pane == Pane::Queue => {
             app.pop_queued_to_input();
             app.pane = Pane::Transcript;
         }
-        KeyCode::Char('d') if app.pane == Pane::Queue && app.input.is_empty() => {
+        KeyCode::Char('d') if app.pane == Pane::Queue => {
             app.delete_queued_at_cursor();
         }
         KeyCode::Esc if app.pane == Pane::Hooks => {

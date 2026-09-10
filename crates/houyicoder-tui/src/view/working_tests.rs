@@ -1004,3 +1004,28 @@ fn test_fleet_click_selects() {
     assert_eq!(app.fleet.selected, Some(1), "first click selects the row");
     assert!(app.teammate_view.is_none(), "one click does not drill in");
 }
+
+/// User text uses the prompt glyph rather than a cell background. Avoiding a
+/// background on wide glyph continuation cells prevents isolated gray blocks
+/// from reappearing when the transcript scrolls back over CJK prompts.
+#[test]
+fn test_cjk_no_background() {
+    use crate::composition;
+    use crate::records::TranscriptLine;
+    use crate::state::Screen;
+    use crate::test_support::render_buffer;
+    use ratatui::style::Color;
+
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.transcript = vec![TranscriptLine::User("中途插话到底有没有问题".into())];
+    let buf = render_buffer(&app, 31, 12);
+    let area = app.transcript_rect.get();
+
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            let cell = buf.cell((x, y)).expect("transcript cell");
+            assert_ne!(cell.style().bg, Some(Color::Indexed(238)));
+        }
+    }
+}

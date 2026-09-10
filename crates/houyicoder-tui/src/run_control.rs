@@ -15,6 +15,7 @@ use crate::records::{Approval, AskQuestion, TranscriptLine};
 
 const MAX_PROJECT_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;
+const MAX_AGENT_MESSAGES_PER_POLL: usize = 4096;
 use crate::state::App;
 use crate::state::enums::LiveBlock;
 use crate::transcript::{TranscriptFrame, chunk_text};
@@ -264,9 +265,10 @@ impl App {
     pub fn poll_agent(&mut self) -> bool {
         let mut applied = false;
         let mut batch: Vec<TranscriptFrame> = Vec::new();
-        loop {
+        for _ in 0..MAX_AGENT_MESSAGES_PER_POLL {
             // Poll one owned message off the session so the session borrow
-            // ends before the mutable dispatch below.
+            // ends before the mutable dispatch below. The batch cap returns
+            // control to terminal input even when producers remain saturated.
             let msg = self.session.as_mut().and_then(|s| s.poll());
             match msg {
                 Some(AgentMessage::Frame(frame)) => {

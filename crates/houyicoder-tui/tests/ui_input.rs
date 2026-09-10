@@ -1,6 +1,6 @@
-//! Real-binary PTY tests for input-box key behavior: the busy-Esc gate (#15)
-//! and the readline-style clear shortcuts (Ctrl+U kill-to-line-start, idle Esc
-//! clear). The unit layer covers InputBuffer mutation + the keys.rs gate; this
+//! Real-binary PTY tests for input-box key behavior: the busy-Esc gate and
+//! the readline-style Ctrl+U clear shortcut. The unit layer covers InputBuffer
+//! mutation and the keys.rs gate; this
 //! layer drives the real crossterm byte path so the key-routing + repaint chain
 //! is pinned, not just the state machine.
 //!
@@ -134,75 +134,30 @@ fn test_ctrlu_clears_busy_draft() {
     );
 }
 
-/// Esc while a run is in flight AND the queue holds a pending message: the
-/// split-Esc design takes two keystrokes — Esc1 aborts the run (queue left
-/// intact), then after the interrupt lands, Esc2 recalls the queue head into
-/// the input box. The popped text must NOT be auto-sent (an Interrupted end
-/// holds the clean-end auto-drain gate) and must NOT be clobbered by the
-/// interrupt's input-restore: Done fires before Esc2 and fills the empty box
-/// with the aborted origin, then Esc2's pop merges the queued text on top so
-/// both survive. Proven behaviorally: after Esc1, wait for the interrupt
-/// notice (the abort really landed through the server), Esc2 to recall, then
-/// Enter. The queued token appearing as a contiguous user echo proves it was
-/// in the input box at submit time — skip Esc2 and the restore submits the
-/// aborted run's origin instead (the first message's text, not the token).
+/// Repeated Esc while a run and queued message are active remains an abort.
+/// Once interruption settles, the queue renders as held instead of moving its
+/// text into the input box through a timing-dependent second action.
 #[test]
 #[ignore]
-fn test_busy_esc_pops_queue() {
+fn test_esc_keeps_queue() {
     let mut s = pty_session_slow_in_repo(make_temp_repo(2), RUN_DELAY_MS);
-    // Start a run (the stub's 3s delay keeps it in-flight with no content).
     s.send_str("first task");
     s.send_key(&Key::Enter);
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    // Queue a message while busy (Enter routes to the pending queue).
     s.send_str(QUEUED_TOKEN);
     s.send_key(&Key::Enter);
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    // Esc1: abort the in-flight run. The queue is left intact (split-Esc
-    // design: recall moves to Esc2). The gap lets crossterm resolve the bare
-    // 0x1b as Esc before anything follows.
+    assert!(s.wait_for("→ next", RENDER_TIMEOUT));
+
     s.send_key(&Key::Esc);
-    // The abort resolves through the server and lands the interrupt notice.
+    s.send_key(&Key::Esc);
+
     assert!(
         s.wait_for("What should Houyi do instead", RENDER_TIMEOUT),
-        "Esc1 should abort the in-flight run:\n{}",
+        "Esc should abort the in-flight run:\n{}",
         s.output()
     );
-    // Esc2: recall — pop the queue head into the input box, merging onto the
-    // restored origin so both survive. The latch is the queue strip clearing:
-    // it renders every frame while pending is non-empty and vanishes once
-    // the pop empties it — the token itself can't latch (the strip shows it
-    // while pending, and the buffer accumulates). Sampling the latest frame
-    // per poll avoids stale frames and orders Enter after 0x1b resolves, so
-    // the Esc-timeout race can't swallow the 0x1b+\r pair. No fixed sleep.
-    s.send_key(&Key::Esc);
-    let popped = {
-        let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
-        loop {
-            s.clear_output();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            if !s.output_compact().contains("queued:") {
-                break true;
-            }
-            if std::time::Instant::now() >= deadline {
-                break false;
-            }
-        }
-    };
     assert!(
-        popped,
-        "Esc2 should pop the queue head (queue strip should clear):\n{}",
-        s.output()
-    );
-    // Wipe history so only what renders after the submit is read; the queued
-    // token was typed char-by-char (never contiguous) and the popped input
-    // box may render it, so the contiguous USER ECHO is the proof it was
-    // submitted from the box - not auto-sent, not left as the restored origin.
-    s.clear_output();
-    s.send_key(&Key::Enter);
-    assert!(
-        s.wait_for(QUEUED_TOKEN, RENDER_TIMEOUT),
-        "Esc2 should pop the queue head to the input box and submit on Enter:\n{}",
+        s.wait_for("⏸", RENDER_TIMEOUT),
+        "repeated Esc must leave the queue held:\n{}",
         s.output()
     );
 }
@@ -232,12 +187,11 @@ fn test_ctrl_u_clears_input() {
     );
 }
 
-/// Shortcut: Esc in the idle working state with non-empty input clears the
-/// input box (a concrete behavior instead of a dead key). Same behavioral
-/// proof as ctrl_u_clears_input: clear, then Enter must submit nothing.
+/// Idle Esc leaves editor content intact. Ctrl+U is the explicit clear action,
+/// so a fast second Esc cannot erase text restored by an interruption.
 #[test]
 #[ignore]
-fn test_esc_clears_idle_input() {
+fn test_esc_keeps_input() {
     let mut s = pty_session();
     s.send_str(UNIQUE_TOKEN);
     s.clear_output();
@@ -245,8 +199,8 @@ fn test_esc_clears_idle_input() {
     std::thread::sleep(std::time::Duration::from_millis(200));
     s.send_key(&Key::Enter);
     assert!(
-        !s.wait_for(UNIQUE_TOKEN, Duration::from_millis(600)),
-        "Esc should clear the idle input so Enter submits nothing:\n{}",
+        s.wait_for(UNIQUE_TOKEN, RENDER_TIMEOUT),
+        "Esc should preserve idle input for submission:\n{}",
         s.output()
     );
 }

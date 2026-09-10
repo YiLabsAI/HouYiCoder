@@ -28,88 +28,56 @@ fn key(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
 }
 
-/// Idle (not busy) with queued inputs: Esc pulls the whole queue back into
-/// the input box in order (joined by newlines), so the user can edit the
-/// batch and resubmit. Commands stay queued. No running task to abort, so
-/// the cancel-when-idle priority does not apply.
+/// Idle Esc does not mutate queued input. Recall remains an explicit queue
+/// action so a delayed or repeated terminal event cannot move unsent text.
 #[test]
-fn test_idle_esc_recalls_all() {
+fn test_idle_esc_keeps() {
     let mut app = working();
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(
-        app.input.value(),
-        "task a\ntask b",
-        "Esc recalls all in order"
-    );
-    assert!(app.pending.is_empty(), "queue drained to input");
+    assert!(app.input.is_empty(), "Esc leaves the input box untouched");
+    assert_eq!(app.pending.len(), 2, "Esc leaves the queue intact");
 }
 
-/// While a run is in flight with queued inputs, the first Esc interrupts
-/// (the queue stays intact, the draft untouched); the second Esc pulls the
-/// whole queue back in order. Splitting interrupt from recall stops a
-/// panic double-press from destroying the just-recalled text: the old
-/// combined abort+pop left agent_busy true after the abort, so the second
-/// Esc fell through to clear-input and wiped the popped text.
+/// Repeated Esc events while a run is in flight stay idempotent aborts. They
+/// never change meaning to queue recall during the asynchronous cancel window.
 #[test]
-fn test_busy_esc_recall() {
+fn test_busy_esc_keeps() {
     let mut app = working();
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
     crate::keys::handle_working(&mut app, esc);
-    assert!(app.cancelling, "first Esc interrupts the run");
-    assert!(
-        app.input.is_empty(),
-        "first Esc does not touch the input box"
-    );
-    assert_eq!(
-        app.pending,
-        vec![
-            PendingItem::Message("task a".into()),
-            PendingItem::Message("task b".into())
-        ],
-        "the queue stays intact after the interrupt"
-    );
     crate::keys::handle_working(&mut app, esc);
-    assert_eq!(
-        app.input.value(),
-        "task a\ntask b",
-        "second Esc recalls all in order"
-    );
-    assert!(app.pending.is_empty(), "tail drained to input");
+    assert!(app.cancelling, "Esc interrupts the run");
+    assert!(app.input.is_empty(), "Esc does not touch the input box");
+    assert_eq!(app.pending.len(), 2, "the queue stays intact");
 }
 
-/// Parked messages (no server copy, blocked behind a barrier or orphaned by
-/// an interrupt) are recalled alongside live messages — joined in queue
-/// order, no QueueRemove fired (there is no server copy to drop).
+/// Explicit recall includes parked messages in queue order.
 #[test]
-fn test_esc_recalls_parked() {
+fn test_recall_includes_parked() {
     let mut app = working();
+    app.pane = Pane::Queue;
     app.pending
         .push(PendingItem::ParkedMessage("held a".into()));
     app.pending
         .push(PendingItem::ParkedMessage("held b".into()));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(
-        app.input.value(),
-        "held a\nheld b",
-        "parked messages recalled in order"
-    );
+    crate::keys::handle_working(&mut app, key('R'));
+    assert_eq!(app.input.value(), "held a\nheld b");
     assert!(app.pending.is_empty(), "queue drained");
 }
 
-/// Slash commands stay queued when messages are recalled — joining them
-/// would let a leading slash reparse the batch as a command and lose the
-/// messages. The command surfaces as the strip head after the messages leave.
+/// Slash commands stay queued when messages are explicitly recalled.
 #[test]
-fn test_esc_recall_keeps_command() {
+fn test_recall_keeps_command() {
     let mut app = working();
+    app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("do work".into()));
     app.pending.push(PendingItem::Command("/clear".into()));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    crate::keys::handle_working(&mut app, key('R'));
     assert_eq!(app.input.value(), "do work", "only the message is recalled");
     assert_eq!(
         app.pending,
@@ -118,18 +86,15 @@ fn test_esc_recall_keeps_command() {
     );
 }
 
-/// Esc recall is destructive: once recalled to the input box, clearing the
-/// input (Ctrl+U) permanently drops the message -- it is no longer in the
-/// queue. This is by design (recall is an explicit user action). Pin it so a
-/// future change that adds undo to recall does not silently weaken the
-/// contract. The batch version (N messages) is N-wide; this test uses one
-/// message since Ctrl+U kills one line at a time.
+/// Explicit recall is destructive: once recalled to the input box, clearing
+/// the input permanently drops the message because it is no longer queued.
 #[test]
-fn test_recall_then_clear_loses() {
+fn test_recall_clear_loses() {
     let mut app = working();
+    app.pane = Pane::Queue;
     app.pending
         .push(PendingItem::Message("important task".into()));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    crate::keys::handle_working(&mut app, key('R'));
     assert_eq!(
         app.input.value(),
         "important task",
@@ -197,8 +162,8 @@ fn test_queue_strip_renders() {
         "queue strip must render, got:\n{out}"
     );
     assert!(
-        out.contains("· 2."),
-        "second item shows position glyph, got:\n{out}"
+        out.contains("· queued"),
+        "second item shows queued state, got:\n{out}"
     );
     assert!(
         out.contains("fix the bug") && out.contains("run tests"),
@@ -375,8 +340,8 @@ fn test_queue_next_row() {
     let out = render_text(&app, 100, 28);
     assert!(out.contains("→ next"), "busy head shows next: {out}");
     assert!(
-        out.contains("· 2."),
-        "non-head shows its position (will auto-run): {out}"
+        out.contains("· queued"),
+        "non-head shows its queued state (will auto-run): {out}"
     );
     assert!(
         !out.contains("⏸ held"),
