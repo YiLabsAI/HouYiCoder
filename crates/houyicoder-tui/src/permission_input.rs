@@ -379,7 +379,7 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
             app.permission_cursor = 0;
             true
         }
-        KeyCode::Right => {
+        KeyCode::Right | KeyCode::Tab => {
             app.permission_tab = app.permission_tab.next();
             app.permission_cursor = 0;
             true

@@ -622,18 +622,21 @@ fn memory_entries() -> Vec<MemoryEntry> {
             summary: "make check must stay green before commit (placeholder)".to_string(),
             scope: "project".to_string(),
             source: "project".to_string(),
+            mtime_secs: 0,
         },
         MemoryEntry {
             topic: "comment-style".to_string(),
             summary: "no CJK, no backtick identifiers in .rs comments (placeholder)".to_string(),
             scope: "user".to_string(),
             source: "feedback".to_string(),
+            mtime_secs: 0,
         },
         MemoryEntry {
             topic: "spec-driven".to_string(),
             summary: "every change cites a spec clause and a test id (placeholder)".to_string(),
             scope: "auto".to_string(),
             source: "reference".to_string(),
+            mtime_secs: 0,
         },
     ]
 }

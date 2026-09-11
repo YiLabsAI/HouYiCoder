@@ -70,11 +70,10 @@ pub(crate) enum PrAction {
     Ready,
 }
 
-/// A parsed PR (number + optional URL + the action).
+/// A parsed pull request number and action.
 #[derive(Debug, Clone)]
 pub(crate) struct PrInfo {
     pub number: u32,
-    pub url: Option<String>,
     pub action: PrAction,
 }
 
@@ -233,16 +232,14 @@ pub(crate) fn detect_git_operation(command: &str, output: &str) -> GitOp {
         op.branch = Some((ref_, BranchAction::Rebased));
     }
     if let Some(action) = gh_pr_action(command) {
-        if let Some((num, url)) = find_pr_in_output(output) {
+        if let Some((num, _)) = find_pr_in_output(output) {
             op.pr = Some(PrInfo {
                 number: num,
-                url: Some(url),
                 action,
             });
         } else if let Some(num) = parse_pr_number_from_text(output) {
             op.pr = Some(PrInfo {
                 number: num,
-                url: None,
                 action,
             });
         }
@@ -350,12 +347,11 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_pr_create_url() {
+    fn test_detect_pr_create() {
         let op = detect_git_operation("gh pr create", "https://github.com/owner/repo/pull/42");
         let pr = op.pr.expect("pr");
         assert_eq!(pr.number, 42);
         assert_eq!(pr.action, PrAction::Created);
-        assert!(pr.url.is_some());
     }
 
     #[test]
@@ -364,7 +360,6 @@ mod tests {
         let pr = op.pr.expect("pr");
         assert_eq!(pr.number, 42);
         assert_eq!(pr.action, PrAction::Merged);
-        assert!(pr.url.is_none());
     }
 
     #[test]

@@ -128,6 +128,8 @@ pub struct MemoryEntry {
     /// Lowercase provenance source label (user / feedback / project /
     /// reference) — what the memory is. Shown as a per-row tag.
     pub source: String,
+    /// Last modification time in seconds since the Unix epoch.
+    pub mtime_secs: u64,
 }
 
 /// One agent in the multi-agent fleet.

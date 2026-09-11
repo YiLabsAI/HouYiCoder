@@ -5,6 +5,9 @@
 //! event types leak through.
 
 use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::memory::{
+    MemoryDetail, MemorySavedKind, MemorySummaryEntry, ToggleState,
+};
 use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunError, RunResult,
 };
@@ -273,29 +276,22 @@ pub enum AgentMessage {
     /// The stored-memory list the /memory command requested over the wire.
     /// Frontmatter-only summaries (no body); a /memory <key> show fetches the
     /// body separately.
-    MemoryListResult {
-        entries: Vec<houyicoder_protocol::frontend::memory::MemorySummaryEntry>,
-    },
+    MemoryListResult { entries: Vec<MemorySummaryEntry> },
     /// The full body of one memory the /memory <key> show requested, or None
     /// when the key was absent.
     MemoryShowResult {
-        entry: Option<houyicoder_protocol::frontend::memory::MemoryDetail>,
+        req_id: RequestId,
+        entry: Option<MemoryDetail>,
     },
     /// The toggle snapshot the /memory pane requested on open (a read) or the
     /// /memory toggle command requested (a flip). Both auto-memory and
     /// auto-dream ride back so the pane renders both rows from one round-trip.
-    MemoryToggleStateResult {
-        state: houyicoder_protocol::frontend::memory::ToggleState,
-    },
+    MemoryToggleStateResult { state: ToggleState },
     /// A background memory task wrote the given count of entries this pass.
     /// Fired once per pass on completion (extract: per fork pass plus the
     /// main-agent saved-this-turn skipped path; dream: per consolidation).
-    /// The kind tells the renderer the verb (extract = Saved, dream =
-    /// Improved).
-    MemorySaved {
-        count: u32,
-        kind: houyicoder_protocol::frontend::memory::MemorySavedKind,
-    },
+    /// The kind distinguishes saved entries from consolidation touches.
+    MemorySaved { count: u32, kind: MemorySavedKind },
     /// The current permission mode the /model read requested over the wire.
     PermissionModeResult {
         mode: houyicoder_protocol::frontend::permission::PermissionMode,

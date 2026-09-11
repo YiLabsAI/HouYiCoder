@@ -139,13 +139,8 @@ impl App {
                 }
             }
             C::Memory => {
-                // Open the memory pane (the list surface) + refresh from the
-                // server. The pane re-renders from memory_entries when the
-                // MemoryListResult lands; until then it shows the prior/empty
-                // list (no "fetching" row needed — the pane itself is the
-                // surface, mirroring /context's cache-then-refresh). The toggle
-                // rows read their state in the same open so both rows render.
                 self.pane = Pane::Memory;
+                self.memory.close_detail();
                 if let Some(req_id) = self.mint_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::MemoryListQuery { req_id });
                 }
@@ -267,8 +262,7 @@ impl App {
         self.transcript.clear();
         self.frames.clear();
         // Reset cached boundaries before the next frame rebuild.
-        self.stable_frame_end = 0;
-        self.stable_line_end = 0;
+        self.current_turn_boundary = Default::default();
         self.verdict_cursor = 0;
         self.verdict_log_cache.clear();
         self.todos.clear();

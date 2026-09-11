@@ -88,9 +88,8 @@ CLONE_BASELINE = 2808
 # module-level dead_code suppressions; the L3 report lists the files so
 # deep review asks "still needed?" when a file is touched.
 MODULE_DEAD_CODE_RE = re.compile(r"#!\[allow\(dead_code\)\]")
-MODULE_DEAD_CODE_BASELINE = 16  # measured 2026-08-17 (14 production + 2
-# test helpers in tests/common/mod.rs; test modules' dead helpers are
-# legit but the suppression should still be visible)
+MODULE_DEAD_CODE_BASELINE = 14  # measured 2026-09-11 after removing the TUI
+# crate-wide suppression and narrowing test-only items.
 
 
 def _rg(pattern: str, *args: str) -> str:

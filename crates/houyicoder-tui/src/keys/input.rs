@@ -1,13 +1,15 @@
-//! Input box dispatch tree. handle_input is the entry: a per-pane action
-//! key handler that may consume the key, falling through to the generic
-//! input switch (type, send, open palette, switch pane, per-pane hunk and
-//! finding keys). Split from the keys root so that module stays a thin
-//! working-surface dispatcher.
+//! Key routing for the active pane and input editor.
+//!
+//! Pane-owned keys take precedence over editor movement and global shortcuts;
+//! unconsumed keys fall through to text editing.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 
-use crate::state::enums::CyclicTab;
+use crate::state::enums::{CyclicTab, StatusTab};
 use crate::state::{App, Pane};
+use crate::view::model_pane::model_row_count;
+use crate::view::skills_pane::display_order;
 
 use super::approval::handle_approval;
 use super::ask_question::handle_ask_question;
@@ -16,6 +18,7 @@ use super::pane_predicates::{
     artifact_editing, pane_approvable, pane_navigable, pane_rejectable, pane_replaces_input,
     pane_reworkable,
 };
+use super::trajectory;
 use super::worktree_pane;
 
 /// Lines moved per PageUp/PageDown in the artifact pane. Fixed rather than
@@ -132,6 +135,22 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         handle_ask_question(app, k);
         return;
     }
+    if app.pane == Pane::Memory && app.memory.detail().is_some() {
+        match k.code {
+            KeyCode::Esc => {
+                app.memory.close_detail();
+            }
+            KeyCode::Up => app.memory.scroll_detail(-1),
+            KeyCode::Down => app.memory.scroll_detail(1),
+            KeyCode::PageUp => app.memory.scroll_detail(-10),
+            KeyCode::PageDown => app.memory.scroll_detail(10),
+            _ => {}
+        }
+        return;
+    }
+    if app.pane == Pane::Trajectory && trajectory::handle(app, k) {
+        return;
+    }
     let editing = artifact_editing(app);
     match k.code {
         // Esc leaves the artifact pane back to the conversation (the main
@@ -144,13 +163,16 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // In the /status pane, Tab cycles the sub-tab (Status, Config, Usage)
         // instead of the whole pane (the pane owns its tab bar).
         KeyCode::Tab if app.pane == Pane::Status => app.status_tab = app.status_tab.next(),
+        KeyCode::Tab if app.pane == Pane::Memory && app.input.is_empty() => {
+            app.cycle_memory_scope()
+        }
         // On the /status Status tab, the e key opens the inline session-name
         // editor (houyi makes the session name
         // inline-editable rather than a rename command). Gated on the Status tab and an empty input box so
         // the palette-style input path stays the fallback elsewhere.
         KeyCode::Char('e')
             if app.pane == Pane::Status
-                && app.status_tab == crate::state::enums::StatusTab::Status
+                && app.status_tab == StatusTab::Status
                 && app.status_name_edit.is_none()
                 && app.input.is_empty() =>
         {
@@ -200,21 +222,21 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // Shift+Tab cycles the permission mode: default, auto, bypass, default. No pane shadows it now (the /memory scope filter moved to
         // Left/Right), so Shift+Tab is always the global mode cycle.
         KeyCode::BackTab => app.tab_cycle_mode(),
+        KeyCode::Char('a') if app.pane == Pane::Memory && app.input.is_empty() => {
+            app.toggle_memory_setting(MemoryToggleWhich::Auto)
+        }
+        KeyCode::Char('c') if app.pane == Pane::Memory && app.input.is_empty() => {
+            app.toggle_memory_setting(MemoryToggleWhich::Dream)
+        }
         KeyCode::Char('d') if app.pane == Pane::Memory && app.input.is_empty() => {
             app.forget_memory_at_cursor()
         }
         KeyCode::Enter if app.pane == Pane::Memory && app.input.is_empty() => {
             app.show_memory_at_cursor()
         }
-        KeyCode::Esc if app.pane == Pane::Memory && app.memory_list.searching() => {
-            app.memory_list.clear_query();
-            app.memory_list.cursor = 0;
+        KeyCode::Esc if app.pane == Pane::Memory && app.memory.searching() => {
+            app.memory.clear_search();
         }
-        // Esc on the /memory pane with no text filter dismisses the pane back
-        // to the transcript. The pane footer advertises "Esc close", so the
-        // key must actually close it; without this arm Esc was a dead key
-        // when the input box and the search filter were both empty. Matches
-        // the Artifact pane's Esc-to-transcript behavior.
         KeyCode::Esc if app.pane == Pane::Memory => {
             app.pane = Pane::Transcript;
         }
@@ -229,7 +251,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.pane = Pane::Transcript;
         }
         KeyCode::Down if app.pane == Pane::Model => {
-            let len = crate::view::model_pane::model_row_count(app);
+            let len = model_row_count(app);
             app.model_sel = (app.model_sel + 1).min(len.saturating_sub(1));
             app.recompute_effort_on_cursor_move();
         }
@@ -261,7 +283,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.skill_sel.set(cur.saturating_sub(1));
         }
         KeyCode::Down if app.pane == Pane::Skills && app.skill_level.get() == 0 => {
-            let len = crate::view::skills_pane::display_order(&app.skill_entries).len();
+            let len = display_order(&app.skill_entries).len();
             if len > 0 {
                 let next = app.skill_sel.get() + 1;
                 app.skill_sel.set(next.min(len.saturating_sub(1)));
@@ -271,7 +293,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.skill_level.set(1);
         }
         KeyCode::Char('t') if app.pane == Pane::Skills && app.skill_level.get() == 1 => {
-            let ordered = crate::view::skills_pane::display_order(&app.skill_entries);
+            let ordered = display_order(&app.skill_entries);
             let sel = app.skill_sel.get().min(ordered.len().saturating_sub(1));
             // Toggle only if the skill is usable (user-invocable or
             // model-invocable). A skill that is neither cannot be toggled.
@@ -334,63 +356,6 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Enter if app.pane == Pane::Hooks && app.hooks_level.get() == 0 => {
             app.hooks_level.set(1);
-        }
-        // /trajectory pane: 3-level drill-down.
-        // Level 0: turn list: Up/Down select, Enter expands, Esc closes.
-        // Level 1: turn detail: Up/Down select events, Enter shows detail, Esc back.
-        // Level 2: event detail: Esc back to level 1.
-        KeyCode::Up if app.pane == Pane::Trajectory => {
-            // Level 2 is a stable detail view (the event selected at L1),
-            // not a switcher, Up/Down is a no-op there; switch events at L1.
-            if app.trajectory_level.get() < 2 {
-                let c = app.trajectory_cursor.get();
-                app.trajectory_cursor.set(c.saturating_sub(1));
-            }
-        }
-        KeyCode::Down if app.pane == Pane::Trajectory => {
-            if app.trajectory_level.get() < 2 {
-                // Clamp to [0, len-1] so the selection glyph stays on the last
-                // row instead of vanishing past the end. len is stashed by the
-                // render path (draw_content); 0 before first render = unbounded.
-                let c = app.trajectory_cursor.get();
-                let len = app.trajectory_list_len.get();
-                let next = c + 1;
-                let max = if len == 0 {
-                    next
-                } else {
-                    len.saturating_sub(1)
-                };
-                app.trajectory_cursor.set(next.min(max));
-            }
-        }
-        KeyCode::Enter if app.pane == Pane::Trajectory && app.input.is_empty() => {
-            let level = app.trajectory_level.get();
-            if level == 0 && app.trajectory_list_len.get() > 0 {
-                // Freeze the turn-list selection so the turn-detail and
-                // event-detail levels render THAT row, not the first turn.
-                // Works for both Turn and [bg] rows. Skip the drill when the
-                // row list is empty (a fresh session with no turns yet);
-                // drilling into no rows rendered "no row data" at the
-                // turn-detail level, which read as a crash.
-                app.trajectory_turn_idx.set(app.trajectory_cursor.get());
-                app.trajectory_level.set(1);
-                app.trajectory_cursor.set(0);
-            } else if level == 1 {
-                // [bg] rows have no event list to drill into; stay at L1.
-                if !app.trajectory_at_bg.get() {
-                    app.trajectory_level.set(2);
-                    // Keep the cursor so L2 shows the event selected at L1.
-                }
-            }
-        }
-        KeyCode::Esc if app.pane == Pane::Trajectory => {
-            let level = app.trajectory_level.get();
-            if level == 0 {
-                app.pane = Pane::Transcript;
-            } else {
-                app.trajectory_level.set(level - 1);
-                app.trajectory_cursor.set(0);
-            }
         }
         // '/' opens the slash palette only when no typed permission sub-mode
         // (add rule / add directory) is active; an AddDir path typically

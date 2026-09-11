@@ -17,8 +17,8 @@ impl App {
         let turn_start = self.current_turn_start();
         // A changed turn boundary or truncated frame log invalidates the stable
         // prefix. Later frames in the same turn reuse it.
-        let need_full =
-            self.stable_frame_end > self.frames.len() || self.stable_frame_end != turn_start;
+        let need_full = self.current_turn_boundary.frame_index > self.frames.len()
+            || self.current_turn_boundary.frame_index != turn_start;
         if need_full {
             let frame_start = self.visible_frame_start();
             let event_lines = if frame_start > 0 {
@@ -39,7 +39,7 @@ impl App {
             }
             merged.extend(event_lines[event_idx..].iter().cloned());
             self.transcript = merged;
-            self.stable_frame_end = turn_start;
+            self.current_turn_boundary.frame_index = turn_start;
             // Map the stable frame prefix to its transcript boundary while
             // retaining any interleaved TUI-only lines. Using transcript.len()
             // here would include the changing tail and duplicate it later.
@@ -60,16 +60,20 @@ impl App {
                 }
                 stable_end = i + 1;
             }
-            self.stable_line_end = stable_end;
+            self.current_turn_boundary.line_index = stable_end;
         } else {
             // Rebuild only the changing tail and preserve TUI-only lines at
             // their existing positions.
             let tail = transcript_from_frames(&self.frames[turn_start..]);
             let mut merged: Vec<TranscriptLine> =
-                Vec::with_capacity(self.stable_line_end + tail.len());
-            merged.extend(self.transcript[..self.stable_line_end].iter().cloned());
+                Vec::with_capacity(self.current_turn_boundary.line_index + tail.len());
+            merged.extend(
+                self.transcript[..self.current_turn_boundary.line_index]
+                    .iter()
+                    .cloned(),
+            );
             let mut tail_idx = 0;
-            for line in &self.transcript[self.stable_line_end..] {
+            for line in &self.transcript[self.current_turn_boundary.line_index..] {
                 if line.is_tui_only() {
                     merged.push(line.clone());
                 } else if tail_idx < tail.len() {
@@ -138,7 +142,7 @@ impl App {
         self.loaded_from_frame.set(batch_start);
         // Older lines extend the stable prefix and must survive the next tail
         // rebuild.
-        self.stable_line_end += prepended;
+        self.current_turn_boundary.line_index += prepended;
         // Shift the scroll position down by the prepended count so the
         // viewport content stays stable. NOTE: prepended counts
         // TranscriptLines, not display rows — multi-row lines (Agent,
@@ -230,7 +234,7 @@ impl App {
             }
         }
         self.verdict_cursor = self.frames.len();
-        self.todos.update(&self.frames);
+        self.todos.update(&self.frames, self.agent_busy);
     }
 }
 

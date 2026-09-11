@@ -19,6 +19,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::view::line_wrap::truncate_width;
+use crate::view::navigation::key_hint;
 
 // Data types
 
@@ -334,10 +335,7 @@ fn draw_turn_list(
     }
     let footer = vec![
         blank(),
-        line(vec![sp(
-            " Up/Down select - Enter expand - Esc close",
-            Color::DarkGray,
-        )]),
+        key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")]),
     ];
     (header, body, footer)
 }
@@ -418,10 +416,7 @@ fn draw_turn_detail(
             }
             let footer = vec![
                 blank(),
-                line(vec![sp(
-                    " Up/Down select · Enter detail · Esc back",
-                    Color::DarkGray,
-                )]),
+                key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "back")]),
             ];
             (header, body, footer)
         }
@@ -451,7 +446,7 @@ fn draw_turn_detail(
                 sp(" latency: ", Color::DarkGray),
                 sp(format!("{}ms", bg.duration_ms), Color::Gray),
             ]));
-            let footer = vec![blank(), line(vec![sp(" Esc back", Color::DarkGray)])];
+            let footer = vec![blank(), key_hint(&[("Esc", "back")])];
             (header, body, footer)
         }
     }
@@ -547,7 +542,7 @@ fn draw_event_detail(
         sp("  · start: ", Color::DarkGray),
         sp(format!("{}ms", ev.start_ms), Color::Gray),
     ]));
-    let footer = vec![line(vec![sp(" Esc back", Color::DarkGray)])];
+    let footer = vec![key_hint(&[("Esc", "back")])];
     (header, body, footer)
 }
 
@@ -580,6 +575,7 @@ fn fmt_k_opt(n: Option<usize>) -> String {
         None => "—".to_string(),
     }
 }
+#[cfg(test)]
 fn bar_width(ms: u64, total: u64, max_w: usize) -> usize {
     if total == 0 {
         0

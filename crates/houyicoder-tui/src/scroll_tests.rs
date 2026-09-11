@@ -1,6 +1,7 @@
-//! Interaction buffer-dump tests for transcript scrollback (PgUp/PgDn, End,
-//! follow-tail) and search (inline Ctrl+F bar plus /search results popup). Each test renders the App to a
-//! TestBackend and asserts on the real rendered text.
+//! Transcript scrolling and search viewport tests.
+//!
+//! These tests pin top-row anchors, follow-tail behavior, row counts, and
+//! search navigation against rendered terminal buffers.
 
 #![cfg(test)]
 
@@ -16,6 +17,22 @@ fn working() -> crate::state::App {
 
 fn render(app: &crate::state::App) -> String {
     render_text(app, 100, 28)
+}
+
+#[test]
+fn test_scrollback_keeps_top_row() {
+    let mut app = working();
+    for i in 0..40 {
+        app.push_transcript_line(crate::state::TranscriptLine::System(format!("row-{i}")));
+    }
+    app.transcript_scroll.follow_tail = false;
+    app.transcript_scroll.offset = 0;
+    let out = render_text(&app, 80, 12);
+    let first = out.lines().next().unwrap_or("");
+    assert!(
+        first.contains("row-0"),
+        "first transcript row must remain visible: [{first}]\n{out}"
+    );
 }
 
 /// Shared /search fixture: a 12-line tool-result body with the query on line 9

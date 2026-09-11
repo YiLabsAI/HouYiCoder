@@ -38,6 +38,11 @@ houyicoder-service = { path = "../houyicoder-service" }
 houyicoder-config = { path = "../houyicoder-config" }
 futures = "0.3"
 portable-pty = "0.9"
+# PTY-only terminal model: ANSI stripping loses cursor, background, and wide-cell state;
+# lower-level vte would require reimplementing the screen. MIT, Rust 1.70, released 2025-07-12.
+# Transitive crates: itoa, unicode-width, vte, arrayvec, memchr. License gate passes;
+# the offline advisory gate reports only the pre-existing yanked chacha20 dependency.
+vt100 = "0.16.2"
 
 [target.'cfg(unix)'.dev-dependencies]
 nix = { version = "0.31", features = ["signal", "process"] }

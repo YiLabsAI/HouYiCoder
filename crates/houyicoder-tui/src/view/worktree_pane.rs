@@ -15,6 +15,7 @@ use ratatui::{
 use crate::composition::WorktreeEntry;
 use crate::list_pane_state::{filter_by_query, search_hint_line, truncate_path};
 use crate::state::App;
+use crate::view::navigation::key_hint;
 
 /// Max width for the path column. Long paths are left-truncated (tail kept)
 /// so the identifying segment stays visible. Fixed width so the column
@@ -94,9 +95,9 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         );
     }
     let footer = if app.worktree_level.get() == 1 {
-        crate::view::hint::key_hint(&[("e", "enter"), ("Esc", "back")])
+        key_hint(&[("e", "enter"), ("Esc", "back")])
     } else {
-        crate::view::hint::key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
+        key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
     };
     f.render_widget(
         Paragraph::new(footer).style(Style::new().fg(Color::DarkGray)),
@@ -132,10 +133,7 @@ fn draw_detail(f: &mut Frame, area: Rect, e: &WorktreeEntry) {
     };
     lines.push(Line::from(format!("Changes:  {changes}")));
     lines.push(Line::from(""));
-    lines.push(crate::view::hint::key_hint(&[
-        ("e", "enter"),
-        ("Esc", "back"),
-    ]));
+    lines.push(key_hint(&[("e", "enter"), ("Esc", "back")]));
     f.render_widget(Paragraph::new(lines), area);
 }
 

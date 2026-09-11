@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
 use serde_json::Value;
 
 use crate::git_op::{self, GitOp};
@@ -59,10 +60,6 @@ impl ToolStats {
             + self.mem_write
             + self.mem_delete
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.total() == 0
-    }
 }
 
 /// The bucket a bash command falls into, so find . | wc -l reads as a list
@@ -115,6 +112,7 @@ fn is_foldable(tool_name: &str) -> bool {
 
 /// Accumulate one tool call into the stats. Tool names follow the registered
 /// name; a bash call is sub-classified by its command.
+#[cfg(test)]
 pub(crate) fn accumulate(stats: &mut ToolStats, tool: &str, input: &Value) {
     match tool {
         "bash" => {

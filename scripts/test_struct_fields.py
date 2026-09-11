@@ -10,7 +10,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_struct_fields import evaluate, STRUCT_FIELD_BASELINE  # noqa: E402
+from check_struct_fields import (  # noqa: E402
+    APP_FIELD_BASELINE,
+    STRUCT_FIELD_BASELINE,
+    evaluate,
+    evaluate_app,
+)
 
 
 def test_growth_blocks():
@@ -27,6 +32,12 @@ def test_drift_blocks():
 def test_exact_green():
     # total == baseline -> 0 (the only green state)
     assert evaluate(STRUCT_FIELD_BASELINE) == 0
+
+
+def test_app_strict_pin():
+    assert evaluate_app(APP_FIELD_BASELINE) == 0
+    assert evaluate_app(APP_FIELD_BASELINE + 1) == 1
+    assert evaluate_app(APP_FIELD_BASELINE - 1) == 1
 
 
 if __name__ == "__main__":

@@ -1,14 +1,12 @@
-//! /memory sub-command dispatch + pane-action methods on App. Extracted from
-//! command.rs so that file stays under the file-size gate. The methods are
-//! the in-TUI surface: the toggle / forget sub-commands (typed in the input
-//! box) + the pane cursor + d action (key-driven). They share the filtered
-//! list with the render path so the cursor the user sees is the one the
-//! action targets.
+//! Memory commands and pane actions.
+//!
+//! Every row action resolves through MemoryPaneState so rendering and command
+//! targets share one filtered selection.
 
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 
-use crate::state::App;
-use crate::state::enums::CyclicTab;
+use crate::agent_message::ClientCommand;
+use crate::state::{App, Pane};
 
 impl App {
     /// Run a /memory sub-command whose body follows the leading token. The
@@ -24,21 +22,7 @@ impl App {
                 _ => None,
             };
             match which {
-                Some(which) => {
-                    let label = match which {
-                        MemoryToggleWhich::Auto => "auto-memory",
-                        MemoryToggleWhich::Dream => "auto-dream",
-                    };
-                    if let Some(req_id) = self.mint_request_id() {
-                        self.send_cmd(crate::run_control::ClientCommand::MemoryToggleQuery {
-                            req_id,
-                            which,
-                        });
-                        self.system_line(format!("memory: toggling {label}..."));
-                    } else {
-                        self.system_line("memory: no carrier (stub mode)");
-                    }
-                }
+                Some(which) => self.toggle_memory_setting(which),
                 None => self.system_line("memory: usage /memory toggle auto|dream"),
             }
             return true;
@@ -62,7 +46,7 @@ impl App {
             } else if let Some(req_id) = self.mint_request_id() {
                 // The command form has no scope (the user typed a key); route
                 // to the auto root, the original command-form behavior.
-                self.send_cmd(crate::run_control::ClientCommand::MemoryForgetQuery {
+                self.send_cmd(ClientCommand::MemoryForgetQuery {
                     req_id,
                     key: key.to_string(),
                     scope: "auto".to_string(),
@@ -74,7 +58,7 @@ impl App {
             return true;
         }
         if let Some(req_id) = self.mint_request_id() {
-            self.send_cmd(crate::run_control::ClientCommand::MemoryShowQuery {
+            self.send_cmd(ClientCommand::MemoryShowQuery {
                 req_id,
                 key: body.to_string(),
             });
@@ -85,60 +69,46 @@ impl App {
         true
     }
 
-    /// Cycle the /memory pane scope filter forward (Right arrow): All to
-    /// User to Project to Auto to All. Pure client state — the list is
-    /// already in memory, so the filter narrows without a wire round-trip;
-    /// the next render shows the narrowed set. Resets the cursor so it
-    /// never points past the new list.
+    /// Toggle one background memory service from either the pane or command.
+    pub(crate) fn toggle_memory_setting(&mut self, which: MemoryToggleWhich) {
+        let label = match which {
+            MemoryToggleWhich::Auto => "auto-memory",
+            MemoryToggleWhich::Dream => "auto-dream",
+        };
+        if let Some(req_id) = self.mint_request_id() {
+            self.send_cmd(ClientCommand::MemoryToggleQuery { req_id, which });
+            self.system_line(format!("memory: toggling {label}..."));
+        } else {
+            self.system_line("memory: no carrier (stub mode)");
+        }
+    }
+
     pub fn cycle_memory_scope(&mut self) {
-        self.memory_scope_tab = self.memory_scope_tab.next();
-        self.memory_list.cursor = 0;
+        self.memory.next_scope();
     }
 
-    /// Cycle the /memory pane scope filter backward (Left arrow).
-    /// See cycle_memory_scope.
     pub fn cycle_memory_scope_prev(&mut self) {
-        self.memory_scope_tab = self.memory_scope_tab.prev();
-        self.memory_list.cursor = 0;
+        self.memory.previous_scope();
     }
 
-    /// Move the /memory pane cursor one row up/down, clamped to the
-    /// scope-filtered list. No-op when the filtered list is empty. Delegates
-    /// the clamp + move to ListPaneState so the logic is shared with the
-    /// worktree pane (and any future list pane).
     pub fn move_memory_cursor(&mut self, delta: i32) {
-        let n = crate::command::render::filtered_memory(
-            &self.memory_entries,
-            self.memory_scope_tab,
-            &self.memory_list.query,
-        )
-        .len();
-        self.memory_list.move_cursor(delta, n);
+        self.memory.move_cursor(delta);
     }
 
     /// Forget the memory row under the cursor (the d action). Sends the
     /// selected key to the server; the MemoryList reply refreshes the pane.
     /// No-op when no carrier or the filtered list is empty.
     pub fn forget_memory_at_cursor(&mut self) {
-        let (key, scope) = match crate::command::render::filtered_memory(
-            &self.memory_entries,
-            self.memory_scope_tab,
-            &self.memory_list.query,
-        )
-        .get(self.memory_list.cursor)
-        {
-            Some(m) => (m.topic.clone(), m.scope.clone()),
-            None => return,
+        let Some(memory) = self.memory.selected() else {
+            return;
         };
+        let key = memory.topic.clone();
+        let scope = memory.scope.clone();
         if let Some(req_id) = self.mint_request_id() {
             // Route the delete by the row's scope so forgetting a
             // user/project row deletes the explicit file in that root, not
             // just the auto-scope copy.
-            self.send_cmd(crate::run_control::ClientCommand::MemoryForgetQuery {
-                req_id,
-                key,
-                scope,
-            });
+            self.send_cmd(ClientCommand::MemoryForgetQuery { req_id, key, scope });
             self.system_line("memory: forgetting...".to_string());
         } else {
             self.system_line("memory: no carrier (stub mode)".to_string());
@@ -149,18 +119,13 @@ impl App {
     /// Sends the selected key; the MemoryShow reply renders inline via the
     /// existing show path. No-op when no carrier or the filtered list is empty.
     pub fn show_memory_at_cursor(&mut self) {
-        let key = match crate::command::render::filtered_memory(
-            &self.memory_entries,
-            self.memory_scope_tab,
-            &self.memory_list.query,
-        )
-        .get(self.memory_list.cursor)
-        {
-            Some(m) => m.topic.clone(),
-            None => return,
+        let Some(memory) = self.memory.selected() else {
+            return;
         };
+        let key = memory.topic.clone();
         if let Some(req_id) = self.mint_request_id() {
-            self.send_cmd(crate::run_control::ClientCommand::MemoryShowQuery { req_id, key });
+            self.memory.request_detail(req_id, key.clone());
+            self.send_cmd(ClientCommand::MemoryShowQuery { req_id, key });
         } else {
             self.system_line("memory: no carrier (stub mode)".to_string());
         }
@@ -171,8 +136,7 @@ impl App {
     /// (case-insensitive), composed with the active scope tab. Resets the
     /// cursor so it never points past the narrowed list.
     pub fn set_memory_search(&mut self, term: &str) {
-        self.pane = crate::state::Pane::Memory;
-        self.memory_list.query = term.to_string();
-        self.memory_list.cursor = 0;
+        self.pane = Pane::Memory;
+        self.memory.set_search(term);
     }
 }

@@ -345,7 +345,7 @@ fn test_permission_pane_renders_tabs() {
     use crate::state::PermissionTab;
     let mut app = app();
     app.pane = Pane::Permission;
-    let text = render_text(&app, 80, 24);
+    let text = render_text(&app, 120, 24);
     assert!(text.contains("Allow"), "tab header lists Allow");
     assert!(text.contains("Ask"), "tab header lists Ask");
     assert!(text.contains("Deny"), "tab header lists Deny");
@@ -356,8 +356,8 @@ fn test_permission_pane_renders_tabs() {
     assert!(text.contains("Workspace"), "tab header lists Workspace");
     assert!(text.contains("[Allow]"), "active tab is bracketed");
     assert!(
-        text.contains("Esc to cancel"),
-        "rule-tab footer shows the cancel hint: {text}"
+        text.contains("Esc to close"),
+        "rule-tab footer shows the close hint: {text}"
     );
     assert_eq!(app.permission_tab, PermissionTab::Allow);
 }
@@ -388,9 +388,12 @@ fn test_pane_tab_cycle_wraps() {
     // Left goes the other way: Allow -> Recently denied.
     crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Left));
     assert_eq!(app.permission_tab, PermissionTab::Recent);
+    crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Tab));
+    assert_eq!(app.permission_tab, PermissionTab::Allow);
 }
 
-fn permission_ignores_unknown_key() {
+#[test]
+fn test_permission_ignores_unknown_key() {
     // A non-nav key in the permission pane falls through (no state change) so
     // the rest of the working keyset can handle it.
     let mut app = app();

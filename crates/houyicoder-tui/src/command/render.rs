@@ -1,12 +1,18 @@
-//! Pure render functions for the slash-command output lines: /status,
-//! /sandbox, /trajectory, /tools. Split from command.rs so the
-//! dispatch surface stays under the file-size gate. Each fn takes a snapshot
-//! or record slice and returns a plain string the host prints — no Frame, no
-//! ratatui, so the layering stays Presentation -> core (the host composes the
-//! string; the render fns never name a resilience or provider type directly).
+//! Text formatting for slash-command results.
+//!
+//! Pure functions map typed frontend responses to terminal text without
+//! reading application state or constructing widgets.
 
-use houyicoder_protocol::frontend::permission::{PermissionEffect, PermissionMode};
-use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_protocol::frontend::memory::{MemoryDetail, MemorySummaryEntry};
+use houyicoder_protocol::frontend::permission::{
+    PermissionDecisionEntry, PermissionEffect, PermissionMode, PermissionRule,
+};
+use houyicoder_protocol::frontend::status::{
+    SessionProvenance as WireSessionProvenance, StatusSnapshot,
+};
+use houyicoder_protocol::frontend::trajectory::{RedundantCallEntry, TrajectoryEntry};
+
+use crate::evidence::MemoryEntry;
 
 /// The display label for a wire permission mode, so the render path never
 /// imports the permission crate (the server is the mode authority).
@@ -30,6 +36,7 @@ pub(crate) fn permission_effect_label(effect: PermissionEffect) -> &'static str 
 
 /// A safe percentage (None when the denominator is zero, so /context never
 /// divides by zero on a provider that reports no window).
+#[cfg(test)]
 fn pct(numerator: u32, denominator: u32) -> Option<f64> {
     if denominator == 0 {
         None
@@ -42,6 +49,7 @@ fn pct(numerator: u32, denominator: u32) -> Option<f64> {
 /// chars/4 estimate), the current window footprint, and the model. Cache and
 /// reasoning breakdowns are first-class so the cache hit rate and the visible
 /// vs reasoning split are visible at a glance.
+#[cfg(test)]
 pub(crate) fn render_context(snap: &StatusSnapshot) -> String {
     let u = &snap.cumulative_usage;
     let window = match pct(snap.last_input_tokens, snap.context_window) {
@@ -76,9 +84,7 @@ pub(crate) fn render_context(snap: &StatusSnapshot) -> String {
 
 /// Render one memory's full body (the /memory <key> show reply): the
 /// frontmatter header (source, key, description) followed by the body content.
-pub(crate) fn render_memory_entry(
-    entry: &houyicoder_protocol::frontend::memory::MemoryDetail,
-) -> String {
+pub(crate) fn render_memory_entry(entry: &MemoryDetail) -> String {
     let mut s = format!("memory: [{}] {}\n", entry.source, entry.key);
     if !entry.description.is_empty() {
         s.push_str(&format!(
@@ -93,42 +99,11 @@ pub(crate) fn render_memory_entry(
     s
 }
 
-use crate::evidence::MemoryEntry;
-/// Map wire memory summaries to the TUI pane rows: topic = key, summary =
-/// "[source] description" (or "[source]" when the description is empty). Pure
-/// over the wire slice so the mapping is unit-testable independent of the App
-/// plumbing that feeds it (the App handler just calls this + sets the pane).
-use crate::state::enums::MemoryScopeTab;
-
-/// Filter the memory list by the active scope tab + a text search substring
-/// (key + description, case-insensitive). All scope returns every entry; the
-/// others narrow to one physical root. An empty search string skips the text
-/// filter. Shared by the render path + the d/enter actions so the cursor index
-/// the user sees is the same one the action targets (no drift between render +
-/// act).
-pub(crate) fn filtered_memory<'a>(
-    entries: &'a [MemoryEntry],
-    tab: MemoryScopeTab,
-    search: &str,
-) -> Vec<&'a MemoryEntry> {
-    let needle = search.to_ascii_lowercase();
+/// Convert memory summaries into list rows without discarding recency.
+pub(crate) fn memory_entries_from_wire(entries: &[MemorySummaryEntry]) -> Vec<MemoryEntry> {
     entries
         .iter()
-        .filter(|m| tab == MemoryScopeTab::All || m.scope == tab.label())
-        .filter(|m| {
-            needle.is_empty()
-                || m.topic.to_ascii_lowercase().contains(&needle)
-                || m.summary.to_ascii_lowercase().contains(&needle)
-        })
-        .collect()
-}
-
-pub(crate) fn memory_entries_from_wire(
-    entries: &[houyicoder_protocol::frontend::memory::MemorySummaryEntry],
-) -> Vec<crate::evidence::MemoryEntry> {
-    entries
-        .iter()
-        .map(|e| crate::evidence::MemoryEntry {
+        .map(|e| MemoryEntry {
             topic: e.key.clone(),
             summary: if e.description.is_empty() {
                 String::new()
@@ -137,6 +112,7 @@ pub(crate) fn memory_entries_from_wire(
             },
             scope: e.scope.clone(),
             source: e.source.clone(),
+            mtime_secs: e.mtime_secs,
         })
         .collect()
 }
@@ -158,31 +134,38 @@ pub(crate) fn render_todo_section(todos: &[crate::todo_view::TodoView]) -> Strin
         .iter()
         .filter(|t| t.status == TodoStatus::InProgress)
         .count();
+    let paused = todos
+        .iter()
+        .filter(|t| t.status == TodoStatus::Paused)
+        .count();
     let open = todos
         .iter()
         .filter(|t| t.status == TodoStatus::Pending)
         .count();
     let mut s = format!(
-        "tasks: {} ({} done, {} in progress, {} open)\n",
+        "tasks: {} ({} done, {} in progress, {} paused, {} open)\n",
         todos.len(),
         done,
         active,
+        paused,
         open,
     );
     let glyph = |st: TodoStatus| match st {
         TodoStatus::InProgress => "◼",
+        TodoStatus::Paused => "Ⅱ",
         TodoStatus::Completed => "✔",
         TodoStatus::Pending => "◻",
     };
     let mut grouped: Vec<&crate::todo_view::TodoView> = Vec::with_capacity(todos.len());
     grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::InProgress));
+    grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Paused));
     grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Pending));
     grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Completed));
     for t in grouped {
-        let label = if t.status == TodoStatus::InProgress {
-            t.active_form.clone().unwrap_or_else(|| t.content.clone())
-        } else {
-            t.content.clone()
+        let label = match t.status {
+            TodoStatus::InProgress => t.active_form.clone().unwrap_or_else(|| t.content.clone()),
+            TodoStatus::Paused => format!("{} (paused)", t.content),
+            TodoStatus::Pending | TodoStatus::Completed => t.content.clone(),
         };
         s.push_str(&format!("  {} {}\n", glyph(t.status), label));
     }
@@ -195,9 +178,9 @@ pub(crate) fn render_todo_section(todos: &[crate::todo_view::TodoView]) -> Strin
 /// deny the human issued this session). One row per verdict: the verdict,
 /// the tool, the scope, the call_id, and the wall-clock ts.
 pub(crate) fn render_permission_view(
-    mode: houyicoder_protocol::frontend::permission::PermissionMode,
-    rules: &[houyicoder_protocol::frontend::permission::PermissionRule],
-    verdicts: &[houyicoder_protocol::frontend::permission::PermissionDecisionEntry],
+    mode: PermissionMode,
+    rules: &[PermissionRule],
+    verdicts: &[PermissionDecisionEntry],
     ask_before_git: bool,
 ) -> String {
     let mut s = format!("mode: {}\n", permission_mode_label(mode));
@@ -313,18 +296,17 @@ pub(crate) fn render_status(
 /// session; ForkedFrom = split off an existing session (the origin sid +
 /// optional turn seq); ResumedFromExport = bootstrapped from an exported
 /// transcript file. The origin sid is shown short so the line fits.
-fn render_provenance(p: &houyicoder_protocol::frontend::status::SessionProvenance) -> String {
-    use houyicoder_protocol::frontend::status::SessionProvenance as P;
+fn render_provenance(p: &WireSessionProvenance) -> String {
     match p {
-        P::Fresh => "fresh".to_string(),
-        P::ForkedFrom { from_sid, from_seq } => match from_seq {
+        WireSessionProvenance::Fresh => "fresh".to_string(),
+        WireSessionProvenance::ForkedFrom { from_sid, from_seq } => match from_seq {
             Some(seq) => format!("forked from {from_sid} at turn {seq}"),
             None => format!("forked from {from_sid}"),
         },
-        P::ResumedFromExport { source_session_id } => {
+        WireSessionProvenance::ResumedFromExport { source_session_id } => {
             format!("resumed from export {source_session_id}")
         }
-        P::SpawnedBy {
+        WireSessionProvenance::SpawnedBy {
             parent_session_id,
             subagent_type,
             task_id: _,
@@ -400,7 +382,7 @@ mod status_tests {
             item("later", TodoStatus::Pending),
         ];
         let out = render_todo_section(&todos);
-        assert!(out.contains("tasks: 3 (1 done, 1 in progress, 1 open)"));
+        assert!(out.contains("tasks: 3 (1 done, 1 in progress, 0 paused, 1 open)"));
         // Grouped order: in-progress first, then pending, then completed.
         let now_pos = out.find("◼ now").unwrap();
         let later_pos = out.find("◻ later").unwrap();
@@ -438,7 +420,7 @@ mod status_tests {
             "mac-seatbelt",
             &todos,
         );
-        assert!(s.contains("tasks: 1 (0 done, 1 in progress, 0 open)"));
+        assert!(s.contains("tasks: 1 (0 done, 1 in progress, 0 paused, 0 open)"));
         assert!(s.contains("◼ run tests"));
     }
 
@@ -617,8 +599,8 @@ pub(crate) fn render_breaker_line(snap: &StatusSnapshot) -> String {
 /// Render the wire trajectory (the /trajectory query reply, a Vec of
 /// session/update) without importing the engine or context crate.
 pub(crate) fn render_trajectory_wire(
-    entries: &[houyicoder_protocol::frontend::trajectory::TrajectoryEntry],
-    redundant: &[houyicoder_protocol::frontend::trajectory::RedundantCallEntry],
+    entries: &[TrajectoryEntry],
+    redundant: &[RedundantCallEntry],
 ) -> String {
     if entries.is_empty() && redundant.is_empty() {
         return "trajectory: no events this session (resumed sessions start empty)".into();
@@ -661,28 +643,18 @@ pub(crate) fn render_trajectory_wire(
     s
 }
 
-/// Render the wire permission mode (the /model read reply) without
-/// importing the permission crate.
-pub(crate) fn render_permission_mode_wire(
-    mode: houyicoder_protocol::frontend::permission::PermissionMode,
-) -> String {
-    format!("mode: {}", permission_mode_label(mode))
-}
-
 /// Render the wire permission rules (the /rules read reply) without
 /// importing the permission crate.
-pub(crate) fn render_permission_rules_wire(
-    rules: &[houyicoder_protocol::frontend::permission::PermissionRule],
-) -> String {
+pub(crate) fn render_permission_rules_wire(rules: &[PermissionRule]) -> String {
     if rules.is_empty() {
         return "rules: (none)".into();
     }
     let mut lines = vec![format!("rules ({}):", rules.len())];
     for r in rules {
         let effect = match r.effect {
-            houyicoder_protocol::frontend::permission::PermissionEffect::Allow => "allow",
-            houyicoder_protocol::frontend::permission::PermissionEffect::Reject => "reject",
-            houyicoder_protocol::frontend::permission::PermissionEffect::Ask => "ask",
+            PermissionEffect::Allow => "allow",
+            PermissionEffect::Reject => "reject",
+            PermissionEffect::Ask => "ask",
         };
         let content = match &r.content {
             Some(c) => format!(" {c:?}"),
@@ -693,14 +665,6 @@ pub(crate) fn render_permission_rules_wire(
     lines.join("\n")
 }
 
-fn content_text(b: &houyicoder_protocol::frontend::run::ContentBlock) -> String {
-    match b {
-        houyicoder_protocol::frontend::run::ContentBlock::Text { text } => text.clone(),
-        _ => "(non-text)".into(),
-    }
-}
-
-#[cfg(test)]
 #[cfg(test)]
 #[path = "render_tests.rs"]
 mod tests;

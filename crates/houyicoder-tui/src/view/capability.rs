@@ -16,9 +16,9 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
-use crate::state::enums::CyclicTab;
 use crate::state::{App, Pane, PermissionInput, PermissionTab, Stage, Verdict};
 use crate::view::components;
+use crate::view::navigation::{key_hint, tab_header};
 use crate::view::status;
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionRule, PermissionRuleContent,
@@ -138,31 +138,15 @@ pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(footer, chunks[5]);
 }
 
-/// The tab header row: a "Permissions:" prefix (the Tabs title, left-aligned)
-/// then the five tabs in ORDER, the active one bracketed bold cyan. Picking
-/// up the enum ORDER means a reorder there flows here without an edit.
-fn permission_tab_header(tab: PermissionTab) -> Paragraph<'static> {
-    let mut spans: Vec<Span<'static>> = vec![Span::styled(
-        "Permissions:  ",
-        Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
-    )];
-    for (i, t) in PermissionTab::ORDER.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw("  "));
-        }
-        let active = *t == tab;
-        let label = t.label();
-        let span = if active {
-            Span::styled(
-                format!("[{label}]"),
-                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled(format!(" {label} "), Style::new().fg(Color::DarkGray))
-        };
-        spans.push(span);
-    }
-    Paragraph::new(Line::from(spans))
+fn permission_tab_header(active: PermissionTab) -> Paragraph<'static> {
+    let tabs = [
+        (PermissionTab::Recent, "Recently denied"),
+        (PermissionTab::Allow, "Allow"),
+        (PermissionTab::Ask, "Ask"),
+        (PermissionTab::Deny, "Deny"),
+        (PermissionTab::Workspace, "Workspace"),
+    ];
+    Paragraph::new(tab_header(active, &tabs))
 }
 
 /// The one-line description shown at the top of each tab's body. Wording
@@ -338,17 +322,29 @@ fn permission_workspace_body(app: &App, cursor: usize) -> Paragraph<'static> {
     Paragraph::new(lines)
 }
 
-/// The footer nav hint, context-sensitive to the tab. Recently-denied is
-/// nav-only (no add/remove/search); the rule tabs and Workspace add the
-/// add/remove keys (Workspace removes a directory, not a rule). "Esc to
-/// cancel" follows the conventional wording.
 fn permission_footer(tab: PermissionTab) -> Line<'static> {
-    let hint = match tab {
-        PermissionTab::Recent => "↑↓ navigate  ←→ tabs  Esc to cancel",
-        PermissionTab::Workspace => "↑↓ navigate  ←→ tabs  a add dir  d remove  Esc to cancel",
-        _ => "↑↓ navigate  ←→ tabs  a add  d remove  s search  Esc to cancel",
-    };
-    Line::from(hint.to_string())
+    match tab {
+        PermissionTab::Recent => key_hint(&[
+            ("Up/Down", "select"),
+            ("Tab/Left/Right", "switch tab"),
+            ("Esc", "close"),
+        ]),
+        PermissionTab::Workspace => key_hint(&[
+            ("Up/Down", "select"),
+            ("a", "add directory"),
+            ("d", "remove"),
+            ("Tab/Left/Right", "switch tab"),
+            ("Esc", "close"),
+        ]),
+        _ => key_hint(&[
+            ("Up/Down", "select"),
+            ("a", "add"),
+            ("d", "remove"),
+            ("s", "search"),
+            ("Tab/Left/Right", "switch tab"),
+            ("Esc", "close"),
+        ]),
+    }
 }
 
 /// A border block whose title fuses the progress bar in Focus mode (so the

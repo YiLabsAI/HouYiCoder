@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Which background memory task produced a MemorySaved event. The host maps
-/// this to a render verb (extract -> Saved, dream -> Improved), keeping the
+/// this to saved-entry or consolidation-touch wording, keeping the
 /// wording out of the wire payload (a typed token, not a string, per the
 /// type-first rule). Lives here so both the engine (its live event) and the
 /// wire (the frontend event) share one definition — no second enum to drift.
@@ -18,8 +18,8 @@ pub enum MemorySavedKind {
     /// extraction pass, including the main-agent saved-this-turn skipped
     /// path). Rendered as Saved.
     Extracted,
-    /// The consolidation dream touched memories (added, merged, or deleted).
-    /// Rendered as Improved.
+    /// The consolidation task touched memories by adding, merging, moving, or
+    /// deleting entries.
     Consolidated,
 }
 

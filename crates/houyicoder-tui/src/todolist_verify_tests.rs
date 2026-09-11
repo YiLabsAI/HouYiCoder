@@ -107,9 +107,11 @@ fn test_done_tasks_retire() {
         ("first", TodoStatus::Completed),
         ("second", TodoStatus::Completed),
     ]);
-    let old = std::time::Instant::now() - std::time::Duration::from_secs(31);
-    app.todos.completion_at.insert("first".into(), old);
-    app.todos.completion_at.insert("second".into(), old);
+    let now = std::time::Instant::now();
+    let completed = now - std::time::Duration::from_secs(6);
+    app.todos.completion_at.insert("first".into(), completed);
+    app.todos.completion_at.insert("second".into(), completed);
+    assert!(app.todos.prune(now));
 
     let out = render_text(&app, 80, 24);
 
@@ -124,7 +126,7 @@ fn test_done_tasks_retire() {
 }
 
 #[test]
-fn test_old_done_hidden() {
+fn test_done_stays_open() {
     let mut app = working_app();
     app.todos.items = seeded_todos(&[
         ("finished", TodoStatus::Completed),
@@ -138,10 +140,9 @@ fn test_old_done_hidden() {
     let out = render_text(&app, 80, 24);
 
     assert!(out.contains("next"), "pending task remains:\n{out}");
-    assert!(!out.contains("finished"), "old completion fades:\n{out}");
     assert!(
-        !out.contains("+1 completed"),
-        "old completion is not summarized:\n{out}"
+        out.contains("finished"),
+        "completed task remains while work is open:\n{out}"
     );
 }
 
@@ -158,7 +159,7 @@ fn test_status_shows_session_tasks() {
     // Todos stay on the Status tab; tokens/wall-duration moved to Usage.
     assert!(out.contains("tasks: 1"), "tasks count missing:\n{out}");
     assert!(
-        out.contains("in progress, 0 open"),
+        out.contains("in progress, 0 paused, 0 open"),
         "tasks breakdown missing:\n{out}"
     );
     assert!(

@@ -372,6 +372,7 @@ fn render_diff_plan(
 /// that happened to contain @@ made count consume the @@ as a diff while render
 /// treated it as plain stdout → scroll/search-jump off by the gap count);
 /// delegating closes it structurally, not by vigilance.
+#[cfg(test)]
 pub(crate) fn result_row_count(body: &str, expanded: bool, is_diff: bool, width: u16) -> usize {
     result_body_rows(body, "", None, expanded, is_diff, width).len()
 }

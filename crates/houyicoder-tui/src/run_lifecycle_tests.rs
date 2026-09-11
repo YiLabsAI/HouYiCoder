@@ -1,5 +1,4 @@
-//! Approval-flow tests split from run_control_tests.rs for file-size. Uses
-//! the parent module's scripted-provider helpers to drive the real runner.
+//! Run approval, cancellation, restoration, and completion-state tests.
 
 use super::*;
 use crate::state::TranscriptLine;
@@ -22,7 +21,7 @@ fn test_one_at_a_time() {
     // the UI shows the first. Approve it (one decision) -> core applies it,
     // returns Interruption(remaining) -> the second card appears. Reject
     // the second -> core feeds back a "rejected by user" result -> model
-    // emits the final reply. This is the one-at-a-time flow end-to-end.
+    // emits the final reply. This verifies one-at-a-time approval end-to-end.
     let responses = vec![
         CompletionResponse {
             output: vec![
@@ -650,7 +649,7 @@ fn test_slash_echo_visible() {
     // by the block Clear.
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    // Simulate the real /context flow: submit_input pushes User echo
+    // Simulate the real /context path: submit_input pushes User echo
     // THEN run_command pushes ContextGrid.
     app.input.set("/context".to_string());
     app.submit_input();

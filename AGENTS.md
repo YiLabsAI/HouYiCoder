@@ -10,7 +10,11 @@ Non-negotiable. Violating them requires explicit approval + a migration plan.
 
 ### 1. Plan First
 Industrial-grade design: plan before implementing. Design docs required for
-features touching multiple crates. Non-functional targets:
+features touching multiple crates. Before coding, identify the state owner and
+expected change radius. A local bug spreading across unrelated modules, a new
+field on central App state, or a parameter threaded through several callers is
+a design warning: restore encapsulation instead of normalizing the fan-out.
+Non-functional targets:
 
 | Metric | Target |
 |--------|--------|
@@ -70,8 +74,11 @@ architecture diagram MUST be updated when layering changes.
 - MSRV declared in rust-toolchain.toml.
 
 ### 10. Bug-Driven Testing
-Bug fixes follow red-green-refactor: write a failing test that reproduces
-the bug, then fix. Tests enable safe refactoring.
+Bug fixes follow red-green-refactor: write a failing test that reproduces the
+bug, then fix. Before changing UI, record the existing layout, styling, keys,
+focus, scrolling, retirement, and resume contract. Visual fixes assert rendered
+cells; terminal cursor or key-order fixes require PTY coverage. An unrelated UX
+change discovered only by dogfooding is a missing regression test.
 
 ### houyicoder-specific architectural rules (inviolable)
 - **One host, many guests.** The Rust daemon holds all trust; every other
@@ -113,6 +120,11 @@ the bug, then fix. Tests enable safe refactoring.
      exists while rows do; a collapsed strip advertises the pane instead. The
      status bar, being the one row that never degrades, carries the count and
      the key hint whenever the footer holds anything live.
+  4. **Sibling panes share one interaction grammar.** Reuse typed tab, list,
+     detail, and footer components instead of local strings. Up/Down selects or
+     scrolls, Enter opens, Esc returns one level, and Esc closes only at the
+     root. Tab switching follows one policy across panes; exceptions require an
+     explicit product reason and visible hint.
 
 ## Repository Layout
 
@@ -214,6 +226,14 @@ the ones whose fix is not obvious from the message alone.
   through the crate's own facade (crate::X). Routing internal deps through
   the public surface hides the real dependency graph.
 
+### Imports expose dependency intent
+- Put domain-type imports at module scope. If the same deep qualified path is
+  used twice, import it instead of repeating it in fields, signatures, or
+  function bodies. Fully qualified paths are for one-off use or ambiguity,
+  not a substitute for an import section.
+- Do not enforce a mechanical `::` depth limit or create vague aliases; both
+  hide rather than clarify ownership.
+
 ### Read-modify-write belongs behind one call
 - A store trait that exposes read and write separately invites a lost
   update: two callers each write a whole record derived from the state
@@ -237,16 +257,14 @@ names of other products or tools — comments describe this codebase's own
 design, not how it compares to others. Enforced by
 scripts/check_rs_comments.py in make check.
 
-**A comment must stand on its own.** State the reasoning; do not cite where
-it is written down. A pointer to something outside the code is one the reader
-may be unable to follow, and it rots on its own schedule while the code moves
-on. So no document paths or filenames, no "see the design doc", and no
-milestone, iteration, or lettered requirement id. If a decision matters to
-someone editing the code, the comment carries the decision; if it does not,
-it does not belong in a comment at all. This bans the citation, not the
-substance — writing out why a rule exists is exactly right. Runtime
-artifacts the product itself reads (agent.md, MEMORY.md, AGENTS.md) are
-domain objects, not citations, and stay allowed. Same enforcement.
+Comments have three jobs: module docs state responsibility and invariants;
+public docs state contracts; inline comments explain non-obvious decisions.
+Delete narration that repeats names or control flow, split/file-size history,
+prior implementation stories, and claims that a test "pins" code. A comment
+must stand alone: no document path, milestone id, or external pointer. Runtime
+artifacts the product reads (agent.md, MEMORY.md, AGENTS.md) remain valid
+domain objects. Missing rationale and excessive comment density are both
+review findings.
 
 ### Bulk edit protocol
 When editing many files via a script (sed or python regex across the tree):
@@ -265,8 +283,11 @@ indent, leftover residue, hit string literals).
   file is legitimately longer than the code it covers). 500–800 is the
   refactor band for production: a file in that range is a prompt to refactor
   on SRP grounds at the right time, not a hard chase to stay under 500.
-- Hitting a threshold is a mandate to refactor, not a warning to ignore.
-  World-class code, no garbage.
+- A threshold mandates responsibility analysis, not mechanical extraction.
+  Do not create a file merely to lower a line count. The new module must own a
+  coherent state-and-operation boundary, have one reason to change, use a
+  stable domain name, and reduce dependency direction or change radius. Moving
+  methods while ownership stays in a god object is not a refactor.
 
 ### Doc comments
 - /// on all public items; Markdown is fine (rustdoc).

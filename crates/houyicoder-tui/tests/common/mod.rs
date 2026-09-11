@@ -1,7 +1,10 @@
 //! Shared pseudo-terminal harness for real-binary interaction tests.
 //! It isolates process state, sends key events, and captures terminal output.
 
-#![allow(dead_code)] // shared helpers vary by integration target
+#![expect(
+    dead_code,
+    reason = "integration test binaries each use a different helper subset"
+)]
 
 use std::env;
 use std::fs;
@@ -21,6 +24,7 @@ pub struct PtySession {
     _child: Box<dyn Child + Send + Sync>,
     writer: Box<dyn Write + Send>,
     output: Arc<Mutex<Vec<u8>>>,
+    screen: Arc<Mutex<vt100::Parser>>,
     _reader: thread::JoinHandle<()>,
     sessions_dir: PathBuf,
     /// A temp home the harness created (not caller-provided); cleaned in Drop
@@ -226,7 +230,9 @@ impl PtySession {
         let writer = pair.master.take_writer().expect("pty writer");
         let reader = pair.master.try_clone_reader().expect("pty reader clone");
         let output = Arc::new(Mutex::new(Vec::<u8>::with_capacity(64 * 1024)));
+        let screen = Arc::new(Mutex::new(vt100::Parser::new(options.rows, COLS, 0)));
         let out_buf = output.clone();
+        let screen_buf = screen.clone();
         let reader_thread = thread::spawn(move || {
             let mut r = reader;
             let mut buf = [0u8; 4096];
@@ -237,6 +243,9 @@ impl PtySession {
                         if let Ok(mut o) = out_buf.lock() {
                             o.extend_from_slice(&buf[..n]);
                         }
+                        if let Ok(mut parser) = screen_buf.lock() {
+                            parser.process(&buf[..n]);
+                        }
                     }
                     Err(_) => break,
                 }
@@ -246,6 +255,7 @@ impl PtySession {
             _child: child,
             writer,
             output,
+            screen,
             _reader: reader_thread,
             sessions_dir,
             _owned_home,
@@ -298,14 +308,29 @@ impl PtySession {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
+    /// Reconstruct the current visible terminal screen from accumulated output.
+    pub fn screen(&self) -> vt100::Screen {
+        self.screen.lock().expect("screen lock").screen().clone()
+    }
+
     /// Return accumulated output without terminal escape sequences.
     pub fn output_plain(&self) -> String {
         strip_ansi(&self.output())
     }
 
-    /// Poll until marker appears in the PLAIN (ANSI-stripped) output, or
-    /// timeout elapses. Use this when the marker would cross a styled-span
-    /// boundary in the raw stream (see output_plain).
+    /// Poll until marker appears on the reconstructed terminal screen.
+    pub fn wait_for_screen(&mut self, marker: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.screen().contents().contains(marker) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        self.screen().contents().contains(marker)
+    }
+
+    /// Poll until marker appears in the ANSI-stripped output stream.
     pub fn wait_for_plain(&mut self, marker: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -789,8 +814,8 @@ pub fn open_permissions(s: &mut PtySession) {
     s.send_str("permissions");
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for("Permissions:", RENDER_TIMEOUT),
-        "pane header should render"
+        s.wait_for("[Allow]", RENDER_TIMEOUT),
+        "pane tab header should render"
     );
 }
 

@@ -31,7 +31,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_topbar(f, outer[0], app);
     draw_columns(f, outer[1], app);
     f.render_widget(
-        Paragraph::new(crate::view::hint::key_hint(&[
+        Paragraph::new(crate::view::navigation::key_hint(&[
             ("Enter", "start"),
             ("Up/Down", "find"),
             ("a", "approve"),

@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::state::App;
+use crate::view::navigation::key_hint;
 
 pub(crate) const HOOKS_PANE_HEIGHT: u16 = 20;
 
@@ -49,9 +50,9 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         draw_event_detail(f, chunks[3], app);
     }
     let hint = if level == 0 {
-        crate::view::hint::key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
+        key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
     } else {
-        crate::view::hint::key_hint(&[("Esc", "back")])
+        key_hint(&[("Esc", "back")])
     };
     f.render_widget(
         Paragraph::new(hint).style(Style::new().fg(Color::DarkGray)),

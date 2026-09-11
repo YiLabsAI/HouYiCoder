@@ -191,6 +191,7 @@ impl App {
     /// Total display rows the active transcript renders in FLAT (window) mode.
     /// The count==render single source for the window view: the flat draw path
     /// publishes the same value to window_scroll.total.
+    #[cfg(test)]
     pub(crate) fn history_display_rows(&self) -> usize {
         self.history_walk(None)
     }

@@ -76,7 +76,7 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         f.render_stateful_widget(list, chunks[1], &mut state);
     }
     // Footer: the key hints.
-    let footer = Paragraph::new(crate::view::hint::key_hint(&[
+    let footer = Paragraph::new(crate::view::navigation::key_hint(&[
         ("Up/Down", "select"),
         ("Enter", "resume"),
         ("Esc", "close"),

@@ -4,8 +4,6 @@
 //! Requests and events cross the wire protocol through the client; runtime
 //! engine types and shared engine state do not enter this crate.
 
-#![allow(dead_code)] // crate root re-exports tui modules consumed by other crates; locally unused
-
 pub mod agent_message;
 pub mod app;
 pub mod approval;
@@ -25,6 +23,7 @@ pub mod input;
 pub mod keys;
 mod list_pane_state;
 pub mod markdown;
+mod memory_state;
 pub mod notifications;
 pub mod palette;
 pub mod paste;
@@ -47,6 +46,8 @@ pub mod transcript;
 pub mod view;
 
 #[cfg(test)]
+mod activity_indicator_tests;
+#[cfg(test)]
 mod artifact_tests;
 #[cfg(test)]
 mod ask_question_render_tests;
@@ -57,12 +58,11 @@ mod development_cycle_tests;
 #[cfg(test)]
 mod export_command_tests;
 #[cfg(test)]
-#[path = "interact_memory_tests.rs"]
-mod interact_memory_tests;
-#[cfg(test)]
-mod interact_tests;
-#[cfg(test)]
 mod jump_pill_tests;
+#[cfg(test)]
+mod memory_pane_tests;
+#[cfg(test)]
+mod paste_submit_tests;
 #[cfg(test)]
 mod permission_render_tests;
 #[cfg(test)]
@@ -81,7 +81,11 @@ mod scroll_tests;
 #[cfg(test)]
 mod selection_clipboard_tests;
 #[cfg(test)]
+mod slash_command_tests;
+#[cfg(test)]
 mod snapshot_render_tests;
+#[cfg(test)]
+mod spec_transition_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

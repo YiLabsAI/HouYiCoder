@@ -144,9 +144,7 @@ fn test_verdict_skipped_on_surface() {
     );
 }
 
-/// memory_entries_from_wire maps wire summaries to pane rows: topic = key,
-/// summary = "[source] description" (or "[source]" when empty). Pins the
-/// mapping independent of the App plumbing that calls it.
+/// Wire summaries retain identity, classification, and recency in pane rows.
 #[test]
 fn test_wire_to_pane_rows() {
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
@@ -156,7 +154,7 @@ fn test_wire_to_pane_rows() {
             description: "make check must stay green".into(),
             source: "project".into(),
             scope: "project".into(),
-            mtime_secs: 0,
+            mtime_secs: 42,
         },
         MemorySummaryEntry {
             key: "bare".into(),
@@ -172,14 +170,14 @@ fn test_wire_to_pane_rows() {
     assert_eq!(rows[0].summary, "make check must stay green");
     assert_eq!(rows[0].scope, "project");
     assert_eq!(rows[0].source, "project");
+    assert_eq!(rows[0].mtime_secs, 42);
     assert_eq!(rows[1].topic, "bare");
     assert!(rows[1].summary.is_empty(), "empty desc stays empty");
     assert_eq!(rows[1].scope, "user");
     assert_eq!(rows[1].source, "user");
 }
 
-/// render_memory_entry shows the source+key header + the description hook +
-/// the body. Pins the /memory <key> show render.
+/// Memory detail text includes source, key, description, and body.
 #[test]
 fn test_show_entry_renders() {
     use houyicoder_protocol::frontend::memory::MemoryDetail;
@@ -197,8 +195,7 @@ fn test_show_entry_renders() {
 }
 
 /// The redundant section renders when redundant calls are present, with the
-/// human-readable kind name (same-message repeat / cross-turn context-loss
-/// re-read), not the machine label. Pins the trajectory redundant surfacing.
+/// human-readable kind name rather than the machine label.
 #[test]
 fn test_trajectory_renders_redundant() {
     use houyicoder_protocol::frontend::trajectory::{RedundantCallEntry, TrajectoryEntry};

@@ -19,14 +19,14 @@ use crate::transcript::TranscriptFrame;
 
 /// Time a completed task remains visible before retiring from the transcript.
 pub(crate) const RECENT_COMPLETION_TTL: Duration = Duration::from_secs(30);
+const COMPLETED_LIST_TTL: Duration = Duration::from_secs(5);
 
-/// The three lifecycle states a checklist entry cycles through. Follows the
-/// wire vocabulary (pending, in_progress, completed) without importing the
-/// engine task type.
+/// Checklist status, including the paused state used for resumed idle work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TodoStatus {
     Pending,
     InProgress,
+    Paused,
     Completed,
 }
 
@@ -64,7 +64,7 @@ pub struct TodoState {
 
 impl TodoState {
     /// Apply newly appended todo-write frames using last-write-wins semantics.
-    pub(crate) fn update(&mut self, frames: &[TranscriptFrame]) {
+    pub(crate) fn update(&mut self, frames: &[TranscriptFrame], run_active: bool) {
         if self.cursor > frames.len() {
             self.cursor = 0;
             self.items.clear();
@@ -78,10 +78,16 @@ impl TodoState {
             }
         }
         self.cursor = frames.len();
-        let Some(items) = latest else {
+        if !run_active {
+            pause_inactive(&mut self.items);
+        }
+        let Some(mut items) = latest else {
             return;
         };
         let initial_projection = self.items.is_empty();
+        if !run_active {
+            pause_inactive(&mut items);
+        }
         if !initial_projection {
             let old_completed: HashSet<String> = self
                 .items
@@ -103,15 +109,41 @@ impl TodoState {
             .collect();
         self.completion_at
             .retain(|content, _| completed.contains(content));
+        if !items.is_empty()
+            && items
+                .iter()
+                .all(|item| item.status == TodoStatus::Completed)
+        {
+            let now = Instant::now();
+            for item in &items {
+                self.completion_at
+                    .entry(item.content.clone())
+                    .or_insert(now);
+            }
+        }
         self.items = items;
     }
 
-    /// Retire elapsed completion markers and report whether rendering changed.
+    /// Hide the whole checklist after every item has remained completed for the
+    /// cohort visibility window.
     pub(crate) fn prune(&mut self, now: Instant) -> bool {
-        let before = self.completion_at.len();
-        self.completion_at
-            .retain(|_, completed| now.duration_since(*completed) < RECENT_COMPLETION_TTL);
-        self.completion_at.len() != before
+        if self.items.is_empty()
+            || self
+                .items
+                .iter()
+                .any(|item| item.status != TodoStatus::Completed)
+            || self
+                .completion_at
+                .values()
+                .max()
+                .is_none_or(|completed| now.duration_since(*completed) < COMPLETED_LIST_TTL)
+        {
+            return false;
+        }
+        self.items.clear();
+        self.completion_at.clear();
+        self.expanded = false;
+        true
     }
 
     /// Reset checklist content, expansion, timestamps, and frame cursor.
@@ -127,6 +159,14 @@ impl TodoState {
     #[cfg(test)]
     pub(crate) fn set_cursor(&mut self, cursor: usize) {
         self.cursor = cursor;
+    }
+}
+
+fn pause_inactive(items: &mut [TodoView]) {
+    for item in items {
+        if item.status == TodoStatus::InProgress {
+            item.status = TodoStatus::Paused;
+        }
     }
 }
 
@@ -248,18 +288,33 @@ mod tests {
     }
 
     #[test]
-    fn test_prune_removes_old() {
+    fn test_run_end_pauses_existing() {
+        let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [{"content": "unfinished", "status": "in_progress"}]
+        })));
+        let mut state = TodoState::default();
+        state.update(std::slice::from_ref(&frame), true);
+        assert_eq!(state.items[0].status, TodoStatus::InProgress);
+
+        state.update(std::slice::from_ref(&frame), false);
+        assert_eq!(state.items[0].status, TodoStatus::Paused);
+    }
+
+    #[test]
+    fn test_prune_hides_done() {
         let now = Instant::now();
         let mut state = TodoState {
-            completion_at: HashMap::from([
-                ("old".to_string(), now - Duration::from_secs(31)),
-                ("fresh".to_string(), now),
-            ]),
+            items: vec![TodoView {
+                content: "done".into(),
+                status: TodoStatus::Completed,
+                active_form: None,
+            }],
+            completion_at: HashMap::from([("done".to_string(), now - Duration::from_secs(6))]),
             ..Default::default()
         };
 
         assert!(state.prune(now));
-        assert!(!state.completion_at.contains_key("old"));
-        assert!(state.completion_at.contains_key("fresh"));
+        assert!(state.items.is_empty());
+        assert!(state.completion_at.is_empty());
     }
 }

@@ -1,4 +1,3 @@
-//! Transcript surface rendering tests.
 use crate::records::TranscriptLine;
 use crate::test_support::render_text;
 use crate::test_support::working_app;

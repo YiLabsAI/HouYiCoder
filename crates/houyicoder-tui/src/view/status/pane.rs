@@ -10,17 +10,23 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::state::{App, enums::StatusTab};
+use crate::view::navigation::{key_hint, tab_header};
 
 /// Default height /status asks for: a header + up to ~12 status lines + a
 /// footer. Capped at half the main area by draw_command_pane.
 pub(crate) const STATUS_PANE_HEIGHT: u16 = 20;
+const STATUS_TABS: [(StatusTab, &str); 3] = [
+    (StatusTab::Status, "Status"),
+    (StatusTab::Config, "Config"),
+    (StatusTab::Usage, "Usage"),
+];
 
 /// Render the /status content into the Pane inner rect (the closure passed
 /// to draw_command_pane). Sub-tab header + the active tab's content + footer.
@@ -34,12 +40,16 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         ])
         .split(inner);
     // Sub-tab header: Status / Config / Usage, the active one bold cyan.
-    f.render_widget(tab_header(app.status_tab), chunks[0]);
+    f.render_widget(
+        Paragraph::new(tab_header(app.status_tab, &STATUS_TABS)),
+        chunks[0],
+    );
     // Body: the active tab's content.
     draw_tab_body(f, app.status_tab, chunks[1], app);
-    // Footer: the Esc hint (the confirm:no keybinding).
-    let footer =
-        Paragraph::new("Esc to close · Tab to switch tab").style(Style::new().fg(Color::DarkGray));
+    let footer = Paragraph::new(key_hint(&[
+        ("Tab/Left/Right", "switch tab"),
+        ("Esc", "close"),
+    ]));
     f.render_widget(footer, chunks[2]);
 }
 
@@ -227,34 +237,6 @@ fn render_usage(app: &App) -> String {
     s.trim_end().to_string()
 }
 
-/// The sub-tab header row: Status / Config / Usage, the active one bold cyan,
-/// the peers dim. A Settings-modal-style tab title; the active
-/// marker echoes the tab highlight.
-fn tab_header(active: StatusTab) -> Paragraph<'static> {
-    Paragraph::new(tab_header_line(active))
-}
-
-/// The Line the tab header renders, extracted so a unit test can assert the
-/// three tab titles without poking private widget fields.
-fn tab_header_line(active: StatusTab) -> Line<'static> {
-    let spans: Vec<Span> = [StatusTab::Status, StatusTab::Config, StatusTab::Usage]
-        .iter()
-        .flat_map(|t| {
-            let is_active = *t == active;
-            let style = if is_active {
-                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::new().fg(Color::DarkGray)
-            };
-            vec![
-                Span::styled(format!(" {} ", t.title()), style),
-                Span::styled("|", Style::new().fg(Color::DarkGray)),
-            ]
-        })
-        .collect();
-    Line::from(spans)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,7 +245,7 @@ mod tests {
     /// marked (the active title appears in the header).
     #[test]
     fn test_header_renders_all_tabs() {
-        let line = tab_header_line(StatusTab::Status);
+        let line = tab_header(StatusTab::Status, &STATUS_TABS);
         let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(rendered.contains("Status"), "Status tab: {rendered}");
         assert!(rendered.contains("Config"), "Config tab: {rendered}");

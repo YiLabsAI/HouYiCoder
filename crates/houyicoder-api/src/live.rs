@@ -32,13 +32,9 @@ pub enum LiveEvent {
     /// A background memory task wrote the given count of entries this pass.
     /// Fired once per pass on completion (extract: per fork pass plus the
     /// main-agent saved-this-turn skipped path; dream: per consolidation).
-    /// The kind tells the host which verb to render (extract = Saved, dream
-    /// = Improved) so the wording decision stays in the frontend, not the
-    /// engine.
-    MemorySaved {
-        count: u32,
-        kind: houyicoder_protocol::frontend::memory::MemorySavedKind,
-    },
+    /// The kind tells the host whether count means saved entries or
+    /// consolidation touches, so wording stays in the frontend.
+    MemorySaved { count: u32, kind: MemorySavedKind },
     /// A long-running tool (currently bash) reports its elapsed seconds so
     /// the host can show the chip is making progress, not stuck. The runner
     /// ticks this every ~1s while the tool executes; the authoritative

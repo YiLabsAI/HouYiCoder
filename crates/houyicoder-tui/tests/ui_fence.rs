@@ -192,7 +192,7 @@ fn test_trajectory_session_no_crash() {
     // the row list is empty — the guard holds the pane at this level).
     let plain = s.output_plain();
     assert!(
-        plain.contains("expand"),
+        plain.contains("open"),
         "turn-list footer must render: {plain}"
     );
     // Enter on an empty row list must NOT drill — the guard holds. The

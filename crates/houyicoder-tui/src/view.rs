@@ -14,7 +14,6 @@ pub mod drag_copy_tests;
 #[cfg(test)]
 pub mod drag_select_bug_tests;
 pub mod export_log;
-pub mod hint;
 pub mod hooks_pane;
 pub mod input_bar;
 pub mod login;
@@ -22,6 +21,7 @@ pub mod logo;
 pub mod markers;
 pub mod memory_pane;
 pub mod model_pane;
+pub mod navigation;
 pub mod palette;
 pub mod pane;
 #[cfg(test)]

@@ -26,12 +26,11 @@ use ratatui::{
     text::{Line, Span},
 };
 
-/// Glyphs for the three lifecycle states. Cyan marks the active item (red is
-/// reserved for stalls and errors), green plus strikethrough marks done, and
-/// a dim hollow square marks pending.
+/// Glyph and color for each checklist lifecycle state.
 fn glyph_for(status: TodoStatus) -> (&'static str, Color, bool) {
     match status {
         TodoStatus::InProgress => ("◼", Color::Cyan, false),
+        TodoStatus::Paused => ("Ⅱ", Color::Yellow, false),
         TodoStatus::Completed => ("✔", Color::Green, true),
         TodoStatus::Pending => ("◻", Color::DarkGray, false),
     }
@@ -59,11 +58,13 @@ fn visible_collapsed<'a>(
     {
         visible.push(active);
     }
-    // Recent completed items within the TTL window, most recent first. The
-    // TTL is read from the completion timestamps tracked by the accumulator.
-    // Items without a timestamp or past the TTL go to the hidden summary --
-    // there is deliberately no fallback, otherwise the TTL would never retire
-    // a completed item while a slot is free.
+    if visible.len() < max
+        && let Some(paused) = todos.iter().find(|t| t.status == TodoStatus::Paused)
+    {
+        visible.push(paused);
+    }
+    // Recent completions receive priority; older completions remain eligible
+    // while unresolved work keeps the checklist visible.
     let now = Instant::now();
     let recent_done = todos.iter().rev().filter(|t| {
         t.status == TodoStatus::Completed
@@ -82,6 +83,17 @@ fn visible_collapsed<'a>(
     {
         visible.push(pending);
     }
+    for done in todos {
+        if done.status != TodoStatus::Completed
+            || visible.iter().any(|shown| shown.content == done.content)
+        {
+            continue;
+        }
+        if visible.len() >= max {
+            break;
+        }
+        visible.push(done);
+    }
     visible
 }
 
@@ -89,28 +101,16 @@ fn count_by_status(todos: &[TodoView], status: TodoStatus) -> usize {
     todos.iter().filter(|t| t.status == status).count()
 }
 
-fn recent_completion_count(todos: &[TodoView], completion_at: &HashMap<String, Instant>) -> usize {
-    let now = Instant::now();
-    todos
-        .iter()
-        .filter(|todo| {
-            todo.status == TodoStatus::Completed
-                && completion_at.get(&todo.content).is_some_and(|completed| {
-                    now.duration_since(*completed) < crate::todo_view::RECENT_COMPLETION_TTL
-                })
-        })
-        .count()
-}
-
 /// The label an item shows: the active-form phrasing for the in-progress item
 /// (falling back to the content), the plain content otherwise.
 fn item_label(item: &TodoView) -> String {
-    if item.status == TodoStatus::InProgress {
-        item.active_form
+    match item.status {
+        TodoStatus::InProgress => item
+            .active_form
             .clone()
-            .unwrap_or_else(|| item.content.clone())
-    } else {
-        item.content.clone()
+            .unwrap_or_else(|| item.content.clone()),
+        TodoStatus::Paused => format!("{} (paused)", item.content),
+        TodoStatus::Pending | TodoStatus::Completed => item.content.clone(),
     }
 }
 
@@ -122,7 +122,7 @@ fn item_line(item: &TodoView) -> Line<'static> {
     let mut style = Style::default().fg(color);
     if strike {
         style = style.add_modifier(Modifier::CROSSED_OUT | Modifier::DIM);
-    } else if item.status == TodoStatus::Pending {
+    } else if matches!(item.status, TodoStatus::Pending | TodoStatus::Paused) {
         style = style.add_modifier(Modifier::DIM);
     }
     Line::from(vec![
@@ -144,10 +144,14 @@ fn hidden_summary_body(
     hidden_pending: usize,
     hidden_completed: usize,
     hidden_active: usize,
+    hidden_paused: usize,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     if hidden_active > 0 {
         parts.push(format!("{hidden_active} in progress"));
+    }
+    if hidden_paused > 0 {
+        parts.push(format!("{hidden_paused} paused"));
     }
     if hidden_pending > 0 {
         parts.push(format!("{hidden_pending} pending"));
@@ -164,9 +168,15 @@ fn hidden_summary(
     hidden_pending: usize,
     hidden_completed: usize,
     hidden_active: usize,
+    hidden_paused: usize,
 ) -> Line<'static> {
     Line::from(Span::styled(
-        hidden_summary_body(hidden_pending, hidden_completed, hidden_active),
+        hidden_summary_body(
+            hidden_pending,
+            hidden_completed,
+            hidden_active,
+            hidden_paused,
+        ),
         Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM),
@@ -179,23 +189,20 @@ fn hidden_summary(
 /// is no checklist, so the caller adds no rows.
 pub fn render_rows(app: &App) -> Vec<(String, Line<'static>)> {
     let todos = &app.todos.items;
-    if todos.is_empty()
-        || (todos
-            .iter()
-            .all(|todo| todo.status == TodoStatus::Completed)
-            && recent_completion_count(todos, &app.todos.completion_at) == 0)
-    {
+    if todos.is_empty() {
         return Vec::new();
     }
     // Header counts the whole list while recent completion rows remain visible.
     let done = count_by_status(todos, TodoStatus::Completed);
     let active = count_by_status(todos, TodoStatus::InProgress);
+    let paused = count_by_status(todos, TodoStatus::Paused);
     let open = count_by_status(todos, TodoStatus::Pending);
     let h = format!(
-        "{} tasks ({} done, {} in progress, {} open)",
+        "{} tasks ({} done, {} in progress, {} paused, {} open)",
         todos.len(),
         done,
         active,
+        paused,
         open,
     );
     let mut out = vec![(
@@ -221,11 +228,15 @@ fn render_collapsed(
 ) -> Vec<(String, Line<'static>)> {
     let max = collapsed_max(term_rows);
     if max == 0 {
-        // Tiny terminal: only actionable or recently completed work counts.
+        // Tiny terminal: only the aggregate lifecycle counts remain.
         let hp = count_by_status(todos, TodoStatus::Pending);
-        let hc = recent_completion_count(todos, completion_at);
+        let hc = count_by_status(todos, TodoStatus::Completed);
         let ha = count_by_status(todos, TodoStatus::InProgress);
-        return vec![(hidden_summary_body(hp, hc, ha), hidden_summary(hp, hc, ha))];
+        let hz = count_by_status(todos, TodoStatus::Paused);
+        return vec![(
+            hidden_summary_body(hp, hc, ha, hz),
+            hidden_summary(hp, hc, ha, hz),
+        )];
     }
     let visible = visible_collapsed(todos, completion_at, max);
     let mut out: Vec<(String, Line<'static>)> = visible
@@ -235,11 +246,15 @@ fn render_collapsed(
     let vis = |s: TodoStatus| visible.iter().filter(|t| t.status == s).count();
     let hp = count_by_status(todos, TodoStatus::Pending).saturating_sub(vis(TodoStatus::Pending));
     let hc =
-        recent_completion_count(todos, completion_at).saturating_sub(vis(TodoStatus::Completed));
+        count_by_status(todos, TodoStatus::Completed).saturating_sub(vis(TodoStatus::Completed));
     let ha =
         count_by_status(todos, TodoStatus::InProgress).saturating_sub(vis(TodoStatus::InProgress));
-    if hp + hc + ha > 0 {
-        out.push((hidden_summary_body(hp, hc, ha), hidden_summary(hp, hc, ha)));
+    let hz = count_by_status(todos, TodoStatus::Paused).saturating_sub(vis(TodoStatus::Paused));
+    if hp + hc + ha + hz > 0 {
+        out.push((
+            hidden_summary_body(hp, hc, ha, hz),
+            hidden_summary(hp, hc, ha, hz),
+        ));
     }
     out
 }
@@ -249,6 +264,7 @@ fn render_collapsed(
 fn render_expanded(todos: &[TodoView], term_rows: u16) -> Vec<(String, Line<'static>)> {
     let mut grouped: Vec<&TodoView> = Vec::with_capacity(todos.len());
     grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::InProgress));
+    grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Paused));
     grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Pending));
     grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Completed));
     // Truncate by terminal height: leave room for the input box (3 rows),
@@ -272,7 +288,11 @@ fn render_expanded(todos: &[TodoView], term_rows: u16) -> Vec<(String, Line<'sta
             .saturating_sub(vis(TodoStatus::Completed));
         let ha = count_by_status(todos, TodoStatus::InProgress)
             .saturating_sub(vis(TodoStatus::InProgress));
-        out.push((hidden_summary_body(hp, hc, ha), hidden_summary(hp, hc, ha)));
+        let hz = count_by_status(todos, TodoStatus::Paused).saturating_sub(vis(TodoStatus::Paused));
+        out.push((
+            hidden_summary_body(hp, hc, ha, hz),
+            hidden_summary(hp, hc, ha, hz),
+        ));
     }
     out
 }
@@ -354,33 +374,33 @@ mod tests {
     }
 
     #[test]
-    fn test_collapsed_completed_ttl_visible() {
+    fn test_recent_done_prioritized() {
         let todos = vec![
             item("old", TodoStatus::Completed),
             item("fresh", TodoStatus::Completed),
             item("now", TodoStatus::InProgress),
         ];
-        // Only "fresh" has a live timestamp; "old" is past the TTL and
-        // retires into the hidden summary even though a slot is free.
+        // Fresh completion is prioritized, while older completed work remains.
         let comp = fresh_completion_map("fresh");
         let vis = visible_collapsed(&todos, &comp, COLLAPSED_MAX);
-        assert_eq!(vis.len(), 2);
+        assert_eq!(vis.len(), 3);
         assert_eq!(vis[0].content, "now");
-        assert_eq!(vis[1].content, "fresh"); // recent completed within TTL
+        assert_eq!(vis[1].content, "fresh");
+        assert_eq!(vis[2].content, "old");
     }
 
     #[test]
-    fn test_collapsed_expired_completed_hidden() {
+    fn test_old_done_retained() {
         let todos = vec![
             item("old", TodoStatus::Completed),
             item("now", TodoStatus::InProgress),
             item("next", TodoStatus::Pending),
         ];
-        // No completion timestamp for "old": past the TTL, so it is hidden.
         let vis = visible_collapsed(&todos, &empty_completion_map(), COLLAPSED_MAX);
-        assert_eq!(vis.len(), 2);
+        assert_eq!(vis.len(), 3);
         assert_eq!(vis[0].content, "now");
         assert_eq!(vis[1].content, "next");
+        assert_eq!(vis[2].content, "old");
     }
 
     #[test]

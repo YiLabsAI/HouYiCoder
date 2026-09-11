@@ -27,13 +27,19 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-STRUCT_FIELD_BASELINE = 590
+STRUCT_FIELD_BASELINE = 584
+APP_FIELD_BASELINE = 171
 
 def evaluate(total, baseline=STRUCT_FIELD_BASELINE) -> int:
     """Pure strict-pin: 0 only when total == baseline. Growth (>) and
     drift (<) both return 1 -- the floor tracks reality. Pure so the
     regression test can lock both directions without touching the filesystem."""
     return 0 if total == baseline else 1
+
+
+def evaluate_app(count, baseline=APP_FIELD_BASELINE) -> int:
+    """Strict-pin the central App field count independently."""
+    return 0 if count == baseline else 1
 
 
 def main() -> int:
@@ -58,6 +64,15 @@ def main() -> int:
             f"{STRUCT_FIELD_BASELINE} (-{STRUCT_FIELD_BASELINE - total}). "
             f"Lower STRUCT_FIELD_BASELINE to {total} in this commit so the "
             f"floor tracks reality (strict-pin: drift blocks until fixed).",
+            file=sys.stderr,
+        )
+        return 1
+    app_fields = next((count for name, count in counts if name.endswith(":App")), 0)
+    if app_fields != APP_FIELD_BASELINE:
+        print(
+            f"error: App field-count ratchet drifted: {app_fields} != "
+            f"{APP_FIELD_BASELINE}. Update APP_FIELD_BASELINE only when App "
+            f"ownership deliberately changes.",
             file=sys.stderr,
         )
         return 1

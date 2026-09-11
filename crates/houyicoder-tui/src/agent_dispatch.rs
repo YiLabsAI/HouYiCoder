@@ -371,38 +371,25 @@ impl App {
                 }
             }
             AgentMessage::MemoryListResult { entries } => {
-                // Populate the memory pane with the real stored-memory list.
-                // The wire→pane mapping is a pure fn so it is unit-testable.
-                self.memory_entries = memory_entries_from_wire(&entries);
-                // Reset the cursor so it never points past the refreshed list
-                // (a forget / rescan shrank it).
-                self.memory_list.cursor = 0;
-                // Reopen the pane ONLY when the user is still on it. A late
-                // list response arriving after the user dismissed the pane
-                // must not yank them back — the refresh is for an active
-                // viewer, not a stale one. The data still lands (the next
-                // /memory open reads it), so nothing is lost.
-                if self.pane == Pane::Memory {
-                    self.pane = Pane::Memory;
-                }
-                self.system_line(format!("memory: {} stored", entries.len()));
+                self.memory.set_entries(memory_entries_from_wire(&entries));
             }
-            AgentMessage::MemoryShowResult { entry } => match entry {
-                Some(e) => self.system_line(render_memory_entry(&e)),
-                None => self.system_line("memory: no such key"),
-            },
-            AgentMessage::MemoryToggleStateResult { state } => {
-                // Apply the snapshot (read on pane-open or after a flip) to the
-                // toggle view state. Reopen the pane ONLY when the user is
-                // still on it — a late flip response arriving after the user
-                // dismissed the pane must not yank them back. The toggle still
-                // takes effect (state is applied + persisted server-side), so
-                // the dismissal is respected without losing the flip.
-                self.memory_toggles = state;
-                if self.pane == Pane::Memory {
-                    self.pane = Pane::Memory;
+            AgentMessage::MemoryShowResult { req_id, entry } => {
+                if self.pane == Pane::Memory && self.memory.is_pending(req_id) {
+                    let missing = entry.is_none();
+                    self.memory.apply_detail(req_id, entry);
+                    if missing {
+                        self.system_line("memory: no such key");
+                    }
+                } else if self.pane != Pane::Memory && self.memory.pending_key().is_some() {
+                    self.memory.close_detail();
+                } else if self.memory.pending_key().is_none() {
+                    match entry {
+                        Some(entry) => self.system_line(render_memory_entry(&entry)),
+                        None => self.system_line("memory: no such key"),
+                    }
                 }
             }
+            AgentMessage::MemoryToggleStateResult { state } => self.memory.set_toggles(state),
             AgentMessage::MemorySaved { count, kind } => self.show_memory_saved(count, kind),
             AgentMessage::UndoResult { description } => match description {
                 Some(desc) => self.system_line(format!("undo: {desc}")),
@@ -498,12 +485,20 @@ impl App {
     }
 
     fn show_memory_saved(&mut self, count: u32, kind: MemorySavedKind) {
-        let verb = match kind {
-            MemorySavedKind::Extracted => "Saved",
-            MemorySavedKind::Consolidated => "Improved",
+        let notice = match kind {
+            MemorySavedKind::Extracted => {
+                let noun = if count == 1 { "memory" } else { "memories" };
+                format!("Saved {count} {noun} · /memory shows newest first")
+            }
+            MemorySavedKind::Consolidated => {
+                let noun = if count == 1 {
+                    "memory change"
+                } else {
+                    "memory changes"
+                };
+                format!("Consolidated {count} {noun} · /memory shows newest first")
+            }
         };
-        let plural = if count == 1 { "memory" } else { "memories" };
-        let notice = format!("{verb} {count} {plural}");
         if !self
             .transcript
             .last()

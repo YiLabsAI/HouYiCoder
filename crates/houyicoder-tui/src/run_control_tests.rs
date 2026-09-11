@@ -983,8 +983,8 @@ mod run_control_stream_tests;
 mod context_command_tests;
 
 #[cfg(test)]
-#[path = "approval_flow_tests.rs"]
-mod approval_flow_tests;
+#[path = "run_lifecycle_tests.rs"]
+mod run_lifecycle_tests;
 
 #[cfg(test)]
 #[path = "subagent_fetch_tests.rs"]
@@ -999,5 +999,5 @@ mod cursor_priority_tests;
 mod approval_render_tests;
 
 #[cfg(test)]
-#[path = "trust_flow_tests.rs"]
-mod trust_flow_tests;
+#[path = "trust_prompt_tests.rs"]
+mod trust_prompt_tests;

@@ -1040,6 +1040,23 @@ fn test_user_background_band() {
         })
         .collect();
     assert!(missing.is_empty(), "background gaps at columns {missing:?}");
+    let first_wide = buf.cell((area.x + 2, user_y)).expect("first CJK cell");
+    assert_eq!(
+        first_wide.diff_option,
+        ratatui::buffer::CellDiffOption::AlwaysUpdate
+    );
+    let continuation = buf.cell((area.x + 3, user_y)).expect("continuation cell");
+    assert_eq!(
+        continuation.diff_option,
+        ratatui::buffer::CellDiffOption::None
+    );
+    let row_tail = buf
+        .cell((area.x + area.width - 1, user_y))
+        .expect("row tail");
+    assert_eq!(
+        row_tail.diff_option,
+        ratatui::buffer::CellDiffOption::AlwaysUpdate
+    );
 }
 
 /// Removing a user row clears its background on the next terminal frame.

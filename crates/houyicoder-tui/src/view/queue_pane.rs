@@ -60,10 +60,13 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         );
     }
     f.render_widget(
-        Paragraph::new(Line::from(
-            "  Enter recall \u{00b7} R recall all \u{00b7} d delete \u{00b7} Esc close",
-        ))
-        .style(Style::new().fg(Color::DarkGray)),
+        Paragraph::new(crate::view::navigation::key_hint(&[
+            ("Up/Down", "select"),
+            ("Enter", "recall"),
+            ("R", "recall all"),
+            ("d", "delete"),
+            ("Esc", "close"),
+        ])),
         chunks[2],
     );
 }

@@ -50,8 +50,7 @@ fn fresh_app() -> App {
     let mut app = composition::app();
     app.transcript.clear();
     app.frames.clear();
-    app.stable_frame_end = 0;
-    app.stable_line_end = 0;
+    app.current_turn_boundary = Default::default();
     app
 }
 
@@ -198,6 +197,7 @@ fn test_todo_skips_chip() {
 #[test]
 fn test_todo_survives_user() {
     let mut app = fresh_app();
+    app.agent_busy = true;
     pump(&mut app, user_msg("go"));
     pump(
         &mut app,
@@ -209,6 +209,39 @@ fn test_todo_survives_user() {
 
     assert_eq!(app.todos.items.len(), 1);
     assert_eq!(app.todos.items[0].content, "task one");
+}
+
+#[test]
+fn test_resumed_todo_paused() {
+    let mut app = fresh_app();
+    pump(&mut app, user_msg("old run"));
+    pump(
+        &mut app,
+        todo_write_frame("c1", &[("unfinished", "in_progress")]),
+    );
+
+    assert_eq!(
+        app.todos.items[0].status,
+        crate::todo_view::TodoStatus::Paused
+    );
+}
+
+#[test]
+fn test_resumed_batches_paused() {
+    let mut app = fresh_app();
+    pump(
+        &mut app,
+        todo_write_frame("c1", &[("unfinished", "pending")]),
+    );
+    pump(
+        &mut app,
+        todo_write_frame("c2", &[("unfinished", "in_progress")]),
+    );
+
+    assert_eq!(
+        app.todos.items[0].status,
+        crate::todo_view::TodoStatus::Paused
+    );
 }
 
 #[test]

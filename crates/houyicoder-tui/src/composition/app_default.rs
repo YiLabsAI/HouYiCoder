@@ -1,5 +1,4 @@
-//! The placeholder App stub (login screen, no runner wired). Split out of
-//! wiring.rs on size grounds.
+//! Default application state used before runtime services are attached.
 
 use super::*;
 
@@ -8,19 +7,19 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use houyicoder_protocol::frontend::SessionId;
-use houyicoder_protocol::frontend::memory::ToggleState;
 use houyicoder_protocol::frontend::model::ModelCatalog;
 
 use crate::history::HistoryNav;
 use crate::input::InputField;
 use crate::list_pane_state::ListPaneState;
+use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::paste::PasteStore;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
-use crate::state::{LiveBlock, MemoryScopeTab, QueueViewState, StatusTab, TrustChoice};
+use crate::state::{CurrentTurnBoundary, LiveBlock, QueueViewState, StatusTab, TrustChoice};
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub fn app() -> App {
@@ -34,8 +33,7 @@ pub fn app() -> App {
         history: HistoryNav::default(),
         transcript: transcript(),
         frames: Vec::new(),
-        stable_frame_end: 0,
-        stable_line_end: 0,
+        current_turn_boundary: CurrentTurnBoundary::default(),
         verdict_cursor: 0,
         transcript_scroll: TranscriptScroll::default(),
         display_rows_cache: RefCell::new(Vec::new()),
@@ -87,13 +85,7 @@ pub fn app() -> App {
         },
         verify_result: verify_result(),
         graph_result: graph_result(),
-        memory_entries: memory_entries(),
-        memory_toggles: ToggleState {
-            auto_memory: true,
-            auto_dream: true,
-        },
-        memory_scope_tab: MemoryScopeTab::All,
-        memory_list: ListPaneState::default(),
+        memory: MemoryPaneState::new(memory_entries()),
         queue_view: QueueViewState::default(),
         worktree_entries: Vec::new(),
         worktree_list: ListPaneState::default(),

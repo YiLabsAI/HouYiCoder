@@ -129,13 +129,13 @@ fn test_esc_exits_pane() {
     // skips it — so we drive a change instead.)
     let mut s = pty_session();
     open_permissions(&mut s);
-    s.assert_contains("Permissions:");
+    s.assert_contains("[Allow]");
     s.clear_output();
     s.send_key(&Key::Esc);
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert!(
-        !s.output().contains("Permissions:"),
-        "Esc should leave the pane (Permissions: header gone):\n{}",
+        !s.output().contains("[Allow]"),
+        "Esc should leave the pane (tab header gone):\n{}",
         s.output()
     );
     // The input box is responsive: typing forces a repaint that lands the

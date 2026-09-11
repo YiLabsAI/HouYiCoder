@@ -1,7 +1,4 @@
-//! Resume-picker interaction tests: the /resume command opens the picker
-//! with a wired SessionLister, the direct-switch by name, + the filter.
-//! Split out of interact_tests on size grounds. Uses the same render +
-//! working helpers (a fresh App with a stub lister wired).
+//! Resume picker opening, filtering, and direct session switching tests.
 
 #![cfg(test)]
 

@@ -1,17 +1,36 @@
-//! Shared footer key-hint builder. Produces a one-line hint where each key
-//! is bold-dim and each action is dim, separated by a middle dot — matching
-//! the idiomatic style where the key stands out and the action recedes.
-//! Callers pass (key, action) pairs; the helper handles the formatting
-//! so every pane renders hints the same way.
+//! Shared pane navigation presentation.
+//!
+//! Tab headers and key-action footers use one visual grammar so sibling panes
+//! do not drift in spacing, active markers, action verbs, or hierarchy hints.
 
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 
+/// Build a tab row with one bracketed active label.
+pub(crate) fn tab_header<T: Copy + Eq>(active: T, tabs: &[(T, &str)]) -> Line<'static> {
+    let mut spans = vec![Span::raw("  ")];
+    for (index, (value, label)) in tabs.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let style = if *value == active {
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(Color::DarkGray)
+        };
+        let text = if *value == active {
+            format!("[{label}]")
+        } else {
+            (*label).to_string()
+        };
+        spans.push(Span::styled(text, style));
+    }
+    Line::from(spans)
+}
+
 /// Build a footer key-hint line from key-action pairs.
-/// Each pair renders as key to action; pairs are joined by a middle dot.
-/// The key is bold dim (stands out), the action is dim (recedes).
 pub(crate) fn key_hint(pairs: &[(&str, &str)]) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
     for (i, (key, action)) in pairs.iter().enumerate() {
@@ -35,6 +54,17 @@ pub(crate) fn key_hint(pairs: &[(&str, &str)]) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_tab_header() {
+        let line = tab_header(1, &[(0, "First"), (1, "Second")]);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(text, "  First  [Second]");
+    }
 
     #[test]
     fn test_hint_pairs() {

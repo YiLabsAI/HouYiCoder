@@ -22,7 +22,6 @@ use crate::view::spinner::{spinner_line, stall_intensity, stall_intensity_reason
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
-    const PLAIN: u8 = crate::selection::TAG_PLAIN;
     const USER: u8 = crate::selection::TAG_USER;
     const SYSTEM: u8 = crate::selection::TAG_SYSTEM;
     const SPINNER: u8 = crate::selection::TAG_SPINNER;
@@ -272,6 +271,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(lines).style(Style::default().fg(Color::Reset).bg(Color::Reset)),
         inner,
     );
+    refresh_wide_cells(f, inner);
 
     // "Jump to bottom" pill: a dim centered overlay on the transcript's
     // bottom row when the user has scrolled back from the tail. Clicking it
@@ -592,6 +592,34 @@ pub(crate) fn user_row(row: &str, query: &str, current: bool, width: u16) -> Lin
     line
 }
 
+/// Refresh writable cells on rows containing wide glyphs.
+pub(crate) fn refresh_wide_cells(f: &mut Frame, area: Rect) {
+    let buffer = f.buffer_mut();
+    for y in area.y..area.y + area.height {
+        let has_wide = (area.x..area.x + area.width).any(|x| {
+            buffer
+                .cell((x, y))
+                .is_some_and(|cell| unicode_width::UnicodeWidthStr::width(cell.symbol()) > 1)
+        });
+        if !has_wide {
+            continue;
+        }
+        for x in area.x..area.x + area.width {
+            let previous_is_wide = x > area.x
+                && buffer
+                    .cell((x - 1, y))
+                    .is_some_and(|cell| unicode_width::UnicodeWidthStr::width(cell.symbol()) > 1);
+            let Some(cell) = buffer.cell_mut((x, y)) else {
+                continue;
+            };
+            let width = unicode_width::UnicodeWidthStr::width(cell.symbol());
+            if width > 1 || (cell.symbol() == " " && !previous_is_wide) {
+                cell.set_diff_option(ratatui::buffer::CellDiffOption::AlwaysUpdate);
+            }
+        }
+    }
+}
+
 /// Order-independent content hash of a string set: XOR each element's stable
 /// byte hash so the result does not depend on HashSet iteration order. Replaces
 /// the .len() proxy for the slots-version cache key -- .len() collided on
@@ -681,7 +709,6 @@ fn fold_hint_row(hint: &str, width: u16) -> String {
 }
 
 fn build_slots_rows(area: Rect, app: &App) -> RowParts {
-    const PLAIN: u8 = crate::selection::TAG_PLAIN;
     const FOLD: u8 = crate::selection::TAG_FOLD;
 
     let mut sink = RowBuffer::default();

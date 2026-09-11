@@ -14,6 +14,7 @@ use ratatui::{
 };
 
 use crate::state::App;
+use crate::view::navigation::key_hint;
 use houyicoder_protocol::frontend::model::ModelCatalogEntry;
 
 /// Default height /model asks for: a header + the list + a footer. Capped at
@@ -103,13 +104,17 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     let focused_id = model_id_at(app, app.model_sel);
     let effort_line = effort_selector_line(&focused_id, app);
     f.render_widget(Paragraph::new(effort_line), chunks[2]);
-    let footer_text = if app.model_catalog.catalog.is_empty() {
-        "no catalog configured; add model.catalog entries to settings.json \u{00b7} Esc to close"
+    let footer = if app.model_catalog.catalog.is_empty() {
+        let mut line = Line::from(Span::styled(
+            "no catalog configured; add model.catalog entries to settings.json · ",
+            Style::new().fg(Color::DarkGray),
+        ));
+        line.spans.extend(key_hint(&[("Esc", "close")]).spans);
+        line
     } else {
-        "Enter to save \u{00b7} Esc to close"
+        key_hint(&[("Up/Down", "select"), ("Enter", "save"), ("Esc", "close")])
     };
-    let footer = Paragraph::new(footer_text).style(Style::new().fg(Color::DarkGray));
-    f.render_widget(footer, chunks[3]);
+    f.render_widget(Paragraph::new(footer), chunks[3]);
 }
 
 /// Build the effort selector line for the focused model. Shows the three

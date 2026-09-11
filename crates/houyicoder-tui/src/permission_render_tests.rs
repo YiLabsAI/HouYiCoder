@@ -226,16 +226,16 @@ fn test_permission_search_submode_filters() {
 
 #[test]
 fn test_pane_renders_pane_frame() {
-    // The /permissions surface uses the Pane primitive: a full-width ─ Divider
-    // framing the region (not a rounded border, not a full-screen overlay), and
-    // a "Permissions:" prefix on the tab row. Both modes (stub + wired) render
-    // inline below the transcript tail — no stub-vs-wired style divergence.
+    // The /permissions surface uses the Pane primitive: a full-width divider
+    // framing the region (not a rounded border, not a full-screen overlay),
+    // and a shared tab header. Both modes (stub + wired) render inline below
+    // the transcript tail — no stub-vs-wired style divergence.
     let mut app = app();
     app.pane = Pane::Permission;
     let text = render_text(&app, 100, 28);
     assert!(
-        text.contains("Permissions:"),
-        "Pane content carries the Permissions: prefix: {text}"
+        text.contains("Recently denied"),
+        "Pane content carries the tab header: {text}"
     );
     assert!(
         text.contains('\u{2500}'),

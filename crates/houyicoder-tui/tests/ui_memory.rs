@@ -1,21 +1,7 @@
-//! Real-binary PTY smoke tests for the /memory pane. #[ignore] (each spawns
-//! the houyi binary + a PTTY -- too slow for the 60s commit gate). Run via
-//! make test ui (builds the bin first) or
-//! cargo test --test ui_memory -- --ignored after cargo build --bin houyi.
+//! Real-binary PTY coverage for memory persistence and pane navigation.
 //!
-//! Industrial-usability proof for the memory loop: launch the real binary,
-//! drive /memory + /save + the toggle / forget / esc sub-paths through a real
-//! terminal, assert BOTH the rendered output AND the real on-disk side-effects
-//! (memory topic files + the settings.json toggle persistence). The inline
-//! unit layer + the wire-contract layer prove the mechanism; this layer proves
-//! a user can actually use memory end to end. HOME is overridden to a temp dir
-//! so /save never touches the developer's real home.
-//!
-//! Render-flip assertions use the ANSI-stripped PLAIN output (the value span is
-//! a separate styled span, so the raw stream splits "Auto-memory: on" across
-//! an SGR run). Persistence + delete assertions read real files (the durable
-//! side-effects) — stronger than screen matching, which ratatui's incremental
-//! diff-draw would otherwise fragment.
+//! Every test uses isolated memory roots and reconstructs terminal state when
+//! final layout or styling matters.
 
 #![allow(clippy::unwrap_in_result)]
 
@@ -72,8 +58,8 @@ fn test_pane_opens() {
         s.output()
     );
     assert!(
-        s.output().contains("Auto-memory:"),
-        "auto-memory toggle row should render:\n{}",
+        s.wait_for_screen("a to disable auto-memory", RENDER_TIMEOUT),
+        "auto-memory action should render:\n{}",
         s.output()
     );
     drop(s);
@@ -81,9 +67,7 @@ fn test_pane_opens() {
 }
 
 /// /save <key> <source>: <fact> typed as a user message -> the deterministic
-/// fact extractor writes a topic file to the auto-scope root, and the next
-/// /memory listing shows the key. Pins the write path + the list refresh
-/// through the real binary.
+/// fact extractor writes a topic file and the next list shows its key.
 #[test]
 #[ignore]
 fn test_save_writes_and_lists() {
@@ -131,12 +115,7 @@ fn test_save_writes_and_lists() {
     drop(std::fs::remove_dir_all(&home));
 }
 
-/// /memory toggle auto flips the auto-memory row on -> off and persists the
-/// choice to the settings file. The render flip is diff-drawn (the value span
-/// is overwritten in place, so "Auto-memory: off" never exists as a contiguous
-/// substring), so the durable signal is the settings file write — the real
-/// industrial-grade proof that the toggle wire round-trip + the persistence
-/// path land through the real binary.
+/// The pane's a shortcut toggles auto-memory and persists the setting.
 #[test]
 #[ignore]
 fn test_toggle_flips_and_persists() {
@@ -144,18 +123,11 @@ fn test_toggle_flips_and_persists() {
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for_plain("Auto-memory: on", RENDER_TIMEOUT),
-        "default auto-memory should be on:\n{}",
+        s.wait_for_screen("a to disable auto-memory", RENDER_TIMEOUT),
+        "default auto-memory action should render:\n{}",
         s.output()
     );
-    s.clear_output();
-    // Close the memory pane first: while the pane is open, the slash key
-    // does not open the command palette (the pane intercepts input).
-    s.send_key(&Key::Esc);
-    // Wait for the pane to close + the working screen to return before
-    // sending the toggle command through the palette.
-    s.wait_for("let's build, or / for commands", RENDER_TIMEOUT);
-    run_slash_command(&mut s, "memory toggle auto");
+    s.send_key(&Key::Char('a'));
     // The server flips + persists; the settings file is the durable proof.
     let settings = home.join(".houyicoder").join("settings.json");
     let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
@@ -178,9 +150,37 @@ fn test_toggle_flips_and_persists() {
     drop(std::fs::remove_dir_all(&home));
 }
 
-/// /memory forget <key> deletes the topic file on disk AND refreshes the pane
-/// to "0 stored". Pins the delete wire round-trip + the write-root resolution
-/// under a temp HOME (the save + the forget must hit the same root).
+/// Memory tabs, detail navigation, scrolling, and hierarchy keys work through
+/// the real terminal.
+#[test]
+#[ignore]
+fn test_pane_navigation() {
+    let home = fresh_home("navigation");
+    let mut s = pty_session_isolated(home.clone());
+    run_slash_command(&mut s, "save nav-key user: memory navigation detail");
+    let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
+    while find_topic(&home, "nav-key").is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    run_slash_command(&mut s, "memory");
+    assert!(s.wait_for_screen("nav-key", RENDER_TIMEOUT));
+    s.send_key(&Key::Tab);
+    assert!(s.wait_for_screen("[User]", RENDER_TIMEOUT));
+    s.send_key(&Key::Left);
+    assert!(s.wait_for_screen("[All]", RENDER_TIMEOUT));
+    s.send_key(&Key::Enter);
+    assert!(s.wait_for_screen("Esc to back", RENDER_TIMEOUT));
+    s.send_key(&Key::Down);
+    s.send_key(&Key::Esc);
+    assert!(s.wait_for_screen("newest first", RENDER_TIMEOUT));
+    s.send_key(&Key::Esc);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!s.screen().contents().contains("newest first"));
+    drop(s);
+    drop(std::fs::remove_dir_all(&home));
+}
+
+/// Forget removes the stored topic and the next list reflects the new count.
 #[test]
 #[ignore]
 fn test_forget_deletes_and_refreshes() {
@@ -208,22 +208,22 @@ fn test_forget_deletes_and_refreshes() {
         }
     };
     run_slash_command(&mut s, "memory forget forget-key");
+    let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
+    while topic.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!topic.exists(), "forget should delete the topic file");
+    run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for("memory: 0 stored", RENDER_TIMEOUT),
-        "forget should refresh the list to 0 stored:\n{}",
-        s.output()
-    );
-    assert!(
-        !topic.exists(),
-        "forget should delete the topic file from disk:\n{}",
+        s.wait_for_screen("0 stored", RENDER_TIMEOUT),
+        "memory pane should show the refreshed count:\n{}",
         s.output()
     );
     drop(s);
     drop(std::fs::remove_dir_all(&home));
 }
 
-/// Esc closes the /memory pane back to the transcript. The pane footer
-/// advertises "Esc close" so the key must actually dismiss the pane.
+/// Esc closes the memory pane and removes it from the terminal screen.
 #[test]
 #[ignore]
 fn test_esc_closes_pane() {
@@ -231,25 +231,17 @@ fn test_esc_closes_pane() {
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for("Auto-memory:", RENDER_TIMEOUT),
+        s.wait_for_screen("a to disable auto-memory", RENDER_TIMEOUT),
         "memory pane should render:\n{}",
         s.output()
     );
-    s.clear_output();
     s.send_key(&Key::Esc);
-    // After Esc the pane is dismissed: the toggle rows + the "Esc close"
-    // footer are gone from the cleared output window. The working-screen
-    // input placeholder is NOT re-rendered (ratatui diff leaves an unchanged
-    // input box untouched), so the reliable signal is the ABSENCE of the
-    // memory pane rows, not the presence of a working-screen marker. A late
-    // list/toggle response can no longer reopen the pane (the result
-    // handlers guard the reopen on pane == Memory), so no drain sleep is
-    // needed before Esc.
     std::thread::sleep(std::time::Duration::from_millis(300));
+    let screen = s.screen().contents();
+    assert!(!screen.contains("memory —"), "pane should close:\n{screen}");
     assert!(
-        !s.output_plain().contains("Auto-memory:"),
-        "Esc should close the memory pane (toggle row gone):\n{}",
-        s.output()
+        !screen.contains("disable auto-memory"),
+        "footer should be gone:\n{screen}"
     );
     drop(s);
     drop(std::fs::remove_dir_all(&home));

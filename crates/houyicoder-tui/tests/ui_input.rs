@@ -187,9 +187,42 @@ fn test_ctrl_u_clears_input() {
     );
 }
 
-/// The hardware cursor remains hidden during redraws. The input caret is a
-/// painted cell, so showing the native cursor would leave a visible movement
-/// trail while the alternate-screen buffer updates.
+/// Streaming CJK text leaves no isolated user-background cells on the final
+/// terminal screen.
+#[test]
+#[ignore]
+fn test_cjk_background_clean() {
+    let marker = "\u{80cc}\u{666f}\u{68c0}\u{67e5}\u{5b8c}\u{6210}";
+    let cjk = "\u{4e2d}\u{6587}\u{5bbd}\u{5b57}\u{7b26}\u{6d41}\u{5f0f}\u{5237}\u{65b0}";
+    let response = format!("{}{marker}", cjk.repeat(300));
+    let script = serde_json::json!([[{"type":"Text", "text": response}]]).to_string();
+    let mut s = pty_session_slow_scripted(1, &script);
+    s.send_str("\u{8bf7}\u{8fde}\u{7eed}\u{8f93}\u{51fa}\u{5bbd}\u{5b57}\u{7b26}");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_screen(marker, RENDER_TIMEOUT * 2),
+        "scripted CJK response should finish:\n{}",
+        s.output()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let screen = s.screen();
+    let (rows, cols) = screen.size();
+    let residual: Vec<(u16, u16)> = (0..rows)
+        .flat_map(|row| (0..cols).map(move |col| (row, col)))
+        .filter(|(row, col)| {
+            screen.cell(*row, *col).is_some_and(|cell| {
+                !cell.is_wide_continuation() && cell.bgcolor() == vt100::Color::Idx(238)
+            })
+        })
+        .collect();
+    assert!(
+        residual.is_empty(),
+        "gray cells remained after the user row scrolled away: {residual:?}\n{}",
+        screen.contents()
+    );
+}
+
+/// The native cursor remains hidden while the painted caret is visible.
 #[test]
 #[ignore]
 fn test_native_cursor_hidden() {

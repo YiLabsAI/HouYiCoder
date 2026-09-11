@@ -11,6 +11,7 @@ use ratatui::{
 };
 
 use crate::state::App;
+use crate::view::navigation::key_hint;
 
 pub(crate) const SKILLS_PANE_HEIGHT: u16 = 16;
 
@@ -153,9 +154,9 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     }
 
     let footer = if app.skill_level.get() == 1 {
-        crate::view::hint::key_hint(&[("t", "toggle"), ("Esc", "back")])
+        key_hint(&[("t", "toggle"), ("Esc", "back")])
     } else {
-        crate::view::hint::key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
+        key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
     };
     f.render_widget(
         Paragraph::new(footer).style(Style::new().fg(Color::DarkGray)),

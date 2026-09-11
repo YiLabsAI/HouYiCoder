@@ -1,10 +1,7 @@
-//! TUI state and core enums. The App struct carries both the legacy stub
-//! surface (transcript, panes, stage) and the real agent-loop wiring (runner,
-//! session, tokio runtime, channel). When a runner is present, submit_input
-//! spawns runner.run on the runtime and the transcript is rebuilt from real
-//! SessionLogEntries; when no runner is wired (tests, login-only), the legacy stub
-//! path stays so existing tests keep passing. The view module reads App and
-//! renders it; the app/keys modules mutate it in response to keys.
+//! Application state shared by rendering, key routing, and session updates.
+//!
+//! App is the composition shell; cohesive concerns own their state and
+//! transitions in dedicated types rather than adding parallel fields here.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -27,6 +24,7 @@ use crate::console_state::ConsoleState;
 use crate::history::HistoryNav;
 use crate::input::InputField;
 use crate::list_pane_state::ListPaneState;
+use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::palette::PaletteState;
 use crate::paste::PasteStore;
@@ -47,7 +45,6 @@ use houyicoder_protocol::acp_wire::PermissionOptionKind;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::hooks::HookEntry;
-use houyicoder_protocol::frontend::memory::ToggleState;
 use houyicoder_protocol::frontend::model::ModelCatalog;
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionMode, PermissionRule,
@@ -111,11 +108,13 @@ impl QueueViewState {
     }
 }
 
-/// The full TUI state. Owned by the app loop; read by the view module. The
-/// palette, console, and review-queue concerns are delegated to focused
-/// sub-structs (PaletteState, ConsoleState, ReviewQueue); the remaining
-/// fields are core surface + artifact state. The agent_* fields wire the real
-/// agent loop: when runner is Some, submit_input spawns runner.run on the tokio runtime and the transcript is rebuilt from real SessionLogEntries arriving over the channel.
+#[derive(Default)]
+pub(crate) struct CurrentTurnBoundary {
+    pub(crate) frame_index: usize,
+    pub(crate) line_index: usize,
+}
+
+/// Top-level state composed from session wiring and domain-owned UI state.
 pub struct App {
     pub screen: Screen,
     pub stage: Stage,
@@ -133,10 +132,7 @@ pub struct App {
     /// The durable wire frame history, owned by App. Incoming frames append
     /// here before the transcript is rebuilt.
     pub frames: Vec<TranscriptFrame>,
-    /// End of the frame prefix reused while the current turn grows.
-    pub stable_frame_end: usize,
-    /// End of the transcript prefix corresponding to stable_frame_end.
-    pub stable_line_end: usize,
+    pub(crate) current_turn_boundary: CurrentTurnBoundary,
     /// Verdict cursor: acpx permission_decision frames are deserialized once
     /// and appended to verdict_log_cache as they cross this cursor. Avoids
     /// re-deserializing the whole history per rebuild (per-frame now). Reset
@@ -260,20 +256,7 @@ pub struct App {
     pub console: ConsoleState,
     pub verify_result: VerifyResult,
     pub graph_result: GraphResult,
-    pub memory_entries: Vec<MemoryEntry>,
-    /// The auto-memory / auto-dream toggle snapshot rendered as on/off rows in
-    /// the /memory pane. Defaults to both on; refreshed from the wire on
-    /// pane-open and after each /memory toggle flip.
-    pub memory_toggles: ToggleState,
-    /// Storage-scope filter the /memory pane is narrowed to. Shift+Tab cycles
-    /// All → User → Project → Auto. All shows the merged set; the others
-    /// narrow to one physical root.
-    pub memory_scope_tab: MemoryScopeTab,
-    /// Cursor + search query for the /memory pane. The cursor indexes the
-    /// scope-and-text-filtered list; move_cursor/clamp take the filtered
-    /// length. The query composes with the scope tab (both must match).
-    /// Adopted from ListPaneState (the worktree pane was the first adopter).
-    pub memory_list: ListPaneState,
+    pub(crate) memory: MemoryPaneState,
     /// Selection and hit-test state for the queued-input interface.
     pub queue_view: QueueViewState,
     /// The linked-worktree rows for the /worktrees pane. Refreshed from

@@ -5,7 +5,6 @@
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::Instant;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -572,7 +571,7 @@ fn copy_native(text: &str) {
     }
     #[cfg(target_os = "linux")]
     {
-        if let Some(tool) = linux_clipboard_tool(text) {
+        if let Some(tool) = linux::linux_clipboard_tool(text) {
             let args: &[&str] = match tool {
                 "wl-copy" => &[],
                 "xclip" => &["-selection", "clipboard"],
@@ -607,36 +606,6 @@ fn run_native(bin: &str, args: &[&str], text: &str) -> std::io::Result<()> {
     } else {
         Err(std::io::Error::other("non-zero exit"))
     }
-}
-
-/// Cached Linux clipboard tool. The probe runs on the FIRST copy with the
-/// actual text (xclip / xsel would hang on an empty probe stdin), then the
-/// winner is cached so later copies skip the chain. wl-copy only when
-/// WAYLAND_DISPLAY is set; xclip then xsel cover X11.
-static LINUX_TOOL: Mutex<Option<Option<&'static str>>> = Mutex::new(None);
-
-fn linux_clipboard_tool(text: &str) -> Option<&'static str> {
-    {
-        let cache = LINUX_TOOL.lock().expect("linux tool cache");
-        match *cache {
-            Some(Some(tool)) => return Some(tool),
-            Some(None) => return None,
-            None => {}
-        }
-    }
-    let winner = if std::env::var_os("WAYLAND_DISPLAY").is_some()
-        && run_native("wl-copy", &[], text).is_ok()
-    {
-        Some("wl-copy")
-    } else if run_native("xclip", &["-selection", "clipboard"], text).is_ok() {
-        Some("xclip")
-    } else if run_native("xsel", &["--clipboard", "--input"], text).is_ok() {
-        Some("xsel")
-    } else {
-        None
-    };
-    *LINUX_TOOL.lock().expect("linux tool cache") = Some(winner);
-    winner
 }
 
 /// Write a byte sequence to stdout (locked, flushed). OSC 52 is a
@@ -793,6 +762,7 @@ fn word_bounds_at(row: &str, col: usize, max_w: usize) -> (usize, usize) {
     (starts[lo], starts[hi] + widths[hi])
 }
 
+mod linux;
 pub mod surface;
 #[cfg(test)]
 mod tests;

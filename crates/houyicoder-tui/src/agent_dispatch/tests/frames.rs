@@ -43,7 +43,7 @@ fn test_frame_log_result_shape() {
 
 /// A TrajectoryResult with redundant calls renders the redundant section
 /// (same-message repeat / cross-turn context-loss re-read) as a system
-/// line. Pins the dispatch side of the trajectory redundant surfacing.
+/// line.
 #[test]
 fn test_trajectory_renders_redundant_section() {
     use crate::records::TranscriptLine;
@@ -95,9 +95,8 @@ fn test_done_clears_running_tools() {
 }
 
 #[test]
-fn test_initial_projection_skips_stamps() {
-    // A resumed session's first projection contains historic completed
-    // items: they must not be stamped as recently completed.
+fn test_completed_cohort_stamped() {
+    // Historic completions are not recent while unresolved work remains.
     let mut app = crate::composition::app();
     app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
         ("old work", "completed"),
@@ -105,21 +104,17 @@ fn test_initial_projection_skips_stamps() {
     ])));
     app.handle_agent_message(done_msg());
     assert!(app.todos.completion_at.is_empty());
-    // A subsequent projection completing a new item stamps it.
+    // Completing the cohort timestamps every item for one shared retirement.
     app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
         ("old work", "completed"),
         ("current", "completed"),
     ])));
     app.handle_agent_message(done_msg());
     assert!(app.todos.completion_at.contains_key("current"));
-    assert!(!app.todos.completion_at.contains_key("old work"));
+    assert!(app.todos.completion_at.contains_key("old work"));
 }
 
-/// The toggle-state result (a read on pane-open or after a flip) applies
-/// the snapshot to the view state. The pane reopens ONLY when the user is
-/// still on it — a late flip response arriving after the user dismissed the
-/// pane must not yank them back. Pins both the state-apply wiring + the
-/// dismissal-respect guard so a later refactor cannot drop either.
+/// A toggle-state result updates memory state without changing the active pane.
 #[test]
 fn test_toggle_state_applies_view() {
     use houyicoder_protocol::frontend::memory::ToggleState;
@@ -132,8 +127,8 @@ fn test_toggle_state_applies_view() {
             auto_dream: true,
         },
     });
-    assert!(!app.memory_toggles.auto_memory, "auto-memory applied");
-    assert!(app.memory_toggles.auto_dream, "auto-dream applied");
+    assert!(!app.memory.toggles().auto_memory, "auto-memory applied");
+    assert!(app.memory.toggles().auto_dream, "auto-dream applied");
     assert_eq!(app.pane, crate::state::Pane::Memory, "pane stays open");
     // Dismissed (pane moved away): the snapshot still applies, but the
     // pane is NOT yanked back to Memory.
@@ -146,7 +141,7 @@ fn test_toggle_state_applies_view() {
         },
     });
     assert!(
-        !app.memory_toggles.auto_memory,
+        !app.memory.toggles().auto_memory,
         "auto-memory applied on dismissal"
     );
     assert_eq!(
@@ -156,11 +151,7 @@ fn test_toggle_state_applies_view() {
     );
 }
 
-/// A list refresh (MemoryListResult) reopens the pane ONLY when the user
-/// is still on it. A late list response arriving after the user dismissed
-/// the pane must not yank them back — the data still lands (the next
-/// /memory open reads it). Pins the dismissal-respect guard on the list
-/// path so a later refactor cannot drop it.
+/// A list refresh updates memory data without changing the active pane.
 #[test]
 fn test_memory_list_respects_dismissal() {
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
@@ -178,7 +169,7 @@ fn test_memory_list_respects_dismissal() {
     });
     assert_eq!(app.pane, Pane::Memory, "pane stays open on active refresh");
     assert!(
-        app.memory_entries.iter().any(|e| e.topic == "build-gate"),
+        app.memory.entries().iter().any(|e| e.topic == "build-gate"),
         "list entry populated"
     );
     // Dismissed (pane moved away): the data still lands, but the pane is
@@ -200,9 +191,32 @@ fn test_memory_list_respects_dismissal() {
         "late list does not yank back a dismissed pane"
     );
     assert!(
-        app.memory_entries.iter().any(|e| e.topic == "build-gate"),
+        app.memory.entries().iter().any(|e| e.topic == "build-gate"),
         "list data still lands on dismissal"
     );
+}
+
+#[test]
+fn test_pane_shows_command_result() {
+    use houyicoder_protocol::envelope::RequestId;
+    use houyicoder_protocol::frontend::memory::MemoryDetail;
+
+    let mut app = crate::composition::app();
+    app.pane = Pane::Memory;
+    app.handle_agent_message(AgentMessage::MemoryShowResult {
+        req_id: RequestId(9),
+        entry: Some(MemoryDetail {
+            key: "build-gate".into(),
+            content: "make check stays green".into(),
+            source: "project".into(),
+            description: "verification".into(),
+            mtime_secs: 0,
+        }),
+    });
+    assert!(app.transcript.iter().any(|line| matches!(
+        line,
+        crate::records::TranscriptLine::System(text) if text.contains("build-gate")
+    )));
 }
 
 /// Equal adjacent memory events render one notice.
@@ -225,7 +239,9 @@ fn test_memory_notice_once() {
     let notices = app
         .transcript
         .iter()
-        .filter(|line| matches!(line, TranscriptLine::System(text) if text == "Saved 3 memories"))
+        .filter(|line| {
+            matches!(line, TranscriptLine::System(text) if text.starts_with("Saved 3 memories"))
+        })
         .count();
     assert_eq!(notices, 1);
     let out = crate::test_support::render_text(&app, 80, 24);
@@ -234,14 +250,14 @@ fn test_memory_notice_once() {
         "extract verb + plural noun should render: {out}"
     );
 
-    // Consolidated, singular: "Improved 1 memory".
+    // Consolidation reports touches, not resulting entry count.
     app.handle_agent_message(AgentMessage::MemorySaved {
         count: 1,
         kind: MemorySavedKind::Consolidated,
     });
     let out = crate::test_support::render_text(&app, 80, 24);
     assert!(
-        out.contains("Improved 1 memory"),
-        "dream verb + singular noun should render: {out}"
+        out.contains("Consolidated 1 memory change"),
+        "consolidation touch count should render: {out}"
     );
 }

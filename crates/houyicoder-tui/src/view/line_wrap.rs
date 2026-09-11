@@ -90,12 +90,6 @@ pub fn wrap_line(text: &str, avail: usize) -> Vec<String> {
     }
 }
 
-/// Trim only trailing ASCII spaces (not internal, not leading) so a wrapped
-/// row does not end in a space that would waste the wrap point.
-fn trim_trailing(s: &str) -> String {
-    s.trim_end_matches(' ').to_string()
-}
-
 /// Width-wrap a plain-text block the way a single Ink Text node wraps a user
 /// prompt: prefix_first (the angle-bracket lead) is prepended to the first
 /// row only; wrapped continuation rows hang at the prefix width so they align
@@ -421,17 +415,12 @@ mod tests {
         );
     }
 
-    /// A line with leading indentation wider than avail drops the excess
-    /// spaces instead of producing a phantom empty row. Without the fix
-    /// "        self" (8-space indent) at avail 5 produced ["", "self"] —
-    /// an empty first row (spaces trimmed by trim_trailing) then "self".
-    /// The fix skips a flush that trims to empty, so the result is
-    /// ["self"] — no phantom blank, no premature break.
+    /// Leading indentation wider than the available width is discarded
+    /// without emitting an empty row.
     #[test]
     fn test_leading_spaces_wider_dropped() {
         let rows = wrap_line("        self", 5);
         assert_eq!(rows, vec!["self".to_string()]);
-        // No empty first row.
         assert!(
             !rows[0].is_empty(),
             "leading spaces must not produce an empty row: {rows:?}"

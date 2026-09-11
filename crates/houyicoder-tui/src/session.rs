@@ -603,7 +603,10 @@ async fn drive_client(
                         let _send = agent_tx.send(AgentMessage::MemoryListResult { entries });
                     }
                     ResponsePayload::MemoryShow(entry) => {
-                        let _send = agent_tx.send(AgentMessage::MemoryShowResult { entry });
+                        let _send = agent_tx.send(AgentMessage::MemoryShowResult {
+                            req_id: resp.req_id,
+                            entry,
+                        });
                     }
                     ResponsePayload::ToggleState(state) => {
                         let _send =
