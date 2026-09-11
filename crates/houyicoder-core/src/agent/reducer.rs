@@ -1,5 +1,5 @@
 //! Tool-output reducer: a per-tool reduction pass that shrinks a large tool
-//! result before it is externalized to the CAS, so the served view carries a
+//! result before it is externalized to the CAS, so the assembled context carries a
 //! compacted form + a block_ref pointer (the raw stays retrievable). The
 //! never-worse guard pins the contract: a reduced output never emits more
 //! than the raw (a filter that would inflate — pretty-printing compact JSON,
@@ -30,7 +30,7 @@ pub struct ReduceCtx {
 }
 
 /// A reduced tool output. The text field is the (possibly compacted) form the
-/// served view carries; data_tag marks it as untrusted data; reduced is true
+/// assembled context carries; data_tag marks it as untrusted data; reduced is true
 /// when the text is smaller than the raw (the never-worse guard may flip
 /// this back to the raw).
 #[derive(Debug, Clone)]
@@ -73,7 +73,7 @@ pub fn never_worse<'a>(raw: &'a str, filtered: &'a str) -> &'a str {
 }
 
 /// A coarse token estimate (bytes/4) — the guard only needs a consistent
-/// ordering between raw + filtered, not a tiktoken-exact count. The served-
+/// ordering between raw + filtered, not a tiktoken-exact count. The assembled-context
 /// view tokenizer is the source of truth for billing; this is the reducer's
 /// local floor.
 fn estimate_tokens(s: &str) -> usize {

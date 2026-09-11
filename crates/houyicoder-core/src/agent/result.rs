@@ -78,7 +78,7 @@ pub enum RunError {
     MaxTurnsExceeded {
         turns: u32,
     },
-    /// The served view exceeded the context window after bounded compress
+    /// The assembled context exceeded the context window after bounded compress
     /// retries. Fail-closed: the session is NOT bricked (the raw log is
     /// intact), but the loop stops to avoid hammering the provider with
     /// oversized requests. The caller surfaces a user choice (rewind to
@@ -87,7 +87,7 @@ pub enum RunError {
     /// When the overflow came from a provider ContextOverflow error, the
     /// enforced_limit is the real window the provider named (already
     /// recorded for the catalog via record_learned_context_window). It is
-    /// None on the pre-flight path where the served view exceeded the
+    /// None on the pre-flight path where the assembled context exceeded the
     /// threshold before a request was sent. Surfacing it lets the caller
     /// tell the user the real limit rather than only the retry count.
     ContextOverflowBounded {

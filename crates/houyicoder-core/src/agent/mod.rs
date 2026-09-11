@@ -118,9 +118,10 @@ pub struct Runner {
     /// impl backed by the loaded ModelSection). None on the stub path; the
     /// chain then stops at the in-session pick + built-in default.
     effort_resolver: Option<Arc<dyn EffortResolver>>,
-    /// Composes the served view per turn: the assembled system prompt + the
-    /// projected message history. The loop calls build() each turn so the
-    /// served view and the /context breakdown share one source.
+    /// Composes the assembled context per turn: the assembled system prompt +
+    /// the projected message history. The loop calls build_for_turn() each
+    /// turn so the assembled context and the /context breakdown share one
+    /// source.
     context_builder: ContextBuilder,
     /// Optional handlers grouped by event domain. The runner remains
     /// independent of frontend and multi-agent delivery concerns.

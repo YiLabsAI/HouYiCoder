@@ -1,13 +1,13 @@
 //! The compaction plan types: how a session's events sit in the active
 //! context view. The plan is view-level — the raw log is never mutated,
-//! only the served window moves. Split from lib.rs so the crate root
+//! only the context window moves. Split from lib.rs so the crate root
 //! stays under the file-size gate.
 
 use crate::{CheckpointId, EventId, SessionId, SessionLogEntry};
 use serde::{Deserialize, Serialize};
 
 /// How an event sits in the active context view. The plan is view-level: the
-/// raw log is never mutated, only the served window moves.
+/// raw log is never mutated, only the context window moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Disposition {
     /// In the active view verbatim.
@@ -40,7 +40,7 @@ pub struct TurnGroup {
 
 /// A compaction plan: which turns are verbatim / summarized / referenced in
 /// the active view, plus the summary text. The raw log is untouched; applying
-/// the plan to a replay produces the served window. The plan is per turn
+/// the plan to a replay produces the context window. The plan is per turn
 /// group (one disposition per atomic API round), not per event: a per-event
 /// plan could express an illegal split of thinking from its tool_use, which
 /// the API rejects — the group makes that split unexpressable.
@@ -58,15 +58,15 @@ pub struct CheckpointManifest {
     pub ts: u64,
 }
 
-/// A snapshot of the served context window for a session. The events field
+/// A snapshot of the assembled context for a session. The events field
 /// is the full replay (raw log is never mutated). When a checkpoint exists,
 /// the manifest carries the per-turn-group Disposition plan; the caller
-/// applies it to produce the served view (Verbatim kept, Summarized folded,
+/// applies it to produce the assembled context (Verbatim kept, Summarized folded,
 /// Referenced replaced). No manifest means full replay (no plan applied).
 #[derive(Debug, Clone)]
 pub struct ContextSnapshot {
     pub session: SessionId,
-    /// Events in the served window (full replay; the manifest projects them).
+    /// Events in the context window (full replay; the manifest projects them).
     pub events: Vec<SessionLogEntry>,
     /// The most recent checkpoint, if any compaction has run.
     pub last_checkpoint: Option<CheckpointId>,
@@ -74,6 +74,6 @@ pub struct ContextSnapshot {
     pub rewind_points: Vec<CheckpointId>,
     /// The latest checkpoint manifest, if one exists. None when no compaction
     /// has run (full replay). The caller applies this to the events to produce
-    /// the served view.
+    /// the assembled context.
     pub manifest: Option<CheckpointManifest>,
 }

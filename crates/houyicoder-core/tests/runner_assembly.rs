@@ -1,14 +1,14 @@
-//! ContextBuilder wiring: when RunnerConfig.instructions is empty, the served
-//! system prompt is the assembled one (identity + project-context walk-up +
-//! tool docs + env), not a thin static string. A non-empty instructions
-//! overrides the assembled prompt verbatim. The served system prompt is
-//! the assembled one (identity + project-context walk-up + tool docs +
-//! env), not a thin static string; the thin static default is dropped.
+//! Runner assembly: how Runner builds the provider request from config +
+//! event log + manifest + cache policy.
 //!
-//! Also verifies the loop uses served.messages from build(): on turn 2, the
-//! input sent to the provider must contain the turn 1 events (user, assistant,
-//! tool result), proving the event log is re-projected through build() each
-//! turn rather than held in a stale buffer.
+//! When RunnerConfig.instructions is empty, the assembled system prompt is
+//! the full one (identity + project-context walk-up + tool docs + env), not
+//! a thin static string. A non-empty instructions is appended to the
+//! assembled prompt so the byte-stable prefix survives for prompt-cache.
+//!
+//! The loop re-projects the event log through build_for_turn() each turn:
+//! on turn 2, the input sent to the provider must contain the turn 1
+//! events (user, assistant, tool result), not a stale in-memory buffer.
 
 use std::sync::{Arc, Mutex};
 
@@ -31,7 +31,7 @@ use houyicoder_core::agent::{
 
 /// A stub provider that records the instructions string from each request
 /// before returning a canned response. Asserts which system prompt the loop
-/// actually served, not just what the config held.
+/// actually assembled, not just what the config held.
 struct RecordingProvider {
     response: CompletionResponse,
     seen: Arc<Mutex<Vec<String>>>,
@@ -106,7 +106,7 @@ async fn test_empty_uses_assembled_prompt() {
         !captured.is_empty(),
         "the loop must have called the provider"
     );
-    // The assembled identity section is served when instructions is empty,
+    // The identity section keeps the full assembly when instructions is empty,
     // not the old thin default string.
     assert!(
         captured[0].contains("You are houyicoder, an AI coding assistant"),
@@ -149,7 +149,7 @@ async fn test_nonempty_overrides_assembled() {
 
 /// A provider that returns scripted responses in sequence while recording the
 /// input items from each request. Used to verify the loop re-projects the
-/// event log through build() each turn (served.messages carries prior turns).
+/// event log through build() each turn (assembled.messages carries prior turns).
 struct InputRecordingProvider {
     responses: Mutex<std::vec::IntoIter<CompletionResponse>>,
     seen: Arc<Mutex<Vec<Vec<InputItem>>>>,
@@ -184,7 +184,7 @@ impl ModelProvider for InputRecordingProvider {
 }
 
 #[tokio::test]
-async fn test_loop_uses_served_messages() {
+async fn test_loop_uses_assembled_messages() {
     // On turn 2, the input sent to the provider must contain the turn 1
     // events (user message + assistant with tool call + tool result). This
     // proves the loop re-projects the event log through build() each turn
@@ -267,9 +267,9 @@ async fn test_loop_uses_served_messages() {
     assert!(matches!(&captured[1][2], InputItem::ToolResult { call_id, .. } if call_id == "c1"));
 }
 
-/// E2E: the loop serves the manifest-projected view (summary + verbatim
+/// The loop assembles the manifest-projected view (summary + verbatim
 /// tail + Referenced output rehydrated from the CAS), not the raw event log.
-/// This catches wiring bugs before the Compress stage writes checkpoints at runtime.
+/// This catches assembly bugs before the Compress stage writes checkpoints at runtime.
 #[tokio::test]
 async fn test_loop_applies_manifest() {
     let session = SessionId::new();
@@ -326,7 +326,7 @@ async fn test_loop_applies_manifest() {
 
     let captured = seen.lock().expect("mutex").clone();
     assert_eq!(captured.len(), 1, "one model call");
-    assert_manifest_served(&captured[0], &summary);
+    assert_manifest_assembled(&captured[0], &summary);
 }
 
 /// Seed the backend with initial events and return them for manifest building.
@@ -375,26 +375,26 @@ async fn seed_manifest_events(
     events
 }
 
-/// Assert the served input carries the manifest-projected view: (a) the
+/// Assert the assembled input carries the manifest-projected view: (a) the
 /// summary is present, not the raw Summarized user text; (b) the verbatim
 /// tail is present; (c) the Summarized large tool result is dropped with its
 /// group (not kept via a Referenced override — that is the Isolate stage's
 /// job, not Compress); (d) the new UserInput (Verbatim default) is present.
-fn assert_manifest_served(input: &[InputItem], summary: &str) {
+fn assert_manifest_assembled(input: &[InputItem], summary: &str) {
     let has_summary = input
         .iter()
         .any(|i| matches!(i, InputItem::User { content } if content == summary));
-    assert!(has_summary, "summary must be in the served input");
+    assert!(has_summary, "summary must be in the assembled input");
 
     let has_raw = input
         .iter()
         .any(|i| matches!(i, InputItem::User { content } if content == "original task"));
-    assert!(!has_raw, "raw Summarized user text must not be served");
+    assert!(!has_raw, "raw Summarized user text must not be assembled");
 
     let has_tail = input
         .iter()
         .any(|i| matches!(i, InputItem::Assistant { content, .. } if content == "latest response"));
-    assert!(has_tail, "verbatim tail must be in the served input");
+    assert!(has_tail, "verbatim tail must be in the assembled input");
 
     // The large tool result c1 sits in the Summarized span (before the
     // verbatim boundary). It is dropped with its group — Referenced is no
@@ -417,7 +417,7 @@ fn assert_manifest_served(input: &[InputItem], summary: &str) {
 
 /// The Auto cache policy places its three breakpoints on the live request the
 /// provider receives (system static prefix, last tool def, latest user message).
-/// Pins the policy-application wiring so a later refactor cannot drop it.
+/// Pins the policy-application path so a later refactor cannot drop it.
 #[tokio::test]
 async fn test_cache_policy_applied_live() {
     use houyicoder_protocol::cache_policy::{BreakpointKind, CacheHint, CacheTtl};

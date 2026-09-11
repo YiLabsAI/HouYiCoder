@@ -141,7 +141,7 @@ pub enum SessionEvent {
     /// demand when the model calls the Skill tool, so the listing stays
     /// terse (progressive disclosure). The checkpoint planner disposes this
     /// as Summarized so compaction folds it out of the live projection;
-    /// the turn-entry step scans the served view for a surviving listing
+    /// the turn-entry step scans the assembled context for a surviving listing
     /// and skips when one exists, so the listing re-surfaces after a
     /// compaction with no provider-side clear — the same natural-reset
     /// pattern memory-recall uses.

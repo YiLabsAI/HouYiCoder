@@ -269,12 +269,12 @@ async fn test_cancelled_records_no_usage() {
 
 /// A provider that omits usage entirely (some OpenAI-compat streams do not
 /// honor stream_options.include_usage) must not leave the turn's cost at a
-/// silent zero: the locally-served token count substitutes, so the status
+/// silent zero: the locally-estimated token count substitutes, so the status
 /// gauge's window footprint and the durable TurnUsage event both read the
 /// real number. Before the fallback the status bar read 0% context forever
 /// while /context (tiktoken) showed real numbers.
 #[tokio::test]
-async fn test_omitted_usage_served_fallback() {
+async fn test_omitted_usage_estimate_fallback() {
     let p = std::sync::Arc::new(ScriptRawProvider::new(vec![vec![
         LlmEvent::StepStart { index: 0 },
         LlmEvent::TextStart { id: "t1".into() },
@@ -300,7 +300,7 @@ async fn test_omitted_usage_served_fallback() {
         SessionEvent::TurnUsage { input_tokens, .. } => {
             assert!(
                 *input_tokens > 0,
-                "omitted usage must fall back to the served token count, got {input_tokens}"
+                "omitted usage must fall back to the estimated token count, got {input_tokens}"
             );
         }
         _ => panic!("not a TurnUsage event"),
@@ -309,7 +309,7 @@ async fn test_omitted_usage_served_fallback() {
     let snap = runner.status_snapshot();
     assert!(
         snap.last_input_tokens > 0,
-        "status snapshot last_input_tokens must read the served fallback, got {}",
+        "status snapshot last_input_tokens must read the estimate fallback, got {}",
         snap.last_input_tokens
     );
 }

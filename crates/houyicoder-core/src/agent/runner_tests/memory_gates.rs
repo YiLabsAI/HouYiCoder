@@ -1,6 +1,6 @@
 //! Gate tests for the memory-recall path: the cumulative byte cap and the
 //! auto_memory toggle. Call inject_memory_recall directly (no run) so the
-//! served view is never tokenized — the gates read byte counts and a bool,
+//! assembled context is never tokenized — the gates read byte counts and a bool,
 //! not tokens, and the tests stay sub-millisecond under any tokenizer.
 
 use super::*;
@@ -69,8 +69,8 @@ impl ModelProvider for StubGateProvider {
 /// The cumulative byte cap skips recall once the session has surfaced enough
 /// memory. A pre-populated memory-recall event over the 60KB cap means the
 /// next inject does not call recall, so no new memory-recall event is
-/// appended. Calls inject_memory_recall directly (no run) so the served
-/// view is never tokenized — the gate reads byte counts, not tokens.
+/// appended. Calls inject_memory_recall directly (no run) — the gate reads
+/// byte counts, not tokens.
 #[tokio::test]
 async fn test_byte_cap_skips_recall() {
     let provider: Arc<dyn ModelProvider> = Arc::new(StubGateProvider);

@@ -263,16 +263,14 @@ impl Server {
             }
             houyicoder_protocol::frontend::FrontendRequest::Context => {
                 let snap = self.runner.status_snapshot();
-                // When no turn has run yet (context_served() is None), build a
-                // prospective view — what the model would see on the first turn
-                // (system prompt + tools, messages = 0) — so /context is never
-                // empty on a fresh session. Computed synchronously at
-                // command time.
-                let served = self
+                // When no turn has run yet (last_measurement() is None),
+                // build a prospective measurement so /context is never empty
+                // on a fresh session.
+                let measurement = self
                     .runner
-                    .context_served()
-                    .unwrap_or_else(|| self.runner.context_prospective());
-                let mut bd = served.breakdown(&snap.model, snap.context_window);
+                    .last_measurement()
+                    .unwrap_or_else(|| self.runner.prospective_measurement());
+                let mut bd = measurement.breakdown(&snap.model, snap.context_window);
                 bd.compact_summary = self.runner.compact_summary(self.session).await;
                 // Compact buffer: summary text token count, injected as a
                 // category so the /context grid shows it separately.
@@ -295,11 +293,11 @@ impl Server {
                     );
                 }
                 // Cache prefix = System prompt + Tools section tokens.
-                let prefix: u32 = served
+                let prefix: u32 = measurement
                     .section(houyicoder_core::agent::SectionKind::SystemPrompt)
                     .map(|s| s.tokens)
                     .unwrap_or(0)
-                    + served
+                    + measurement
                         .section(houyicoder_core::agent::SectionKind::Tools)
                         .map(|s| s.tokens)
                         .unwrap_or(0);
@@ -320,9 +318,9 @@ impl Server {
                 // PostCompact, then reply with the outcome. The runner fires
                 // the hooks + runs marker extraction internally so the manual
                 // path and the auto overflow path share one sequence. The
-                // served view picks up the manifest on the next turn —
+                // assembled context picks up the manifest on the next turn —
                 // compaction does not reduce the in-flight context
-                // immediately, only the next served window. An error surfaces
+                // immediately, only the next context window. An error surfaces
                 // as a ResponsePayload::Error so the host renders it rather
                 // than hanging on the req_id.
                 match self.runner.compact(self.session).await {

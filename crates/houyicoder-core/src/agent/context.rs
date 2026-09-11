@@ -62,16 +62,23 @@ impl SectionKind {
     }
 }
 
-/// Provider-facing context with pre-flight section measurements.
+/// One context assembly's product: the model-facing context (system +
+/// messages) and its pre-flight measurement.
 #[derive(Debug, Clone, Default)]
-pub struct ServedView {
+pub struct AssembledContext {
     pub system: String,
-    pub tools: Vec<String>,
     pub messages: Vec<InputItem>,
+    pub measurement: ContextMeasurement,
+}
+
+/// Pre-flight section measurements of an assembled context.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContextMeasurement {
+    pub tool_names: Vec<String>,
     pub sections: Vec<Section>,
 }
 
-impl ServedView {
+impl ContextMeasurement {
     /// Total tokens across all context sections.
     pub fn token_count(&self) -> u32 {
         self.sections.iter().map(|s| s.tokens).sum()
@@ -194,8 +201,9 @@ pub struct ContextBuilder {
     tokenizer: Tokenizer,
     /// Runtime cwd shared with worktree switching.
     cwd: Arc<RwLock<PathBuf>>,
-    /// Last model context retained for /context inspection.
-    last_served: Mutex<Option<ServedView>>,
+    /// Last turn's measurement, cached for /context. Only build_for_turn
+    /// writes; build() does not.
+    last_measurement: Mutex<Option<ContextMeasurement>>,
     /// Retention policy shared with cached-prefix liveness.
     retention_policy: Mutex<Option<Arc<dyn retention::RetentionPolicy>>>,
     /// The agent directory section (deterministic list of registered agent
@@ -211,7 +219,7 @@ impl ContextBuilder {
         Self {
             tokenizer: Tokenizer::new(),
             cwd: Arc::new(RwLock::new(cwd)),
-            last_served: Mutex::new(None),
+            last_measurement: Mutex::new(None),
             retention_policy: Mutex::new(None),
             agent_directory: Mutex::new(None),
         }
@@ -247,12 +255,12 @@ impl ContextBuilder {
     }
 
     /// Switch the cwd at runtime (worktree enter/exit). Writes the cwd and
-    /// clears the cached served view so the next build recomputes the system
+    /// clears the cached measurement so the next build recomputes the system
     /// prompt with the new project context (AGENTS.md walk-up). Clears the
     /// cwd-dependent system-prompt + memory-file caches on worktree entry.
     pub fn switch_cwd(&self, cwd: PathBuf) {
         *self.cwd.write().expect("cwd lock") = cwd;
-        if let Ok(mut g) = self.last_served.lock() {
+        if let Ok(mut g) = self.last_measurement.lock() {
             *g = None;
         }
     }
@@ -264,23 +272,40 @@ impl ContextBuilder {
         Arc::clone(&self.cwd)
     }
 
-    /// Build a served view without a checkpoint manifest.
-    pub fn build(&self, events: &[SessionLogEntry]) -> ServedView {
-        self.build_with_manifest(events, None, None, &[], None)
+    /// Bare assembly: no checkpoint selection, no tool measurement, no
+    /// memory index. Does not cache. Used by prospective_measurement and
+    /// tests.
+    pub fn build(&self, events: &[SessionLogEntry]) -> AssembledContext {
+        self.assemble(events, None, None, &[], None)
     }
 
-    /// Build the provider-facing view and its context breakdown.
-    ///
-    /// The manifest selects transcript events before assembly. Recalled memory
-    /// remains in the message stream so the system prompt stays cache-stable.
-    pub fn build_with_manifest(
+    /// The turn path: select events per the checkpoint manifest, assemble,
+    /// measure real tool defs and the memory index, and cache the
+    /// measurement. Recalled memory stays in the message stream so the
+    /// system prompt stays cache-stable.
+    pub fn build_for_turn(
         &self,
         events: &[SessionLogEntry],
         manifest: Option<&CheckpointManifest>,
         backend: Option<&dyn houyicoder_context::ContextBackend>,
         tool_defs: &[houyicoder_protocol::llm::ToolDef],
         memory_index: Option<&str>,
-    ) -> ServedView {
+    ) -> AssembledContext {
+        let assembled = self.assemble(events, manifest, backend, tool_defs, memory_index);
+        if let Ok(mut g) = self.last_measurement.lock() {
+            *g = Some(assembled.measurement.clone());
+        }
+        assembled
+    }
+
+    fn assemble(
+        &self,
+        events: &[SessionLogEntry],
+        manifest: Option<&CheckpointManifest>,
+        backend: Option<&dyn houyicoder_context::ContextBackend>,
+        tool_defs: &[houyicoder_protocol::llm::ToolDef],
+        memory_index: Option<&str>,
+    ) -> AssembledContext {
         let filtered = match manifest {
             Some(manifest) => selection::apply_manifest(events, manifest, backend),
             None => events.to_vec(),
@@ -372,17 +397,15 @@ impl ContextBuilder {
             );
         }
 
-        let served = ServedView {
-            system: prompt.text,
-            tools: tool_defs.iter().map(|td| td.name.clone()).collect(),
-            messages,
+        let measurement = ContextMeasurement {
+            tool_names: tool_defs.iter().map(|td| td.name.clone()).collect(),
             sections,
         };
-        // /context must report the exact view sent to the provider.
-        if let Ok(mut g) = self.last_served.lock() {
-            *g = Some(served.clone());
+        AssembledContext {
+            system: prompt.text,
+            messages,
+            measurement,
         }
-        served
     }
 
     fn assemble_messages(
@@ -405,10 +428,11 @@ impl ContextBuilder {
         turn_group::assemble_model_input_with(events, backend, &*policy, now_ms)
     }
 
-    /// The most recently built served view, so the host can render /context
-    /// from the exact view the model saw. None before the first turn builds one.
-    pub fn last_served(&self) -> Option<ServedView> {
-        self.last_served.lock().ok().and_then(|g| g.clone())
+    /// The measurement of the most recent turn. None before the first turn.
+    /// Not the exact provider request — call.rs appends configured
+    /// instructions to the system prompt after assembly.
+    pub fn last_measurement(&self) -> Option<ContextMeasurement> {
+        self.last_measurement.lock().ok().and_then(|g| g.clone())
     }
 
     /// The tokenizer used for section sizing (shared with /context).

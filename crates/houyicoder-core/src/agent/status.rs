@@ -384,22 +384,18 @@ impl crate::agent::Runner {
         next
     }
 
-    /// The most recently built served view (cached by ContextBuilder after each
-    /// model call), so /context renders the real per-section breakdown the model
-    /// saw — not a stub. None before the first turn or when no view has been
-    /// built this process; the host falls back to the stub path then.
-    pub fn context_served(&self) -> Option<crate::agent::ServedView> {
-        self.context_builder.last_served()
+    /// The measurement of the most recent turn. None before the first turn;
+    /// the host falls back to prospective_measurement() then.
+    pub fn last_measurement(&self) -> Option<crate::agent::ContextMeasurement> {
+        self.context_builder.last_measurement()
     }
 
-    /// A prospective served view — what the model would see on the first turn
-    /// (system prompt + tools + memory sections, messages = 0). Used when
-    /// context_served() is None (fresh session, no turn run yet) so /context is
-    /// never empty. Builds with an empty event slice: messages section is 0,
-    /// memory recall uses an empty query (no entries surfaced), the system
-    /// prompt and tools sections carry their real token counts.
-    pub fn context_prospective(&self) -> crate::agent::ServedView {
-        self.context_builder.build(&[])
+    /// A prospective measurement — what the context would measure on the
+    /// first turn (system prompt + tools, messages = 0). Used when
+    /// last_measurement() is None so /context is never empty on a fresh
+    /// session.
+    pub fn prospective_measurement(&self) -> crate::agent::ContextMeasurement {
+        self.context_builder.build(&[]).measurement
     }
 
     /// Wire the undo stack + snapshot store for recoverable destructive ops.

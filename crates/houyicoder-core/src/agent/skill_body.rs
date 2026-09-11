@@ -1,6 +1,7 @@
 //! Revive invoked skill bodies after a compaction. SkillBody events are
-//! Summarized (folded out of the served view post-compact) and excluded
-//! from the folded summary span, so a compaction drops them from the view.
+//! Summarized (folded out of the assembled context post-compact) and excluded
+//! from the folded summary span, so a compaction drops them from the
+//! assembled context.
 //! This step re-appends the most-recent bodies from the raw log, bounded
 //! by a per-agent byte budget (most-recent-first), so the model retains
 //! invoked skill directives across a compaction boundary.
@@ -86,8 +87,8 @@ pub(crate) fn frame_untrusted_body(skill_name: &str, content: &str, untrusted: b
 }
 
 impl Runner {
-    /// Re-append invoked skill bodies a compaction folded out of the served
-    /// view. No-op when a SkillBody already survives in the view. When none
+    /// Re-append invoked skill bodies a compaction folded out of the assembled
+    /// context. No-op when a SkillBody already survives. When none
     /// survives, the most-recent body per skill (dedup by name, R23g) is
     /// re-appended within a per-skill + per-agent byte budget (most-recent-
     /// first head-truncate). The re-appended events land after the
@@ -251,7 +252,7 @@ mod tests {
         }
     }
 
-    /// When a SkillBody already survives in the view, inject is a no-op: the
+    /// When a SkillBody already survives, inject is a no-op: the
     /// event count does not grow (the model already sees the body).
     #[tokio::test]
     async fn test_inject_noop_when_survives() {
@@ -303,7 +304,7 @@ mod tests {
         );
     }
 
-    /// Post-compact (a manifest folds the SkillBody out of the served view),
+    /// Post-compact (a manifest folds the SkillBody out of the assembled context),
     /// inject re-appends the most-recent body so the model retains the
     /// directive across the boundary. Pins the durable-survival behavior:
     /// an invoked skill's guidance is not lost to a compaction.
@@ -361,7 +362,7 @@ mod tests {
             filtered
                 .iter()
                 .all(|e| !matches!(e.event, SessionEvent::SkillBody { .. })),
-            "manifest folded the SkillBody out of the served view"
+            "manifest folded the SkillBody out of the assembled context"
         );
         runner.inject_skill_body(session).await.unwrap();
         let view_after = runner.store().current_view(session).await.unwrap();

@@ -8,8 +8,8 @@ pub use super::backbone::{
 };
 pub use super::conditional_activation::{ConditionalActivation, ConditionalSkillActivator};
 pub use super::context::{
-    CategoryBreakdown, ContextBreakdown, ContextBuilder, GridSquare, Section, SectionKind,
-    ServedView, Tokenizer, build_grid, stub_breakdown,
+    AssembledContext, CategoryBreakdown, ContextBreakdown, ContextBuilder, ContextMeasurement,
+    GridSquare, Section, SectionKind, Tokenizer, build_grid, stub_breakdown,
 };
 pub use super::diff::unified_diff;
 pub use super::hook::HookError;

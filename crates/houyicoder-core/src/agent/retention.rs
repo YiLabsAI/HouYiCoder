@@ -9,7 +9,7 @@
 //!   result was produced and whether a later result superseded it.
 //! - isolate_large_output (in append.rs): serialize a tool output, store it
 //!   via block_put, and return a block_ref marker (with an inline preview)
-//!   so the raw large content is not in the served view. A structured result
+//!   so the raw large content is not in the assembled context. A structured result
 //!   externalizes only its largest string field, keeping the envelope's
 //!   other keys inline. Fail-closed: no backend or block_put failure keeps
 //!   the original output (no content loss, no dangling marker).
@@ -20,7 +20,7 @@
 //! (same hash not rewritten).
 //!
 //! The 3-tier policy replaces the prior unconditional materialize, which
-//! re-read every block_ref into the view — zero served-view savings, the CAS
+//! re-read every block_ref into the view — zero assembled-context savings, the CAS
 //! stored bytes for nothing. Summarize and evict skip the block_get so the
 //! verbatim tail stays small; only a recent, active result pays the
 //! retrieval. A future policy can add cache-liveness (clear aggressively

@@ -265,9 +265,9 @@ async fn test_auto_failure_turn_suppress() {
 }
 
 /// A successful compact clears the stale last_turn_delta so
-/// effective_served_tokens does not floor to the pre-compact provider
-/// observation on the post-compact view. Pins the fix: after a mid-turn
-/// compaction, the served view shrinks but last_turn_delta held the
+/// conservative_input_tokens does not floor to the pre-compact provider
+/// observation on the post-compact context. Pins the fix: after a mid-turn
+/// compaction, the context shrinks but last_turn_delta held the
 /// pre-compact input tokens, so max(estimate, stale) re-tripped the gate.
 #[tokio::test]
 async fn test_compact_clears_stale_delta() {
@@ -298,7 +298,7 @@ async fn test_compact_clears_stale_delta() {
             .unwrap();
     }
     // Simulate a prior provider turn that reported input_tokens (sets
-    // last_turn_delta — the stale floor effective_served_tokens uses).
+    // last_turn_delta — the stale floor conservative_input_tokens uses).
     {
         let usage = Usage {
             input_tokens: 180_000,

@@ -6,7 +6,7 @@
 //! disclosure: the attachment carries only descriptions; the full body
 //! loads on demand when the model calls the Skill tool.
 //!
-//! The step scans the served view for a surviving listing event and skips
+//! The step scans the assembled context for a surviving listing event and skips
 //! when one exists. Compaction gives a listing the Summarized disposition,
 //! so a folded listing drops out of the view — the scan naturally empties
 //! and the listing re-surfaces after a compaction with no provider-side
@@ -151,7 +151,7 @@ fn listing_content_hash(descs: &[SkillDescriptor]) -> u64 {
 
 impl Runner {
     /// Append a skill-discovery listing attachment for this turn when no
-    /// up-to-date listing survives in the served view. The listing carries
+    /// up-to-date listing survives in the assembled context. The listing carries
     /// descriptions only (progressive disclosure); the Skill tool loads
     /// full bodies on demand. No-op when no registry is wired, when the
     /// registry has no model-invocable skills, or when a surviving listing's

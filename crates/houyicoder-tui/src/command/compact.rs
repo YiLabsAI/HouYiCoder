@@ -8,9 +8,9 @@ use crate::state::App;
 
 impl App {
     /// Handle the /compact slash command: refuse while a run is in flight so
-    /// compaction never races the live turn's served view (compacting mid-run
+    /// compaction never races the live turn's assembled context (compacting mid-run
     /// would corrupt the window the run is reading), then send the CompactQuery.
-    /// The served view picks up the manifest on the next turn, so /compact does
+    /// The assembled context picks up the manifest on the next turn, so /compact does
     /// not reduce the in-flight context immediately — a second /compact before
     /// the next turn sees the same content plus the first compact's output, so
     /// the "before" count grows. Push a "compacting..." system line so the user

@@ -339,7 +339,7 @@ impl Runner {
     /// ISOLATE_LARGE_OUTPUT_BYTES, externalize it to the CAS (block_put) and
     /// append a block_ref marker carrying an inline preview instead of the
     /// raw content. The raw stays in the CAS for on-demand materialize; the
-    /// served view carries a small pointer. Fail-closed: on no backend or
+    /// assembled context carries a small pointer. Fail-closed: on no backend or
     /// block_put failure, append the raw output (no content loss).
     /// Append a synthetic tool-call event: one minted by the loop rather
     /// than carried by a model response (the entitlement ask raised after
@@ -525,9 +525,9 @@ impl Runner {
     /// instructions), build + commit a CheckpointManifest, then fire
     /// PostCompact. The /compact command calls this. Returns the outcome
     /// (folded count, manifest id, pre/post token estimates) for the wire
-    /// reply. The served view picks up the manifest on the next turn's
-    /// build_with_manifest — compaction does not reduce the in-flight context
-    /// immediately, only the next served window.
+    /// reply. The assembled context picks up the manifest on the next turn's
+    /// build_for_turn — compaction does not reduce the in-flight context
+    /// immediately, only the next turn's window.
     pub async fn compact(
         &self,
         session: SessionId,

@@ -24,6 +24,6 @@ fn test_scales_to_million_window() {
 #[test]
 fn test_tiny_window_saturates() {
     // A 200-token window smaller than the reserve: threshold 0, compress
-    // trips on any non-empty served view.
+    // trips on any non-empty assembled context.
     assert_eq!(pre_flight_threshold(200, 8_000), 0);
 }

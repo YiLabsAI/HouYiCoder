@@ -9,7 +9,7 @@
 //! field), so the window resolves client-side: a [1m] suffix opts into the
 //! 1M window, the bare id falls to the conservative 200k default. The
 //! history is sized to sit between the two pre-flight thresholds (~179k and
-//! ~979k), so the same served view runs clean under the wide window and
+//! ~979k), so the same assembled context runs clean under the wide window and
 //! trips the ceiling under the narrow one - the differential proves the
 //! switch flipped the gate, not a change in the history.
 
@@ -166,7 +166,7 @@ async fn append_history(store: &SessionStore, session: SessionId) {
 }
 
 /// A model switch that shrinks the resolved window compacts the session on
-/// the next turn instead of overflowing: the same served view runs clean
+/// the next turn instead of overflowing: the same assembled context runs clean
 /// under the wide window (no checkpoint written), trips the narrow window's
 /// pre-flight threshold after the switch, compacts, and the turn still
 /// completes.

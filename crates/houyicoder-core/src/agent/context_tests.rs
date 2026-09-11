@@ -55,8 +55,8 @@ fn test_section_label_all_kinds() {
 }
 
 #[test]
-fn test_served_view_token_count() {
-    let v = ServedView {
+fn test_measurement_token_count() {
+    let m = ContextMeasurement {
         sections: vec![
             Section {
                 kind: SectionKind::SystemPrompt,
@@ -71,9 +71,9 @@ fn test_served_view_token_count() {
         ],
         ..Default::default()
     };
-    assert_eq!(v.token_count(), 150);
-    assert_eq!(v.section(SectionKind::Messages).unwrap().tokens, 50);
-    assert!(v.section(SectionKind::Tools).is_none());
+    assert_eq!(m.token_count(), 150);
+    assert_eq!(m.section(SectionKind::Messages).unwrap().tokens, 50);
+    assert!(m.section(SectionKind::Tools).is_none());
 }
 
 #[test]
@@ -95,10 +95,11 @@ fn test_builder_empty_log_system() {
     let v = b.build(&[]);
     assert!(v.messages.is_empty());
     assert!(!v.system.is_empty(), "system prompt must be non-empty");
-    assert!(v.tools.is_empty());
+    assert!(v.measurement.tool_names.is_empty());
     // Two sections: SystemPrompt + Messages.
-    assert_eq!(v.sections.len(), 2);
+    assert_eq!(v.measurement.sections.len(), 2);
     let sys = v
+        .measurement
         .section(SectionKind::SystemPrompt)
         .expect("system section");
     assert!(sys.tokens > 0, "system prompt must count > 0 tokens");
@@ -107,7 +108,10 @@ fn test_builder_empty_log_system() {
         "no project context row when no memory file"
     );
     assert!(sys.items.contains(&"Identity".to_string()));
-    assert_eq!(v.section(SectionKind::Messages).unwrap().tokens, 0);
+    assert_eq!(
+        v.measurement.section(SectionKind::Messages).unwrap().tokens,
+        0
+    );
 }
 
 #[test]
@@ -128,8 +132,9 @@ fn test_tool_schema_tokens_counted() {
             "required": ["command"]
         }),
     }];
-    let v = b.build_with_manifest(&[], None, None, &tool_defs, None);
+    let v = b.build_for_turn(&[], None, None, &tool_defs, None);
     let tools = v
+        .measurement
         .section(SectionKind::Tools)
         .expect("Tools section present");
     assert!(
@@ -139,10 +144,30 @@ fn test_tool_schema_tokens_counted() {
     );
     assert_eq!(tools.items, vec!["bash".to_string()]);
     assert!(
-        v.token_count() >= tools.tokens,
+        v.measurement.token_count() >= tools.tokens,
         "token_count includes tool tokens: total={} tools={}",
-        v.token_count(),
+        v.measurement.token_count(),
         tools.tokens
+    );
+    assert!(
+        b.last_measurement().is_some(),
+        "the turn path caches its measurement"
+    );
+}
+
+#[test]
+fn test_bare_build_skips_cache() {
+    // Bare assembly must leave the cache alone: a prospective /context on a
+    // fresh session must not masquerade as a served turn measurement.
+    let mut scratch = std::env::temp_dir();
+    scratch.push(format!("ctx-test-nocache-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let b = ContextBuilder::new().with_cwd(scratch);
+    let v = b.build(&[]);
+    assert!(!v.system.is_empty());
+    assert!(
+        b.last_measurement().is_none(),
+        "bare assembly must not populate last_measurement"
     );
 }
 
@@ -158,6 +183,7 @@ fn test_builder_injects_memory() {
     assert!(!v.system.is_empty());
     assert!(v.system.contains("Scratch Project"), "memory file injected");
     let sys = v
+        .measurement
         .section(SectionKind::SystemPrompt)
         .expect("system section");
     assert!(sys.tokens > 0);
@@ -188,6 +214,7 @@ fn test_memory_behavior_section_present() {
         "trusting-recall guidance present"
     );
     let sys = v
+        .measurement
         .section(SectionKind::SystemPrompt)
         .expect("system section");
     assert!(
@@ -301,6 +328,7 @@ fn test_context_partitions_recall_tokens() {
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let v = b.build(&events);
     let mem = v
+        .measurement
         .section(SectionKind::Memory)
         .expect("Memory section present when a memory-recall event is in the log");
     assert!(
@@ -325,15 +353,19 @@ fn test_context_partitions_recall_tokens() {
     // additive across pieces).
     let merged = format!("what is the build rule\n{mem_text}");
     let full_input = tok.count(&merged);
-    let messages_tokens = v.section(SectionKind::Messages).unwrap().tokens;
-    let sys_tokens = v.section(SectionKind::SystemPrompt).unwrap().tokens;
+    let messages_tokens = v.measurement.section(SectionKind::Messages).unwrap().tokens;
+    let sys_tokens = v
+        .measurement
+        .section(SectionKind::SystemPrompt)
+        .unwrap()
+        .tokens;
     assert_eq!(
         messages_tokens + mem.tokens,
         full_input,
         "memory must not be double-counted (Messages + Memory == full input)"
     );
     assert_eq!(
-        v.token_count(),
+        v.measurement.token_count(),
         sys_tokens + full_input,
         "total == system + full input, no memory inflation"
     );
@@ -374,6 +406,7 @@ fn test_skill_section_recomputed_projection() {
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let v = b.build(&events);
     let skill = v
+        .measurement
         .section(SectionKind::Skills)
         .expect("Skills section present when a listing event is in the log");
     assert!(
@@ -386,7 +419,7 @@ fn test_skill_section_recomputed_projection() {
     let tok = Tokenizer::new();
     let merged = format!("help me commit\n{listing_text}");
     let full_input = tok.count(&merged);
-    let messages_tokens = v.section(SectionKind::Messages).unwrap().tokens;
+    let messages_tokens = v.measurement.section(SectionKind::Messages).unwrap().tokens;
     assert_eq!(
         messages_tokens + skill.tokens,
         full_input,
@@ -441,14 +474,12 @@ fn test_stub_breakdown_renders_grid() {
 }
 
 #[test]
-fn test_served_view_breakdown_real() {
-    // The real /context breakdown derives from the served sections: one
-    // category per section kind, a trailing Free-space row, a grid, and the
-    // real per-section token counts (no chars/4 estimate).
-    let served = ServedView {
-        system: String::new(),
-        tools: Vec::new(),
-        messages: Vec::new(),
+fn test_measurement_breakdown_real() {
+    // The real /context breakdown derives from the measurement sections:
+    // one category per section kind, a trailing Free-space row, a grid,
+    // and the real per-section token counts (no chars/4 estimate).
+    let measurement = ContextMeasurement {
+        tool_names: Vec::new(),
         sections: vec![
             Section {
                 kind: SectionKind::SystemPrompt,
@@ -462,7 +493,7 @@ fn test_served_view_breakdown_real() {
             },
         ],
     };
-    let bd = served.breakdown("test", 200_000);
+    let bd = measurement.breakdown("test", 200_000);
     assert_eq!(bd.total_tokens, 31_800);
     assert_eq!(bd.context_window, 200_000);
     // Two section categories + one Free-space row.
@@ -479,17 +510,15 @@ fn test_served_view_breakdown_real() {
 #[test]
 fn test_build_empty_events_view() {
     // build(&[]) with no events is the fresh-session /context path
-    // (context_served() None → context_prospective() → build(&[])). It must
-    // produce a non-empty prospective view: system prompt + tools sections
-    // carry real token counts, the messages section is 0, free space is the
-    // remainder — never empty.
+    // (last_measurement() None → prospective_measurement() → build(&[])).
     let cb = ContextBuilder::new();
     let view = cb.build(&[]);
     assert!(
-        view.token_count() > 0,
+        view.measurement.token_count() > 0,
         "prospective view must have system prompt + tools tokens, not 0"
     );
     let messages = view
+        .measurement
         .sections
         .iter()
         .find(|s| s.kind == SectionKind::Messages)
@@ -498,9 +527,7 @@ fn test_build_empty_events_view() {
         messages.tokens, 0,
         "messages tokens must be 0 (no turn run)"
     );
-    // The breakdown is non-empty: categories include system prompt + tools +
-    // messages + free space, and the grid is built.
-    let bd = view.breakdown("test", 200_000);
+    let bd = view.measurement.breakdown("test", 200_000);
     assert!(
         bd.categories.len() >= 3,
         "prospective breakdown has system prompt + tools + messages + free space"
@@ -563,9 +590,11 @@ fn test_system_block_stable_turns() {
         "system prompt byte-stable across turns (event log grew but system did not)"
     );
     let sys1 = v1
+        .measurement
         .section(SectionKind::SystemPrompt)
         .expect("system section");
     let sys2 = v2
+        .measurement
         .section(SectionKind::SystemPrompt)
         .expect("system section");
     assert_eq!(sys1.tokens, sys2.tokens, "system section tokens stable");
@@ -612,15 +641,19 @@ fn test_recall_not_system_section() {
         "recalled memory must not enter the system prompt static section"
     );
     let sys = v
+        .measurement
         .section(SectionKind::SystemPrompt)
         .expect("system section");
     assert!(
         !sys.items.iter().any(|i| i.contains("DEPLOY_COMMAND")),
         "system items must not list recall content"
     );
-    // The recall text IS served (merged into the user message by the
-    // projection) — the model sees it, just not in the static prefix.
-    let msgs = v.section(SectionKind::Messages).expect("messages section");
+    // The recall text is in the user message (merged by the projection) —
+    // the model sees it, just not in the static prefix.
+    let msgs = v
+        .measurement
+        .section(SectionKind::Messages)
+        .expect("messages section");
     assert!(
         msgs.tokens > 0,
         "messages section carries the merged recall"

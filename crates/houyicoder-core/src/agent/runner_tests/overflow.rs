@@ -294,7 +294,7 @@ async fn test_overflow_provider_complete() {
 
 #[test]
 fn test_overflow_display_no_limit() {
-    // The pre-flight path (served view exceeded the threshold before a
+    // The pre-flight path (assembled context exceeded the threshold before a
     // request was sent) carries enforced_limit = None. Its Display must not
     // claim a provider-enforced limit it does not have.
     let err = RunError::ContextOverflowBounded {

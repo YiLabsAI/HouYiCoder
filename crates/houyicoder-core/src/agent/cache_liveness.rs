@@ -1,7 +1,7 @@
 //! Cache-liveness signal + per-block stable retention decisions.
 //!
 //! A turn that hit the prompt cache and is within the cache TTL leaves a
-//! cached prefix in the served view. Demoting a block_ref inside that prefix
+//! cached prefix in the assembled context. Demoting a block_ref inside that prefix
 //! (Materialize → Summarize/Evict) changes the prefix bytes, so the next
 //! turn's cache read misses — a small per-block saving that breaks the whole
 //! prefix. While the cache is live, retention must hold each block_ref's

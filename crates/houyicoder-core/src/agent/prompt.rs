@@ -379,7 +379,7 @@ pub(crate) fn project_context_section(cwd: &Path) -> Option<String> {
 /// layout is byte-stable and the section label is present in the drill-down.
 fn tool_docs_section() -> String {
     "# Tool docs\n\
-     Tools are declared in the Tools section of the served view; this summary \
+     Tools are declared in the Tools section of the assembled context; this summary \
      will list each tool name and a one-line description once tool schemas land."
         .to_string()
 }

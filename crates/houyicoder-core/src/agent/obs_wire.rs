@@ -31,19 +31,17 @@ pub fn start_turn(obs: &SharedObservability) {
     }
 }
 
-/// Record a turn's usage + cost (G3 live meter). served_token_count is the
-/// local tiktoken count of what was sent this turn, the fallback when the
-/// provider omits usage (so context_pct is never a silent 0%). api_duration_ms
-/// is the wall-clock length of this round-trip (stream start → Finish);
-/// api_duration_without_retries is NOT taken here (passed 0) — it refers to
-/// transport-layer retries (network re-attempts within one call), NOT to
-/// length-recovery (a separate logical round-trip recorded on its own). Do
-/// not fold the two when the without_retries tracking wires.
+/// Record a turn's usage + cost (G3 live meter). estimated_input_tokens is
+/// the local tiktoken count of what was sent, the fallback when the
+/// provider omits usage (context_pct never reads a silent 0%).
+/// api_duration_ms is the stream start → Finish wall-clock. The final 0 is
+/// the transport-retry duration slot: length-recovery is a separate
+/// logical round-trip recorded on its own, not folded into it.
 pub fn record_turn(
     obs: &SharedObservability,
     model: &str,
     usage: &Usage,
-    served_token_count: u32,
+    estimated_input_tokens: u32,
     api_duration_ms: u64,
     context_window: u32,
     max_output_tokens: u32,
@@ -52,7 +50,7 @@ pub fn record_turn(
         ol.record_usage(
             model,
             usage,
-            served_token_count,
+            estimated_input_tokens,
             api_duration_ms,
             0,
             context_window,
@@ -95,7 +93,7 @@ mod tests {
     #[test]
     fn test_record_turn_captures_usage() {
         let obs = new_log(200_000);
-        // served_token_count is the fallback; with input_tokens > 0 the
+        // estimated_input_tokens is the fallback; with input_tokens > 0 the
         // provider's count is primary, so context_pct = 1000 / 200_000.
         // api_duration_ms=500 flows through to the cost tally.
         record_turn(
@@ -124,9 +122,9 @@ mod tests {
     }
 
     #[test]
-    fn test_record_turn_served_fallback() {
+    fn test_record_turn_estimate_fallback() {
         // A streaming proxy that omits usage: input_tokens 0, so context_pct
-        // falls back to the local served_token_count. Never a silent 0%.
+        // falls back to the local estimate. Never a silent 0%.
         let obs = new_log(200_000);
         let zero_usage = Usage {
             input_tokens: 0,
@@ -146,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_record_turn_unknown_fill() {
-        // Both provider usage and served count zero: the fill is unknown, not
+        // Both provider usage and estimate zero: the fill is unknown, not
         // 0% — None so a future consumer can render "—" instead of a wrong 0%.
         let obs = new_log(200_000);
         let zero_usage = Usage {

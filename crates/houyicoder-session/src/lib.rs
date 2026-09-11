@@ -2,8 +2,8 @@
 //!
 //! SessionStore is the engine-facing facade over a ContextBackend: it appends
 //! SessionLogEntries with a tamper-evident hash-chain, tracks a delta-persistence
-//! counter for interrupted-turn rewind, and assembles the served context view
-//! by applying a CompactionPlan to a replay. The raw log (owned by the
+//! counter for interrupted-turn rewind, and assembles the context by
+//! applying a CompactionPlan to a replay. The raw log (owned by the
 //! ContextBackend in the context layer) is never mutated; compaction is
 //! view-selection, not destruction.
 //!
@@ -533,7 +533,7 @@ impl SessionStore {
         self.backend.list_checkpoints(session).await
     }
 
-    /// Assemble the served context view. Reads the full event log and, if a
+    /// Assemble the context. Reads the full event log and, if a
     /// checkpoint exists, loads the latest manifest so the caller can apply the
     /// per-event Disposition plan (Verbatim / Summarized / Referenced). No
     /// checkpoint means full replay (no plan applied).

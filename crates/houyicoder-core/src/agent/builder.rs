@@ -32,9 +32,9 @@ impl Runner {
     }
 
     /// Switch the cwd at runtime through a shared Arc<Runner> (worktree
-    /// enter/exit). Writes the interior-mutable cwd + clears the cached served
-    /// view so the next build recomputes the system prompt with the new
-    /// project context.
+    /// enter/exit). Writes the interior-mutable cwd + clears the cached
+    /// measurement so the next build recomputes the system prompt with
+    /// the new project context.
     pub fn switch_cwd(&self, cwd: PathBuf) {
         self.context_builder.switch_cwd(cwd);
     }

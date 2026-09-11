@@ -1,5 +1,5 @@
 //! The conversation recall tool. The model calls it to recall detail that was
-//! folded out of the served view by a compaction, without re-injecting the
+//! folded out of the assembled context by a compaction, without re-injecting the
 //! whole block. The tool replays the raw session log (append-only, never
 //! mutated by a compaction), filters to the text-bearing events, and either
 //! substring-searches a query or slices a turn range, returning short snippets
@@ -7,10 +7,10 @@
 //!
 //! A compaction folds older turns into a summary (Summarized disposition) and
 //! keeps a verbatim tail (Verbatim). The raw events stay in the log; the
-//! served view applies the manifest's disposition plan on top. So a replay
+//! assembled context applies the manifest's disposition plan on top. So a replay
 //! returns every event, including the folded ones — this tool searches that
 //! full set. When a match lands in the Summarized span (the compacted detail
-//! the served view no longer shows), the tool bumps a recall meter the
+//! the assembled context no longer shows), the tool bumps a recall meter the
 //! compaction path snapshots to compute a recall rate: of the events a
 //! compaction folded, how many the model later pulled back. The rate is an
 //! instrumentation signal, not a correctness gate.
@@ -182,7 +182,7 @@ struct SearchMatch {
 }
 
 /// Collect the event ids the current manifest marks Summarized (the folded
-/// span the served view no longer shows verbatim). Empty when no compaction
+/// span the assembled context no longer shows verbatim). Empty when no compaction
 /// has run. The tool uses this to count how many keyword matches landed in
 /// compacted detail — the recall signal.
 async fn folded_event_ids(store: &Arc<dyn SessionLog>, session: SessionId) -> Vec<EventId> {

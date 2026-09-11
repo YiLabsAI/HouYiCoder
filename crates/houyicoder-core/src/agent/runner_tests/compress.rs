@@ -42,7 +42,7 @@ fn runner_with_cfg0() -> RunnerConfig {
 #[tokio::test]
 async fn test_compress_writes_checkpoint() {
     // Compress a session with enough events to fold, then verify the next
-    // current_view returns a manifest and the served view is smaller.
+    // current_view returns a manifest and the assembled context is smaller.
     let store = std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     // Append enough assistant turns that compress has something to fold.
@@ -146,15 +146,15 @@ impl ModelProvider for SmallWindowProvider {
 #[tokio::test]
 async fn test_pre_flight_trips_compress() {
     // Window 22000 with max_output 8000: pre_flight_threshold = 22000 - 21k =
-    // 1000. The served view (system prompt + a few events ≈ 2-3k) lands in
-    // (threshold, window/2] = (1000, 11000] — so the economy gate (served >
-    // window/2) SKIPS and ONLY the pre-flight path (served > threshold) can
+    // 1000. The assembled context (system prompt + a few events ≈ 2-3k) lands in
+    // (threshold, window/2] = (1000, 11000] — so the economy gate (conservative >
+    // window/2) SKIPS and ONLY the pre-flight path (conservative > threshold) can
     // fire. This is path attribution: a mutation that flips the pre-flight
     // comparison (>) to (<) now removes the compact + checkpoint, failing
-    // the test — the prior window=200 made economy fire first (served >
+    // the test — the prior window=200 made economy fire first (conservative >
     // window/2=100) so the pre-flight mutation survived (false-green, #113).
     // After compress (folding the older events), the next iteration has a
-    // manifest applied and the served view is smaller.
+    // manifest applied and the assembled context is smaller.
     let p = Arc::new(SmallWindowProvider::new("done", 22000));
     let runner = Runner::new(
         std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
@@ -233,13 +233,13 @@ async fn test_pre_flight_trips_compress() {
 
 /// A pre-flight compress that makes progress must re-inject memory recall
 /// so the model is not memory-blind for the rest of the run: compact folds
-/// older memory-recall events out of the served view (Summarized), and the
+/// older memory-recall events out of the assembled context (Summarized), and the
 /// re-inject surfaces them again. This pins that the re-inject call on the
 /// hot path actually executes when pre-flight trips — without it, the line
 /// is dead (the prior weak pre-flight test never exceeded the window).
 #[tokio::test]
 async fn test_compress_runs_reinject() {
-    // Tiny window plus long pre-populated turns so the served view exceeds
+    // Tiny window plus long pre-populated turns so the assembled context exceeds
     // 95% of the window on the first model call. Eight 200-char assistant
     // turns far exceed 200 tokens regardless of the tokenizer ratio.
     let p = Arc::new(SmallWindowProvider::new("done", 200));
@@ -293,7 +293,7 @@ async fn test_compress_runs_reinject() {
         events
             .iter()
             .any(|e| matches!(e.event, SessionEvent::CompactionBoundary { .. })),
-        "pre-flight must trip compress when the served view exceeds the window"
+        "pre-flight must trip compress when the assembled context exceeds the window"
     );
 }
 
@@ -547,12 +547,12 @@ async fn test_run_max_turns_reached() {
         RunOutcome::MaxTurnsReached { turns } if turns == 5
     ));
     assert_eq!(result.turns, 5);
-    // The provider omits usage (Usage::default()); the served-token
+    // The provider omits usage (Usage::default()); the estimated-token
     // fallback fills input_tokens so the status gauge + tally read the real
     // footprint, not a silent 0.
     assert!(
         result.usage.input_tokens > 0,
-        "omitted usage falls back to the served count: {:#?}",
+        "omitted usage falls back to the estimated count: {:#?}",
         result.usage
     );
 }

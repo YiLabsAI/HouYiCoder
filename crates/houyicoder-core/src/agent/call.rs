@@ -61,7 +61,7 @@ mod pre_flight_threshold_tests;
 /// committed — a mid-stream error is terminal; there is no partial-recovery
 /// path here yet.
 ///
-/// Pre-flight (fail-closed): if the served view exceeds the absolute reserve
+/// Pre-flight (fail-closed): if the assembled context exceeds the absolute reserve
 /// (window minus the model response room and an estimation margin), compress
 /// before sending to the provider. Overflow handler: when
 /// the stream returns ContextOverflow, compress and retry (bounded 2). If
@@ -116,18 +116,17 @@ impl Runner {
             // in the byte-stable cache prefix. None when no provider is wired
             // (tests, stub). Capped at 200 entries.
             let memory_index = self.format_memory_index();
-            let mut served = self.context_builder.build_with_manifest(
+            let mut assembled = self.context_builder.build_for_turn(
                 &snapshot.events,
                 snapshot.manifest.as_ref(),
                 Some(self.store.backend()),
                 &tool_defs,
                 memory_index.as_deref(),
             );
-            // Capture the served token count up front: served.messages is
-            // moved into the request below, so token_count() (a &self method)
-            // can't run after that. The count is the provider-omits-usage
-            // fallback for context_pct, passed to record_turn at turn end.
-            let served_tokens = served.token_count();
+            // Capture before assembled.messages moves into the request;
+            // token_count() can't run after that. Fallback for
+            // provider-omits-usage, passed to record_turn at turn end.
+            let estimated_input_tokens = assembled.measurement.token_count();
 
             // Convergence reminder: when the turn count is within the
             // reminder window of the hard cap, inject a user message that
@@ -137,7 +136,7 @@ impl Runner {
             // The turn>1 guard skips the very first call: reminding before
             // the model has acted once is absurd, and it keeps tiny max_turns
             // configs (tests, short subagent forks) from firing the reminder
-            // on turn 1 and polluting the served view.
+            // on turn 1 and polluting the assembled context.
             let remaining = max_turns.saturating_sub(turn);
             if turn > 1 && remaining <= CONVERGE_REMINDER_TURNS {
                 // Convergence nudge: encourage the model to synthesize if it
@@ -147,12 +146,12 @@ impl Runner {
                 let reminder = "If you have gathered enough information to \
                      answer, synthesize your findings and produce the final \
                      answer now. Prioritize answering over further exploration.";
-                served.messages.push(InputItem::User {
+                assembled.messages.push(InputItem::User {
                     content: reminder.into(),
                 });
             }
 
-            // Pre-flight: served tokens exceed the absolute reserve (model
+            // Pre-flight: estimated tokens exceed the absolute reserve (model
             // response room, capped, + estimation margin) → compress first,
             // fail-closed so an oversized request never reaches the provider.
             // See pre_flight_threshold: an absolute buffer beats a 95% ratio,
@@ -173,35 +172,33 @@ impl Runner {
                 // provider caps' static max_output — so the room the gate
                 // reserves matches the room the request asks for.
                 let threshold = pre_flight_threshold(window, self.resolve_max_output_tokens());
-                // Floor the served estimate to the last observed input tokens
-                // so a tiktoken undercount on a non-native model cannot
-                // false-trip the gate. The observed is the provider's ground
-                // truth for the prefix; the estimate covers messages added
-                // since. The max is the conservative floor.
+                // Floor the estimate to the last observed input tokens so a
+                // tiktoken undercount on a non-native model cannot false-trip
+                // the gate. The max is the conservative floor.
                 let last_observed = self
                     .observability
                     .lock()
                     .ok()
                     .and_then(|ol| ol.last_turn_delta().map(|d| d.input));
-                let served_tokens =
-                    super::model_window::effective_served_tokens(served_tokens, last_observed);
-                // Economy gate (cost-saving): compact proactively when the
-                // remaining turns make the rewrite + summarizer cost pay back
-                // in cache-read savings over the horizon. Runs BEFORE the
-                // ceiling (overflow-guard) so a view that is expensive to
-                // compacts early. Guarded by served_tokens > window/2 so a
-                // small test window does not false-fire; the decision layer
-                // also skips on NoShrink/NoHorizon/BelowBreakeven. No-progress
-                // here is not an error (the view may already be compacted):
-                // fall through to the ceiling check.
+                let conservative_input_tokens = super::model_window::conservative_input_tokens(
+                    estimated_input_tokens,
+                    last_observed,
+                );
+                // Economy gate: compact proactively when the remaining turns
+                // make the rewrite + summarizer cost pay back in cache-read
+                // savings. Runs before the ceiling so an expensive view
+                // compacts early. Guarded by conservative_input_tokens >
+                // window/2 so a small test window does not false-fire.
                 let cost = self.cost_model.cost();
-                if served_tokens > window / 2
+                if conservative_input_tokens > window / 2
                     && remaining > 0
                     && !economy_fired_this_turn
                     && self.compact_suppress() == super::compact::CompactSuppress::None
                 {
-                    let projection =
-                        super::economy::economy_projection(served_tokens, remaining as u64);
+                    let projection = super::economy::economy_projection(
+                        conservative_input_tokens,
+                        remaining as u64,
+                    );
                     let decision = super::economy::economy_decision(projection, &cost);
                     if decision.compact {
                         // Mark fired before the await so a re-entry after
@@ -216,15 +213,15 @@ impl Runner {
                         if progress {
                             self.inject_memory_recall(session).await?;
                             // A compaction folded the listing out of the
-                            // served view; re-announce so the model is not
-                            // skill-blind for the rest of this run. No-op
+                            // assembled context; re-announce so the model is
+                            // not skill-blind for the rest of this run. No-op
                             // when a listing still survives (dedup scan).
                             self.inject_skill_listing_and_body(session).await?;
                             continue 'outer;
                         }
                     }
                 }
-                if served_tokens > threshold {
+                if conservative_input_tokens > threshold {
                     if overflow_retries >= MAX_OVERFLOW_RETRIES {
                         return Err(RunError::ContextOverflowBounded {
                             retries: overflow_retries,
@@ -253,7 +250,7 @@ impl Runner {
                     }
                     overflow_retries += 1;
                     // Compact folded older memory-recall events out of the
-                    // served view (Summarized disposition drops them from the
+                    // assembled context (Summarized disposition drops them from the
                     // projection). Re-inject so the model is not memory-blind
                     // for the rest of this run: the surfaced scan now sees the
                     // folded set as empty, so recall re-surfaces entries the
@@ -266,13 +263,13 @@ impl Runner {
                 }
             }
 
-            // Append the configured instructions to the served system prompt
+            // Append the configured instructions to the assembled system prompt
             // (do not replace it) so the static identity/framework prefix
             // stays byte-stable for prompt-cache. An empty configured
-            // instructions field (the production path) uses the served system
-            // verbatim. Custom text lands at the end; the default prompt is
-            // kept.
-            let instructions = assemble_instructions(&served.system, &self.config.instructions);
+            // instructions field (the production path) uses the assembled
+            // system verbatim. Custom text lands at the end; the default
+            // prompt is kept.
+            let instructions = assemble_instructions(&assembled.system, &self.config.instructions);
             let active_model = self.active_model();
             let mut settings = ModelSettings {
                 max_output_tokens: Some(self.resolve_max_output_tokens()),
@@ -289,7 +286,7 @@ impl Runner {
             let mut request = CompletionRequest {
                 model: super::model_window::normalize_model_for_api(&active_model),
                 instructions,
-                input: served.messages,
+                input: assembled.messages,
                 tools: self.tools.tool_defs(),
                 settings,
                 cache_breakpoints: Vec::new(),
@@ -399,7 +396,7 @@ impl Runner {
                             }
                             overflow_retries += 1;
                             // Compact folded older memory-recall events out
-                            // of the served view; re-inject so the model is
+                            // of the assembled context; re-inject so the model is
                             // not memory-blind for the rest of this run.
                             self.inject_memory_recall(session).await?;
                             // Re-announce skills: the compact folded the
@@ -449,9 +446,9 @@ impl Runner {
                     .await?;
             }
             // Provider-omits-usage fallback: some OpenAI-compat streams
-            // ignore stream_options.include_usage; substitute the served
-            // estimate so the status gauge + tally read the real footprint.
-            super::model_window::fill_omitted_usage(&mut state.usage, served_tokens);
+            // ignore stream_options.include_usage; substitute the estimated
+            // input tokens so the status gauge + tally read the real footprint.
+            super::model_window::fill_omitted_usage(&mut state.usage, estimated_input_tokens);
             // Capture the raw provider finish_reason BEFORE dialect
             // normalization so the verdict carries the original dialect
             // (max_tokens / MAX_TOKENS / length / stop). Without this the
@@ -470,26 +467,13 @@ impl Runner {
             {
                 state.finish_reason = Some("length".into());
             }
-            // Silent-truncation heuristic: trusts the provider finish_reason
-            // exclusively and recovers only on "length" or the context-window
-            // signal. A proxy that cuts the stream at the token
-            // cap but signals "stop" passes through as a complete reply, and a
-            // cut mid-code-block leaves an open fence the caller cannot
-            // distinguish from a finished one. Synthesize "length" when the
-            // provider claimed a natural stop but the output looks cut, so the
-            // existing resume loop picks it up. Two signals, either suffices:
-            // 1. output reached the token cap — output_tokens within SLACK of
-            //    the cap. The server-reported usage is accurate when present;
-            //    many streaming proxies omit it, so a cheap self-count estimate
-            //    (the shared Tokenizer) is the fallback — catching a proxy
-            //    that honored max_tokens but mislabeled the stop.
-            // 2. an unclosed code block — an odd triple-backtick count means a
-            //    fence opened but never closed, so the cut landed mid-block.
-            //
-            // Classified once into a TruncationSignal the verdict records, so
-            // the heuristic is not re-run for the verdict. When the provider
-            // already signaled the cap-cut, the heuristic is skipped (nothing
-            // to synthesize) and the signal stays None.
+            // Silent-truncation heuristic: a proxy can cut the stream at
+            // the token cap yet signal "stop". Synthesize "length" when the
+            // provider claimed a natural stop but the output looks cut, so
+            // the resume loop recovers. Either signal suffices: output at
+            // the token cap (server usage or a self-count), or an unclosed
+            // code fence (odd triple-backtick count). Classified once into
+            // TruncationSignal; skipped when the provider already cut.
             let self_count_output_tokens = super::Tokenizer::new().count(&state.assistant_text);
             let mut truncation_signal = TruncationSignal::None;
             if state.finish_reason.as_deref() != Some("length") {
@@ -544,7 +528,7 @@ impl Runner {
                     &self.observability,
                     &partial.model,
                     &partial.usage,
-                    served_tokens,
+                    estimated_input_tokens,
                     api_start.elapsed().as_millis() as u64,
                     caps.context_window,
                     self.resolve_max_output_tokens(),
@@ -596,18 +580,15 @@ impl Runner {
                     },
                 ))
                 .await?;
-            // Record the per-turn usage now that both values live in this
-            // scope: response.usage (provider-measured, primary) and
-            // served_tokens (local tiktoken, fallback when the provider
-            // omits usage). The durable TurnUsage event + the in-memory OL
-            // delta fire together, once per model call that returns to the
-            // drive loop. Co-located with the TruncationVerdict (the other
-            // per-turn durable metadata) so a replay sees them adjacent.
+            // Record per-turn usage: response.usage (provider-measured,
+            // primary) and estimated_input_tokens (local tiktoken, fallback
+            // when the provider omits usage). Co-located with the
+            // TruncationVerdict so a replay sees them adjacent.
             obs_wire::record_turn(
                 &self.observability,
                 &response.model,
                 &response.usage,
-                served_tokens,
+                estimated_input_tokens,
                 api_start.elapsed().as_millis() as u64,
                 caps.context_window,
                 self.resolve_max_output_tokens(),
@@ -717,17 +698,14 @@ pub(crate) fn accumulate_usage(total: &mut Usage, turn: &Usage) {
     total.reasoning_tokens += turn.reasoning_tokens;
 }
 
-/// Assemble the provider-facing instruction string: the served system prompt
-/// with the configured instructions appended. An empty configured field
-/// returns the served system verbatim (the production path). Appending keeps
-/// the static identity/framework prefix byte-stable so the prompt-cache
-/// prefix survives; replacing would discard the served prompt + thrash the
-/// cache on every config change.
-fn assemble_instructions(served_system: &str, configured: &str) -> String {
+/// Append configured instructions to the assembled system prompt. An empty
+/// configured field returns the assembled system verbatim. Appending keeps
+/// the static identity/framework prefix byte-stable for prompt-cache.
+fn assemble_instructions(assembled_system: &str, configured: &str) -> String {
     if configured.is_empty() {
-        served_system.to_string()
+        assembled_system.to_string()
     } else {
-        format!("{served_system}\n\n{configured}")
+        format!("{assembled_system}\n\n{configured}")
     }
 }
 

@@ -1,11 +1,11 @@
 //! agent::lifecycle — the Compress stage runtime + the LLM summarizer.
 //!
 //! The Compress stage is the "don't brick" safety net for long-running sessions
-//! that approach the context window. When the served view exceeds the
+//! that approach the context window. When the assembled context exceeds the
 //! pre-flight threshold (95% of the window) or the provider returns
 //! ContextOverflow, the loop calls compress_session to fold older events into
 //! a summary, persist a CheckpointManifest, and append CompactionBoundary +
-//! Summary events so the next select() yields a smaller served window.
+//! Summary events so the next select() yields a smaller context window.
 //!
 //! LlmSummarizer calls the provider to produce a real summary, chunked by
 //! assistant turns to prevent the summarizer itself from overflowing. When the

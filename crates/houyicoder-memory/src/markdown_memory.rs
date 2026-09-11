@@ -542,7 +542,7 @@ impl MemoryProvider for MarkdownMemoryProvider {
         // Filter already-surfaced keys BEFORE ranking so fresh candidates
         // beyond the result cap get a chance when the top-ranked entries are
         // all surfaced. Surfaced is caller-provided (the set of keys already
-        // in the served view), so the provider holds no surfaced state
+        // in the assembled context), so the provider holds no surfaced state
         // across calls.
         let fresh: Vec<ScannedTopic> = candidates
             .into_iter()

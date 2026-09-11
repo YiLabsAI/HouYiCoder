@@ -15,17 +15,16 @@
 
 use houyicoder_api::cost_model::ProviderCost;
 
-/// The projected size of the served view AFTER a compaction (the verbatim
-/// tail + the summary). The economy decision runs BEFORE the compaction, so
-/// the caller estimates this (e.g. from the manifest's verbatim-tail token
-/// count, or a fold-ratio heuristic). A rough estimate is fine — the gate
-/// is conservative, and an over-estimate of new under-counts savings
-/// (leans toward not compacting, which is safe).
+/// The projected size of the assembled context AFTER a compaction (the
+/// verbatim tail + the summary). The economy decision runs BEFORE the
+/// compaction, so the caller estimates this. A rough estimate is fine —
+/// the gate is conservative, and an over-estimate of new under-counts
+/// savings (leans toward not compacting, which is safe).
 #[derive(Debug, Clone, Copy)]
 pub struct CompactProjection {
-    /// The current served-token count (pre-compact).
+    /// The current input-token count (pre-compact).
     pub old_tokens: u64,
-    /// The projected served-token count after compaction.
+    /// The projected input-token count after compaction.
     pub new_tokens: u64,
     /// The remaining turns in the run (for the savings horizon). A simple
     /// estimate (max_turns - current_turn) for now; an EWMA projection lands
@@ -72,18 +71,18 @@ pub enum EconomyReason {
     NoShrink,
 }
 
-/// Build a compaction projection from the served-token count + remaining
-/// turns. The post-compact size is a fold-ratio heuristic (the verbatim tail
-/// is roughly a third of the served view); the summarizer cost is the folded
-/// span re-billed at input + a tenth of it at output (a summary is ~10% of
-/// the input). Rough but conservative — an over-estimate of the post-compact
-/// size under-counts savings, leaning toward skipping (safe; the ceiling
-/// gate still fires if the view keeps growing).
-pub fn economy_projection(served_tokens: u32, remaining_turns: u64) -> CompactProjection {
-    let projected_new = served_tokens / 3;
-    let folded = served_tokens.saturating_sub(projected_new);
+/// Build a compaction projection from the current input-token count +
+/// remaining turns. The post-compact size is a fold-ratio heuristic (the
+/// verbatim tail is roughly a third of the assembled context); the
+/// summarizer cost is the folded span re-billed at input + a tenth at
+/// output. Rough but conservative — an over-estimate under-counts
+/// savings, leaning toward skipping (safe; the ceiling gate still fires
+/// if the view keeps growing).
+pub fn economy_projection(current_input_tokens: u32, remaining_turns: u64) -> CompactProjection {
+    let projected_new = current_input_tokens / 3;
+    let folded = current_input_tokens.saturating_sub(projected_new);
     CompactProjection {
-        old_tokens: served_tokens as u64,
+        old_tokens: current_input_tokens as u64,
         new_tokens: projected_new as u64,
         remaining_turns,
         summarizer_input_tokens: folded as u64,
@@ -186,8 +185,8 @@ mod tests {
 
     #[test]
     fn test_economy_projection_fold_ratio() {
-        // The projection folds the served view by a third; the summarizer
-        // re-bills the folded span at input + a tenth at output.
+        // The projection folds the assembled context by a third; the
+        // summarizer re-bills the folded span at input + a tenth at output.
         let p = economy_projection(150_000, 10);
         assert_eq!(p.old_tokens, 150_000);
         assert_eq!(p.new_tokens, 50_000);

@@ -3,7 +3,7 @@
 //! Given the append-only event log and a CompressPolicy, build_manifest
 //! produces a CheckpointManifest: a per-turn-group Disposition plan
 //! (Verbatim, Summarized) plus a summary of the folded span. The raw log is
-//! never mutated; applying the plan to a replay yields the served window.
+//! never mutated; applying the plan to a replay yields the context window.
 //!
 //! Disposition heuristic:
 //! - The last tail_turns assistant turns (API rounds) stay Verbatim (preserved
@@ -45,7 +45,7 @@ use houyicoder_context::{
 #[derive(Debug, Clone)]
 pub struct CompressPolicy {
     /// Number of recent assistant turns (API rounds) kept verbatim in the
-    /// served view. The unit is the assistant response, not the user prompt.
+    /// assembled context. The unit is the assistant response, not the user prompt.
     pub tail_turns: usize,
     /// Token-budget ceiling on the verbatim tail. 0 disables the ceiling so
     /// tail_turns alone governs the boundary.
@@ -200,8 +200,8 @@ pub async fn build_manifest(
         .unwrap_or(0);
 
     // 1. Compute the verbatim/summarized boundary. The token estimate uses
-    //    the same tokenizer as the served view so the preserve_recent_tokens
-    //    ceiling and the served-view count never disagree on what a token is.
+    //    the same tokenizer as the assembled context so the preserve_recent_tokens
+    //    ceiling and the assembled-context count never disagree on what a token is.
     let tokenizer = super::context::Tokenizer::new();
     let mut boundary = verbatim_boundary(events, policy.tail_turns);
     if policy.preserve_recent_tokens > 0 {

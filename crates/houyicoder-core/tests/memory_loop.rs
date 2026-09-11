@@ -1,5 +1,5 @@
 //! Real E2E for the memory closed loop: recall injects a durable
-//! memory-recall attachment into the served message stream (merged into the
+//! memory-recall attachment into the assembled message stream (merged into
 //! user turn, not the system prompt, so the system prompt stays byte-frozen
 //! for prompt-cache across turns), write persists facts from /save signals,
 //! and compaction folds old memory-recall events out of the projection so
@@ -76,7 +76,7 @@ impl MemoryProvider for RecordingMemory {
 }
 
 /// One captured request: the instructions string plus the concatenated
-/// user-message text the model was served. The user text carries the
+/// user-message text the model received. The user text carries the
 /// memory-recall attachment merged into the turn's user input.
 #[derive(Clone)]
 struct CapturedRequest {
@@ -149,9 +149,10 @@ impl ModelProvider for FinalResponseProvider {
     }
 }
 
-/// When static config.instructions are appended to the served system prompt,
-/// the recalled memory still reaches the model via the message stream — it is
-/// a tail attachment merged into the user turn, not part of the system prompt.
+/// When static config.instructions are appended to the assembled system
+/// prompt, the recalled memory still reaches the model via the message
+/// stream — it is a tail attachment merged into the user turn, not part
+/// of the system prompt.
 /// This is the regression the durable-tail pivot prevents: memory used to live
 /// in system_text, so a config.instructions replace silently dropped it.
 #[tokio::test]
@@ -181,7 +182,7 @@ async fn test_instructions_override_keeps_memory() {
         .await;
     assert!(result.is_ok(), "run must succeed");
     let captured = seen.lock().expect("seen").clone();
-    // The configured instructions are APPENDED to the served system prompt
+    // The configured instructions are APPENDED to the assembled system prompt
     // (not a replace) so the byte-stable prefix survives for prompt-cache.
     // Both the assembled identity and the configured text are present.
     assert!(
@@ -215,7 +216,7 @@ fn runner_with_memory(provider: Arc<dyn ModelProvider>, memory: Arc<dyn MemoryPr
     .with_memory(memory)
 }
 
-/// The recalled memory entry appears in the user-message text served to the
+/// The recalled memory entry appears in the user-message text the model
 /// provider, NOT in the instructions (system prompt). This is the core
 /// closed-loop assertion: memory is a durable tail attachment merged into the
 /// turn's user input, so the system prompt stays byte-stable across turns
@@ -249,12 +250,12 @@ async fn test_recall_injects_user_text() {
     // system prompt / instructions.
     assert!(
         captured[0].user_text.contains("Prefer let chains"),
-        "recalled memory must appear in the served user text: {}",
+        "recalled memory must appear in the user text: {}",
         captured[0].user_text
     );
     assert!(
         captured[0].user_text.contains("rust-conventions"),
-        "memory key must appear in the served user text"
+        "memory key must appear in the user text"
     );
     assert!(
         !captured[0].instructions.contains("Prefer let chains"),
@@ -376,7 +377,7 @@ async fn test_post_compress_recall_surfaces() {
 }
 
 /// No memory wired: the recall path is opt-in — no memory-recall attachment
-/// is injected into the served user text, and no write happens. The memory
+/// is injected into the user text, and no write happens. The memory
 /// behavior guidance (the always-on what-to-save section in the system
 /// prompt) is present by design; what is opt-in is the recall injection and
 /// the write seam, both of which stay dormant with no provider. This

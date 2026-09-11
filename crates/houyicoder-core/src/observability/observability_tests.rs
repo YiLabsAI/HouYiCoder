@@ -197,7 +197,7 @@ fn test_cost_accumulates_per_model() {
 fn test_turn_delta_ratios() {
     let mut log = ObservabilityLog::new(200_000);
     // context_pct uses the provider's measured input_tokens (1000) as the
-    // source of truth — NOT the 30k local served fallback (ignored when
+    // source of truth — NOT the 30k local estimate fallback (ignored when
     // input_tokens > 0), and NOT cumulative.input (per-turn, so it does not
     // false-ceiling as turns accumulate).
     let u = Usage {
@@ -232,7 +232,7 @@ fn test_turn_delta_ratios() {
 #[test]
 fn test_context_pct_fallback() {
     // A streaming proxy that omits usage (input_tokens 0): context_pct falls
-    // back to the local served count, never a silent 0%. Same dual-number
+    // back to the local estimate, never a silent 0%. Same dual-number
     // convention as TruncationVerdict's server/self output-token pair.
     let mut log = ObservabilityLog::new(200_000);
     let u = usage(0, 500, 0);
@@ -244,7 +244,7 @@ fn test_context_pct_fallback() {
 
 #[test]
 fn test_context_pct_unknown() {
-    // Provider usage zero AND served count zero: the fill is unknown, not
+    // Provider usage zero AND estimate zero: the fill is unknown, not
     // 0%. None so a consumer renders "—" rather than a plausible-but-wrong
     // 0% (the bug class this log exists to kill — #73/#75).
     let mut log = ObservabilityLog::new(200_000);

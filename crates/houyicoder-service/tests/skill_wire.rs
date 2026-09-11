@@ -186,7 +186,7 @@ async fn test_run_model_skill_tool() {
 /// A skill body past the large-output isolate threshold lands as a
 /// block_ref marker (preview + hint) in the ToolResult, not the raw bytes
 /// — the agent loop externalizes the largest string field to the CAS so
-/// the served view stays small and the raw stays retrievable. Proves the
+/// the assembled context stays small and the raw stays retrievable. Proves the
 /// isolation applies to skill bodies (not just bash/grep output).
 #[tokio::test]
 async fn test_run_large_body_compacts() {
@@ -262,7 +262,7 @@ async fn test_run_large_body_compacts() {
     drop(std::fs::remove_dir_all(&tmp));
 }
 
-/// A compaction that folds the listing out of the served view triggers a
+/// A compaction that folds the listing out of the assembled context triggers a
 /// re-announce on the next turn: inject_skill_listing scans the
 /// manifest-applied view, finds no surviving listing, and appends a new
 /// one. The model is never skill-blind after a compact. Proves the
@@ -307,7 +307,7 @@ async fn test_compact_reinjects_listing() {
     let last_event = view1.events.last().unwrap().id;
 
     // Simulate a compact: write a manifest that Summarizes the listing's
-    // turn group so apply_manifest folds it out of the served view.
+    // turn group so apply_manifest folds it out of the assembled context.
     let manifest = CheckpointManifest {
         id: CheckpointId::new(),
         session,

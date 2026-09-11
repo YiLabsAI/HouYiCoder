@@ -26,7 +26,7 @@ pub enum CachePolicy {
 }
 
 /// A provider of cache breakpoints. The trait is the seam between the
-/// request-building loop (which knows the served view) and the transport
+/// request-building loop (which knows the assembled context) and the transport
 /// (which lowers breakpoints to a wire format). The default implementation
 /// places the Auto three-breakpoint set; a provider that wants no cache
 /// hints returns None.

@@ -1,7 +1,7 @@
 //! Selection: apply a CheckpointManifest to an event log, producing the
-//! filtered event sequence for the served view. This is the Select stage's
+//! filtered event sequence for the assembled context. This is the Select stage's
 //! plan-application step (the bridge between Compress's manifest and the
-//! served view).
+//! assembled context).
 //!
 //! The event to InputItem grouping lives in turn_group; the CAS retention
 //! (materialize/externalize) lives in retention. This module owns only the
@@ -10,8 +10,8 @@
 use houyicoder_context::{ContextBackend, Disposition, EventId, SessionEvent, SessionLogEntry};
 
 /// Apply a CheckpointManifest to an event log, producing the filtered event
-/// sequence for the served view. This is the Select stage's plan-application
-/// step (the bridge between Compress's manifest and the served view).
+/// sequence for the assembled context. This is the Select stage's plan-application
+/// step (the bridge between Compress's manifest and the assembled context).
 ///
 /// Disposition handling:
 /// - Verbatim: event stays as-is. A tool_result the Isolate stage

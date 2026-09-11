@@ -1,25 +1,22 @@
 //! Model-adaptive context window + output-token resolution, and
 //! effective-token accounting.
 //!
-//! The provider reports a static default window via capabilities(), but the
-//! real window depends on the active model id: a [1m] suffix opts into a
-//! long-context window (an explicit client-side opt-in, authoritative over
-//! all detection); a per-family version-aware catalog covers open-weight
-//! models whose models-list endpoint omits the context-length field (Z.AI
-//! GLM: 5.2 = 1M, 5/5.1/4.6/4.7 = 200K, 4.5 and earlier = 128K; qwen3 /
-//! deepseek / openai-reasoning families publish both a context window and an
-//! output-token cap); an error-response learner corrects a stale or wrong
-//! catalog entry the first time the provider enforces the real limit in a
-//! context-length-exceeded error body; an unknown model falls back to a
-//! conservative default so the context-ceiling-never-brick invariant holds.
+//! The provider reports a static default window via capabilities(); the
+//! real window depends on the active model id, resolved in priority
+//! order: a [1m] suffix opts into the long-context window (authoritative);
+//! a per-family version-aware catalog covers open-weight models whose
+//! models-list omits context-length; an error-response learner corrects
+//! a stale entry when the provider enforces the real limit; unknown
+//! models fall back to a conservative default so context ceiling never
+//! bricks.
 //!
-//! Effective-token accounting normalizes the two provider reporting styles:
-//! split-accounting (input_tokens is the uncached remainder; cache read +
-//! cache creation are separate fields that must be added) and
-//! subset-accounting (input_tokens already includes cached tokens; adding
-//! cache again would double-count). The effective input is the inclusive
-//! total in both cases, computed from the broken-out fields when they are
-//! non-zero so a misreported inclusive field cannot silently undercount.
+//! Effective-token accounting normalizes the two provider reporting
+//! styles: split-accounting (input_tokens is the uncached remainder;
+//! cache read + creation are separate fields that must be added) and
+//! subset-accounting (input_tokens already includes cached tokens). The
+//! effective input is the inclusive total in both cases, computed from
+//! the broken-out fields when non-zero so a misreported inclusive field
+//! cannot undercount.
 
 use houyicoder_protocol::llm::{ModelCapabilities, Usage};
 use std::collections::HashMap;
@@ -283,34 +280,31 @@ pub fn effective_input_tokens(usage: &Usage) -> u32 {
     if split > 0 { split } else { usage.input_tokens }
 }
 
-/// The effective served-token count for the pre-flight gate: the max of the
-/// local tiktoken estimate and the last turn's observed input tokens. The
-/// estimate can undercount on non-tiktoken-native models (glm/qwen); the
-/// observed is the provider's ground truth for the prefix. The max is a
-/// conservative floor — the gate never under-trips on an undercount, at the
-/// cost of an occasional early compact when the estimate overcounts.
-pub fn effective_served_tokens(estimate: u32, last_observed_input: Option<u64>) -> u32 {
+/// The conservative input-token count for the pre-flight gate: the max of
+/// the local tiktoken estimate and the last turn's observed input tokens.
+/// The estimate can undercount on non-tiktoken-native models (glm/qwen);
+/// the observed is the provider's ground truth. The max never under-trips
+/// on an undercount, at the cost of an occasional early compact.
+pub fn conservative_input_tokens(estimate: u32, last_observed_input: Option<u64>) -> u32 {
     match last_observed_input {
         Some(obs) if obs > 0 => estimate.max(obs as u32),
         _ => estimate,
     }
 }
 
-/// Fill a usage the provider omitted with the locally-served token count.
-/// Some OpenAI-compat streams do not honor stream_options.include_usage, so
-/// the finish arrives with usage 0 while the reply is complete. A silent 0
-/// makes the status gauge read 0% forever and the cumulative tally
-/// under-count; the served estimate (tiktoken over the exact served view) is
-/// the same number record_turn receives, so every downstream reader sees the
-/// real footprint instead of an unknown that reads as zero.
-pub fn fill_omitted_usage(usage: &mut Usage, served_tokens: u32) {
+/// Fill a usage the provider omitted with the locally-estimated input
+/// tokens. Some OpenAI-compat streams do not honor
+/// stream_options.include_usage, so the finish arrives with usage 0. The
+/// estimate (tiktoken over the assembled context) is the same number
+/// record_turn receives, so downstream readers see the real footprint.
+pub fn fill_omitted_usage(usage: &mut Usage, estimated_input_tokens: u32) {
     if usage.input_tokens == 0 {
-        usage.input_tokens = served_tokens;
+        usage.input_tokens = estimated_input_tokens;
         if usage.non_cached_input_tokens == 0 {
-            usage.non_cached_input_tokens = served_tokens;
+            usage.non_cached_input_tokens = estimated_input_tokens;
         }
         if usage.total_tokens == 0 {
-            usage.total_tokens = served_tokens.saturating_add(usage.output_tokens);
+            usage.total_tokens = estimated_input_tokens.saturating_add(usage.output_tokens);
         }
     }
 }
@@ -523,17 +517,17 @@ mod tests {
     }
 
     #[test]
-    fn test_served_tokens_floor_estimate() {
+    fn test_conservative_input_tokens_floors() {
         // The estimate undercounts (tiktoken drift); the observed is the
         // ground truth. The floor takes the max so the gate does not under-trip.
-        assert_eq!(effective_served_tokens(30_000, Some(45_000)), 45_000);
+        assert_eq!(conservative_input_tokens(30_000, Some(45_000)), 45_000);
         // The estimate overcounts; the observed is smaller. The estimate
         // stands (never undercount below the estimate either — the estimate
-        // is the upper bound of the served view).
-        assert_eq!(effective_served_tokens(50_000, Some(40_000)), 50_000);
+        // is the upper bound of the assembled context).
+        assert_eq!(conservative_input_tokens(50_000, Some(40_000)), 50_000);
         // No observed yet (first turn): the estimate stands alone.
-        assert_eq!(effective_served_tokens(20_000, None), 20_000);
-        assert_eq!(effective_served_tokens(20_000, Some(0)), 20_000);
+        assert_eq!(conservative_input_tokens(20_000, None), 20_000);
+        assert_eq!(conservative_input_tokens(20_000, Some(0)), 20_000);
     }
 
     #[test]

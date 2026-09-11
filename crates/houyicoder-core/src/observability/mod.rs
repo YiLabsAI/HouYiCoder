@@ -204,17 +204,11 @@ pub struct TurnTokenDelta {
     /// hit" (real input, no cache), distinct from None. Aligns the OTel
     /// convention: cache_read.input_tokens SHOULD be in input_tokens.
     pub cache_hit_ratio: Option<f64>,
-    /// Current served-view occupancy: the provider's measured input_tokens
-    /// (what it counted as served) over context_window, clamped to [0.0, 1.0].
-    /// Falls back to the local tiktoken served count when the provider omits
-    /// usage (common for streaming proxies — the same dual-number convention
-    /// as TruncationVerdict's server_output_tokens / self_count_output_tokens).
-    /// None when both are zero, so an unknown fill is never displayed as 0% —
-    /// a plausible-but-wrong number is the bug class this log exists to kill.
-    /// NOT cumulative.input, which grows unbounded and would false-ceiling.
-    /// The status bar computes the same per-turn input_tokens / window from
-    /// the live StatusSnapshot; the two are separate fields with one source,
-    /// so they must not diverge — see status.rs last_input_tokens.
+    /// Current context occupancy: the provider's measured input_tokens over
+    /// context_window, clamped to [0.0, 1.0]. Falls back to the local
+    /// tiktoken estimate when the provider omits usage. None when both are
+    /// zero, so an unknown fill is never displayed as 0%. Per-turn, not
+    /// cumulative — cumulative.input grows unbounded and would false-ceiling.
     pub context_pct: Option<f64>,
 }
 
@@ -491,18 +485,15 @@ impl ObservabilityLog {
     }
 
     /// Fold a provider response's usage into the per-model cost tally and
-    /// derive the per-turn token delta. The cost is computed via the
-    /// pricing table held by the log. served_token_count is the local
+    /// derive the per-turn token delta. estimated_input_tokens is the local
     /// tiktoken count of what was sent this turn, used as a fallback when
-    /// the provider omits usage (common for streaming proxies) — same
-    /// provider-primary + local-fallback convention as TruncationVerdict's
-    /// output-token pair.
+    /// the provider omits usage.
     #[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
     pub fn record_usage(
         &mut self,
         model: &str,
         usage: &Usage,
-        served_token_count: u32,
+        estimated_input_tokens: u32,
         api_duration_ms: u64,
         api_duration_without_retries_ms: u64,
         context_window: u32,
@@ -551,22 +542,20 @@ impl ObservabilityLog {
         } else {
             None
         };
-        // context_pct is the CURRENT served occupancy, not cumulative input
-        // (cumulative grows unbounded and false-ceilings). The provider's
-        // measured input_tokens is the source of truth — it counted exactly
-        // what we sent. The local tiktoken served_token_count covers providers
-        // that omit usage (common for streaming proxies); the two numbers
-        // serve the same question on opposite sides of the call, mirroring
-        // TruncationVerdict's server/self output-token pair. When both are
-        // zero the fill is unknown, not 0% — a 0% display for an unknown
-        // value is the plausible-but-wrong number class (#73).
-        let served_tokens = if usage.input_tokens > 0 {
+        // context_pct is the current context occupancy, not cumulative
+        // input. The provider's measured input_tokens is primary; the local
+        // tiktoken estimate covers providers that omit usage. When both
+        // are zero the fill is unknown, not 0%.
+        let observed_or_estimated_input_tokens = if usage.input_tokens > 0 {
             usage.input_tokens as u64
         } else {
-            served_token_count as u64
+            estimated_input_tokens as u64
         };
-        let context_pct = if served_tokens > 0 && self.context_window > 0 {
-            Some((served_tokens as f64 / self.context_window as f64).clamp(0.0, 1.0))
+        let context_pct = if observed_or_estimated_input_tokens > 0 && self.context_window > 0 {
+            Some(
+                (observed_or_estimated_input_tokens as f64 / self.context_window as f64)
+                    .clamp(0.0, 1.0),
+            )
         } else {
             None
         };
@@ -643,11 +632,9 @@ impl ObservabilityLog {
     }
 
     /// Clear the last-turn delta. Called after a mid-turn compaction: the
-    /// post-compact served view is rebuilt from the manifest (projection-
-    /// accurate), so the pre-compact provider-reported input tokens are no
-    /// longer a valid floor for effective_served_tokens. Leaving them stale
-    /// floors the estimate to the pre-compact size and false-trips the
-    /// pre-flight / overflow gate on a view that is actually under threshold.
+    /// post-compact context is rebuilt from the manifest, so the
+    /// pre-compact provider-reported input tokens are no longer a valid
+    /// floor for conservative_input_tokens.
     pub fn clear_last_turn_delta(&mut self) {
         self.last_turn_delta = None;
     }
@@ -655,10 +642,10 @@ impl ObservabilityLog {
 
 /// Read-only projection of the log's aggregates for inspection commands.
 /// Renamed from ContextView to MetricsView (2026-08-02): the log no longer
-/// duplicates the served view — context_pct is passed to record_usage as a
-/// u32 (provider input_tokens primary, local tiktoken fallback), so the
-/// breakdown() method + last_breakdown field are gone. trajectory() still
-/// reads the writes buffer until /trajectory projects from the store
+/// duplicates the assembled context — context_pct is passed to record_usage
+/// as a u32 (provider input_tokens primary, local tiktoken fallback), so
+/// the breakdown() method + last_breakdown field are gone. trajectory()
+/// still reads the writes buffer until /trajectory projects from the store
 /// directly. The rename also disambiguates from the TUI's own ContextView
 /// struct (the /context view model).
 pub trait MetricsView {

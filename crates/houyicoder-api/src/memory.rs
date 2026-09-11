@@ -13,7 +13,7 @@
 //! half-written.
 //!
 //! De-dup is caller-driven, not provider-internal: the caller passes the set
-//! of memory keys already in the served view (scanned from the projected
+//! of memory keys already in the assembled context (scanned from the projected
 //! transcript) so recall skips entries the model already sees this turn.
 //! Compaction folds old memory-recall events out of the projection (they
 //! take the Summarized disposition), so the scanned surfaced set naturally
@@ -34,7 +34,7 @@ use std::collections::HashSet;
 
 /// Engine-facing recall plus write seam. The engine holds this trait and
 /// never sees the backend. recall is budget-bounded deterministic ranking
-/// that skips any key in surfaced (a key already in the served view this
+/// that skips any key in surfaced (a key already in the assembled context this
 /// turn); add lands a single source of truth; update rewrites; rebuild_index
 /// regenerates the derived index from the topic files (self-healing).
 pub trait MemoryProvider: Send + Sync {

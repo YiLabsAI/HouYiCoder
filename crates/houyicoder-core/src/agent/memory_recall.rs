@@ -10,7 +10,7 @@
 //! in the message stream, not the prompt) so prompt-cache survives.
 //!
 //! Compaction gives old memory-recall events the Summarized disposition, so
-//! they fold out of the served view. The surfaced scan reads the projection
+//! they fold out of the assembled context. The surfaced scan reads the projection
 //! (not the raw append-only log), so a folded memory-recall event is gone
 //! from the scanned set — the natural reset that lets entries re-surface
 //! post-compress with no provider-side clear. Surfaced tracking reads the
@@ -25,9 +25,9 @@ use houyicoder_context::{
 use super::append::new_event;
 use super::{RunError, Runner, context, selection};
 
-/// Collect the keys of memory-recall events that survive in the served view
+/// Collect the keys of memory-recall events that survive in the assembled context
 /// (after applying the manifest) plus their cumulative byte size. Summarized
-/// memory-recall events fold out of the view, so their keys drop out of the
+/// memory-recall events fold out of the assembled context, so their keys drop
 /// set and their bytes drop out of the total — the natural reset at the
 /// compaction boundary that lets entries re-surface. The de-dup set is what
 /// the turn-entry recall passes to the provider so it skips entries the model
@@ -35,7 +35,7 @@ use super::{RunError, Runner, context, selection};
 /// the session has surfaced enough memory, stop adding more — the most
 /// relevant entries are already in context). Scanning the projection (not the
 /// raw log) is what makes compaction the reset point: the raw log is
-/// append-only, but a folded memory-recall event is gone from the served view.
+/// append-only, but a folded memory-recall event is gone from the assembled context.
 fn surfaced_memory_scan(
     events: &[SessionLogEntry],
     manifest: Option<&CheckpointManifest>,
@@ -70,7 +70,7 @@ fn surfaced_memory_scan(
     (keys, bytes)
 }
 
-/// Per-session cumulative cap on injected memory bytes. Once the served view
+/// Per-session cumulative cap on injected memory bytes. Once the assembled context
 /// has surfaced this much memory, recall stops for the rest of the run (until
 /// compact folds the old attachments out, resetting the counter). Bounds a
 /// long session where the selector keeps finding distinct files. Roughly
@@ -83,7 +83,7 @@ impl Runner {
     /// Recall relevant memory for the turn about to start and append a durable
     /// memory-recall attachment the projection merges into this turn's user
     /// message. The surfaced de-dup set is scanned from the projected
-    /// transcript (memory-recall events still in the served view — Summarized
+    /// transcript (memory-recall events still in the assembled context — Summarized
     /// ones fold out at the compaction boundary, so the set naturally empties
     /// post-compress and entries re-surface with no provider-side clear). The
     /// query is the latest user input in the log. No-op when no memory
@@ -108,7 +108,7 @@ impl Runner {
         // Cumulative injection cap: once the session has surfaced enough
         // memory, stop adding more — the most relevant entries are already
         // in context, and further recall only crowds the window. Compact
-        // folds old memory-recall events out of the view, which resets this
+        // folds old memory-recall events out of the assembled context, which
         // counter naturally (their bytes drop out).
         if surfaced_bytes >= MAX_SESSION_BYTES {
             return Ok(());
@@ -207,7 +207,7 @@ mod tests {
         assert!(keys.contains("bravo"));
         assert!(keys.contains("charlie"));
         assert_eq!(keys.len(), 3);
-        // Both recall events survive in the view, so bytes is twice the
+        // Both recall events survive in the assembled context, so bytes is twice
         // fixture's recall text length.
         let one = "<system-reminder>...</system-reminder>".len();
         assert_eq!(bytes, one * 2);
@@ -242,7 +242,7 @@ mod tests {
     }
 
     /// A memory-recall event folded by a manifest (Summarized) drops out of
-    /// the served view, so its key is not surfaced and its bytes are not
+    /// the assembled context, so its key is not surfaced and its bytes are not
     /// counted — the natural reset that lets recall re-surface it
     /// post-compress (both the de-dup set and the cumulative cap reset).
     #[test]
@@ -299,7 +299,7 @@ mod tests {
     /// pins the planner (not a hand-crafted manifest) so a regression that
     /// special-cased memory-recall to Verbatim would fail here. The companion
     /// scan test above then proves a Summarized memory-recall drops out of the
-    /// served view — together they are the natural-reset contract.
+    /// assembled context — together they are the natural-reset contract.
     #[tokio::test]
     async fn test_planner_folds_recall() {
         use super::super::manifest::{CompressPolicy, HeuristicSummarizer, build_manifest};

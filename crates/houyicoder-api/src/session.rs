@@ -24,7 +24,7 @@ pub trait SessionLog: Send + Sync {
     /// Read the full event log for a session in append order.
     fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>>;
 
-    /// Assemble the served context view: the full replay plus the latest
+    /// Assemble the context: the full replay plus the latest
     /// checkpoint manifest, so the caller can apply the disposition plan.
     fn current_view(&self, session: SessionId) -> PFut<'_, Result<ContextSnapshot, ContextError>>;
 

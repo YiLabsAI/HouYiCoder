@@ -53,7 +53,7 @@ impl ModelProvider for CannedProvider {
 
 /// Seed a session store with a folded UserInput + a verbatim AssistantMessage,
 /// plus a manifest that Summarizes the UserInput. The tool replays the full
-/// log (both events) but the served view would fold the UserInput; a search
+/// log (both events) but the assembled context would fold the UserInput; a search
 /// for the folded keyword lands a match in the Summarized span.
 async fn seed_folded_session() -> (Arc<SessionStore>, SessionId) {
     let session = SessionId::new();
@@ -104,7 +104,7 @@ fn log_handle(store: &Arc<SessionStore>) -> Arc<dyn SessionLog> {
 
 /// The conversation recall tool searches the full raw log (including
 /// compacted-out detail) and bumps the recall meter when a match lands in the
-/// Summarized span. A folded event the served view no longer shows is still
+/// Summarized span. A folded event the assembled context no longer shows is still
 /// recallable, and the recall counts toward the meter.
 #[tokio::test]
 async fn test_search_finds_compacted_detail() {
@@ -437,7 +437,7 @@ fn unique_nonce() -> u64 {
 }
 
 /// A canned provider with a small context window so the economy gate's
-/// served > window/2 condition is reachable in a test without seeding a
+/// conservative > window/2 condition is reachable in a test without seeding a
 /// 100k-token conversation. Returns a fixed final-text response so the run
 /// reaches FinalOutput after the proactive compact.
 struct SmallWindowProvider {
@@ -477,7 +477,7 @@ impl ModelProvider for SmallWindowProvider {
     }
 }
 
-/// The economy gate fires a proactive compact when the served view exceeds
+/// The economy gate fires a proactive compact when the assembled context exceeds
 /// half the window AND the cost decision (breakeven over the remaining turns)
 /// says compact. Pins the proactive path: the run reaches FinalOutput AND a
 /// CompactionBoundary event lands in the log (the compact fired before the
@@ -486,10 +486,10 @@ impl ModelProvider for SmallWindowProvider {
 async fn test_economy_gate_fires_compact() {
     let session = SessionId::new();
     let backend = InMemoryBackend::new();
-    // Seed 50 short turns so served (system ~3k + 50 turns ~8.5k = ~11.5k)
+    // Seed 50 short turns so the context (system ~3k + 50 turns ~8.5k = ~11.5k)
     // exceeds window/2 (10k) on turn 1's pre-flight. The compact folds 46
     // turns, keeps the last 4 (the verbatim tail ~700 tokens) so the
-    // post-compact served (~3k system + summary + 700 tail = ~4.2k) sits
+    // post-compact context (~3k system + summary + 700 tail = ~4.2k) sits
     // below the ceiling threshold (6500) — the run proceeds to FinalOutput
     // instead of tripping the overflow path. The window (20k) is larger than
     // the estimation margin (13k) so the ceiling threshold is non-zero.
@@ -562,7 +562,7 @@ async fn test_still_over_sets_sticky() {
     let backend = InMemoryBackend::new();
     // Two assistant turns — below the default tail_turns=4, so a compact
     // keeps everything Verbatim (no progress). With a small window + an
-    // isolated cwd the served view sits over the ceiling threshold.
+    // isolated cwd the assembled context sits over the ceiling threshold.
     for i in 0..2 {
         let u = SessionLogEntry {
             id: EventId::new(),
