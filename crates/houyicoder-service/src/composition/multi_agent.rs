@@ -1,6 +1,6 @@
 //! The multi-agent runtime: the SpawnHandle impl the agent tool calls.
 //! Holds the parent's components (registry, store, provider, tools, config,
-//! worktree controller, cwd) and on a sync spawn drives the child runner to
+//! worktree controller, cwd) and on a foreground spawn drives the child runner to
 //! a terminal state, records the SubagentReturn boundary, and returns the
 //! result the tool projects into its tool_result.
 
@@ -17,7 +17,7 @@ use houyicoder_context::{
     DescriptorUpdate, HookEventKind, HookFirePayload, NameSource, SessionDescriptor,
     SessionDescriptorStore, SessionId, SessionProvenance,
 };
-use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, ChildDescriptor, ChildRunMode};
 use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
 use houyicoder_core::agent::multi_agent::concurrency_gate::{AcquireResult, ConcurrencyGate};
 use houyicoder_core::agent::multi_agent::registry::{
@@ -152,10 +152,7 @@ pub(super) fn wire_agent_directory(
     }
 }
 
-/// Build the spawn port the composition root attaches to the runner. The
-/// workspace (or the process cwd when none resolved) is the child's env-block
-/// cwd. Splits the runtime construction out of the composition root so the
-/// root file stays under the size gate.
+/// Build the child-spawn port attached to the parent runner.
 pub(super) fn build_runtime(deps: MultiAgentDeps) -> Arc<dyn SpawnHandle> {
     Arc::new(MultiAgentRuntime::new(deps))
 }
@@ -195,11 +192,11 @@ impl SpawnHandle for MultiAgentRuntime {
             tool_call_id: ctx.call_id.clone(),
         };
         if args.run_in_background {
-            Box::pin(spawn_exec::run_async_spawn(
+            Box::pin(spawn_exec::run_background_spawn(
                 this, parent_sid, depth, cancel, hook_fire, trigger, args,
             ))
         } else {
-            Box::pin(run_sync_spawn(
+            Box::pin(run_foreground_spawn(
                 this, parent_sid, depth, cancel, hook_fire, trigger, args,
             ))
         }
@@ -319,39 +316,23 @@ impl SpawnHandle for MultiAgentRuntime {
             hook: hook.to_string(),
         };
         if args.run_in_background {
-            Box::pin(spawn_exec::run_async_spawn(
+            Box::pin(spawn_exec::run_background_spawn(
                 this, parent_sid, 0, None, None, trigger, args,
             ))
         } else {
-            Box::pin(run_sync_spawn(
+            Box::pin(run_foreground_spawn(
                 this, parent_sid, 0, None, None, trigger, args,
             ))
         }
     }
 }
 
-/// Announce a child spawn on the global topic so a watcher (the fleet
-/// projector, the completion notification injector) can subscribe to that
-/// child's progress and completed topics before the first turn lands. The
-/// run_in_background flag lets the notification injector filter detached
-/// (async) spawns from sync ones. Fire-and-forget: no watcher, no effect.
-fn announce_spawn(
-    bus: Option<&Arc<AgentBus>>,
-    child_id: &str,
-    subagent_type: &str,
-    run_in_background: bool,
-) {
+/// Announce a child before its first status event can be published.
+fn announce_spawn(bus: Option<&Arc<AgentBus>>, child: ChildDescriptor) {
     use houyicoder_async::bus::MessageBus;
     use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, spawned_topic};
     if let Some(bus) = bus {
-        bus.publish(
-            spawned_topic(),
-            BusMessage::Spawned {
-                agent_id: child_id.to_string(),
-                subagent_type: subagent_type.to_string(),
-                run_in_background,
-            },
-        );
+        bus.publish(spawned_topic(), BusMessage::Spawned { child });
     }
 }
 
@@ -412,7 +393,7 @@ async fn fire_subagent_stop(
     }
 }
 
-async fn run_sync_spawn(
+async fn run_foreground_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
     depth: u32,
@@ -424,10 +405,7 @@ async fn run_sync_spawn(
     let def = this
         .registry
         .resolve(&args.subagent_type, &ResolveCtx::default())
-        .map_err(|e| match e {
-            AgentError::NotFound { .. } => SpawnFailure::UnknownAgent,
-            AgentError::PermissionDenied { .. } => SpawnFailure::CapabilityDenied,
-        })?;
+        .map_err(map_registry_err)?;
     let isolation = match args.isolation.as_str() {
         "worktree" => IsolationMode::Worktree,
         _ => IsolationMode::None,
@@ -467,7 +445,7 @@ async fn run_sync_spawn(
         depth,
         isolation,
         worktree_controller: this.worktree_controller.clone(),
-        run_in_background: false,
+        run_mode: ChildRunMode::Foreground,
         parent_cancel: cancel,
         bus: this.bus.clone(),
     };
@@ -478,7 +456,14 @@ async fn run_sync_spawn(
     // parent blocks on the tool call + cannot be viewing the child mid-run —
     // but the registry is shared so the async path's contract holds uniformly).
     this.register_child(&child_str, &handle.runner);
-    announce_spawn(this.bus.as_ref(), &child_str, &args.subagent_type, false);
+    announce_spawn(
+        this.bus.as_ref(),
+        ChildDescriptor {
+            agent_id: child_str.clone(),
+            agent_type: args.subagent_type.clone(),
+            run_mode: ChildRunMode::Foreground,
+        },
+    );
     // SubagentStart fires at the durable spawn boundary (child session exists,
     // SubagentSpawn recorded, run not started); pairs with the later
     // SubagentStop across the SubagentSpawn-to-Return span.
@@ -513,7 +498,14 @@ async fn run_sync_spawn(
         &args.subagent_type,
         &child_str,
     );
-    Ok(SpawnOutcome::sync(child_str, status, summary, usage))
+    Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
+}
+
+fn map_registry_err(error: AgentError) -> SpawnFailure {
+    match error {
+        AgentError::NotFound { .. } => SpawnFailure::UnknownAgent,
+        AgentError::PermissionDenied { .. } => SpawnFailure::CapabilityDenied,
+    }
 }
 
 fn map_spawn_err(e: SpawnError) -> SpawnFailure {

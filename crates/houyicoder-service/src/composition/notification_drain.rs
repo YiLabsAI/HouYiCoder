@@ -1,18 +1,17 @@
 //! Completion notification injector. Subscribes to the global completion
-//! topic; when a detached async child completes, enqueues a
+//! topic; when a detached background child completes, enqueues a
 //! lower-priority notification into the parent runner's mid-turn queue.
 //! Sync children are skipped — their result returns as the tool result.
 //!
-//! The Completed message carries subagent_type and run_in_background so
-//! the drain does not depend on the Spawned message, which can be lost to
-//! broadcast lag — the prior silent-drop bug.
+//! Each completion carries its child descriptor, so the drain does not depend
+//! on observing the earlier spawn announcement.
 
 use std::sync::Arc;
 
 use houyicoder_async::bus::MessageBus;
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::multi_agent::bus_types::{
-    AgentBus, BusMessage, ChildStatus, global_completed_topic,
+    AgentBus, BusMessage, ChildRunMode, ChildStatus, global_completed_topic,
 };
 
 /// Lowercase label for a child's terminal status, mirrored from the fleet
@@ -55,20 +54,18 @@ pub fn spawn(bus: Option<Arc<AgentBus>>, runner: Arc<Runner>, runtime: tokio::ru
         loop {
             match completed_rx.recv().await {
                 Ok(BusMessage::Completed {
-                    agent_id,
+                    child,
                     status,
                     summary,
-                    subagent_type,
-                    run_in_background,
                 }) => {
-                    // Only async children get a completion notification —
-                    // sync children's result returns as the tool result. The
-                    // Completed message carries subagent_type and
-                    // run_in_background, so the drain does not depend on the
-                    // Spawned message, which can be lost to broadcast lag.
-                    if run_in_background {
-                        let text = notification_text(&subagent_type, &agent_id, &status, &summary);
-                        runner.enqueue_notification(agent_id, text);
+                    if child.run_mode == ChildRunMode::Background {
+                        let text = notification_text(
+                            &child.agent_type,
+                            &child.agent_id,
+                            &status,
+                            &summary,
+                        );
+                        runner.enqueue_notification(child.agent_id, text);
                     }
                 }
                 Ok(_) => {}
@@ -83,10 +80,18 @@ pub fn spawn(bus: Option<Arc<AgentBus>>, runner: Arc<Runner>, runtime: tokio::ru
 mod tests {
     use super::*;
     use houyicoder_core::agent::ToolRegistry;
-    use houyicoder_core::agent::multi_agent::bus_types::spawned_topic;
+    use houyicoder_core::agent::multi_agent::bus_types::{ChildDescriptor, spawned_topic};
     use houyicoder_core::agent::runner_config::RunnerConfig;
     use houyicoder_memory::InMemoryBackend;
     use houyicoder_session::SessionStore;
+
+    fn child(id: &str, run_mode: ChildRunMode) -> ChildDescriptor {
+        ChildDescriptor {
+            agent_id: id.into(),
+            agent_type: "explore".into(),
+            run_mode,
+        }
+    }
 
     fn bare_runner() -> Arc<Runner> {
         let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -107,7 +112,7 @@ mod tests {
     /// A detached child's completion enqueues one notification carrying the
     /// subagent type + summary into the parent's lower-priority queue.
     #[tokio::test]
-    async fn test_async_completion_enqueues() {
+    async fn test_background_completion_enqueues() {
         let bus = Arc::new(AgentBus::new());
         let runner = bare_runner();
         spawn(
@@ -118,9 +123,7 @@ mod tests {
         bus.publish(
             spawned_topic(),
             BusMessage::Spawned {
-                agent_id: "c1".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
+                child: child("c1", ChildRunMode::Background),
             },
         );
         // No sleep: the global completion subscription exists at startup, so
@@ -130,11 +133,9 @@ mod tests {
         bus.publish(
             global_completed_topic(),
             BusMessage::Completed {
-                agent_id: "c1".into(),
+                child: child("c1", ChildRunMode::Background),
                 status: ChildStatus::Completed,
                 summary: "found auth".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
             },
         );
         tokio::task::yield_now().await;
@@ -144,11 +145,11 @@ mod tests {
         assert!(snap[0].contains("found auth"), "carries the summary");
     }
 
-    /// A sync child is skipped: its result returns as the tool result, so no
+    /// A foreground child is skipped: its result returns as the tool result, so no
     /// notification is enqueued even though its completion lands on the global
-    /// topic alongside async children.
+    /// topic alongside background children.
     #[tokio::test]
-    async fn test_sync_completion_skipped() {
+    async fn test_foreground_completion_skips_queue() {
         let bus = Arc::new(AgentBus::new());
         let runner = bare_runner();
         spawn(
@@ -159,26 +160,22 @@ mod tests {
         bus.publish(
             spawned_topic(),
             BusMessage::Spawned {
-                agent_id: "c2".into(),
-                subagent_type: "explore".into(),
-                run_in_background: false,
+                child: child("c2", ChildRunMode::Foreground),
             },
         );
         tokio::task::yield_now().await;
         bus.publish(
             global_completed_topic(),
             BusMessage::Completed {
-                agent_id: "c2".into(),
+                child: child("c2", ChildRunMode::Foreground),
                 status: ChildStatus::Completed,
                 summary: "done".into(),
-                subagent_type: "explore".into(),
-                run_in_background: false,
             },
         );
         tokio::task::yield_now().await;
         assert!(
             runner.queued_notifications_snapshot().is_empty(),
-            "sync children do not enqueue a notification"
+            "foreground children do not enqueue a notification"
         );
     }
 
@@ -197,28 +194,22 @@ mod tests {
         bus.publish(
             spawned_topic(),
             BusMessage::Spawned {
-                agent_id: "c3".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
+                child: child("c3", ChildRunMode::Background),
             },
         );
         bus.publish(
             spawned_topic(),
             BusMessage::Spawned {
-                agent_id: "c3".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
+                child: child("c3", ChildRunMode::Background),
             },
         );
         tokio::task::yield_now().await;
         bus.publish(
             global_completed_topic(),
             BusMessage::Completed {
-                agent_id: "c3".into(),
+                child: child("c3", ChildRunMode::Background),
                 status: ChildStatus::Completed,
                 summary: "done".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
             },
         );
         tokio::task::yield_now().await;
@@ -229,9 +220,7 @@ mod tests {
         );
     }
 
-    /// A failed child also enqueues a notification (the parent learns of
-    /// failure, not only success). Pins that the drain matches every terminal
-    /// status, so a later narrowing to Completed-only would regress red.
+    /// A failed background child also enqueues a completion notification.
     #[tokio::test]
     async fn test_failed_completion_enqueues() {
         let bus = Arc::new(AgentBus::new());
@@ -244,20 +233,16 @@ mod tests {
         bus.publish(
             spawned_topic(),
             BusMessage::Spawned {
-                agent_id: "c4".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
+                child: child("c4", ChildRunMode::Background),
             },
         );
         tokio::task::yield_now().await;
         bus.publish(
             global_completed_topic(),
             BusMessage::Completed {
-                agent_id: "c4".into(),
+                child: child("c4", ChildRunMode::Background),
                 status: ChildStatus::Failed,
                 summary: "provider fatal".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
             },
         );
         tokio::task::yield_now().await;
@@ -267,7 +252,7 @@ mod tests {
         assert!(snap[0].contains("provider fatal"), "carries the summary");
     }
 
-    /// Multiple async children completing near-simultaneously each enqueue a
+    /// Multiple background children completing near-simultaneously each enqueue a
     /// distinct notification (no cross-child dedup): the map is keyed by
     /// child id, so three children produce three notifications.
     #[tokio::test]
@@ -283,9 +268,7 @@ mod tests {
             bus.publish(
                 spawned_topic(),
                 BusMessage::Spawned {
-                    agent_id: id.into(),
-                    subagent_type: "explore".into(),
-                    run_in_background: true,
+                    child: child(id, ChildRunMode::Background),
                 },
             );
         }
@@ -294,11 +277,9 @@ mod tests {
             bus.publish(
                 global_completed_topic(),
                 BusMessage::Completed {
-                    agent_id: id.into(),
+                    child: child(id, ChildRunMode::Background),
                     status: ChildStatus::Completed,
                     summary: summary.into(),
-                    subagent_type: "explore".into(),
-                    run_in_background: true,
                 },
             );
         }
@@ -326,20 +307,16 @@ mod tests {
         bus.publish(
             spawned_topic(),
             BusMessage::Spawned {
-                agent_id: "c8".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
+                child: child("c8", ChildRunMode::Background),
             },
         );
         tokio::task::yield_now().await;
         bus.publish(
             global_completed_topic(),
             BusMessage::Completed {
-                agent_id: "c8".into(),
+                child: child("c8", ChildRunMode::Background),
                 status: ChildStatus::Completed,
                 summary: String::new(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
             },
         );
         tokio::task::yield_now().await;
@@ -373,19 +350,15 @@ mod tests {
         bus.publish(
             spawned_topic(),
             BusMessage::Spawned {
-                agent_id: "c9".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
+                child: child("c9", ChildRunMode::Background),
             },
         );
         bus.publish(
             global_completed_topic(),
             BusMessage::Completed {
-                agent_id: "c9".into(),
+                child: child("c9", ChildRunMode::Background),
                 status: ChildStatus::Completed,
                 summary: "race".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
             },
         );
         tokio::task::yield_now().await;
@@ -399,10 +372,8 @@ mod tests {
         assert!(snap[0].contains("race"), "carries the summary");
     }
 
-    /// A completion for a child whose Spawned was never published still
-    /// enqueues a notification. The Completed message is self-contained,
-    /// carrying subagent_type and run_in_background, so it does not depend
-    /// on the Spawned message. Pins the broadcast-lag resilience.
+    /// A self-contained completion still notifies when the earlier spawn
+    /// announcement was not observed.
     #[tokio::test]
     async fn test_orphan_completion_notifies() {
         let bus = Arc::new(AgentBus::new());
@@ -416,11 +387,9 @@ mod tests {
         bus.publish(
             global_completed_topic(),
             BusMessage::Completed {
-                agent_id: "orphan".into(),
+                child: child("orphan", ChildRunMode::Background),
                 status: ChildStatus::Completed,
                 summary: "no spawn seen".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
             },
         );
         tokio::task::yield_now().await;
@@ -428,7 +397,7 @@ mod tests {
         assert_eq!(
             snap.len(),
             1,
-            "a Completed with run_in_background=true enqueues without a Spawned"
+            "a background completion enqueues without a spawn announcement"
         );
         assert!(
             snap[0].contains("explore"),

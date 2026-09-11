@@ -8,6 +8,7 @@ use houyicoder_session::SessionStore;
 use std::sync::{Arc, Mutex};
 
 use crate::agent::ToolRegistry;
+use crate::agent::multi_agent::bus_types::ChildRunMode;
 use crate::agent::multi_agent::registry::IsolationMode;
 use crate::agent::multi_agent::spawn::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
 use crate::agent::runner_config::RunnerConfig;
@@ -85,7 +86,7 @@ async fn test_spawn_child_worktree_isolation() {
         depth: 0,
         isolation: IsolationMode::Worktree,
         worktree_controller: Some(controller.clone()),
-        run_in_background: false,
+        run_mode: ChildRunMode::Foreground,
         parent_cancel: None,
         bus: None,
     };
@@ -133,7 +134,7 @@ async fn test_spawn_child_fence_fail() {
         depth: 0,
         isolation: IsolationMode::Worktree,
         worktree_controller: Some(controller),
-        run_in_background: false,
+        run_mode: ChildRunMode::Foreground,
         parent_cancel: None,
         bus: None,
     };

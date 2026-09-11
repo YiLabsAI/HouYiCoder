@@ -28,7 +28,7 @@ fn test_tokenizer_no_cjk_undercount() {
 #[test]
 fn test_tokenizer_exact_counts() {
     // Mixed and CJK cases distinguish the intended BPE table from fallback
-    // encodings; ASCII cases pin general table drift.
+    // encodings; ASCII cases cover general table drift.
     let t = Tokenizer::real();
     let cases = [
         ("hello world", 2),
@@ -243,9 +243,7 @@ fn test_memory_manifest_format_aligned() {
     );
 }
 
-/// A fresh entry (mtime within today) renders the manifest header without a
-/// staleness caveat — the caveat is noise on fresh memories. Pins the
-/// no-caveat branch so a regression that warns on every entry is caught.
+/// A fresh entry renders without a staleness caveat.
 #[test]
 fn test_memory_manifest_no_caveat() {
     let now = std::time::SystemTime::now()
@@ -265,16 +263,10 @@ fn test_memory_manifest_no_caveat() {
     );
 }
 
-/// The /context Memory section is recomputed from the memory-recall events
-/// in the projected view (not the system prompt — memory lives in the message
-/// stream now). Pins the recompute path: a memory-recall event in the log
-/// yields a Memory section carrying its keys and a positive token count, the
-/// system prompt stays free of recalled memory (byte-frozen for cache), and
-/// the memory tokens are not double-counted (Messages + Memory == the full
-/// input; total == system + input) so the pre-flight compress threshold does
-/// not trip a memory-budget's worth of tokens early.
+/// The context breakdown attributes recalled-memory tokens separately without
+/// changing the cache-stable system prompt or double-counting message input.
 #[test]
-fn test_memory_section_recomputed_projection() {
+fn test_context_partitions_recall_tokens() {
     let mut scratch = std::env::temp_dir();
     scratch.push(format!("ctx-test-memsec-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).expect("mkdir scratch");
@@ -516,11 +508,7 @@ fn test_build_empty_events_view() {
     assert!(!bd.grid.is_empty(), "prospective breakdown builds a grid");
 }
 
-/// The system prompt is byte-stable across turns (same cwd, no memory-file
-/// change) so the prompt-cache prefix hits on every turn. The build is purely
-/// cwd-dependent — no event leakage — so two builds over different event logs
-/// yield identical system text. Pins the cache-stability invariant so a later
-/// refactor cannot leak per-turn state into the static prefix.
+/// The system prompt remains byte-stable as the event log grows in one cwd.
 #[test]
 fn test_system_block_stable_turns() {
     let mut scratch = std::env::temp_dir();
@@ -584,10 +572,8 @@ fn test_system_block_stable_turns() {
     std::fs::remove_dir_all(&scratch).ok();
 }
 
-/// Recalled memory lands in the message stream (merged into the user turn),
-/// NOT in the system prompt's static section — so per-turn recall does not
-/// break the cached prefix. Pins the separation so a later refactor cannot
-/// fold recall back into the system block.
+/// Recalled memory remains in the message stream and outside the static
+/// system prompt.
 #[test]
 fn test_recall_not_system_section() {
     let mut scratch = std::env::temp_dir();
@@ -642,12 +628,8 @@ fn test_recall_not_system_section() {
     std::fs::remove_dir_all(&scratch).ok();
 }
 
-/// The system prompt carries a dynamic_boundary offset: the static prefix
-/// (before the boundary) is byte-stable across different working directories
-/// — only the dynamic suffix (project context + env, after the boundary)
-/// changes with cwd. A cache policy splits here so the prefix caches globally
-/// while the suffix stays session-scoped. Pins the reorder + boundary rule so
-/// a later refactor cannot fold cwd-dependent content back into the prefix.
+/// The dynamic boundary keeps the static prefix stable across working
+/// directories while project context remains in the session-scoped suffix.
 #[test]
 fn test_boundary_splits_static_dynamic() {
     let mut dir_a = std::env::temp_dir();
@@ -685,9 +667,7 @@ fn test_boundary_splits_static_dynamic() {
     std::fs::remove_dir_all(&dir_b).ok();
 }
 
-/// When no project memory file is present, the dynamic suffix still carries
-/// the env section (cwd-dependent) and the boundary splits before it. Pins
-/// that the boundary is always set, even without a project context.
+/// The dynamic boundary remains present when no project memory exists.
 #[test]
 fn test_boundary_set_without_project() {
     let mut scratch = std::env::temp_dir();

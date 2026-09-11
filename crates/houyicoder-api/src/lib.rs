@@ -8,14 +8,13 @@
 //! types; any signature needing an implementation type forces that type down
 //! to the foundation first, or the trait does not enter ports.
 
+pub mod agent_event;
 pub mod cache_policy;
 pub mod cost_model;
 pub mod hook_fire;
 pub mod launcher;
-pub mod live;
 pub mod mcp;
 pub mod memory;
-pub mod progress;
 pub mod provider;
 pub mod sandbox;
 pub mod session;

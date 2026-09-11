@@ -2,7 +2,7 @@
 //! loop_tests.rs stays under the file-size gate.
 
 use super::*;
-use crate::agent::tests::runner_with;
+use crate::agent::runner_tests::runner_with;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_context::SessionEvent;

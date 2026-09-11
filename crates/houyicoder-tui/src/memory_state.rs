@@ -1,13 +1,14 @@
 //! State and transitions for the memory browser.
 //!
 //! The owner keeps list selection, filtering, toggle state, detail requests,
-//! and bounded detail scrolling consistent across command, key, wire, and view
-//! boundaries.
+//! notice identity, and bounded detail scrolling consistent across command,
+//! key, wire, and view boundaries.
 
 use std::cell::Cell;
+use std::collections::HashSet;
 
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::memory::{MemoryDetail, ToggleState};
+use houyicoder_protocol::frontend::memory::{MemoryChangeId, MemoryDetail, ToggleState};
 
 use crate::evidence::MemoryEntry;
 use crate::list_pane_state::ListPaneState;
@@ -31,6 +32,7 @@ pub(crate) struct MemoryPaneState {
     scope: MemoryScopeTab,
     list: ListPaneState,
     detail: Option<MemoryDetailState>,
+    seen_changes: HashSet<MemoryChangeId>,
 }
 
 impl MemoryPaneState {
@@ -44,6 +46,7 @@ impl MemoryPaneState {
             scope: MemoryScopeTab::All,
             list: ListPaneState::default(),
             detail: None,
+            seen_changes: HashSet::new(),
         }
     }
 
@@ -87,6 +90,10 @@ impl MemoryPaneState {
     pub(crate) fn set_entries(&mut self, entries: Vec<MemoryEntry>) {
         self.entries = entries;
         self.list.cursor = 0;
+    }
+
+    pub(crate) fn register_change(&mut self, id: &MemoryChangeId) -> bool {
+        self.seen_changes.insert(id.clone())
     }
 
     pub(crate) fn cursor(&self) -> usize {

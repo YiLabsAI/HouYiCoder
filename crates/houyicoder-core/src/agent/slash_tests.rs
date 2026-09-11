@@ -318,10 +318,8 @@ async fn test_run_lands_skill_body() {
     );
 }
 
-/// A refused skill (@skill:secret, user-invocable=false) ends the turn
-/// without a model call: no MetaUser body appended, no assistant
-/// message, turns=0. The refusal surfaces as a system line (no-op in
-/// tests with no live sink).
+/// A refused non-user-invocable skill ends the turn without a model call or
+/// assistant message.
 #[tokio::test]
 async fn test_run_refused_skips_model() {
     use houyicoder_context::SessionEvent;

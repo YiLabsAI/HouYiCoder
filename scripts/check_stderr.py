@@ -7,12 +7,12 @@ terminal at wherever the cursor happens to sit -- which, during a session,
 is inside the input box. A best-effort failure reported with eprintln does
 not reach a log; it corrupts the surface the user is typing into.
 
-There are three sinks and the choice between them is a design decision,
-not a matter of taste:
+There are three delivery destinations and the choice between them is a design
+decision, not a matter of taste:
 
-  user-visible   the user must know, or can act on it. Emit a system line
-                 (LiveEvent::SystemLine through the runner's live sink);
-                 it lands in the transcript and survives scrollback.
+  user-visible   the user must know, or can act on it. Emit a UserNoticeEvent
+                 through the runner's user-notice handler; it lands in the
+                 transcript and survives scrollback.
   diagnostic     only a developer can use it. Append to the debug log
                  (the debug_log module, gated by HOUYICODER_DEBUG_LOG);
                  it goes to a file and never touches the terminal.

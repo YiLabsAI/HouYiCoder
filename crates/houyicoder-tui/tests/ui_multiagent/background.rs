@@ -1,21 +1,22 @@
 use super::*;
 
-/// Real-binary async delegation: the parent delegates a background child
-/// (run_in_background), the tool returns async_launched immediately, the
-/// parent continues, the detached driver runs the child to completion, the
-/// notification injector enqueues, and the parent's next run drains the
-/// notification at its first turn boundary. The script is all "ok" past
-/// turn 1 so the shared provider race (parent vs child consuming turns)
-/// cannot break either side. Slow, ignored by default.
+/// Real-binary background delegation: the parent delegates a background
+/// child (run_in_background), the tool returns a launched result
+/// immediately, the parent continues, the detached driver runs the child
+/// to completion, the notification injector enqueues, and the parent's
+/// next run drains the notification at its first turn boundary. The
+/// script is all "ok" past turn 1 so the shared provider race (parent vs
+/// child consuming turns) cannot break either side. Slow, ignored by
+/// default.
 #[test]
 #[ignore]
-fn test_multi_async_delegation() {
+fn test_background_delegation_completes() {
     // Turn 1: the agent tool call with run_in_background, then the parent
     // continues with a text. Every later turn is "ok" so the child + the
     // parent's later turns all resolve to a final text regardless of who
     // consumes which scripted turn (the shared provider race).
     let script = r#"[
-        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"delegated async, continuing"}],
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"delegated background, continuing"}],
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}],
@@ -37,11 +38,11 @@ fn test_multi_async_delegation() {
     );
     s.send_str("find the auth module");
     s.send_str("\r");
-    // Turn 1: the async spawn fires + the parent continues. "delegated async"
-    // confirms the parent did not block on the child (async_launched).
+    // Turn 1: the background spawn fires + the parent continues. "delegated
+    // background" confirms the parent did not block on the child.
     assert!(
-        s.wait_for_plain("delegated async", RENDER_TIMEOUT * 2),
-        "parent should continue past an async delegation:\n{}",
+        s.wait_for_plain("delegated background", RENDER_TIMEOUT * 2),
+        "parent should continue past a background delegation:\n{}",
         s.output()
     );
     // Give the detached driver time to run the child to completion + the
@@ -60,7 +61,7 @@ fn test_multi_async_delegation() {
     }
     assert!(
         drained,
-        "async child completion notification should drain into the parent \
+        "background child completion notification should drain into the parent \
          transcript across several turn boundaries:\n{}",
         s.output()
     );
@@ -71,12 +72,13 @@ fn test_multi_async_delegation() {
     );
 }
 
-/// The parent continues past an async spawn without blocking: the parent's
-/// own text renders right after the async_launched result, before the child
-/// completes. Proves the async path returns immediately (no sync block).
+/// The parent continues past a background spawn without blocking: the
+/// parent's own text renders right after the launched result, before the
+/// child completes. Proves the background path returns immediately (no
+/// foreground block).
 #[test]
 #[ignore]
-fn test_async_parent_unblocked() {
+fn test_background_spawn_unblocks_parent() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent carried on"}],
         [{"type":"Text","text":"ok"}],
@@ -89,20 +91,20 @@ fn test_async_parent_unblocked() {
     s.send_str("\r");
     assert!(
         s.wait_for_compact("parentcarriedon", RENDER_TIMEOUT * 2),
-        "parent should continue past an async spawn:\n{}",
+        "parent should continue past a background spawn:\n{}",
         s.output()
     );
 }
 
-/// The async completion notification carries the child's result text, not
-/// just the terminal status, so the parent transcript shows what the child
-/// produced. Distinct from the status-only assertion.
+/// The background completion notification carries the child's result text,
+/// not just the terminal status, so the parent transcript shows what the
+/// child produced. Distinct from the status-only assertion.
 #[test]
 #[ignore]
-fn test_async_child_text_drains() {
+fn test_background_output_reaches_parent() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent continues"}],
-        [{"type":"Text","text":"async child produced this"}],
+        [{"type":"Text","text":"background child produced this"}],
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}],
@@ -119,27 +121,28 @@ fn test_async_child_text_drains() {
     for _ in 0..6 {
         s.send_str("update");
         s.send_str("\r");
-        if s.wait_for_compact("asyncchildproducedthis", RENDER_TIMEOUT * 2) {
+        if s.wait_for_compact("backgroundchildproducedthis", RENDER_TIMEOUT * 2) {
             drained = true;
             break;
         }
     }
     assert!(
         drained,
-        "async notification should carry the child result text:\n{}",
+        "background notification should carry the child result text:\n{}",
         s.output()
     );
 }
 
-/// An async spawn followed by a sync spawn in one run: the async child
-/// detaches, the sync child blocks the parent to completion, then the async
-/// notification drains later. Proves the two spawn modes coexist.
+/// A background spawn followed by a foreground spawn in one run: the
+/// background child detaches, the foreground child blocks the parent to
+/// completion, then the background notification drains later. Proves the
+/// two spawn modes coexist.
 #[test]
 #[ignore]
-fn test_async_then_sync_mix() {
+fn test_mixed_modes_preserve_order() {
     let script = r#"[
-        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"async","description":"async","run_in_background":true}},{"type":"Text","text":"after async"}],
-        [{"type":"Text","text":"sync child result"}],
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"background","description":"background","run_in_background":true}},{"type":"Text","text":"after background"}],
+        [{"type":"Text","text":"foreground child result"}],
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}],
@@ -150,28 +153,28 @@ fn test_async_then_sync_mix() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("mixed");
     s.send_str("\r");
-    // The async spawn returns immediately; the parent continues.
+    // The background spawn returns immediately; the parent continues.
     assert!(
-        s.wait_for_compact("afterasync", RENDER_TIMEOUT * 2),
-        "parent should continue past the async spawn:\n{}",
+        s.wait_for_compact("afterbackground", RENDER_TIMEOUT * 2),
+        "parent should continue past the background spawn:\n{}",
         s.output()
     );
-    // The sync child (turn 1) blocks the parent to completion + its result
-    // fold renders.
+    // The foreground child (turn 1) blocks the parent to completion + its
+    // result fold renders.
     assert!(
-        s.wait_for_compact("syncchildresult", RENDER_TIMEOUT * 3),
-        "sync child result should render:\n{}",
+        s.wait_for_compact("foregroundchildresult", RENDER_TIMEOUT * 3),
+        "foreground child result should render:\n{}",
         s.output()
     );
 }
 
 // ---- batch 5: agents pane + slash + misc ----
 
-/// The async spawn result surfaces a "launched in the background" message,
-/// so the user knows the child is detached (not blocking).
+/// The background spawn result surfaces a "launched in the background"
+/// message, so the user knows the child is detached (not blocking).
 #[test]
 #[ignore]
-fn test_async_background_message() {
+fn test_background_spawn_reports_start() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent continues"}],
         [{"type":"Text","text":"ok"}],
@@ -183,18 +186,18 @@ fn test_async_background_message() {
     s.send_str("\r");
     assert!(
         s.wait_for_compact("background", RENDER_TIMEOUT * 2),
-        "async spawn should surface a background-launch message:\n{}",
+        "background spawn should surface a background-launch message:\n{}",
         s.output()
     );
 }
 
-/// The async completion notification drains into the parent transcript at a
-/// turn boundary, proving the detached-child completion reaches the parent.
-/// (Counting exact drain events is a unit-level concern; here the render
-/// stays across frames so the buffer count is not a drain count.)
+/// The background completion notification drains into the parent transcript
+/// at a turn boundary, proving the detached-child completion reaches the
+/// parent. (Counting exact drain events is a unit-level concern; here the
+/// render stays across frames so the buffer count is not a drain count.)
 #[test]
 #[ignore]
-fn test_async_notification_drains_once() {
+fn test_background_notice_arrives_once() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent continues"}],
         [{"type":"Text","text":"ok"}],

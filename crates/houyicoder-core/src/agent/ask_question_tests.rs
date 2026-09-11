@@ -4,7 +4,7 @@
 //! result the model sees carries the formatted summary. These assert the real
 //! runner wiring, not the tool's execute_authorized in isolation.
 
-use super::tests::runner_with;
+use super::runner_tests::runner_with;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};

@@ -8,7 +8,9 @@ use std::iter;
 use std::time::Instant;
 
 use houyicoder_protocol::frontend::SessionId as WireSessionId;
-use houyicoder_protocol::frontend::memory::MemorySavedKind;
+use houyicoder_protocol::frontend::memory::{
+    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+};
 use houyicoder_protocol::frontend::run::RunError;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCallStatus};
 
@@ -390,7 +392,11 @@ impl App {
                 }
             }
             AgentMessage::MemoryToggleStateResult { state } => self.memory.set_toggles(state),
-            AgentMessage::MemorySaved { count, kind } => self.show_memory_saved(count, kind),
+            AgentMessage::MemoryChanged {
+                id,
+                origin,
+                changes,
+            } => self.show_memory_changes(&id, origin, &changes),
             AgentMessage::UndoResult { description } => match description {
                 Some(desc) => self.system_line(format!("undo: {desc}")),
                 None => self.system_line("undo: nothing to undo (stack empty)"),
@@ -484,28 +490,38 @@ impl App {
         }
     }
 
-    fn show_memory_saved(&mut self, count: u32, kind: MemorySavedKind) {
-        let notice = match kind {
-            MemorySavedKind::Extracted => {
-                let noun = if count == 1 { "memory" } else { "memories" };
-                format!("Saved {count} {noun} · /memory shows newest first")
-            }
-            MemorySavedKind::Consolidated => {
-                let noun = if count == 1 {
-                    "memory change"
-                } else {
-                    "memory changes"
-                };
-                format!("Consolidated {count} {noun} · /memory shows newest first")
-            }
-        };
-        if !self
-            .transcript
-            .last()
-            .is_some_and(|line| matches!(line, TranscriptLine::System(text) if text == &notice))
-        {
-            self.system_line(notice);
+    fn show_memory_changes(
+        &mut self,
+        id: &MemoryChangeId,
+        origin: MemoryChangeOrigin,
+        changes: &[MemoryChange],
+    ) {
+        if !self.memory.register_change(id) {
+            return;
         }
+        let source = match origin {
+            MemoryChangeOrigin::PrimaryAgent => "primary agent",
+            MemoryChangeOrigin::AutoMemory => "auto-memory",
+            MemoryChangeOrigin::AutoDream => "auto-dream",
+        };
+        let operations = changes
+            .iter()
+            .map(|change| {
+                let operation = match change.operation {
+                    MemoryOperation::Stored => "stored",
+                    MemoryOperation::Deleted => "deleted",
+                    MemoryOperation::Promoted => "promoted",
+                    MemoryOperation::Demoted => "demoted",
+                };
+                format!("{operation} {}", change.key)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let count = changes.len();
+        let noun = if count == 1 { "change" } else { "changes" };
+        self.system_line(format!(
+            "Memory {source}: {count} {noun} ({operations}) · /memory shows newest first"
+        ));
         if self.pane == Pane::Memory
             && let Some(req_id) = self.mint_request_id()
         {

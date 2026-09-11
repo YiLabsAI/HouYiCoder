@@ -1,7 +1,4 @@
-//! Public run entries: run, run_forked, resume. Each is a thin wrapper over
-//! drive_loop that sets up per-run state (cancel token, fact extraction,
-//! memory recall) at the boundaries a caller hits. Extracted from the main
-//! impl so the entry surface and the loop body live apart.
+//! Public run entry points and per-run state initialization.
 
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::Usage;
@@ -13,6 +10,7 @@ use super::runner_config::{
     DEFAULT_SNAPSHOT_SIZE_CAP_BYTES, DEFAULT_SNAPSHOT_TTL_SECS, RunnerConfig,
 };
 use super::*;
+use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::provider::ModelProvider;
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32};
@@ -40,7 +38,7 @@ impl Runner {
             active_effort,
             effort_resolver: None,
             context_builder: ContextBuilder::new(),
-            live: None,
+            events: AgentEventHandlers::default(),
             inbox: Mutex::new(None),
             startup_warnings: Mutex::new(Vec::new()),
             breaker: None,
@@ -140,17 +138,7 @@ impl Runner {
         self.inject_memory_recall(session).await?;
         self.inject_skill_listing_and_body(session).await?;
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
-        let result = match result {
-            Ok(r) => {
-                let (status, summary) = r.outcome.terminal_status();
-                self.emit_run_completed(status, &summary);
-                Ok(r)
-            }
-            Err(e) => {
-                self.emit_run_completed("failed", &e.to_string());
-                Err(e)
-            }
-        };
+        self.emit_run_result(&result);
         // Best-effort fact persistence: failures are logged, not fatal.
         if let Ok(_) = result
             && let Some(memory) = &self.memory
@@ -197,6 +185,7 @@ impl Runner {
         if let Some(r) = self.aborted_short_circuit(session).await? {
             // Abort skips drive_loop, so finalize here.
             let result = Ok(r);
+            self.emit_run_result(&result);
             self.finalize_input_buffer(&result);
             return result;
         }
@@ -213,8 +202,11 @@ impl Runner {
             });
         }
         let prior_turns = self.count_turns(session).await?;
-        self.drive_loop(session, prior_turns, Usage::default(), &token)
-            .await
+        let result = self
+            .drive_loop(session, prior_turns, Usage::default(), &token)
+            .await;
+        self.emit_run_result(&result);
+        result
     }
 
     /// Re-apply or clear skill entitlements at the turn boundary. A skill

@@ -29,34 +29,35 @@ pub fn spawn(
             tokio::select! {
                 biased;
                 msg = spawned_rx.recv() => match msg {
-                    Ok(BusMessage::Spawned { agent_id, subagent_type, run_in_background: _ }) => {
+                    Ok(BusMessage::Spawned { child }) => {
                         let snap = Snapshot::default();
-                        emit(&event_sequencer, &agent_id, &subagent_type, &snap);
-                        children.insert(agent_id, (subagent_type, snap));
+                        emit(&event_sequencer, &child.agent_id, &child.agent_type, &snap);
+                        children.insert(child.agent_id, (child.agent_type, snap));
                     }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },
                 msg = progress_rx.recv() => match msg {
-                    Ok(BusMessage::Progress { agent_id, turn, tokens, tool_uses, last_activity }) => {
-                        if let Some((subagent_type, snap)) = children.get_mut(&agent_id) {
-                            *snap = Snapshot { turn, tokens, tool_uses, last_activity, completed: None };
-                            emit(&event_sequencer, &agent_id, subagent_type, snap);
-                        }
+                    Ok(BusMessage::Progress { child, turn, tokens, tool_uses, last_activity }) => {
+                        let entry = children
+                            .entry(child.agent_id.clone())
+                            .or_insert_with(|| (child.agent_type, Snapshot::default()));
+                        entry.1 = Snapshot { turn, tokens, tool_uses, last_activity, completed: None };
+                        emit(&event_sequencer, &child.agent_id, &entry.0, &entry.1);
                     }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },
                 msg = completed_rx.recv() => match msg {
-                    Ok(BusMessage::Completed { agent_id, status, summary, .. }) => {
-                        if let Some((subagent_type, snap)) = children.get_mut(&agent_id) {
-                            snap.completed = Some(status_str(&status));
-                            snap.last_activity = Some(summary);
-                            emit(&event_sequencer, &agent_id, subagent_type, snap);
-                            children.remove(&agent_id);
-                        }
+                    Ok(BusMessage::Completed { child, status, summary }) => {
+                        let mut snap = children
+                            .remove(&child.agent_id)
+                            .map_or_else(Snapshot::default, |(_, snap)| snap);
+                        snap.completed = Some(status_str(&status));
+                        snap.last_activity = Some(summary);
+                        emit(&event_sequencer, &child.agent_id, &child.agent_type, &snap);
                     }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -102,6 +103,7 @@ fn emit(event_sequencer: &EventSequencer, agent_id: &str, subagent_type: &str, s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use houyicoder_core::agent::multi_agent::bus_types::{ChildDescriptor, ChildRunMode};
 
     #[test]
     fn test_emit_submits_reliable_status() {
@@ -138,9 +140,11 @@ mod tests {
         bus.publish(
             spawned_topic(),
             BusMessage::Spawned {
-                agent_id: "c1".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
+                child: ChildDescriptor {
+                    agent_id: "c1".into(),
+                    agent_type: "explore".into(),
+                    run_mode: ChildRunMode::Background,
+                },
             },
         );
         tokio::time::timeout(std::time::Duration::from_secs(1), sequencer.notified())
@@ -150,11 +154,13 @@ mod tests {
         bus.publish(
             global_completed_topic(),
             BusMessage::Completed {
-                agent_id: "c1".into(),
+                child: ChildDescriptor {
+                    agent_id: "c1".into(),
+                    agent_type: "explore".into(),
+                    run_mode: ChildRunMode::Background,
+                },
                 status: ChildStatus::Completed,
                 summary: "done".into(),
-                subagent_type: "explore".into(),
-                run_in_background: true,
             },
         );
         tokio::time::timeout(std::time::Duration::from_secs(1), sequencer.notified())

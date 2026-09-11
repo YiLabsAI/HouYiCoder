@@ -30,7 +30,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
 use houyicoder_core::agent::multi_agent::registry::{BuiltInRegistry, built_in_all};
 use houyicoder_core::agent::runner_config::RunnerConfig;
-use houyicoder_core::agent::{AgentTool, Runner, Tokenizer, ToolRegistry};
+use houyicoder_core::agent::{DelegationTool, Runner, Tokenizer, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
@@ -243,7 +243,7 @@ fn build_harness(
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
     let mut tools = ToolRegistry::new();
-    tools.register(Arc::new(AgentTool::new(registry.clone())));
+    tools.register(Arc::new(DelegationTool::new(registry.clone())));
     let config = RunnerConfig::default();
     let parent = Arc::new(RecordingProvider::new(
         Arc::new(FakeProvider::new(parent_responses)),

@@ -1,10 +1,4 @@
-//! agent::call — the streaming model-call path with pre-flight and overflow.
-//!
-//! Extracted from the runner module to keep file sizes under the gate. The
-//! model_call_stream method is the hot path: re-project the event log, build
-//! the request, drive the provider stream, and fold events into a
-//! CompletionResponse. Pre-flight (fail-closed at the absolute reserve —
-/// ! window minus the model response room and an estimation margin) and ! overflow handling (compress → retry, bounded 2) live here so the ! session never bricks on ContextOverflow.
+//! Streaming model calls, request preflight, and context overflow recovery.
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
@@ -16,7 +10,7 @@ use houyicoder_protocol::llm::{LlmEvent, Usage};
 
 use super::truncation::{classify_truncation_signal, is_length_reason};
 use super::{RunError, Runner, new_event, obs_wire};
-use houyicoder_api::live::{LiveEvent, LiveSink};
+use houyicoder_api::agent_event::{EventHandler, ResponseStreamEvent};
 
 #[path = "stream_fold.rs"]
 mod stream_fold;
@@ -308,7 +302,7 @@ impl Runner {
             self.cache_policy
                 .apply(&mut request.cache_breakpoints, &policy);
             let provider = self.provider.clone();
-            let live = self.live.clone();
+            let response_handler = self.events.response_stream_handler();
             let max_attempts = self.config.retry.max_attempts.max(1);
 
             // Retry-to-first-event: a retryable transport error before any event
@@ -420,10 +414,11 @@ impl Runner {
             };
 
             let mut state = StreamFold::default();
-            // Process events INLINE as they arrive — not buffered — so the
-            // live sink fires during the stream + each delta hits the log.
+            // Process events as they arrive so response handlers and the log
+            // observe each delta without waiting for stream completion.
             if let Some(ev) = first {
-                self.fold_event(ev, &mut state, session, &live).await?;
+                self.fold_event(ev, &mut state, session, response_handler.as_deref())
+                    .await?;
             }
             loop {
                 let ev = tokio::select! {
@@ -450,7 +445,8 @@ impl Runner {
                         None => break,
                     },
                 };
-                self.fold_event(ev, &mut state, session, &live).await?;
+                self.fold_event(ev, &mut state, session, response_handler.as_deref())
+                    .await?;
             }
             // Provider-omits-usage fallback: some OpenAI-compat streams
             // ignore stream_options.include_usage; substitute the served
@@ -641,9 +637,8 @@ impl Runner {
         Ok(())
     }
 
-    /// Fold one streamed LlmEvent into the turn state: append a text delta to
-    /// the durable log + notify the live sink + accumulate; collect reasoning,
-    /// tool calls, and usage. A ProviderError event is terminal for the turn.
+    /// Fold one streamed LlmEvent into turn state and emit response events.
+    /// A ProviderError event is terminal for the turn.
     /// Boundary events (TextStart/End, ToolInput*, Step*) are ignored —
     /// tool-input streaming is not surfaced here yet.
     async fn fold_event(
@@ -651,12 +646,12 @@ impl Runner {
         ev: LlmEvent,
         state: &mut StreamFold,
         session: SessionId,
-        live: &Option<LiveSink>,
+        response_handler: Option<&dyn EventHandler<ResponseStreamEvent>>,
     ) -> Result<(), RunError> {
         match ev {
             LlmEvent::TextDelta { text, .. } => {
-                if let Some(sink) = live {
-                    sink(&LiveEvent::AssistantDelta { text: text.clone() });
+                if let Some(handler) = response_handler {
+                    handler.handle(ResponseStreamEvent::AssistantTextDelta { text: text.clone() });
                 }
                 self.store
                     .append(new_event(
@@ -667,8 +662,8 @@ impl Runner {
                 state.assistant_text.push_str(&text);
             }
             LlmEvent::ReasoningDelta { text, .. } => {
-                if let Some(sink) = live {
-                    sink(&LiveEvent::ReasoningDelta { text: text.clone() });
+                if let Some(handler) = response_handler {
+                    handler.handle(ResponseStreamEvent::ReasoningDelta { text: text.clone() });
                 }
                 state.reasoning.push(text);
             }

@@ -38,9 +38,9 @@ pub use super::step::{ApprovalDecision, ApprovalRequest, NextStep, TurnOutcome};
 pub use super::thinking::{thinking_brief, turn_reasoning, turn_tool_summary};
 pub use super::tool::{StubTool, ToolRegistry};
 pub use super::tools::{
-    AgentTool, AskUserQuestionTool, BashTool, ConversationSearchTool, EditTool, EnterWorktreeTool,
-    ExitWorktreeTool, GlobTool, GrepTool, MemoryAddTool, MultiEditTool, ReadTool, SkillTool,
-    TodoItem, TodoStatus, TodoWriteTool, WebFetchTool, WriteTool,
+    AskUserQuestionTool, BashTool, ConversationSearchTool, DelegationTool, EditTool,
+    EnterWorktreeTool, ExitWorktreeTool, GlobTool, GrepTool, MemoryAddTool, MultiEditTool,
+    ReadTool, SkillTool, TodoItem, TodoStatus, TodoWriteTool, WebFetchTool, WriteTool,
 };
 pub use super::turn_group::assemble_model_input;
 pub use super::verify::{MakeCheckGate, VerifyFailure, VerifyGate};

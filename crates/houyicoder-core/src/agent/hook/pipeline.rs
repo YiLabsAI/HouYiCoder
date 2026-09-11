@@ -1,7 +1,4 @@
-//! Hook fire-point wiring: PreToolUse arbitration before tool execution +
-//! PostToolUse / PostToolUseFailure non-blocking fire after. Split from
-//! mod.rs so the runner surface stays under the file-size gate. These are
-//! pub(super) helpers called from apply_decisions' tool-exec path.
+//! Hook arbitration and lifecycle events around tool execution.
 //!
 //! Verdict handling (full, per the hook design):
 //! - Allow / Observe / Trigger / Inject keep the tool in the exec queue.
@@ -23,7 +20,9 @@
 
 use std::sync::Arc;
 
+use houyicoder_api::agent_event::{EventHandler, ToolExecutionEvent};
 use houyicoder_api::tool::Tool;
+use houyicoder_api::tool::progress::ToolProgressReporter;
 use houyicoder_context::SessionId;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -34,34 +33,26 @@ use super::{
 };
 use crate::agent::Runner;
 
-/// A ProgressSink that forwards tool progress to the runner's live-event
-/// stream as ToolProgress (the host renders (Ns) on the chip). One per tool
-/// call — carries the call_id so the host routes the tick to the right chip.
-/// None when no live sink is wired (tests, non-interactive runs); the
-/// progress calls are then no-ops. Held by the ToolCtx for the call's
-/// lifetime; the tool drives progress through it (e.g. BashTool ticks
-/// elapsed every ~1s).
-struct LiveProgressSink {
+/// Forwards progress from one tool call to the tool-execution event handler.
+/// The call identity lets the host route each update to the correct tool.
+struct ToolExecutionReporter {
     call_id: String,
-    live: Option<houyicoder_api::live::LiveSink>,
+    handler: Option<Arc<dyn EventHandler<ToolExecutionEvent>>>,
 }
 
-impl LiveProgressSink {
-    fn new(call_id: String, live: Option<houyicoder_api::live::LiveSink>) -> Self {
-        Self { call_id, live }
+impl ToolExecutionReporter {
+    fn new(call_id: String, handler: Option<Arc<dyn EventHandler<ToolExecutionEvent>>>) -> Self {
+        Self { call_id, handler }
     }
 }
 
-impl houyicoder_api::progress::ProgressSink for LiveProgressSink {
+impl ToolProgressReporter for ToolExecutionReporter {
     fn progress(&self, current: u64, total: Option<u64>) {
-        // current is the tool's elapsed seconds; total is the running stdout
-        // line count (Some when the backend streams, None otherwise). Forward
-        // both so the host's chip renders "(Ns · M lines)".
-        if let Some(live) = &self.live {
-            live(&houyicoder_api::live::LiveEvent::ToolProgress {
+        if let Some(handler) = &self.handler {
+            handler.handle(ToolExecutionEvent::Progress {
                 call_id: self.call_id.clone(),
                 elapsed_secs: current,
-                lines: total,
+                output_lines: total,
             });
         }
     }
@@ -211,11 +202,11 @@ impl Runner {
                     .iter()
                     .map(|(id, name, _, input)| (id.clone(), name.clone(), input.clone()))
                     .collect();
-                let live = self.live.clone();
+                let events = self.events.clone();
                 let mut group: FuturesUnordered<_> = batch
                     .into_iter()
                     .map(move |(id, name, t, input)| {
-                        let live = live.clone();
+                        let events = events.clone();
                         async move {
                             let input_for_hook = input.clone();
                             // Measure the wall-clock length of this one tool call so
@@ -227,15 +218,15 @@ impl Runner {
                             // Propagate the run's CancellationToken into ToolCtx so
                             // a tool that honors ctx.cancel (Grep/Glob) observes
                             // the abort mid-walk and returns promptly. Attach the
-                            // live progress sink so a long-running tool (bash) can
-                            // tick elapsed back to the host's chip.
+                            // tool execution reporter so a long-running tool (bash)
+                            // can tick elapsed back to the host's chip.
                             let mut ctx = ToolCtx::new(id.as_str())
                                 .with_cancel(token.clone())
                                 .with_session(session)
                                 .with_denied_agents(self.denied_agents.clone())
-                                .with_progress(std::sync::Arc::new(LiveProgressSink::new(
+                                .with_progress(Arc::new(ToolExecutionReporter::new(
                                     id.clone(),
-                                    live,
+                                    events.tool_execution_handler(),
                                 )))
                                 .with_agent_identity(self.agent_identity().clone());
                             if let Some(h) = self.spawn_handle() {
@@ -306,9 +297,9 @@ impl Runner {
                     .with_cancel(token.clone())
                     .with_session(session)
                     .with_denied_agents(self.denied_agents.clone())
-                    .with_progress(std::sync::Arc::new(LiveProgressSink::new(
+                    .with_progress(Arc::new(ToolExecutionReporter::new(
                         id.clone(),
-                        self.live.clone(),
+                        self.events.tool_execution_handler(),
                     )))
                     .with_agent_identity(self.agent_identity().clone());
                 if let Some(h) = self.spawn_handle() {

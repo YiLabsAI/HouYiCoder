@@ -17,7 +17,7 @@ use houyicoder_protocol::llm::{OutputItem, Usage};
 use houyicoder_session::SessionStore;
 use serde_json::Value;
 
-use super::tests::{GuardedTool, HangingProvider, runner_with};
+use super::runner_tests::{GuardedTool, HangingProvider, runner_with};
 use super::*;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};

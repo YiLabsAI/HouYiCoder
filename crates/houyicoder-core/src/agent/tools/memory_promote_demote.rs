@@ -27,6 +27,8 @@ use houyicoder_context::MemoryError;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
+use crate::agent::memory_change_recorder::MemoryChangeRecorder;
+use houyicoder_api::agent_event::MemoryOperation;
 
 /// A structured scope-promote tool. The forked consolidation dream calls it
 /// when a rule has crossed the promotion threshold (high recall frequency,
@@ -35,11 +37,11 @@ use super::{Tool, ToolCtx, ToolError};
 /// file so the rule is always-on rather than recall-on-demand.
 pub struct PromoteMemoryTool {
     provider: Arc<dyn MemoryProvider>,
-    /// Optional write counter the caller threads in to learn how many
+    /// Optional write recorder the caller threads in to learn how many
     /// scope-flow ops landed this pass. Shared with the add + delete tools
     /// so one notice fires per pass that touches the store. None for the
     /// main runner's tool, which does not notify.
-    counter: Option<Arc<std::sync::atomic::AtomicU32>>,
+    recorder: Option<Arc<MemoryChangeRecorder>>,
 }
 
 impl PromoteMemoryTool {
@@ -48,14 +50,14 @@ impl PromoteMemoryTool {
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
         Self {
             provider,
-            counter: None,
+            recorder: None,
         }
     }
-    /// Thread a write counter so a successful promote bumps it. The dream
-    /// shares one counter across the add + delete + promote + demote tools so
+    /// Thread a write recorder so a successful promote bumps it. The dream
+    /// shares one recorder across the add + delete + promote + demote tools so
     /// any touch counts toward the notice.
-    pub fn with_counter(mut self, counter: Arc<std::sync::atomic::AtomicU32>) -> Self {
-        self.counter = Some(counter);
+    pub(crate) fn with_recorder(mut self, recorder: Arc<MemoryChangeRecorder>) -> Self {
+        self.recorder = Some(recorder);
         self
     }
 }
@@ -90,15 +92,15 @@ impl Tool for PromoteMemoryTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let provider = Arc::clone(&self.provider);
-        let counter = self.counter.clone();
+        let recorder = self.recorder.clone();
         Box::pin(async move {
             let key = input.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
                 ToolError::Failed("promote_memory: 'key' must be a non-empty string".to_string())
             })?;
             match provider.promote_memory(key) {
                 Ok(()) => {
-                    if let Some(c) = &counter {
-                        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(recorder) = &recorder {
+                        recorder.record(key, MemoryOperation::Promoted);
                     }
                     Ok(json!({"promoted": key}))
                 }
@@ -129,18 +131,18 @@ impl Tool for PromoteMemoryTool {
 /// topic is recall-on-demand only. The reverse of promote_memory.
 pub struct DemoteMemoryTool {
     provider: Arc<dyn MemoryProvider>,
-    counter: Option<Arc<std::sync::atomic::AtomicU32>>,
+    recorder: Option<Arc<MemoryChangeRecorder>>,
 }
 
 impl DemoteMemoryTool {
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
         Self {
             provider,
-            counter: None,
+            recorder: None,
         }
     }
-    pub fn with_counter(mut self, counter: Arc<std::sync::atomic::AtomicU32>) -> Self {
-        self.counter = Some(counter);
+    pub(crate) fn with_recorder(mut self, recorder: Arc<MemoryChangeRecorder>) -> Self {
+        self.recorder = Some(recorder);
         self
     }
 }
@@ -173,15 +175,15 @@ impl Tool for DemoteMemoryTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let provider = Arc::clone(&self.provider);
-        let counter = self.counter.clone();
+        let recorder = self.recorder.clone();
         Box::pin(async move {
             let key = input.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
                 ToolError::Failed("demote_memory: 'key' must be a non-empty string".to_string())
             })?;
             match provider.demote_memory(key) {
                 Ok(()) => {
-                    if let Some(c) = &counter {
-                        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(recorder) = &recorder {
+                        recorder.record(key, MemoryOperation::Demoted);
                     }
                     Ok(json!({"demoted": key}))
                 }
@@ -272,28 +274,29 @@ mod tests {
         assert_eq!(p.demoted.lock().expect("demoted").len(), 1);
     }
 
-    /// A threaded counter bumps once per successful promote / demote so the
+    /// A threaded recorder bumps once per successful promote / demote so the
     /// dream can fire one memory-saved notice per pass that touches the
     /// store. A NotFound does not bump it.
     #[tokio::test]
-    async fn test_promote_demote_share_counter() {
+    async fn test_promote_demote_share_recorder() {
         let p = provider();
-        let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let recorder = Arc::new(MemoryChangeRecorder::new());
         let promote = PromoteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
-            .with_counter(counter.clone());
+            .with_recorder(recorder.clone());
         let demote = DemoteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
-            .with_counter(counter.clone());
+            .with_recorder(recorder.clone());
         run_promote(&promote, json!({"key": "k1"}))
             .await
             .expect("promote");
         run_demote(&demote, json!({"key": "k2"}))
             .await
             .expect("demote");
-        assert_eq!(
-            counter.load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "promote + demote bump the shared counter"
-        );
+        let changes = recorder.take();
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].key, "k1");
+        assert_eq!(changes[0].operation, MemoryOperation::Promoted);
+        assert_eq!(changes[1].key, "k2");
+        assert_eq!(changes[1].operation, MemoryOperation::Demoted);
     }
 
     /// A missing key is surfaced as a NotFound error the model can act on

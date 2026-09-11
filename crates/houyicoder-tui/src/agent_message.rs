@@ -1,12 +1,9 @@
-//! The TUI's wire-message vocabulary: the AgentMessage channel (driver ->
-//! event loop) and the ClientCommand channel (event loop -> driver). Split
-//! out of run_control so the driver logic and the message types grow
-//! independently. The types reference protocol wire shapes only — no engine
-//! event types leak through.
+//! Wire commands and frontend events exchanged by the TUI driver and event
+//! loop.
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::{
-    MemoryDetail, MemorySavedKind, MemorySummaryEntry, ToggleState,
+    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryDetail, MemorySummaryEntry, ToggleState,
 };
 use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunError, RunResult,
@@ -287,11 +284,12 @@ pub enum AgentMessage {
     /// /memory toggle command requested (a flip). Both auto-memory and
     /// auto-dream ride back so the pane renders both rows from one round-trip.
     MemoryToggleStateResult { state: ToggleState },
-    /// A background memory task wrote the given count of entries this pass.
-    /// Fired once per pass on completion (extract: per fork pass plus the
-    /// main-agent saved-this-turn skipped path; dream: per consolidation).
-    /// The kind distinguishes saved entries from consolidation touches.
-    MemorySaved { count: u32, kind: MemorySavedKind },
+    /// Successful memory changes emitted together by one producer.
+    MemoryChanged {
+        id: MemoryChangeId,
+        origin: MemoryChangeOrigin,
+        changes: Vec<MemoryChange>,
+    },
     /// The current permission mode the /model read requested over the wire.
     PermissionModeResult {
         mode: houyicoder_protocol::frontend::permission::PermissionMode,

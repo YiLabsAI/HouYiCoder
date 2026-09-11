@@ -20,15 +20,15 @@ const LONG_CHILD: &str = "This is a long child analysis that exceeds the one-lin
 /// post-exit retire fires. Mirrors the FLEET_GRACE constant in agent_message.
 const FLEET_GRACE: Duration = Duration::from_secs(5);
 
-#[path = "ui_multiagent/async_flow.rs"]
-mod async_flow;
+#[path = "ui_multiagent/background.rs"]
+mod background;
 #[path = "ui_multiagent/esc.rs"]
 mod esc;
+#[path = "ui_multiagent/foreground.rs"]
+mod foreground;
 #[path = "ui_multiagent/panes.rs"]
 mod panes;
 #[path = "ui_multiagent/pill.rs"]
 mod pill;
-#[path = "ui_multiagent/sync.rs"]
-mod sync;
 #[path = "ui_multiagent/teammate.rs"]
 mod teammate;

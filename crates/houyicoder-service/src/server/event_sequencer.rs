@@ -3,11 +3,17 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use houyicoder_api::live::LiveEvent;
+use houyicoder_api::agent_event::{
+    self, AgentEventHandlers, EventHandler, MemoryChangedEvent, ResponseStreamEvent,
+    ToolExecutionEvent, UserNoticeEvent,
+};
 use houyicoder_core::agent::Runner;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::envelope::{EventEnvelope, EventSeq};
 use houyicoder_protocol::frontend::FrontendEvent;
+use houyicoder_protocol::frontend::memory::{
+    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+};
 use tokio::sync::Notify;
 
 const MAX_EPHEMERAL_PENDING: usize = 256;
@@ -46,12 +52,84 @@ fn agent_status_id(event: &FrontendEvent) -> Option<&str> {
 /// The per-session ordering authority for frontend events.
 ///
 /// Producers enqueue typed events without assigning sequence numbers. The
-/// active Server is the sole consumer and wire writer, so sequence allocation
-/// and carrier order cannot diverge. Reliable frames remain journaled for a
-/// reconnect; ephemeral previews may be dropped while their queue is full.
+/// active Server is the sole consumer and frontend event writer, so sequence
+/// allocation and carrier order cannot diverge. Reliable frames remain in
+/// memory for a
+/// reconnect to the same server process; ephemeral previews may be dropped
+/// while their queue is full.
 #[derive(Clone)]
 pub struct EventSequencer {
     inner: Arc<SequencerInner>,
+}
+
+impl EventHandler<ResponseStreamEvent> for EventSequencer {
+    fn handle(&self, event: ResponseStreamEvent) {
+        let (method, text) = match event {
+            ResponseStreamEvent::AssistantTextDelta { text } => (AcpxMethod::LlmTextDelta, text),
+            ResponseStreamEvent::ReasoningDelta { text } => (AcpxMethod::LlmReasoningDelta, text),
+        };
+        self.enqueue_ephemeral(FrontendEvent::Acpx {
+            notification: AcpxNotification::new(method, serde_json::json!({ "text": text })),
+        });
+    }
+}
+
+impl EventHandler<ToolExecutionEvent> for EventSequencer {
+    fn handle(&self, event: ToolExecutionEvent) {
+        let ToolExecutionEvent::Progress {
+            call_id,
+            elapsed_secs,
+            output_lines,
+        } = event;
+        self.enqueue_ephemeral(FrontendEvent::Acpx {
+            notification: AcpxNotification::new(
+                AcpxMethod::ToolProgress,
+                serde_json::json!({ "call_id": call_id, "elapsed_secs": elapsed_secs, "lines": output_lines }),
+            ),
+        });
+    }
+}
+
+impl EventHandler<MemoryChangedEvent> for EventSequencer {
+    fn handle(&self, event: MemoryChangedEvent) {
+        self.enqueue_reliable(FrontendEvent::MemoryChanged {
+            id: MemoryChangeId(event.id.to_string()),
+            origin: to_protocol_memory_origin(event.origin),
+            changes: event
+                .changes
+                .into_iter()
+                .map(|change| MemoryChange {
+                    key: change.key,
+                    operation: to_protocol_memory_operation(change.operation),
+                })
+                .collect(),
+        });
+    }
+}
+
+impl EventHandler<UserNoticeEvent> for EventSequencer {
+    fn handle(&self, event: UserNoticeEvent) {
+        self.enqueue_reliable(FrontendEvent::SystemLine {
+            text: event.message,
+        });
+    }
+}
+
+fn to_protocol_memory_origin(origin: agent_event::MemoryChangeOrigin) -> MemoryChangeOrigin {
+    match origin {
+        agent_event::MemoryChangeOrigin::PrimaryAgent => MemoryChangeOrigin::PrimaryAgent,
+        agent_event::MemoryChangeOrigin::AutoMemory => MemoryChangeOrigin::AutoMemory,
+        agent_event::MemoryChangeOrigin::AutoDream => MemoryChangeOrigin::AutoDream,
+    }
+}
+
+fn to_protocol_memory_operation(operation: agent_event::MemoryOperation) -> MemoryOperation {
+    match operation {
+        agent_event::MemoryOperation::Stored => MemoryOperation::Stored,
+        agent_event::MemoryOperation::Deleted => MemoryOperation::Deleted,
+        agent_event::MemoryOperation::Promoted => MemoryOperation::Promoted,
+        agent_event::MemoryOperation::Demoted => MemoryOperation::Demoted,
+    }
 }
 
 impl Default for EventSequencer {
@@ -73,53 +151,12 @@ impl EventSequencer {
 
     /// Install this sequencer as the runner's event destination.
     pub fn install_on(&self, runner: &mut Runner) {
-        let sequencer = self.clone();
-        runner.set_live_sink(Arc::new(move |event| {
-            sequencer.enqueue_runner_event(event);
-        }));
-    }
-
-    fn enqueue_runner_event(&self, event: &LiveEvent) {
-        match event {
-            LiveEvent::AssistantDelta { text } => {
-                self.enqueue_ephemeral(FrontendEvent::Acpx {
-                    notification: AcpxNotification::new(
-                        AcpxMethod::LlmTextDelta,
-                        serde_json::json!({ "text": text }),
-                    ),
-                });
-            }
-            LiveEvent::ReasoningDelta { text } => {
-                self.enqueue_ephemeral(FrontendEvent::Acpx {
-                    notification: AcpxNotification::new(
-                        AcpxMethod::LlmReasoningDelta,
-                        serde_json::json!({ "text": text }),
-                    ),
-                });
-            }
-            LiveEvent::ToolProgress {
-                call_id,
-                elapsed_secs,
-                lines,
-            } => {
-                self.enqueue_ephemeral(FrontendEvent::Acpx {
-                    notification: AcpxNotification::new(
-                        AcpxMethod::ToolProgress,
-                        serde_json::json!({ "call_id": call_id, "elapsed_secs": elapsed_secs, "lines": lines }),
-                    ),
-                });
-            }
-            LiveEvent::MemorySaved { count, kind } => {
-                self.enqueue_reliable(FrontendEvent::MemorySaved {
-                    count: *count,
-                    kind: *kind,
-                });
-            }
-            LiveEvent::SystemLine { text } => {
-                self.enqueue_reliable(FrontendEvent::SystemLine { text: text.clone() });
-            }
-            LiveEvent::TurnBoundary { .. } | LiveEvent::RunCompleted { .. } => {}
-        }
+        let mut handlers = AgentEventHandlers::default();
+        handlers.set_response_stream(Arc::new(self.clone()));
+        handlers.set_tool_execution(Arc::new(self.clone()));
+        handlers.set_memory_changed(Arc::new(self.clone()));
+        handlers.set_user_notice(Arc::new(self.clone()));
+        runner.set_event_handlers(handlers);
     }
 
     /// Enqueue a reliable event for the active server to sequence and retain.
@@ -173,24 +210,28 @@ impl EventSequencer {
         state.latest_status.clear();
     }
 
-    pub(crate) fn sequence_available<F>(&self, project: F) -> Vec<EventEnvelope>
+    pub(crate) fn sequence_available<F>(&self, load_durable_events: F) -> Vec<EventEnvelope>
     where
         F: FnOnce(usize) -> Vec<Vec<FrontendEvent>>,
     {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
-        let entries = project(state.trajectory_cursor);
-        let mut sequenced = Self::sequence_trajectory(&mut state, entries);
+        let durable_events = load_durable_events(state.trajectory_cursor);
+        let mut sequenced = Self::sequence_trajectory(&mut state, durable_events);
         sequenced.extend(Self::sequence_pending(&mut state));
         sequenced
     }
 
-    pub(crate) fn prepare_replay<F>(&self, last: Option<EventSeq>, project: F) -> Vec<EventEnvelope>
+    pub(crate) fn prepare_replay<F>(
+        &self,
+        last: Option<EventSeq>,
+        load_durable_events: F,
+    ) -> Vec<EventEnvelope>
     where
         F: FnOnce(usize) -> Vec<Vec<FrontendEvent>>,
     {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
-        let entries = project(state.trajectory_cursor);
-        drop(Self::sequence_trajectory(&mut state, entries));
+        let durable_events = load_durable_events(state.trajectory_cursor);
+        drop(Self::sequence_trajectory(&mut state, durable_events));
         Self::collect_reliable_after(&state, last)
     }
 
@@ -199,8 +240,8 @@ impl EventSequencer {
         entries: Vec<Vec<FrontendEvent>>,
     ) -> Vec<EventEnvelope> {
         let mut sequenced = Vec::new();
-        for projections in entries {
-            for payload in projections {
+        for events in entries {
+            for payload in events {
                 let frame = EventEnvelope::new(EventSeq(state.next_seq), payload);
                 state.next_seq = state.next_seq.saturating_add(1);
                 state.reliable.push(frame.clone());
@@ -287,6 +328,7 @@ impl EventSequencer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use houyicoder_context as context;
 
     fn line(text: &str) -> FrontendEvent {
         FrontendEvent::SystemLine {
@@ -330,11 +372,73 @@ mod tests {
     }
 
     #[test]
+    fn test_memory_event_projects_fields() {
+        let sequencer = EventSequencer::new();
+        let id = context::MemoryChangeId::new();
+        EventHandler::<MemoryChangedEvent>::handle(
+            &sequencer,
+            MemoryChangedEvent {
+                id,
+                origin: agent_event::MemoryChangeOrigin::AutoDream,
+                changes: vec![agent_event::MemoryChange {
+                    key: "build-gate".into(),
+                    operation: agent_event::MemoryOperation::Promoted,
+                }],
+            },
+        );
+        let pending = sequencer.sequence_pending_for_test();
+        assert!(matches!(
+            &pending[0].payload,
+            FrontendEvent::MemoryChanged { id: projected, origin: MemoryChangeOrigin::AutoDream, changes }
+                if projected.0 == id.to_string()
+                    && changes[0].operation == MemoryOperation::Promoted
+        ));
+    }
+
+    #[test]
+    fn test_tool_event_projects_progress() {
+        let sequencer = EventSequencer::new();
+        EventHandler::<ToolExecutionEvent>::handle(
+            &sequencer,
+            ToolExecutionEvent::Progress {
+                call_id: "call-1".into(),
+                elapsed_secs: 3,
+                output_lines: Some(7),
+            },
+        );
+        let pending = sequencer.sequence_pending_for_test();
+        assert!(matches!(
+            &pending[0].payload,
+            FrontendEvent::Acpx { notification }
+                if notification.method == AcpxMethod::ToolProgress
+        ));
+    }
+
+    #[test]
+    fn test_notice_event_projects_line() {
+        let sequencer = EventSequencer::new();
+        EventHandler::<UserNoticeEvent>::handle(
+            &sequencer,
+            UserNoticeEvent {
+                message: "check config".into(),
+            },
+        );
+        let pending = sequencer.sequence_pending_for_test();
+        assert!(matches!(
+            &pending[0].payload,
+            FrontendEvent::SystemLine { text } if text == "check config"
+        ));
+    }
+
+    #[test]
     fn test_runner_events_defer_sequence() {
         let sequencer = EventSequencer::new();
-        sequencer.enqueue_runner_event(&LiveEvent::AssistantDelta {
-            text: "next".into(),
-        });
+        EventHandler::<ResponseStreamEvent>::handle(
+            &sequencer,
+            ResponseStreamEvent::AssistantTextDelta {
+                text: "next".into(),
+            },
+        );
 
         assert_eq!(sequencer.next_seq(), 0);
         let pending = sequencer.sequence_pending_for_test();
@@ -389,11 +493,11 @@ mod tests {
     #[test]
     fn test_snapshot_blocks_causal_delta() {
         let sequencer = EventSequencer::new();
-        let projector = sequencer.clone();
+        let sequencer_for_load = sequencer.clone();
         let (snapshot_tx, snapshot_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let projection = std::thread::spawn(move || {
-            projector.sequence_available(|_| {
+        let sequencing = std::thread::spawn(move || {
+            sequencer_for_load.sequence_available(|_| {
                 snapshot_tx.send(()).expect("snapshot entered");
                 release_rx.recv().expect("snapshot released");
                 vec![vec![line("user"), line("commit")]]
@@ -410,7 +514,7 @@ mod tests {
         attempt_rx.recv().expect("producer started");
         release_tx.send(()).expect("release snapshot");
 
-        let durable = projection.join().expect("projection thread");
+        let durable = sequencing.join().expect("sequencing thread");
         enqueue.join().expect("producer thread");
         let pending = sequencer.sequence_pending_for_test();
         assert_eq!(durable[0].seq, EventSeq(0));

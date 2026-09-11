@@ -1,16 +1,15 @@
-//! Composition-root wiring: builder methods that attach the shared breaker,
-//! pin the context cwd, install the verify gate, and set the live-event sink.
-//! Split from mod.rs so the runner surface stays under the file-size gate;
-//! these are pure field setters consumed at the composition root (build_runner).
+//! Composition-root wiring for Runner collaborators and runtime policy.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::SessionId;
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 
+use super::memory_change_recorder::MemoryChangeRecorder;
 use super::{RunError, Runner, VerifyGate};
-use houyicoder_api::live::LiveSink;
+use houyicoder_api::agent_event::AgentEventHandlers;
 
 impl Runner {
     /// Attach the aggregate resource breaker the sandbox enforces against, so
@@ -59,28 +58,19 @@ impl Runner {
         self
     }
 
-    /// Install a live-event sink. Call before the runner is shared (Arc-ed) —
-    /// the host owns the value, sets the sink, then wraps it. The closure
-    /// receives each LiveEvent the runner emits during a streaming turn.
-    ///
-    /// Also forwards the sink to the extractor + dream so a background pass
-    /// that writes memories can push one MemorySaved event (event-driven push,
-    /// not a second channel). The forked runners inside extract/dream do not
-    /// get the sink — they have their own None live_sink — so the fork's token
-    /// deltas never fire into the user transcript.
-    pub fn set_live_sink(&mut self, sink: LiveSink) {
-        if let Some(e) = self.extractor.as_ref() {
-            e.set_notify_sink(sink.clone());
+    /// Install all event-domain handlers before the runner is shared.
+    pub fn set_event_handlers(&mut self, events: AgentEventHandlers) {
+        if let Some(extractor) = self.extractor.as_ref() {
+            extractor.set_memory_changed_handler(events.memory_changed_handler());
         }
-        if let Some(d) = self.dream.as_ref() {
-            d.set_notify_sink(sink.clone());
+        if let Some(dream) = self.dream.as_ref() {
+            dream.set_memory_changed_handler(events.memory_changed_handler());
         }
-        self.live = Some(sink);
+        self.events = events;
     }
 
     /// Install the bus inbox receiver for a spawned child. Call before the
-    /// runner is shared (Arc-ed), alongside set_live_sink. The drive loop
-    /// drains this at each turn boundary, appending Inbox texts as user
+    /// runner is shared. The drive loop drains this at each turn boundary, appending Inbox texts as user
     /// messages so a parent can steer a running child mid-task.
     pub fn set_inbox(
         &mut self,
@@ -89,11 +79,9 @@ impl Runner {
         *self.inbox.lock().expect("inbox lock") = Some(rx);
     }
 
-    /// Clone the installed live sink, if any. Lets the composition root share
-    /// the runner's sink with collaborators built before the runner (the
-    /// worktree controller) without a second channel.
-    pub fn live_sink(&self) -> Option<LiveSink> {
-        self.live.clone()
+    /// Clone the installed event handlers for a staged collaborator.
+    pub fn event_handlers(&self) -> AgentEventHandlers {
+        self.events.clone()
     }
 
     /// Wire a persistent memory provider. When set, the turn-entry step
@@ -105,10 +93,7 @@ impl Runner {
     /// completes, explicit save signals in the user input are written
     /// atomically. Consumes and returns self for chaining at the composition
     /// root.
-    pub fn with_memory(
-        mut self,
-        provider: Arc<dyn houyicoder_api::memory::MemoryProvider>,
-    ) -> Self {
+    pub fn with_memory(mut self, provider: Arc<dyn MemoryProvider>) -> Self {
         // Register the structured save_memory tool so the main agent can save
         // a memory by emitting a save_memory tool call — auto-approve, no
         // path-escape surface (the provider owns every path), routes through
@@ -126,18 +111,15 @@ impl Runner {
         self
     }
 
-    /// Like with_memory but registers save_memory with a write counter the
-    /// caller threads in. The forked extraction runner uses this so it can
-    /// read how many saves landed this pass + fire one memory-saved notice.
-    /// The main runner uses with_memory (no counter; it does not notify).
-    pub fn with_memory_counted(
+    /// Configure memory writes for an automatic extraction run.
+    pub(crate) fn with_extraction_memory(
         mut self,
-        provider: Arc<dyn houyicoder_api::memory::MemoryProvider>,
-        counter: Arc<std::sync::atomic::AtomicU32>,
+        provider: Arc<dyn MemoryProvider>,
+        recorder: Arc<MemoryChangeRecorder>,
     ) -> Self {
         self.tools.register(Arc::new(
             super::tools::MemoryAddTool::new(provider.clone())
-                .with_counter(counter)
+                .with_recorder(recorder)
                 .with_origin(houyicoder_context::MemoryOrigin::Extractor),
         ));
         self.memory = Some(provider);
@@ -241,7 +223,7 @@ impl Runner {
     /// Wire a workspace probe for the re-derivable compaction backbone's
     /// derivation watermark. The composition root passes a GitWorkspaceProbe
     /// sharing the cwd handle so worktree switches propagate. Called pre-Arc,
-    /// like set_live_sink. None (the default) ⇒ the backbone runs the
+    /// before sharing the runner. None (the default) means the backbone runs the
     /// log-rederivable layer only; the workspace watermark fields are None.
     pub fn set_workspace_probe(&mut self, probe: Arc<dyn super::backbone::WorkspaceProbe>) {
         self.workspace_probe = Some(probe);
@@ -764,8 +746,7 @@ mod compact_summary_tests {
             std::env::temp_dir().join(format!("mem-index-{}-{}", std::process::id(), line!()));
         drop(std::fs::remove_dir_all(&root));
         std::fs::create_dir_all(&root).expect("mkdir");
-        let memory: Arc<dyn houyicoder_api::memory::MemoryProvider> =
-            Arc::new(MarkdownMemoryProvider::new(root.clone()));
+        let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
         memory
             .add(MemoryEntry::new(
                 "proj-pref",

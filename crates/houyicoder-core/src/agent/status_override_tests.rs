@@ -1,12 +1,9 @@
-//! max_output_tokens resolution tests, split from status.rs to keep that file
-//! under the size gate. The catalog override (ModelEntry.max_output_tokens)
-//! wins over the construction-time config value, and the pre-flight reserve +
-//! request body share it (same source, no overflow).
+//! Output-token limit resolution and catalog override behavior.
 
 #![cfg(test)]
 
 use crate::agent::{EffortResolver, Runner, RunnerConfig, ToolRegistry};
-use houyicoder_api::live::LiveEvent;
+use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
 use houyicoder_protocol::llm::EffortLevel;
 use std::sync::{Arc, Mutex};
 
@@ -60,19 +57,18 @@ fn test_resolve_max_tokens_fallback() {
     );
 }
 
-/// emit_unactionable_overflow surfaces a SystemLine notice through the live
-/// sink, pointing the user at the catalog override. The one self-heal gap.
+/// emit_unactionable_overflow surfaces a user notice that points at the
+/// catalog override.
 #[test]
 fn test_emit_unactionable_overflow_notice() {
     let captured = Arc::new(Mutex::new(Vec::<String>::new()));
     let cap = captured.clone();
-    let sink: houyicoder_api::live::LiveSink = Arc::new(move |ev: &LiveEvent| {
-        if let LiveEvent::SystemLine { text } = ev {
-            cap.lock().unwrap().push(text.clone());
-        }
-    });
+    let mut events = AgentEventHandlers::default();
+    events.set_user_notice(Arc::new(move |event: UserNoticeEvent| {
+        cap.lock().unwrap().push(event.message);
+    }));
     let mut runner = stub_runner(32_768);
-    runner.set_live_sink(sink);
+    runner.set_event_handlers(events);
     runner.emit_unactionable_overflow("qwen3.7-max");
     let got = captured.lock().unwrap().clone();
     assert_eq!(got.len(), 1, "one notice fired");

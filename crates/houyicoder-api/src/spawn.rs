@@ -46,17 +46,13 @@ pub struct SpawnArgs {
     /// "none" for a fresh-context child, "worktree" for a per-child fence;
     /// the engine serializes its typed isolation to this string here.
     pub isolation: String,
-    /// False: spawn blocks until the child reaches a terminal state (sync;
-    /// the caller reads the child log by sid for status, summary, result
-    /// ref, and usage). True: spawn returns once the child is started
-    /// (async; completion arrives later as a pending notification on the
-    /// next parent turn).
+    /// False runs the child in the foreground. True returns after startup and
+    /// lets the child continue in the background.
     pub run_in_background: bool,
 }
 
 impl SpawnArgs {
-    /// Build from the three fields the model provides; isolation and
-    /// run_in_background default to a sync, fresh-context spawn.
+    /// Build a foreground, fresh-context spawn from the model fields.
     pub fn new(
         subagent_type: impl Into<String>,
         prompt: impl Into<String>,
@@ -72,31 +68,28 @@ impl SpawnArgs {
     }
 }
 
-/// The child reference a spawn returns. The engine's full handle carries
-/// the child Runner; the port exposes the child session id plus, for a sync
-/// spawn (run_in_background false), the terminal result the tool projects
-/// into its tool_result. Async spawns carry None for the result fields --
-/// completion reaches the parent later as a pending notification.
+/// The child reference returned by a spawn. Foreground outcomes include the
+/// terminal result; background outcomes carry only the child identity.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct SpawnOutcome {
     pub child_session_id: String,
     /// Terminal status label (completed / max_turns / interrupted / ...).
-    /// None on an async spawn.
+    /// None when the child runs in the background.
     pub status: Option<String>,
     /// The child's final answer text (or last assistant text on a non-final
-    /// terminal). None on an async spawn.
+    /// terminal). None for a background child.
     pub summary: Option<String>,
     /// A pointer back to the child transcript (the child session id) for
-    /// follow-up reads. None on an async spawn.
+    /// follow-up reads. None for a background child.
     pub result_ref: Option<String>,
-    /// The child's cumulative token usage. None on an async spawn.
+    /// The child's cumulative token usage. None for a background child.
     pub usage: Option<houyicoder_protocol::llm::Usage>,
 }
 
 impl SpawnOutcome {
-    /// A sync outcome: the child reached a terminal state, carry the result.
-    pub fn sync(
+    /// Build an outcome for a foreground child that reached a terminal state.
+    pub fn foreground(
         child_session_id: impl Into<String>,
         status: impl Into<String>,
         summary: impl Into<String>,
@@ -112,8 +105,8 @@ impl SpawnOutcome {
         }
     }
 
-    /// An async outcome: the child started; completion comes later.
-    pub fn async_launched(child_session_id: impl Into<String>) -> Self {
+    /// Build an outcome after a background child starts.
+    pub fn background_started(child_session_id: impl Into<String>) -> Self {
         Self {
             child_session_id: child_session_id.into(),
             status: None,
@@ -150,7 +143,7 @@ pub trait SpawnHandle: Send + Sync {
     /// typed rejection the tool surfaces to the model.
     ///
     /// The per-call ToolCtx supplies the parent session id (the child log's
-    /// parent), the parent's cancel token (a sync child links it so a parent
+    /// parent), the parent's cancel token (a foreground child links it so a parent
     /// abort cancels the child), and the parent agent identity (the child's
     /// depth is parent + 1 for the recursion guard).
     ///

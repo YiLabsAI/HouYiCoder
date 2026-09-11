@@ -33,6 +33,7 @@ mod hook;
 mod input_queue;
 mod lifecycle;
 mod manifest;
+mod memory_change_recorder;
 mod memory_recall;
 pub mod model_window;
 mod obs_wire;
@@ -72,7 +73,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use houyicoder_api::live::LiveSink;
+use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::SessionId;
 use houyicoder_protocol::llm::Usage;
@@ -121,11 +122,9 @@ pub struct Runner {
     /// projected message history. The loop calls build() each turn so the
     /// served view and the /context breakdown share one source.
     context_builder: ContextBuilder,
-    /// Optional live-event sink the runner notifies while a turn streams. The
-    /// host (a TUI) installs a closure that adapts LiveEvent into its own render
-    /// path; the runner knows nothing about the host's types. None in tests and
-    /// the pure-stub path ⇒ streaming still works, just with no live preview.
-    live: Option<LiveSink>,
+    /// Optional handlers grouped by event domain. The runner remains
+    /// independent of frontend and multi-agent delivery concerns.
+    events: AgentEventHandlers,
     /// Bus inbox receiver for a spawned child: the parent publishes
     /// BusMessage::Inbox texts and the drive loop drains them at each turn
     /// boundary, appending each as a user message before the next model
@@ -600,7 +599,7 @@ impl Runner {
                     }
                     next_step = self.resolve_turn(session, &response, token).await?;
                     if matches!(next_step, NextStep::RunAgain) {
-                        append::emit_turn_progress(self.live.as_ref(), &response, turn, &usage);
+                        append::emit_turn_progress(&self.events, &response, turn, &usage);
                     }
                 }
                 NextStep::FinalOutput(text) => {
@@ -713,7 +712,7 @@ mod budget_pressure_gate_tests;
 mod denied_agents_tests;
 mod outcome_counts;
 #[cfg(test)]
-mod tests;
+mod runner_tests;
 #[cfg(test)]
 mod tool_duration_tests;
 #[cfg(test)]

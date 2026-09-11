@@ -101,7 +101,9 @@ mod tests {
     use futures::StreamExt;
     use futures::channel::mpsc;
     use houyicoder_api::provider::ModelProvider;
-    use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, permission_response_topic};
+    use houyicoder_core::agent::multi_agent::bus_types::{
+        AgentBus, ChildDescriptor, ChildRunMode, permission_response_topic,
+    };
     use houyicoder_protocol::envelope::{
         ClientFrame, ClientResponseEnvelope, ClientResponsePayload, ServerFrame,
     };
@@ -199,9 +201,7 @@ mod tests {
             &mut server,
             &mut io,
             BusMessage::Spawned {
-                agent_id: "x".into(),
-                subagent_type: "explore".into(),
-                run_in_background: false,
+                child: ChildDescriptor::new("x", "explore", ChildRunMode::Foreground),
             },
         )
         .await

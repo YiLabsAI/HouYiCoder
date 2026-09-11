@@ -622,8 +622,8 @@ fn test_untrusted_skip_notice() {
     // registry. The notice must name the skipped hooks and must not point at
     // an escape hatch that does not exist.
     use crate::agent::ToolRegistry;
-    use crate::agent::tests::runner_with;
-    use houyicoder_api::live::{LiveEvent, LiveSink};
+    use crate::agent::runner_tests::runner_with;
+    use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
     use std::sync::{Arc, Mutex};
 
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -638,11 +638,11 @@ fn test_untrusted_skip_notice() {
         Arc::new(crate::provider::test_support::FakeProvider::text("ok")),
         ToolRegistry::new(),
     );
-    runner.set_live_sink(Arc::new(move |ev: &LiveEvent| {
-        if let LiveEvent::SystemLine { text } = ev {
-            cap.lock().unwrap().push(text.clone());
-        }
-    }) as LiveSink);
+    let mut events = AgentEventHandlers::default();
+    events.set_user_notice(Arc::new(move |event: UserNoticeEvent| {
+        cap.lock().unwrap().push(event.message);
+    }));
+    runner.set_event_handlers(events);
     let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
     runner.dispatch_hooks(&reg, &ctx);
     let lines = captured.lock().unwrap();

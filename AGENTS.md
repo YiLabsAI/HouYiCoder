@@ -301,17 +301,17 @@ indent, leftover residue, hit string literals).
   invariant.
 - Tool execution failures surface with context, never silent.
 
-### Where a message goes (three sinks)
+### Message delivery destinations
 The TUI runs in the terminal's alternate screen, which does not capture
 stdout or stderr. A print macro from library code is painted by the
 terminal wherever the cursor sits — during a session that is **inside the
 input box**. So "I do not want to swallow this error, and I do not want to
 propagate it, so eprintln" corrupts the surface the user is typing into.
-Choosing the sink is a design decision, not a matter of taste:
+Choosing the delivery destination is a design decision, not a matter of taste:
 
-| Sink | When | How |
-|------|------|-----|
-| User-visible | The user must know, or can act on it | System line — `LiveEvent::SystemLine` through the runner's live sink; lands in the transcript, survives scrollback |
+| Destination | When | How |
+|-------------|------|-----|
+| User-visible | The user must know, or can act on it | `UserNoticeEvent` through the runner's user-notice handler; lands in the transcript and survives scrollback |
 | Diagnostic | Only a developer can use it | `tracing` macros (`tracing::warn!`, `tracing::debug!`); a file-backed subscriber installed at the composition root, toggled at runtime via the `/debug` wire command. Never the terminal |
 | Console | No alternate screen is up: argument parsing, startup failure, a non-TUI binary | A print macro, correct here and only here |
 
@@ -327,7 +327,7 @@ Choosing the sink is a design decision, not a matter of taste:
 - Test and example targets are exempt by structure (tests/, examples/,
   benches/, *_tests.rs, and the trailing `#[cfg(test)] mod`) — there their
   output IS the product.
-- **A best-effort failure is not exempt from having a sink.** Silently
+- **A best-effort failure still needs a delivery destination.** Silently
   dropping it violates the no-silent-failure rule; eprintln-ing it is not a
   channel, just an unrouted write. Pick user-visible or diagnostic.
 

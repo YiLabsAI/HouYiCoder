@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::memory::MemorySavedKind;
+use super::memory::{MemoryChange, MemoryChangeId, MemoryChangeOrigin};
 use super::queue::QueuedInput;
 use super::session_update::SessionUpdate;
 
@@ -70,12 +70,14 @@ pub enum FrontendEvent {
         #[serde(rename = "texts")]
         inputs: Vec<QueuedInput>,
     },
-    /// A background memory task (extract or dream) wrote the given count of
-    /// entries this pass. Fired once per pass on completion, after the run
-    /// ended. Best-effort (a full channel drops the notice; data is on disk).
-    MemorySaved {
-        count: u32,
-        kind: MemorySavedKind,
+    /// Successful memory changes emitted together by one producer.
+    MemoryChanged {
+        /// Unique delivery identity.
+        id: MemoryChangeId,
+        /// Producer responsible for the changes.
+        origin: MemoryChangeOrigin,
+        /// Exact successful operations in append order.
+        changes: Vec<MemoryChange>,
     },
     /// A runtime notice the agent loop wants surfaced to the user as a system
     /// line (not a delta, not a tool frame). Carries pre-rendered text the
@@ -102,6 +104,26 @@ pub enum FrontendEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::memory::MemoryOperation;
+
+    #[test]
+    fn test_memory_event_round_trips() {
+        let event = FrontendEvent::MemoryChanged {
+            id: MemoryChangeId("change-1".into()),
+            origin: MemoryChangeOrigin::AutoMemory,
+            changes: vec![MemoryChange {
+                key: "build-gate".into(),
+                operation: MemoryOperation::Stored,
+            }],
+        };
+        let json = serde_json::to_string(&event).expect("serialize memory event");
+        let decoded = serde_json::from_str::<FrontendEvent>(&json).expect("decode memory event");
+        assert!(matches!(
+            decoded,
+            FrontendEvent::MemoryChanged { id, changes, .. }
+                if id.0 == "change-1" && changes[0].key == "build-gate"
+        ));
+    }
 
     #[test]
     fn test_commit_wire_compat() {

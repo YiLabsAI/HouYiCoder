@@ -13,7 +13,7 @@ use houyicoder_protocol::llm::{
     Usage,
 };
 
-use crate::agent::tests::runner_with;
+use crate::agent::runner_tests::runner_with;
 use crate::agent::{RunError, RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 

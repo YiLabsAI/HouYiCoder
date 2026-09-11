@@ -23,8 +23,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+use houyicoder_api::agent_event::{EventHandler, UserNoticeEvent};
 use houyicoder_api::hook_fire::HookFire;
-use houyicoder_api::live::{LiveEvent, LiveSink};
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
@@ -115,13 +115,11 @@ pub struct WorktreeController {
     /// sandboxed agent rewrote it. The fence allows .git refs, so a malicious
     /// or buggy agent could move main; the alert keeps it from being silent.
     original_main_ref: Mutex<Option<String>>,
-    /// Optional live sink for user-visible notices (the main-branch-moved
-    /// alert). Injected after construction, same staged-delegation pattern
-    /// as set_cwd_handle: the controller is built before the runner, then
-    /// the composition root attaches the runner's sink once it exists.
-    live: Mutex<Option<LiveSink>>,
+    /// Optional destination for user-visible notices such as a moved main
+    /// branch. The composition root attaches it after constructing the runner.
+    user_notice: Mutex<Option<Arc<dyn EventHandler<UserNoticeEvent>>>>,
     /// The hook-fire seam for WorktreeCreate / WorktreeRemove events.
-    /// Attached after construction (staged delegation, like set_live_sink):
+    /// Attached after construction:
     /// the controller is built before the runner, so the composition root
     /// attaches the runner's hook-fire handle once it exists. None when no
     /// hooks are wired; fire is a no-op then.
@@ -149,7 +147,7 @@ impl WorktreeController {
             store,
             session_id,
             original_main_ref: Mutex::new(None),
-            live: Mutex::new(None),
+            user_notice: Mutex::new(None),
             hook_fire: Mutex::new(None),
         }
     }
@@ -161,15 +159,13 @@ impl WorktreeController {
         *self.cwd_handle.lock().expect("cwd handle lock") = cwd;
     }
 
-    /// Attach the runner's live sink for user-visible notices (the
-    /// main-branch-moved alert). Same staged-delegation pattern as
-    /// set_cwd_handle: the controller is built before the runner.
-    pub fn set_live_sink(&self, sink: LiveSink) {
-        *self.live.lock().expect("live sink lock") = Some(sink);
+    /// Attach the runner's user-notice destination.
+    pub fn set_user_notice_handler(&self, handler: Arc<dyn EventHandler<UserNoticeEvent>>) {
+        *self.user_notice.lock().expect("user notice lock") = Some(handler);
     }
 
     /// Attach the hook-fire seam for WorktreeCreate / WorktreeRemove events.
-    /// Staged delegation, like set_live_sink: the controller is built before
+    /// The controller is built before
     /// the runner, so the composition root attaches the runner's hook-fire
     /// handle once it exists. Pass None to clear.
     pub fn set_hook_fire(&self, fire: Option<Arc<dyn HookFire>>) {
@@ -451,16 +447,14 @@ impl WorktreeController {
             worktree_session::rev_parse(&self.repo_root, &format!("refs/heads/{branch}"))
             && &now != orig
         {
-            // The main branch moved while the agent was isolated — it may
-            // have rewritten history. This is security-relevant: the user
-            // must see it, not just the diagnostic log. Surface through the
-            // live sink as a system line; fall back to tracing when no sink
-            // is attached (tests, the stub path).
+            // A rewritten main branch is security-relevant and must reach the
+            // user when a notice destination is installed.
             let notice = format!(
                 "worktree: main branch {branch} moved while isolated ({orig} -> {now}); the agent may have rewritten history"
             );
-            if let Some(sink) = self.live.lock().expect("live sink lock").as_ref() {
-                sink(&LiveEvent::SystemLine { text: notice });
+            let handler = self.user_notice.lock().expect("user notice lock").clone();
+            if let Some(handler) = handler {
+                handler.handle(UserNoticeEvent { message: notice });
             } else {
                 tracing::warn!("{notice}");
             }

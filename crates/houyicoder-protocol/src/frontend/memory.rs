@@ -6,21 +6,45 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Which background memory task produced a MemorySaved event. The host maps
-/// this to saved-entry or consolidation-touch wording, keeping the
-/// wording out of the wire payload (a typed token, not a string, per the
-/// type-first rule). Lives here so both the engine (its live event) and the
-/// wire (the frontend event) share one definition — no second enum to drift.
+/// Wire identity for one emitted set of memory changes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MemoryChangeId(pub String);
+
+/// The producer responsible for memory changes emitted together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MemoryChangeOrigin {
+    /// A save_memory call made by the primary agent.
+    PrimaryAgent,
+    /// Automatic extraction after a run.
+    AutoMemory,
+    /// Automatic memory consolidation.
+    AutoDream,
+}
+
+/// The operation applied to one memory key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MemoryOperation {
+    /// A memory was stored.
+    Stored,
+    /// A memory was deleted.
+    Deleted,
+    /// A memory moved to a broader scope.
+    Promoted,
+    /// A memory moved to a narrower scope.
+    Demoted,
+}
+
+/// One successful memory operation projected onto the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum MemorySavedKind {
-    /// The extractor wrote new memories (from the conversation or a forked
-    /// extraction pass, including the main-agent saved-this-turn skipped
-    /// path). Rendered as Saved.
-    Extracted,
-    /// The consolidation task touched memories by adding, merging, moving, or
-    /// deleting entries.
-    Consolidated,
+pub struct MemoryChange {
+    /// The exact memory key affected.
+    pub key: String,
+    /// The operation applied to the key.
+    pub operation: MemoryOperation,
 }
 
 /// One stored memory's frontmatter: key, one-line description, source label,

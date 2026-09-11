@@ -14,7 +14,7 @@ use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use crate::agent::ToolRegistry;
 use crate::agent::hook::HookRegistry;
 use crate::agent::hook::{Hook, HookContext, HookError, HookEvent, HookSource, HookVerdict};
-use crate::agent::tests::runner_with;
+use crate::agent::runner_tests::runner_with;
 use crate::agent::{Runner, build_hook_fire};
 use crate::provider::test_support::FakeProvider;
 

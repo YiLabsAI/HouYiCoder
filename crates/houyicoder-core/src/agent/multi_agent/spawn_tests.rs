@@ -1,6 +1,7 @@
-//! TDD anchor for spawn_child: the minimal contract before implementation.
+//! Child spawn boundaries, cancellation, status, and inbox behavior.
 
 use super::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
+use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::CancellationToken;
 use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_memory::InMemoryBackend;
@@ -8,6 +9,7 @@ use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
 use crate::agent::ToolRegistry;
+use crate::agent::multi_agent::bus_types::ChildRunMode;
 use crate::agent::multi_agent::registry::IsolationMode;
 use crate::agent::runner_config::RunnerConfig;
 use crate::provider::test_support::FakeProvider;
@@ -15,7 +17,7 @@ use crate::provider::test_support::FakeProvider;
 fn req_at_depth(
     parent_sid: SessionId,
     store: Arc<SessionStore>,
-    provider: Arc<dyn houyicoder_api::provider::ModelProvider>,
+    provider: Arc<dyn ModelProvider>,
     depth: u32,
 ) -> SpawnRequest {
     SpawnRequest {
@@ -36,7 +38,7 @@ fn req_at_depth(
         depth,
         isolation: IsolationMode::None,
         worktree_controller: None,
-        run_in_background: false,
+        run_mode: ChildRunMode::Foreground,
         parent_cancel: None,
         bus: None,
     }
@@ -49,8 +51,7 @@ fn req_at_depth(
 async fn test_spawn_creates_boundary() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let req = req_at_depth(parent_sid, store.clone(), provider, 0);
     let handle = spawn_child(req).await.expect("spawn should succeed");
     assert_ne!(handle.session, parent_sid);
@@ -97,16 +98,12 @@ async fn test_spawn_creates_boundary() {
     );
 }
 
-/// A system-triggered spawn (a hook/gate, not the model) records its origin
-/// on the SubagentSpawn boundary so a replay distinguishes a gate-driven
-/// spawn from a model delegation. Pins the trigger_source durable trail for
-/// the first-party spawn entry.
+/// A system-triggered spawn records its origin on the durable boundary.
 #[tokio::test]
 async fn test_spawn_records_system_trigger() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let mut req = req_at_depth(parent_sid, store.clone(), provider, 0);
     req.trigger = TriggerSource::System {
         hook: "review_gate".into(),
@@ -143,8 +140,7 @@ async fn test_spawn_records_system_trigger() {
 async fn test_spawn_rejects_depth_cap() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let req = req_at_depth(parent_sid, store.clone(), provider, 4);
     match spawn_child(req).await {
         Ok(_) => panic!("spawn at depth cap must reject, not succeed"),
@@ -158,16 +154,12 @@ async fn test_spawn_rejects_depth_cap() {
     );
 }
 
-/// Boundary opposite of the depth cap: a spawn at depth MAX-1 (3) is the
-/// last allowed level — the child carries depth 4 (MAX), one short of the
-/// reject. Pins both sides of the boundary so an off-by-one in the guard
-/// flips this red before the reject test does.
+/// A spawn immediately below the depth cap remains allowed.
 #[tokio::test]
 async fn test_spawn_depth_under_cap() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let req = req_at_depth(parent_sid, store.clone(), provider, 3);
     let handle = spawn_child(req)
         .await
@@ -179,15 +171,14 @@ async fn test_spawn_depth_under_cap() {
     );
 }
 
-/// A sync child shares the parent's cancel token (a linked clone), so
+/// A foreground child shares the parent's cancel token (a linked clone), so
 /// cancelling the parent cancels the child -- an ESC on the parent must
-/// propagate to a blocking sync child.
+/// propagate to a blocking foreground child.
 #[tokio::test]
-async fn test_spawn_sync_links_cancel() {
+async fn test_foreground_child_links_cancel() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let parent = CancellationToken::new();
     let mut req = req_at_depth(parent_sid, store, provider, 0);
     req.parent_cancel = Some(parent.clone());
@@ -195,28 +186,27 @@ async fn test_spawn_sync_links_cancel() {
     parent.cancel();
     assert!(
         handle.cancel.is_cancelled(),
-        "sync child's cancel must be linked to the parent's"
+        "foreground child's cancel must be linked to the parent's"
     );
 }
 
-/// An async child gets a fresh unlinked cancel token, so cancelling the
-/// parent does not propagate -- async children run on and are killed
+/// A background child gets a fresh unlinked cancel token, so cancelling the
+/// parent does not propagate -- background children run on and are killed
 /// explicitly via the runtime's kill path, not by a parent ESC.
 #[tokio::test]
-async fn test_spawn_async_unlinks_cancel() {
+async fn test_background_child_unlinks_cancel() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let parent = CancellationToken::new();
     let mut req = req_at_depth(parent_sid, store, provider, 0);
-    req.run_in_background = true;
+    req.run_mode = ChildRunMode::Background;
     req.parent_cancel = Some(parent.clone());
     let handle = spawn_child(req).await.expect("spawn");
     parent.cancel();
     assert!(
         !handle.cancel.is_cancelled(),
-        "async child's cancel must stay independent of the parent's"
+        "background child's cancel must stay independent of the parent's"
     );
 }
 
@@ -226,22 +216,17 @@ async fn test_spawn_async_unlinks_cancel() {
 async fn test_spawn_child_effort_gate() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let req = req_at_depth(parent_sid, store, provider, 0);
     let handle = spawn_child(req).await.expect("spawn");
     assert_eq!(
         handle.runner.active_effort(),
         Some(houyicoder_protocol::llm::EffortLevel::Low),
-        "child must pin the lowest effort tier at spawn"
+        "child uses the lowest effort tier"
     );
 }
 
-/// A child armed with a bus publishes one Progress snapshot at each
-/// turn boundary; a parent subscribed to the child's progress topic receives
-/// it. The causal path the acceptance pins: publish → receive (not a timer).
-/// The child runs two turns — a tool call (RunAgain) then final text — so
-/// the turn-1 boundary fires exactly one Progress before the terminal turn.
+/// A child publishes one progress snapshot after each non-terminal turn.
 #[tokio::test]
 async fn test_spawn_publishes_progress() {
     use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage, progress_topic};
@@ -277,8 +262,7 @@ async fn test_spawn_publishes_progress() {
         },
         model: "test".into(),
     };
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::new(vec![resp1, resp2]));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![resp1, resp2]));
     let mut req = req_at_depth(parent_sid, store, provider, 0);
     req.bus = Some(bus.clone());
     let handle = spawn_child(req).await.expect("spawn");
@@ -298,13 +282,13 @@ async fn test_spawn_publishes_progress() {
     // The turn-1 boundary published one Progress the parent received.
     match rx.try_recv().expect("parent received progress") {
         BusMessage::Progress {
-            agent_id,
+            child,
             turn,
             tokens,
             tool_uses,
             last_activity,
         } => {
-            assert_eq!(agent_id, child_id);
+            assert_eq!(child.agent_id, child_id);
             assert_eq!(turn, 1);
             assert_eq!(tokens, 150); // 100 input + 50 output, cumulative after turn 1
             assert_eq!(tool_uses, 1);
@@ -331,8 +315,7 @@ async fn test_spawn_terminal_skips_progress() {
     let bus = Arc::new(AgentBus::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("immediate answer"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("immediate answer"));
     let mut req = req_at_depth(parent_sid, store, provider, 0);
     req.bus = Some(bus.clone());
     let handle = spawn_child(req).await.expect("spawn");
@@ -361,8 +344,7 @@ async fn test_spawn_publishes_completion() {
     let bus = Arc::new(AgentBus::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("found auth module"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("found auth module"));
     let mut req = req_at_depth(parent_sid, store, provider, 0);
     req.bus = Some(bus.clone());
     let handle = spawn_child(req).await.expect("spawn");
@@ -374,12 +356,11 @@ async fn test_spawn_publishes_completion() {
         .await;
     match rx.try_recv().expect("parent received completion") {
         BusMessage::Completed {
-            agent_id,
+            child,
             status,
             summary,
-            ..
         } => {
-            assert_eq!(agent_id, child_id);
+            assert_eq!(child.agent_id, child_id);
             assert_eq!(status, ChildStatus::Completed);
             assert_eq!(summary, "found auth module");
         }
@@ -416,8 +397,7 @@ async fn test_inbox_drained_at_boundary() {
         usage: Usage::default(),
         model: "test".into(),
     };
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::new(vec![turn1, turn2]));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![turn1, turn2]));
     let mut req = req_at_depth(parent_sid, store.clone(), provider, 0);
     req.bus = Some(bus.clone());
     let handle = spawn_child(req).await.expect("spawn");

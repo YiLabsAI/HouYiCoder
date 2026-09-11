@@ -1,11 +1,4 @@
-//! The identifier newtypes of the context layer: the session, event, and
-//! checkpoint ids, plus the two hash wrappers that appear on a logged event.
-//!
-//! Split from the crate root on size grounds. They belong together: each is
-//! a thin newtype over a generated id with the same mint, Display, and
-//! parse-back trio, and every one of them crosses the wire, so their serde
-//! shape is a compatibility surface that is easier to review in one file
-//! than scattered through the event types that carry them.
+//! Stable identifier and hash newtypes used by context records.
 
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
@@ -97,6 +90,58 @@ impl EventId {
     /// Parse a display string (ULID) back into an EventId.
     pub fn from_display_string(s: &str) -> Option<Self> {
         s.parse::<Ulid>().ok().map(Self)
+    }
+}
+
+/// The unique identity of one memory-change notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MemoryChangeId(Ulid);
+
+impl MemoryChangeId {
+    /// Mint a fresh memory-change identity.
+    pub fn new() -> Self {
+        Self(Ulid::generate())
+    }
+
+    /// Parse a display string back into a MemoryChangeId.
+    pub fn from_display_string(s: &str) -> Option<Self> {
+        s.parse::<Ulid>().ok().map(Self)
+    }
+}
+
+impl Default for MemoryChangeId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for MemoryChangeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[cfg(test)]
+mod memory_change_id_tests {
+    use super::*;
+
+    #[test]
+    fn test_memory_id_round_trips() {
+        let id = MemoryChangeId::default();
+        assert_ne!(id, MemoryChangeId::new());
+        let rendered = id.to_string();
+        assert_eq!(MemoryChangeId::from_display_string(&rendered), Some(id));
+        let json = serde_json::to_string(&id).expect("serialize memory change id");
+        assert_eq!(
+            serde_json::from_str::<MemoryChangeId>(&json).expect("deserialize memory change id"),
+            id
+        );
+    }
+
+    #[test]
+    fn test_memory_id_rejects_invalid() {
+        assert!(MemoryChangeId::from_display_string("not-an-id").is_none());
     }
 }
 

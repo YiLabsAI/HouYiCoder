@@ -6,8 +6,8 @@
 //! / the self-evolution re-reads see the real per-turn cost, not the
 //! default-zero wire type.
 
-use super::tests::length::ScriptRawProvider;
-use super::tests::{HangingProvider, runner_with};
+use super::runner_tests::length::ScriptRawProvider;
+use super::runner_tests::{HangingProvider, runner_with};
 use super::*;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_context::SessionEvent;

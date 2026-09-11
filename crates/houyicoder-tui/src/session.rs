@@ -475,10 +475,15 @@ async fn drive_client(
                     FrontendEvent::QueuedInputCommitted { inputs } => {
                         let _send = agent_tx.send(AgentMessage::QueuedInputCommitted { inputs });
                     }
-                    FrontendEvent::MemorySaved { count, kind } => {
-                        let _send = agent_tx.send(AgentMessage::MemorySaved {
-                            count,
-                            kind,
+                    FrontendEvent::MemoryChanged {
+                        id,
+                        origin,
+                        changes,
+                    } => {
+                        let _send = agent_tx.send(AgentMessage::MemoryChanged {
+                            id,
+                            origin,
+                            changes,
                         });
                     }
                     FrontendEvent::SystemLine { text } => {
@@ -701,7 +706,6 @@ fn kill_child_notification(child_sid: &str) -> AcpNotification {
     )
 }
 
-#[cfg(test)]
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;

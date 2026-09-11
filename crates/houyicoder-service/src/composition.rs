@@ -51,9 +51,9 @@ use houyicoder_core::agent::extractor::MemoryExtractor;
 use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
-    AgentTool, CommandHook, ConversationSearchTool, GitWorkspaceProbe, HookPolicy, HookRegistry,
-    HookSource, HotPathReducer, LlmSummarizer, Runner, SkillHookRegistrar, TodoWriteTool,
-    ToolRegistry, parse_event,
+    CommandHook, ConversationSearchTool, DelegationTool, GitWorkspaceProbe, HookPolicy,
+    HookRegistry, HookSource, HotPathReducer, LlmSummarizer, Runner, SkillHookRegistrar,
+    TodoWriteTool, ToolRegistry, parse_event,
 };
 use houyicoder_memory::{
     FileDescriptorStore, InMemoryBackend, InMemoryDescriptorStore, LocalFileBackend,
@@ -486,7 +486,7 @@ pub(crate) fn assemble(
         None => std::collections::HashSet::new(),
     });
     let agent_registry = multi_agent::built_in_registry();
-    tools.register(Arc::new(AgentTool::new(agent_registry.clone())));
+    tools.register(Arc::new(DelegationTool::new(agent_registry.clone())));
     // Spawn port + agent directory; construction is in the multi_agent module.
     // Hoist the bus so the fleet status relay (wired at pairing) can share it.
     let bus = std::sync::Arc::new(houyicoder_core::agent::multi_agent::bus_types::AgentBus::new());

@@ -5,7 +5,7 @@
 //! derived-index pointer) and the in-process write lock. The tool holds no
 //! path logic of its own — the provider owns every path — so there is no
 //! path-escape surface for the agent to probe. This is the structurally-safe
-//! counterpart to a raw sandboxed Write: the capability is save a memory
+//! recorderpart to a raw sandboxed Write: the capability is save a memory
 //! entry, not write an arbitrary file under the memory dir.
 //!
 //! Auto-approve by construction: the approval gate stays off and the tool
@@ -32,6 +32,8 @@ use houyicoder_context::{MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, Me
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
+use crate::agent::memory_change_recorder::MemoryChangeRecorder;
+use houyicoder_api::agent_event::MemoryOperation;
 
 /// A structured memory-write tool. The forked extraction agent calls it to
 /// persist a new memory entry; the provider owns the atomic write. Holds the
@@ -39,11 +41,11 @@ use super::{Tool, ToolCtx, ToolError};
 /// in the same process.
 pub struct MemoryAddTool {
     provider: Arc<dyn MemoryProvider>,
-    /// Optional write counter the caller threads in to learn how many saves
+    /// Optional write recorder the caller threads in to learn how many saves
     /// landed this pass. Incremented on a successful add so the extractor/dream
     /// can fire one memory-saved notice per pass (not per call). None for the
     /// main runner's tool, which does not notify.
-    counter: Option<Arc<std::sync::atomic::AtomicU32>>,
+    recorder: Option<Arc<MemoryChangeRecorder>>,
     /// Which writer this tool saves on behalf of. Injected by the host at
     /// construction (the LLM never provides origin) so a dream cannot
     /// self-promote. Unknown for a bare tool (tests).
@@ -56,15 +58,15 @@ impl MemoryAddTool {
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
         Self {
             provider,
-            counter: None,
+            recorder: None,
             origin: MemoryOrigin::Unknown,
         }
     }
 
-    /// Thread a write counter so a successful save bumps it. The caller resets
+    /// Thread a write recorder so a successful save bumps it. The caller resets
     /// before a fork pass + reads after to fire one memory-saved notice.
-    pub fn with_counter(mut self, counter: Arc<std::sync::atomic::AtomicU32>) -> Self {
-        self.counter = Some(counter);
+    pub(crate) fn with_recorder(mut self, recorder: Arc<MemoryChangeRecorder>) -> Self {
+        self.recorder = Some(recorder);
         self
     }
 
@@ -125,7 +127,7 @@ impl Tool for MemoryAddTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let provider = Arc::clone(&self.provider);
-        let counter = self.counter.clone();
+        let recorder = self.recorder.clone();
         Box::pin(async move {
             let key = parse_string(&input, "key")?;
             let description = parse_string(&input, "description")?;
@@ -149,8 +151,8 @@ impl Tool for MemoryAddTool {
             };
             match save {
                 Ok(()) => {
-                    if let Some(c) = &counter {
-                        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(recorder) = &recorder {
+                        recorder.record(&key, MemoryOperation::Stored);
                     }
                     Ok(json!({"saved": key}))
                 }
@@ -320,15 +322,15 @@ mod tests {
         assert!(e.mtime_secs > 0, "mtime stamped with now");
     }
 
-    /// A threaded counter bumps once per successful save so the extractor can
+    /// A threaded recorder bumps once per successful save so the extractor can
     /// fire one memory-saved notice per pass. A failed save (unknown source)
     /// does not bump it.
     #[tokio::test]
     async fn test_save_memory_counts_writes() {
         let p = provider();
-        let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let recorder = Arc::new(MemoryChangeRecorder::new());
         let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
-            .with_counter(counter.clone());
+            .with_recorder(recorder.clone());
         let input = json!({
             "key": "k1",
             "description": "d",
@@ -342,22 +344,17 @@ mod tests {
         )
         .await
         .expect("second save");
-        assert_eq!(
-            counter.load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "two successful saves bump the counter twice"
-        );
+        let changes = recorder.take();
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].key, "k1");
+        assert_eq!(changes[1].key, "k2");
         let err_input =
             json!({ "key": "k3", "description": "d", "source": "bogus", "content": "c" });
         let _err = run(&tool, err_input).await;
-        assert_eq!(
-            counter.load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "a failed save does not bump the counter"
-        );
+        assert!(recorder.take().is_empty());
     }
 
-    /// Without a threaded counter the tool still saves (the main runner's tool
+    /// Without a threaded recorder the tool still saves (the main runner's tool
     /// does not notify, so it never wires one).
     #[tokio::test]
     async fn test_save_memory_works_untracked() {
@@ -411,9 +408,8 @@ mod tests {
         );
     }
 
-    /// Auto-approve is the whole point of the forked-extract write seam: a
-    /// true gate would queue approvals no one answers. Pin it so a later
-    /// destructive-tool-implies-approval default does not silently turn it on.
+    /// Auto-approve is required by the forked-extract write seam because a
+    /// true gate would queue approvals with no responder.
     #[test]
     fn test_save_memory_auto_approves() {
         let p = provider();
@@ -456,10 +452,9 @@ mod tests {
     }
 
     /// The scope field defaults to auto when omitted, and a project value
-    /// threads through to the provider's add_in_scope so the dream can
-    /// refresh a project-scope entry in place rather than shadowing it with
-    /// a competing auto copy. Pins the MED-1 closure: a project-scope refresh
-    /// no longer lands in auto.
+    /// threads through to the provider's add_in_scope so the dream refreshes
+    /// a project-scope entry in place rather than shadowing it with a
+    /// competing auto copy.
     #[tokio::test]
     async fn test_save_scope_threads_through() {
         let p = provider();

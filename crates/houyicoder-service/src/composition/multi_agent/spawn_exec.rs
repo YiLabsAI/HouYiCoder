@@ -1,5 +1,4 @@
-//! Child finalization + async spawn execution, split from the runtime so
-//! the orchestration file stays under the size gate.
+//! Child finalization and background spawn execution.
 
 use std::sync::Arc;
 
@@ -7,12 +6,10 @@ use houyicoder_api::hook_fire::HookFire;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnOutcome};
 use houyicoder_context::SessionId;
-use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, ChildDescriptor, ChildRunMode};
 use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
 use houyicoder_core::agent::multi_agent::concurrency_gate::AcquireResult;
-use houyicoder_core::agent::multi_agent::registry::{
-    AgentError, IsolationMode, PromptSource, ResolveCtx,
-};
+use houyicoder_core::agent::multi_agent::registry::{IsolationMode, PromptSource, ResolveCtx};
 use houyicoder_core::agent::multi_agent::{SpawnRequest, spawn_child};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
@@ -94,17 +91,9 @@ pub(super) async fn finalize_child(
     (status, summary, usage)
 }
 
-/// Spawn a child that runs detached in a background task: the parent turn
-/// does not block on the child run. The child is spawned with an unlinked
-/// cancel token (the parent's ESC does not propagate), the bus live sink
-/// publishes Progress/Completed as the child runs, and the detached driver
-/// runs the same finalization as sync (worktree cleanup, inbox close,
-/// SubagentStop, SubagentReturn). The result reaches the parent via the bus
-/// completed publish, not a return value. The concurrency cap applies the same
-/// way as the sync path: a resolved spawn acquires a running slot before any
-/// side effect, the permit is moved into the detached driver, and dropping it
-/// at the end of the run releases the slot so a queued spawn can proceed.
-pub(super) async fn run_async_spawn(
+/// Spawn a background child and return after it starts. Capacity remains held
+/// until the detached driver finishes cleanup and publishes completion.
+pub(super) async fn run_background_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
     depth: u32,
@@ -116,20 +105,12 @@ pub(super) async fn run_async_spawn(
     let def = this
         .registry
         .resolve(&args.subagent_type, &ResolveCtx::default())
-        .map_err(|e| match e {
-            AgentError::NotFound { .. } => SpawnFailure::UnknownAgent,
-            AgentError::PermissionDenied { .. } => SpawnFailure::CapabilityDenied,
-        })?;
+        .map_err(super::map_registry_err)?;
     let isolation = match args.isolation.as_str() {
         "worktree" => IsolationMode::Worktree,
         _ => IsolationMode::None,
     };
-    // Concurrency cap (non-blocking for the async path): a free slot is taken
-    // now + held until the detached driver completes; a full cap rejects with
-    // backpressure so the model re-queues next turn rather than freezing the
-    // parent turn. The queue is sync-path only — a background spawn does not
-    // wait inline (run_in_background returns async_launched immediately on a
-    // free slot, ConcurrencySaturated on a full one).
+    // Background spawns reject saturation without blocking the parent turn.
     let permit = match this.gate.try_acquire() {
         AcquireResult::Acquired(p) => p,
         AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
@@ -160,7 +141,7 @@ pub(super) async fn run_async_spawn(
         depth,
         isolation,
         worktree_controller: this.worktree_controller.clone(),
-        run_in_background: true,
+        run_mode: ChildRunMode::Background,
         parent_cancel: cancel,
         bus: this.bus.clone(),
     };
@@ -170,7 +151,14 @@ pub(super) async fn run_async_spawn(
     // Register the child's live runner so a per-turn abort (the viewed-child
     // Esc path) can reach its turn-cancel token while the async driver runs.
     this.register_child(&child_str, &handle.runner);
-    super::announce_spawn(this.bus.as_ref(), &child_str, &args.subagent_type, true);
+    super::announce_spawn(
+        this.bus.as_ref(),
+        ChildDescriptor::new(
+            child_str.clone(),
+            args.subagent_type.clone(),
+            ChildRunMode::Background,
+        ),
+    );
     super::fire_subagent_start(
         hook_fire.as_ref(),
         parent_sid,
@@ -216,5 +204,5 @@ pub(super) async fn run_async_spawn(
             &child_str_stamp,
         );
     });
-    Ok(SpawnOutcome::async_launched(child_str))
+    Ok(SpawnOutcome::background_started(child_str))
 }

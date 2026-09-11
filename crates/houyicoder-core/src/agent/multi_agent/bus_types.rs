@@ -6,42 +6,63 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Whether a child blocks its parent turn or continues independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChildRunMode {
+    /// The parent waits for the child result.
+    Foreground,
+    /// The child continues after the spawn call returns.
+    Background,
+}
+
+/// Stable identity and execution mode for a child agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildDescriptor {
+    /// Child session identity.
+    pub agent_id: String,
+    /// Registered child-agent type.
+    pub agent_type: String,
+    /// Product execution mode.
+    pub run_mode: ChildRunMode,
+}
+
+impl ChildDescriptor {
+    /// Describe one child agent and its run mode.
+    pub fn new(
+        agent_id: impl Into<String>,
+        agent_type: impl Into<String>,
+        run_mode: ChildRunMode,
+    ) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            agent_type: agent_type.into(),
+            run_mode,
+        }
+    }
+}
+
 /// A message carried on the agent bus. Enumerated so subscribers match
 /// on kind without parsing strings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BusMessage {
     /// Per-turn progress from a running child.
     Progress {
-        agent_id: String,
+        child: ChildDescriptor,
         turn: u32,
         tokens: u64,
         tool_uses: u32,
         last_activity: Option<String>,
     },
-    /// Terminal state: the child is done, failed, or killed.
-    /// Carries subagent_type and run_in_background so the notification
-    /// drain does not depend on the Spawned message, which can be lost
-    /// to broadcast lag.
+    /// Terminal state with a self-contained child descriptor.
     Completed {
-        agent_id: String,
+        child: ChildDescriptor,
         status: ChildStatus,
         summary: String,
-        subagent_type: String,
-        run_in_background: bool,
     },
     /// A message delivered to a child's inbox (parent -> child).
     Inbox { text: String },
-    /// Announced when a child spawns so a watcher can subscribe to that
-    /// child's progress and completed topics before the first turn lands. The
-    /// run_in_background flag marks detached (async) spawns: a completion
-    /// notification injector subscribes only to those, so a sync child — whose
-    /// result the parent already receives as the tool result — does not get a
-    /// redundant "child completed" notification re-injected into its own turn.
-    Spawned {
-        agent_id: String,
-        subagent_type: String,
-        run_in_background: bool,
-    },
+    /// Announced before the child's first status event.
+    Spawned { child: ChildDescriptor },
     /// A child asks the parent to approve a guarded tool call. Published on
     /// the global permission-request topic; the parent server subscribes,
     /// surfaces the ask through its existing wire-approval flow, and
@@ -82,28 +103,27 @@ pub enum ChildStatus {
 pub type AgentBus = houyicoder_async::bus::InProcBus<BusMessage>;
 
 /// Build a topic string for a child's progress channel. Per-child targeted
-/// channel for a watcher that already learned the id from Spawned. The live
-/// sink also fans Progress out to the global progress topic so a watcher
-/// subscribed before any child spawns cannot lose a one-shot message to the
-/// subscribe-after-publish race.
+/// channel for a watcher that already learned the id from Spawned. The
+/// status publisher also fans Progress out to the global progress topic so
+/// a watcher subscribed before any child spawns cannot lose a one-shot
+/// message to the subscribe-after-publish race.
 pub fn progress_topic(agent_id: &str) -> String {
     format!("task.{agent_id}.progress")
 }
 
 /// Build a topic string for a child's completion channel. Per-child targeted
-/// channel for a watcher that already learned the id from Spawned. The live
-/// sink also fans Completed out to the global completion topic so a watcher
-/// subscribed before any child spawns cannot lose the terminal event: a
-/// per-child subscribe that lands after the child already completed would
-/// miss the one-shot Completed entirely (broadcast does not replay history),
-/// leaving the parent notification lost and the footer pill stuck on running.
+/// channel for a watcher that already learned the id from Spawned. The
+/// status publisher also fans Completed out to the global completion topic
+/// so a watcher subscribed before any child spawns cannot lose the terminal
+/// event: a per-child subscribe that lands after the child already completed
+/// would miss the one-shot Completed entirely (broadcast does not replay
+/// history), leaving the parent notification lost and the footer pill stuck
+/// on running.
 pub fn completed_topic(agent_id: &str) -> String {
     format!("task.{agent_id}.completed")
 }
 
-/// The global progress topic: a watcher subscribes once at startup (before
-/// any child spawns) and demuxes by the agent_id each Progress carries. The
-/// live sink fans out to this + the per-child channel.
+/// The global progress topic for watchers subscribed before children spawn.
 pub fn global_progress_topic() -> &'static str {
     "agents.progress"
 }
@@ -111,8 +131,8 @@ pub fn global_progress_topic() -> &'static str {
 /// The global completion topic: a watcher subscribes once at startup (before
 /// any child spawns) and demuxes by the agent_id each Completed carries.
 /// Subscribe-before-publish guarantees the terminal event is never lost to a
-/// per-child subscribe landing after the child already completed. The live
-/// sink fans out to this + the per-child channel.
+/// per-child subscribe landing after the child already completed. The status
+/// publisher fans out to this + the per-child channel.
 pub fn global_completed_topic() -> &'static str {
     "agents.completed"
 }
@@ -153,7 +173,11 @@ mod tests {
         bus.publish(
             &progress_topic("child-1"),
             BusMessage::Progress {
-                agent_id: "child-1".into(),
+                child: ChildDescriptor {
+                    agent_id: "child-1".into(),
+                    agent_type: "explore".into(),
+                    run_mode: ChildRunMode::Foreground,
+                },
                 turn: 1,
                 tokens: 100,
                 tool_uses: 2,
@@ -161,8 +185,8 @@ mod tests {
             },
         );
         match rx.try_recv().expect("message received") {
-            BusMessage::Progress { agent_id, turn, .. } => {
-                assert_eq!(agent_id, "child-1");
+            BusMessage::Progress { child, turn, .. } => {
+                assert_eq!(child.agent_id, "child-1");
                 assert_eq!(turn, 1);
             }
             _ => panic!("expected Progress"),
@@ -182,12 +206,10 @@ mod tests {
         );
     }
 
-    /// The permission round-trip: a child subscribes to its per-request
-    /// response topic BEFORE publishing the request, so the parent's later
-    /// response cannot be lost to broadcast lag. Pins the ordering contract
-    /// the run-loop relies on.
+    /// The child subscribes before publishing its request so the response
+    /// cannot be lost to broadcast lag.
     #[tokio::test]
-    async fn test_permission_request_response_roundtrip() {
+    async fn test_child_receives_permission_reply() {
         let bus = AgentBus::new();
         let mut parent_rx = bus.subscribe(permission_request_topic());
         let child_id = "child-1";

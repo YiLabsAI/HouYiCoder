@@ -3,32 +3,25 @@
 //! wall clock before the store sets prev_hash on append.
 
 mod hook;
-pub(crate) use hook::{emit_live_line, record_hook_signals};
+pub(crate) use hook::{emit_user_notice, record_hook_signals};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use houyicoder_api::live::{LiveEvent, LiveSink};
+use houyicoder_api::agent_event::{AgentEventHandlers, RunCompletionStatus, RunLifecycleEvent};
 use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{OutputItem, Usage};
 use serde_json::Value;
 
 use super::hook::{HookEvent, wire::HookOutcome};
-use super::{CompletionResponse, RunError, Runner};
+use super::{CompletionResponse, RunError, RunOutcome, RunResult, Runner};
 
-/// Forward a turn-boundary snapshot to the live sink. Called after a turn
-/// resolves and the loop will run again; the snapshot carries the turn's own
-/// tool count, the last tool name, and cumulative tokens so a watcher that
-/// does not consume the token stream (a spawned child's bus bridge) can
-/// report per-turn progress. No-op when no sink is installed.
+/// Emit progress after a completed turn when the run will continue.
 pub(crate) fn emit_turn_progress(
-    live: Option<&LiveSink>,
+    events: &AgentEventHandlers,
     response: &CompletionResponse,
     turn: u32,
     usage: &Usage,
 ) {
-    let Some(sink) = live else {
-        return;
-    };
     let tool_uses = response
         .output
         .iter()
@@ -38,7 +31,7 @@ pub(crate) fn emit_turn_progress(
         OutputItem::ToolCall { name, .. } => Some(name.clone()),
         _ => None,
     });
-    sink(&LiveEvent::TurnBoundary {
+    events.emit_run_lifecycle(RunLifecycleEvent::TurnCompleted {
         turn,
         cumulative_tokens: usage.input_tokens as u64 + usage.output_tokens as u64,
         tool_uses,
@@ -47,26 +40,26 @@ pub(crate) fn emit_turn_progress(
 }
 
 impl Runner {
-    /// Surface a notice to the user through the live sink: a transcript
-    /// system line the host renders verbatim. For things the user must know
-    /// or can act on — a hook that failed, a fence that did not engage. Not
-    /// for diagnostics (those go to the tracing sink; the user cannot act
-    /// on them and would see noise). No-op when no host installed a sink
-    /// (tests, the stub path).
+    /// Emit a user-visible notice for actionable runtime conditions.
     pub(crate) fn emit_system_line(&self, text: String) {
-        emit_live_line(self.live.as_ref(), text);
+        emit_user_notice(&self.events, text);
     }
 
-    /// Notify a watcher the run reached a terminal state. Emitted once at
-    /// the end of run(); a spawned child's bus bridge forwards it onto the
-    /// child's completed topic. No-op when no sink is installed.
-    pub(crate) fn emit_run_completed(&self, status: &str, summary: &str) {
-        if let Some(sink) = self.live.as_ref() {
-            sink(&LiveEvent::RunCompleted {
-                status: status.to_string(),
-                summary: summary.to_string(),
-            });
-        }
+    /// Emit the lifecycle event represented by a run result. An approval
+    /// Interruption is a pause rather than a completed run, so it emits
+    /// nothing; resume reports the eventual completion or failure.
+    pub(crate) fn emit_run_result(&self, result: &Result<RunResult, RunError>) {
+        let (status, summary) = match result {
+            Ok(run) => {
+                if matches!(run.outcome, RunOutcome::Interruption(_)) {
+                    return;
+                }
+                run.outcome.terminal_status()
+            }
+            Err(error) => (RunCompletionStatus::Failed, error.to_string()),
+        };
+        self.events
+            .emit_run_lifecycle(RunLifecycleEvent::Completed { status, summary });
     }
     /// Surface the one overflow case the catalog cannot self-heal: the
     /// provider rejected an over-long request but its error body carried no
@@ -685,7 +678,7 @@ impl Runner {
         record_hook_signals(
             self.store.as_ref(),
             &self.observability,
-            self.live.as_ref(),
+            &self.events,
             session,
             event,
             tool_name,
@@ -695,9 +688,8 @@ impl Runner {
     }
 }
 
-/// Emit a system line through the live sink when one is attached; no-op
-/// Build a SessionLogEntry with a fresh id and a wall-clock timestamp. prev_hash is
-/// set by SessionStore::append.
+/// Build a SessionLogEntry with a fresh id and wall-clock timestamp.
+/// SessionStore sets prev_hash during append.
 pub(crate) fn new_event(session: SessionId, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
         id: EventId::new(),

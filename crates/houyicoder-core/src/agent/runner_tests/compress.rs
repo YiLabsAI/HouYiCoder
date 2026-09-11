@@ -312,7 +312,7 @@ async fn test_compress_runs_reinject() {
 #[tokio::test]
 async fn test_stream_stall_aborts() {
     use houyicoder_protocol::llm::ProviderError;
-    let p = Arc::new(super::tests::HangingProvider::new(vec![]));
+    let p = Arc::new(super::HangingProvider::new(vec![]));
     let runner = runner_with(p, ToolRegistry::new());
     let session = SessionId::new();
     let result = runner.run(session, "hi".into()).await.unwrap_err();
@@ -327,12 +327,10 @@ async fn test_stream_stall_aborts() {
 #[tokio::test]
 async fn test_stall_flushes_partial() {
     use houyicoder_protocol::llm::{LlmEvent, ProviderError};
-    let p = Arc::new(super::tests::HangingProvider::new(vec![
-        LlmEvent::TextDelta {
-            id: "t1".into(),
-            text: "partial".into(),
-        },
-    ]));
+    let p = Arc::new(super::HangingProvider::new(vec![LlmEvent::TextDelta {
+        id: "t1".into(),
+        text: "partial".into(),
+    }]));
     let runner = runner_with(p, ToolRegistry::new());
     let session = SessionId::new();
     let result = runner.run(session, "hi".into()).await.unwrap_err();

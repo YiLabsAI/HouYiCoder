@@ -11,15 +11,14 @@
 //! exposes the construction so a caller (the stop hook) can drive a forked
 //! extraction run; tests call it directly.
 
-use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
-
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{SessionId, SessionLogEntry};
+use std::path::Path;
+use std::sync::Arc;
 
+use super::memory_change_recorder::MemoryChangeRecorder;
 use super::prompt::extract::build_extraction_prompt;
 use super::runner_config::RunnerConfig;
 use super::{RunError, RunOutcome, RunResult, Runner, ToolRegistry};
@@ -28,46 +27,45 @@ use super::{RunError, RunOutcome, RunResult, Runner, ToolRegistry};
 /// The store is ephemeral (an in-memory backend the caller constructs) so the
 /// forked transcript stays out of the durable main log. The provider and
 /// memory are shared (Arc clone) so prompt caching and the in-process write
-/// lock carry over. The save_memory tool is registered with the given counter
-/// so the caller can read how many saves the fork landed this pass (the main
-/// runner's tool has no counter; it does not notify).
-pub fn build_forked_extract_runner(
+/// lock carry over. The save_memory tool is registered with the given
+/// recorder so the caller can drain the exact operations the fork landed
+/// this pass (the main runner's tool has no recorder; it does not notify).
+pub(crate) fn build_forked_extract_runner(
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: &Path,
     config: RunnerConfig,
-    counter: Arc<AtomicU32>,
+    recorder: Arc<MemoryChangeRecorder>,
 ) -> Runner {
     let tools = ToolRegistry::new();
     Runner::new(store, provider, tools, config)
-        .with_memory_counted(memory, counter)
+        .with_extraction_memory(memory, recorder)
         .with_cwd(cwd.to_path_buf())
 }
 
 /// Drive a forked extraction run on a fresh ephemeral session. The prefix is
 /// the main conversation events (replayed by the caller); the extraction
-/// prompt is appended as the user input. Returns the run result. The counter
-/// is reset before the run + bumped per successful save_memory call so the
-/// caller reads it after to fire one memory-saved notice. The forked run is
-/// bounded by the config max_turns (five for extraction). No auto-fire: the
-/// caller (the stop hook) invokes this; tests invoke it directly.
-pub async fn run_forked_extract(
+/// prompt is appended as the user input. Returns the run result. The
+/// recorder is drained after the run so the caller reads the exact
+/// successful operations to fire one memory-changed notice. The forked run
+/// is bounded by the config max_turns (five for extraction). No auto-fire:
+/// the caller (the stop hook) invokes this; tests invoke it directly.
+pub(crate) async fn run_forked_extract(
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: &Path,
     config: RunnerConfig,
     prefix: &[SessionLogEntry],
-    counter: Arc<AtomicU32>,
+    recorder: Arc<MemoryChangeRecorder>,
 ) -> Result<RunResult, RunError> {
-    counter.store(0, std::sync::atomic::Ordering::SeqCst);
     // Inject the existing-memory manifest so the forked agent dedups by
     // reusing a key instead of re-saving the same fact each turn (a
     // formatMemoryManifest pre-inject). Built before moving memory into
     // the runner.
     let prompt = build_extraction_prompt(&memory.list_memories());
-    let runner = build_forked_extract_runner(store, provider, memory, cwd, config, counter);
+    let runner = build_forked_extract_runner(store, provider, memory, cwd, config, recorder);
     let session = SessionId::new();
     let result = runner.run_forked(session, prefix, prompt).await;
     // A fork that hits the turn cap did not finish extracting — treat as a
@@ -257,7 +255,7 @@ mod tests {
         std::fs::create_dir_all(&cwd).expect("mkdir cwd");
 
         let prefix = main_prefix();
-        let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let recorder = Arc::new(MemoryChangeRecorder::new());
         let result = run_forked_extract(
             ephemeral,
             provider,
@@ -265,7 +263,7 @@ mod tests {
             &cwd,
             config(),
             &prefix,
-            counter,
+            recorder,
         )
         .await
         .expect("forked run must not error");
@@ -317,7 +315,7 @@ mod tests {
         let cwd = std::env::temp_dir().join(format!("fork-prefix-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).expect("mkdir cwd");
         let prefix = main_prefix();
-        let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let recorder = Arc::new(MemoryChangeRecorder::new());
         let result = run_forked_extract(
             ephemeral,
             provider,
@@ -325,7 +323,7 @@ mod tests {
             &cwd,
             config(),
             &prefix,
-            counter,
+            recorder,
         )
         .await
         .expect("forked run must not error");

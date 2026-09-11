@@ -15,19 +15,22 @@
 //! into the extraction prompt, the mutex scan range, and the advance that
 //! prevents re-counting.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use houyicoder_api::live::{LiveEvent, LiveSink, MemorySavedKind};
+use houyicoder_api::agent_event::{
+    EventHandler, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent, MemoryOperation,
+};
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
+use houyicoder_context::{EventId, MemoryChangeId, SessionEvent, SessionLogEntry};
 use tokio::task::JoinHandle;
 
 use super::extract::run_forked_extract;
+use super::memory_change_recorder::MemoryChangeRecorder;
 use super::{RunError, RunResult, RunnerConfig};
 
 #[derive(Debug)]
@@ -56,11 +59,7 @@ pub struct MemoryExtractor {
     memory: Arc<dyn MemoryProvider>,
     cwd: PathBuf,
     config: RunnerConfig,
-    /// Host-installed sink fired once per pass when memories land (extract
-    /// fork wrote N, or the main agent saved this turn so the fork was
-    /// skipped). None when no host wires one (tests, forked runners), so
-    /// notify is a no-op there.
-    notify_sink: Mutex<Option<LiveSink>>,
+    memory_changed: Mutex<Option<Arc<dyn EventHandler<MemoryChangedEvent>>>>,
 }
 
 impl MemoryExtractor {
@@ -84,29 +83,33 @@ impl MemoryExtractor {
             memory,
             cwd,
             config,
-            notify_sink: Mutex::new(None),
+            memory_changed: Mutex::new(None),
         }
     }
 
-    /// Install the host sink fired on each pass that writes memories. The
-    /// runner forwards its own live sink here so the extractor (a detached
-    /// spawned task) can push a MemorySaved event without holding a wire
-    /// handle. The forked runner's live sink stays None so the fork's token
-    /// deltas do not fire into the user transcript.
-    pub fn set_notify_sink(&self, sink: LiveSink) {
-        *self.notify_sink.lock().expect("notify_sink") = Some(sink);
+    /// Install the handler for successful memory changes.
+    pub(crate) fn set_memory_changed_handler(
+        &self,
+        handler: Option<Arc<dyn EventHandler<MemoryChangedEvent>>>,
+    ) {
+        *self.memory_changed.lock().expect("memory handler lock") = handler;
     }
 
-    /// Fire one MemorySaved notice if a sink is wired + count > 0. Best-effort:
-    /// a None sink (tests, forked runner) is a no-op; the sink itself is
-    /// try_send-droppable on a full channel.
-    fn fire_saved(&self, count: u32, kind: MemorySavedKind) {
-        if count == 0 {
+    fn emit_changes(&self, origin: MemoryChangeOrigin, changes: Vec<MemoryChange>) {
+        if changes.is_empty() {
             return;
         }
-        let sink = self.notify_sink.lock().expect("notify_sink").clone();
-        if let Some(sink) = sink {
-            sink(&LiveEvent::MemorySaved { count, kind });
+        let handler = self
+            .memory_changed
+            .lock()
+            .expect("memory handler lock")
+            .clone();
+        if let Some(handler) = handler {
+            handler.handle(MemoryChangedEvent {
+                id: MemoryChangeId::new(),
+                origin,
+                changes,
+            });
         }
     }
 
@@ -120,19 +123,13 @@ impl MemoryExtractor {
     ) -> Result<ExtractOutcome, RunError> {
         let cursor = *self.cursor.lock().expect("cursor");
         let new_message_count = count_messages_since(messages, cursor.as_ref());
-        if has_memory_writes_since(messages, cursor.as_ref()) {
-            // The main agent saved this turn (mutual exclusion: the fork
-            // would re-extract). This is the path the user directly
-            // triggered, so it deserves a notice — count the saves + fire.
-            let saved = count_memory_writes_since(messages, cursor.as_ref()) as u32;
+        let primary_changes = memory_changes_since(messages, cursor.as_ref());
+        if !primary_changes.is_empty() {
             advance_cursor(&self.cursor, messages);
-            self.fire_saved(saved, MemorySavedKind::Extracted);
+            self.emit_changes(MemoryChangeOrigin::PrimaryAgent, primary_changes);
             return Ok(ExtractOutcome::Skipped { new_message_count });
         }
-        // A fresh counter the fork's save_memory tool bumps per successful
-        // write. Reset before the run so the load after is this pass's count
-        // (not an accumulator across passes).
-        let counter = Arc::new(AtomicU32::new(0));
+        let recorder = Arc::new(MemoryChangeRecorder::new());
         let result = run_forked_extract(
             Arc::clone(&self.store),
             Arc::clone(&self.provider),
@@ -140,17 +137,14 @@ impl MemoryExtractor {
             &self.cwd,
             self.config.clone(),
             messages,
-            Arc::clone(&counter),
+            Arc::clone(&recorder),
         )
         .await;
         // Advance the cursor only on success. On error the cursor stays so
         // the errored messages are reconsidered next pass.
         if result.is_ok() {
             advance_cursor(&self.cursor, messages);
-            self.fire_saved(
-                counter.load(std::sync::atomic::Ordering::SeqCst),
-                MemorySavedKind::Extracted,
-            );
+            self.emit_changes(MemoryChangeOrigin::AutoMemory, recorder.take());
         }
         result.map(ExtractOutcome::Extracted)
     }
@@ -286,48 +280,34 @@ pub(crate) fn count_messages_since(
         .count()
 }
 
-/// True if the main agent emitted a save_memory tool call after the cursor
-/// (mutual exclusion: the fork would just re-extract what was already
-/// saved). Same fallback as count_messages_since when the cursor id is not
-/// found.
-pub(crate) fn has_memory_writes_since(
+fn memory_changes_since(
     messages: &[SessionLogEntry],
     cursor: Option<&EventId>,
-) -> bool {
-    let start = match cursor {
-        None => 0,
-        Some(id) => match messages.iter().position(|m| &m.id == id) {
-            Some(i) => i + 1,
-            None => 0,
-        },
-    };
-    messages
-        .iter()
-        .skip(start)
-        .any(|m| is_save_memory_call(&m.event))
-}
-
-/// Count of save_memory tool calls the main agent emitted after the cursor.
-/// The Skipped path (mutual exclusion: the fork would re-extract what the
-/// main agent already saved) still owes the user a memory-saved notice — it
-/// is the path the user directly triggered by telling the agent to save.
-/// Same fallback as has_memory_writes_since when the cursor id is not found.
-pub(crate) fn count_memory_writes_since(
-    messages: &[SessionLogEntry],
-    cursor: Option<&EventId>,
-) -> usize {
-    let start = match cursor {
-        None => 0,
-        Some(id) => match messages.iter().position(|m| &m.id == id) {
-            Some(i) => i + 1,
-            None => 0,
-        },
-    };
-    messages
-        .iter()
-        .skip(start)
-        .filter(|m| is_save_memory_call(&m.event))
-        .count()
+) -> Vec<MemoryChange> {
+    let start = cursor
+        .and_then(|id| messages.iter().position(|message| &message.id == id))
+        .map_or(0, |index| index + 1);
+    let mut pending_calls = HashSet::new();
+    let mut changes = Vec::new();
+    for message in messages.iter().skip(start) {
+        match &message.event {
+            SessionEvent::ToolCall { call_id, tool, .. } if tool == "save_memory" => {
+                pending_calls.insert(call_id.as_str());
+            }
+            SessionEvent::ToolResult {
+                call_id, output, ..
+            } if pending_calls.remove(call_id.as_str()) => {
+                if let Some(key) = output.get("saved").and_then(serde_json::Value::as_str) {
+                    changes.push(MemoryChange {
+                        key: key.to_string(),
+                        operation: MemoryOperation::Stored,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    changes
 }
 
 fn is_model_visible(kind: &SessionEvent) -> bool {
@@ -337,10 +317,6 @@ fn is_model_visible(kind: &SessionEvent) -> bool {
             | SessionEvent::MidTurnInput { .. }
             | SessionEvent::AssistantMessage { .. }
     )
-}
-
-fn is_save_memory_call(kind: &SessionEvent) -> bool {
-    matches!(kind, SessionEvent::ToolCall { tool, .. } if tool == "save_memory")
 }
 
 #[cfg(test)]

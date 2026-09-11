@@ -1,9 +1,4 @@
-//! Re-derivable compaction backbone + conversation recall tool wiring. Split
-//! from context_wiring.rs so that file stays under the file-size gate. The
-//! conversation_search tool replays the raw log to recall compacted detail +
-//! bumps a recall meter; the backbone derives a structured block from the
-//! folded events + workspace, merges it after the LLM summary (authoritative
-//! on conflict), and measures a conflict rate.
+//! Re-derivable compaction state and compacted-conversation recall.
 
 use std::sync::Arc;
 
@@ -112,7 +107,7 @@ fn log_handle(store: &Arc<SessionStore>) -> Arc<dyn SessionLog> {
 /// Summarized span. A folded event the served view no longer shows is still
 /// recallable, and the recall counts toward the meter.
 #[tokio::test]
-async fn test_conversation_recalls_compacted_detail() {
+async fn test_search_finds_compacted_detail() {
     let (store, session) = seed_folded_session().await;
     let runner = Runner::new(
         store.clone(),

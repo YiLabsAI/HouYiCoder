@@ -4,7 +4,7 @@
 //! method, which owns the topic-file removal and the derived-index
 //! regeneration. The tool holds no path logic of its own — the provider
 //! owns every path — so there is no path-escape surface for the agent to
-//! probe. This is the structurally-safe counterpart to a raw sandboxed
+//! probe. This is the structurally-safe recorderpart to a raw sandboxed
 //! file delete over the memory directory: the capability is delete one
 //! memory entry by key, not delete an arbitrary file under the memory dir.
 //!
@@ -30,17 +30,19 @@ use houyicoder_context::MemoryError;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
+use crate::agent::memory_change_recorder::MemoryChangeRecorder;
+use houyicoder_api::agent_event::MemoryOperation;
 
 /// A structured memory-delete tool. The forked consolidation agent calls it
 /// to prune a stale or contradicted entry; the provider owns the removal
 /// and the index regeneration.
 pub struct DeleteMemoryTool {
     provider: Arc<dyn MemoryProvider>,
-    /// Optional write counter the caller threads in to learn how many
+    /// Optional write recorder the caller threads in to learn how many
     /// deletions landed this pass. Incremented on a successful delete so the
     /// dream can fire one memory-saved notice per pass. None for the main
     /// runner's tool, which does not notify.
-    counter: Option<Arc<std::sync::atomic::AtomicU32>>,
+    recorder: Option<Arc<MemoryChangeRecorder>>,
 }
 
 impl DeleteMemoryTool {
@@ -49,15 +51,15 @@ impl DeleteMemoryTool {
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
         Self {
             provider,
-            counter: None,
+            recorder: None,
         }
     }
 
-    /// Thread a write counter so a successful delete bumps it. The dream
-    /// shares one counter across the add + delete tools so a touch (add or
+    /// Thread a write recorder so a successful delete bumps it. The dream
+    /// shares one recorder across the add + delete tools so a touch (add or
     /// delete) counts toward the notice.
-    pub fn with_counter(mut self, counter: Arc<std::sync::atomic::AtomicU32>) -> Self {
-        self.counter = Some(counter);
+    pub(crate) fn with_recorder(mut self, recorder: Arc<MemoryChangeRecorder>) -> Self {
+        self.recorder = Some(recorder);
         self
     }
 }
@@ -88,15 +90,15 @@ impl Tool for DeleteMemoryTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let provider = Arc::clone(&self.provider);
-        let counter = self.counter.clone();
+        let recorder = self.recorder.clone();
         Box::pin(async move {
             let key = input.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
                 ToolError::Failed("delete_memory: 'key' must be a non-empty string".to_string())
             })?;
             match provider.delete_memory(key) {
                 Ok(()) => {
-                    if let Some(c) = &counter {
-                        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(recorder) = &recorder {
+                        recorder.record(key, MemoryOperation::Deleted);
                     }
                     Ok(json!({"deleted": key}))
                 }
@@ -172,24 +174,20 @@ mod tests {
         assert_eq!(p.deleted.lock().expect("deleted")[0], "stale-thing");
     }
 
-    /// A threaded counter bumps once per successful delete so the dream can
+    /// A threaded recorder bumps once per successful delete so the dream can
     /// fire one memory-saved notice per pass. A NotFound does not bump it.
     #[tokio::test]
     async fn test_delete_memory_counts_deletes() {
         let p = provider();
-        let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let recorder = Arc::new(MemoryChangeRecorder::new());
         let tool = DeleteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
-            .with_counter(counter.clone());
+            .with_recorder(recorder.clone());
         run(&tool, json!({"key": "a"})).await.expect("delete a");
         run(&tool, json!({"key": "b"})).await.expect("delete b");
-        assert_eq!(
-            counter.load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "two successful deletes bump the counter twice"
-        );
+        assert_eq!(recorder.take().len(), 2);
     }
 
-    /// A NotFound does not bump the counter (no memory was touched).
+    /// A NotFound does not bump the recorder (no memory was touched).
     #[tokio::test]
     async fn test_memory_skips_missing_count() {
         struct EmptyMemory;
@@ -204,15 +202,11 @@ mod tests {
                 Err(MemoryError::NotFound)
             }
         }
-        let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let recorder = Arc::new(MemoryChangeRecorder::new());
         let tool = DeleteMemoryTool::new(Arc::new(EmptyMemory) as Arc<dyn MemoryProvider>)
-            .with_counter(counter.clone());
+            .with_recorder(recorder.clone());
         let _err = run(&tool, json!({"key": "absent"})).await;
-        assert_eq!(
-            counter.load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "a failed delete does not bump the counter"
-        );
+        assert!(recorder.take().is_empty());
     }
 
     #[tokio::test]

@@ -63,9 +63,9 @@ fn test_teammate_pill_pins_view() {
     );
 }
 
-/// After a sync delegation completes, the footer pill renders the child's
-/// done row (the type + a done marker + the token total). Proves the pill
-/// surfaces the terminal state, not just the running state.
+/// After a foreground delegation completes, the footer pill renders the
+/// child's done row (the type + a done marker + the token total). Proves
+/// the pill surfaces the terminal state, not just the running state.
 #[test]
 #[ignore]
 fn test_pill_done_after_completion() {
@@ -90,7 +90,7 @@ fn test_pill_done_after_completion() {
     );
 }
 
-/// Two sync delegations in one run leave two footer pill rows, each
+/// Two foreground delegations in one run leave two footer pill rows, each
 /// carrying its own type + done marker. Proves the pill tracks multiple
 /// children (not last-writer-wins) and each row is typed by its delegation.
 #[test]
@@ -120,10 +120,10 @@ fn test_pill_two_children_rows() {
     );
 }
 
-/// While a sync child is in-flight, the footer pill renders the running row
-/// (the type + a live verb), distinct from the done row. Proves the pill
-/// tracks the running state before completion. Uses the stub delay so the
-/// in-flight window is wide enough to catch.
+/// While a foreground child is in-flight, the footer pill renders the
+/// running row (the type + a live verb), distinct from the done row. Proves
+/// the pill tracks the running state before completion. Uses the stub
+/// delay so the in-flight window is wide enough to catch.
 #[test]
 #[ignore]
 fn test_pill_running_verb_inflight() {
@@ -175,7 +175,7 @@ fn test_pill_shift_enter_teammate() {
     );
 }
 
-// ---- batch 4: async delegation ----
+// ---- batch 4: background delegation ----
 
 /// The running pill shows the live-progress glyph (a hollow circle),
 /// distinct from the done row's check mark. Proves the pill distinguishes
@@ -199,9 +199,10 @@ fn test_pill_running_glyph() {
     );
 }
 
-/// The pill transitions from the running row to the done row as a sync child
-/// completes: the running verb appears first, then the done marker replaces
-/// it. Proves the pill reflects the live state change at completion.
+/// The pill transitions from the running row to the done row as a
+/// foreground child completes: the running verb appears first, then the
+/// done marker replaces it. Proves the pill reflects the live state change
+/// at completion.
 #[test]
 #[ignore]
 fn test_pill_running_to_done() {
@@ -283,7 +284,7 @@ fn test_pill_shift_arrows_enter() {
 #[ignore]
 fn test_pill_enter_running_child() {
     let script = r#"[
-        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"delegated async, continuing"}],
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"delegated background, continuing"}],
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}],
@@ -295,8 +296,8 @@ fn test_pill_enter_running_child() {
     s.send_str("find the auth module");
     s.send_str("\r");
     assert!(
-        s.wait_for_plain("delegated async", RENDER_TIMEOUT * 2),
-        "parent should continue past an async delegation:\n{}",
+        s.wait_for_plain("delegated background", RENDER_TIMEOUT * 2),
+        "parent should continue past a background delegation:\n{}",
         s.output()
     );
     // Clear so the post-drill frame is what we assert on, then select the
@@ -310,7 +311,7 @@ fn test_pill_enter_running_child() {
         s.output()
     );
     assert!(
-        !s.output_plain().contains("delegated async"),
+        !s.output_plain().contains("delegated background"),
         "parent transcript must not render inside the child view:\n{}",
         s.output()
     );

@@ -28,9 +28,7 @@ use houyicoder_protocol::llm::Usage;
 use super::Runner;
 use super::retention::{RetentionContext, RetentionDecision, RetentionPolicy};
 
-/// The cache-liveness Runner surface: construction wiring + the per-turn
-/// cache-read stamp. Lives here (not on the Runner's main impl) so the
-/// Runner module stays under the file-size gate.
+/// Cache-liveness policy wiring and per-turn cache-read state.
 impl Runner {
     /// Install the cache-liveness retention policy on the context builder,
     /// sharing this runner's cached-prefix state. Called once at construction
@@ -312,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn test_expired_cache_recomputes_aggressively() {
+    fn test_expired_cache_recomputes_policy() {
         // While the cache is live, a block_ref stores its decision. Once the
         // TTL elapses (or the last turn missed), the stored decision is no
         // longer consulted — the aggressive band applies, so an age-3 block
@@ -333,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn test_superseded_evicts_regardless_liveness() {
+    fn test_policy_evicts_superseded_block() {
         let s = Arc::new(CachedPrefixState::new());
         s.record_turn(1_000, 800);
         let policy = CacheLivenessRetentionPolicy::new(Arc::clone(&s));

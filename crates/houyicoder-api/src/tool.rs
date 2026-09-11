@@ -4,6 +4,8 @@
 //! engine; only the trait descends here so the permission layer depends
 //! downward, not back into the engine.
 
+pub mod progress;
+
 use houyicoder_async::{CancellationToken, PFut};
 use houyicoder_context::SessionId;
 use houyicoder_protocol::extension::ToolError;
@@ -11,8 +13,8 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use self::progress::ToolProgressReporter;
 use crate::hook_fire::HookFire;
-use crate::progress::ProgressSink;
 use crate::spawn::{AgentIdentity, SpawnHandle};
 
 /// Per-call context a tool receives alongside its input. Owned (no lifetime
@@ -35,7 +37,7 @@ pub struct ToolCtx {
     /// Cooperative cancellation; None when the dispatch is non-cancellable.
     pub cancel: Option<CancellationToken>,
     /// Host progress sink; None when no host surfaces progress.
-    pub progress: Option<Arc<dyn ProgressSink>>,
+    pub progress: Option<Arc<dyn ToolProgressReporter>>,
     /// The session the dispatch runs under; None when the dispatch is not
     /// bound to a session (non-interactive runs, tests). A tool that needs the
     /// raw log (the conversation recall tool replays it) reads this to pick the
@@ -94,8 +96,8 @@ impl ToolCtx {
     }
 
     /// Attach a host progress sink the tool reports through.
-    pub fn with_progress(mut self, sink: Arc<dyn ProgressSink>) -> Self {
-        self.progress = Some(sink);
+    pub fn with_progress(mut self, reporter: Arc<dyn ToolProgressReporter>) -> Self {
+        self.progress = Some(reporter);
         self
     }
 

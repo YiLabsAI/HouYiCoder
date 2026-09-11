@@ -1,7 +1,7 @@
 //! Hook-signal recording shared by the Runner's in-loop hook recorder and a
 //! service-layer fire point. One recorder, two callers, no divergence.
 
-use houyicoder_api::live::{LiveEvent, LiveSink};
+use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{HookVerdictKind, SessionEvent, SessionId};
 
@@ -15,25 +15,17 @@ use super::super::hook::{
 use super::super::obs_wire::SharedObservability;
 use super::new_event;
 
-/// Forward a system line to the live sink. No-op when no sink is wired.
-/// Extracted from the Runner method so a service-layer fire point shares one
-/// live-emit path with the in-loop hook recorder.
-pub(crate) fn emit_live_line(live: Option<&LiveSink>, text: String) {
-    if let Some(sink) = live {
-        sink(&LiveEvent::SystemLine { text });
-    }
+/// Emit a user-visible notice through the configured event handler.
+pub(crate) fn emit_user_notice(events: &AgentEventHandlers, message: String) {
+    events.emit_user_notice(UserNoticeEvent { message });
 }
 
-/// Record one HookSignal per hook outcome to the session log, reading the
-/// current turn/call coords from the shared observability log and emitting
-/// user-visible lines (Observe notes, hook failures) through the live sink.
-/// Extracted from Runner::append_hook_signals so a service-layer fire point
-/// records with the same shape the Runner does. Best-effort: a store error is
-/// dropped, not fatal (hook audit must not crash the run).
+/// Record hook outcomes and emit user-visible notices for observable failures.
+/// Audit persistence remains best-effort so it cannot abort the run.
 pub(crate) async fn record_hook_signals(
     store: &dyn SessionLog,
     obs: &SharedObservability,
-    live: Option<&LiveSink>,
+    events: &AgentEventHandlers,
     session: SessionId,
     event: HookEvent,
     tool_name: Option<&str>,
@@ -56,14 +48,14 @@ pub(crate) async fn record_hook_signals(
             Ok(HookVerdict::Deny(r)) => (HookVerdictKind::Deny, r.clone(), None, None),
             Ok(HookVerdict::Feedback(r)) => (HookVerdictKind::Feedback, r.clone(), None, None),
             Ok(HookVerdict::Observe(r)) => {
-                emit_live_line(live, format!("hook {}: {r}", o.hook_name));
+                emit_user_notice(events, format!("hook {}: {r}", o.hook_name));
                 (HookVerdictKind::Observe, r.clone(), None, None)
             }
             Ok(HookVerdict::Inject(r)) => (HookVerdictKind::Inject, r.clone(), None, None),
             Ok(HookVerdict::Ask(r)) => (HookVerdictKind::Ask, r.clone(), None, None),
             Err(e) => {
-                emit_live_line(
-                    live,
+                emit_user_notice(
+                    events,
                     format!("hook {} failed: {}", o.hook_name, wire_error_reason(e)),
                 );
                 (

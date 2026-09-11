@@ -1,5 +1,5 @@
-//! The agent tool: the model-facing entry for sub-agent delegation. The
-//! tool resolves the requested type against the registry and surfaces a
+//! The delegation tool: the model-facing entry for sub-agent delegation.
+//! The tool resolves the requested type against the registry and surfaces a
 //! denial distinctly from an unknown type before any spawn.
 //!
 //! The available-agent directory is injected into the parent system prompt as
@@ -18,11 +18,11 @@ use crate::agent::multi_agent::registry::{AgentError, AgentRegistry, ResolveCtx}
 
 /// The model-facing delegation tool. Resolves the requested type against
 /// the registry; never holds the runner.
-pub struct AgentTool {
+pub struct DelegationTool {
     registry: Arc<dyn AgentRegistry>,
 }
 
-impl AgentTool {
+impl DelegationTool {
     pub fn new(registry: Arc<dyn AgentRegistry>) -> Self {
         Self { registry }
     }
@@ -55,9 +55,9 @@ After launching you know nothing about what the child found. Never fabricate or 
 
 Input: {description: short 3-5 word label, prompt: the task, subagent_type?: agent type (defaults to general-purpose), isolation?: \"none\" | \"worktree\" (default none)}.
 
-Subagents run synchronously (the parent turn blocks until the child finishes). Background delegation is not yet exposed: an async child cannot be stopped from the TUI today, so advertising it would let an unkillable agent run. The field stays in the wire schema for when the kill UX lands.";
+Subagents run in the foreground, so the parent waits for the child result. Background delegation remains hidden until the TUI can stop a running child.";
 
-impl Tool for AgentTool {
+impl Tool for DelegationTool {
     fn name(&self) -> &str {
         "agent"
     }
@@ -81,7 +81,7 @@ impl Tool for AgentTool {
                     "description": "The type of specialized agent to use; defaults to general-purpose"
                 },
                 // run_in_background is intentionally absent from the schema:
-                // an async child cannot be stopped from the TUI yet, so
+                // a background child cannot be stopped from the TUI yet, so
                 // exposing it would let an unkillable agent run. The wire
                 // struct still carries the field (defaults false) for when
                 // the kill UX lands.
@@ -209,21 +209,21 @@ fn spawn_failure_msg(f: houyicoder_api::spawn::SpawnFailure) -> String {
 /// terminal status, and usage; an empty summary gets a placeholder so the
 /// parent does not read "nothing" as "done", and a summary past the 100k
 /// char cap is tail-truncated with a note that the child log holds the full
-/// output. An async launch (no terminal status) surfaces a "launched in the
-/// background" message instead — the result arrives later as a
+/// output. A background outcome (no terminal status) surfaces a "launched in
+/// the background" message instead — the result arrives later as a
 /// turn-boundary notification, not as this tool_result.
 fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome, color: Option<&str>) -> Value {
     let usage = outcome.usage.unwrap_or_default();
-    // An async launch carries no terminal status or summary — the parent
-    // does not block on the child. Surface that distinctly so the model
-    // does not read "returned no output" (a sync empty-result symptom) and
+    // A background outcome carries no terminal status or summary — the parent
+    // does not block on the child. Surface that distinctly so the model does
+    // not read "returned no output" (a foreground empty-result symptom) and
     // instead knows the result arrives later as a turn-boundary notification.
-    let async_launched = outcome.status.is_none();
+    let background_started = outcome.status.is_none();
     let status = outcome.status.clone().unwrap_or_default();
     let child = outcome.child_session_id.clone();
     let result_ref = outcome.result_ref.unwrap_or_default();
     let mut content = outcome.summary.unwrap_or_default();
-    if async_launched {
+    if background_started {
         content = "Launched in the background; the result arrives as a \
                    notification on your next turn."
             .into();
@@ -277,13 +277,13 @@ mod tests {
     use houyicoder_context::SessionId;
     use std::collections::HashSet;
 
-    fn make_tool() -> AgentTool {
+    fn make_tool() -> DelegationTool {
         let registry = Arc::new(
             crate::agent::multi_agent::registry::BuiltInRegistry::from_agents(
                 crate::agent::multi_agent::registry::built_in_all(),
             ),
         ) as Arc<dyn AgentRegistry>;
-        AgentTool::new(registry)
+        DelegationTool::new(registry)
     }
 
     fn ctx_with_denied(denied: &[&str]) -> ToolCtx {
@@ -304,10 +304,7 @@ mod tests {
         assert!(props.contains_key("prompt"));
         assert!(props.contains_key("subagent_type"));
         assert!(props.contains_key("isolation"));
-        // run_in_background is intentionally absent from the schema: an async
-        // child cannot be stopped from the TUI yet, so advertising it would
-        // let an unkillable agent run. Re-add when the kill UX lands. Pins
-        // the temporary narrowing so it is not silently re-exposed.
+        // Background execution remains hidden until the TUI can stop a child.
         assert!(
             !props.contains_key("run_in_background"),
             "run_in_background must stay out of the schema until kill UX lands"
@@ -407,7 +404,7 @@ mod tests {
                 _args: SpawnArgs,
             ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
                 Box::pin(async {
-                    Ok(SpawnOutcome::sync(
+                    Ok(SpawnOutcome::foreground(
                         "child-sid",
                         "completed",
                         "the child answer",
@@ -441,7 +438,7 @@ mod tests {
         use houyicoder_api::spawn::SpawnOutcome;
         use houyicoder_protocol::llm::Usage;
         let out = build_tool_result(
-            SpawnOutcome::sync("c1", "completed", "", Usage::default()),
+            SpawnOutcome::foreground("c1", "completed", "", Usage::default()),
             None,
         );
         assert_eq!(out["content"], "(Subagent returned no output.)");
@@ -449,23 +446,24 @@ mod tests {
         assert!(out["color"].is_null());
     }
 
-    /// An async launch (no terminal status + no summary) surfaces a distinct
-    /// "launched in the background" message, not the sync empty-result
-    /// placeholder. The model must not mistake an async launch for a child
-    /// that returned no output.
+    /// A background outcome reports that the child started without presenting
+    /// an empty foreground result.
     #[test]
-    fn test_tool_result_async_launch() {
+    fn test_background_result_reports_start() {
         use houyicoder_api::spawn::SpawnOutcome;
-        let out = build_tool_result(SpawnOutcome::async_launched("c1"), None);
-        assert_eq!(out["status"], "", "async launch carries no terminal status");
+        let out = build_tool_result(SpawnOutcome::background_started("c1"), None);
+        assert_eq!(
+            out["status"], "",
+            "background outcome carries no terminal status"
+        );
         let content = out["content"].as_str().unwrap_or("");
         assert!(
             content.contains("Launched in the background"),
-            "async launch surfaces a launched message, not 'returned no output': {content}"
+            "background outcome surfaces a launched message, not 'returned no output': {content}"
         );
         assert!(
             !content.contains("returned no output"),
-            "async must not use the sync empty-result placeholder: {content}"
+            "background must not use the foreground empty-result placeholder: {content}"
         );
     }
 
@@ -474,7 +472,7 @@ mod tests {
         use houyicoder_api::spawn::SpawnOutcome;
         use houyicoder_protocol::llm::Usage;
         let out = build_tool_result(
-            SpawnOutcome::sync("c1", "completed", "done", Usage::default()),
+            SpawnOutcome::foreground("c1", "completed", "done", Usage::default()),
             Some("red"),
         );
         assert_eq!(out["color"], "red");
@@ -488,7 +486,7 @@ mod tests {
         // child log holds the full output.
         let big: String = "a".repeat(100_005);
         let out = build_tool_result(
-            SpawnOutcome::sync("child-xyz", "completed", &big, Usage::default()),
+            SpawnOutcome::foreground("child-xyz", "completed", &big, Usage::default()),
             None,
         );
         let content = out["content"].as_str().unwrap();
@@ -500,8 +498,7 @@ mod tests {
 
     #[test]
     fn test_toolctx_threads_spawn() {
-        // The tool reads agent identity + spawn handle from the per-call
-        // context; this pins that the port wires them through.
+        // The per-call context carries agent identity and the spawn handle.
         use houyicoder_api::spawn::{AgentIdentity, SpawnArgs};
         struct NoSpawn;
         impl houyicoder_api::spawn::SpawnHandle for NoSpawn {

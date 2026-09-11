@@ -1,13 +1,13 @@
 use super::*;
 
-/// PTY real-binary sync delegation full chain. Send a message, the stub
-/// returns an agent-tool call, the sync spawn runs the child, the parent
-/// resumes, the Subagent fold-group appears, Enter opens the teammate
-/// view banner, Shift+Down returns to the parent transcript (Esc only
-/// interrupts the viewed child's turn).
+/// PTY real-binary foreground delegation full chain. Send a message, the
+/// stub returns an agent-tool call, the foreground spawn runs the child,
+/// the parent resumes, the Subagent fold-group appears, Enter opens the
+/// teammate view banner, Shift+Down returns to the parent transcript (Esc
+/// only interrupts the viewed child's turn).
 #[test]
 #[ignore]
-fn test_multi_sync_delegation() {
+fn test_foreground_delegation_completes() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find the auth module","description":"find auth"}}],
         [{"type":"Text","text":"auth is in src/auth"}],
@@ -139,7 +139,7 @@ fn test_multi_large_child_summary() {
 /// drop) and the summary line carries real content.
 #[test]
 #[ignore]
-fn test_sync_child_summary_text() {
+fn test_foreground_summary_reaches_parent() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"the auth module lives in src/auth"}],
@@ -163,10 +163,10 @@ fn test_sync_child_summary_text() {
 
 /// The agent-tool call row renders with the subagent type, distinct from
 /// the fold-group below it. Proves the delegation call surfaces in the
-/// transcript (the ⏺ Agent(→ type) row), not just the result fold.
+/// transcript (the Agent(→ type) row), not just the result fold.
 #[test]
 #[ignore]
-fn test_sync_agent_call_row() {
+fn test_foreground_call_renders_row() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -193,7 +193,7 @@ fn test_sync_agent_call_row() {
 /// parent run loop is intact post-delegation.
 #[test]
 #[ignore]
-fn test_sync_followup_persists() {
+fn test_foreground_followup_persists() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"child found auth"}],
@@ -223,7 +223,7 @@ fn test_sync_followup_persists() {
 /// parent resumes. Proves the empty-content edge is handled.
 #[test]
 #[ignore]
-fn test_sync_empty_child_safe() {
+fn test_foreground_empty_output_survives() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":""}],
@@ -249,7 +249,7 @@ fn test_sync_empty_child_safe() {
 /// the collapsed fold head (newlines become spaces, not literal \n).
 #[test]
 #[ignore]
-fn test_sync_child_multiline_summary() {
+fn test_foreground_summary_preserves_lines() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"line one\nline two\nline three"}],
@@ -278,7 +278,7 @@ fn test_sync_child_multiline_summary() {
 /// silent drop) and the transcript order is user → call → fold.
 #[test]
 #[ignore]
-fn test_sync_user_message_echo() {
+fn test_foreground_input_echoes_user() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"child result"}],
@@ -305,7 +305,7 @@ fn test_sync_user_message_echo() {
 /// mangling. Proves the summary path handles non-ascii content.
 #[test]
 #[ignore]
-fn test_sync_child_unicode_summary() {
+fn test_foreground_summary_keeps_unicode() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"héllo wörld café"}],
@@ -326,7 +326,7 @@ fn test_sync_child_unicode_summary() {
 /// A very long task prompt does not crash the spawn or the fold render.
 #[test]
 #[ignore]
-fn test_sync_long_prompt_safe() {
+fn test_foreground_long_prompt_survives() {
     let prompt = "x".repeat(200);
     let script = format!(
         r#"[[{{"type":"ToolCall","id":"toolu_1","name":"agent","input":{{"subagent_type":"explore","prompt":"{prompt}","description":"long"}}}}],[{{"type":"Text","text":"child done"}}],[{{"type":"Text","text":"parent done"}}]]"#
@@ -346,7 +346,7 @@ fn test_sync_long_prompt_safe() {
 /// backslash-quote in the summary).
 #[test]
 #[ignore]
-fn test_sync_quotes_unescaped() {
+fn test_foreground_quotes_remain_literal() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"the \"auth\" is here"}],
@@ -373,7 +373,7 @@ fn test_sync_quotes_unescaped() {
 /// banner carries that default label.
 #[test]
 #[ignore]
-fn test_sync_general_purpose_type() {
+fn test_general_agent_runs_foreground() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],

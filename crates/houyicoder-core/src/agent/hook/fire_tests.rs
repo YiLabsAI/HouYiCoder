@@ -12,7 +12,7 @@ use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
 use crate::agent::hook::registry::HookRegistry;
 use crate::agent::hook::{Hook, HookContext, HookError, HookEvent, HookSource, HookVerdict};
-use crate::agent::tests::runner_with;
+use crate::agent::runner_tests::runner_with;
 use crate::agent::{RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 
@@ -693,41 +693,4 @@ async fn test_deny_records_gate_violation() {
         violations[0], "test-placement",
         "violation recorded against the deny reason (the rule key)"
     );
-}
-
-/// LiveProgressSink forwards a progress(elapsed, None) call to the live
-/// stream as a ToolProgress event carrying the sink's call_id + the elapsed
-/// seconds. None when no live sink is wired (no-op). Pins the runner→host
-/// forwarding side of the bash-elapsed channel.
-#[test]
-fn test_live_progress_sink_forwards() {
-    use super::LiveProgressSink;
-    use houyicoder_api::live::LiveEvent;
-    use houyicoder_api::progress::ProgressSink;
-    use std::sync::Mutex;
-
-    let collected = Arc::new(Mutex::new(Vec::<LiveEvent>::new()));
-    let sink_live = Arc::new({
-        let collected = Arc::clone(&collected);
-        move |ev: &LiveEvent| collected.lock().expect("collected").push(ev.clone())
-    }) as Arc<dyn Fn(&LiveEvent) + Send + Sync>;
-    let live = Arc::new(LiveProgressSink::new("c1".into(), Some(sink_live)));
-    live.progress(12, None);
-    let got = collected.lock().expect("collected").clone();
-    assert_eq!(got.len(), 1, "one event forwarded");
-    match &got[0] {
-        LiveEvent::ToolProgress {
-            call_id,
-            elapsed_secs,
-            ..
-        } => {
-            assert_eq!(call_id, "c1");
-            assert_eq!(*elapsed_secs, 12);
-        }
-        _ => panic!("expected ToolProgress, got {:?}", got[0]),
-    }
-
-    // No live sink wired: no-op (must not panic, must not forward).
-    let none_sink = LiveProgressSink::new("c2".into(), None);
-    none_sink.progress(5, None);
 }

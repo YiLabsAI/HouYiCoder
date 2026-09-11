@@ -51,12 +51,12 @@ fn test_multi_ctrl_o_thought() {
     );
 }
 
-/// Two consecutive sync delegations produce two independent fold-groups,
-/// each carrying its own child summary. Proves per-child rendering (not a
-/// merged or last-writer-wins fold).
+/// Two consecutive foreground delegations produce two independent
+/// fold-groups, each carrying its own child summary. Proves per-child
+/// rendering (not a merged or last-writer-wins fold).
 #[test]
 #[ignore]
-fn test_sync_two_folds_render() {
+fn test_foreground_two_folds_render() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"first","description":"first"}},
          {"type":"ToolCall","id":"toolu_2","name":"agent","input":{"subagent_type":"explore","prompt":"second","description":"second"}}],
@@ -116,7 +116,7 @@ fn test_fold_summary_truncates() {
 /// hard-coded to one value.
 #[test]
 #[ignore]
-fn test_sync_fold_shows_type() {
+fn test_foreground_fold_shows_type() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"plan","prompt":"plan the work","description":"plan"}}],
         [{"type":"Text","text":"plan made"}],
@@ -186,7 +186,7 @@ fn test_fold_short_summary_full() {
 /// result precedes the parent's resume text in transcript order).
 #[test]
 #[ignore]
-fn test_sync_parent_after_fold() {
+fn test_foreground_parent_after_fold() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"child found auth"}],

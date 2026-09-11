@@ -23,14 +23,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
-use houyicoder_api::live::{LiveEvent, LiveSink, MemorySavedKind};
+use super::memory_change_recorder::MemoryChangeRecorder;
+use houyicoder_api::agent_event::{
+    EventHandler, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent,
+};
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{MemoryRecallStats, MemorySummary, SessionId};
+use houyicoder_context::{MemoryChangeId, MemoryRecallStats, MemorySummary, SessionId};
 use tokio::task::JoinHandle;
 
 use super::runner_config::RunnerConfig;
@@ -393,33 +395,33 @@ pub(crate) fn build_consolidation_prompt(
 /// wired with with_memory — the dream prompt is self-contained (listing
 /// plus index injected) and recall injection is a main-loop feature that
 /// would add noise here; run_forked does not inject recall regardless.
-pub fn build_forked_dream_runner(
+pub(crate) fn build_forked_dream_runner(
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: &Path,
     config: RunnerConfig,
-    counter: Arc<AtomicU32>,
+    recorder: Arc<MemoryChangeRecorder>,
 ) -> Runner {
-    // The add + delete + promote + demote tools share one counter so a
+    // The add + delete + promote + demote tools share one recorder so a
     // touch (add, delete, promote, or demote) counts toward the notice
     // (the consolidation dream both writes new entries, prunes stale ones,
     // and flows rules between scopes).
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(
         MemoryAddTool::new(memory.clone())
-            .with_counter(counter.clone())
+            .with_recorder(recorder.clone())
             .with_origin(houyicoder_context::MemoryOrigin::Dream),
     ));
     tools.register(Arc::new(ShowMemoryTool::new(memory.clone())));
     tools.register(Arc::new(
-        DeleteMemoryTool::new(memory.clone()).with_counter(counter.clone()),
+        DeleteMemoryTool::new(memory.clone()).with_recorder(recorder.clone()),
     ));
     tools.register(Arc::new(
-        PromoteMemoryTool::new(memory.clone()).with_counter(counter.clone()),
+        PromoteMemoryTool::new(memory.clone()).with_recorder(recorder.clone()),
     ));
     tools.register(Arc::new(
-        DemoteMemoryTool::new(memory.clone()).with_counter(counter),
+        DemoteMemoryTool::new(memory.clone()).with_recorder(recorder),
     ));
     Runner::new(store, provider, tools, config).with_cwd(cwd.to_path_buf())
 }
@@ -427,19 +429,18 @@ pub fn build_forked_dream_runner(
 /// Drive a forked consolidation run on a fresh ephemeral session. No prefix
 /// — the dream is pure consolidation (the Stop-hook extractor plus
 /// before-compact markers already gather new signal). Returns the run
-/// result. Bounded by the config max_turns. The counter is reset before the
-/// run + bumped per touch so the caller reads it after.
-pub async fn run_forked_dream(
+/// result. Bounded by the config max_turns. The recorder is drained after
+/// the run so the caller reads the exact successful operations.
+pub(crate) async fn run_forked_dream(
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: &Path,
     config: RunnerConfig,
     prompt: &str,
-    counter: Arc<AtomicU32>,
+    recorder: Arc<MemoryChangeRecorder>,
 ) -> Result<RunResult, RunError> {
-    counter.store(0, std::sync::atomic::Ordering::SeqCst);
-    let runner = build_forked_dream_runner(store, provider, memory, cwd, config, counter);
+    let runner = build_forked_dream_runner(store, provider, memory, cwd, config, recorder);
     let session = SessionId::new();
     runner.run_forked(session, &[], prompt.to_string()).await
 }
@@ -457,9 +458,7 @@ pub struct DreamRunner {
     in_progress: Mutex<bool>,
     in_flight: Mutex<Vec<JoinHandle<()>>>,
     last_scan_at: Mutex<u64>,
-    /// Host-installed sink fired once per consolidation pass that touched
-    /// memories. None when no host wires one (tests, forked runners).
-    notify_sink: Mutex<Option<LiveSink>>,
+    memory_changed: Mutex<Option<Arc<dyn EventHandler<MemoryChangedEvent>>>>,
     /// The durable session log root, so the dream can scan previous
     /// sessions' RewardObservation events for cross-session retry
     /// patterns. None in tests or when the session log root is not
@@ -488,7 +487,7 @@ impl DreamRunner {
             in_progress: Mutex::new(false),
             in_flight: Mutex::new(Vec::new()),
             last_scan_at: Mutex::new(0),
-            notify_sink: Mutex::new(None),
+            memory_changed: Mutex::new(None),
             session_log_root: None,
         }
     }
@@ -502,26 +501,28 @@ impl DreamRunner {
         self
     }
 
-    /// Install the host sink fired when a consolidation pass touches
-    /// memories. The runner forwards its own live sink here so the dream (a
-    /// detached spawned task) can push a MemorySaved event without holding a
-    /// wire handle. The forked runner's live sink stays None so the fork's
-    /// token deltas do not fire into the user transcript.
-    pub fn set_notify_sink(&self, sink: LiveSink) {
-        *self.notify_sink.lock().expect("notify_sink") = Some(sink);
+    /// Install the handler for successful memory changes.
+    pub(crate) fn set_memory_changed_handler(
+        &self,
+        handler: Option<Arc<dyn EventHandler<MemoryChangedEvent>>>,
+    ) {
+        *self.memory_changed.lock().expect("memory handler lock") = handler;
     }
 
-    /// Fire one MemorySaved notice if a sink is wired + count > 0. Best-effort:
-    /// a None sink (tests, forked runner) is a no-op.
-    fn fire_saved(&self, count: u32) {
-        if count == 0 {
+    fn emit_changes(&self, changes: Vec<MemoryChange>) {
+        if changes.is_empty() {
             return;
         }
-        let sink = self.notify_sink.lock().expect("notify_sink").clone();
-        if let Some(sink) = sink {
-            sink(&LiveEvent::MemorySaved {
-                count,
-                kind: MemorySavedKind::Consolidated,
+        let handler = self
+            .memory_changed
+            .lock()
+            .expect("memory handler lock")
+            .clone();
+        if let Some(handler) = handler {
+            handler.handle(MemoryChangedEvent {
+                id: MemoryChangeId::new(),
+                origin: MemoryChangeOrigin::AutoDream,
+                changes,
             });
         }
     }
@@ -683,9 +684,9 @@ impl DreamRunner {
                 reward.as_ref(),
             )
         };
-        // A fresh counter the forked add/delete tools bump per touch. Reset
-        // before the run so the load after is this pass's count.
-        let counter = Arc::new(AtomicU32::new(0));
+        // One recorder preserves the successful operations emitted by every
+        // memory tool in this consolidation.
+        let recorder = Arc::new(MemoryChangeRecorder::new());
         let config = if is_reward_dream {
             let mut c = self.config.clone();
             c.max_turns = REWARD_DREAM_MAX_TURNS;
@@ -700,7 +701,7 @@ impl DreamRunner {
             &self.cwd,
             config,
             &prompt,
-            Arc::clone(&counter),
+            Arc::clone(&recorder),
         )
         .await;
         match result {
@@ -716,7 +717,7 @@ impl DreamRunner {
                 drop(self.memory.rebuild_index());
                 // Fire one notice if the dream touched any memories this
                 // pass (an Ok run that wrote nothing is not worth a notice).
-                self.fire_saved(counter.load(std::sync::atomic::Ordering::SeqCst));
+                self.emit_changes(recorder.take());
             }
             Err(e) => {
                 let fork_err = format!("auto-dream fork failed: {e}");

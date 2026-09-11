@@ -20,8 +20,8 @@ use houyicoder_session::SessionStore;
 use houyicoder_tui::state::TranscriptLine;
 
 /// Pair an in-memory server + client around a runner, mirroring the CLI
-/// composition root: install the live delta sink (streams acpx/llm/* deltas
-/// onto the wire), Arc the runner, spawn the server, return the shared
+/// composition root: install the event sequencer, stream response events
+/// onto the wire, Arc the runner, spawn the server, and return the shared
 /// runner + un-connected client.
 fn pair_inproc(
     mut runner: Runner,

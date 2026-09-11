@@ -222,7 +222,7 @@ impl HookEvent {
     /// Whether this event has a live fire point wired. The three
     /// tool-lifecycle events fire in the agent loop; the four reserved
     /// subagent and worktree events fire at the service-layer boundaries
-    /// (a sync spawn in run_sync_spawn, the worktree controller enter and
+    /// (a foreground spawn in run_sync_spawn, the worktree controller enter and
     /// exit). The rest are declared-only. The /hooks command marks fired
     /// events so the user sees which are live vs reserved.
     pub fn is_fired(self) -> bool {

@@ -26,12 +26,10 @@ fn test_trigger_as_str_maps() {
     assert_eq!(CompactTrigger::Auto.as_str(), "auto");
 }
 
-/// build_manifest falls back to the heuristic summarizer when the LLM
-/// summarizer fails, threading custom_instructions through so a PreCompact
-/// hook's Inject output is not lost on the fallback path. Pins the
-/// LlmFailed arm + the heuristic's custom_instructions parameter.
+/// build_manifest preserves injected hook guidance when the primary
+/// summarizer fails and the heuristic fallback runs.
 #[tokio::test]
-async fn test_manifest_fallback_threads_instructions() {
+async fn test_fallback_preserves_hook_guidance() {
     use houyicoder_context::Disposition;
     let s = SessionId::new();
     // Six assistant turns so the default tail_turns=4 Summarizes the first 2

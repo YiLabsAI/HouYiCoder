@@ -2,7 +2,9 @@ use super::*;
 use crate::agent::runner_config::DEFAULT_SNAPSHOT_TTL_SECS;
 use crate::provider::test_support::FakeProvider;
 use futures::StreamExt;
-use houyicoder_api::live::LiveEvent;
+use houyicoder_api::agent_event::{
+    AgentEventHandlers, ResponseStreamEvent, RunCompletionStatus, RunLifecycleEvent,
+};
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_context::SessionEvent;
 use houyicoder_memory::InMemoryBackend;
@@ -11,6 +13,7 @@ use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionRequest, CompletionResponse, OutputItem, ProviderError};
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
+use std::sync::Mutex;
 #[cfg(test)]
 mod mid_turn;
 
@@ -270,22 +273,19 @@ fn runner_with_cfg0() -> RunnerConfig {
 
 #[tokio::test]
 async fn test_stream_persists_deltas() {
-    // FakeProvider streams "hello world" as 4-char deltas. The live sink must
-    // receive each delta, the session log carries only the authoritative
-    // AssistantMessage (deltas are transport-only, copy + live sink, not
-    // durable), and projection folds the one AssistantMessage into a single
-    // assistant InputItem (no duplication).
+    // Response handlers receive each streamed delta. The session log carries
+    // only the authoritative assistant message, and projection produces one
+    // assistant input item without duplicating transport-only deltas.
     let p = Arc::new(FakeProvider::text("hello world"));
     let store = std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
-    let collected: Arc<std::sync::Mutex<Vec<LiveEvent>>> =
+    let collected: Arc<Mutex<Vec<ResponseStreamEvent>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
-    let sink: Arc<dyn Fn(&LiveEvent) + Send + Sync> = {
-        let c = collected.clone();
-        Arc::new(move |ev: &LiveEvent| {
-            c.lock().expect("sink").push(ev.clone());
-        })
-    };
+    let mut events = AgentEventHandlers::default();
+    let captured = collected.clone();
+    events.set_response_stream(Arc::new(move |event| {
+        captured.lock().expect("events").push(event);
+    }));
     let mut runner = Runner::new(
         store,
         p,
@@ -301,34 +301,23 @@ async fn test_stream_persists_deltas() {
             },
         },
     );
-    runner.set_live_sink(sink);
+    runner.set_event_handlers(events);
     let result = runner.run(session, "hi".into()).await.expect("run");
     assert!(matches!(result.outcome, RunOutcome::FinalOutput(t) if t == "hello world"));
 
-    // 4-char chunks of "hello world": "hell", "o wo", "rld" → 3 live deltas.
-    let live = collected.lock().expect("sink").clone();
-    let deltas: Vec<String> = live
+    let streamed = collected.lock().expect("events").clone();
+    let deltas: Vec<String> = streamed
         .into_iter()
-        .filter_map(|ev| match ev {
-            LiveEvent::AssistantDelta { text } | LiveEvent::ReasoningDelta { text } => Some(text),
-            // MemorySaved is orthogonal (no extractor/dream wired); ToolProgress
-            // is the bash-elapsed tick (no long bash here); SystemLine is a
-            // runtime notice (no overflow here). None is a delta.
-            LiveEvent::MemorySaved { .. }
-            | LiveEvent::ToolProgress { .. }
-            | LiveEvent::SystemLine { .. }
-            | LiveEvent::TurnBoundary { .. }
-            | LiveEvent::RunCompleted { .. } => None,
+        .map(|event| match event {
+            ResponseStreamEvent::AssistantTextDelta { text }
+            | ResponseStreamEvent::ReasoningDelta { text } => text,
         })
         .collect();
     assert_eq!(deltas.concat(), "hello world");
     assert_eq!(deltas.len(), 3);
 
-    // The durable log carries only the authoritative AssistantMessage;
-    // deltas are process-local transport records (copy + live sink only),
-    // never persisted to the backend log, so the model-input history sees
-    // one assistant message not fragments. The live sink above received all
-    // 3 deltas; replay() carries zero.
+    // The durable log carries only the authoritative AssistantMessage.
+    // Response events carry deltas without fragmenting model-input history.
     let events = runner.store().replay(session).await.expect("replay");
     let delta_n = events
         .iter()
@@ -412,7 +401,7 @@ async fn test_resume_partial_interrupts() {
 }
 
 #[tokio::test]
-async fn test_resume_full_then_continues() {
+async fn test_resume_emits_final_completion() {
     // Two approval-requiring calls; the caller decides both (one approved, one
     // rejected). No remaining pending → the loop continues to the next turn,
     // which here is a final-text response. This guards the backward-compatible
@@ -445,9 +434,20 @@ async fn test_resume_full_then_continues() {
     let p = Arc::new(FakeProvider::new(responses));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(GuardedTool::new()));
-    let runner = runner_with(p, tools);
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::clone(&captured);
+    let mut handlers = AgentEventHandlers::default();
+    handlers.set_run_lifecycle(Arc::new(move |event| {
+        events.lock().expect("lifecycle events").push(event);
+    }));
+    let mut runner = runner_with(p, tools);
+    runner.set_event_handlers(handlers);
     let session = SessionId::new();
     let result = runner.run(session, "hi".into()).await.unwrap();
+    assert!(
+        captured.lock().expect("lifecycle events").is_empty(),
+        "approval pause must not complete the run"
+    );
     let approvals = match result.outcome {
         RunOutcome::Interruption(a) => a,
         _ => panic!("expected interruption"),
@@ -462,6 +462,13 @@ async fn test_resume_full_then_continues() {
         RunOutcome::FinalOutput(t) => assert_eq!(t, "after approvals"),
         other => panic!("expected final output, got {other:?}"),
     }
+    assert_eq!(
+        *captured.lock().expect("lifecycle events"),
+        vec![RunLifecycleEvent::Completed {
+            status: RunCompletionStatus::Completed,
+            summary: "after approvals".into(),
+        }]
+    );
     // Verify the reject branch wrote the rejection-note result for c2.
     let events = runner.store().replay(session).await.unwrap();
     let c2_outcome = events.iter().find_map(|e| match &e.event {

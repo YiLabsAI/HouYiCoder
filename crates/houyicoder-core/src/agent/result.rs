@@ -1,8 +1,6 @@
-//! Run outcome and error types. Pure data types extracted from the runner
-//! module so the runner file stays under the file-size gate. The runner
-//! re-exports these at the agent module root so callers name them as
-//! agent::RunResult etc.
+//! Agent run outcomes, completion summaries, and errors.
 
+use houyicoder_api::agent_event::RunCompletionStatus;
 use houyicoder_context::ContextError;
 use houyicoder_protocol::llm::{ProviderError, Usage};
 
@@ -44,14 +42,14 @@ impl RunOutcome {
     /// not read the session log. The status names match the spawn runtime's
     /// terminal_summary; the summary is the FinalOutput text (or empty for
     /// non-text terminals — the precise partial lives in the log).
-    pub fn terminal_status(&self) -> (&'static str, String) {
+    pub fn terminal_status(&self) -> (RunCompletionStatus, String) {
         match self {
-            Self::FinalOutput(t) => ("completed", t.clone()),
-            Self::MaxTurnsReached { .. } => ("max_turns", String::new()),
-            Self::Interrupted(s) => ("interrupted", s.clone()),
-            Self::Interruption(_) => ("interrupted", String::new()),
-            Self::VerifyFailed(_) => ("verify_failed", String::new()),
-            Self::Handoff(a) => ("handoff", a.0.clone()),
+            Self::FinalOutput(text) => (RunCompletionStatus::Completed, text.clone()),
+            Self::MaxTurnsReached { .. } => (RunCompletionStatus::TurnLimitReached, String::new()),
+            Self::Interrupted(reason) => (RunCompletionStatus::Interrupted, reason.clone()),
+            Self::Interruption(_) => (RunCompletionStatus::Interrupted, String::new()),
+            Self::VerifyFailed(_) => (RunCompletionStatus::VerificationFailed, String::new()),
+            Self::Handoff(agent) => (RunCompletionStatus::HandedOff, agent.0.clone()),
         }
     }
 }

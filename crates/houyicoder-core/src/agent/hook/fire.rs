@@ -1,23 +1,18 @@
-//! The HookFire implementor a service-layer fire point calls. Holds Arc
-//! clones of the parent runner's hook deps (registry, store, observability,
-//! live sink), not a reference back to the runner, so firing from a
-//! service-layer boundary (run_sync_spawn, the worktree controller) records
-//! with the same shape the in-loop hook recorder does, with no
-//! self-referential Arc cycle. build_hook_fire reads the runner's private
-//! fields (visible to this descendant module) and returns None when no
-//! registry is wired, so a no-hook dispatch is a no-op rather than a panic.
+//! The HookFire implementation used by service-layer fire points. It owns
+//! clones of the parent runner's hook dependencies rather than a reference to
+//! the runner, avoiding a self-referential Arc cycle.
 
 use std::sync::Arc;
 
+use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::hook_fire::HookFire;
-use houyicoder_api::live::LiveSink;
 use houyicoder_api::session::SessionLog;
 use houyicoder_async::PFut;
 use houyicoder_context::{HookEventKind, HookFirePayload};
 
 use super::{HookContext, HookEvent, HookPayload, HookRegistry};
 use crate::agent::Runner;
-use crate::agent::append::{emit_live_line, record_hook_signals};
+use crate::agent::append::{emit_user_notice, record_hook_signals};
 use crate::agent::obs_wire::SharedObservability;
 use houyicoder_context::AgentId;
 
@@ -32,7 +27,7 @@ pub(crate) struct HookDispatcher {
     hooks: Arc<HookRegistry>,
     store: Arc<dyn SessionLog>,
     obs: SharedObservability,
-    live: Option<LiveSink>,
+    events: AgentEventHandlers,
 }
 
 impl HookDispatcher {
@@ -40,13 +35,13 @@ impl HookDispatcher {
         hooks: Arc<HookRegistry>,
         store: Arc<dyn SessionLog>,
         obs: SharedObservability,
-        live: Option<LiveSink>,
+        events: AgentEventHandlers,
     ) -> Self {
         Self {
             hooks,
             store,
             obs,
-            live,
+            events,
         }
     }
 }
@@ -59,15 +54,15 @@ impl HookFire for HookDispatcher {
             };
             let outcomes = self.hooks.dispatch(&ctx);
             if let Some(skipped) = self.hooks.take_skipped_untrusted() {
-                emit_live_line(
-                    self.live.as_ref(),
+                emit_user_notice(
+                    &self.events,
                     format!("untrusted project hooks skipped: {}", skipped.join(", ")),
                 );
             }
             record_hook_signals(
                 self.store.as_ref(),
                 &self.obs,
-                self.live.as_ref(),
+                &self.events,
                 payload.session,
                 ctx.event,
                 None,
@@ -146,6 +141,6 @@ pub fn build_hook_fire(runner: &Runner) -> Option<Arc<dyn HookFire>> {
         Arc::clone(hooks),
         runner.store.clone(),
         runner.observability.clone(),
-        runner.live.clone(),
+        runner.events.clone(),
     )))
 }

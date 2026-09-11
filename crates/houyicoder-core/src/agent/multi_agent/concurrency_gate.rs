@@ -56,7 +56,7 @@ impl ConcurrencyGate {
 
     /// Acquire a running slot. Fast path: a slot is free, returns Acquired.
     /// Slow path: slots full but the queue has room, blocks until a slot
-    /// frees. Reject path: queue saturated, returns Rejected. The sync spawn
+    /// frees. Reject path: queue saturated, returns Rejected. The foreground spawn
     /// path uses this (interactive, blocking — a queued spawn waits for a
     /// slot rather than refusing the user's request).
     pub async fn acquire(&self) -> AcquireResult {
@@ -89,7 +89,7 @@ impl ConcurrencyGate {
     }
 
     /// Non-blocking acquire: take a free slot if one is open, else Reject
-    /// immediately — no queue, no wait. The async spawn path uses this so a
+    /// immediately — no queue, no wait. The background spawn path uses this so a
     /// background spawn never blocks the parent turn: a spawn that finds the
     /// cap full rejects with ConcurrencySaturated and the model re-queues
     /// next turn, rather than freezing the parent until a child completes.

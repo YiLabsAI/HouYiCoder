@@ -28,7 +28,7 @@ fn runtime_with_text_child(text: &str) -> (MultiAgentRuntime, Arc<SessionStore>,
 }
 
 #[tokio::test]
-async fn test_sync_spawn_drives_terminal() {
+async fn test_foreground_spawn_reaches_terminal() {
     let (runtime, store, parent_sid) = runtime_with_text_child("child answer");
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let args = SpawnArgs::new("explore", "find the auth module", "find auth");
@@ -145,7 +145,7 @@ async fn test_max_turns_surfaces_partial() {
 }
 
 #[tokio::test]
-async fn test_sync_spawn_unknown_type() {
+async fn test_foreground_spawn_rejects_unknown() {
     let (runtime, _store, parent_sid) = runtime_with_text_child("x");
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let args = SpawnArgs::new("no-such-type", "task", "task");
@@ -154,7 +154,7 @@ async fn test_sync_spawn_unknown_type() {
 }
 
 #[tokio::test]
-async fn test_async_spawn_launches() {
+async fn test_background_spawn_records_return() {
     let (runtime, store, parent_sid) = runtime_with_text_child("x");
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let mut args = SpawnArgs::new("explore", "task", "task");
@@ -162,14 +162,14 @@ async fn test_async_spawn_launches() {
     let outcome = runtime
         .spawn(&ctx, args)
         .await
-        .expect("async spawn launches, not refused");
+        .expect("background spawn launches, not refused");
     assert!(
         outcome.status.is_none(),
-        "async spawn returns no terminal status (it lands later via the bus)"
+        "background spawn returns no terminal status (it lands later via the bus)"
     );
     assert!(
         !outcome.child_session_id.is_empty(),
-        "async spawn returns a child session id"
+        "background spawn returns a child session id"
     );
     // The detached driver runs the child to completion and records the
     // SubagentReturn boundary in the parent log. Yield to let the
@@ -192,10 +192,10 @@ async fn test_async_spawn_launches() {
     );
 }
 
-/// An async spawn of an unknown agent type rejects with UnknownAgent
+/// An background spawn of an unknown agent type rejects with UnknownAgent
 /// before any detached task starts — the resolve gates both paths.
 #[tokio::test]
-async fn test_async_spawn_unknown_type() {
+async fn test_background_spawn_rejects_unknown() {
     let (runtime, _store, parent_sid) = runtime_with_text_child("x");
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let mut args = SpawnArgs::new("nonexistent", "task", "task");
@@ -204,7 +204,7 @@ async fn test_async_spawn_unknown_type() {
     assert!(matches!(err, SpawnFailure::UnknownAgent));
 }
 
-/// A sync spawn announces on the spawned topic so a fleet watcher can
+/// A foreground spawn announces on the spawned topic so a fleet watcher can
 /// subscribe to the child's progress before the first turn lands.
 #[tokio::test]
 async fn test_spawn_announces_on_bus() {
@@ -232,17 +232,10 @@ async fn test_spawn_announces_on_bus() {
     let args = SpawnArgs::new("explore", "find auth", "find auth");
     let _outcome = runtime.spawn(&ctx, args).await.expect("spawn");
     match rx.try_recv().expect("spawn announced") {
-        BusMessage::Spawned {
-            agent_id,
-            subagent_type,
-            run_in_background,
-        } => {
-            assert!(!agent_id.is_empty());
-            assert_eq!(subagent_type, "explore");
-            assert!(
-                !run_in_background,
-                "sync spawn must announce run_in_background=false"
-            );
+        BusMessage::Spawned { child } => {
+            assert!(!child.agent_id.is_empty());
+            assert_eq!(child.agent_type, "explore");
+            assert_eq!(child.run_mode, ChildRunMode::Foreground);
         }
         other => panic!("expected Spawned, got {other:?}"),
     }
@@ -296,11 +289,10 @@ async fn test_spawn_system_records_trigger() {
     );
 }
 
-/// A first-party async spawn (run_in_background) returns async_launched and
-/// records the system trigger on the durable boundary once the detached driver
-/// runs. Pins the async branch of the service/hook entry.
+/// A first-party background spawn reports its start and records the system
+/// trigger when the detached driver runs.
 #[tokio::test]
-async fn test_spawn_system_async_records() {
+async fn test_background_spawn_records_trigger() {
     use houyicoder_context::SessionEvent;
     use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
 
@@ -310,7 +302,7 @@ async fn test_spawn_system_async_records() {
     let outcome = runtime
         .spawn_system(parent_sid, "review_gate", args)
         .await
-        .expect("async spawn");
+        .expect("background spawn");
     assert!(
         outcome.status.is_none(),
         "async first-party spawn returns no terminal status"
@@ -382,7 +374,7 @@ async fn test_send_to_child_inbox() {
     }
 }
 
-/// A recording HookFire for asserting run_sync_spawn fires SubagentStart
+/// A recording HookFire for asserting run_foreground_spawn fires SubagentStart
 /// and SubagentStop at the durable spawn and return boundaries.
 struct RecordingHookFire {
     events: Arc<std::sync::Mutex<Vec<HookEventKind>>>,
@@ -411,12 +403,9 @@ async fn test_spawn_rejected_when_saturated() {
     );
 }
 
-/// The concurrency cap applies to the async path too: a zero-cap gate rejects
-/// a background spawn with ConcurrencySaturated, not a successful async launch.
-/// Pins DEFECT-2 — before the fix, the async path bypassed the gate and the
-/// spawn succeeded like the launches test.
+/// A saturated gate rejects a background spawn without waiting.
 #[tokio::test]
-async fn test_async_spawn_saturated_rejects() {
+async fn test_background_spawn_rejects_saturation() {
     let (runtime, _store, parent_sid) = runtime_with_text_child("x");
     let runtime = runtime.with_gate(std::sync::Arc::new(ConcurrencyGate::new(0, 0)));
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -425,11 +414,11 @@ async fn test_async_spawn_saturated_rejects() {
     let err = runtime.spawn(&ctx, args).await.unwrap_err();
     assert!(
         matches!(err, SpawnFailure::ConcurrencySaturated),
-        "zero-cap gate must reject the async spawn too, got {err:?}"
+        "zero-cap gate must reject the background spawn too, got {err:?}"
     );
 }
 
-/// run_sync_spawn fires SubagentStart at the spawn boundary (after
+/// run_foreground_spawn fires SubagentStart at the spawn boundary (after
 /// spawn_child, before the run) and SubagentStop at the return boundary
 /// (before record_subagent_return), threaded through ToolCtx.hook_fire.
 #[tokio::test]
@@ -467,12 +456,12 @@ async fn test_spawn_fires_start_stop() {
     );
 }
 
-/// End-to-end async spawn → detached driver → bus Completed → notification
+/// End-to-end background spawn → detached driver → bus Completed → notification
 /// injector → parent queue. The detached child + its notification land
 /// independent of the parent's run lifecycle (async cancel unlinked;
 /// notification arrives even though the parent is not running a turn).
 #[tokio::test]
-async fn test_async_spawn_notifies_parent() {
+async fn test_background_child_notifies_parent() {
     use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
     use houyicoder_core::agent::{Runner, ToolRegistry};
 
@@ -508,10 +497,10 @@ async fn test_async_spawn_notifies_parent() {
     let outcome = runtime
         .spawn_system(parent_sid, "review_gate", args)
         .await
-        .expect("async spawn");
+        .expect("background spawn");
     assert!(
         outcome.status.is_none(),
-        "async spawn returns no terminal status"
+        "background spawn returns no terminal status"
     );
     let mut found = false;
     for _ in 0..200 {
@@ -523,7 +512,7 @@ async fn test_async_spawn_notifies_parent() {
     }
     assert!(
         found,
-        "async child completion reached the parent notification queue"
+        "background child completion reached the parent notification queue"
     );
     let notif = &parent_runner.queued_notifications_snapshot()[0];
     assert!(notif.contains("explore"), "carries the subagent type");
@@ -615,14 +604,9 @@ impl ModelProvider for PartialThenFailProvider {
     }
 }
 
-/// A sync child whose run fails (non-retryable provider error) surfaces the
-/// failure to the parent as the spawn tool result: status=failed + a
-/// non-empty summary carrying the error. The durable SubagentReturn boundary
-/// lands in the parent log with the failed status so replay is honest about
-/// the outcome. Pins the sync propagation path: the parent learns of a child
-/// failure through the tool result, not a silent hang or an empty answer.
+/// A foreground child failure reaches the parent result and durable return.
 #[tokio::test]
-async fn test_sync_failed_child_propagates() {
+async fn test_foreground_failure_reaches_parent() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FailingProvider::new(ProviderError::Auth));
     let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
@@ -664,15 +648,10 @@ async fn test_sync_failed_child_propagates() {
     );
 }
 
-/// A child whose stream errors mid-response (text deltas arrive, then the
-/// stream errors before any StepFinish) currently LOSES the partial text: the
-/// extractor flushes an AssistantMessage only on StepFinish, so the in-flight
-/// deltas never land in the child log, and finalize_child's partial-output
-/// branch (line: Some(p) => "...Partial output:\n{p}") never fires -- the
-/// summary is just the error reason. Pins the current behavior so a future
-/// fix (flush the accumulated text buffer on stream-error) flips this red.
+/// A foreground stream failure excludes text that never reached the durable
+/// child log.
 #[tokio::test]
-async fn test_sync_failed_midstream() {
+async fn test_foreground_failure_loses_partial() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> =
         Arc::new(PartialThenFailProvider::new(ProviderError::Auth));
@@ -726,15 +705,9 @@ async fn test_sync_failed_midstream() {
     );
 }
 
-/// An async (detached) child whose run fails notifies the parent through the
-/// bus completion path: the run emits RunCompleted with a failed status, the
-/// bus bridge maps it to ChildStatus::Failed, and the notification injector
-/// enqueues a lower-priority message the parent reads mid-turn. Pins the
-/// async propagation path: a background child failure reaches the parent even
-/// though the parent is not blocked on the spawn — the parent learns of the
-/// failure, not a perpetual running pill.
+/// A background child failure reaches the parent notification queue.
 #[tokio::test]
-async fn test_async_failed_child_notifies() {
+async fn test_background_failure_notifies_parent() {
     use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
     use houyicoder_core::agent::{Runner, ToolRegistry};
 
@@ -773,10 +746,10 @@ async fn test_async_failed_child_notifies() {
     let outcome = runtime
         .spawn_system(parent_sid, "review_gate", args)
         .await
-        .expect("async spawn launches");
+        .expect("background spawn launches");
     assert!(
         outcome.status.is_none(),
-        "async spawn returns no terminal status",
+        "background spawn returns no terminal status",
     );
     let mut found = false;
     for _ in 0..200 {
@@ -801,13 +774,9 @@ async fn test_async_failed_child_notifies() {
     }
     assert!(
         found,
-        "a failed async child reaches the parent notification queue",
+        "a failed background child reaches the parent notification queue",
     );
-    // The durable SubagentReturn boundary lands even on the async path — the
-    // detached driver runs finalize_child, which records the return with the
-    // failed status. The status is pinned, not just the boundary's existence,
-    // so a regression that records the wrong terminal on the async path goes
-    // red rather than staying green on a status=completed mislabel.
+    // The durable return records the background child's terminal status.
     let events = store.trajectory_snapshot(parent_sid);
     let ret_status = events.iter().find_map(|e| match &e.event {
         SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
@@ -851,11 +820,7 @@ fn test_cancel_child_turn_registry() {
     );
 }
 
-/// kill_child mirrors cancel_child_turn's registry contract (live Weak
-/// upgrades + abort fires → true; stale/dropped → false + prune; unknown →
-/// false). Distinct from cancel_child_turn: kill_child calls the lifecycle
-/// abort (terminal), not the per-turn cancel. Pins the lifecycle-kill path
-/// for background children.
+/// kill_child aborts registered children and rejects stale or unknown entries.
 #[test]
 fn test_kill_child_registry() {
     use houyicoder_core::agent::Runner;

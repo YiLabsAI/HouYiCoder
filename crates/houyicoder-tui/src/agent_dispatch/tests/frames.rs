@@ -45,7 +45,7 @@ fn test_frame_log_result_shape() {
 /// (same-message repeat / cross-turn context-loss re-read) as a system
 /// line.
 #[test]
-fn test_trajectory_renders_redundant_section() {
+fn test_transcript_shows_redundant_calls() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.handle_agent_message(AgentMessage::TrajectoryResult {
@@ -219,45 +219,52 @@ fn test_pane_shows_command_result() {
     )));
 }
 
-/// Equal adjacent memory events render one notice.
 #[test]
-fn test_memory_notice_once() {
-    use crate::state::{Screen, TranscriptLine};
-    use houyicoder_protocol::frontend::memory::MemorySavedKind;
+fn test_notice_shows_memory_changes() {
+    use crate::records::TranscriptLine;
+    use crate::state::Screen;
+    use houyicoder_protocol::frontend::memory::{
+        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    };
     let mut app = crate::composition::app();
     app.screen = Screen::Working;
-
-    // Extracted, plural: "Saved 3 memories".
-    app.handle_agent_message(AgentMessage::MemorySaved {
-        count: 3,
-        kind: MemorySavedKind::Extracted,
+    let changes = vec![
+        MemoryChange {
+            key: "alpha".into(),
+            operation: MemoryOperation::Promoted,
+        },
+        MemoryChange {
+            key: "beta".into(),
+            operation: MemoryOperation::Deleted,
+        },
+    ];
+    app.handle_agent_message(AgentMessage::MemoryChanged {
+        id: MemoryChangeId("change-1".into()),
+        origin: MemoryChangeOrigin::AutoDream,
+        changes: changes.clone(),
     });
-    app.handle_agent_message(AgentMessage::MemorySaved {
-        count: 3,
-        kind: MemorySavedKind::Extracted,
+    app.handle_agent_message(AgentMessage::MemoryChanged {
+        id: MemoryChangeId("change-1".into()),
+        origin: MemoryChangeOrigin::AutoDream,
+        changes,
     });
-    let notices = app
-        .transcript
-        .iter()
-        .filter(|line| {
-            matches!(line, TranscriptLine::System(text) if text.starts_with("Saved 3 memories"))
-        })
-        .count();
-    assert_eq!(notices, 1);
-    let out = crate::test_support::render_text(&app, 80, 24);
-    assert!(
-        out.contains("Saved 3 memories"),
-        "extract verb + plural noun should render: {out}"
+    assert_eq!(
+        app.transcript
+            .iter()
+            .filter(
+                |line| matches!(line, TranscriptLine::System(text) if text.contains("auto-dream"))
+            )
+            .count(),
+        1
     );
-
-    // Consolidation reports touches, not resulting entry count.
-    app.handle_agent_message(AgentMessage::MemorySaved {
-        count: 1,
-        kind: MemorySavedKind::Consolidated,
-    });
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_support::render_text(&app, 100, 24);
+    assert!(out.contains("auto-dream"), "origin should render: {out}");
     assert!(
-        out.contains("Consolidated 1 memory change"),
-        "consolidation touch count should render: {out}"
+        out.contains("promoted alpha"),
+        "promotion should render: {out}"
+    );
+    assert!(
+        out.contains("deleted beta"),
+        "deletion should render: {out}"
     );
 }

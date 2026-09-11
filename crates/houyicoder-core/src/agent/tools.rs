@@ -10,11 +10,11 @@
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::extension::ToolError;
 
-mod agent;
 mod ask_user_question;
 mod bash_snapshot;
 mod bash_tool;
 mod conversation_search;
+mod delegation;
 mod edit;
 mod file_edit;
 mod glob;
@@ -34,10 +34,10 @@ mod worktree_enter;
 mod worktree_exit;
 mod write;
 
-pub use agent::AgentTool;
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash_tool::BashTool;
 pub use conversation_search::ConversationSearchTool;
+pub use delegation::DelegationTool;
 pub use edit::EditTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;

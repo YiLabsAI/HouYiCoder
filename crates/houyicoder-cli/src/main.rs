@@ -505,9 +505,8 @@ fn run_tui_loop(
     }
 }
 
-/// The composition root: build the runner via the service layer, install the
-/// live sink (so streamed deltas ship to the TUI while the server's run
-/// drives), Arc the runner so the server task and the TUI share one, pair an
+/// The composition root: build the runner via the service layer, install its
+/// event handlers, Arc the runner so the server task and the TUI share one, pair an
 /// in-memory server + client around it, spawn the server on the shared
 /// runtime, and return the wired bundle for the TUI. The TUI never constructs
 /// these itself; it stays a presentation layer over the protocol client.
@@ -575,7 +574,7 @@ fn build_bundle_for_resume(
     ))
 }
 
-/// Shared TUI wiring: install the live delta sink, pair the in-memory
+/// Shared TUI wiring: install the agent event handlers, pair the in-memory
 /// server and client, build the trajectory, export, and snapshot bridges
 /// over the SessionLog, and assemble the RunnerBundle the TUI drives. Both
 /// the fresh path (build_bundle) and the resume path
@@ -691,14 +690,11 @@ fn pair_inproc_server(
             .handle()
             .clone(),
     );
-    // Share the runner's live sink with the worktree controller so the
-    // main-branch-moved alert surfaces as a system line the user sees, not
-    // just a diagnostic log entry. The controller was built before the
-    // runner (staged delegation); attach the sink now that it exists.
+    // Route worktree security notices through the same user-visible destination.
     if let Some(controller) = &worktree_controller
-        && let Some(sink) = runner.live_sink()
+        && let Some(handler) = runner.event_handlers().user_notice_handler()
     {
-        controller.set_live_sink(sink);
+        controller.set_user_notice_handler(handler);
     }
     // Drain startup warnings synchronously before the runner is shared so the
     // host pushes them as initial transcript system lines — no async-sink race.

@@ -165,13 +165,13 @@ fn test_steer_completed_notice() {
     );
 }
 
-// ---- batch 1: sync delegation + fold-group interaction ----
+// ---- batch 1: foreground delegation + fold-group interaction ----
 
 /// Enter the teammate view, Esc out, then re-Enter on the same fold. Proves
 /// the drill-in is idempotent (re-entry does not get stuck or refuse).
 #[test]
 #[ignore]
-fn test_sync_reenter_teammate() {
+fn test_foreground_reenter_teammate() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],

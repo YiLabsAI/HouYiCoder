@@ -1,8 +1,10 @@
 use super::*;
 use std::collections::HashSet;
-use std::sync::Mutex as StdMutex;
+use std::sync::{Arc, Mutex as StdMutex};
 
-use houyicoder_api::live::{LiveEvent, LiveSink, MemorySavedKind};
+use houyicoder_api::agent_event::{
+    AgentEventHandlers, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent, MemoryOperation,
+};
 use houyicoder_context::MemoryEntry;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{
@@ -14,28 +16,29 @@ use houyicoder_session::SessionStore;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
 
-/// A recording live sink capturing MemorySaved events so a dream test asserts
-/// the consolidation pass fired one notice. Other events are ignored.
-struct RecordingSink(StdMutex<Vec<LiveEvent>>);
-impl RecordingSink {
-    fn new() -> (LiveSink, std::sync::Arc<RecordingSink>) {
-        let inner = std::sync::Arc::new(RecordingSink(StdMutex::new(Vec::new())));
-        let inner_clone = std::sync::Arc::clone(&inner);
-        let sink: LiveSink = std::sync::Arc::new(move |ev: &LiveEvent| {
-            inner_clone.0.lock().expect("sink").push(ev.clone());
-        });
-        (sink, inner)
+struct RecordingChanges(StdMutex<Vec<MemoryChangedEvent>>);
+impl RecordingChanges {
+    fn new() -> (AgentEventHandlers, Arc<Self>) {
+        let inner = Arc::new(Self(StdMutex::new(Vec::new())));
+        let captured = Arc::clone(&inner);
+        let mut events = AgentEventHandlers::default();
+        events.set_memory_changed(Arc::new(move |event| {
+            captured.0.lock().expect("changes").push(event);
+        }));
+        (events, inner)
     }
-    fn memory_saved(&self) -> Vec<(u32, MemorySavedKind)> {
+
+    fn summaries(&self) -> Vec<(usize, MemoryChangeOrigin)> {
         self.0
             .lock()
-            .expect("sink")
+            .expect("changes")
             .iter()
-            .filter_map(|ev| match ev {
-                LiveEvent::MemorySaved { count, kind } => Some((*count, *kind)),
-                _ => None,
-            })
+            .map(|event| (event.changes.len(), event.origin))
             .collect()
+    }
+
+    fn events(&self) -> Vec<MemoryChangedEvent> {
+        self.0.lock().expect("changes").clone()
     }
 }
 
@@ -469,8 +472,8 @@ async fn test_gate_open_fires_stamps() {
         calls: StdMutex::new(0),
     });
     let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
-    let (sink, recording) = RecordingSink::new();
-    dream.set_notify_sink(sink);
+    let (sink, recording) = RecordingChanges::new();
+    dream.set_memory_changed_handler(sink.memory_changed_handler());
     dream.execute_dream(None, None);
     dream.drain_pending(Duration::from_secs(5)).await;
     assert_eq!(
@@ -481,8 +484,8 @@ async fn test_gate_open_fires_stamps() {
     assert!(root.join(LOCK_FILE).exists(), "lock stamped on success");
     // The dream touched one memory, so the sink fires one Consolidated notice.
     assert_eq!(
-        recording.memory_saved(),
-        vec![(1, MemorySavedKind::Consolidated)],
+        recording.summaries(),
+        vec![(1, MemoryChangeOrigin::AutoDream)],
         "a successful dream fires one Consolidated memory-saved notice"
     );
     drop(std::fs::remove_dir_all(&root));
@@ -629,11 +632,7 @@ fn test_lock_acquire_is_atomic() {
     let prior = lock.try_acquire().expect("first acquire creates the lock");
     assert_eq!(prior, 0, "no prior lock");
     assert!(lock.last_consolidated_at() > 0, "lock file created");
-    // A second acquirer on the SAME fresh lock: the stale check (1h) bails
-    // first — the lock is fresh. This is the in-process guard. The
-    // create_new atomicity matters cross-process (a second process stat-ing
-    // an absent lock + create_new-ing loses the race). Here we pin the
-    // in-process behavior: a fresh lock blocks a second acquirer.
+    // A fresh lock remains exclusively owned by its first acquirer.
     let lock_b = ConsolidationLock::new(&dir);
     assert!(
         lock_b.try_acquire().is_none(),
@@ -642,35 +641,40 @@ fn test_lock_acquire_is_atomic() {
     drop(std::fs::remove_dir_all(&dir));
 }
 
-/// fire_saved pushes a MemorySaved event to the installed sink (Consolidated
-/// kind, the count + kind carried verbatim) and is a no-op when no sink is
-/// wired or the count is zero. Direct call (no spawn) so coverage attributes
-/// it cleanly.
-#[tokio::test]
-async fn test_fire_saved_pushes_consolidated() {
-    let root = temp_dir("fire-saved");
+#[test]
+fn test_dream_reports_memory_operations() {
+    let root = temp_dir("emit-changes");
     let memory = Arc::new(FsMemory::new(root.clone()));
     let provider: Arc<dyn ModelProvider> =
         Arc::new(crate::provider::test_support::FakeProvider::text("ok"));
     let (dream, _) = dream_runner(memory, provider);
-
-    // No sink wired: a fire is a silent no-op (tests, forked runner).
-    dream.fire_saved(2);
-    // Wire a recording sink + fire: the sink receives one Consolidated event.
-    let (sink, recording) = RecordingSink::new();
-    dream.set_notify_sink(sink);
-    dream.fire_saved(2);
+    let (events, recording) = RecordingChanges::new();
+    dream.set_memory_changed_handler(events.memory_changed_handler());
+    dream.emit_changes(vec![
+        MemoryChange {
+            key: "stored-key".into(),
+            operation: MemoryOperation::Stored,
+        },
+        MemoryChange {
+            key: "deleted-key".into(),
+            operation: MemoryOperation::Deleted,
+        },
+    ]);
+    let events = recording.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].origin, MemoryChangeOrigin::AutoDream);
     assert_eq!(
-        recording.memory_saved(),
-        vec![(2, MemorySavedKind::Consolidated)],
-        "fire_saved pushes one Consolidated event to the sink"
-    );
-    // A zero-count fire is a no-op even with a sink wired.
-    dream.fire_saved(0);
-    assert_eq!(
-        recording.memory_saved().len(),
-        1,
-        "a zero-count fire does not push another event"
+        events[0].changes,
+        vec![
+            MemoryChange {
+                key: "stored-key".into(),
+                operation: MemoryOperation::Stored,
+            },
+            MemoryChange {
+                key: "deleted-key".into(),
+                operation: MemoryOperation::Deleted,
+            },
+        ]
     );
     drop(std::fs::remove_dir_all(&root));
 }

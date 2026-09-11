@@ -1,13 +1,6 @@
-//! Child-agent spawn: create an independent child Runner from a parent's
-//! components, record the durable spawn boundary, and return a handle.
-//!
-//! The spawn function is a standalone entry, not a method on Runner, so
-//! the agent module file stays under the size gate. The caller extracts
-//! what spawn needs into a SpawnRequest and passes it here; the child
-//! Runner is built with a shared SessionStore (same backend, routes by
-//! session id), the parent provider (shared), a narrowed ToolRegistry,
-//! and a cloned RunnerConfig.
+//! Child-agent construction, durable spawn boundaries, and run handles.
 
+use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_async::CancellationToken;
@@ -19,8 +12,10 @@ use crate::agent::runner_config::RunnerConfig;
 use crate::agent::worktree_controller::{ChildWorktree, WorktreeController};
 use crate::agent::{Runner, ToolRegistry};
 
+use super::bus_types::{ChildDescriptor, ChildRunMode};
 use super::child_prompt::resolve_child_effort;
 use super::registry::IsolationMode;
+use super::status_publisher::ChildStatusPublisher;
 
 /// Cap on spawn nesting. A top-level agent is depth 0; each spawn adds 1.
 /// v0 limit per the multi-agent config (max_depth = 4): levels 0-3 spawn
@@ -81,16 +76,13 @@ pub struct SpawnRequest {
     /// fail-closes to WorktreeFenceNarrowFail rather than degrading to no
     /// isolation.
     pub worktree_controller: Option<Arc<WorktreeController>>,
-    /// True for an async (unlinked) child that returns immediately and
-    /// completes later; false for a sync child that blocks the parent turn.
-    pub run_in_background: bool,
-    /// The parent's cancel token, shared by a sync child so a parent abort
-    /// cancels the child too. Ignored for an async child, which gets a fresh
+    /// Whether the child blocks the parent or continues independently.
+    pub run_mode: ChildRunMode,
+    /// The parent's cancel token, shared by a foreground child so a parent
+    /// abort cancels the child too. Ignored for a background child, which gets a fresh
     /// unlinked token so the parent's ESC does not propagate.
     pub parent_cancel: Option<CancellationToken>,
-    /// The shared in-process bus. When present, the child's live sink is armed
-    /// with the bus bridge that publishes a Progress message per completed
-    /// turn onto the child's progress topic. None when no bus is wired.
+    /// The shared in-process bus used for child status and steering.
     pub bus: Option<Arc<super::bus_types::AgentBus>>,
 }
 
@@ -130,16 +122,15 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     }
 
     let child_sid = SessionId::new();
-    // A sync child shares the parent's cancel token (a linked clone), so a
-    // parent abort cancels the child; an async child gets a fresh unlinked
+    // A foreground child shares the parent's cancel token (a linked clone), so a
+    // parent abort cancels the child; an background child gets a fresh unlinked
     // token, so the parent's ESC does not propagate -- the caller cancels an
-    // async child through its own handle. A sync spawn with no parent token
+    // background child through its own handle. A foreground spawn with no parent token
     // degrades to an unlinked child token (still cancellable via the handle,
     // just not parent-linked).
-    let cancel = if req.run_in_background {
-        CancellationToken::new()
-    } else {
-        req.parent_cancel.clone().unwrap_or_default()
+    let cancel = match req.run_mode {
+        ChildRunMode::Background => CancellationToken::new(),
+        ChildRunMode::Foreground => req.parent_cancel.clone().unwrap_or_default(),
     };
 
     // Per-child worktree + fence. Fail-closed: a missing controller or a
@@ -176,10 +167,12 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     let parent_sid = req.parent_sid;
     let subagent_type = req.subagent_type.clone();
     let prompt_summary = req.prompt_summary.clone();
-    // Clone the bus out before the runner build moves the other req fields, so
-    // the child can be armed with the bus bridge without a partial-borrow on a
-    // moved struct.
     let bus = req.bus.clone();
+    let child = ChildDescriptor {
+        agent_id: child_sid.to_string(),
+        agent_type: req.subagent_type.clone(),
+        run_mode: req.run_mode,
+    };
 
     let mut runner =
         Runner::with_shared_store(req.parent_store, req.provider, req.tools, req.config)
@@ -190,17 +183,11 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
                 depth: req.depth + 1,
                 parent_session_id: Some(req.parent_sid.to_string()),
             });
-    // Arm the bus bridge as the child's live sink: forwards each
-    // TurnBoundary onto the child's progress topic. agent_id is the child
-    // session id spawn minted above.
     if let Some(bus) = bus {
         use houyicoder_async::bus::MessageBus;
-        runner.set_live_sink(super::bus_sink::bus_live_sink(
-            bus.clone(),
-            child_sid.to_string(),
-            req.subagent_type.clone(),
-            req.run_in_background,
-        ));
+        let mut events = AgentEventHandlers::default();
+        events.set_run_lifecycle(Arc::new(ChildStatusPublisher::new(bus.clone(), child)));
+        runner.set_event_handlers(events);
         // Register a point-to-point inbox so the parent can steer this
         // child mid-task: the drive loop drains the receiver at each turn
         // boundary, appending each Inbox text as a user message. The bus
@@ -243,7 +230,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
 /// Append the SubagentReturn boundary to the parent log: the durable marker
 /// that pairs with SubagentSpawn so replay reconstructs the delegation
 /// (child reached a terminal state, with its summary + usage). The runtime
-/// writes this after driving a sync child to terminal.
+/// writes this after driving a foreground child to terminal.
 pub async fn record_subagent_return(
     store: &dyn SessionLog,
     parent_sid: SessionId,

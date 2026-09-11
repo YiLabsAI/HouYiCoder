@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// The wire protocol version. Bumped only on a breaking change to the
 /// message set or framing; a peer that sees a different version fails the
 /// handshake rather than guessing.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.

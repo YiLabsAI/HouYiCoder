@@ -1,6 +1,7 @@
 use super::*;
+use crate::agent::memory_change_recorder::MemoryChangeRecorder;
 use crate::agent::{Runner, ToolRegistry};
-use houyicoder_api::live::{LiveEvent, LiveSink, MemorySavedKind};
+use houyicoder_api::agent_event::{AgentEventHandlers, MemoryChangeOrigin, MemoryChangedEvent};
 use houyicoder_context::{MemoryEntry, MemorySummary};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{
@@ -9,8 +10,7 @@ use houyicoder_protocol::llm::{
 };
 use houyicoder_session::SessionStore;
 use std::collections::HashSet;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicU32;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
@@ -29,28 +29,24 @@ impl MemoryProvider for RecordingMemory {
     }
 }
 
-/// A recording live sink capturing MemorySaved events so the test asserts the
-/// extractor fired one per pass. Other events (deltas) are ignored — the
-/// forked runner's live sink is None, so none fire here anyway.
-struct RecordingSink(StdMutex<Vec<LiveEvent>>);
-impl RecordingSink {
-    fn new() -> (LiveSink, std::sync::Arc<RecordingSink>) {
-        let inner = std::sync::Arc::new(RecordingSink(StdMutex::new(Vec::new())));
-        let inner_clone = std::sync::Arc::clone(&inner);
-        let sink: LiveSink = std::sync::Arc::new(move |ev: &LiveEvent| {
-            inner_clone.0.lock().expect("sink").push(ev.clone());
-        });
-        (sink, inner)
+struct RecordingChanges(StdMutex<Vec<MemoryChangedEvent>>);
+impl RecordingChanges {
+    fn new() -> (AgentEventHandlers, Arc<Self>) {
+        let inner = Arc::new(Self(StdMutex::new(Vec::new())));
+        let captured = Arc::clone(&inner);
+        let mut events = AgentEventHandlers::default();
+        events.set_memory_changed(Arc::new(move |event| {
+            captured.0.lock().expect("changes").push(event);
+        }));
+        (events, inner)
     }
-    fn memory_saved(&self) -> Vec<(u32, MemorySavedKind)> {
+
+    fn summaries(&self) -> Vec<(usize, MemoryChangeOrigin)> {
         self.0
             .lock()
-            .expect("sink")
+            .expect("changes")
             .iter()
-            .filter_map(|ev| match ev {
-                LiveEvent::MemorySaved { count, kind } => Some((*count, *kind)),
-                _ => None,
-            })
+            .map(|event| (event.changes.len(), event.origin))
             .collect()
     }
 }
@@ -239,6 +235,16 @@ fn conversation() -> Vec<SessionLogEntry> {
     ]
 }
 
+fn append_event(messages: &mut Vec<SessionLogEntry>, event: SessionEvent) {
+    messages.push(SessionLogEntry {
+        id: EventId::new(),
+        session: messages[0].session,
+        ts: 0,
+        prev_hash: None,
+        event,
+    });
+}
+
 /// A clean conversation: the fork runs and the cursor advances to the
 /// last message on success.
 #[tokio::test]
@@ -246,8 +252,8 @@ async fn test_extract_advances_cursor_success() {
     let (ext, memory) = extractor(Arc::new(FakeProvider {
         calls: StdMutex::new(0),
     }));
-    let (sink, recording) = RecordingSink::new();
-    ext.set_notify_sink(sink);
+    let (sink, recording) = RecordingChanges::new();
+    ext.set_memory_changed_handler(sink.memory_changed_handler());
     let msgs = conversation();
     let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
     assert!(
@@ -266,8 +272,8 @@ async fn test_extract_advances_cursor_success() {
     );
     // The fork wrote one memory, so the sink fires one Extracted notice.
     assert_eq!(
-        recording.memory_saved(),
-        vec![(1, MemorySavedKind::Extracted)],
+        recording.summaries(),
+        vec![(1, MemoryChangeOrigin::AutoMemory)],
         "a successful fork fires one Extracted memory-saved notice"
     );
 }
@@ -280,8 +286,8 @@ async fn test_extract_skips_main_saved() {
     let (ext, memory) = extractor(Arc::new(FakeProvider {
         calls: StdMutex::new(0),
     }));
-    let (sink, recording) = RecordingSink::new();
-    ext.set_notify_sink(sink);
+    let (sink, recording) = RecordingChanges::new();
+    ext.set_memory_changed_handler(sink.memory_changed_handler());
     // The prefix already contains a save_memory tool call (the main agent
     // saved this turn) — mutual exclusion must skip the fork.
     let mut msgs = conversation();
@@ -297,6 +303,17 @@ async fn test_extract_skips_main_saved() {
                 "key": "k", "description": "d",
                 "source": "feedback", "content": "c"
             }),
+        },
+    });
+    msgs.push(SessionLogEntry {
+        id: EventId::new(),
+        session: msgs[0].session,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::ToolResult {
+            call_id: "main-save".into(),
+            output: serde_json::json!({"saved": "k"}),
+            duration_ms: 0,
         },
     });
     let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
@@ -317,9 +334,9 @@ async fn test_extract_skips_main_saved() {
     // saved), so it still fires a notice — one Extracted, count = the saves
     // the main agent emitted.
     assert_eq!(
-        recording.memory_saved(),
-        vec![(1, MemorySavedKind::Extracted)],
-        "the skipped (main-agent-saved) path still fires an Extracted notice"
+        recording.summaries(),
+        vec![(1, MemoryChangeOrigin::PrimaryAgent)],
+        "the successful primary save emits its exact change"
     );
 }
 
@@ -366,36 +383,46 @@ fn test_count_since_fallbacks_missing() {
     );
 }
 
-/// has_memory_writes_since detects a save_memory call after the cursor.
 #[test]
-fn test_has_writes_detects_save() {
-    let msgs = conversation();
-    assert!(
-        !has_memory_writes_since(&msgs, None),
-        "clean conversation has no save_memory call"
-    );
-    let mut msgs = msgs;
-    msgs.push(SessionLogEntry {
-        id: EventId::new(),
-        session: msgs[0].session,
-        ts: 0,
-        prev_hash: None,
-        event: SessionEvent::ToolCall {
+fn test_result_confirms_memory_change() {
+    let mut msgs = conversation();
+    append_event(
+        &mut msgs,
+        SessionEvent::ToolCall {
             call_id: "c".into(),
             tool: "save_memory".into(),
             input: serde_json::json!({}),
         },
-    });
-    assert!(
-        has_memory_writes_since(&msgs, None),
-        "save_memory call detected"
     );
-    // Cursor at the save_memory call: scan starts after it → false.
-    let save_id = msgs.last().expect("last").id;
-    assert!(
-        !has_memory_writes_since(&msgs, Some(&save_id)),
-        "scan after the save call finds nothing"
+    assert!(memory_changes_since(&msgs, None).is_empty());
+    append_event(
+        &mut msgs,
+        SessionEvent::tool_result("c", serde_json::json!({"saved": "exact-key"})),
     );
+    append_event(
+        &mut msgs,
+        SessionEvent::tool_result("c", serde_json::json!({"saved": "duplicate"})),
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::ToolCall {
+            call_id: "failed".into(),
+            tool: "save_memory".into(),
+            input: serde_json::json!({}),
+        },
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::tool_result("failed", serde_json::json!({"error": "write failed"})),
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::tool_result("failed", serde_json::json!({"saved": "late"})),
+    );
+    let changes = memory_changes_since(&msgs, None);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].key, "exact-key");
+    assert_eq!(changes[0].operation, MemoryOperation::Stored);
 }
 
 /// extract_memories is fire-and-forget: it returns immediately and the
@@ -548,9 +575,7 @@ async fn test_runner_fires_extractor_final() {
     std::fs::remove_dir_all(&cwd).ok();
 }
 
-/// extract_memories short-circuits when there are no new messages since
-/// the cursor (cursor at the last message) — no spawn, no stash. Pins
-/// the cheap pre-check so a re-emitted FinalOutput does not re-spawn.
+/// Extraction remains idle when the cursor covers the latest message.
 #[tokio::test]
 async fn test_extract_skips_no_new() {
     let (ext, _memory) = extractor(Arc::new(FakeProvider {
@@ -570,8 +595,7 @@ async fn test_extract_skips_no_new() {
     );
 }
 
-/// MainFinalProvider.complete returns the scripted response (the runner
-/// uses stream, so complete is otherwise dead; this pins it).
+/// MainFinalProvider returns its scripted completion response.
 #[tokio::test]
 async fn test_main_final_complete_returns() {
     let p = MainFinalProvider {
@@ -694,7 +718,7 @@ async fn test_forked_extract_receives_manifest() {
         &cwd,
         config,
         &prefix,
-        Arc::new(AtomicU32::new(0)),
+        Arc::new(MemoryChangeRecorder::new()),
     )
     .await;
     assert!(result.is_ok(), "forked run completes");

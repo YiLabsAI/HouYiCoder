@@ -132,7 +132,7 @@ mod tests {
     use super::*;
     use crate::agent::RunOutcome;
     use crate::agent::ToolRegistry;
-    use crate::agent::tests::runner_with;
+    use crate::agent::runner_tests::runner_with;
     use houyicoder_context::SessionId;
     use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
     use std::sync::Arc;

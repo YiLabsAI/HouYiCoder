@@ -298,10 +298,7 @@ async fn test_tools_execute_through_controller() {
     std::fs::remove_dir_all(&repo).ok();
 }
 
-/// When the main branch ref moves while the agent is isolated, exit
-/// surfaces a system line through the live sink so the user sees the
-/// history rewrite — not just a diagnostic log entry. The sink is the
-/// user-visible channel; without it the alert is silent.
+/// Exiting isolation emits a user notice when the main branch ref changed.
 #[tokio::test]
 async fn test_exit_warns_history_rewrite() {
     let repo = make_repo(8);
@@ -317,13 +314,10 @@ async fn test_exit_warns_history_rewrite() {
             .args(["commit", "--allow-empty", "-m", "rewrite", "-q", "--amend"])
             .status(),
     );
-    // Attach a capturing sink.
     let captured = Arc::new(Mutex::new(Vec::<String>::new()));
     let cap = captured.clone();
-    controller.set_live_sink(Arc::new(move |ev: &LiveEvent| {
-        if let LiveEvent::SystemLine { text } = ev {
-            cap.lock().unwrap().push(text.clone());
-        }
+    controller.set_user_notice_handler(Arc::new(move |event: UserNoticeEvent| {
+        cap.lock().unwrap().push(event.message);
     }));
     // Exit.
     controller

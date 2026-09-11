@@ -15,7 +15,7 @@ use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use serde_json::Value;
 
-use super::tests::runner_with;
+use super::runner_tests::runner_with;
 use super::*;
 use crate::provider::test_support::FakeProvider;
 

@@ -1,15 +1,14 @@
-//! Direct coverage of append_hook_signals across every verdict arm. Split
-//! from fire_tests.rs to keep that file under the file-size gate.
+//! Durable hook signals and user notices for hook outcomes.
 
 use std::sync::{Arc, Mutex};
 
-use houyicoder_api::live::LiveEvent;
+use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
 use crate::agent::ToolRegistry;
 use crate::agent::hook::{HookError, HookEvent, HookOutcome, HookVerdict};
-use crate::agent::tests::runner_with;
+use crate::agent::runner_tests::runner_with;
 use crate::provider::test_support::FakeProvider;
 
 #[tokio::test]
@@ -142,8 +141,8 @@ async fn test_append_signals_cover_verdicts() {
 }
 
 /// An Observe verdict and a hook error both surface a system line through
-/// the live sink so the user sees them, not just the durable trajectory.
-/// The sink is the user-visible channel; the trajectory is the audit record.
+/// the user-notice handler so the user sees them, not just the durable
+/// trajectory. The notice channel is user-visible; the trajectory is the audit record.
 /// Both fire for the same outcome — the user is told, and the run is
 /// recorded. Allow and the string-only verdicts (Deny/Feedback/Inject/Ask)
 /// do not fire a system line: Deny/Feedback/Inject/Ask are acted on by the
@@ -153,11 +152,10 @@ async fn test_append_signals_cover_verdicts() {
 async fn test_observe_error_warn_user() {
     let captured = Arc::new(Mutex::new(Vec::<String>::new()));
     let cap = captured.clone();
-    let sink: houyicoder_api::live::LiveSink = Arc::new(move |ev: &LiveEvent| {
-        if let LiveEvent::SystemLine { text } = ev {
-            cap.lock().unwrap().push(text.clone());
-        }
-    });
+    let mut events = AgentEventHandlers::default();
+    events.set_user_notice(Arc::new(move |event: UserNoticeEvent| {
+        cap.lock().unwrap().push(event.message);
+    }));
     let mut runner = runner_with(
         Arc::new(FakeProvider::new(vec![CompletionResponse {
             output: vec![OutputItem::Text {
@@ -168,7 +166,7 @@ async fn test_observe_error_warn_user() {
         }])),
         ToolRegistry::new(),
     );
-    runner.set_live_sink(sink);
+    runner.set_event_handlers(events);
     let session = SessionId::new();
     let outcomes = vec![
         HookOutcome {

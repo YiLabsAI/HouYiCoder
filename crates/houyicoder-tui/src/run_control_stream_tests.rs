@@ -1,13 +1,8 @@
-//! Streaming tests split from run_control_tests.rs for the file-size gate.
-//! Reasoning and text streaming persistence, plus the output-tail truncation
-//! guard. These cover the ephemeral live preview and the authoritative
-//! AssistantMessage frame that supersedes it.
+//! Streaming behavior for transient output and durable completion frames.
 use super::*;
 
-/// End-to-end: a provider returning OutputItem::Reasoning streams
-/// ReasoningDelta through fold_event → the live sink → AgentMessage →
-/// live_reasoning_text (transient), and the durable Reasoning event lands as a
-/// TranscriptLine::Thinking after Done.
+/// Streamed reasoning remains transient until completion records it in the
+/// transcript.
 #[test]
 fn test_reasoning_streams_and_persists() {
     let resp = CompletionResponse {
@@ -54,9 +49,9 @@ fn test_reasoning_streams_and_persists() {
 
 /// Regression guard for output-tail truncation. A streamed reply must land in
 /// the transcript in full after Done — head and the last 4-char delta (the
-/// tail). The live delta sink ships each chunk via try_send on a bounded
-/// channel; the authoritative AssistantMessage frame replaces that preview,
-/// so the rebuild from frames must carry every token. A
+/// tail). The response stream handler ships each chunk via try_send on a
+/// bounded channel; the authoritative AssistantMessage frame replaces that
+/// preview, so the rebuild from frames must carry every token. A
 /// regression that drops the final chunk before the Finish event, or that lets
 /// the live preview be cleared without the authoritative frame landing first,
 /// would leave the tail missing. The reply is deliberately long (many deltas)

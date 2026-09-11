@@ -1,6 +1,4 @@
-//! Drive a sync child to a terminal state, routing mid-run permission asks
-//! through the bus to the parent's approval flow. Extracted so the runtime
-//! file stays under the size gate.
+//! Foreground child execution and permission routing.
 
 use std::sync::Arc;
 
@@ -13,7 +11,7 @@ use houyicoder_core::agent::multi_agent::bus_types::{
 };
 use houyicoder_core::agent::{ApprovalDecision, ApprovalRequest, RunError, RunOutcome, RunResult};
 
-/// Drive a sync child to a terminal state, routing mid-run permission asks
+/// Drive a foreground child to a terminal state, routing mid-run permission asks
 /// through the bus to the parent's approval flow. Mirrors the parent server's
 /// serve loop: run() returns RunOutcome::Interruption(approvals) when a
 /// guarded tool needs approval; each approval is published on the bus, the
@@ -146,9 +144,9 @@ mod tests {
     use std::sync::Arc;
 
     /// route_approvals_via_bus round-trips a permission ask to a parent
-    /// responder + collects the decision. Pins the contract
-    /// drive_child_to_terminal relies on: subscribe-before-publish on the
-    /// per-call_id response topic so no broadcast lag drops the decision.
+    /// responder and collects the decision. drive_child_to_terminal relies
+    /// on subscribe-before-publish for the per-call response topic so no
+    /// broadcast lag drops the decision.
     #[tokio::test]
     async fn test_route_approvals_via_bus() {
         let bus = Arc::new(AgentBus::new());
