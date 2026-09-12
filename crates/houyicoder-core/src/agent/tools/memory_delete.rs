@@ -30,7 +30,7 @@ use houyicoder_context::MemoryError;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
-use crate::agent::memory_change_recorder::MemoryChangeRecorder;
+use crate::agent::memory::MutationLog;
 use houyicoder_api::agent_event::MemoryOperation;
 
 /// A structured memory-delete tool. The forked consolidation agent calls it
@@ -42,7 +42,7 @@ pub struct DeleteMemoryTool {
     /// deletions landed this pass. Incremented on a successful delete so the
     /// dream can fire one memory-saved notice per pass. None for the main
     /// runner's tool, which does not notify.
-    recorder: Option<Arc<MemoryChangeRecorder>>,
+    recorder: Option<Arc<MutationLog>>,
 }
 
 impl DeleteMemoryTool {
@@ -58,7 +58,7 @@ impl DeleteMemoryTool {
     /// Thread a write recorder so a successful delete bumps it. The dream
     /// shares one recorder across the add + delete tools so a touch (add or
     /// delete) counts toward the notice.
-    pub(crate) fn with_recorder(mut self, recorder: Arc<MemoryChangeRecorder>) -> Self {
+    pub(crate) fn with_recorder(mut self, recorder: Arc<MutationLog>) -> Self {
         self.recorder = Some(recorder);
         self
     }
@@ -179,7 +179,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_memory_counts_deletes() {
         let p = provider();
-        let recorder = Arc::new(MemoryChangeRecorder::new());
+        let recorder = Arc::new(MutationLog::new());
         let tool = DeleteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
             .with_recorder(recorder.clone());
         run(&tool, json!({"key": "a"})).await.expect("delete a");
@@ -202,7 +202,7 @@ mod tests {
                 Err(MemoryError::NotFound)
             }
         }
-        let recorder = Arc::new(MemoryChangeRecorder::new());
+        let recorder = Arc::new(MutationLog::new());
         let tool = DeleteMemoryTool::new(Arc::new(EmptyMemory) as Arc<dyn MemoryProvider>)
             .with_recorder(recorder.clone());
         let _err = run(&tool, json!({"key": "absent"})).await;

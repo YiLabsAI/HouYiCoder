@@ -129,7 +129,7 @@ impl Runner {
                     // hook whose deny reason names the rule key lands a
                     // precise counter, a free-text reason lands a coarse
                     // one. Either way the dream sees the cumulative count.
-                    if let Some(memory) = self.memory.as_ref() {
+                    if let Some(memory) = self.memory.provider() {
                         memory.record_gate_violation(&reason);
                     }
                     blocked.push((id.clone(), hook_blocked_json(&reason)));

@@ -225,7 +225,6 @@ mod tests {
                 .any(|m| m.key.starts_with("compact-decision")),
             "decision signal present"
         );
-        // The Verbatim event (id3, "latest") is NOT scanned.
         assert!(
             candidates.iter().all(|m| m.content != "latest"),
             "verbatim event not scanned"

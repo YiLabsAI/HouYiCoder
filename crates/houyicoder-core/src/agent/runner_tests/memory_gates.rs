@@ -1,5 +1,5 @@
 //! Gate tests for the memory-recall path: the cumulative byte cap and the
-//! auto_memory toggle. Call inject_memory_recall directly (no run) so the
+//! auto_memory toggle. Call memory.recall directly (no run) so the
 //! assembled context is never tokenized — the gates read byte counts and a bool,
 //! not tokens, and the tests stay sub-millisecond under any tokenizer.
 
@@ -30,7 +30,7 @@ fn runner_with(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> Runner 
 }
 
 /// A provider stub used by the gate tests (the run path is not exercised;
-/// inject_memory_recall is called directly, so this only needs to satisfy the
+/// memory.recall is called directly, so this only needs to satisfy the
 /// constructor).
 struct StubGateProvider;
 
@@ -69,7 +69,7 @@ impl ModelProvider for StubGateProvider {
 /// The cumulative byte cap skips recall once the session has surfaced enough
 /// memory. A pre-populated memory-recall event over the 60KB cap means the
 /// next inject does not call recall, so no new memory-recall event is
-/// appended. Calls inject_memory_recall directly (no run) — the gate reads
+/// appended. Calls memory.recall directly (no run) — the gate reads
 /// byte counts, not tokens.
 #[tokio::test]
 async fn test_byte_cap_skips_recall() {
@@ -81,7 +81,8 @@ async fn test_byte_cap_skips_recall() {
             MemorySource::Project,
         )]),
     );
-    let runner = runner_with(provider, ToolRegistry::new()).with_memory(memory);
+    let mut runner = runner_with(provider, ToolRegistry::new());
+    runner.memory.install_provider(memory);
     let session = SessionId::new();
     // A multi-word user input (so the single-word gate would NOT skip) plus
     // a memory-recall event over the 60KB cap. The byte-cap gate fires
@@ -108,7 +109,7 @@ async fn test_byte_cap_skips_recall() {
             .await
             .unwrap();
     }
-    runner.inject_memory_recall(session).await.unwrap();
+    runner.memory.recall(session).await.unwrap();
     let events = runner.store().replay(session).await.unwrap();
     let recall_events = events
         .iter()
@@ -134,7 +135,8 @@ async fn test_recall_records_bytes() {
             MemorySource::Project,
         )]),
     );
-    let runner = runner_with(provider, ToolRegistry::new()).with_memory(memory);
+    let mut runner = runner_with(provider, ToolRegistry::new());
+    runner.memory.install_provider(memory);
     let session = SessionId::new();
     runner
         .store()
@@ -149,7 +151,7 @@ async fn test_recall_records_bytes() {
         })
         .await
         .unwrap();
-    runner.inject_memory_recall(session).await.unwrap();
+    runner.memory.recall(session).await.unwrap();
     let events = runner.store().replay(session).await.unwrap();
     let recalled = events
         .iter()
@@ -171,8 +173,6 @@ async fn test_recall_records_bytes() {
 /// the surfaced/byte-cap/query gates. Covers the toggle gate line.
 #[tokio::test]
 async fn test_toggle_off_skips_recall() {
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
     let provider: Arc<dyn ModelProvider> = Arc::new(StubGateProvider);
     let memory: Arc<dyn houyicoder_api::memory::MemoryProvider> = Arc::new(
         houyicoder_memory::KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
@@ -181,11 +181,9 @@ async fn test_toggle_off_skips_recall() {
             MemorySource::Project,
         )]),
     );
-    let auto_memory = Arc::new(AtomicBool::new(false));
-    let auto_dream = Arc::new(AtomicBool::new(true));
-    let runner = runner_with(provider, ToolRegistry::new())
-        .with_memory(memory)
-        .with_toggles(auto_memory, auto_dream);
+    let mut runner = runner_with(provider, ToolRegistry::new());
+    runner.memory.set_auto_memory(false);
+    runner.memory.install_provider(memory);
     let session = SessionId::new();
     runner
         .store()
@@ -200,7 +198,7 @@ async fn test_toggle_off_skips_recall() {
         })
         .await
         .unwrap();
-    runner.inject_memory_recall(session).await.unwrap();
+    runner.memory.recall(session).await.unwrap();
     let events = runner.store().replay(session).await.unwrap();
     assert!(
         events

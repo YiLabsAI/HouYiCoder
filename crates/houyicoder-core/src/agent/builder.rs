@@ -1,13 +1,17 @@
-//! Composition-root wiring for Runner collaborators and runtime policy.
+//! Configures Runner collaborators and runtime policy.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::SessionId;
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 
-use super::memory_change_recorder::MemoryChangeRecorder;
+use super::conditional_activation::ConditionalSkillActivator;
+use super::hook::registry::HookRegistry;
+use super::memory::{MemoryRuntime, MutationLog};
+use super::multi_agent::bus_types::BusMessage;
+use super::skill_reload::SkillReloadGuard;
+use super::tools::MemoryAddTool;
 use super::{RunError, Runner, VerifyGate};
 use houyicoder_api::agent_event::AgentEventHandlers;
 
@@ -21,11 +25,7 @@ impl Runner {
         self
     }
 
-    /// Pin the cwd the context builder uses for the project-context walk-up
-    /// (the nearest AGENTS.md). Call at the composition root with the resolved
-    /// workspace root so the system prompt's project-context section reads the
-    /// right file; tests default to the process cwd. Consumes and returns self
-    /// for chaining.
+    /// Set the workspace used to discover project instructions.
     pub fn with_cwd(mut self, cwd: PathBuf) -> Self {
         self.context_builder = self.context_builder.with_cwd(cwd);
         self
@@ -60,22 +60,14 @@ impl Runner {
 
     /// Install all event-domain handlers before the runner is shared.
     pub fn set_event_handlers(&mut self, events: AgentEventHandlers) {
-        if let Some(extractor) = self.extractor.as_ref() {
-            extractor.set_memory_changed_handler(events.memory_changed_handler());
-        }
-        if let Some(dream) = self.dream.as_ref() {
-            dream.set_memory_changed_handler(events.memory_changed_handler());
-        }
+        self.memory.set_event_handlers(&events);
         self.events = events;
     }
 
     /// Install the bus inbox receiver for a spawned child. Call before the
     /// runner is shared. The drive loop drains this at each turn boundary, appending Inbox texts as user
     /// messages so a parent can steer a running child mid-task.
-    pub fn set_inbox(
-        &mut self,
-        rx: tokio::sync::mpsc::UnboundedReceiver<crate::agent::multi_agent::bus_types::BusMessage>,
-    ) {
+    pub fn set_inbox(&mut self, rx: tokio::sync::mpsc::UnboundedReceiver<BusMessage>) {
         *self.inbox.lock().expect("inbox lock") = Some(rx);
     }
 
@@ -84,55 +76,44 @@ impl Runner {
         self.events.clone()
     }
 
-    /// Wire a persistent memory provider. When set, the turn-entry step
-    /// recalls relevant entries per user query and appends a durable
-    /// memory-recall attachment the projection merges into the turn's user
-    /// message — the system prompt stays byte-frozen across turns
-    /// (prompt-cache friendly), and compaction folds old memory-recall events
-    /// out of the view so the surfaced set naturally resets. After a run
-    /// completes, explicit save signals in the user input are written
-    /// atomically. Consumes and returns self for chaining at the composition
-    /// root.
-    pub fn with_memory(mut self, provider: Arc<dyn MemoryProvider>) -> Self {
-        // Register the structured save_memory tool so the main agent can save
-        // a memory by emitting a save_memory tool call — auto-approve, no
-        // path-escape surface (the provider owns every path), routes through
-        // the provider atomic write under the in-process lock. The tool
-        // shares the provider handle so main-agent saves and forked-extract
-        // saves land under the same lock. Registering here (not at the
-        // composition root) keeps the tool coupled to memory being wired and
-        // covers the forked-extract runner for free (it also calls
-        // with_memory).
-        self.tools.register(Arc::new(
-            super::tools::MemoryAddTool::new(provider.clone())
-                .with_origin(houyicoder_context::MemoryOrigin::MainAgent),
-        ));
-        self.memory = Some(provider);
+    /// Install a fully constructed memory runtime. Registers the
+    /// save_memory tool sharing the runtime's provider so main-agent saves
+    /// and forked-extract saves land under the same lock. Consumes and
+    /// returns self for chaining at the composition root.
+    pub fn install_memory(mut self, runtime: MemoryRuntime) -> Self {
+        runtime.set_event_handlers(&self.events);
+        if let Some(provider) = runtime.provider() {
+            self.tools.register(Arc::new(
+                MemoryAddTool::new(provider.clone())
+                    .with_origin(houyicoder_context::MemoryOrigin::MainAgent),
+            ));
+        }
+        self.memory = runtime;
         self
     }
 
-    /// Configure memory writes for an automatic extraction run.
-    pub(crate) fn with_extraction_memory(
+    /// Install memory writes and mutation tracking for an extraction run.
+    pub(crate) fn install_extraction_memory(
         mut self,
-        provider: Arc<dyn MemoryProvider>,
-        recorder: Arc<MemoryChangeRecorder>,
+        provider: Arc<dyn houyicoder_api::memory::MemoryProvider>,
+        recorder: Arc<MutationLog>,
     ) -> Self {
         self.tools.register(Arc::new(
-            super::tools::MemoryAddTool::new(provider.clone())
+            MemoryAddTool::new(provider.clone())
                 .with_recorder(recorder)
                 .with_origin(houyicoder_context::MemoryOrigin::Extractor),
         ));
-        self.memory = Some(provider);
+        self.memory.install_provider(provider);
         self
     }
 
     /// Read access to the tool registry. The composition root + tests use it
-    /// to assert a tool is registered (e.g. save_memory after with_memory).
+    /// to assert a tool is registered (e.g. save_memory after install_memory).
     pub fn tools(&self) -> &super::ToolRegistry {
         &self.tools
     }
 
-    /// Wire the hook registry. When set, the runner fires PreToolUse before
+    /// Install the hook registry. When set, the runner fires PreToolUse before
     /// each tool execution and PostToolUse / PostToolUseFailure after, then
     /// arbitrates the verdicts to drive flow control (Deny blocks the call,
     /// Feedback surfaces a self-correction signal to the model, Observe is
@@ -140,12 +121,12 @@ impl Runner {
     /// default) means no hooks fire at runtime. Consumes and returns self
     /// for chaining at the composition root, where settings-loaded hooks
     /// register before the runner is shared.
-    pub fn with_hooks(mut self, hooks: Arc<crate::agent::hook::registry::HookRegistry>) -> Self {
+    pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
         self.hooks = Some(hooks);
         self
     }
 
-    /// Wire the skill-hook registrar shared by the Skill tool and the @skill: activation
+    /// Install the skill-hook registrar shared by skill activation paths.
     /// dispatch. The registrar holds a live workspace-trust ref the server
     /// writes after the startup trust prompt resolves; both invocation paths
     /// call its register method after a skill body prepares. Unwired in tests
@@ -156,12 +137,9 @@ impl Runner {
         self
     }
 
-    /// Wire the paths-gated skill activator shared by the file-touch tools
+    /// Install the path-gated skill activator used by file tools
     /// and the listing. None when off; the listing then shows every skill.
-    pub fn with_conditional(
-        mut self,
-        conditional: Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>,
-    ) -> Self {
+    pub fn with_conditional(mut self, conditional: Arc<dyn ConditionalSkillActivator>) -> Self {
         self.conditional = Some(conditional);
         self
     }
@@ -172,17 +150,14 @@ impl Runner {
     /// Set the hot-reload driver lifetime guard after construction (the
     /// builder chain ends before the reloader can be built, so the
     /// composition root sets it here). None when no driver was constructed.
-    pub fn set_skill_reloader(
-        &mut self,
-        reloader: Option<Arc<dyn crate::agent::skill_reload::SkillReloadGuard>>,
-    ) {
+    pub fn set_skill_reloader(&mut self, reloader: Option<Arc<dyn SkillReloadGuard>>) {
         self.skill_reloader = reloader;
     }
 
     /// Write the resolved workspace trust through the registrar. The server
     /// calls this once after the startup trust prompt so a Project or Local
     /// skill hook invoked later reads the resolved value, not the
-    /// fail-closed default. No-op when no registrar is wired.
+    /// fail-closed default. No-op without a registrar.
     pub fn set_trust(&self, state: houyicoder_api::trust::TrustState) {
         if let Some(r) = self.registrar.as_ref() {
             r.set_trust(state);
@@ -220,7 +195,7 @@ impl Runner {
         Arc::clone(&self.recall_meter)
     }
 
-    /// Wire a workspace probe for the re-derivable compaction backbone's
+    /// Install a workspace probe for the re-derivable compaction backbone's
     /// derivation watermark. The composition root passes a GitWorkspaceProbe
     /// sharing the cwd handle so worktree switches propagate. Called pre-Arc,
     /// before sharing the runner. None (the default) means the backbone runs the
@@ -229,7 +204,7 @@ impl Runner {
         self.workspace_probe = Some(probe);
     }
 
-    /// Wire a tool-output reducer. the isolate stage reduces a large tool
+    /// Install a tool-output reducer. The isolate stage reduces a large tool
     /// result (strip ansi, head/tail, truncate) before serving it so the
     /// served preview is compact; the raw stays in the CAS. None (the
     /// default) ⇒ no reduction (the raw preview is served). The composition
@@ -251,7 +226,7 @@ impl Runner {
         self
     }
 
-    /// Wire the skill registry the turn-entry step reads to build the
+    /// Install the skill registry used to build the
     /// skill-discovery listing attachment. The registry is discovered at
     /// startup; the same Arc is shared with the Skill tool (registered
     /// separately at the composition root) so invocation + listing see one
@@ -261,45 +236,6 @@ impl Runner {
         registry: Arc<dyn houyicoder_api::skill::SkillRegistry>,
     ) -> Self {
         self.skill_registry = Some(registry);
-        self
-    }
-
-    /// Wire the memory extractor that fires at query-loop end to
-    /// background-extract memories from the conversation. Fire-and-forget:
-    /// the spawned fork runs on a tokio task so the main loop is never
-    /// blocked. Only the main runner wires this; the forked extraction
-    /// runner leaves it None so it never recursively self-triggers.
-    pub fn with_extractor(
-        mut self,
-        extractor: Arc<crate::agent::extractor::MemoryExtractor>,
-    ) -> Self {
-        self.extractor = Some(extractor);
-        self
-    }
-
-    /// Wire the consolidation dream that fires at query-loop end to
-    /// background-consolidate the memory store (merge near-duplicates,
-    /// resolve contradictions, convert relative dates, prune stale
-    /// entries, regenerate the index). Fire-and-forget: the spawned fork
-    /// runs on a tokio task so the main loop is never blocked. Only the
-    /// main runner wires this; the forked runners leave it None so it never
-    /// recursively self-triggers.
-    pub fn with_dream(mut self, dream: Arc<crate::agent::auto_dream::DreamRunner>) -> Self {
-        self.dream = Some(dream);
-        self
-    }
-
-    /// Install runtime-flippable memory toggles. The composition root creates
-    /// the Arc handles, passes clones here so the drive loop gates on them,
-    /// and keeps clones for the host so a toggle command can flip them
-    /// mid-session (the change lands on the next gate check, no restart).
-    pub fn with_toggles(
-        mut self,
-        auto_memory: Arc<std::sync::atomic::AtomicBool>,
-        auto_dream: Arc<std::sync::atomic::AtomicBool>,
-    ) -> Self {
-        self.auto_memory = auto_memory;
-        self.auto_dream = auto_dream;
         self
     }
 
@@ -324,50 +260,13 @@ impl Runner {
         self.provider.refresh_served_models()
     }
 
-    /// Fire the background memory subsystems at query-loop end (FinalOutput):
-    /// the extractor (conversation to memory) and the dream (consolidation).
-    /// Both fire-and-forget off the hot path; a failure logs + never fails
-    /// the run. Only the main runner wires these (None on forked runners), so
-    /// neither recursively self-triggers.
-    pub(crate) async fn fire_background_at_finaloutput(&self, session: SessionId) {
-        use std::sync::atomic::Ordering;
-        if std::env::var("HOUYICODER_REWARD_OFF").is_ok() {
-            return;
-        }
-        // auto_memory gates the extractor (the cheaper, deterministic half).
-        // The dream is gated separately by auto_dream so a user who wants
-        // extraction but not the consolidation LLM can keep the former.
-        if self.auto_memory.load(Ordering::Relaxed)
-            && let Some(ext) = self.extractor.as_ref()
-        {
-            match self.store.replay(session).await {
-                Ok(msgs) => ext.extract_memories(msgs),
-                Err(e) => tracing::warn!("memory extract replay failed: {e}"),
-            }
-        }
-        if self.auto_dream.load(Ordering::Relaxed)
-            && let Some(dream) = self.dream.as_ref()
-        {
-            // Reward snapshot: lock OL + redundancy briefly, clone out, drop
-            // both before the fire-and-forget spawn. The snapshot is owned
-            // and moved into the dream task; DreamRunner never holds OL.
-            let reward = crate::agent::reward_snapshot::capture_reward_snapshot(
-                &self.observability,
-                &self.redundancy,
-            );
-            dream.execute_dream(Some(reward), Some(&session.to_string()));
-        }
-    }
-
     /// Await in-flight dream tasks (reward-dream or consolidation) until
     /// they finish or the timeout expires. Tests use this instead of
     /// polling dream_count on a sleep loop — the JoinHandle await is
     /// event-driven (the scheduler wakes on task completion), and the
     /// deadline is a safety bound, not a poll interval.
     pub async fn join_dreams(&self, timeout: std::time::Duration) {
-        if let Some(dream) = self.dream.as_ref() {
-            dream.drain_pending(timeout).await;
-        }
+        self.memory.join_background(timeout).await;
     }
 
     /// Auto compaction (fired by the pre-flight and overflow handlers): fold
@@ -389,30 +288,15 @@ impl Runner {
 
     /// Before-clear preservation: scan the whole session for unsolved-problem
     /// and key-decision signals, write them to the auto scope so key facts
-    /// survive /clear. Matches before-compact preservation but scans every
-    /// event (clear drops everything, not just a folded span). Best-effort:
-    /// a write failure logs and continues; memory never blocks the clear
-    /// path. No-op when no memory provider is wired.
-    pub async fn before_clear(&self, session: SessionId) -> Result<(), super::RunError> {
-        let Some(memory) = &self.memory else {
-            return Ok(());
-        };
-        let events = self.store.replay(session).await?;
-        let existing: std::collections::HashSet<String> =
-            memory.list_memories().into_iter().map(|s| s.key).collect();
-        for entry in super::memory_preservation::preserve_session(&events) {
-            if existing.contains(&entry.key) {
-                continue;
-            }
-            if let Err(e) = memory.add(entry) {
-                tracing::warn!("before-clear preservation write failed: {e}");
-            }
-        }
-        Ok(())
+    /// survive /clear. Best-effort: a write failure logs and continues;
+    /// memory never blocks the clear path. No-op when no memory provider
+    /// is available.
+    pub async fn before_clear(&self, session: SessionId) -> Result<(), RunError> {
+        self.memory.preserve_before_clear(session).await
     }
 
     /// Override the default heuristic summarizer with an LLM-backed one. The
-    /// composition root calls this at construction to wire production summaries.
+    /// composition root installs the production implementation.
     pub fn with_summarizer(mut self, summarizer: Box<dyn super::manifest::Summarizer>) -> Self {
         self.summarizer = summarizer;
         self
@@ -428,27 +312,10 @@ impl Runner {
     }
 
     /// Format the memory index for the system prompt prefix. Returns None
-    /// when no provider is wired. Capped at 200 entries.
+    /// without a provider or the store is empty. Capped at 200
+    /// entries.
     pub fn format_memory_index(&self) -> Option<String> {
-        let memory = self.memory.as_ref()?;
-        let summaries = memory.list_memories();
-        if summaries.is_empty() {
-            return None;
-        }
-        let lines: String = summaries
-            .iter()
-            .take(200)
-            .map(|s| {
-                format!(
-                    "- {} [{}/{}]: {}\n",
-                    s.key,
-                    s.source.as_label(),
-                    s.origin.as_label(),
-                    s.description
-                )
-            })
-            .collect();
-        Some(lines)
+        self.memory.format_index()
     }
 
     /// Token count of the compact summary text (the replacement for folded
@@ -734,6 +601,8 @@ mod compact_summary_tests {
 
     #[test]
     fn test_memory_index_formats_entries() {
+        use crate::agent::MemoryRuntime;
+        use houyicoder_api::memory::MemoryProvider;
         use houyicoder_context::{MemoryEntry, MemorySource};
         use houyicoder_memory::MarkdownMemoryProvider;
         let root =
@@ -749,15 +618,17 @@ mod compact_summary_tests {
             ))
             .unwrap();
         let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        let mut runtime = MemoryRuntime::new(store.clone());
+        runtime.install_provider(memory);
         let runner = Runner::with_shared_store(
             store,
             Arc::new(crate::provider::test_support::FakeProvider::new(vec![])),
             crate::agent::ToolRegistry::new(),
             crate::agent::runner_config::RunnerConfig::default(),
         )
-        .with_memory(memory);
+        .install_memory(runtime);
         let idx = runner.format_memory_index();
-        assert!(idx.is_some(), "index returned with provider wired");
+        assert!(idx.is_some(), "configured provider produces an index");
         let s = idx.unwrap();
         assert!(s.contains("proj-pref"), "key in index: {s}");
         assert!(s.contains("project"), "source label: {s}");

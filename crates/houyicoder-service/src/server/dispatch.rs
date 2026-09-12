@@ -1,8 +1,7 @@
-//! Request dispatch — routing one frontend request to its handler. Split
-//! from server.rs as a child module so that file stays under the size gate;
-//! same pattern as io / session / delta.
+//! Routes frontend requests to server operations.
 
 use houyicoder_protocol::envelope::{RequestEnvelope, ResponsePayload};
+use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
 use super::{Server, io::ServerIo};
@@ -24,7 +23,7 @@ impl Server {
     ) -> Result<(), WireError> {
         let req_id = req.req_id;
         match req.payload {
-            houyicoder_protocol::frontend::FrontendRequest::MessageSend {
+            FrontendRequest::MessageSend {
                 session_id,
                 content,
                 disabled_skills,
@@ -49,7 +48,7 @@ impl Server {
                 }
                 self.handle_message_send(io, req_id, content).await
             }
-            houyicoder_protocol::frontend::FrontendRequest::RunCancel {
+            FrontendRequest::RunCancel {
                 session_id,
                 reason: _,
             } => {
@@ -76,12 +75,12 @@ impl Server {
                 self.runner.abort();
                 self.send_response(io, req_id, ResponsePayload::Ack).await
             }
-            houyicoder_protocol::frontend::FrontendRequest::Status => {
+            FrontendRequest::Status => {
                 let wire = self.status_snapshot_wire();
                 self.send_response(io, req_id, ResponsePayload::Status(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::RenameSession { session_id, name } => {
+            FrontendRequest::RenameSession { session_id, name } => {
                 if !self.session_matches(&session_id) {
                     return self
                         .send_response(
@@ -153,7 +152,7 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::Status(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::ToolList => {
+            FrontendRequest::ToolList => {
                 let wire =
                     self.runner
                         .tools_snapshot()
@@ -165,7 +164,7 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::Tools(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::Agents => {
+            FrontendRequest::Agents => {
                 // The directory doubles as the model's prompt paragraph
                 // (byte-stable for the prompt cache); the panel renders it
                 // verbatim.
@@ -173,7 +172,7 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::Agents(dir))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::ChildTranscript { child_sid } => {
+            FrontendRequest::ChildTranscript { child_sid } => {
                 let frames = self.child_transcript_frames(&child_sid).await;
                 self.send_response(
                     io,
@@ -182,19 +181,19 @@ impl Server {
                 )
                 .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::Hooks => {
+            FrontendRequest::Hooks => {
                 let mut wire = hooks_to_wire(self.runner.hooks_list());
                 wire.extend(hook_events_to_wire());
                 wire.sort_by(|a, b| a.name.cmp(&b.name));
                 self.send_response(io, req_id, ResponsePayload::Hooks(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::Skills => {
+            FrontendRequest::Skills => {
                 let wire = skills_to_wire(self.runner.skills_snapshot());
                 self.send_response(io, req_id, ResponsePayload::Skills(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::Undo => {
+            FrontendRequest::Undo => {
                 let desc = match self.runner.undo_last() {
                     houyicoder_core::snapshot::UndoOutcome::Restored(entry) => {
                         Some(entry.description())
@@ -207,10 +206,8 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::UndoResult(desc))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::ModelInfo => {
-                self.handle_model_info(io, req_id).await
-            }
-            houyicoder_protocol::frontend::FrontendRequest::ModelSet {
+            FrontendRequest::ModelInfo => self.handle_model_info(io, req_id).await,
+            FrontendRequest::ModelSet {
                 model,
                 effort,
                 effort_toggled,
@@ -244,7 +241,7 @@ impl Server {
                 )
                 .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::Trajectory => {
+            FrontendRequest::Trajectory => {
                 let events = self.runner.store().trajectory_snapshot(self.session);
                 let entries = pa::build_trajectory_entries(&events);
                 let redundant =
@@ -261,7 +258,7 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::Trajectory(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::Context => {
+            FrontendRequest::Context => {
                 let snap = self.runner.status_snapshot();
                 // When no turn has run yet (last_measurement() is None),
                 // build a prospective measurement so /context is never empty
@@ -312,7 +309,7 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::Context(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::Compact => {
+            FrontendRequest::Compact => {
                 // Manual /compact: fire PreCompact hooks, fold older events
                 // into a summary, persist a CheckpointManifest, fire
                 // PostCompact, then reply with the outcome. The runner fires
@@ -343,17 +340,17 @@ impl Server {
                     }
                 }
             }
-            houyicoder_protocol::frontend::FrontendRequest::MemoryList => {
+            FrontendRequest::MemoryList => {
                 let wire = pa::memory_view::map_memory_list(self.runner.memory_list());
                 self.send_response(io, req_id, ResponsePayload::MemoryList(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::MemoryShow { key } => {
+            FrontendRequest::MemoryShow { key } => {
                 let wire = pa::memory_view::map_memory_entry(self.runner.memory_show(&key));
                 self.send_response(io, req_id, ResponsePayload::MemoryShow(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::MemoryForget { key, scope } => {
+            FrontendRequest::MemoryForget { key, scope } => {
                 // NotFound is benign (the row is already gone); re-list. A
                 // real failure (Io, bad path, corrupt, atomicity) must
                 // surface to the user — otherwise the pane re-lists with the
@@ -379,24 +376,25 @@ impl Server {
                     }
                 }
             }
-            houyicoder_protocol::frontend::FrontendRequest::MemoryToggleState => {
-                let (auto_memory, auto_dream) = self.runner.toggles_state();
-                let wire = pa::memory_view::map_toggle_state(auto_memory, auto_dream);
+            FrontendRequest::MemoryToggleState => {
+                let state = self.runner.memory_gate_state();
+                let wire = pa::memory_view::map_toggle_state(state.auto_memory, state.auto_dream);
                 self.send_response(io, req_id, ResponsePayload::ToggleState(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::MemoryToggle { which } => {
+            FrontendRequest::MemoryToggle { which } => {
                 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+                let current = self.runner.memory_gate_state();
                 let (auto_memory, auto_dream) = match which {
                     MemoryToggleWhich::Auto => {
-                        let am = self.runner.flip_auto_memory();
-                        let ad = self.runner.toggles_state().1;
-                        (am, ad)
+                        let am = !current.auto_memory;
+                        self.runner.set_auto_memory(am);
+                        (am, current.auto_dream)
                     }
                     MemoryToggleWhich::Dream => {
-                        let ad = self.runner.flip_auto_dream();
-                        let am = self.runner.toggles_state().0;
-                        (am, ad)
+                        let ad = !current.auto_dream;
+                        self.runner.set_auto_dream(ad);
+                        (current.auto_memory, ad)
                     }
                 };
                 // Persist the new pair so the choice survives a restart. The
@@ -413,12 +411,12 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::ToggleState(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::PermissionMode => {
+            FrontendRequest::PermissionMode => {
                 let wire = pa::permission_mode_to_wire(self.gate.current());
                 self.send_response(io, req_id, ResponsePayload::PermissionMode(wire))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::PermissionRules => {
+            FrontendRequest::PermissionRules => {
                 self.send_response(
                     io,
                     req_id,
@@ -426,7 +424,7 @@ impl Server {
                 )
                 .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::PermissionCycleMode => {
+            FrontendRequest::PermissionCycleMode => {
                 let resp = match self.gate.tab_cycle() {
                     Ok(mode) => ResponsePayload::PermissionMode(pa::permission_mode_to_wire(mode)),
                     Err(e) => ResponsePayload::Error(WireError::new(
@@ -437,7 +435,7 @@ impl Server {
                 };
                 self.send_response(io, req_id, resp).await
             }
-            houyicoder_protocol::frontend::FrontendRequest::PermissionAddRule { rule } => {
+            FrontendRequest::PermissionAddRule { rule } => {
                 let resp = match pa::permission_rule_from_wire(&rule) {
                     Ok(r) => {
                         self.gate.add_rule(r);
@@ -451,7 +449,7 @@ impl Server {
                 };
                 self.send_response(io, req_id, resp).await
             }
-            houyicoder_protocol::frontend::FrontendRequest::PermissionRemoveRule { index } => {
+            FrontendRequest::PermissionRemoveRule { index } => {
                 // Respond with the updated rule set (mirrors AddRule) so the
                 // frontend's rules_cache stays in sync after a delete.
                 let resp = if self.gate.remove_rule(index) {
@@ -465,7 +463,7 @@ impl Server {
                 };
                 self.send_response(io, req_id, resp).await
             }
-            houyicoder_protocol::frontend::FrontendRequest::PermissionAddWorkingDir { path } => {
+            FrontendRequest::PermissionAddWorkingDir { path } => {
                 // Extend the kernel fence (the seatbelt allow-back) so the
                 // agent's next exec can touch the directory. The session
                 // canonicalizes + validates it is a directory; a bad path
@@ -488,7 +486,7 @@ impl Server {
                 };
                 self.send_response(io, req_id, resp).await
             }
-            houyicoder_protocol::frontend::FrontendRequest::PermissionRemoveWorkingDir { path } => {
+            FrontendRequest::PermissionRemoveWorkingDir { path } => {
                 // No-op when the path was never added; respond with the
                 // updated list either way (mirrors AddWorkingDir).
                 if let Some(s) = &self.sandbox_session {
@@ -501,17 +499,17 @@ impl Server {
                 )
                 .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::PermissionAskBeforeGit { enabled } => {
+            FrontendRequest::PermissionAskBeforeGit { enabled } => {
                 // None queries; Some sets. Always reply with the resulting
                 // state so the /permission view stays in sync.
                 self.send_response(io, req_id, self.ask_before_git_response(enabled))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::DebugSet { level } => {
+            FrontendRequest::DebugSet { level } => {
                 self.send_response(io, req_id, self.debug_response(level))
                     .await
             }
-            houyicoder_protocol::frontend::FrontendRequest::SessionReset { session_id } => {
+            FrontendRequest::SessionReset { session_id } => {
                 if session_id.0 != self.session.to_string() {
                     return self
                         .send_response(
@@ -550,7 +548,7 @@ impl Server {
         }
     }
 
-    /// True when the wire session id names this server's session. The wire id
+    /// True when the protocol session id names this server's session. The protocol id
     /// is a display string; the engine session is ULID-backed, so the match is
     /// on the display form.
     pub(super) fn session_matches(
@@ -560,7 +558,7 @@ impl Server {
         wire_id.0 == self.session.to_string()
     }
 
-    /// Project the gate's durable rule set to the wire form for /rules
+    /// Project the gate's durable rule set to the protocol form for /rules
     /// replies + the add/remove acks that ship the updated set.
     fn rule_set_wire(&self) -> Vec<houyicoder_protocol::frontend::permission::PermissionRule> {
         // The /permissions management view lists durable (writable-scope)
@@ -585,7 +583,7 @@ impl Server {
             .unwrap_or_default()
     }
 
-    /// Build the current wire status, deriving an unnamed session's display
+    /// Build the current protocol status, deriving an unnamed session's display
     /// name from the first prompt when its descriptor is available.
     fn status_snapshot_wire(&self) -> houyicoder_protocol::frontend::status::StatusSnapshot {
         let snap = self.runner.status_snapshot();
@@ -620,7 +618,7 @@ impl Server {
     }
 }
 
-/// Convert core HookEntry list to wire HookEntry list (the /hooks server
+/// Convert core HookEntry list to protocol HookEntry list (the /hooks server
 /// response). Pure so it is unit-testable without a Server or Runner. A
 /// registered hook is fired iff any of its events has a live dispatch point.
 pub(crate) fn hooks_to_wire(
@@ -639,7 +637,7 @@ pub(crate) fn hooks_to_wire(
         .collect()
 }
 
-/// Convert the api SkillSnapshot list to the wire SkillEntry list for the
+/// Convert the api SkillSnapshot list to the protocol SkillEntry list for the
 /// /skills pane. The origin field carries the discovery source so the pane
 /// groups entries by where the skill was loaded from; invocable carries the
 /// model-invocation gate (false when disable-model-invocation hides the
@@ -665,7 +663,7 @@ pub(crate) fn skills_to_wire(
         .collect()
 }
 
-/// The framework's declared hook-event surface, each as a wire entry (name +
+/// The framework's declared hook-event surface, each as a protocol entry (name +
 /// live-fire marker). Source is "framework"; fired marks the three events with
 /// a live dispatch point. Lets /hooks show what the hook system can do even
 /// when no external hooks are configured.
@@ -749,8 +747,8 @@ fn slugify(text: &str) -> String {
 mod rename_session_tests;
 
 #[cfg(test)]
-#[path = "memory_forget_dispatch_tests.rs"]
-mod memory_forget_dispatch_tests;
+#[path = "memory_tests.rs"]
+mod memory_tests;
 
 #[cfg(test)]
 #[path = "context_dispatch_tests.rs"]

@@ -218,7 +218,7 @@ impl crate::agent::Runner {
     /// section. Sorted by input+output descending so the heaviest model
     /// leads. Returns an empty vec when the observability log is empty or the
     /// lock is poisoned; the render path then degrades to the flat cumulative
-    /// tally. The server trims this to the wire view (no USD, no capability
+    /// tally. The server trims this to the protocol view (no USD, no capability
     /// fields) before sending.
     pub fn by_model_usage(&self) -> Vec<(String, crate::observability::ModelUsage)> {
         let Ok(ol) = self.observability.lock() else {
@@ -286,15 +286,15 @@ impl crate::agent::Runner {
     }
 
     /// List all registered hooks for the /hooks visibility command. Empty when
-    /// no hook registry is wired. Returns core HookEntry (name, events,
-    /// source); the server converts to the wire DTO.
+    /// no hook registry is configured. Returns core HookEntry (name, events,
+    /// source); the server converts to the protocol DTO.
     pub fn hooks_list(&self) -> Vec<crate::agent::hook::registry::HookEntry> {
         self.hooks.as_ref().map(|r| r.list()).unwrap_or_default()
     }
 
     /// List model-invocable skills paired with their discovery origin, for
-    /// the /skills visibility command. The server converts to the wire DTO.
-    /// Empty when no skill registry is wired.
+    /// the /skills visibility command. The server converts to the protocol DTO.
+    /// Empty when no skill registry is configured.
     pub fn skills_snapshot(&self) -> Vec<houyicoder_api::skill::SkillSnapshot> {
         self.skill_registry
             .as_ref()
@@ -314,74 +314,53 @@ impl crate::agent::Runner {
     }
 
     /// List every stored memory as a frontmatter-only summary (no body), for
-    /// the /memory command. Empty when no memory provider is wired.
+    /// the /memory command. Empty when no memory provider is configured.
     pub fn memory_list(&self) -> Vec<houyicoder_context::MemorySummary> {
-        self.memory
-            .as_ref()
-            .map(|m| m.list_memories())
-            .unwrap_or_default()
+        self.memory.list()
     }
 
     /// Fetch the full body of one memory by key, for /memory <key>. None when
-    /// no provider is wired or the key is absent.
+    /// no provider is configured or the key is absent.
     pub fn memory_show(&self, key: &str) -> Option<houyicoder_context::MemoryEntry> {
-        self.memory.as_ref().and_then(|m| m.show_memory(key))
+        self.memory.show(key)
     }
 
     /// Forget one memory by key + scope (the /memory pane d action + /memory
     /// forget command). The scope label (user / project / auto) routes the
     /// delete to the matching storage root so forgetting a user/project row
     /// deletes the explicit file, not just the auto-scope copy. Returns Err
-    /// when no provider is wired or the delete fails (absent key, bad path).
+    /// when no provider is configured or the delete fails (absent key, bad path).
     /// The caller re-lists to refresh the pane.
     pub fn memory_forget(
         &self,
         key: &str,
         scope: &str,
     ) -> Result<(), houyicoder_context::MemoryError> {
-        let Some(memory) = &self.memory else {
-            return Ok(());
-        };
-        // Map the wire label to a scope; an unknown label (a client bug)
-        // falls back to Auto, the single-root behavior, so a bad label never
-        // panics the dispatch path.
-        let scope = houyicoder_context::MemoryScope::from_label(scope)
-            .unwrap_or(houyicoder_context::MemoryScope::Auto);
-        memory.delete_memory_in_scope(key, scope)
+        self.memory.forget(key, scope)
     }
 
-    /// Read both memory toggles (auto-memory, auto-dream) for the /memory pane.
-    /// The switches are runtime-flippable atomics shared with the drive loop, so
-    /// a flip lands on the next gate check with no restart. Pure read; the
-    /// caller owns persistence (the layering keeps the config crate out of
-    /// core, so the persist call lives in the service boundary).
-    pub fn toggles_state(&self) -> (bool, bool) {
-        use std::sync::atomic::Ordering;
-        (
-            self.auto_memory.load(Ordering::Relaxed),
-            self.auto_dream.load(Ordering::Relaxed),
-        )
+    /// Read the memory gate state (auto-memory, auto-dream) for the /memory
+    /// pane. The switches are runtime-flippable atomics shared with the
+    /// drive loop, so a change lands on the next gate check with no restart.
+    /// Pure read; the caller owns persistence (the layering keeps the config
+    /// crate out of core, so the persist call lives in the service boundary).
+    pub fn memory_gate_state(&self) -> super::memory::MemoryGateState {
+        self.memory.gate_state()
     }
 
-    /// Flip the auto-memory switch and return the new value. The drive loop
-    /// gates turn-entry recall + the background extractor on this same atomic,
-    /// so the flip takes effect on the next gate check. Does not persist; the
-    /// caller writes the resulting pair to the settings file.
-    pub fn flip_auto_memory(&self) -> bool {
-        use std::sync::atomic::Ordering;
-        let next = !self.auto_memory.load(Ordering::Relaxed);
-        self.auto_memory.store(next, Ordering::Relaxed);
-        next
+    /// Set the auto-memory switch. The drive loop gates turn-entry recall
+    /// and the background extractor on this same atomic, so the change takes
+    /// effect on the next gate check. Does not persist; the caller writes
+    /// the resulting state to the settings file.
+    pub fn set_auto_memory(&self, enabled: bool) {
+        self.memory.set_auto_memory(enabled);
     }
 
-    /// Flip the auto-dream switch and return the new value. The drive loop
-    /// gates the background consolidation dream on this same atomic, so the
-    /// flip takes effect on the next gate check. Does not persist.
-    pub fn flip_auto_dream(&self) -> bool {
-        use std::sync::atomic::Ordering;
-        let next = !self.auto_dream.load(Ordering::Relaxed);
-        self.auto_dream.store(next, Ordering::Relaxed);
-        next
+    /// Set the auto-dream switch. The drive loop gates the background
+    /// consolidation dream on this same atomic, so the change takes effect
+    /// on the next gate check. Does not persist.
+    pub fn set_auto_dream(&self, enabled: bool) {
+        self.memory.set_auto_dream(enabled);
     }
 
     /// The measurement of the most recent turn. None before the first turn;
@@ -398,7 +377,7 @@ impl crate::agent::Runner {
         self.context_builder.build(&[]).measurement
     }
 
-    /// Wire the undo stack + snapshot store for recoverable destructive ops.
+    /// Install recovery state for destructive operations.
     /// The composition root calls this after constructing the runner, passing
     /// the same Arc handles it gave the BashTool so push (BashTool) and pop
     /// (undo_last) share one stack.

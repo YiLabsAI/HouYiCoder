@@ -23,7 +23,7 @@ use houyicoder_session::SessionStore;
 use std::collections::HashSet;
 
 use houyicoder_core::agent::runner_config::RunnerConfig;
-use houyicoder_core::agent::{RunOutcome, Runner, ToolRegistry};
+use houyicoder_core::agent::{MemoryGates, MemoryRuntime, RunOutcome, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 
 /// A memory provider that returns scripted entries on recall (skipping any
@@ -165,8 +165,17 @@ async fn test_instructions_override_keeps_memory() {
     ));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let provider = Arc::new(FinalResponseProvider { seen: seen.clone() });
+    let store: Arc<dyn houyicoder_api::session::SessionLog> =
+        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runtime = MemoryRuntime::from_parts(
+        store.clone(),
+        Some(memory.clone()),
+        MemoryGates::new(true, true),
+        None,
+        None,
+    );
     let runner = Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        store,
         provider,
         ToolRegistry::new(),
         RunnerConfig {
@@ -174,7 +183,7 @@ async fn test_instructions_override_keeps_memory() {
             ..RunnerConfig::default()
         },
     )
-    .with_memory(memory.clone());
+    .install_memory(runtime);
 
     let session = SessionId::new();
     let result = runner
@@ -207,13 +216,22 @@ async fn test_instructions_override_keeps_memory() {
 }
 
 fn runner_with_memory(provider: Arc<dyn ModelProvider>, memory: Arc<dyn MemoryProvider>) -> Runner {
+    let store: Arc<dyn houyicoder_api::session::SessionLog> =
+        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runtime = MemoryRuntime::from_parts(
+        store.clone(),
+        Some(memory),
+        MemoryGates::new(true, true),
+        None,
+        None,
+    );
     Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        store,
         provider,
         ToolRegistry::new(),
         RunnerConfig::default(),
     )
-    .with_memory(memory)
+    .install_memory(runtime)
 }
 
 /// The recalled memory entry appears in the user-message text the model

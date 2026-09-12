@@ -22,7 +22,6 @@ use houyicoder_context::{
 use super::backbone::{derive_backbone, merge_summary};
 use super::hook::{CompactTrigger, HookContext, HookEvent, HookPayload, HookVerdict, arbitrate};
 use super::manifest::{CompressPolicy, build_manifest, estimate_transcript_tokens};
-use super::memory_preservation::preserve_folded_context;
 use super::selection;
 use super::{RunError, Runner};
 
@@ -262,17 +261,7 @@ impl Runner {
     }
 
     fn preserve_compacted_memory(&self, events: &[SessionLogEntry], manifest: &CheckpointManifest) {
-        let Some(memory) = &self.memory else {
-            return;
-        };
-        let existing: HashSet<String> = memory.list_memories().into_iter().map(|s| s.key).collect();
-        for entry in preserve_folded_context(events, manifest) {
-            if !existing.contains(&entry.key)
-                && let Err(error) = memory.add(entry)
-            {
-                tracing::warn!("before-compact preservation write failed: {error}");
-            }
-        }
+        self.memory.preserve_folded(events, manifest);
     }
 
     /// Fire PreCompact hooks and return the merged custom instructions (the

@@ -27,7 +27,7 @@ use houyicoder_context::MemoryError;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
-use crate::agent::memory_change_recorder::MemoryChangeRecorder;
+use crate::agent::memory::MutationLog;
 use houyicoder_api::agent_event::MemoryOperation;
 
 /// A structured scope-promote tool. The forked consolidation dream calls it
@@ -41,7 +41,7 @@ pub struct PromoteMemoryTool {
     /// scope-flow ops landed this pass. Shared with the add + delete tools
     /// so one notice fires per pass that touches the store. None for the
     /// main runner's tool, which does not notify.
-    recorder: Option<Arc<MemoryChangeRecorder>>,
+    recorder: Option<Arc<MutationLog>>,
 }
 
 impl PromoteMemoryTool {
@@ -56,7 +56,7 @@ impl PromoteMemoryTool {
     /// Thread a write recorder so a successful promote bumps it. The dream
     /// shares one recorder across the add + delete + promote + demote tools so
     /// any touch counts toward the notice.
-    pub(crate) fn with_recorder(mut self, recorder: Arc<MemoryChangeRecorder>) -> Self {
+    pub(crate) fn with_recorder(mut self, recorder: Arc<MutationLog>) -> Self {
         self.recorder = Some(recorder);
         self
     }
@@ -131,7 +131,7 @@ impl Tool for PromoteMemoryTool {
 /// topic is recall-on-demand only. The reverse of promote_memory.
 pub struct DemoteMemoryTool {
     provider: Arc<dyn MemoryProvider>,
-    recorder: Option<Arc<MemoryChangeRecorder>>,
+    recorder: Option<Arc<MutationLog>>,
 }
 
 impl DemoteMemoryTool {
@@ -141,7 +141,7 @@ impl DemoteMemoryTool {
             recorder: None,
         }
     }
-    pub(crate) fn with_recorder(mut self, recorder: Arc<MemoryChangeRecorder>) -> Self {
+    pub(crate) fn with_recorder(mut self, recorder: Arc<MutationLog>) -> Self {
         self.recorder = Some(recorder);
         self
     }
@@ -280,7 +280,7 @@ mod tests {
     #[tokio::test]
     async fn test_promote_demote_share_recorder() {
         let p = provider();
-        let recorder = Arc::new(MemoryChangeRecorder::new());
+        let recorder = Arc::new(MutationLog::new());
         let promote = PromoteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
             .with_recorder(recorder.clone());
         let demote = DemoteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)

@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent::auto_dream::DreamRunner;
+use crate::agent::memory::{MemoryGates, MemoryRuntime};
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::{MemoryEntry, MemoryError, SessionId};
 use std::collections::HashSet;
@@ -31,9 +32,6 @@ fn runner_with_empty_dream() -> Runner {
         Arc::new(crate::provider::test_support::FakeProvider::text("x"));
     let memory: Arc<dyn MemoryProvider> = Arc::new(EmptyMemory);
     let ephemeral: Arc<dyn houyicoder_api::session::SessionLog> = store.clone();
-    // The dream's cwd is only reached when execute_dream gets past the
-    // empty-memory gate; keep it per-call anyway so the day that gate
-    // moves, two tests running in parallel do not share one directory.
     let dream = Arc::new(DreamRunner::new(
         ephemeral,
         Arc::clone(&provider),
@@ -41,13 +39,20 @@ fn runner_with_empty_dream() -> Runner {
         unique_dream_cwd(),
         crate::agent::runner_config::RunnerConfig::default(),
     ));
+    let runtime = MemoryRuntime::from_parts(
+        store.clone(),
+        None,
+        MemoryGates::new(true, true),
+        None,
+        Some(dream),
+    );
     Runner::with_shared_store(
         store,
         provider,
         crate::agent::ToolRegistry::new(),
         crate::agent::runner_config::RunnerConfig::default(),
     )
-    .with_dream(dream)
+    .install_memory(runtime)
 }
 
 fn unique_dream_cwd() -> std::path::PathBuf {
@@ -59,15 +64,17 @@ fn unique_dream_cwd() -> std::path::PathBuf {
 
 #[tokio::test]
 async fn test_reward_feeds_into_dream() {
-    // The dream's memory root is empty (InMemoryBackend), so
-    // execute_dream returns early — but the reward projection + the
-    // execute_dream(Some) call run (the diff-cov lines under fire).
     let runner = runner_with_empty_dream();
     let session = SessionId::new();
-    runner.fire_background_at_finaloutput(session).await;
-    // No panic = the projection ran + the dream was called with
-    // Some(reward). The gate inside execute_dream returns early on the
-    // empty memory root, so no forked agent spawns.
+    runner
+        .memory
+        .fire_background(session, || {
+            crate::agent::reward_snapshot::capture_reward_snapshot(
+                &runner.observability,
+                &runner.redundancy,
+            )
+        })
+        .await;
 }
 
 #[tokio::test]
@@ -91,6 +98,10 @@ async fn test_join_dreams_no_inflight() {
     );
     runner_no_dream
         .join_dreams(std::time::Duration::from_secs(1))
+        .await;
+    runner_no_dream
+        .memory
+        .fire_background(SessionId::new(), || panic!("reward must stay lazy"))
         .await;
 }
 

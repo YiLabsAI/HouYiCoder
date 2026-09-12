@@ -1,6 +1,4 @@
-//! Public re-exports of the agent module API surface, split from mod.rs so
-//! the module root stays under the file-size gate. The agent module path
-//! still resolves these via mod.rs re-exporting exports.
+//! Declares the public agent API surface.
 
 pub use super::backbone::{
     BackboneDerivation, CompactBackbone, ConflictRate, GitWorkspaceProbe, StubWorkspaceProbe,
@@ -25,6 +23,7 @@ pub use super::hook::{
 pub use super::manifest::{
     CompressPolicy, HeuristicSummarizer, SummarizeError, Summarizer, build_manifest,
 };
+pub use super::memory::{MemoryGateState, MemoryGates, MemoryRuntime};
 pub use super::prompt::SystemPrompt;
 pub use super::prompt::extract::extraction_prompt;
 pub use super::reducer::{

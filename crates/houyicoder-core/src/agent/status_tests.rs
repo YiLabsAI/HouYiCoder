@@ -329,7 +329,7 @@ fn test_skills_snapshot_lists_registry() {
     assert_eq!(snap[1].origin, "project");
 }
 
-/// memory_forget maps the wire scope label to a MemoryScope and routes the
+/// memory_forget maps the protocol scope label to a MemoryScope and routes the
 /// delete via delete_memory_in_scope (so a /memory pane d-action on a
 /// project row hits the project root, not just the auto copy). A recording
 /// mock captures the scope arg so the label-to-enum mapping + the dispatch
@@ -362,15 +362,15 @@ fn test_memory_forget_routes_scope() {
     // Exercise the required trait methods so the mock has no dead code.
     drop(provider.recall("", 0, &HashSet::new()));
     drop(provider.add(MemoryEntry::new("k", "c", MemorySource::Project)));
-    let runner = crate::agent::Runner::with_shared_store(
+    let mut runner = crate::agent::Runner::with_shared_store(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),
         std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
         crate::agent::ToolRegistry::new(),
         crate::agent::RunnerConfig::default(),
-    )
-    .with_memory(provider);
+    );
+    runner.memory.install_provider(provider);
     runner.memory_forget("k", "project").unwrap();
     let captured = deletes.lock().unwrap().clone();
     assert_eq!(captured.len(), 1, "delete routed once");

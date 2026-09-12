@@ -1,14 +1,9 @@
-//! /memory toggle wire contract: a read + a flip round-trip through the
-//! in-memory carrier. The flip lands on the runner's runtime atomic (the next
-//! gate check sees it), persists to the injected settings path so the choice
-//! survives a restart, and the response carries the full snapshot so the pane
-//! re-renders both rows from one reply. The settings path is a temp file so the
-//! test never touches the developer's real settings.
+//! Memory command integration tests.
 
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
-use houyicoder_core::agent::{Runner, ToolRegistry};
+use houyicoder_core::agent::{MemoryGates, MemoryRuntime, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
@@ -43,9 +38,7 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     (Arc::new(runner), session)
 }
 
-/// A runner wired with a single-root markdown memory provider seeded with one
-/// topic, so a forget request actually deletes + the refreshed list reflects
-/// it. The temp root is process-unique so concurrent tests never collide.
+/// Build a runner with one stored memory.
 fn runner_with_memory(key: &str, body: &str) -> (Arc<Runner>, SessionId, std::path::PathBuf) {
     use houyicoder_context::{MemoryEntry, MemorySource};
     use houyicoder_memory::MarkdownMemoryProvider;
@@ -61,6 +54,13 @@ fn runner_with_memory(key: &str, body: &str) -> (Arc<Runner>, SessionId, std::pa
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("hello"));
+    let runtime = MemoryRuntime::from_parts(
+        store.clone(),
+        Some(memory),
+        MemoryGates::new(true, true),
+        None,
+        None,
+    );
     let runner = Runner::with_shared_store(
         store,
         provider,
@@ -72,19 +72,18 @@ fn runner_with_memory(key: &str, body: &str) -> (Arc<Runner>, SessionId, std::pa
             ..RunnerConfig::default()
         },
     )
-    .with_memory(memory);
+    .install_memory(runtime);
     (Arc::new(runner), session, root)
 }
 
-/// A process-unique temp settings path so concurrent tests never collide and
-/// the developer's real settings file is never written.
+/// Return an isolated settings path.
 fn temp_settings_path() -> std::path::PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("houyi-toggle-test-{}-{n}.json", std::process::id()))
 }
 
-/// Drain frames until the ToggleState response paired to req_id lands.
+/// Receive the requested toggle state.
 async fn recv_toggle(
     resp_id: RequestId,
     rx: &mut futures::channel::mpsc::Receiver<String>,
@@ -106,8 +105,6 @@ async fn handshake(
     let _ = recv_hello(rx).await;
 }
 
-/// The read returns both toggles on (the default), and the flip flips only the
-/// named switch, persists the pair, and returns the new snapshot.
 #[tokio::test]
 async fn test_toggle_read_flip_roundtrip() {
     let (runner, session) = stub_runner();
@@ -123,7 +120,6 @@ async fn test_toggle_read_flip_roundtrip() {
 
     handshake(&mut client_tx, &mut client_rx).await;
 
-    // Read: both on (the default).
     let read_req = RequestEnvelope::new(RequestId(1), FrontendRequest::MemoryToggleState);
     send_frame(&mut client_tx, &ClientFrame::Request(read_req)).await;
     match recv_toggle(RequestId(1), &mut client_rx).await {
@@ -134,7 +130,6 @@ async fn test_toggle_read_flip_roundtrip() {
         other => panic!("expected ToggleState, got {other:?}"),
     }
 
-    // Flip auto-memory: only that switch moves; the snapshot reflects it.
     let flip_req = RequestEnvelope::new(
         RequestId(2),
         FrontendRequest::MemoryToggle {
@@ -150,11 +145,9 @@ async fn test_toggle_read_flip_roundtrip() {
         other => panic!("expected ToggleState after flip, got {other:?}"),
     }
 
-    // The flip landed on the runner's runtime atomic (the next gate check sees
-    // it) and persisted to the injected path so it survives a restart.
-    let (am, ad) = runner.toggles_state();
-    assert!(!am, "runner atomic reflects the flip");
-    assert!(ad, "dream atomic untouched");
+    let state = runner.memory_gate_state();
+    assert!(!state.auto_memory, "runner atomic reflects the flip");
+    assert!(state.auto_dream, "dream atomic untouched");
     let (persisted, _w) = houyicoder_config::load_toggles_from(&settings);
     assert!(!persisted.auto_memory, "persisted auto-memory off");
     assert!(persisted.auto_dream, "persisted auto-dream on");
@@ -164,8 +157,6 @@ async fn test_toggle_read_flip_roundtrip() {
     drop(std::fs::remove_file(&settings));
 }
 
-/// Flipping dream touches only the dream switch; auto-memory stays put. Pins
-/// the per-switch scoping so a later refactor cannot flip both at once.
 #[tokio::test]
 async fn test_dream_leaves_auto_memory() {
     let (runner, session) = stub_runner();
@@ -201,7 +192,7 @@ async fn test_dream_leaves_auto_memory() {
     drop(std::fs::remove_file(&settings));
 }
 
-/// Drain frames until the MemoryList response paired to req_id lands.
+/// Receive the requested memory list.
 async fn recv_list(
     resp_id: RequestId,
     rx: &mut futures::channel::mpsc::Receiver<String>,
@@ -222,10 +213,6 @@ async fn recv_list(
     panic!("no MemoryList response for {resp_id:?}");
 }
 
-/// Forget deletes the topic + the server replies with the refreshed list
-/// (empty after). Pins the MemoryForget dispatch + the Runner accessor + that
-/// the reply carries the narrowed list so the pane refreshes without a second
-/// request.
 #[tokio::test]
 async fn test_forget_archives_and_refreshes() {
     let (runner, session, root) = runner_with_memory("build-gate", "make check green");
@@ -265,8 +252,7 @@ async fn test_forget_archives_and_refreshes() {
     drop(std::fs::remove_dir_all(&root));
 }
 
-/// Drain frames until the Error response paired to req_id lands; return its
-/// message. Mirrors recv_list for the failure path.
+/// Receive the requested error message.
 #[cfg(unix)]
 async fn recv_error(
     resp_id: RequestId,
@@ -288,9 +274,6 @@ async fn recv_error(
     panic!("no Error response for {resp_id:?}");
 }
 
-/// A forget that hits an I/O failure (a read-only root) surfaces as a wire
-/// Error, not a silent MemoryList that would leave the entry present + the
-/// user believing the delete worked. Pins the Io-failure surfacing.
 #[cfg(unix)]
 #[tokio::test]
 async fn test_forget_surfaces_io_failure() {
@@ -323,7 +306,6 @@ async fn test_forget_surfaces_io_failure() {
     );
     drop(client_tx);
     drop(handle.await);
-    // Restore + cleanup (the read-only root otherwise resists removal).
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).ok();
     drop(std::fs::remove_dir_all(&root));
 }

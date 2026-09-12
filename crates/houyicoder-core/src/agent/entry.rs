@@ -29,6 +29,7 @@ impl Runner {
         let observability = obs_wire::new_log(provider.capabilities().context_window);
         let active_model = Arc::new(RwLock::new(config.model.clone()));
         let active_effort = Arc::new(RwLock::new(None));
+        let memory = memory::MemoryRuntime::new(store.clone());
         let runner = Self {
             store,
             provider,
@@ -54,7 +55,7 @@ impl Runner {
             snapshot_ttl_secs: DEFAULT_SNAPSHOT_TTL_SECS,
             snapshot_size_cap_bytes: DEFAULT_SNAPSHOT_SIZE_CAP_BYTES,
             summarizer: Box::new(manifest::HeuristicSummarizer),
-            memory: None,
+            memory,
             skill_registry: None,
             sandbox_session: None,
             skill_grants: None,
@@ -74,10 +75,6 @@ impl Runner {
             cache_model_switch_flag: AtomicBool::new(false),
             cached_prefix: Arc::new(cache_liveness::CachedPrefixState::new()),
             reducer: None,
-            extractor: None,
-            dream: None,
-            auto_memory: Arc::new(AtomicBool::new(true)),
-            auto_dream: Arc::new(AtomicBool::new(true)),
             input_queue: input_queue::InputQueue::new(),
             queued_notifications: Mutex::new(VecDeque::new()),
             redundancy: Mutex::new(redundancy::RedundancyTracker::new()),
@@ -135,13 +132,13 @@ impl Runner {
                 });
             }
         }
-        self.inject_memory_recall(session).await?;
+        self.memory.recall(session).await?;
         self.inject_skill_listing_and_body(session).await?;
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
         self.emit_run_result(&result);
         // Best-effort fact persistence: failures are logged, not fatal.
         if let Ok(_) = result
-            && let Some(memory) = &self.memory
+            && let Some(memory) = self.memory.provider()
         {
             for entry in pending_facts {
                 if let Err(e) = memory.add(entry) {

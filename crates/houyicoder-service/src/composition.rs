@@ -558,18 +558,16 @@ pub(crate) fn assemble(
             let memory_provider: Arc<dyn MemoryProvider> =
                 Arc::new(memory::memory_provider_for(&ws));
             let cwd = ws.clone();
-            let r = runner
-                .with_cwd(ws)
-                .with_memory(Arc::clone(&memory_provider));
-            // Background memory (extractor + dream) at query-loop end, off
-            // the hot path. None on the forked runner, no self-trigger.
-            let (mut r, warnings) = memory::wire_background_memory(
-                r,
-                provider_for_extractor,
+            let session_log_root = runner.store().session_log_root();
+            let (runtime, warnings) = memory::build_memory_runtime(
+                runner.store(),
                 memory_provider,
-                cwd,
+                provider_for_extractor,
+                cwd.clone(),
                 model_for_extractor,
+                session_log_root,
             );
+            let mut r = runner.with_cwd(ws).install_memory(runtime);
             if let Some((stack, store)) = undo_handles {
                 r.set_undo(stack, store);
             }

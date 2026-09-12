@@ -212,7 +212,7 @@ impl Runner {
                             p = self.compress(session) => p?,
                         };
                         if progress {
-                            self.inject_memory_recall(session).await?;
+                            self.memory.recall(session).await?;
                             // A compaction folded the listing out of the
                             // assembled context; re-announce so the model is
                             // not skill-blind for the rest of this run. No-op
@@ -254,7 +254,7 @@ impl Runner {
                     // for the rest of this run: the surfaced scan now sees the
                     // folded set as empty, so recall re-surfaces entries the
                     // model still needs for the remaining tool turns.
-                    self.inject_memory_recall(session).await?;
+                    self.memory.recall(session).await?;
                     // Re-announce skills too: the compact folded the
                     // listing out, so the scan resets and it re-surfaces.
                     self.inject_skill_listing_and_body(session).await?;
@@ -397,7 +397,7 @@ impl Runner {
                             // Compaction folded older memory-recall events out
                             // of the context; re-inject so the model is not
                             // memory-blind for the rest of this run.
-                            self.inject_memory_recall(session).await?;
+                            self.memory.recall(session).await?;
                             // Re-announce skills: the compact folded the
                             // listing out; the scan resets and re-surfaces it.
                             self.inject_skill_listing_and_body(session).await?;

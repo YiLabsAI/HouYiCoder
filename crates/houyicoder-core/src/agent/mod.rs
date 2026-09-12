@@ -32,9 +32,7 @@ pub mod git_discard;
 pub(crate) mod hook;
 mod input_queue;
 mod manifest;
-mod memory_change_recorder;
-mod memory_preservation;
-mod memory_recall;
+mod memory;
 pub mod model_window;
 mod obs_wire;
 mod prompt;
@@ -67,7 +65,25 @@ pub mod multi_agent;
 pub use effort::{
     EffortResolver, apply_effort_settings, effort_default_for, resolve_applied_effort,
 };
-pub use exports::*;
+pub use exports::{
+    ApprovalDecision, ApprovalRequest, ArbitratedVerdict, AskUserQuestionTool, AssembledContext,
+    BackboneDerivation, BashTool, CategoryBreakdown, CommandHook, CompactBackbone,
+    CompactionOutcome, CompressPolicy, ConditionalActivation, ConditionalSkillActivator,
+    ConflictRate, ContextBreakdown, ContextBuilder, ContextMeasurement, ConversationSearchTool,
+    DelegationTool, EditTool, EnterWorktreeTool, ExitWorktreeTool, GitWorkspaceProbe, GlobTool,
+    GrepTool, GridSquare, HeuristicSummarizer, Hook, HookContext, HookEntry, HookError, HookEvent,
+    HookId, HookPayload, HookPolicy, HookRegistry, HookSource, HookVerdict, HotPathReducer,
+    LlmSummarizer, MakeCheckGate, MemoryAddTool, MemoryGateState, MemoryGates, MemoryRuntime,
+    MultiEditTool, NextStep, ReadTool, RecordedCompaction, ReduceCtx, ReducedOutput, Section,
+    SectionKind, SkillHookRegistrar, SkillReloadGuard, SkillTool, StatusSnapshot, StubTool,
+    StubWorkspaceProbe, SummarizeError, Summarizer, SystemPrompt, TodoItem, TodoStatus,
+    TodoWriteTool, Tokenizer, ToolOutputReducer, ToolRegistry, ToolResult, TrustLevel, TurnOutcome,
+    UsageAccumulator, VerifyFailure, VerifyGate, WebFetchTool, WorkspaceProbe, WorktreeController,
+    WriteTool, apply_manifest, arbitrate, assemble_model_input, build_grid, build_hook_fire,
+    build_manifest, derive_backbone, extraction_prompt, merge_summary, never_worse, parse_event,
+    render_backbone_block, stub_breakdown, thinking_brief, turn_reasoning, turn_tool_summary,
+    unified_diff,
+};
 
 use std::sync::Arc;
 
@@ -84,6 +100,7 @@ use status::SharedUsage;
 
 use append::new_event;
 use call::accumulate_usage;
+use multi_agent::bus_types::BusMessage;
 use synthetic::SyntheticToolOutcome;
 
 pub mod runner_config;
@@ -130,11 +147,7 @@ pub struct Runner {
     /// BusMessage::Inbox texts and the drive loop drains them at each turn
     /// boundary, appending each as a user message before the next model
     /// call. None for the top-level runner (no bus steering).
-    inbox: std::sync::Mutex<
-        Option<
-            tokio::sync::mpsc::UnboundedReceiver<crate::agent::multi_agent::bus_types::BusMessage>,
-        >,
-    >,
+    inbox: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<BusMessage>>>,
     /// Startup warnings (bad settings fields, network policy typos) queued
     /// for the host to surface as initial transcript system lines. The
     /// composition root collects these during build; the host drains them at
@@ -145,7 +158,7 @@ pub struct Runner {
     /// the composition root so status reads the same breaker the sandbox
     /// enforces against; enforcement stays in the sandbox (the runner never
     /// calls try_acquire), this field is read-only for status reporting. None
-    /// when no breaker is wired (tests, the stub path).
+    /// when no breaker is configured (tests, the stub path).
     breaker: Option<Arc<ResourceBreaker>>,
     /// Shared cumulative usage accumulator across runs on this runner. The drive
     /// loop writes per-turn; status_snapshot reads it for /context + /compact.
@@ -186,16 +199,12 @@ pub struct Runner {
     /// (no LLM dependency, used in tests). The composition root overrides with
     /// LlmSummarizer for production so compress produces real summaries.
     summarizer: Box<dyn manifest::Summarizer>,
-    /// Optional persistent memory provider. When wired, the turn-entry step
-    /// recalls relevant entries per user query and appends a durable
-    /// memory-recall attachment the projection merges into the turn's user
-    /// message — so the system prompt stays byte-frozen across turns. The
-    /// surfaced de-dup set is scanned from the projected transcript, so
-    /// compaction (which folds old memory-recall events out) is the natural
-    /// reset point. None in tests and the pure-stub path (no cross-session
-    /// memory).
-    memory: Option<Arc<dyn houyicoder_api::memory::MemoryProvider>>,
-    /// Optional skill registry. When wired, the turn-entry step appends a
+    /// The cohesive owner of memory state and operations: provider handle,
+    /// feature gates, background processes (extractor + dream), and all
+    /// memory query/mutation operations. Constructed by the composition root
+    /// and installed via install_memory.
+    memory: memory::MemoryRuntime,
+    /// Optional skill registry. When configured, the turn-entry step appends a
     /// skill-discovery listing attachment (descriptions only — the Skill
     /// tool loads bodies on demand). None in tests and the pure-stub path
     /// (no skill discovery).
@@ -204,36 +213,36 @@ pub struct Runner {
     /// path (skill_slash) can grant the same entitlements the Skill tool
     /// grants (app-launch + extra mach services). None in tests / no-sandbox.
     sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    /// Per-skill sandbox grant store (user-scope, not in repo). When wired,
+    /// Per-skill sandbox grant store (user-scope, not in repo). When configured,
     /// grants for a skill merge with its frontmatter declaration on invoke.
     skill_grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
     /// The skill whose entitlements are active for the current run. Shared
     /// with the SkillTool so both invocation paths can set it. Read by the
     /// post-bash-failure approval to attribute discovered services.
     active_skill: Arc<std::sync::Mutex<Option<String>>>,
-    /// Optional hook registry. When wired, the runner fires PreToolUse
+    /// Optional hook registry. When configured, the runner fires PreToolUse
     /// before each tool execution and PostToolUse / PostToolUseFailure
     /// after, arbitrating verdicts (Deny blocks, Feedback surfaces a
     /// self-correction signal, Observe logs, Trigger fires downstream, Allow
     /// proceeds). None means no hooks fire at runtime. See hook_pipeline.rs.
-    hooks: Option<Arc<crate::agent::hook::registry::HookRegistry>>,
-    /// Optional skill-hook registrar. When wired, invoking a skill (via the
+    hooks: Option<Arc<HookRegistry>>,
+    /// Optional skill-hook registrar. When configured, invoking a skill (via the
     /// Skill tool or the slash dispatch) registers its frontmatter hooks into
     /// the session hook registry. Holds a live workspace-trust ref so a
     /// Project or Local source fails closed before registration under an
     /// untrusted workspace. None in tests and the pure-stub path.
-    registrar: Option<Arc<crate::agent::SkillHookRegistrar>>,
+    registrar: Option<Arc<SkillHookRegistrar>>,
     /// Paths-gated skill activator; file-touch tools activate, the listing
     /// filters by its active set. None when the feature is off.
-    conditional: Option<Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>>,
+    conditional: Option<Arc<dyn ConditionalSkillActivator>>,
     /// Hot-reload driver lifetime guard. Held (never read) so a watcher +
     /// thread constructed at the composition root lives as long as the
     /// runner and is torn down with it; dropping it stops the watcher. None
-    /// when no hot-reload driver is wired.
-    skill_reloader: Option<Arc<dyn crate::agent::skill_reload::SkillReloadGuard>>,
+    /// without a hot-reload driver.
+    skill_reloader: Option<Arc<dyn SkillReloadGuard>>,
     /// Prompt-cache breakpoint policy. Decides where to carve a stable prefix
-    /// for prompt-cache reuse (the wire kinds live in the wire crate;
-    /// the provider lowers each kind to its own format). Defaults to the Auto
+    /// for reuse; providers lower each protocol kind to their own format.
+    /// Defaults to the Auto
     /// three-breakpoint set; a provider with no cache support swaps NoCachePolicy.
     cache_policy: Arc<dyn houyicoder_api::cache_policy::CachePolicyProvider>,
     /// Per-provider token-cost model. Drives the economy-driven compaction
@@ -273,26 +282,6 @@ pub struct Runner {
     /// Optional tool-output reducer; the isolate stage reduces a large tool
     /// result before serving it.
     reducer: Option<Arc<dyn reducer::ToolOutputReducer>>,
-    /// Optional memory extractor that fires at query-loop end (FinalOutput,
-    /// no tool calls) to background-extract memories from the conversation.
-    /// Fire-and-forget: the spawned fork runs on a tokio task so the main
-    /// loop is never blocked. Only the main runner wires this (the forked
-    /// extraction runner does not), so it never recursively self-triggers.
-    /// None in tests and the pure-stub path.
-    extractor: Option<Arc<crate::agent::extractor::MemoryExtractor>>,
-    /// Consolidation dream firing at query-loop end (fire-and-forget, off the
-    /// hot path). None on forked runners (no self-trigger) + tests.
-    dream: Option<Arc<crate::agent::auto_dream::DreamRunner>>,
-    /// Runtime-flippable memory feature switches shared with the host. The
-    /// host flips them via a command and the change takes effect on the next
-    /// gate check (no runner restart). auto_memory gates turn-entry recall
-    /// injection + the background extractor; auto_dream gates the
-    /// consolidation dream. Default on; constructed from the persisted
-    /// settings file at the composition root. AtomicBool so a host thread
-    /// flips while the drive loop reads — no lock, no contention on the hot
-    /// path.
-    auto_memory: Arc<std::sync::atomic::AtomicBool>,
-    auto_dream: Arc<std::sync::atomic::AtomicBool>,
     /// Mid-turn user interjections plus the identities the drive loop
     /// committed at a turn boundary, so the frontend can drop exact items
     /// from its mirror. Single source of truth on the host; the frontend
@@ -342,14 +331,14 @@ impl Runner {
         self.store.clone()
     }
 
-    /// The skill registry, when wired. The approval path reads it to detect
+    /// The skill registry, when configured. The approval path reads it to detect
     /// when a Bash command runs a skill-directory script so the prompt can
     /// show what would execute. None on the pure-stub path (no discovery).
     pub fn skill_registry(&self) -> Option<&Arc<dyn houyicoder_api::skill::SkillRegistry>> {
         self.skill_registry.as_ref()
     }
 
-    /// Wire the shared sandbox session so the @skill: slash path can
+    /// Install the shared sandbox session so the @skill: slash path can
     /// grant entitlements the Skill tool grants. None in tests.
     pub fn with_sandbox_session(
         mut self,
@@ -359,7 +348,7 @@ impl Runner {
         self
     }
 
-    /// Wire the per-skill grant store so skill invocations merges granted mach services.
+    /// Install the per-skill grant store.
     pub fn with_skill_grants(
         mut self,
         grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
@@ -390,8 +379,7 @@ impl Runner {
 
     /// The dream's cross-session scan root, or None when in-memory.
     pub fn dream_session_log_root(&self) -> Option<&std::path::Path> {
-        let dream = self.dream.as_ref();
-        dream.and_then(|d| d.session_log_root.as_deref())
+        self.memory.dream_session_log_root()
     }
 
     /// The active model id (the /model pane select). The runner reads this per
@@ -422,7 +410,7 @@ impl Runner {
     }
 
     /// Resolve the effort level the next completion request should carry,
-    /// following the chain: active pick → catalog (via the wired resolver) →
+    /// following the chain: active pick → catalog (via the configured resolver) →
     /// per-model default → None. Short-circuits to None for a model the dialect
     /// probe does not recognize (I8). The composition root wires the resolver
     /// from the loaded ModelSection; None means the stub path stops at the
@@ -436,7 +424,7 @@ impl Runner {
         )
     }
 
-    /// Wire a catalog-backed effort resolver (the composition root injects an
+    /// Install a catalog-backed effort resolver (the composition root injects an
     /// impl backed by the loaded ModelSection). Builder-style so the runner
     /// assembles in one statement.
     pub fn with_effort_resolver(mut self, resolver: Arc<dyn EffortResolver>) -> Self {
@@ -470,10 +458,7 @@ impl Runner {
         resolved.min(provider_cap)
     }
 
-    /// Wiring probe: true when the composition root wired an LlmSummarizer
-    /// (real summaries) rather than the default HeuristicSummarizer
-    /// placeholder. Lets a composition-root test assert the production
-    /// runner uses a real summarizer without exposing the trait object.
+    /// Return whether compaction uses the model-backed summarizer.
     pub fn summarizer_is_llm(&self) -> bool {
         self.summarizer
             .as_any()
@@ -615,7 +600,14 @@ impl Runner {
                     }
                     // Background memory at query-loop end: extractor + dream,
                     // both fire-and-forget; never fails the run.
-                    self.fire_background_at_finaloutput(session).await;
+                    self.memory
+                        .fire_background(session, || {
+                            reward_snapshot::capture_reward_snapshot(
+                                &self.observability,
+                                &self.redundancy,
+                            )
+                        })
+                        .await;
                     return Ok(RunResult {
                         outcome: RunOutcome::FinalOutput(text),
                         turns: turn,
@@ -685,9 +677,9 @@ impl Runner {
         }
         // Recall memory for the injected query (the latest user input), so a
         // mid-turn "now help with X" gets X's memories rather than riding the
-        // original turn's recall. No-op when no memory provider is wired.
+        // original turn's recall. No-op without a memory provider.
         if had_pending {
-            self.inject_memory_recall(session).await?;
+            self.memory.recall(session).await?;
             // A drained mid-turn input may follow a compaction that folded
             // the listing + invoked bodies out; re-announce both so the
             // model keeps skill discovery + the directives for the rest of

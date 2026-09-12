@@ -1,15 +1,7 @@
-//! Forked extraction runner: a bounded agent-loop run on a fresh ephemeral
-//! session that clones the main conversation as prefix, appends the extraction
-//! prompt, and drives with a forked config (max_turns five, a sandboxed tool
-//! set limited to the structured memory-write tool in this first slice). The
-//! forked run writes to the ephemeral session, not the main log, so the main
-//! transcript is untouched. The provider and memory are shared with the main
-//! runner so prompt caching and the write lock carry over.
+//! Runs bounded memory extraction in an ephemeral session.
 //!
-//! Not yet wired to fire: the stop-hook trigger, cursor incrementality,
-//! mutual exclusion, and coalescing land in later slices. This module
-//! exposes the construction so a caller (the stop hook) can drive a forked
-//! extraction run; tests call it directly.
+//! The model and memory provider are shared with the main runner, while the
+//! conversation log remains isolated.
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
@@ -18,7 +10,7 @@ use houyicoder_context::{SessionId, SessionLogEntry};
 use std::path::Path;
 use std::sync::Arc;
 
-use super::memory_change_recorder::MemoryChangeRecorder;
+use super::memory::MutationLog;
 use super::prompt::extract::build_extraction_prompt;
 use super::runner_config::RunnerConfig;
 use super::{RunError, RunOutcome, RunResult, Runner, ToolRegistry};
@@ -36,11 +28,11 @@ pub(crate) fn build_forked_extract_runner(
     memory: Arc<dyn MemoryProvider>,
     cwd: &Path,
     config: RunnerConfig,
-    recorder: Arc<MemoryChangeRecorder>,
+    recorder: Arc<MutationLog>,
 ) -> Runner {
     let tools = ToolRegistry::new();
     Runner::new(store, provider, tools, config)
-        .with_extraction_memory(memory, recorder)
+        .install_extraction_memory(memory, recorder)
         .with_cwd(cwd.to_path_buf())
 }
 
@@ -58,7 +50,7 @@ pub(crate) async fn run_forked_extract(
     cwd: &Path,
     config: RunnerConfig,
     prefix: &[SessionLogEntry],
-    recorder: Arc<MemoryChangeRecorder>,
+    recorder: Arc<MutationLog>,
 ) -> Result<RunResult, RunError> {
     // Inject the existing-memory manifest so the forked agent dedups by
     // reusing a key instead of re-saving the same fact each turn (a
@@ -255,7 +247,7 @@ mod tests {
         std::fs::create_dir_all(&cwd).expect("mkdir cwd");
 
         let prefix = main_prefix();
-        let recorder = Arc::new(MemoryChangeRecorder::new());
+        let recorder = Arc::new(MutationLog::new());
         let result = run_forked_extract(
             ephemeral,
             provider,
@@ -315,7 +307,7 @@ mod tests {
         let cwd = std::env::temp_dir().join(format!("fork-prefix-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).expect("mkdir cwd");
         let prefix = main_prefix();
-        let recorder = Arc::new(MemoryChangeRecorder::new());
+        let recorder = Arc::new(MutationLog::new());
         let result = run_forked_extract(
             ephemeral,
             provider,
@@ -336,12 +328,10 @@ mod tests {
         std::fs::remove_dir_all(&cwd).ok();
     }
 
-    /// with_memory registers the structured save_memory tool on the runner so
-    /// the main agent can save a memory by emitting a tool call (the forked
-    /// runner gets it for free since it also calls with_memory). Pins the
-    /// registration so a future refactor that drops it is caught.
+    /// install_memory registers the structured save_memory tool.
     #[test]
-    fn test_with_memory_registers_tool() {
+    fn test_install_memory_registers_tool() {
+        use crate::agent::MemoryRuntime;
         let store: Arc<dyn SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
         let provider: Arc<dyn ModelProvider> =
@@ -349,16 +339,18 @@ mod tests {
         let memory = Arc::new(RecordingMemory {
             written: Mutex::new(Vec::new()),
         });
+        let mut runtime = MemoryRuntime::new(store.clone());
+        runtime.install_provider(Arc::clone(&memory) as Arc<dyn MemoryProvider>);
         let runner = Runner::with_shared_store(
             store,
             provider,
             ToolRegistry::new(),
             RunnerConfig::default(),
         )
-        .with_memory(Arc::clone(&memory) as Arc<dyn MemoryProvider>);
+        .install_memory(runtime);
         assert!(
             runner.tools().get("save_memory").is_some(),
-            "with_memory must register the save_memory tool"
+            "install_memory must register the save_memory tool"
         );
         assert!(
             memory.written_entries().is_empty(),

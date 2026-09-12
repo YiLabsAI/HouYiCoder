@@ -30,7 +30,7 @@ use houyicoder_context::{EventId, MemoryChangeId, SessionEvent, SessionLogEntry}
 use tokio::task::JoinHandle;
 
 use super::extract::run_forked_extract;
-use super::memory_change_recorder::MemoryChangeRecorder;
+use super::memory::MutationLog;
 use super::{RunError, RunResult, RunnerConfig};
 
 #[derive(Debug)]
@@ -129,7 +129,7 @@ impl MemoryExtractor {
             self.emit_changes(MemoryChangeOrigin::PrimaryAgent, primary_changes);
             return Ok(ExtractOutcome::Skipped { new_message_count });
         }
-        let recorder = Arc::new(MemoryChangeRecorder::new());
+        let recorder = Arc::new(MutationLog::new());
         let result = run_forked_extract(
             Arc::clone(&self.store),
             Arc::clone(&self.provider),

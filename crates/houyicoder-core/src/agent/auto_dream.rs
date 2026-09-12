@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use super::memory_change_recorder::MemoryChangeRecorder;
+use super::memory::MutationLog;
 use houyicoder_api::agent_event::{
     EventHandler, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent,
 };
@@ -384,24 +384,15 @@ pub(crate) fn build_consolidation_prompt(
     )
 }
 
-/// Build a forked dream runner over a caller-provided ephemeral store. The
-/// store is ephemeral (an in-memory backend the caller constructs) so the
-/// forked dream transcript stays out of the durable main log. The provider
-/// and memory are shared (Arc clone) so prompt caching and the in-process
-/// write lock carry over. The tool set is the five structured memory tools:
-/// save_memory (write/update, scope-aware), show_memory (read one body),
-/// delete_memory (prune), promote_memory (auto -> project, always-on), and
-/// demote_memory (project -> auto, recall-on-demand). The runner is NOT
-/// wired with with_memory — the dream prompt is self-contained (listing
-/// plus index injected) and recall injection is a main-loop feature that
-/// would add noise here; run_forked does not inject recall regardless.
+/// Build an isolated consolidation runner with memory management tools.
+/// Recall stays disabled because the consolidation prompt contains the index.
 pub(crate) fn build_forked_dream_runner(
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: &Path,
     config: RunnerConfig,
-    recorder: Arc<MemoryChangeRecorder>,
+    recorder: Arc<MutationLog>,
 ) -> Runner {
     // The add + delete + promote + demote tools share one recorder so a
     // touch (add, delete, promote, or demote) counts toward the notice
@@ -438,7 +429,7 @@ pub(crate) async fn run_forked_dream(
     cwd: &Path,
     config: RunnerConfig,
     prompt: &str,
-    recorder: Arc<MemoryChangeRecorder>,
+    recorder: Arc<MutationLog>,
 ) -> Result<RunResult, RunError> {
     let runner = build_forked_dream_runner(store, provider, memory, cwd, config, recorder);
     let session = SessionId::new();
@@ -686,7 +677,7 @@ impl DreamRunner {
         };
         // One recorder preserves the successful operations emitted by every
         // memory tool in this consolidation.
-        let recorder = Arc::new(MemoryChangeRecorder::new());
+        let recorder = Arc::new(MutationLog::new());
         let config = if is_reward_dream {
             let mut c = self.config.clone();
             c.max_turns = REWARD_DREAM_MAX_TURNS;

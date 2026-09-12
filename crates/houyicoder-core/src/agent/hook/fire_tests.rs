@@ -680,9 +680,10 @@ async fn test_deny_records_gate_violation() {
         Arc::new(FakeProvider::new(vec![first, second]));
     let registry = HookRegistry::new();
     registry.register(Arc::new(DenyNamedRule));
-    let runner = runner_with(provider, tools)
-        .with_hooks(Arc::new(registry))
-        .with_memory(Arc::clone(&memory) as Arc<dyn houyicoder_api::memory::MemoryProvider>);
+    let mut runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
+    runner
+        .memory
+        .install_provider(Arc::clone(&memory) as Arc<dyn houyicoder_api::memory::MemoryProvider>);
     let session = SessionId::new();
     let result = runner.run(session, "go".into()).await.expect("run");
     assert!(matches!(result.outcome, RunOutcome::FinalOutput(_)));

@@ -1,10 +1,6 @@
-//! Skill hot-reload driver: owns the filesystem watcher and the thread that
-//! feeds events through the pure timing policy (in the skill data leaf) and
-//! re-discovers + swaps the registry set on a settled change. Lives at the
-//! composition root because it depends on the watcher library + threads,
-//! which the pure data leaf must not. The engine holds it behind the named
-//! SkillReloadGuard trait for the session lifetime only; dropping it stops
-//! the watcher and the thread.
+//! Reloads skill definitions after stable filesystem changes.
+//!
+//! The session guard owns and stops the watcher thread.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -14,18 +10,18 @@ use std::time::{Duration, Instant};
 use houyicoder_api::skill::SkillRegistry;
 use houyicoder_core::agent::{ConditionalSkillActivator, SkillHookRegistrar, SkillReloadGuard};
 use houyicoder_skill::lifecycle::{Action, ReloadScheduler, WatchDepth};
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+#[cfg(target_os = "macos")]
+use notify::PollWatcher as PlatformWatcher;
+#[cfg(not(target_os = "macos"))]
+use notify::RecommendedWatcher as PlatformWatcher;
+use notify::{RecursiveMode, Watcher};
 
 use super::skill::SkillRegistryImpl;
 
-/// Quiet poll interval for the event loop. The thread blocks on the event
-/// channel for this long, then drains the scheduler, so a reload fires
-/// promptly after a debounce + stability window even with no new events.
+/// Maximum idle wait between scheduler checks.
 const LOOP_POLL: Duration = Duration::from_millis(100);
 
-/// The shared reload dependencies, bundled so the event loop and the event
-/// router take one argument instead of five (the watcher library is not
-/// one of them — it is owned by the loop).
+/// Collaborators retained by the reload thread.
 struct ReloadDeps {
     registry: std::sync::Arc<SkillRegistryImpl>,
     activator: std::sync::Arc<dyn ConditionalSkillActivator>,
@@ -35,8 +31,7 @@ struct ReloadDeps {
 }
 
 impl ReloadDeps {
-    /// Re-discover + swap, then refresh the conditional activator and
-    /// invalidate + re-register only the changed skills' hooks.
+    /// Refresh definitions and dependent runtime state.
     fn reload(&self) {
         let outcome = self
             .registry
@@ -52,9 +47,7 @@ impl ReloadDeps {
     }
 }
 
-/// The driver. Constructed at the composition root; held by the runner for
-/// the session. Dropping it drops the shutdown sender, which the thread
-/// reads as "stop", so the watcher and thread tear down with the session.
+/// Session-scoped skill reload guard.
 pub struct SkillReloader {
     _thread: Option<JoinHandle<()>>,
     shutdown: Option<mpsc::Sender<()>>,
@@ -63,11 +56,7 @@ pub struct SkillReloader {
 impl SkillReloadGuard for SkillReloader {}
 
 impl SkillReloader {
-    /// Watch the skill scan roots and spawn a thread that re-discovers on a
-    /// settled change. Returns None (no reload) when no roots exist to
-    /// watch — the feature is inert, not erroring, in a brand-new workspace
-    /// with no config directory yet. Returns the guard as the named trait so
-    /// the caller holds a lifetime handle without depending on this type.
+    /// Start reloading existing skill roots. Returns None when no roots exist.
     pub fn start(
         registry: std::sync::Arc<SkillRegistryImpl>,
         activator: std::sync::Arc<dyn ConditionalSkillActivator>,
@@ -80,32 +69,6 @@ impl SkillReloader {
             tracing::info!("no skill watch roots; hot-reload inert this session");
             return None;
         }
-        let (event_tx, event_rx) = mpsc::channel::<Vec<PathBuf>>();
-        let mut watcher: RecommendedWatcher = match RecommendedWatcher::new(
-            move |res: Result<notify::Event, _>| {
-                if let Ok(ev) = res
-                    && event_tx.send(ev.paths).is_err()
-                {
-                    // Channel closed: the reloader is gone. Stop sending.
-                }
-            },
-            notify::Config::default(),
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::warn!(error = %e, "skill watcher init failed; hot-reload off");
-                return None;
-            }
-        };
-        for (path, depth) in &roots {
-            let mode = match depth {
-                WatchDepth::Deep => RecursiveMode::Recursive,
-                WatchDepth::Shallow => RecursiveMode::NonRecursive,
-            };
-            if let Err(e) = watcher.watch(path, mode) {
-                tracing::warn!(path = %path.display(), error = %e, "watch add failed; skipping root");
-            }
-        }
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
         let deps = ReloadDeps {
             registry,
@@ -116,7 +79,7 @@ impl SkillReloader {
         };
         let thread = match thread::Builder::new()
             .name("skill-hot-reload".into())
-            .spawn(move || run_loop(watcher, event_rx, shutdown_rx, deps))
+            .spawn(move || start_watcher(roots, shutdown_rx, deps))
         {
             Ok(handle) => handle,
             Err(e) => {
@@ -133,39 +96,66 @@ impl SkillReloader {
 
 impl Drop for SkillReloader {
     fn drop(&mut self) {
-        // Drop the shutdown sender so the thread reads Disconnected and exits.
         self.shutdown.take();
+        if let Some(thread) = self._thread.take() {
+            drop(thread.join());
+        }
     }
 }
 
-/// The event loop: route events (dynamic-watch skills/ creation vs
-/// in-skills SKILL.md changes), drive the scheduler, and act on its
-/// decisions (stability check, then reload + refresh + invalidate).
+fn start_watcher(roots: Vec<(PathBuf, WatchDepth)>, shutdown_rx: Receiver<()>, deps: ReloadDeps) {
+    let (event_tx, event_rx) = mpsc::channel::<Vec<PathBuf>>();
+    let config = notify::Config::default().with_poll_interval(Duration::from_millis(500));
+    let mut watcher = match PlatformWatcher::new(
+        move |res: Result<notify::Event, _>| {
+            if let Ok(event) = res {
+                drop(event_tx.send(event.paths));
+            }
+        },
+        config,
+    ) {
+        Ok(watcher) => watcher,
+        Err(error) => {
+            tracing::warn!(%error, "skill watcher init failed; hot-reload off");
+            return;
+        }
+    };
+    for (path, depth) in &roots {
+        let mode = match depth {
+            WatchDepth::Deep => RecursiveMode::Recursive,
+            WatchDepth::Shallow => RecursiveMode::NonRecursive,
+        };
+        if let Err(error) = watcher.watch(path, mode) {
+            tracing::warn!(path = %path.display(), %error, "watch add failed; skipping root");
+        }
+    }
+    run_loop(watcher, event_rx, shutdown_rx, deps);
+}
+
+/// Process filesystem events until shutdown.
 fn run_loop(
-    mut watcher: RecommendedWatcher,
+    mut watcher: PlatformWatcher,
     event_rx: Receiver<Vec<PathBuf>>,
     shutdown_rx: Receiver<()>,
     deps: ReloadDeps,
 ) {
     let mut scheduler = ReloadScheduler::new();
     loop {
-        // Drain any pending events (a burst may queue several).
         match event_rx.recv_timeout(LOOP_POLL) {
             Ok(paths) => route_events(&paths, &mut scheduler, &mut watcher, &deps),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
-        // Check shutdown: Ok(()) (signaled) or Disconnected (sender gone)
-        // both mean stop; only Empty means continue.
         if !matches!(shutdown_rx.try_recv(), Err(mpsc::TryRecvError::Empty)) {
             return;
         }
-        // Drive the scheduler.
         let now = Instant::now();
         while let Some(action) = scheduler.poll(now) {
             match action {
                 Action::CheckStability(paths) => {
-                    let stable = files_settled(&paths);
+                    let Some(stable) = files_settled(&paths, &shutdown_rx) else {
+                        return;
+                    };
                     scheduler.confirm_stable(now, stable);
                 }
                 Action::Reload => deps.reload(),
@@ -174,20 +164,15 @@ fn run_loop(
     }
 }
 
-/// Route a batch of event paths. A newly-created skills directory (under a
-/// shallow family watch) gets a dynamic recursive watch plus an immediate
-/// reload to cover files that landed in the race window before the watch was
-/// installed. A SKILL.md change inside a skills directory feeds the
-/// scheduler (debounce + write-stability). Other paths are ignored.
+/// Route relevant filesystem changes into the reload scheduler.
 fn route_events(
     paths: &[PathBuf],
     scheduler: &mut ReloadScheduler,
-    watcher: &mut RecommendedWatcher,
+    watcher: &mut PlatformWatcher,
     deps: &ReloadDeps,
 ) {
     let now = Instant::now();
     for path in paths {
-        // Skip .git / node_modules churn.
         if path
             .components()
             .any(|c| c.as_os_str() == ".git" || c.as_os_str() == "node_modules")
@@ -195,12 +180,10 @@ fn route_events(
             continue;
         }
         if is_skills_dir(path) {
-            // A skills/ directory appeared under a shallow family watch.
-            // Watch it recursively and reload immediately to cover any
-            // SKILL.md that already landed before the watch was installed.
             if watcher.watch(path, RecursiveMode::Recursive).is_err() {
                 tracing::warn!(path = %path.display(), "dynamic skills/ watch failed");
             }
+            // Cover files created before the recursive watch became active.
             deps.reload();
             continue;
         }
@@ -215,15 +198,17 @@ fn is_skills_dir(path: &Path) -> bool {
     path.is_dir() && path.file_name().is_some_and(|n| n == "skills")
 }
 
-/// Stat each pending file's size, poll at the stability interval until the
-/// size is unchanged for the stability window. Returns true once settled.
-fn files_settled(paths: &[PathBuf]) -> bool {
+/// Wait until pending files stabilize or shutdown begins.
+fn files_settled(paths: &[PathBuf], shutdown_rx: &Receiver<()>) -> Option<bool> {
     let mut last: Vec<Option<u64>> = paths.iter().map(|p| file_size(p.as_path())).collect();
     let poll = Duration::from_millis(500);
     let window = Duration::from_secs(1);
     let start = Instant::now();
     loop {
-        thread::sleep(poll);
+        match shutdown_rx.recv_timeout(poll) {
+            Err(RecvTimeoutError::Timeout) => {}
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => return None,
+        }
         let mut changed = false;
         for (i, p) in paths.iter().enumerate() {
             let s = file_size(p);
@@ -233,11 +218,10 @@ fn files_settled(paths: &[PathBuf]) -> bool {
             }
         }
         if !changed && Instant::now().duration_since(start) >= window {
-            return true;
+            return Some(true);
         }
         if Instant::now().duration_since(start) >= Duration::from_secs(30) {
-            // Give up after a long churn; let the next event retry.
-            return false;
+            return Some(false);
         }
     }
 }
@@ -288,9 +272,6 @@ mod tests {
         }
     }
 
-    /// reload re-discovers and swaps so a skill added after construction
-    /// surfaces in find. Exercises the reload path (registry.reload +
-    /// activator.refresh + registrar.invalidate) without a watcher.
     #[test]
     fn test_reload_picks_new_skill() {
         let tmp = std::env::temp_dir().join(format!("skill-reload-deps-{}", std::process::id()));
@@ -312,8 +293,6 @@ mod tests {
         drop(std::fs::remove_dir_all(&tmp));
     }
 
-    /// start returns None (no reload) when no watch roots exist — a
-    /// brand-new workspace with no config directory. No thread is spawned.
     #[test]
     fn test_start_no_roots_none() {
         let tmp = std::env::temp_dir().join(format!("skill-reload-noroots-{}", std::process::id()));
@@ -337,8 +316,26 @@ mod tests {
         drop(std::fs::remove_dir_all(&tmp));
     }
 
-    /// is_skills_dir: a directory named "skills" is the dynamic-watch
-    /// trigger; a file or a differently-named dir is not.
+    #[test]
+    fn test_drop_stops_watcher() {
+        let tmp = std::env::temp_dir().join(format!("skill-reload-drop-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&tmp));
+        write_skill(&tmp, "alpha");
+        let deps = deps_with(&tmp);
+        let guard = SkillReloader::start(
+            deps.registry,
+            deps.activator,
+            deps.registrar,
+            deps.cwd,
+            deps.home,
+        )
+        .expect("watch roots exist");
+        let started = Instant::now();
+        drop(guard);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop(std::fs::remove_dir_all(&tmp));
+    }
+
     #[test]
     fn test_is_skills_dir() {
         let tmp = std::env::temp_dir().join(format!("skill-isd-{}", std::process::id()));
@@ -355,7 +352,6 @@ mod tests {
         drop(std::fs::remove_dir_all(&tmp));
     }
 
-    /// file_size: Some(bytes) for an existing file, None for a missing one.
     #[test]
     fn test_file_size() {
         let tmp = std::env::temp_dir().join(format!("skill-fs-{}", std::process::id()));

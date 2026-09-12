@@ -352,13 +352,14 @@ async fn test_stall_flushes_partial() {
 /// provider is wired: the about-to-fold span is scanned for signals + hits
 /// are written (best-effort). With a stub provider (add = no-op) this covers
 /// the wiring path; the preservation logic itself is tested in
-/// memory_preservation.rs (the pure fn).
+/// memory/preservation.rs (the pure fn).
 #[tokio::test]
 async fn test_compress_runs_preservation() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let memory: Arc<dyn houyicoder_api::memory::MemoryProvider> =
         Arc::new(houyicoder_memory::StubMemoryProvider::new());
-    let runner = runner_with(provider, ToolRegistry::new()).with_memory(memory);
+    let mut runner = runner_with(provider, ToolRegistry::new());
+    runner.memory.install_provider(memory);
     let session = houyicoder_context::SessionId::new();
     // Seed 6 assistant turns so default tail_turns=4 folds the oldest 2.
     // Their text contains an unsolved signal so preserve_folded_context
@@ -437,8 +438,10 @@ async fn test_before_clear_writes_markers() {
         written: std::sync::Mutex::new(Vec::new()),
         existing_keys: std::sync::Mutex::new(Vec::new()),
     });
-    let runner = runner_with(provider, ToolRegistry::new())
-        .with_memory(Arc::clone(&memory) as Arc<dyn houyicoder_api::memory::MemoryProvider>);
+    let mut runner = runner_with(provider, ToolRegistry::new());
+    runner
+        .memory
+        .install_provider(Arc::clone(&memory) as Arc<dyn houyicoder_api::memory::MemoryProvider>);
     let session = houyicoder_context::SessionId::new();
     for text in ["hit an error here", "we decided to use rust", "plain turn"] {
         runner
@@ -485,8 +488,10 @@ async fn test_before_clear_dedups_existing() {
         written: std::sync::Mutex::new(Vec::new()),
         existing_keys: std::sync::Mutex::new(vec!["compact-unsolved-error".into()]),
     });
-    let runner = runner_with(provider, ToolRegistry::new())
-        .with_memory(Arc::clone(&memory) as Arc<dyn houyicoder_api::memory::MemoryProvider>);
+    let mut runner = runner_with(provider, ToolRegistry::new());
+    runner
+        .memory
+        .install_provider(Arc::clone(&memory) as Arc<dyn houyicoder_api::memory::MemoryProvider>);
     let session = houyicoder_context::SessionId::new();
     runner
         .store()

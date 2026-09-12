@@ -1,8 +1,4 @@
-//! MemoryForget dispatch handler — inline (src/) tests. The handler is
-//! async + needs ServerIo, testable inline via ServerIo::new (mirroring
-//! rename_session_tests), so these count toward --lib diff-cov (make check's
-//! --lib lcov cannot see tests/ coverage). Covers the Ok -> MemoryList path
-//! and the Io-failure -> Error surfacing.
+//! Memory request dispatch tests.
 
 #![cfg(test)]
 
@@ -11,6 +7,8 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySummary};
+use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_core::agent::{MemoryGates, MemoryRuntime, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
@@ -22,9 +20,7 @@ use houyicoder_session::SessionStore;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// A memory provider that fails the delete for the key "fail" (Io) and
-/// succeeds for every other key. Lets the dispatch handler exercise both the
-/// MemoryList reply (Ok) and the Error reply (Io) without a filesystem.
+/// In-memory provider with a deterministic delete failure.
 struct MockMemory;
 
 impl MemoryProvider for MockMemory {
@@ -46,19 +42,26 @@ impl MemoryProvider for MockMemory {
     }
 }
 
-fn stub_runner_with_memory() -> Arc<houyicoder_core::agent::Runner> {
+fn stub_runner_with_memory() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runtime = MemoryRuntime::from_parts(
+        store.clone(),
+        Some(Arc::new(MockMemory)),
+        MemoryGates::new(true, true),
+        None,
+        None,
+    );
     Arc::new(
-        houyicoder_core::agent::Runner::with_shared_store(
+        Runner::with_shared_store(
             store,
             Arc::new(houyicoder_provider::FakeProvider::text("x")),
-            houyicoder_core::agent::ToolRegistry::new(),
-            houyicoder_core::agent::runner_config::RunnerConfig {
+            ToolRegistry::new(),
+            RunnerConfig {
                 model: "test".into(),
-                ..houyicoder_core::agent::runner_config::RunnerConfig::default()
+                ..RunnerConfig::default()
             },
         )
-        .with_memory(Arc::new(MockMemory)),
+        .install_memory(runtime),
     )
 }
 

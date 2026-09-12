@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::memory_change_recorder::MemoryChangeRecorder;
+use crate::agent::memory::{MemoryGates, MemoryRuntime, MutationLog};
 use crate::agent::{Runner, ToolRegistry};
 use houyicoder_api::agent_event::{AgentEventHandlers, MemoryChangeOrigin, MemoryChangedEvent};
 use houyicoder_context::{MemoryEntry, MemorySummary};
@@ -546,16 +546,22 @@ async fn test_runner_fires_extractor_final() {
         },
     ));
     let runner = Runner::with_shared_store(
-        main_store,
+        main_store.clone(),
         Arc::clone(&provider) as Arc<dyn ModelProvider>,
         ToolRegistry::new(),
         RunnerConfig {
             max_turns: 5,
             ..RunnerConfig::default()
         },
-    )
-    .with_memory(Arc::clone(&memory) as Arc<dyn MemoryProvider>)
-    .with_extractor(Arc::clone(&ext));
+    );
+    let runtime = MemoryRuntime::from_parts(
+        main_store,
+        Some(Arc::clone(&memory) as Arc<dyn MemoryProvider>),
+        MemoryGates::new(true, true),
+        Some(Arc::clone(&ext)),
+        None,
+    );
+    let runner = runner.install_memory(runtime);
     let session = houyicoder_context::SessionId::new();
     let result = runner
         .run(session, "remember to keep responses terse".into())
@@ -718,7 +724,7 @@ async fn test_forked_extract_receives_manifest() {
         &cwd,
         config,
         &prefix,
-        Arc::new(MemoryChangeRecorder::new()),
+        Arc::new(MutationLog::new()),
     )
     .await;
     assert!(result.is_ok(), "forked run completes");

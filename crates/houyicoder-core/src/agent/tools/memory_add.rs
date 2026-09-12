@@ -18,7 +18,7 @@
 //! still routes through the same provider, so this tool is the forked
 //! agent write seam only, not the main loop write seam.
 //!
-//! The provider is shared (Arc) with the runner that owns it, so a forked
+//! The provider is shared with the runner that owns it, so a forked
 //! extraction run in the same process lands writes under the same write lock
 //! as an explicit user save — no cross-write orphan within the process.
 //! Cross-process safety is a store-level concern (a planned journal), not
@@ -32,7 +32,7 @@ use houyicoder_context::{MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, Me
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
-use crate::agent::memory_change_recorder::MemoryChangeRecorder;
+use crate::agent::memory::MutationLog;
 use houyicoder_api::agent_event::MemoryOperation;
 
 /// A structured memory-write tool. The forked extraction agent calls it to
@@ -45,7 +45,7 @@ pub struct MemoryAddTool {
     /// landed this pass. Incremented on a successful add so the extractor/dream
     /// can fire one memory-saved notice per pass (not per call). None for the
     /// main runner's tool, which does not notify.
-    recorder: Option<Arc<MemoryChangeRecorder>>,
+    recorder: Option<Arc<MutationLog>>,
     /// Which writer this tool saves on behalf of. Injected by the host at
     /// construction (the LLM never provides origin) so a dream cannot
     /// self-promote. Unknown for a bare tool (tests).
@@ -65,7 +65,7 @@ impl MemoryAddTool {
 
     /// Thread a write recorder so a successful save bumps it. The caller resets
     /// before a fork pass + reads after to fire one memory-saved notice.
-    pub(crate) fn with_recorder(mut self, recorder: Arc<MemoryChangeRecorder>) -> Self {
+    pub(crate) fn with_recorder(mut self, recorder: Arc<MutationLog>) -> Self {
         self.recorder = Some(recorder);
         self
     }
@@ -328,7 +328,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_memory_counts_writes() {
         let p = provider();
-        let recorder = Arc::new(MemoryChangeRecorder::new());
+        let recorder = Arc::new(MutationLog::new());
         let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
             .with_recorder(recorder.clone());
         let input = json!({
