@@ -168,8 +168,8 @@ async fn test_overflow_no_progress_fails() {
     // pins the suppress state on the NoProgress path, which the test
     // previously left unasserted (it only checked the error variant).
     assert_eq!(
-        runner.compact_suppress(),
-        super::compact::CompactSuppress::Sticky,
+        runner.compaction_suppression(),
+        super::compaction::CompactionSuppression::Sticky,
         "NoProgress should set Sticky suppress so auto-compact does not retry pointlessly next turn"
     );
 }

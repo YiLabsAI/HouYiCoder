@@ -12,6 +12,7 @@ use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, Sessi
 use houyicoder_protocol::llm::{OutputItem, Usage};
 use serde_json::Value;
 
+use super::compaction::CompactionOutcome;
 use super::hook::{HookEvent, wire::HookOutcome};
 use super::{CompletionResponse, RunError, RunOutcome, RunResult, Runner};
 
@@ -528,11 +529,8 @@ impl Runner {
     /// reply. The assembled context picks up the manifest on the next turn's
     /// build_for_turn — compaction does not reduce the in-flight context
     /// immediately, only the next turn's window.
-    pub async fn compact(
-        &self,
-        session: SessionId,
-    ) -> Result<super::compact::CompactOutcome, RunError> {
-        self.compact_internal(session, super::hook::CompactTrigger::Manual)
+    pub async fn compact(&self, session: SessionId) -> Result<CompactionOutcome, RunError> {
+        self.run_compaction(session, super::hook::CompactTrigger::Manual)
             .await
     }
 

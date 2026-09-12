@@ -6,6 +6,7 @@ pub use super::backbone::{
     BackboneDerivation, CompactBackbone, ConflictRate, GitWorkspaceProbe, StubWorkspaceProbe,
     WorkspaceProbe, derive_backbone, merge_summary, render_backbone_block,
 };
+pub use super::compaction::{CompactionOutcome, LlmSummarizer, RecordedCompaction};
 pub use super::conditional_activation::{ConditionalActivation, ConditionalSkillActivator};
 pub use super::context::{
     AssembledContext, CategoryBreakdown, ContextBreakdown, ContextBuilder, ContextMeasurement,
@@ -21,7 +22,6 @@ pub use super::hook::{
     ArbitratedVerdict, Hook, HookContext, HookEvent, HookPayload, HookPolicy, HookSource,
     HookVerdict, ToolResult, arbitrate,
 };
-pub use super::lifecycle::{CompressResult, LlmSummarizer, compress_session};
 pub use super::manifest::{
     CompressPolicy, HeuristicSummarizer, SummarizeError, Summarizer, build_manifest,
 };

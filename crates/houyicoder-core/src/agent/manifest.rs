@@ -1,38 +1,9 @@
-//! agent::manifest — the Compress stage's disposition planner.
+//! Builds immutable compaction plans from the append-only event log.
 //!
-//! Given the append-only event log and a CompressPolicy, build_manifest
-//! produces a CheckpointManifest: a per-turn-group Disposition plan
-//! (Verbatim, Summarized) plus a summary of the folded span. The raw log is
-//! never mutated; applying the plan to a replay yields the context window.
-//!
-//! Disposition heuristic:
-//! - The last tail_turns assistant turns (API rounds) stay Verbatim (preserved
-//!   in the view). The unit is the assistant response so a single-user agentic
-//!   session still compacts.
-//! - Older turns are Summarized (folded into the summary).
-//! - preserve_recent_tokens caps the verbatim tail's token estimate; when the
-//!   tail exceeds the budget the oldest verbatim turns fold into the summary
-//!   until it fits (0 disables the ceiling).
-//!
-//! The plan is per turn group, not per event. One group = one API round
-//! (an API-round boundary fires at each new assistant response, integral
-//! same fate). thinking and its tool_use blocks always land in the same
-//! group, so a plan cannot split them — the API rejects a tool_use whose
-//! thinking block landed in a different fate. Type First encoding makes the
-//! illegal split unexpressable, not repaired later.
-//!
-//! Referenced is not a Compress disposition. A large tool_result is
-//! externalized to the CAS at the Isolate stage (PostToolUse, before
-//! Compress), so by the time build_manifest runs the result event already
-//! carries a small block_ref marker. The round is Verbatim or Summarized
-//! and the marker rides along; the pair stays integral. The
-//! large_output_bytes knob is the Isolate threshold, reserved here until
-//! the Isolate stage lands.
-//!
-//! The Summarizer trait is the seam: HeuristicSummarizer returns a placeholder
-//! string (no LLM dependency); LlmSummarizer (in lifecycle.rs) calls a provider
-//! with chunked input to prevent summarizer-self-overflow, falling back to the
-//! heuristic when the provider is unavailable.
+//! Recent assistant turns remain Verbatim; older turns become Summarized.
+//! Plans operate on complete API rounds so thinking and tool-use blocks cannot
+//! receive different dispositions. Applying a plan changes the selected view,
+//! never the underlying log.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -50,11 +21,8 @@ pub struct CompressPolicy {
     /// Token-budget ceiling on the verbatim tail. 0 disables the ceiling so
     /// tail_turns alone governs the boundary.
     pub preserve_recent_tokens: usize,
-    /// ToolResult outputs whose serialized byte length exceeds this become a
-    /// CAS block_ref at the Isolate stage (PostToolUse, before Compress). This
-    /// is the Isolate threshold, not a Compress disposition: build_manifest
-    /// assigns only Verbatim or Summarized. Reserved here until the Isolate
-    /// stage lands; 0 disables the large-output externalization path.
+    /// Reserved byte threshold for externalizing large tool results. It does
+    /// not affect disposition planning; 0 disables externalization.
     pub large_output_bytes: usize,
 }
 
@@ -68,8 +36,7 @@ impl Default for CompressPolicy {
     }
 }
 
-/// Error returned when summarization fails. The compress caller falls back to
-/// the heuristic summarizer on LlmFailed so the compaction pipeline never bricks.
+/// Error returned when summarization cannot produce text.
 #[derive(Debug)]
 pub enum SummarizeError {
     /// The LLM call failed (provider error, network, etc.).
@@ -89,17 +56,10 @@ impl std::fmt::Display for SummarizeError {
 
 impl std::error::Error for SummarizeError {}
 
-/// Produces a summary string for the Summarized span. The real implementation
-/// (LlmSummarizer in lifecycle.rs) calls a provider with chunked input; this
-/// trait is the seam so build_manifest's callers can swap summarizers without
-/// touching the disposition logic.
+/// Produces summary text for events assigned a Summarized disposition.
 pub trait Summarizer: Send + Sync + std::any::Any {
-    /// Summarize the given events (the folded span) into a single string.
-    /// custom_instructions, when present, are merged into the summarizer
-    /// prompt so a PreCompact hook (or a future /compact argument) can steer
-    /// the summary. Heuristic summarizers ignore it. The lifetime ties the
-    /// future to both the self borrow and the events slice so the
-    /// implementation can choose to borrow or clone.
+    /// Summarize the folded events. Provider-backed implementations may merge
+    /// custom_instructions into their prompt; deterministic ones may ignore it.
     fn summarize<'a>(
         &'a self,
         events: &'a [SessionLogEntry],
@@ -252,7 +212,7 @@ pub async fn build_manifest(
             Ok(text) => Some(text),
             Err(SummarizeError::Empty) => None,
             Err(SummarizeError::LlmFailed(_)) => {
-                // Fall back to the heuristic so the pipeline never bricks.
+                // Preserve progress when provider summarization fails.
                 HeuristicSummarizer
                     .summarize(&folded_owned, custom_instructions)
                     .await

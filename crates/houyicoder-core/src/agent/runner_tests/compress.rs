@@ -220,7 +220,7 @@ async fn test_pre_flight_trips_compress() {
         }
     }
     // Prove compress actually ran: the overflow-retry path calls
-    // compact_internal, which commits a checkpoint via write_checkpoint.
+    // run_compaction, which commits a checkpoint via write_checkpoint.
     // A tautology here would let a regression that drops compress pass.
     let snap = runner.store().current_view(session).await.unwrap();
     assert!(
@@ -348,20 +348,20 @@ async fn test_stall_flushes_partial() {
     );
 }
 
-/// Runner.compress runs before-compact marker extraction when a memory
-/// provider is wired: the about-to-fold span is scanned for markers + hits
+/// Runner.compress runs before-compact preservation when a memory
+/// provider is wired: the about-to-fold span is scanned for signals + hits
 /// are written (best-effort). With a stub provider (add = no-op) this covers
-/// the wiring path; the marker extraction logic itself is tested in
-/// lifecycle.rs (the pure fn).
+/// the wiring path; the preservation logic itself is tested in
+/// memory_preservation.rs (the pure fn).
 #[tokio::test]
-async fn test_compress_runs_marker_extraction() {
+async fn test_compress_runs_preservation() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let memory: Arc<dyn houyicoder_api::memory::MemoryProvider> =
         Arc::new(houyicoder_memory::StubMemoryProvider::new());
     let runner = runner_with(provider, ToolRegistry::new()).with_memory(memory);
     let session = houyicoder_context::SessionId::new();
     // Seed 6 assistant turns so default tail_turns=4 folds the oldest 2.
-    // Their text contains an unsolved marker so extract_precompact_markers
+    // Their text contains an unsolved signal so preserve_folded_context
     // finds hits; the stub add accepts them (no-op).
     for i in 0..6 {
         runner

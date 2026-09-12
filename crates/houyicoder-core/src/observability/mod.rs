@@ -34,7 +34,8 @@ use houyicoder_context::SessionLogEntry;
 use houyicoder_protocol::llm::Usage;
 use serde::{Deserialize, Serialize};
 
-use crate::agent::{CompressResult, HookError};
+use crate::agent::compaction::RecordedCompaction;
+use crate::agent::hook::HookError;
 
 // ===== bounds =====
 
@@ -335,7 +336,7 @@ impl CostAccumulator {
 pub struct ObservabilityLog {
     writes: Vec<SessionLogEntry>,
     tool_calls: Vec<ToolCallRecord>,
-    last_report: Option<CompressResult>,
+    last_report: Option<RecordedCompaction>,
     errors: Vec<HookError>,
     cost: CostAccumulator,
     cumulative_usage: Usage,
@@ -590,8 +591,8 @@ impl ObservabilityLog {
         (self.turn_count, self.call_in_turn)
     }
 
-    /// Cache the most recent compress result for insight projection.
-    pub fn set_report(&mut self, report: CompressResult) {
+    /// Cache the most recent compaction recording for insight projection.
+    pub fn set_report(&mut self, report: RecordedCompaction) {
         self.last_report = Some(report);
     }
 
@@ -652,8 +653,8 @@ pub trait MetricsView {
     /// The trajectory event stream (append order). Drops when the store
     /// becomes the single source for /trajectory projection.
     fn trajectory(&self) -> &[SessionLogEntry];
-    /// The most recent compress result, for trajectory compact drill-down.
-    fn report(&self) -> Option<&CompressResult>;
+    /// The most recent compaction recording, for trajectory compact drill-down.
+    fn report(&self) -> Option<&RecordedCompaction>;
     /// Per-tool aggregate statistics, for the trajectory tool-filter view.
     fn tool_stats(&self) -> &[ToolCallRecord];
     /// Aggregated cost, for the status bar + cost view.
@@ -667,7 +668,7 @@ impl MetricsView for ObservabilityLog {
         &self.writes
     }
 
-    fn report(&self) -> Option<&CompressResult> {
+    fn report(&self) -> Option<&RecordedCompaction> {
         self.last_report.as_ref()
     }
 

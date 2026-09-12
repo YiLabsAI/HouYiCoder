@@ -1,4 +1,4 @@
-//! Re-derivable compaction state and compacted-conversation recall.
+//! End-to-end compaction pipeline integration tests.
 
 use std::sync::Arc;
 
@@ -10,10 +10,9 @@ use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, Disposition, EventId, SessionEvent,
     SessionId, SessionLogEntry, TurnGroup,
 };
-use houyicoder_core::agent::compact::CompactOutcome;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
-    ConversationSearchTool, Runner, SummarizeError, Summarizer, ToolRegistry,
+    CompactionOutcome, ConversationSearchTool, Runner, SummarizeError, Summarizer, ToolRegistry,
 };
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{
@@ -177,7 +176,7 @@ async fn seed_rich_session() -> (Arc<SessionStore>, SessionId) {
 }
 
 /// After conversation_search bumps the meter, a compaction snapshots it and
-/// the CompactOutcome carries a non-None recall rate (recalls / folded
+/// the CompactionOutcome carries a non-None recall rate (recalls / folded
 /// count). The rate is computed from the same meter the tool bumps, not a
 /// separate channel; the snapshot resets the meter for the next interval.
 #[tokio::test]
@@ -200,7 +199,7 @@ async fn test_recall_rate_in_report() {
     runner
         .recall_meter()
         .store(2, std::sync::atomic::Ordering::Relaxed);
-    let outcome: CompactOutcome = runner.compact(session).await.expect("compact");
+    let outcome: CompactionOutcome = runner.compact(session).await.expect("compact");
     assert!(
         outcome.folded_count > 0,
         "fixture must fold at least one event for a rate"
@@ -551,13 +550,8 @@ async fn test_economy_gate_fires_compact() {
     );
 }
 
-/// A no-progress compact that leaves the view still over the ceiling sets a
-/// Sticky suppress so the next turn does not retry pointlessly (the view
-/// cannot shrink — all-Verbatim). Pins the still-over suppress path +
-/// confirms the run fail-closes with ContextOverflowNoProgress.
 #[tokio::test]
-async fn test_still_over_sets_sticky() {
-    use houyicoder_core::agent::compact::CompactSuppress;
+async fn test_overflow_no_progress() {
     let session = SessionId::new();
     let backend = InMemoryBackend::new();
     // Two assistant turns — below the default tail_turns=4, so a compact
@@ -608,10 +602,5 @@ async fn test_still_over_sets_sticky() {
             houyicoder_core::agent::RunError::ContextOverflowNoProgress
         ),
         "no-progress over-ceiling run fails closed"
-    );
-    assert_eq!(
-        runner.compact_suppress(),
-        CompactSuppress::Sticky,
-        "still-over no-progress sets a Sticky suppress"
     );
 }

@@ -501,9 +501,9 @@ pub(crate) fn assemble(
         bus: Some(Arc::clone(&bus)),
         descriptor_store: Some(Arc::clone(&descriptor_store)),
     });
-    // LlmSummarizer shares the main provider + model so compress produces
+    // LlmSummarizer shares the main provider + model so compaction produces
     // real summaries; the self-overflow guard + heuristic fallback are in
-    // lifecycle.rs. Cloned before the runner takes the provider.
+    // compaction/summarization.rs. Cloned before the runner takes the provider.
     let summarizer = Box::new(LlmSummarizer::new(
         Arc::clone(&provider_for_extractor),
         model_for_extractor.clone(),

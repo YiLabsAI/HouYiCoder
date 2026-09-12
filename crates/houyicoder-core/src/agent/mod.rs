@@ -16,7 +16,7 @@ mod backbone;
 mod builder;
 mod cache_liveness;
 mod call;
-pub mod compact;
+pub(crate) mod compaction;
 mod conditional_activation;
 mod context;
 mod diff;
@@ -29,11 +29,11 @@ pub mod extract;
 pub mod extractor;
 mod fact;
 pub mod git_discard;
-mod hook;
+pub(crate) mod hook;
 mod input_queue;
-mod lifecycle;
 mod manifest;
 mod memory_change_recorder;
+mod memory_preservation;
 mod memory_recall;
 pub mod model_window;
 mod obs_wire;
@@ -243,7 +243,7 @@ pub struct Runner {
     cost_model: Arc<dyn houyicoder_api::cost_model::CostModelProvider>,
     /// Recall meter: counts conversation_search matches that landed in the
     /// folded (Summarized) span since the last compaction. The conversation
-    /// recall tool bumps it; compact_internal snapshots + resets it to
+    /// recall tool bumps it; run_compaction snapshots + resets it to
     /// compute a recall rate (recalls / folded count) for the compaction
     /// report. Shared (Arc) so the tool + the compaction path share one
     /// counter across the session. A fresh meter starts at 0 (no recalls).
@@ -254,20 +254,16 @@ pub struct Runner {
     /// the cwd handle so worktree switches propagate. None ⇒ the backbone
     /// runs the log-rederivable layer only (the watermark fields are None).
     workspace_probe: Option<Arc<dyn backbone::WorkspaceProbe>>,
-    /// Auto-compact suppression level (a CompactSuppress as u8). Set by a
-    /// deterministic compact failure + read by the pre-flight economy gate;
-    /// manual /compact bypasses it. The turn-start self-heal clears Turn.
-    compact_suppress: std::sync::atomic::AtomicU8,
+    /// Auto-compact suppression level (a CompactionSuppression as u8). Set by
+    /// a deterministic compact failure, read by the pre-flight economy gate;
+    /// manual /compact bypasses it. Turn-level clears at turn start.
+    compaction_suppression: std::sync::atomic::AtomicU8,
     /// Cached-prefix liveness + per-block stable retention decisions; shared
     /// with the ContextBuilder (see cache_liveness).
     cached_prefix: std::sync::Arc<cache_liveness::CachedPrefixState>,
-    /// Consecutive transient (Other-class) auto-compact failures. A fatal
-    /// cause goes Sticky on the first failure; a transient cause self-heals
-    /// each turn and would retry every turn, so a streak promotes it to Sticky
-    /// after 3, stopping a persistently-failing transient cause from hammering
-    /// a doomed compact each turn. Reset on a successful compact + on a
-    /// context-budget change.
-    compact_consecutive_failures: std::sync::atomic::AtomicU32,
+    /// Consecutive transient auto-compaction failures. Repeated failures
+    /// become sticky to stop retry churn. Reset by success or budget changes.
+    compaction_transient_failures: std::sync::atomic::AtomicU32,
     /// Previous turn's cache_read for break detection (None before first turn).
     cache_prev_read: std::sync::Mutex<Option<u64>>,
     /// Flag: compaction ran since the previous provider response.
@@ -481,7 +477,7 @@ impl Runner {
     pub fn summarizer_is_llm(&self) -> bool {
         self.summarizer
             .as_any()
-            .downcast_ref::<lifecycle::LlmSummarizer>()
+            .downcast_ref::<compaction::LlmSummarizer>()
             .is_some()
     }
 
@@ -492,10 +488,9 @@ impl Runner {
         if let Ok(mut m) = self.active_model.write() {
             *m = model;
         }
-        // A model switch may change the resolved context window (a larger
-        // window lifts a sticky suppress that a fatal compact set under the
-        // old, smaller window).
-        self.clear_sticky_compact_suppress();
+        // A model switch may change the context window; a larger window
+        // lifts a sticky suppress set by a fatal compact under the old one.
+        self.clear_sticky_compaction_suppression();
         // A model switch changes the provider-facing prefix, so the cached
         // prefix generation + the last observed input tokens are stale.
         self.cached_prefix.invalidate();

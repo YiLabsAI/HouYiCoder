@@ -8,6 +8,7 @@ use houyicoder_protocol::llm::{
 };
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 
+use super::compaction::{CompactionSuppression, SuppressionCause};
 use super::truncation::{classify_truncation_signal, is_length_reason};
 use super::{RunError, Runner, new_event, obs_wire};
 use houyicoder_api::agent_event::{EventHandler, ResponseStreamEvent};
@@ -89,7 +90,7 @@ impl Runner {
         // even for
         // cancelled / errored turns (which never reach a TurnUsage).
         obs_wire::start_turn(&self.observability);
-        self.heal_turn_start_suppress();
+        self.heal_turn_start_suppression();
         self.append_turn_started(session).await?;
 
         let mut overflow_retries = 0u32;
@@ -193,7 +194,7 @@ impl Runner {
                 if conservative_input_tokens > window / 2
                     && remaining > 0
                     && !economy_fired_this_turn
-                    && self.compact_suppress() == super::compact::CompactSuppress::None
+                    && self.compaction_suppression() == CompactionSuppression::None
                 {
                     let projection = super::economy::economy_projection(
                         conservative_input_tokens,
@@ -238,13 +239,11 @@ impl Runner {
                         p = self.compress(session) => p?,
                     };
                     if !progress {
-                        // The compact made no progress (all-Verbatim) AND the
-                        // view is still over the ceiling — a re-loop would not
-                        // shrink. Sticky-suppress the auto path so the next
-                        // turn does not retry pointlessly; the overflow guard
-                        // stays fail-closed here.
-                        self.set_compact_suppress(
-                            super::compact::SuppressReason::StillOver.suppress_state(),
+                        // All-Verbatim and still over ceiling: a re-loop
+                        // would not shrink. Sticky-suppress so the next
+                        // turn does not retry pointlessly.
+                        self.set_compaction_suppression(
+                            SuppressionCause::NoProgress.suppression_state(),
                         );
                         return Err(RunError::ContextOverflowNoProgress);
                     }
@@ -389,15 +388,15 @@ impl Runner {
                         p = self.compress(session) => p?,
                     };
                             if !progress {
-                                self.set_compact_suppress(
-                                    super::compact::SuppressReason::StillOver.suppress_state(),
+                                self.set_compaction_suppression(
+                                    SuppressionCause::NoProgress.suppression_state(),
                                 );
                                 return Err(RunError::ContextOverflowNoProgress);
                             }
                             overflow_retries += 1;
-                            // Compact folded older memory-recall events out
-                            // of the assembled context; re-inject so the model is
-                            // not memory-blind for the rest of this run.
+                            // Compaction folded older memory-recall events out
+                            // of the context; re-inject so the model is not
+                            // memory-blind for the rest of this run.
                             self.inject_memory_recall(session).await?;
                             // Re-announce skills: the compact folded the
                             // listing out; the scan resets and re-surfaces it.

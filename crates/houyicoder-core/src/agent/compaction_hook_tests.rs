@@ -112,11 +112,11 @@ impl Hook for FixedHook {
 }
 
 /// Summarizer fixture that captures injected instructions.
-struct CapturingSummarizer {
+struct SummaryCapture {
     seen: Mutex<Option<String>>,
 }
 
-impl CapturingSummarizer {
+impl SummaryCapture {
     fn new() -> Self {
         Self {
             seen: Mutex::new(None),
@@ -127,7 +127,7 @@ impl CapturingSummarizer {
     }
 }
 
-impl Summarizer for CapturingSummarizer {
+impl Summarizer for SummaryCapture {
     fn summarize<'a>(
         &'a self,
         _events: &'a [SessionLogEntry],
@@ -148,7 +148,7 @@ impl Summarizer for CapturingSummarizer {
 /// Build a runner with deterministic summary and hook fixtures.
 fn build_runner(
     store: Arc<SessionStore>,
-    summarizer: Arc<CapturingSummarizer>,
+    summarizer: Arc<SummaryCapture>,
     hooks: Option<HookRegistry>,
 ) -> Runner {
     let mut runner = Runner::new(
@@ -160,17 +160,17 @@ fn build_runner(
             ..crate::agent::runner_config::RunnerConfig::default()
         },
     );
-    runner = runner.with_summarizer(Box::new(CapturingSummarizerWrapper(summarizer)));
+    runner = runner.with_summarizer(Box::new(CapturingSummarizer(summarizer)));
     if let Some(reg) = hooks {
         runner = runner.with_hooks(Arc::new(reg));
     }
     runner
 }
 
-/// Trait-object wrapper retaining the test's shared capture handle.
-struct CapturingSummarizerWrapper(Arc<CapturingSummarizer>);
+/// Trait-object adapter retaining the test's shared capture handle.
+struct CapturingSummarizer(Arc<SummaryCapture>);
 
-impl Summarizer for CapturingSummarizerWrapper {
+impl Summarizer for CapturingSummarizer {
     fn summarize<'a>(
         &'a self,
         events: &'a [SessionLogEntry],
@@ -224,7 +224,7 @@ async fn test_precompress_fires_return_channel() {
     let (s, events) = six_turn_session();
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_events(&store, &events).await;
-    let capturing = Arc::new(CapturingSummarizer::new());
+    let capturing = Arc::new(SummaryCapture::new());
     let reg = HookRegistry::new();
     reg.register(Arc::new(FixedHook {
         name: "pre-inject".into(),
@@ -258,7 +258,7 @@ async fn test_precompact_no_deny_path() {
     let (s, events) = six_turn_session();
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_events(&store, &events).await;
-    let capturing = Arc::new(CapturingSummarizer::new());
+    let capturing = Arc::new(SummaryCapture::new());
     let reg = HookRegistry::new();
     reg.register(Arc::new(FixedHook {
         name: "pre-deny".into(),
@@ -289,7 +289,7 @@ async fn test_postcompact_fires_with_summary() {
     let (s, events) = six_turn_session();
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_events(&store, &events).await;
-    let capturing = Arc::new(CapturingSummarizer::new());
+    let capturing = Arc::new(SummaryCapture::new());
     let reg = HookRegistry::new();
     reg.register(Arc::new(FixedHook {
         name: "post-observe".into(),
@@ -339,7 +339,7 @@ async fn test_recompact_reuses_measurement() {
     let (session, events) = six_turn_session();
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_events(&store, &events).await;
-    let summarizer = Arc::new(CapturingSummarizer::new());
+    let summarizer = Arc::new(SummaryCapture::new());
     let runner = build_runner(store, summarizer, None);
 
     let first = runner.compact(session).await.expect("first compact");
@@ -356,7 +356,7 @@ async fn test_auto_path_fires_precompact() {
     let (s, events) = six_turn_session();
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_events(&store, &events).await;
-    let capturing = Arc::new(CapturingSummarizer::new());
+    let capturing = Arc::new(SummaryCapture::new());
     let reg = HookRegistry::new();
     reg.register(Arc::new(FixedHook {
         name: "pre-auto".into(),

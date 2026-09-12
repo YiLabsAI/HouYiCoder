@@ -370,35 +370,29 @@ impl Runner {
         }
     }
 
-    /// Compress the session (auto path, fired by the pre-flight + overflow
-    /// handler in the agent loop): fold older events into a summary, persist
-    /// a checkpoint manifest, append CompactionBoundary + Summary events
-    /// (hash chain maintained), and fire PreCompact/PostCompact hooks.
-    /// Delegates to compact_internal so the manual /compact path and the
-    /// auto path share one hook-fire + marker-extraction sequence (only the
-    /// trigger differs). Returns true when at least one event was Summarized
-    /// (progress was made). When false, the manifest is all-Verbatim and
-    /// compressing again would not shrink the window — the caller must
-    /// fail-closed.
+    /// Auto compaction (fired by the pre-flight and overflow handlers): fold
+    /// older events into a summary, persist a checkpoint manifest, append
+    /// CompactionBoundary + Summary events, and fire hooks. Delegates to
+    /// run_compaction so manual and auto share one pipeline. Returns true
+    /// when progress was made (at least one Summarized event); false means
+    /// the manifest is all-Verbatim and the caller must fail-closed.
     pub async fn compress(&self, session: SessionId) -> Result<bool, RunError> {
-        // Flag for cache-break attribution: compaction rewrites the prefix,
-        // so the next provider response will likely show a cache-read drop.
-        // The flag is cleared in append_turn_usage after attribution.
+        // Compaction rewrites the prefix, so the next provider response will
+        // likely show a cache-read drop. Cleared in append_turn_usage.
         self.cache_compact_flag
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let outcome = self
-            .compact_internal(session, crate::agent::hook::CompactTrigger::Auto)
+            .run_compaction(session, crate::agent::hook::CompactTrigger::Auto)
             .await?;
         Ok(outcome.made_progress)
     }
 
-    /// Before-clear marker extraction: scan the whole session for
-    /// unsolved-problem and key-decision markers, write them to the auto
-    /// scope so key facts survive the /clear drop. Matches the before-compact
-    /// extraction but scans every event (clear drops everything, not just a
-    /// folded span). Deterministic, no model, best-effort — a write failure
-    /// logs and continues; memory persistence never blocks the clear path.
-    /// No-op when no memory provider is wired.
+    /// Before-clear preservation: scan the whole session for unsolved-problem
+    /// and key-decision signals, write them to the auto scope so key facts
+    /// survive /clear. Matches before-compact preservation but scans every
+    /// event (clear drops everything, not just a folded span). Best-effort:
+    /// a write failure logs and continues; memory never blocks the clear
+    /// path. No-op when no memory provider is wired.
     pub async fn before_clear(&self, session: SessionId) -> Result<(), super::RunError> {
         let Some(memory) = &self.memory else {
             return Ok(());
@@ -406,12 +400,12 @@ impl Runner {
         let events = self.store.replay(session).await?;
         let existing: std::collections::HashSet<String> =
             memory.list_memories().into_iter().map(|s| s.key).collect();
-        for entry in super::lifecycle::extract_preclear_markers(&events) {
+        for entry in super::memory_preservation::preserve_session(&events) {
             if existing.contains(&entry.key) {
                 continue;
             }
             if let Err(e) = memory.add(entry) {
-                tracing::warn!("before-clear marker write failed: {e}");
+                tracing::warn!("before-clear preservation write failed: {e}");
             }
         }
         Ok(())

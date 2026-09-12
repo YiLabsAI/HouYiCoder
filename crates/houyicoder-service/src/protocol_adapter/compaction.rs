@@ -1,11 +1,11 @@
 //! Map the engine compaction outcome to the wire reply.
 
-use houyicoder_core::agent::compact::CompactOutcome;
+use houyicoder_core::agent::CompactionOutcome;
 use houyicoder_protocol::frontend::compact::CompactReply;
 
-/// Map CompactOutcome (progress, folded count, manifest id, token estimates)
+/// Map CompactionOutcome (progress, folded count, manifest id, token estimates)
 /// to the wire reply.
-pub(crate) fn map_compact_reply(outcome: &CompactOutcome) -> CompactReply {
+pub(crate) fn map_compact_reply(outcome: &CompactionOutcome) -> CompactReply {
     CompactReply::new(
         outcome.made_progress,
         outcome.folded_count as u64,
@@ -21,11 +21,10 @@ pub(crate) fn map_compact_reply(outcome: &CompactOutcome) -> CompactReply {
 mod tests {
     use super::*;
     use houyicoder_context::CheckpointId;
-    use houyicoder_core::agent::compact::CompactOutcome;
 
     #[test]
     fn test_reply_carries_outcome_fields() {
-        let outcome = CompactOutcome {
+        let outcome = CompactionOutcome {
             made_progress: true,
             folded_count: 12,
             manifest_id: CheckpointId::new(),
@@ -45,7 +44,7 @@ mod tests {
 
     #[test]
     fn test_no_progress_reply_honest() {
-        let outcome = CompactOutcome {
+        let outcome = CompactionOutcome {
             made_progress: false,
             folded_count: 0,
             manifest_id: CheckpointId::new(),

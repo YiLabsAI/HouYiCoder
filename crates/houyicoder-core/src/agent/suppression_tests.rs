@@ -1,7 +1,4 @@
-//! Auto-compact suppress state-machine tests: the reason→scope mapping, the
-//! u8 round-trip, and the runner-level set/get/clear + model-switch-clears-
-//! sticky behavior. The turn-start self-heal + the fire-path integration are
-//! covered by the rederive_wiring economy-gate integration test.
+//! Automatic compaction retry-suppression tests.
 
 use std::sync::Arc;
 
@@ -9,7 +6,7 @@ use houyicoder_context::SessionId;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
 
-use crate::agent::compact::{CompactSuppress, SuppressReason};
+use super::{CompactionSuppression, SuppressionCause};
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::{Runner, ToolRegistry};
 
@@ -26,60 +23,67 @@ fn runner() -> Runner {
 }
 
 #[test]
-fn test_reason_maps_to_scope() {
-    // A transient failure (Other) only skips one turn (self-heals); a fatal
-    // failure (Schema) + a no-progress-still-over both stick until a
-    // context-budget change clears them.
+fn test_cause_maps_to_scope() {
+    // Transient failures skip one turn; terminal causes remain suppressed
+    // until the context budget changes.
     assert_eq!(
-        SuppressReason::Other.suppress_state(),
-        CompactSuppress::Turn
+        SuppressionCause::Transient.suppression_state(),
+        CompactionSuppression::Turn
     );
     assert_eq!(
-        SuppressReason::Schema.suppress_state(),
-        CompactSuppress::Sticky
+        SuppressionCause::CorruptLog.suppression_state(),
+        CompactionSuppression::Sticky
     );
     assert_eq!(
-        SuppressReason::StillOver.suppress_state(),
-        CompactSuppress::Sticky
+        SuppressionCause::NoProgress.suppression_state(),
+        CompactionSuppression::Sticky
     );
 }
 
 #[test]
-fn test_suppress_round_trips_u8() {
+fn test_suppression_round_trips_u8() {
     for level in [
-        CompactSuppress::None,
-        CompactSuppress::Turn,
-        CompactSuppress::Sticky,
+        CompactionSuppression::None,
+        CompactionSuppression::Turn,
+        CompactionSuppression::Sticky,
     ] {
-        assert_eq!(CompactSuppress::from_u8(level.as_u8()), level);
+        assert_eq!(CompactionSuppression::from_u8(level.as_u8()), level);
     }
-    // An unknown value (a removed/future level on a stale log) reads as None
-    // so a stale suppress never bricks auto-compact.
-    assert_eq!(CompactSuppress::from_u8(99), CompactSuppress::None);
-    assert_eq!(CompactSuppress::from_u8(3), CompactSuppress::None);
-    assert_eq!(CompactSuppress::from_u8(4), CompactSuppress::None);
+    // Unknown values cannot disable automatic compaction.
+    assert_eq!(
+        CompactionSuppression::from_u8(99),
+        CompactionSuppression::None
+    );
+    assert_eq!(
+        CompactionSuppression::from_u8(3),
+        CompactionSuppression::None
+    );
+    assert_eq!(
+        CompactionSuppression::from_u8(4),
+        CompactionSuppression::None
+    );
 }
 
 #[test]
 fn test_turn_clears_at_start() {
-    assert!(CompactSuppress::Turn.clears_at_turn_start());
-    assert!(!CompactSuppress::Sticky.clears_at_turn_start());
-    assert!(!CompactSuppress::None.clears_at_turn_start());
+    assert!(CompactionSuppression::Turn.clears_at_turn_start());
+    assert!(!CompactionSuppression::Sticky.clears_at_turn_start());
+    assert!(!CompactionSuppression::None.clears_at_turn_start());
 }
 
 #[test]
 fn test_runner_set_get_clear() {
     let r = runner();
-    assert_eq!(r.compact_suppress(), CompactSuppress::None);
+    assert_eq!(r.compaction_suppression(), CompactionSuppression::None);
 
-    r.set_compact_suppress(CompactSuppress::Sticky);
-    assert_eq!(r.compact_suppress(), CompactSuppress::Sticky);
+    r.set_compaction_suppression(CompactionSuppression::Sticky);
+    assert_eq!(r.compaction_suppression(), CompactionSuppression::Sticky);
 
     // clear_sticky leaves a Turn-level suppress (the turn-start self-heal
     // owns that) but clears sticky/credit/auth.
-    r.set_compact_suppress(CompactSuppress::Turn);
-    r.clear_sticky_compact_suppress();
-    assert_eq!(r.compact_suppress(), CompactSuppress::Turn);
+    r.set_compaction_suppression(CompactionSuppression::Turn);
+    r.clear_sticky_compaction_suppression();
+    assert_eq!(r.compaction_suppression(), CompactionSuppression::Turn);
 }
 
 #[test]
@@ -88,42 +92,35 @@ fn test_model_switch_clears_sticky() {
     // under the old (smaller) window lifts. Turn-level is left to the
     // turn-start self-heal.
     let r = runner();
-    r.set_compact_suppress(CompactSuppress::Sticky);
+    r.set_compaction_suppression(CompactionSuppression::Sticky);
     r.set_model("glm-4.6[1m]".into());
-    assert_eq!(r.compact_suppress(), CompactSuppress::None);
+    assert_eq!(r.compaction_suppression(), CompactionSuppression::None);
 
-    r.set_compact_suppress(CompactSuppress::Turn);
+    r.set_compaction_suppression(CompactionSuppression::Turn);
     r.set_model("glm-4.6".into());
     assert_eq!(
-        r.compact_suppress(),
-        CompactSuppress::Turn,
+        r.compaction_suppression(),
+        CompactionSuppression::Turn,
         "model switch leaves Turn to the turn-start self-heal"
     );
 }
 
 #[test]
-fn test_import_compiles() {
-    // Kept so the SessionId import is not flagged when the test config above
-    // does not name it; future suppress tests may key state by session.
-    let _ = SessionId::new();
-}
-
-#[test]
 fn test_heal_clears_turn_level() {
     let r = runner();
-    r.set_compact_suppress(CompactSuppress::Turn);
-    r.heal_turn_start_suppress();
+    r.set_compaction_suppression(CompactionSuppression::Turn);
+    r.heal_turn_start_suppression();
     assert_eq!(
-        r.compact_suppress(),
-        CompactSuppress::None,
+        r.compaction_suppression(),
+        CompactionSuppression::None,
         "Turn self-heals"
     );
 
-    r.set_compact_suppress(CompactSuppress::Sticky);
-    r.heal_turn_start_suppress();
+    r.set_compaction_suppression(CompactionSuppression::Sticky);
+    r.heal_turn_start_suppression();
     assert_eq!(
-        r.compact_suppress(),
-        CompactSuppress::Sticky,
+        r.compaction_suppression(),
+        CompactionSuppression::Sticky,
         "Sticky survives the turn-start heal"
     );
 }
@@ -136,18 +133,18 @@ fn test_three_failures_trip_breaker() {
     // per-turn; the third trips the circuit breaker so auto-compact stops
     // hammering a doomed compact.
     let r = runner();
-    r.record_compact_failure(SuppressReason::Other);
+    r.record_compaction_failure(SuppressionCause::Transient);
     assert_eq!(
-        r.compact_suppress(),
-        CompactSuppress::Turn,
+        r.compaction_suppression(),
+        CompactionSuppression::Turn,
         "first transient failure self-heals next turn"
     );
-    r.record_compact_failure(SuppressReason::Other);
-    assert_eq!(r.compact_suppress(), CompactSuppress::Turn);
-    r.record_compact_failure(SuppressReason::Other);
+    r.record_compaction_failure(SuppressionCause::Transient);
+    assert_eq!(r.compaction_suppression(), CompactionSuppression::Turn);
+    r.record_compaction_failure(SuppressionCause::Transient);
     assert_eq!(
-        r.compact_suppress(),
-        CompactSuppress::Sticky,
+        r.compaction_suppression(),
+        CompactionSuppression::Sticky,
         "third consecutive transient failure trips the circuit breaker"
     );
 }
@@ -158,11 +155,11 @@ fn test_fatal_failure_persists_immediately() {
     // over-window) persists on the first failure — retrying cannot help, so
     // no streak is needed.
     let r = runner();
-    r.record_compact_failure(SuppressReason::Schema);
-    assert_eq!(r.compact_suppress(), CompactSuppress::Sticky);
-    r.set_compact_suppress(CompactSuppress::None);
-    r.record_compact_failure(SuppressReason::StillOver);
-    assert_eq!(r.compact_suppress(), CompactSuppress::Sticky);
+    r.record_compaction_failure(SuppressionCause::CorruptLog);
+    assert_eq!(r.compaction_suppression(), CompactionSuppression::Sticky);
+    r.set_compaction_suppression(CompactionSuppression::None);
+    r.record_compaction_failure(SuppressionCause::NoProgress);
+    assert_eq!(r.compaction_suppression(), CompactionSuppression::Sticky);
 }
 
 #[test]
@@ -170,16 +167,16 @@ fn test_success_resets_failure_streak() {
     // A successful compact wipes the streak so a future transient blip starts
     // the count fresh, not one failure from a circuit-break trip.
     let r = runner();
-    r.record_compact_failure(SuppressReason::Other);
-    r.record_compact_failure(SuppressReason::Other);
+    r.record_compaction_failure(SuppressionCause::Transient);
+    r.record_compaction_failure(SuppressionCause::Transient);
     // Simulate the success path: clear suppress + reset the streak.
-    r.set_compact_suppress(CompactSuppress::None);
-    r.compact_consecutive_failures
+    r.set_compaction_suppression(CompactionSuppression::None);
+    r.compaction_transient_failures
         .store(0, std::sync::atomic::Ordering::Relaxed);
-    r.record_compact_failure(SuppressReason::Other);
+    r.record_compaction_failure(SuppressionCause::Transient);
     assert_eq!(
-        r.compact_suppress(),
-        CompactSuppress::Turn,
+        r.compaction_suppression(),
+        CompactionSuppression::Turn,
         "streak reset on success — one failure is per-turn, not a trip"
     );
 }
@@ -189,19 +186,19 @@ fn test_model_switch_resets_streak() {
     // A context-budget change (model switch / rewind) is a fresh start: a
     // prior transient streak no longer applies under the new window.
     let r = runner();
-    r.record_compact_failure(SuppressReason::Other);
-    r.record_compact_failure(SuppressReason::Other);
-    r.clear_sticky_compact_suppress();
-    r.record_compact_failure(SuppressReason::Other);
+    r.record_compaction_failure(SuppressionCause::Transient);
+    r.record_compaction_failure(SuppressionCause::Transient);
+    r.clear_sticky_compaction_suppression();
+    r.record_compaction_failure(SuppressionCause::Transient);
     assert_eq!(
-        r.compact_suppress(),
-        CompactSuppress::Turn,
+        r.compaction_suppression(),
+        CompactionSuppression::Turn,
         "streak reset on context-budget change"
     );
 }
 
 #[tokio::test]
-async fn test_auto_failure_turn_suppress() {
+async fn test_auto_failure_suppression() {
     use houyicoder_async::PFut;
     use houyicoder_context::{ContextBackend, ContextError, EventId, SessionLogEntry};
 
@@ -254,12 +251,12 @@ async fn test_auto_failure_turn_suppress() {
             ..RunnerConfig::default()
         },
     );
-    // compress is the auto path; the commit fails (transient I/O → Other →
+    // compress is the auto path; the commit fails (transient I/O →
     // Turn). A manual /compact would bypass the suppress.
     let _outcome = r.compress(SessionId::new()).await;
     assert_eq!(
-        r.compact_suppress(),
-        CompactSuppress::Turn,
+        r.compaction_suppression(),
+        CompactionSuppression::Turn,
         "auto compact failure sets a Turn-level suppress"
     );
 }
