@@ -39,8 +39,11 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     let filtered = app.memory.filtered();
     let n = filtered.len();
     let cursor = app.memory.cursor().min(n.saturating_sub(1));
-    let header_lines = memory_header(app, tab, n);
-    let header_h = header_lines.len() as u16;
+    let header_rows: Vec<Line> = memory_header(app, tab, n)
+        .into_iter()
+        .flat_map(|line| wrap_styled_line(line, area.width as usize))
+        .collect();
+    let header_h = header_rows.len() as u16;
     // Pre-wrap the footer so the reserved height is exactly what renders.
     let footer_rows: Vec<Line> = memory_footer(area.width)
         .into_iter()
@@ -56,7 +59,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             Constraint::Length(footer_h),
         ])
         .split(area);
-    f.render_widget(Paragraph::new(header_lines), chunks[0]);
+    f.render_widget(Paragraph::new(header_rows), chunks[0]);
     if filtered.is_empty() {
         f.render_widget(
             Paragraph::new("  (no memories yet)").style(Style::new().fg(Color::DarkGray)),
@@ -77,29 +80,15 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(footer_rows), chunks[2]);
 }
 
-/// The footer key hints: navigation and row actions first, toggles second.
-/// The toggles line carries the scope pair while it fits on one row at this
-/// width; on a narrow pane the scope pair moves to a third line instead of
-/// wrapping mid-hint.
-fn memory_footer(width: u16) -> Vec<Line<'static>> {
-    let nav = key_hint(&[
+/// Primary list actions use the same footer grammar as sibling panes.
+/// Scope and toggle hints live beside the controls they operate in the header.
+fn memory_footer(_width: u16) -> Vec<Line<'static>> {
+    vec![key_hint(&[
         ("Up/Down", "select"),
         ("Enter", "open"),
         ("d", "forget"),
         ("Esc", "close"),
-    ]);
-    let toggles = key_hint(&[("a", "toggle auto-memory"), ("c", "toggle auto-dream")]);
-    let scope = key_hint(&[("Tab/Left/Right", "switch scope")]);
-    let combined = key_hint(&[
-        ("a", "toggle auto-memory"),
-        ("c", "toggle auto-dream"),
-        ("Tab/Left/Right", "switch scope"),
-    ]);
-    if wrap_styled_line(combined.clone(), width as usize).len() > 1 {
-        vec![nav, toggles, scope]
-    } else {
-        vec![nav, combined]
-    }
+    ])]
 }
 
 fn draw_loading(f: &mut Frame, area: Rect, key: &str) {
@@ -143,16 +132,16 @@ fn draw_detail(
                     Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
                 ),
             ]),
-            Line::from(format!("  source: {}", detail.source))
-                .style(Style::new().fg(Color::DarkGray)),
+            Line::from(format!(
+                "  source: {} · updated: {}",
+                detail.source,
+                age_label(detail.mtime_secs)
+            ))
+            .style(Style::new().fg(Color::DarkGray)),
         ]),
         rows[0],
     );
-    let mut body = vec![
-        Line::from(format!("updated: {}", age_label(detail.mtime_secs)))
-            .style(Style::new().fg(Color::DarkGray)),
-        Line::from(""),
-    ];
+    let mut body = Vec::new();
     let description = detail.description.trim();
     if !description.is_empty() && !detail.content.trim_start().starts_with(description) {
         body.push(Line::from(description.to_string()).style(Style::new().fg(Color::DarkGray)));
@@ -195,7 +184,11 @@ fn memory_header(app: &App, tab: MemoryScopeTab, n: usize) -> Vec<Line<'static>>
         (MemoryScopeTab::Project, "Project"),
         (MemoryScopeTab::Auto, "Auto"),
     ];
-    let mut lines = vec![tab_header(tab, &tabs)];
+    let mut tabs = tab_header(tab, &tabs);
+    tabs.spans.push(Span::raw("    "));
+    tabs.spans
+        .extend(key_hint(&[("Tab/Left/Right", "switch scope")]).spans);
+    let mut lines = vec![tabs];
     if app.memory.searching() {
         lines.push(
             Line::from(format!(
@@ -205,30 +198,30 @@ fn memory_header(app: &App, tab: MemoryScopeTab, n: usize) -> Vec<Line<'static>>
             .style(Style::new().fg(Color::DarkGray)),
         );
     }
-    lines.push(
-        Line::from(format!("  memory — {n} stored · newest first"))
-            .style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-    );
-    if !app.memory.entries().is_empty() {
-        lines.push(
-            Line::from(scope_distribution(app.memory.entries()))
-                .style(Style::new().fg(Color::DarkGray)),
-        );
-    }
-    lines.push(toggle_status_line(&app.memory));
+    lines.push(memory_status_line(&app.memory, n));
     lines
 }
 
-/// The toggle status row: the current state of each switch, with an
-/// in-flight flip marked until its reply lands. On is ● (Cyan, bold), off
-/// is ○ (dim), pending is ◌ (Cyan).
-fn toggle_status_line(memory: &MemoryPaneState) -> Line<'static> {
+/// Count, ordering, and switch state share one status row beneath the tabs.
+/// On is ● (Cyan, bold), off is ○ (dim), pending is ◌ (Cyan).
+fn memory_status_line(memory: &MemoryPaneState, count: usize) -> Line<'static> {
     let switches = [MemoryToggleWhich::Auto, MemoryToggleWhich::Dream];
-    let mut spans = vec![Span::raw("  ")];
-    for (i, which) in switches.into_iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw("    "));
-        }
+    let noun = if count == 1 { "memory" } else { "memories" };
+    let mut spans = vec![Span::styled(
+        format!("  {count} {noun} · newest first"),
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )];
+    for (index, which) in switches.into_iter().enumerate() {
+        spans.push(Span::styled(
+            if index == 0 { "    " } else { " · " },
+            Style::new().fg(Color::DarkGray),
+        ));
+        let key = match which {
+            MemoryToggleWhich::Auto => "a",
+            MemoryToggleWhich::Dream => "c",
+        };
+        spans.extend(key_hint(&[(key, "toggle")]).spans);
+        spans.push(Span::raw(" "));
         let on = match which {
             MemoryToggleWhich::Auto => memory.toggles().auto_memory,
             MemoryToggleWhich::Dream => memory.toggles().auto_dream,
@@ -300,20 +293,4 @@ fn age_label(mtime_secs: u64) -> String {
         3_600..=86_399 => format!("{}h ago", age / 3_600),
         _ => format!("{}d ago", age / 86_400),
     }
-}
-
-/// One-line breakdown of how many memories live in each storage scope, across
-/// the full entry list (not the filtered view). Shown dim under the header so
-/// the user sees the distribution at a glance even when narrowed to one scope.
-fn scope_distribution(entries: &[MemoryEntry]) -> String {
-    let (mut u, mut p, mut a) = (0usize, 0usize, 0usize);
-    for m in entries {
-        match m.scope.as_str() {
-            "user" => u += 1,
-            "project" => p += 1,
-            "auto" => a += 1,
-            _ => {}
-        }
-    }
-    format!("  {u} user / {p} project / {a} auto")
 }

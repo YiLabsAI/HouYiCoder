@@ -273,4 +273,42 @@ fn test_notice_shows_memory_changes() {
         out.contains("deleted beta"),
         "deletion should render: {out}"
     );
+    assert!(
+        out.contains("Memory auto-dream: 2 changes · /memory"),
+        "the summary must not inline every key: {out}"
+    );
+    assert!(
+        out.contains("⎿  promoted alpha") && out.contains("⎿  deleted beta"),
+        "each exact change remains visible on a child row: {out}"
+    );
+}
+
+#[test]
+fn test_notice_wraps_long_keys() {
+    use houyicoder_protocol::frontend::memory::{
+        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    };
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    let changes = (0..4)
+        .map(|index| MemoryChange {
+            key: format!("project-memory-with-a-deliberately-long-key-{index}"),
+            operation: MemoryOperation::Stored,
+        })
+        .collect();
+    app.handle_agent_message(AgentMessage::MemoryChanged {
+        id: MemoryChangeId("change-long".into()),
+        origin: MemoryChangeOrigin::AutoMemory,
+        changes,
+    });
+    let out = crate::test_support::render_text(&app, 54, 36);
+    assert!(
+        out.contains("Memory auto-memory: 4 changes · /memory"),
+        "summary remains visible after wrapping: {out}"
+    );
+    assert_eq!(
+        out.matches('⎿').count(),
+        4,
+        "every change keeps its own visible child row after wrapping: {out}"
+    );
 }

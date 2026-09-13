@@ -568,24 +568,19 @@ impl App {
             MemoryChangeOrigin::AutoMemory => "auto-memory",
             MemoryChangeOrigin::AutoDream => "auto-dream",
         };
-        let operations = changes
-            .iter()
-            .map(|change| {
-                let operation = match change.operation {
-                    MemoryOperation::Stored => "stored",
-                    MemoryOperation::Deleted => "deleted",
-                    MemoryOperation::Promoted => "promoted",
-                    MemoryOperation::Demoted => "demoted",
-                };
-                format!("{operation} {}", change.key)
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
         let count = changes.len();
         let noun = if count == 1 { "change" } else { "changes" };
-        self.system_line(format!(
-            "Memory {source}: {count} {noun} ({operations}) · /memory shows newest first"
-        ));
+        let mut notice = format!("Memory {source}: {count} {noun} · /memory");
+        for change in changes {
+            let operation = match change.operation {
+                MemoryOperation::Stored => "stored",
+                MemoryOperation::Deleted => "deleted",
+                MemoryOperation::Promoted => "promoted",
+                MemoryOperation::Demoted => "demoted",
+            };
+            notice.push_str(&format!("\n  ⎿  {operation} {}", change.key));
+        }
+        self.system_line(notice);
         if self.pane == Pane::Memory
             && let Some(req_id) = self.mint_request_id()
         {

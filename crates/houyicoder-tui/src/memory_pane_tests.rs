@@ -169,10 +169,20 @@ fn test_memory_detail_inline() {
     assert!(detail.contains("newest"));
     assert_eq!(detail.matches("full memory body").count(), 1);
     assert!(detail.contains("detail line 0"));
+    assert!(detail.contains("source: feedback · updated:"));
     assert!(detail.contains("Esc to back"));
     assert_eq!(app.transcript.len(), transcript_len);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.memory.detail_offset(), Some(1));
+    let scrolled = render(&app);
+    assert!(
+        scrolled.contains("source: feedback · updated:"),
+        "identity metadata stays fixed while the body scrolls:\n{scrolled}"
+    );
+    assert!(
+        !scrolled.contains("full memory body") && scrolled.contains("detail line 0"),
+        "the body, not the metadata header, advances by one row:\n{scrolled}"
+    );
     for _ in 0..100 {
         crate::keys::handle_working(
             &mut app,
@@ -221,7 +231,7 @@ fn test_memory_search_narrows_clears() {
     app.run_tui_local_command("memory search build");
     let narrowed = render(&app);
     assert!(
-        narrowed.contains("1 stored"),
+        narrowed.contains("1 memory"),
         "search narrows to one:\n{narrowed}"
     );
     assert!(narrowed.contains("search: [build]"), "search query shown");
@@ -230,7 +240,7 @@ fn test_memory_search_narrows_clears() {
     // Esc clears the filter, back to the full set.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     let cleared = render(&app);
-    assert!(cleared.contains("3 stored"), "Esc restores full list");
+    assert!(cleared.contains("3 memories"), "Esc restores full list");
     assert!(!cleared.contains("search: ["), "search row gone after Esc");
 }
 
@@ -251,14 +261,17 @@ fn test_memory_pane_renders_rows() {
     app.run_command(SlashCommand::Memory);
     let on = render(&app);
     assert_eq!(app.pane, Pane::Memory);
-    // Footer verbs are static — the current state lives in the header row.
     assert!(
-        on.contains("a to toggle auto-memory"),
-        "auto-memory hint missing"
+        on.contains("a to toggle ● auto-memory") && on.contains("c to toggle ● auto-dream"),
+        "each toggle key must name its target"
     );
     assert!(
-        on.contains("c to toggle auto-dream"),
-        "auto-dream hint missing"
+        on.contains("3 memories · newest first"),
+        "one compact summary row should own count and ordering:\n{on}"
+    );
+    assert!(
+        !on.contains("user / 17 project / 12 auto"),
+        "scope distribution must not duplicate the tab navigation:\n{on}"
     );
     // Both switches default on: the status row renders filled glyphs.
     assert!(on.contains("● auto-memory"), "on renders ●:\n{on}");
@@ -271,8 +284,8 @@ fn test_memory_pane_renders_rows() {
     assert!(off.contains("○ auto-memory"), "off renders ○:\n{off}");
     assert!(off.contains("○ auto-dream"), "off renders ○:\n{off}");
     assert!(
-        off.contains("a to toggle auto-memory"),
-        "footer verb does not flip with the state"
+        off.contains("a to toggle ○ auto-memory") && off.contains("c to toggle ○ auto-dream"),
+        "toggle actions stay mapped when the state flips"
     );
 }
 
@@ -366,7 +379,7 @@ fn test_memory_pane_empty_state() {
     app.memory.clear_entries();
     app.run_command(SlashCommand::Memory);
     let out = render(&app);
-    assert!(out.contains("0 stored"), "zero count missing:\n{out}");
+    assert!(out.contains("0 memories"), "zero count missing:\n{out}");
     assert!(
         out.contains("no memories yet"),
         "empty hint missing:\n{out}"
@@ -393,11 +406,11 @@ fn test_scope_tab_narrows_list() {
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     let all = render(&app);
-    assert!(all.contains("3 stored"), "All shows all three:\n{all}");
+    assert!(all.contains("3 memories"), "All shows all three:\n{all}");
     assert!(all.contains("[All]"), "All tab active");
     app.cycle_memory_scope();
     let user = render(&app);
-    assert!(user.contains("1 stored"), "User narrows to one:\n{user}");
+    assert!(user.contains("1 memory"), "User narrows to one:\n{user}");
     assert!(user.contains("comment-style"), "user-scoped entry shows");
     assert!(
         !user.contains("build-gate"),
@@ -419,7 +432,7 @@ fn test_scope_tab_narrows_list() {
     app.cycle_memory_scope();
     let back = render(&app);
     assert!(back.contains("[All]"), "cycle wraps to All");
-    assert!(back.contains("3 stored"), "All shows all three again");
+    assert!(back.contains("3 memories"), "All shows all three again");
 }
 
 /// A pending flip renders ◌ in the header, and the same switch cannot be
@@ -786,24 +799,36 @@ fn test_forget_failure_names_action() {
     );
 }
 
-/// The footer keeps toggles and scope on one line while they fit, and
-/// moves the scope pair to a third line when the pane is too narrow.
+/// The footer is one logical action row at normal width and wraps as one
+/// unit on narrow terminals without dropping any action.
 #[test]
-fn test_footer_splits_when_narrow() {
+fn test_footer_wraps_when_narrow() {
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     let wide = render_text(&app, 100, 28);
     assert!(
-        wide.contains("toggle auto-dream · Tab/Left/Right to switch scope"),
-        "wide keeps the toggles and scope on one line:\n{wide}"
-    );
-    let narrow = render_text(&app, 70, 28);
-    assert!(
-        !narrow.contains("toggle auto-dream · Tab/Left/Right"),
-        "narrow moves the scope pair to its own line:\n{narrow}"
+        wide.contains("Up/Down to select · Enter to open · d to forget · Esc to close"),
+        "wide footer follows the sibling-pane grammar:\n{wide}"
     );
     assert!(
-        narrow.contains("Tab/Left/Right to switch scope"),
-        "the scope hint is still present:\n{narrow}"
+        wide.contains("a to toggle ● auto-memory") && wide.contains("c to toggle ● auto-dream"),
+        "toggle hints stay mapped to their status:\n{wide}"
     );
+    assert!(
+        wide.contains("Tab/Left/Right to switch scope"),
+        "scope hint stays by tabs:\n{wide}"
+    );
+    let narrow = render_text(&app, 54, 28);
+    for hint in [
+        "Up/Down to select",
+        "a to toggle",
+        "Tab/Left/Right to",
+        "switch scope",
+        "Esc to close",
+    ] {
+        assert!(
+            narrow.contains(hint),
+            "narrow layout keeps {hint}:\n{narrow}"
+        );
+    }
 }

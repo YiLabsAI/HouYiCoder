@@ -71,14 +71,15 @@ impl MemoryPaneState {
         }
     }
 
-    pub(crate) fn entries(&self) -> &[MemoryEntry] {
-        &self.entries
-    }
-
     #[cfg(test)]
     pub(crate) fn clear_entries(&mut self) {
         self.entries.clear();
         self.list.cursor = 0;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn entries(&self) -> &[MemoryEntry] {
+        &self.entries
     }
 
     pub(crate) fn toggles(&self) -> &ToggleState {

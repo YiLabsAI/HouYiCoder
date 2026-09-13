@@ -528,8 +528,15 @@ pub(crate) fn push_line_rows(
     } else {
         line.render()
     };
-    for row in text.split('\n') {
-        sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
+    for logical in text.split('\n') {
+        let rows = if matches!(line, TranscriptLine::System(_)) {
+            crate::view::line_wrap::wrap_line(logical, width as usize)
+        } else {
+            vec![logical.to_string()]
+        };
+        for row in rows {
+            sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
+        }
     }
     true
 }

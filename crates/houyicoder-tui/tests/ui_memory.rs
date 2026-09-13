@@ -53,12 +53,12 @@ fn test_pane_opens() {
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for("memory —", RENDER_TIMEOUT),
+        s.wait_for("memories · newest first", RENDER_TIMEOUT),
         "memory pane header should render:\n{}",
         s.output()
     );
     assert!(
-        s.wait_for_screen("a to toggle auto-memory", RENDER_TIMEOUT),
+        s.wait_for_screen("a to toggle ● auto-memory", RENDER_TIMEOUT),
         "auto-memory action should render:\n{}",
         s.output()
     );
@@ -182,7 +182,13 @@ fn test_pane_navigation() {
     assert!(s.wait_for_screen("[All]", RENDER_TIMEOUT));
     s.send_key(&Key::Enter);
     assert!(s.wait_for_screen("Esc to back", RENDER_TIMEOUT));
+    assert!(s.wait_for_screen("source: user · updated:", RENDER_TIMEOUT));
     s.send_key(&Key::Down);
+    assert!(
+        s.wait_for_screen("source: user · updated:", RENDER_TIMEOUT),
+        "detail metadata must remain fixed while the body scrolls:\n{}",
+        s.output()
+    );
     s.send_key(&Key::Esc);
     assert!(s.wait_for_screen("newest first", RENDER_TIMEOUT));
     s.send_key(&Key::Esc);
@@ -227,7 +233,7 @@ fn test_forget_deletes_and_refreshes() {
     assert!(!topic.exists(), "forget should delete the topic file");
     run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for_screen("0 stored", RENDER_TIMEOUT),
+        s.wait_for_screen("0 memories", RENDER_TIMEOUT),
         "memory pane should show the refreshed count:\n{}",
         s.output()
     );
@@ -243,17 +249,20 @@ fn test_esc_closes_pane() {
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for_screen("a to toggle auto-memory", RENDER_TIMEOUT),
+        s.wait_for_screen("a to toggle ● auto-memory", RENDER_TIMEOUT),
         "memory pane should render:\n{}",
         s.output()
     );
     s.send_key(&Key::Esc);
     std::thread::sleep(std::time::Duration::from_millis(300));
     let screen = s.screen().contents();
-    assert!(!screen.contains("memory —"), "pane should close:\n{screen}");
     assert!(
-        !screen.contains("toggle auto-memory"),
-        "footer should be gone:\n{screen}"
+        !screen.contains("newest first"),
+        "pane should close:\n{screen}"
+    );
+    assert!(
+        !screen.contains("a to toggle ● auto-memory"),
+        "memory controls should be gone:\n{screen}"
     );
     drop(s);
     drop(std::fs::remove_dir_all(&home));

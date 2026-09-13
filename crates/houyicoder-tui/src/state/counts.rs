@@ -85,6 +85,16 @@ impl App {
             TranscriptLine::Tool { name, .. } if name != "result" => line
                 .tool_call_rows(w, full_tool_call)
                 .map_or(1, |rows| rows.len()),
+            TranscriptLine::System(_) => {
+                let text = if self.verbose {
+                    line.render_verbose()
+                } else {
+                    line.render()
+                };
+                text.split('\n')
+                    .map(|logical| crate::view::line_wrap::wrap_line(logical, w as usize).len())
+                    .sum()
+            }
             // count==render: the chip text is mode-dependent (verbose renders
             // the untruncated invocation, which can span many lines where the
             // truncated status occupies one) — count the same form the
