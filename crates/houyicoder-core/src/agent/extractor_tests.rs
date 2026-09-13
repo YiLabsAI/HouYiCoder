@@ -3,7 +3,7 @@ use crate::agent::memory::{MemoryGates, MemoryRuntime, MutationLog};
 use crate::agent::{Runner, ToolRegistry};
 use houyicoder_api::agent_event::{AgentEventHandlers, MemoryChangeOrigin, MemoryChangedEvent};
 use houyicoder_context::{MemoryEntry, MemorySummary};
-use houyicoder_memory::InMemoryBackend;
+use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, LlmEvent, ModelCapabilities, ModelSettings,
     OutputItem, ProviderError, Usage,
@@ -276,6 +276,52 @@ async fn test_extract_advances_cursor_success() {
         vec![(1, MemoryChangeOrigin::AutoMemory)],
         "a successful fork fires one Extracted memory-saved notice"
     );
+}
+
+#[tokio::test]
+async fn test_unrelated_turn_stays_silent() {
+    let provider = Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    });
+    let memory_root = std::env::temp_dir().join(format!("extract-repeat-{}", std::process::id()));
+    std::fs::create_dir_all(&memory_root).unwrap();
+    let memory = Arc::new(MarkdownMemoryProvider::new(memory_root.clone()));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let extractor = MemoryExtractor::new(
+        store,
+        provider,
+        memory,
+        memory_root.clone(),
+        RunnerConfig {
+            max_turns: 5,
+            ..RunnerConfig::default()
+        },
+    );
+    let (events, recording) = RecordingChanges::new();
+    extractor.set_memory_changed_handler(events.memory_changed_handler());
+    let mut messages = conversation();
+    extractor.run_extraction_once(&messages).await.unwrap();
+    assert_eq!(recording.summaries().len(), 1);
+    append_event(
+        &mut messages,
+        SessionEvent::UserInput {
+            text: "which model is active".into(),
+        },
+    );
+    append_event(
+        &mut messages,
+        SessionEvent::AssistantMessage {
+            text: "the configured model is active".into(),
+            thinking: None,
+        },
+    );
+    extractor.run_extraction_once(&messages).await.unwrap();
+    assert_eq!(
+        recording.summaries().len(),
+        1,
+        "an unrelated turn that repeats the same save stays silent"
+    );
+    std::fs::remove_dir_all(memory_root).ok();
 }
 
 /// When the main agent already emitted a save_memory call in this turn
@@ -723,7 +769,10 @@ async fn test_forked_extract_receives_manifest() {
         Arc::clone(&memory) as Arc<dyn MemoryProvider>,
         &cwd,
         config,
-        &prefix,
+        ExtractionWindow {
+            prefix: &prefix,
+            new_message_count: 2,
+        },
         Arc::new(MutationLog::new()),
     )
     .await;
@@ -752,5 +801,9 @@ async fn test_forked_extract_receives_manifest() {
     assert!(
         user_input.contains("Existing memory files"),
         "forked input must carry the manifest heading, got: {user_input}"
+    );
+    assert!(
+        user_input.contains("last 2 model-visible messages"),
+        "the cursor-derived extraction window must reach the provider: {user_input}"
     );
 }

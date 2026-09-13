@@ -29,7 +29,7 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_context::{EventId, MemoryChangeId, SessionEvent, SessionLogEntry};
 use tokio::task::JoinHandle;
 
-use super::extract::run_forked_extract;
+use super::extract::{ExtractionWindow, run_forked_extract};
 use super::memory::MutationLog;
 use super::{RunError, RunResult, RunnerConfig};
 
@@ -136,7 +136,10 @@ impl MemoryExtractor {
             Arc::clone(&self.memory),
             &self.cwd,
             self.config.clone(),
-            messages,
+            ExtractionWindow {
+                prefix: messages,
+                new_message_count,
+            },
             Arc::clone(&recorder),
         )
         .await;
@@ -174,7 +177,6 @@ impl MemoryExtractor {
             } else {
                 None
             };
-            let _ = is_trailing; // trailing runs skip the throttle (not yet impl)
             let _outcome = self.run_extraction_once(&messages).await;
             // finally: drain the stashed context. in_progress stays true across
             // the trailing chain so concurrent triggers coalesce; only set

@@ -32,6 +32,24 @@
 use houyicoder_context::{MemoryEntry, MemoryError, MemoryRecallStats, MemoryScope, MemorySummary};
 use std::collections::HashSet;
 
+/// The observable effect of one memory upsert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryWriteOutcome {
+    /// No record with this key existed before the write.
+    Created,
+    /// The existing record differed and was replaced.
+    Updated,
+    /// The existing record already had identical durable content.
+    Unchanged,
+}
+
+impl MemoryWriteOutcome {
+    /// Whether the operation changed durable memory content.
+    pub fn changed(self) -> bool {
+        !matches!(self, Self::Unchanged)
+    }
+}
+
 /// Engine-facing recall plus write seam. The engine holds this trait and
 /// never sees the backend. recall is budget-bounded deterministic ranking
 /// that skips any key in surfaced (a key already in the assembled context this
@@ -47,6 +65,12 @@ pub trait MemoryProvider: Send + Sync {
     /// derived index pointer is reconciled under the same lock; a failed
     /// pointer triggers best-effort rollback of the topic file).
     fn add(&self, entry: MemoryEntry) -> Result<(), MemoryError>;
+    /// Atomically write only when durable content differs. Providers without
+    /// identity-aware storage conservatively report Created after add.
+    fn add_if_changed(&self, entry: MemoryEntry) -> Result<MemoryWriteOutcome, MemoryError> {
+        self.add(entry)?;
+        Ok(MemoryWriteOutcome::Created)
+    }
     /// Atomically write a new memory entry into a specific storage scope.
     /// The default delegates to add (which writes to the auto scope for the
     /// markdown backend) so providers that do not distinguish scopes stay
@@ -59,6 +83,16 @@ pub trait MemoryProvider: Send + Sync {
     fn add_in_scope(&self, entry: MemoryEntry, scope: MemoryScope) -> Result<(), MemoryError> {
         let _ = scope;
         self.add(entry)
+    }
+    /// Atomically write into a scope only when durable content differs.
+    /// Providers without scope-aware identity conservatively report Created.
+    fn add_in_scope_if_changed(
+        &self,
+        entry: MemoryEntry,
+        scope: MemoryScope,
+    ) -> Result<MemoryWriteOutcome, MemoryError> {
+        self.add_in_scope(entry, scope)?;
+        Ok(MemoryWriteOutcome::Created)
     }
     /// Promote a memory from the auto scope into the project scope (the
     /// always-on carrier). The dream calls this when a rule has crossed the

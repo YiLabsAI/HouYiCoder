@@ -1,11 +1,9 @@
-//! Tests for the markdown memory provider. Extracted to keep the main
-//! module under the file-size gate.
-//!
-//! These tests cover recall ranking, de-dup placement, atomic write with
-//! rollback, index line+byte caps, and boundary conditions.
+//! Markdown memory recall, atomic writes, index repair, and boundary behavior.
 
 use super::*;
 use houyicoder_context::{MemoryOrigin, MemorySource};
+use std::fs::{File, FileTimes, OpenOptions};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn temp_root() -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -111,6 +109,65 @@ fn test_atomic_write_lands_topic() {
     let idx = fs::read_to_string(&index).unwrap();
     assert!(idx.contains("alpha"), "index must reference the key");
     std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn test_identical_add_is_unchanged() {
+    let root = temp_root();
+    let provider = MarkdownMemoryProvider::new(root.clone());
+    let value = entry("stable", "same body", MemorySource::Feedback)
+        .with_meta("same description", 0)
+        .with_origin(MemoryOrigin::Extractor);
+    assert_eq!(
+        provider.add_if_changed(value.clone()).unwrap(),
+        MemoryWriteOutcome::Created
+    );
+    let topic = root.join("stable.md");
+    let index = root.join(INDEX_FILE);
+    let old_time = UNIX_EPOCH + Duration::from_secs(1_000_000);
+    for path in [&topic, &index] {
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(old_time))
+            .unwrap();
+    }
+    assert_eq!(
+        provider.add_if_changed(value).unwrap(),
+        MemoryWriteOutcome::Unchanged
+    );
+    assert_eq!(
+        std::fs::metadata(&topic).unwrap().modified().unwrap(),
+        old_time
+    );
+    assert_eq!(
+        std::fs::metadata(&index).unwrap().modified().unwrap(),
+        old_time,
+        "unchanged saves must not rewrite the derived index"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&index)
+            .unwrap()
+            .matches("stable")
+            .count(),
+        1,
+        "unchanged saves must not duplicate index pointers"
+    );
+    assert_eq!(
+        provider
+            .add_if_changed(
+                entry("stable", "changed body", MemorySource::Feedback)
+                    .with_meta("same description", 0)
+                    .with_origin(MemoryOrigin::Extractor)
+            )
+            .unwrap(),
+        MemoryWriteOutcome::Updated
+    );
+    let updated_index = fs::read_to_string(&index).unwrap();
+    assert_eq!(updated_index.matches("stable").count(), 1);
+    assert!(updated_index.contains("changed body"));
+    fs::remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -557,12 +614,12 @@ fn test_rebuild_heals_external_edit() {
     // Pin bravo.md's mtime strictly ahead of the index so root_is_stale
     // detects it even on filesystems with coarse mtime resolution
     // (overlayfs on CI runners can round to whole seconds).
-    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
-    let times = std::fs::FileTimes::new().set_modified(future);
+    let future = SystemTime::now() + Duration::from_secs(5);
+    let times = FileTimes::new().set_modified(future);
     // Open with write access: on Windows, set_times maps to SetFileTime,
     // which requires FILE_WRITE_ATTRIBUTES. File::open is GENERIC_READ only
     // and yields Access Denied there; OpenOptions with write(true) includes it.
-    std::fs::OpenOptions::new()
+    OpenOptions::new()
         .read(true)
         .write(true)
         .open(&ext_path)

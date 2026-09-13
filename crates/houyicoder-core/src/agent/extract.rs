@@ -36,30 +36,32 @@ pub(crate) fn build_forked_extract_runner(
         .with_cwd(cwd.to_path_buf())
 }
 
-/// Drive a forked extraction run on a fresh ephemeral session. The prefix is
-/// the main conversation events (replayed by the caller); the extraction
-/// prompt is appended as the user input. Returns the run result. The
-/// recorder is drained after the run so the caller reads the exact
-/// successful operations to fire one memory-changed notice. The forked run
-/// is bounded by the config max_turns (five for extraction). No auto-fire:
-/// the caller (the stop hook) invokes this; tests invoke it directly.
+/// The full cache prefix paired with its cursor-derived eligible suffix size.
+pub(crate) struct ExtractionWindow<'a> {
+    pub(crate) prefix: &'a [SessionLogEntry],
+    pub(crate) new_message_count: usize,
+}
+
+/// Drive a forked extraction run on a fresh ephemeral session. The full
+/// conversation remains the cache prefix while the window count limits which
+/// trailing messages may produce writes.
 pub(crate) async fn run_forked_extract(
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: &Path,
     config: RunnerConfig,
-    prefix: &[SessionLogEntry],
+    window: ExtractionWindow<'_>,
     recorder: Arc<MutationLog>,
 ) -> Result<RunResult, RunError> {
     // Inject the existing-memory manifest so the forked agent dedups by
     // reusing a key instead of re-saving the same fact each turn (a
     // formatMemoryManifest pre-inject). Built before moving memory into
     // the runner.
-    let prompt = build_extraction_prompt(&memory.list_memories());
+    let prompt = build_extraction_prompt(window.new_message_count, &memory.list_memories());
     let runner = build_forked_extract_runner(store, provider, memory, cwd, config, recorder);
     let session = SessionId::new();
-    let result = runner.run_forked(session, prefix, prompt).await;
+    let result = runner.run_forked(session, window.prefix, prompt).await;
     // A fork that hits the turn cap did not finish extracting — treat as a
     // failure so the extractor's cursor stays and the range is reconsidered
     // next pass. The main loop's max_turns is a graceful RunOutcome; a
@@ -254,7 +256,10 @@ mod tests {
             Arc::clone(&memory) as Arc<dyn MemoryProvider>,
             &cwd,
             config(),
-            &prefix,
+            ExtractionWindow {
+                prefix: &prefix,
+                new_message_count: 2,
+            },
             recorder,
         )
         .await
@@ -314,7 +319,10 @@ mod tests {
             Arc::clone(&memory) as Arc<dyn MemoryProvider>,
             &cwd,
             config(),
-            &prefix,
+            ExtractionWindow {
+                prefix: &prefix,
+                new_message_count: 2,
+            },
             recorder,
         )
         .await

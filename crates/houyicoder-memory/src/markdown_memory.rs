@@ -1,27 +1,12 @@
 //! Markdown directory plus derived-index memory provider.
 //!
-//! A memory directory of markdown files with YAML frontmatter plus a
-//! derived MEMORY index file. Three design decisions:
+//! Topic files are the source of truth; MEMORY.md is a bounded derived index.
+//! Recall ranks frontmatter by keyword overlap and reads selected bodies only.
+//! Writes compare and replace a topic under one lock, then reconcile the index.
+//! Failed index updates restore the previous topic when possible. Rendering
+//! never performs synchronous reads.
 //!
-//! 1. Deterministic recall: candidate files are ranked by keyword overlap
-//!    over frontmatter fields, so the hot path pays no per-turn model
-//!    side-query (no latency, no token cost per turn).
-//! 2. Single-source atomic write: the topic file is the single source of
-//!    truth; the index is a derived projection regenerated from topic
-//!    files. write_atomic lands the topic file and its index pointer
-//!    under a lock with a best-effort rollback if the index pointer cannot
-//!    land. The rollback is best-effort: if the remove itself fails the
-//!    store is left half-written and AtomicityFailed is returned. A write
-//!    fans out to a single topic file rather than three independent paths,
-//!    so a crash cannot leave the store half-written across paths.
-//! 3. No render-path synchronous read: recall is invoked from the agent
-//!    select step, never from a synchronous render path.
-//!
-//! File layout under root:
-//!   <root>/<key>.md   topic record (frontmatter + body)
-//!   <root>/MEMORY.md  derived index (pointer per topic, byte-capped)
-//!
-//! Topic record frontmatter fields: name, description, source.
+//! Each root contains key.md topic records and a derived MEMORY.md index.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -32,7 +17,7 @@ use std::sync::Mutex;
 use std::cmp::Reverse;
 
 use crate::provider::{hit_count, tokenize};
-use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
 use houyicoder_context::{MemoryEntry, MemoryError, MemoryRecallStats, MemoryScope, MemorySummary};
 
 mod io;
@@ -334,13 +319,18 @@ impl MarkdownMemoryProvider {
     fn append_index_pointer_in(&self, root: &Path, entry: &MemoryEntry) -> Result<(), String> {
         let index_path = Self::index_path_for(root);
         let mut existing = fs::read_to_string(&index_path).unwrap_or_default();
-        let line = format!(
+        let prefix = format!("- {} [", entry.key);
+        existing = existing
+            .lines()
+            .filter(|line| !line.starts_with(&prefix))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        existing.push_str(&format!(
             "- {} [{}]: {}\n",
             entry.key,
             entry.source.as_label(),
             first_line(&entry.content)
-        );
-        existing.push_str(&line);
+        ));
         existing = cap_index_content(&existing, self.max_lines);
         write_bytes_atomic(&index_path, existing.as_bytes()).map_err(|e| e.to_string())
     }
@@ -412,28 +402,16 @@ impl MemoryProvider for MarkdownMemoryProvider {
         self.write_root().to_string_lossy().into_owned()
     }
 
-    /// Delete one topic by key from the write root. Removes the topic file
-    /// under the write lock (so a concurrent add of the same key cannot
-    /// race), then regenerates the derived index so the deleted pointer
-    /// disappears. The index rebuild runs after the guard drops because the
-    /// rebuild takes the same lock and the lock is not reentrant. Best-effort
-    /// on the rebuild: a failure still leaves the topic gone — recall scans
-    /// topic files, not the index, so a stale pointer is cosmetic drift
-    /// healed by the next rebuild_if_stale. This form deletes from the auto
-    /// scope (the dream's consolidation target).
+    /// Delete a topic from the auto scope. Topic removal is authoritative;
+    /// derived-index repair is best-effort and self-heals later.
     fn delete_memory(&self, key: &str) -> Result<(), MemoryError> {
         // Delegate to the scoped form so there is one delete path
         // (root_for_scope(Auto) is the write root).
         self.delete_memory_in_scope(key, MemoryScope::Auto)
     }
 
-    /// Delete by key from a specific scope's root. The /memory pane calls
-    /// this so forget on a user/project row deletes the file in that scope's
-    /// root, not just the auto-scope copy (which would leave the explicit
-    /// original and the list would still show it). The stats sidecar (auto
-    /// root) and the index rebuild (all roots) are scope-wide, so a delete in
-    /// any scope prunes the global stats entry + regenerates every root's
-    /// index.
+    /// Delete a topic from one scope, prune its global stats, and rebuild the
+    /// derived indexes.
     fn delete_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
         let key = sanitize_key(key)?;
         let topic_path = self.root_for_scope(scope).join(format!("{key}.md"));
@@ -484,14 +462,8 @@ impl MemoryProvider for MarkdownMemoryProvider {
             .collect()
     }
 
-    /// Increment recall_hits + update last_access_ts for the keys a recall
-    /// just surfaced. Under the write lock so a concurrent delete cannot
-    /// prune a key this increment is about to re-create (an orphan stats
-    /// row for a removed topic). The lock is cheap off the hot path — recall
-    /// fires at turn entry, not per model call. A crash mid-write still
-    /// leaves a corrupt sidecar the next load treats as empty on a cold
-    /// restart. gate_violations is untouched here; zero today, the
-    /// PreToolUse feed is not wired.
+    /// Record recall hits under the write lock so delete cannot leave orphan
+    /// stats. Sidecar corruption degrades to empty counters.
     fn record_recall_hits(&self, keys: &[String]) {
         if keys.is_empty() {
             return;
@@ -510,15 +482,8 @@ impl MemoryProvider for MarkdownMemoryProvider {
         self.save_stats(&stats);
     }
 
-    /// Increment gate_violations for one key (signal B: a PreToolUse gate
-    /// denied a call because the agent violated the rule that key names).
-    /// Under the write lock so a concurrent delete cannot prune a key this
-    /// increment is about to re-create. The key is sanitized to the
-    /// canonical NFC form so a caller passing a deny reason that happens
-    /// to name the rule still maps to the on-disk stem. A crash mid-write
-    /// leaves a corrupt sidecar the next load treats as empty (cold
-    /// restart). recall_hits + last_access_ts are untouched (fed by
-    /// record_recall_hits on the recall path).
+    /// Record one gate violation under the write lock using the canonical key.
+    /// Sidecar corruption degrades to empty counters.
     fn record_gate_violation(&self, key: &str) {
         let Ok(key) = sanitize_key(key) else {
             return;
@@ -586,14 +551,15 @@ impl MemoryProvider for MarkdownMemoryProvider {
         out
     }
 
-    fn add(&self, mut entry: MemoryEntry) -> Result<(), MemoryError> {
+    fn add(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
+        self.add_if_changed(entry).map(|_| ())
+    }
+
+    fn add_if_changed(&self, mut entry: MemoryEntry) -> Result<MemoryWriteOutcome, MemoryError> {
         let _guard = self.write_lock.lock().expect("write lock poisoned");
-        // Canonicalize the key to NFC so the filename, frontmatter name, and
-        // index pointer all live under one form — a caller passing a
-        // decomposed grapheme still writes the precomposed file.
         entry.key = sanitize_key(&entry.key)?;
         let root = self.write_root().to_path_buf();
-        self.add_in_root(&root, &entry)
+        self.add_if_changed_in_root(&root, &entry)
     }
 
     /// Write a new memory entry into a specific storage scope. Used by the
@@ -601,30 +567,26 @@ impl MemoryProvider for MarkdownMemoryProvider {
     /// rather than writing a competing auto-scope copy that would shadow the
     /// explicit version by newest-mtime (the dedup divergence the charter
     /// audit flagged). Closes the auto-shadows-explicit edge case.
-    fn add_in_scope(&self, mut entry: MemoryEntry, scope: MemoryScope) -> Result<(), MemoryError> {
+    fn add_in_scope(&self, entry: MemoryEntry, scope: MemoryScope) -> Result<(), MemoryError> {
+        self.add_in_scope_if_changed(entry, scope).map(|_| ())
+    }
+
+    fn add_in_scope_if_changed(
+        &self,
+        mut entry: MemoryEntry,
+        scope: MemoryScope,
+    ) -> Result<MemoryWriteOutcome, MemoryError> {
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         entry.key = sanitize_key(&entry.key)?;
         let root = self.root_for_scope(scope).to_path_buf();
-        self.add_in_root(&root, &entry)
+        self.add_if_changed_in_root(&root, &entry)
     }
 
-    /// Promote a topic from the auto scope into the project scope (the
-    /// always-on carrier). Lands the three-step file-op sequence the design
-    /// pins: (1) merge the topic's rule sentence (the first content line,
-    /// the rule itself) into the project memory file (agent.md), creating
-    /// the file if missing, skipping the merge when the sentence is already
-    /// present; (2) move the topic file from the auto root into the
-    /// project root so recall still finds it under the project scope; (3)
-    /// regenerate the derived indexes for both roots. Idempotent: a topic
-    /// already living in the project root only merges the rule sentence.
-    /// Returns NotFound when the topic is not in the auto root.
+    /// Promote a topic into the project scope and always-on carrier, then
+    /// rebuild both derived indexes. Repeated promotion is idempotent.
     fn promote_memory(&self, key: &str) -> Result<(), MemoryError> {
         let key = sanitize_key(key)?;
-        // Hold the write lock across the read-merge-move AND the rebuild so
-        // a concurrent add cannot land a competing auto copy between the
-        // move and the index regeneration (TOCTOU). rebuild_index_impl_locked
-        // assumes the lock is held; the public rebuild_index_impl takes its
-        // own lock and would deadlock nested.
+        // Keep carrier, topic, and index changes in one critical section.
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         let auto_root = self.write_root().to_path_buf();
         let project_root = self.root_for_scope(MemoryScope::Project).to_path_buf();
@@ -678,18 +640,11 @@ impl MemoryProvider for MarkdownMemoryProvider {
         Ok(())
     }
 
-    /// Demote a topic from the project scope back into the auto scope. The
-    /// reverse of promote: (1) remove the rule sentence from the project
-    /// memory file (agent.md); (2) move the topic file from the project
-    /// root into the auto root so the topic is recall-on-demand only;
-    /// (3) regenerate both indexes. Idempotent: a topic already in the
-    /// auto root only removes the carrier line. Returns NotFound when the
-    /// topic is in neither root.
+    /// Demote a topic into the auto scope, remove its carrier rule, and
+    /// rebuild both derived indexes. Repeated demotion is idempotent.
     fn demote_memory(&self, key: &str) -> Result<(), MemoryError> {
         let key = sanitize_key(key)?;
-        // Hold the write lock across the read-strip-move AND the rebuild
-        // (same TOCTOU closure as promote_memory). rebuild_index_impl_locked
-        // assumes the lock is held.
+        // Keep carrier, topic, and index changes in one critical section.
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         let auto_root = self.write_root().to_path_buf();
         let project_root = self.root_for_scope(MemoryScope::Project).to_path_buf();
@@ -737,32 +692,45 @@ impl MemoryProvider for MarkdownMemoryProvider {
 }
 
 impl MarkdownMemoryProvider {
-    /// Land a topic file plus its index pointer in a specific root under the
-    /// write lock. Shared by add (auto root) and add_in_scope (any root).
-    /// The caller holds the write lock + has sanitized the key.
-    fn add_in_root(&self, root: &Path, entry: &MemoryEntry) -> Result<(), MemoryError> {
+    /// Compare and land one topic plus its index under the caller-held lock.
+    fn add_if_changed_in_root(
+        &self,
+        root: &Path,
+        entry: &MemoryEntry,
+    ) -> Result<MemoryWriteOutcome, MemoryError> {
         fs::create_dir_all(root).map_err(|_| MemoryError::Io)?;
         let topic_path = root.join(format!("{}.md", entry.key));
-        let payload = serialize_topic_file(entry);
-        // Step one: land the topic file atomically (temp plus rename).
-        write_bytes_atomic(&topic_path, payload.as_bytes())?;
-        // Step two: append a pointer to the derived index. If this fails,
-        // attempt a best-effort rollback by removing the topic file. If the
-        // rollback remove itself fails the store is left half-written (topic
-        // file present, index pointer missing) and AtomicityFailed is
-        // returned so the caller knows the store is inconsistent.
-        if let Err(e) = self.append_index_pointer_in(root, entry) {
-            if let Err(rm_err) = fs::remove_file(&topic_path) {
+        let payload = serialize_topic_file(entry).into_bytes();
+        let previous = match fs::read(&topic_path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err(MemoryError::Io),
+        };
+        if previous.as_deref() == Some(payload.as_slice()) {
+            return Ok(MemoryWriteOutcome::Unchanged);
+        }
+        let outcome = if previous.is_some() {
+            MemoryWriteOutcome::Updated
+        } else {
+            MemoryWriteOutcome::Created
+        };
+        write_bytes_atomic(&topic_path, &payload)?;
+        if let Err(error) = self.append_index_pointer_in(root, entry) {
+            let rollback = match previous {
+                Some(bytes) => write_bytes_atomic(&topic_path, &bytes),
+                None => fs::remove_file(&topic_path).map_err(|_| MemoryError::Io),
+            };
+            if let Err(rollback_error) = rollback {
                 tracing::warn!(
-                    "memory rollback: failed to remove topic file {}: {rm_err}",
+                    "memory rollback failed for {}: {rollback_error}",
                     topic_path.display()
                 );
             }
             return Err(MemoryError::AtomicityFailed(format!(
-                "index pointer failed: {e}"
+                "index pointer failed: {error}"
             )));
         }
-        Ok(())
+        Ok(outcome)
     }
 }
 

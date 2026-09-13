@@ -146,15 +146,21 @@ impl Tool for MemoryAddTool {
                 .with_meta(description, now_secs)
                 .with_origin(self.origin);
             let save = match scope {
-                MemoryScope::Auto => provider.add(entry),
-                other => provider.add_in_scope(entry, other),
+                MemoryScope::Auto => provider.add_if_changed(entry),
+                other => provider.add_in_scope_if_changed(entry, other),
             };
             match save {
-                Ok(()) => {
-                    if let Some(recorder) = &recorder {
+                Ok(outcome) => {
+                    if outcome.changed()
+                        && let Some(recorder) = &recorder
+                    {
                         recorder.record(&key, MemoryOperation::Stored);
                     }
-                    Ok(json!({"saved": key}))
+                    if outcome.changed() {
+                        Ok(json!({"saved": key}))
+                    } else {
+                        Ok(json!({"saved": key, "unchanged": true}))
+                    }
                 }
                 Err(e) => Err(map_memory_error(e)),
             }
@@ -251,7 +257,7 @@ fn map_memory_error(e: MemoryError) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_api::memory::MemoryProvider;
+    use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
     use houyicoder_context::MemoryEntry;
     use std::collections::HashSet;
     use std::sync::Mutex;
@@ -291,6 +297,27 @@ mod tests {
             writes: Mutex::new(Vec::new()),
             scopes: Mutex::new(Vec::new()),
         })
+    }
+
+    struct UnchangedMemory;
+
+    impl MemoryProvider for UnchangedMemory {
+        fn recall(
+            &self,
+            _query: &str,
+            _budget: usize,
+            _surfaced: &HashSet<String>,
+        ) -> Vec<MemoryEntry> {
+            Vec::new()
+        }
+
+        fn add(&self, _entry: MemoryEntry) -> Result<(), MemoryError> {
+            Ok(())
+        }
+
+        fn add_if_changed(&self, _entry: MemoryEntry) -> Result<MemoryWriteOutcome, MemoryError> {
+            Ok(MemoryWriteOutcome::Unchanged)
+        }
     }
 
     async fn run(tool: &MemoryAddTool, input: Value) -> Result<Value, ToolError> {
@@ -352,6 +379,34 @@ mod tests {
             json!({ "key": "k3", "description": "d", "source": "bogus", "content": "c" });
         let _err = run(&tool, err_input).await;
         assert!(recorder.take().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_repeat_save_emits_once() {
+        let root =
+            std::env::temp_dir().join(format!("memory-add-unchanged-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create memory root");
+        let provider = Arc::new(houyicoder_memory::MarkdownMemoryProvider::new(root.clone()));
+        let recorder = Arc::new(MutationLog::new());
+        let tool = MemoryAddTool::new(provider).with_recorder(recorder.clone());
+        let input =
+            json!({ "key": "stable", "description": "d", "source": "user", "content": "c" });
+        run(&tool, input.clone()).await.expect("first save");
+        assert_eq!(recorder.take().len(), 1, "the first save is observable");
+        let second = run(&tool, input).await.expect("repeated save");
+        assert_eq!(second, json!({"saved": "stable", "unchanged": true}));
+        assert!(recorder.take().is_empty(), "the repeated save is silent");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn test_unchanged_save_is_silent() {
+        let recorder = Arc::new(MutationLog::new());
+        let tool = MemoryAddTool::new(Arc::new(UnchangedMemory)).with_recorder(recorder.clone());
+        let input = json!({ "key": "k", "description": "d", "source": "user", "content": "c" });
+        let output = run(&tool, input).await.expect("unchanged save succeeds");
+        assert_eq!(output, json!({"saved": "k", "unchanged": true}));
+        assert!(recorder.take().is_empty(), "unchanged writes do not notify");
     }
 
     /// Without a threaded recorder the tool still saves (the main runner's tool
