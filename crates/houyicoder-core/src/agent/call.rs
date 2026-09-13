@@ -207,6 +207,7 @@ impl Runner {
                         // abortable; a cancel returns Ok(None) first).
                         economy_fired_this_turn = true;
                         let progress = tokio::select! {
+                            biased;
                             _ = token.cancelled() => return Ok(None),
                             _ = turn_token.cancelled() => return Ok(None),
                             p = self.compress(session) => p?,
@@ -230,6 +231,7 @@ impl Runner {
                         });
                     }
                     let progress = tokio::select! {
+                        biased;
                         // compress is another LLM call on the run chain —
                         // abortable like stream.next(), not a bare await. A
                         // provider stall here otherwise hangs the run past
@@ -320,19 +322,9 @@ impl Runner {
             tracing::debug!("stream opened");
             let first = loop {
                 tokio::select! {
+                    biased;
                     _ = token.cancelled() => return Ok(None),
                     _ = turn_token.cancelled() => return Ok(None),
-                    _ = tokio::time::sleep(stream_idle_timeout()) => {
-                        tracing::debug!(elapsed = ?api_start.elapsed(), "stall retry (no chunk for idle timeout)");
-                        if attempts + 1 < max_attempts {
-                            attempts += 1;
-                            let wait = self.config.retry.delay_for(attempts, None);
-                            tokio::time::sleep(wait).await;
-                            stream = provider.stream(request.clone());
-                            continue;
-                        }
-                        return Err(RunError::ProviderFatal(ProviderError::Network));
-                    }
                     item = stream.next() => match item {
                         Some(Ok(ev)) => {
                             tracing::debug!(elapsed = ?api_start.elapsed(), "first event received");
@@ -379,14 +371,15 @@ impl Runner {
                                 });
                             }
                             let progress = tokio::select! {
-                        // compress is another LLM call on the run chain —
-                        // abortable like stream.next(), not a bare await. A
-                        // provider stall here otherwise hangs the run past
-                        // the sandbox fence with no Esc path.
-                        _ = token.cancelled() => return Ok(None),
-                        _ = turn_token.cancelled() => return Ok(None),
-                        p = self.compress(session) => p?,
-                    };
+                                biased;
+                                // compress is another LLM call on the run chain —
+                                // abortable like stream.next(), not a bare await. A
+                                // provider stall here otherwise hangs the run past
+                                // the sandbox fence with no Esc path.
+                                _ = token.cancelled() => return Ok(None),
+                                _ = turn_token.cancelled() => return Ok(None),
+                                p = self.compress(session) => p?,
+                            };
                             if !progress {
                                 self.set_compaction_suppression(
                                     SuppressionCause::NoProgress.suppression_state(),
@@ -406,6 +399,17 @@ impl Runner {
                         Some(Err(e)) => return Err(RunError::ProviderFatal(e)),
                         None => break None,
                     },
+                    _ = tokio::time::sleep(stream_idle_timeout()) => {
+                        tracing::debug!(elapsed = ?api_start.elapsed(), "stall retry (no chunk for idle timeout)");
+                        if attempts + 1 < max_attempts {
+                            attempts += 1;
+                            let wait = self.config.retry.delay_for(attempts, None);
+                            tokio::time::sleep(wait).await;
+                            stream = provider.stream(request.clone());
+                            continue;
+                        }
+                        return Err(RunError::ProviderFatal(ProviderError::Network));
+                    }
                 }
             };
 
@@ -418,6 +422,7 @@ impl Runner {
             }
             loop {
                 let ev = tokio::select! {
+                    biased;
                     _ = token.cancelled() => {
                         let response = state.clone().into_response(self.config.model.clone());
                         self.append_response_events(session, &response).await?;
@@ -429,17 +434,17 @@ impl Runner {
                         self.append_response_events(session, &response).await?;
                         return Ok(None);
                     }
+                    ev = stream.next() => match ev {
+                        Some(Ok(e)) => e,
+                        Some(Err(e)) => return Err(RunError::ProviderFatal(e)),
+                        None => break,
+                    },
                     _ = tokio::time::sleep(stream_idle_timeout()) => {
                         // Stall mid-stream: flush the partial so text is not lost, then fail (no retry — would replay emitted events).
                         let response = state.clone().into_response(self.config.model.clone());
                         self.append_response_events(session, &response).await?;
                         return Err(RunError::ProviderFatal(ProviderError::Network));
                     }
-                    ev = stream.next() => match ev {
-                        Some(Ok(e)) => e,
-                        Some(Err(e)) => return Err(RunError::ProviderFatal(e)),
-                        None => break,
-                    },
                 };
                 self.fold_event(ev, &mut state, session, response_handler.as_deref())
                     .await?;
@@ -454,12 +459,8 @@ impl Runner {
             // normalize below flattens the dialect to "length" and the raw
             // spelling the gateway used is lost to trajectory analysis.
             let raw_finish_reason = state.finish_reason.clone();
-            // Normalize provider dialects of the cap-cut finish reason before
-            // any comparison: OpenAI-compatible gateways say "length", but an
-            // Anthropic-shaped reply says "max_tokens" and Gemini says
-            // "MAX_TOKENS". The recovery gate below compares against "length"
-            // exactly, so an unnormalized alias silently disabled recovery —
-            // the reply rendered cut mid-sentence with no notice (bug-log #29).
+            // An unnormalized alias silently disables length recovery and leaves
+            // the response visibly truncated.
             if let Some(reason) = &state.finish_reason
                 && reason != "length"
                 && is_length_reason(reason)

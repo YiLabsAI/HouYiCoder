@@ -580,6 +580,16 @@ impl Runner {
                     }
                     next_step = self.resolve_turn(session, &response, token).await?;
                     if matches!(next_step, NextStep::RunAgain) {
+                        // Tools may finish normally after cancellation and still yield RunAgain.
+                        // Reconcile their durable results before ending the run.
+                        if token.is_cancelled() {
+                            self.reconcile_tool_results(session).await?;
+                            return Ok(RunResult {
+                                outcome: RunOutcome::Interrupted("interrupted by user".to_string()),
+                                turns: turn,
+                                usage,
+                            });
+                        }
                         append::emit_turn_progress(&self.events, &response, turn, &usage);
                     }
                 }

@@ -12,6 +12,7 @@ use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
     Usage,
 };
+use tokio::sync::Notify;
 
 use crate::agent::runner_tests::runner_with;
 use crate::agent::{RunError, RunOutcome, ToolRegistry};
@@ -237,5 +238,115 @@ async fn test_idle_timeout_to_fatal() {
     match result {
         Err(RunError::ProviderFatal(ProviderError::Network)) => {}
         other => panic!("expected ProviderFatal(Network) from idle timeout, got {other:?}"),
+    }
+}
+
+/// A provider whose first stream call yields one event, then parks at a
+/// test-controlled gate before draining the rest, so a test can make the
+/// mid-stream select's cancel branch and stream branch ready at once and
+/// let the select's priority — not polling luck — decide.
+struct RaceMidStreamProvider {
+    finish: Arc<FakeProvider>,
+    at_gate: Arc<Notify>,
+    release: Arc<Notify>,
+    calls: AtomicU32,
+}
+
+impl RaceMidStreamProvider {
+    fn new(finish: Arc<FakeProvider>) -> Self {
+        Self {
+            finish,
+            at_gate: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+            calls: AtomicU32::new(0),
+        }
+    }
+}
+
+/// The gated stream's position: yield the first event, hold at the gate,
+/// then drain the remainder.
+enum GateStep {
+    First,
+    Gated,
+    Rest,
+}
+
+impl ModelProvider for RaceMidStreamProvider {
+    fn complete(
+        &self,
+        req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        self.finish.complete(req)
+    }
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        use futures::StreamExt;
+        if self.calls.fetch_add(1, Ordering::SeqCst) != 0 {
+            return self.finish.stream(req);
+        }
+        let inner = self.finish.stream(req);
+        let at_gate = self.at_gate.clone();
+        let release = self.release.clone();
+        Box::pin(futures::stream::unfold(
+            (inner, at_gate, release, GateStep::First),
+            |(mut inner, at_gate, release, step)| async move {
+                match step {
+                    GateStep::First => {
+                        let ev = inner.next().await?;
+                        Some((ev, (inner, at_gate, release, GateStep::Gated)))
+                    }
+                    GateStep::Gated => {
+                        at_gate.notify_one();
+                        release.notified().await;
+                        let ev = inner.next().await?;
+                        Some((ev, (inner, at_gate, release, GateStep::Rest)))
+                    }
+                    GateStep::Rest => {
+                        let ev = inner.next().await?;
+                        Some((ev, (inner, at_gate, release, GateStep::Rest)))
+                    }
+                }
+            },
+        ))
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        self.finish.capabilities()
+    }
+}
+
+/// A lifecycle abort landing while the run parks in the mid-stream select,
+/// with the stream simultaneously ready, must resolve to Interrupted. The
+/// biased priority puts cancel first; without it the ready stream branch
+/// wins about half the time. Looped so polling-order luck cannot hide.
+#[tokio::test]
+async fn test_lifecycle_abort_wins_race() {
+    for _ in 0..25 {
+        let provider = Arc::new(RaceMidStreamProvider::new(Arc::new(FakeProvider::text(
+            "done",
+        ))));
+        let at_gate = provider.at_gate.clone();
+        let release = provider.release.clone();
+        let runner = Arc::new(runner_with(
+            provider as Arc<dyn ModelProvider>,
+            ToolRegistry::new(),
+        ));
+        let session = SessionId::new();
+        let r = runner.clone();
+        let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
+        // Wait until the run parks at the gate inside the mid-stream select.
+        at_gate.notified().await;
+        // Cancel the lifecycle token and release the stream with no await
+        // between, so both select branches are ready in the same re-poll.
+        runner.abort();
+        release.notify_one();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), task)
+            .await
+            .expect("run resolved within 3s of the lifecycle abort")
+            .expect("run task")
+            .expect("run ok");
+        assert!(
+            matches!(result.outcome, RunOutcome::Interrupted(_)),
+            "lifecycle abort must win the mid-stream race, got {:?}",
+            result.outcome
+        );
     }
 }
