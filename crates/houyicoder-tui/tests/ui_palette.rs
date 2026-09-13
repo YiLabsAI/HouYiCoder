@@ -26,6 +26,21 @@ fn pause() {
     std::thread::sleep(Duration::from_millis(200));
 }
 
+/// A prefix match outranks an earlier substring match in the real palette.
+#[test]
+#[ignore]
+fn test_prefix_selects_agents() {
+    let mut session = pty_session();
+    session.send_key(&Key::Char('/'));
+    session.send_key(&Key::Char('a'));
+    session.send_key(&Key::Enter);
+    assert!(
+        session.wait_for_compact("Availableagents", RENDER_TIMEOUT),
+        "typing a must select /agents rather than /clear:\n{}",
+        session.output()
+    );
+}
+
 /// /search is palette-selectable: open the palette, filter to it, Enter
 /// selects (takes_arg inserts "/search " + waits), type a query, Enter
 /// submits, and the search-pane header renders. This proves /search is in

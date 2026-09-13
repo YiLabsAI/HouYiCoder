@@ -18,25 +18,36 @@ pub struct PaletteState {
 }
 
 impl PaletteState {
-    /// The filtered slash-command list, narrowed by the inline query. Empty
-    /// query returns the full set. Match is case-insensitive substring on the
-    /// command name (without the leading slash), so typing "spe" narrows to
-    /// /spec, /release-notes, etc.
+    /// The filtered slash-command list, narrowed by the inline query. Exact
+    /// names rank first, then name prefixes, then substring fallbacks. Empty
+    /// queries preserve the product-defined palette order.
     pub fn filtered(&self) -> Vec<SlashCommand> {
         let q = self.query.trim().to_ascii_lowercase();
         let q = q.strip_prefix('/').unwrap_or(&q);
         if q.is_empty() {
             return SlashCommand::ALL.to_vec();
         }
-        SlashCommand::ALL
+        let mut matches: Vec<(u8, usize, usize, SlashCommand)> = SlashCommand::ALL
             .iter()
-            .filter(|c| {
-                c.name()
-                    .trim_start_matches('/')
-                    .to_ascii_lowercase()
-                    .contains(q)
+            .enumerate()
+            .filter_map(|(index, command)| {
+                let name = command.name().trim_start_matches('/').to_ascii_lowercase();
+                let rank = if name == q {
+                    0
+                } else if name.starts_with(q) {
+                    1
+                } else if name.contains(q) {
+                    2
+                } else {
+                    return None;
+                };
+                Some((rank, name.len(), index, *command))
             })
-            .copied()
+            .collect();
+        matches.sort_by_key(|(rank, len, index, _)| (*rank, *len, *index));
+        matches
+            .into_iter()
+            .map(|(_, _, _, command)| command)
             .collect()
     }
 
@@ -136,5 +147,17 @@ mod tests {
         assert!(p.len() < full);
         let cmd = p.selected().expect("filtered list non-empty");
         assert!(cmd.name().contains("spe"));
+    }
+
+    #[test]
+    fn test_prefix_ranks_before_substring() {
+        let mut p = PaletteState::default();
+        p.open();
+        p.push('a');
+        assert_eq!(p.selected(), Some(SlashCommand::Agents));
+        let names: Vec<&str> = p.filtered().iter().map(SlashCommand::name).collect();
+        let agents = names.iter().position(|name| *name == "/agents").unwrap();
+        let clear = names.iter().position(|name| *name == "/clear").unwrap();
+        assert!(agents < clear, "prefix matches must precede substrings");
     }
 }
