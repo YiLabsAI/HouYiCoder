@@ -193,8 +193,8 @@ fn test_augment_skips_non_shell() {
 /// forgotten next launch; store only and the run that just asked still
 /// refuses the path. macOS-only: widening a live fence is Seatbelt-only.
 #[cfg(target_os = "macos")]
-#[test]
-fn test_consent_reaches_both_layers() {
+#[tokio::test]
+async fn test_consent_reaches_both_layers() {
     use houyicoder_api::sandbox::SandboxSession;
     use houyicoder_permission::{FileRuleStore, RuleStore};
     use houyicoder_sandbox::PlatformSession;
@@ -236,19 +236,51 @@ fn test_consent_reaches_both_layers() {
             .any(|d| std::path::Path::new(d.as_str()) == coutside.as_path()),
         "fence (additional_dirs) has the granted dir: {dirs:?}"
     );
-    let stored = store.load_directories();
+    let stored = store.load_read_directories();
     assert!(
         stored.iter().any(|d| d == &coutside),
         "durable store persisted the granted dir: {stored:?}"
     );
+    assert!(
+        session
+            .write_file(
+                &outside.join("blocked.txt").to_string_lossy(),
+                b"blocked".to_vec(),
+            )
+            .await
+            .is_err(),
+        "a grep approval must not authorize host writes"
+    );
 
-    // A file (not a dir) path: add_working_dir fails (is_dir check) but
-    // the consent must not crash — the eprintln surfaces the failure so
-    // the user is not left in a silent death-loop.
-    let file_path = root.join("not-a-dir.txt");
-    std::fs::write(&file_path, b"x").expect("write file");
+    let config_dir = root.join("config");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    let file_path = config_dir.join("settings.json");
+    std::fs::write(&file_path, b"{}").expect("write file");
     let input = serde_json::json!({"path": file_path.to_string_lossy()});
-    server.apply_consent_directory("grep", &input, "once");
+    server.apply_consent_directory("edit", &input, "once");
+    let canonical_config = dunce::canonicalize(&config_dir).unwrap();
+    assert!(
+        session
+            .working_dirs()
+            .iter()
+            .any(|dir| std::path::Path::new(dir) == canonical_config),
+        "an approved file edit grants its parent directory for this session"
+    );
+    assert!(
+        !store
+            .load_directories()
+            .iter()
+            .any(|dir| dir == &canonical_config),
+        "once grants the live fence without persisting the directory"
+    );
+    session
+        .write_file(&file_path.to_string_lossy(), b"{\"model\":{}}".to_vec())
+        .await
+        .expect("the approved file path is writable through the host tool fence");
+    assert_eq!(
+        std::fs::read_to_string(&file_path).unwrap(),
+        "{\"model\":{}}"
+    );
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -305,7 +337,7 @@ fn test_ask_reason_selects_grant() {
     };
     server.route_consent("grep", &input, "always", Some(&user_ask_reason));
     assert!(
-        store.load_directories().is_empty(),
+        store.load_directories().is_empty() && store.load_read_directories().is_empty(),
         "non-path-bounds grep must not grant a directory"
     );
 
@@ -320,8 +352,8 @@ fn test_ask_reason_selects_grant() {
     server.route_consent("grep", &input, "always", Some(&path_bounds_reason));
     let coutside = dunce::canonicalize(&outside).unwrap();
     assert!(
-        store.load_directories().iter().any(|d| d == &coutside),
-        "path-bounds grep grants the directory"
+        store.load_read_directories().iter().any(|d| d == &coutside),
+        "path-bounds grep grants a read-only directory"
     );
 
     std::fs::remove_dir_all(&root).ok();

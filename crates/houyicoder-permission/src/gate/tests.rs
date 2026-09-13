@@ -35,10 +35,10 @@ mod fenced_exec;
 #[cfg(test)]
 mod git_ops;
 #[cfg(test)]
-mod invariants;
-#[cfg(test)]
 mod matrix;
 #[cfg(test)]
 mod mode_decision;
+#[cfg(test)]
+mod pipeline_contract;
 #[cfg(test)]
 mod rule_dedup;

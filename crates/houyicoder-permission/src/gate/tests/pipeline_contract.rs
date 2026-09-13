@@ -1,8 +1,5 @@
-//! Gate invariants: the ladder order + spec-matching, mode-insensitivity of
-//! immune stages, the unbypassable headless fallback, thread-safety of
-//! concurrent decide() callers, and the path-bounds ask/defer discipline.
-//! These assert properties that always hold of the assembled gate, not of
-//! any single validator's decision.
+//! Assembled gate pipeline contract: validator order, mode immunity, headless
+//! fallback, concurrent decisions, and workspace-boundary authorization.
 
 use crate::decision::{Decision, DenySource, Outcome};
 use crate::gate::{DefaultModeGate, ModeGate};
@@ -187,6 +184,55 @@ fn test_concurrent_gate_decide_safe() {
     }
 }
 
+#[test]
+fn test_outside_edit_asks_path() {
+    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    struct BoundsFence(PathBuf);
+    impl Containment for BoundsFence {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![self.0.clone()],
+            }
+        }
+        fn would_block(&self, _effect: SideEffect) -> Option<String> {
+            None
+        }
+        fn boundary_root(&self) -> Option<Arc<Path>> {
+            Some(Arc::from(self.0.clone().into_boxed_path()))
+        }
+    }
+
+    let base = std::env::temp_dir().join(format!("gate-edit-{}", std::process::id()));
+    let root = base.join("root");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let settings = outside.join("settings.json");
+    std::fs::write(&settings, b"{}").unwrap();
+    let gate = DefaultModeGate::new_without_builtins()
+        .with_containment(Arc::new(BoundsFence(std::fs::canonicalize(&root).unwrap())));
+    let input = serde_json::json!({"path": settings.to_string_lossy()});
+    let request = ToolRequest {
+        tool_name: "edit",
+        input: Some(&input),
+        is_destructive: true,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    let decision = gate.decide(&request);
+    assert!(
+        matches!(decision, Decision::Ask(ref reason)
+            if reason.validator == "path-bounds"
+                && reason.detail.contains("authorizes parent directory")
+                && reason.detail.contains("always persists")),
+        "outside edit must disclose the directory grant: {decision:?}"
+    );
+    std::fs::remove_dir_all(base).ok();
+}
+
 /// A grep/glob path or pattern that canonicalizes outside the workspace +
 /// authorized dirs surfaces an Ask at the gate's path-bounds pre-check, so the
 /// user can grant it — instead of the tool's hard PathEscapes rejection. The
@@ -239,9 +285,12 @@ fn test_outside_asks_inside_defers() {
         is_read_only: true,
         native_requires_approval: false,
     };
+    let decision = g.decide(&req);
     assert!(
-        matches!(g.decide(&req).outcome(), Outcome::Ask),
-        "out-of-workspace grep path must Ask"
+        matches!(decision, Decision::Ask(ref reason)
+            if reason.detail.contains("read-only directory")
+                && reason.detail.contains("always persists")),
+        "out-of-workspace grep must disclose its read-only grant: {decision:?}"
     );
 
     // glob pattern whose dir portion is outside root → Ask.

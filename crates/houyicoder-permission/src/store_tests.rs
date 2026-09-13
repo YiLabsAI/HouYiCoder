@@ -324,6 +324,26 @@ fn test_directory_persists_and_hydrates() {
     std::fs::remove_dir_all(&target).ok();
 }
 
+#[test]
+fn test_read_directory_round_trip() {
+    use crate::store::Scope;
+    let dir = tempdir();
+    let target = std::env::temp_dir().join(format!("houyi-read-dir-{}", std::process::id()));
+    std::fs::create_dir_all(&target).unwrap();
+    let store = std::sync::Arc::new(tmp_store(&dir, "read-dir")) as std::sync::Arc<dyn RuleStore>;
+    store.add_read_directory(&target, Scope::Local).unwrap();
+    let reloaded =
+        std::sync::Arc::new(tmp_store(&dir, "read-dir")) as std::sync::Arc<dyn RuleStore>;
+    assert_eq!(reloaded.load_read_directories().len(), 1);
+    assert!(reloaded.load_directories().is_empty());
+    reloaded.add_directory(&target, Scope::Local).unwrap();
+    assert!(reloaded.load_read_directories().is_empty());
+    assert_eq!(reloaded.load_directories().len(), 1);
+    reloaded.remove_directory(&target, Scope::Local).unwrap();
+    assert!(reloaded.load_directories().is_empty());
+    std::fs::remove_dir_all(target).ok();
+}
+
 /// Adding the same directory twice is idempotent (one entry, not two), and
 /// removing a directory that was never added is a no-op (no panic, no write).
 /// Covers the duplicate-skip and no-match early-return branches in

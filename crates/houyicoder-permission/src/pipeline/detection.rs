@@ -339,11 +339,10 @@ impl Validator for CompoundCommandValidator {
     }
 }
 
-/// A grep/glob path whose canonical form the fence says is outside the
-/// workspace + authorized dirs surfaces an Ask so the user can grant it —
-/// instead of the tool's hard PathEscapes rejection. Bypass-immune safety
-/// (ModeImmune): fires in Auto like destructive/egress, the agent cannot
-/// auto-allow an out-of-workspace read. The gate only asks; it does not judge
+/// A write-tool path whose canonical form the fence says is outside the
+/// workspace and authorized dirs surfaces an Ask so approval can widen the
+/// live fence before execution, instead of approving a call the inner tool
+/// will still reject. Bypass-immune safety fires in Auto as well. The gate only asks; it does not judge
 /// in-bounds (an uncertain canonicalize or a missing fence degrades to None,
 /// letting confine_path / the kernel fence enforce). Holds the containment
 /// handle directly (not via GateCtx — the design keeps GateCtx fence-free); the
@@ -376,7 +375,11 @@ impl Validator for PathBoundsValidator {
     fn check(&self, req: &ToolRequest<'_>, _ctx: &GateCtx<'_>) -> Option<Decision> {
         let containment = self.containment.as_ref()?;
         let root = containment.boundary_root()?;
-        let additional = containment.boundary_dirs();
+        let additional = if houyicoder_api::sandbox::boundary_path_uses_parent(req.tool_name) {
+            containment.boundary_write_dirs()
+        } else {
+            containment.boundary_dirs()
+        };
         for p in path_args_for_boundary(req.tool_name, req.input) {
             let candidate = root.join(&p);
             if let Ok(canonical) = std::fs::canonicalize(&candidate)
@@ -385,10 +388,27 @@ impl Validator for PathBoundsValidator {
                 if consent_allows(req, _ctx) {
                     return None;
                 }
+                let detail = if houyicoder_api::sandbox::boundary_path_uses_parent(req.tool_name) {
+                    let parent = canonical.parent().unwrap_or(&canonical);
+                    format!(
+                        "path outside the workspace; approval authorizes parent directory {}; choosing always persists it",
+                        parent.display()
+                    )
+                } else {
+                    let directory = if canonical.is_file() {
+                        canonical.parent().unwrap_or(&canonical)
+                    } else {
+                        &canonical
+                    };
+                    format!(
+                        "path outside the workspace; approval authorizes read-only directory {}; choosing always persists it",
+                        directory.display()
+                    )
+                };
                 return Some(Decision::Ask(AskReason {
                     source: AskSource::Detection,
                     validator: self.name(),
-                    detail: "path outside the workspace and authorized dirs".into(),
+                    detail,
                     containment_note: None,
                 }));
             }

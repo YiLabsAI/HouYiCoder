@@ -28,7 +28,7 @@ mod worktree;
 
 mod containment;
 mod paths;
-pub(crate) use containment::{ContainmentAdapter, attach_git_common_dir, rehydrate_directories};
+pub(crate) use containment::{ContainmentAdapter, attach_git_common_dir, restore_directory_grants};
 
 pub use resume::{
     ResumeError, build_runner_for_fork, build_runner_for_resume_export,
@@ -364,7 +364,7 @@ pub(crate) fn assemble(
     // are ignored: a directory deleted since it was persisted should not brick
     // startup; the stale entry just does not re-attach.
     if let (Some(session), Some(store)) = (&sandbox_session, &rule_store) {
-        rehydrate_directories(session.as_ref(), store.as_ref());
+        restore_directory_grants(session.as_ref(), store.as_ref());
     }
     if let (Some(session), Some(ws)) = (&sandbox_session, workspace.as_deref()) {
         attach_git_common_dir(session.as_ref(), ws);

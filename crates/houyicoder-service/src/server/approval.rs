@@ -282,7 +282,7 @@ impl Server {
     /// Route a path-bounds approval (grep/glob) to the two persistence layers:
     /// the kernel fence (additional_dirs, always — so the gate's re-check on
     /// resume passes instead of re-asking in a loop) and the durable store
-    /// (only on scope "always", so the fence rehydrates the directory on
+    /// (only on scope "always", so startup restores the directory into the fence on
     /// restart). Mirrors apply_consent_rule for bash: same scope contract
     /// ("always" = persist, "once" = this session), reusing Scope rather than
     /// a new concept. The path extraction is the shared path_args_for_boundary
@@ -295,21 +295,44 @@ impl Server {
         scope: &str,
     ) {
         let paths = houyicoder_api::sandbox::path_args_for_boundary(tool_name, Some(input));
-        for p in paths {
-            if let Some(session) = &self.sandbox_session
-                && let Err(e) = session.add_working_dir(&p)
-            {
-                tracing::warn!(
-                    "path-bounds consent: add_working_dir failed for {p}: {e}; the tool will still refuse the path"
-                );
+        for path in paths {
+            let grant = boundary_grant_dir(tool_name, std::path::Path::new(&path));
+            let grant_display = grant.to_string_lossy();
+            let write_access = houyicoder_api::sandbox::boundary_path_uses_parent(tool_name);
+            if let Some(session) = &self.sandbox_session {
+                let result = if write_access {
+                    session.add_working_dir(&grant_display)
+                } else {
+                    session.add_reading_dir(&grant_display)
+                };
+                if let Err(error) = result {
+                    tracing::warn!(
+                        "path-bounds consent: sandbox grant failed for {grant_display}: {error}; the tool will still refuse the path"
+                    );
+                }
             }
             if scope == "always" {
-                self.gate.add_directory(
-                    std::path::Path::new(&p),
-                    houyicoder_permission::Scope::Local,
-                );
+                if write_access {
+                    self.gate
+                        .add_directory(&grant, houyicoder_permission::Scope::Local);
+                } else {
+                    self.gate
+                        .add_read_directory(&grant, houyicoder_permission::Scope::Local);
+                }
             }
         }
+    }
+}
+
+fn boundary_grant_dir(tool_name: &str, path: &std::path::Path) -> std::path::PathBuf {
+    match tool_name {
+        tool if houyicoder_api::sandbox::boundary_path_uses_parent(tool) => path
+            .parent()
+            .map_or_else(|| path.to_path_buf(), std::path::Path::to_path_buf),
+        _ if path.is_file() => path
+            .parent()
+            .map_or_else(|| path.to_path_buf(), std::path::Path::to_path_buf),
+        _ => path.to_path_buf(),
     }
 }
 

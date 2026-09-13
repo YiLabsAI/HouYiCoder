@@ -43,6 +43,8 @@ pub trait ModeGate: Send + Sync {
     /// rehydrates it on restart. Default no-op (no store / a test gate). The
     /// fence's additional_dirs is updated separately by the caller.
     fn add_directory(&self, _dir: &std::path::Path, _scope: crate::store::Scope) {}
+    /// Persist a read-only directory authorization.
+    fn add_read_directory(&self, _dir: &std::path::Path, _scope: crate::store::Scope) {}
     /// Remove a rule by index. Returns true if the index was in range.
     fn remove_rule(&self, index: usize) -> bool;
     /// Enable or disable the git-checkpoint builtin rules (git commit / rebase
@@ -364,17 +366,25 @@ impl ModeGate for DefaultModeGate {
     }
 
     fn add_directory(&self, dir: &std::path::Path, scope: crate::store::Scope) {
-        // Persist a path-bounds approval marked "always" so the fence
-        // rehydrates the directory on restart. The fence's additional_dirs is
-        // updated separately (by the server, before resume). Log a store
-        // failure rather than silently dropping — matches add_rule.
         if scope.is_writable()
             && let Some(store) = &self.store
-            && let Err(e) = store.add_directory(dir, scope)
+            && let Err(error) = store.add_directory(dir, scope)
         {
             tracing::warn!(
                 "[permission] add_directory: persistence write failed; the \
-                 directory auth will not survive restart: {e}"
+                 directory auth will not survive restart: {error}"
+            );
+        }
+    }
+
+    fn add_read_directory(&self, dir: &std::path::Path, scope: crate::store::Scope) {
+        if scope.is_writable()
+            && let Some(store) = &self.store
+            && let Err(error) = store.add_read_directory(dir, scope)
+        {
+            tracing::warn!(
+                "[permission] add_read_directory: persistence write failed; the \
+                 directory auth will not survive restart: {error}"
             );
         }
     }

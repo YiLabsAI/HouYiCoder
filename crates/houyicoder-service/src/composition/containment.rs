@@ -1,7 +1,5 @@
-//! Containment-bridge utilities split from the composition root so it stays
-//! under the file-size gate. The adapter + directory rehydration are the seam
-//! between a SandboxSession (the fence owner) and the Containment /
-//! RuleStore traits the composition root threads.
+//! Connects sandbox containment with permission storage and runtime directory
+//! grants.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -41,27 +39,41 @@ impl Containment for ContainmentAdapter {
             .map(PathBuf::from)
             .collect()
     }
+
+    fn boundary_write_dirs(&self) -> Vec<PathBuf> {
+        self.0
+            .writing_dirs()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect()
+    }
 }
 
-/// Rehydrate persistent directory authorizations from the rule store into the
-/// kernel fence. Directories the user persisted (via /permissions AddDir or an
+/// Restore persistent directory grants from the rule store into the kernel
+/// fence. Directories the user persisted (via /permissions AddDir or an
 /// approval card) live in the store's envelope; the fence is in-memory and
 /// starts empty, so without this bridge a persistent directory auth is silent
 /// on restart — the store has it, but the kernel fence does not, and the tool
 /// still refuses. Errors are ignored: a directory deleted since it was
 /// persisted should not brick startup; the stale entry just does not re-attach.
-pub(crate) fn rehydrate_directories(session: &dyn SandboxSession, store: &dyn RuleStore) {
-    let dirs = store.load_directories();
+pub(crate) fn restore_directory_grants(session: &dyn SandboxSession, store: &dyn RuleStore) {
+    let write_dirs = store.load_directories();
+    let read_dirs = store.load_read_directories();
     let mut failed = 0;
-    for dir in &dirs {
+    for dir in &write_dirs {
         if session.add_working_dir(&dir.to_string_lossy()).is_err() {
             failed += 1;
         }
     }
+    for dir in &read_dirs {
+        if session.add_reading_dir(&dir.to_string_lossy()).is_err() {
+            failed += 1;
+        }
+    }
+    let total = write_dirs.len() + read_dirs.len();
     if failed > 0 {
         tracing::warn!(
-            "startup: {failed}/{} persistent directory authorizations failed to re-attach to the fence; the corresponding tools will refuse those paths",
-            dirs.len()
+            "startup: {failed}/{total} persistent directory authorizations failed to re-attach to the fence; the corresponding tools will refuse those paths"
         );
     }
 }
@@ -108,6 +120,7 @@ mod tests {
     use super::*;
     use houyicoder_permission::{FileRuleStore, Scope};
     use houyicoder_sandbox::PlatformSession;
+    use std::fs;
 
     /// Never default_paths: that would write the developer's real home.
     fn temp_store(root: &Path) -> Arc<dyn RuleStore> {
@@ -120,8 +133,8 @@ mod tests {
 
     fn temp_root(tag: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("{tag}-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&root));
-        std::fs::create_dir_all(&root).expect("mkdir root");
+        drop(fs::remove_dir_all(&root));
+        fs::create_dir_all(&root).expect("mkdir root");
         root
     }
 
@@ -131,17 +144,23 @@ mod tests {
     /// already approved.
     #[test]
     fn test_startup_restores_fence() {
-        let root = temp_root("houyi-rehydrate");
+        let root = temp_root("houyi-restore");
         let store = temp_store(&root);
         let target = root.join("authorized-dir");
-        std::fs::create_dir_all(&target).expect("mkdir target");
+        fs::create_dir_all(&target).expect("mkdir target");
         store
             .add_directory(&target, Scope::Project)
             .expect("add_directory");
-        let canonical = std::fs::canonicalize(&target).expect("canonicalize target");
+        let read_target = root.join("read-dir");
+        fs::create_dir_all(&read_target).expect("mkdir read target");
+        store
+            .add_read_directory(&read_target, Scope::Project)
+            .expect("add_read_directory");
+        let canonical = fs::canonicalize(&target).expect("canonicalize target");
+        let canonical_read = fs::canonicalize(&read_target).expect("canonicalize read target");
 
         let repo = root.join("repo");
-        std::fs::create_dir_all(&repo).expect("mkdir repo");
+        fs::create_dir_all(&repo).expect("mkdir repo");
         let session: Arc<dyn SandboxSession> =
             Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
         assert!(
@@ -149,13 +168,27 @@ mod tests {
             "fence starts empty before the restore"
         );
 
-        rehydrate_directories(session.as_ref(), store.as_ref());
+        restore_directory_grants(session.as_ref(), store.as_ref());
         let dirs = session.working_dirs();
         assert!(
             dirs.iter().any(|d| Path::new(d.as_str()) == canonical),
             "the persisted directory must be back in the fence: {dirs:?}"
         );
-        std::fs::remove_dir_all(&root).ok();
+        assert!(
+            session
+                .reading_dirs()
+                .iter()
+                .any(|dir| Path::new(dir) == canonical_read),
+            "the read-only grant must restore separately"
+        );
+        assert!(
+            session
+                .writing_dirs()
+                .iter()
+                .all(|dir| Path::new(dir) != canonical_read),
+            "restore must not upgrade read-only access"
+        );
+        fs::remove_dir_all(&root).ok();
     }
 
     /// A directory deleted since it was persisted must not brick startup. The
@@ -163,24 +196,24 @@ mod tests {
     /// entry in the store cannot cost the user every other grant.
     #[test]
     fn test_startup_skips_stale_dir() {
-        let root = temp_root("houyi-rehydrate-stale");
+        let root = temp_root("houyi-restore-stale");
         let store = temp_store(&root);
         let target = root.join("authorized-dir");
-        std::fs::create_dir_all(&target).expect("mkdir target");
+        fs::create_dir_all(&target).expect("mkdir target");
         store
             .add_directory(&target, Scope::Project)
             .expect("add_directory");
-        let canonical = std::fs::canonicalize(&target).expect("canonicalize target");
+        let canonical = fs::canonicalize(&target).expect("canonicalize target");
         // Never created, so its re-attach fails.
         store
             .add_directory(&root.join("stale-deleted"), Scope::Project)
             .expect("add stale dir");
 
         let repo = root.join("repo");
-        std::fs::create_dir_all(&repo).expect("mkdir repo");
+        fs::create_dir_all(&repo).expect("mkdir repo");
         let session: Arc<dyn SandboxSession> =
             Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
-        rehydrate_directories(session.as_ref(), store.as_ref());
+        restore_directory_grants(session.as_ref(), store.as_ref());
 
         let dirs = session.working_dirs();
         assert!(
@@ -191,7 +224,7 @@ mod tests {
             !dirs.iter().any(|d| d.contains("stale-deleted")),
             "the stale directory must not re-attach: {dirs:?}"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// Init a git repo with one commit, and link a worktree under it. Returns
@@ -200,7 +233,7 @@ mod tests {
     #[expect(clippy::disallowed_methods, reason = "test fixture, not model-driven")]
     fn git_repo_with_worktree(root: &Path) -> Option<(PathBuf, PathBuf)> {
         let repo = root.join("repo");
-        std::fs::create_dir_all(&repo).ok()?;
+        fs::create_dir_all(&repo).ok()?;
         let git = |args: &[&str], cwd: &Path| {
             std::process::Command::new("git")
                 .args(args)
@@ -212,7 +245,7 @@ mod tests {
         git(&["init"], &repo)?;
         git(&["config", "user.email", "t@t"], &repo)?;
         git(&["config", "user.name", "t"], &repo)?;
-        std::fs::write(repo.join("f.txt"), b"x").ok()?;
+        fs::write(repo.join("f.txt"), b"x").ok()?;
         git(&["add", "."], &repo)?;
         git(&["commit", "-m", "init"], &repo)?;
         let wt = root.join("wt");
@@ -231,10 +264,10 @@ mod tests {
     fn test_worktree_attaches_git_common() {
         let root = temp_root("houyi-wt-gitcommon");
         let Some((repo, wt)) = git_repo_with_worktree(&root) else {
-            std::fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
             return;
         };
-        let wt_canon = std::fs::canonicalize(&wt).expect("canonicalize worktree");
+        let wt_canon = fs::canonicalize(&wt).expect("canonicalize worktree");
         let session: Arc<dyn SandboxSession> =
             Arc::new(PlatformSession::new_in_cwd(&wt_canon).expect("sandbox"));
         assert!(
@@ -244,13 +277,13 @@ mod tests {
 
         attach_git_common_dir(session.as_ref(), &wt_canon);
 
-        let main_git = std::fs::canonicalize(repo.join(".git")).expect("canonicalize main .git");
+        let main_git = fs::canonicalize(repo.join(".git")).expect("canonicalize main .git");
         let dirs = session.working_dirs();
         assert!(
             dirs.iter().any(|d| Path::new(d.as_str()) == main_git),
             "the main repo git dir must be in the fence so git can write from the worktree: {dirs:?}"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// A main repo needs no allow-back: its git dir is inside the workspace,
@@ -261,10 +294,10 @@ mod tests {
     fn test_main_repo_attaches_nothing() {
         let root = temp_root("houyi-main-gitcommon");
         let Some((repo, _wt)) = git_repo_with_worktree(&root) else {
-            std::fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
             return;
         };
-        let repo_canon = std::fs::canonicalize(&repo).expect("canonicalize repo");
+        let repo_canon = fs::canonicalize(&repo).expect("canonicalize repo");
         let session: Arc<dyn SandboxSession> =
             Arc::new(PlatformSession::new_in_cwd(&repo_canon).expect("sandbox"));
 
@@ -275,7 +308,7 @@ mod tests {
             "a main repo's git dir is already inside the workspace: {:?}",
             session.working_dirs()
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// The gate asks through Containment instead of holding the session, so the
@@ -286,7 +319,7 @@ mod tests {
     fn test_containment_reports_bounds() {
         let root = temp_root("adapter-bound");
         let extra = root.join("extra");
-        std::fs::create_dir_all(&extra).expect("mkdir extra");
+        fs::create_dir_all(&extra).expect("mkdir extra");
         let session: Arc<dyn SandboxSession> =
             Arc::new(PlatformSession::new_in_cwd(&root).expect("sandbox"));
         session
@@ -296,15 +329,15 @@ mod tests {
         let adapter = ContainmentAdapter(session);
         assert_eq!(
             adapter.boundary_root().map(|p| p.to_path_buf()),
-            Some(std::fs::canonicalize(&root).expect("canonicalize root")),
+            Some(fs::canonicalize(&root).expect("canonicalize root")),
             "the root the session enforces must be the root the gate sees"
         );
         let dirs = adapter.boundary_dirs();
-        let widened = std::fs::canonicalize(&extra).expect("canonicalize extra");
+        let widened = fs::canonicalize(&extra).expect("canonicalize extra");
         assert!(
             dirs.iter().any(|d| d == &widened),
             "a runtime-added dir must be in the bounds the gate sees: {dirs:?}"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 }

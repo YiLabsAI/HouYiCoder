@@ -1,17 +1,7 @@
-//! Seatbelt profile builders — composable segments composing into a full
-//! macOS sandbox-exec profile. Industrial-grade allowlist: deny default +
-//! an explicit allow-set covering everything sh/dyld needs to start, then
-//! allow-only file writes (workspace + tmpdir + stdio), a network segment that
-//! denies egress by default,
-//! and layer mandatory deny + denyReadAlways on top so AI-agent
-//! exfiltration vectors (.ssh, .gitconfig, .mcp.json, .git/hooks, ...) cannot
-//! be read or written even when nested inside an allowed path.
-//!
-//! The segments encode: the mach services and /dev devices dyld touches
-//! during process start, the fs three-stage shape (allow-all -> deny-broad
-//! -> allow-back), the denyReadAlways re-emit rule, and the mandatory deny
-//! file/dir list. Each segment is an independent Rust builder, unit-testable
-//! in isolation.
+//! Composes the macOS Seatbelt profile from process, filesystem, network, and
+//! mandatory-deny segments. The profile denies by default, grants only named
+//! capabilities, and emits mandatory denies after allow-backs because Seatbelt
+//! resolves matching rules in order.
 
 use houyicoder_api::sandbox::NetworkPolicy;
 use std::path::Path;
@@ -22,11 +12,7 @@ mod network;
 use self::deny::{deny_snapshot_store, mandatory_deny};
 use self::network::network_rules;
 
-/// mach services dyld/launchd look up during process start (srt's set),
-/// plus com.apple.hiservices-xpcservice for macOS UI automation. Native
-/// app automation tools connect to this XPC service to drive browser
-/// windows via the HIServices framework (Apple Events, Finder, app
-/// policy). Apple-signed system process, user-level UI ops only.
+/// Mach services required for process startup and native UI automation.
 const MACH_SERVICES: &[&str] = &[
     "com.apple.audio.systemsoundserver",
     "com.apple.distributed_notifications@Uv3",
@@ -56,38 +42,12 @@ const DEV_IOCTL: &[&str] = &[
     "/dev/tty",
 ];
 
-/// Broad read-deny regions. Only /etc remains: system config that is
-/// re-allow-listed back for the specific files git must read (see
-/// SYSTEM_ETC_ALLOW). The home tree (/Users) is NOT a broad deny anymore —
-/// that posture blocked legitimate cross-project source reads (a workspace
-/// under /Users could read itself but not sibling projects), which is
-/// stricter than a read-all stance without buying extra safety (writes
-/// still default-deny to workspace+additional). Sensitive home
-/// paths are denied by name in mandatory_deny (.ssh, .aws, .gnupg, .bashrc,
-/// .mcp.json, .netrc, ...), so lifting the broad /Users deny opens ordinary
-/// source reads while the credential vectors stay denied. A user can widen
-/// reads further via the read-allowlist config (additional read-allow paths).
+/// Broad system-config read denies. Specific required files are allowed back;
+/// sensitive home paths are handled by mandatory_deny.
 const DENY_REGIONS: &[&str] = &["/etc", "/private/etc"];
 
-/// System-wide files under /etc that git must read at startup. The shell runs
-/// non-login (/bin/sh -c), so it does not source /etc/profile; /etc/gitconfig
-/// is the system-level git config every git invocation reads, and /etc/paths is
-/// read by path_helper. The broad /etc deny (DENY_REGIONS) and the mandatory
-/// .profile/.gitconfig regex denies block these reads, so git would print
-/// "fatal: unable to access '/etc/gitconfig'" — which surfaced on Edit chips
-/// because a same-turn Bash+git result got misattached (bug-log #17). These
-/// are SYSTEM config (no credentials; ~/.gitconfig and ~/.profile stay
-/// denied), so reads are allow-listed back after the mandatory denies so
-/// last-match-wins lets them through.
-///
-/// /etc/profile is listed for completeness even though the non-login shell no
-/// longer sources it: a future tool that reads it directly stays allowed, and
-/// the entry is harmless while the shell does not source it.
-///
-/// Listed as the /etc form only; allow_system_etc also emits the /private/etc
-/// resolved form, because on macOS /etc is a symlink to /private/etc and
-/// seatbelt matches the resolved realpath. Adding a new system file here
-/// auto-covers both paths — no manual /private/etc mirror per entry.
+/// Public system files required by shell, git, and build startup. Rendering
+/// covers both /etc and its resolved /private/etc form.
 const SYSTEM_ETC_ALLOW: &[&str] = &[
     "/etc/profile",
     "/etc/gitconfig",
@@ -97,24 +57,32 @@ const SYSTEM_ETC_ALLOW: &[&str] = &[
     "/etc/ssl/openssl.cnf",
 ];
 
-/// Render a full Seatbelt profile bound to the workspace. Composes six
-/// segments in order: deny_default -> allow_set -> filesystem_rules ->
-/// deny_read_always -> mandatory_deny -> network. Order is load-bearing:
-/// seatbelt is last-match-wins, so every deny that must hold against an
-/// allow-back has to land after the allow-back segment.
+/// Render a complete profile. Mandatory denies follow allow-backs so they
+/// remain authoritative.
 pub fn render_profile(workspace: &Path, tmpdir: &str, tag: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
     render(&ProfileSpec::new(workspace, tmpdir, &home, tag))
 }
 
-/// Everything the profile renderer needs, as one named value.
-///
-/// A struct rather than a positional parameter list because three of the four
-/// required inputs are strings and two of them are paths: transposing the
-/// temp dir, the home dir, and the violation tag compiles cleanly and produces a
-/// fence that is wrong in a way no test would obviously catch. Naming them at
-/// the call site removes that class of mistake. Marked non-exhaustive so a later
-/// fence axis is an added builder method rather than a break at every call site.
+/// Runtime directory allow-backs split by write capability.
+#[derive(Debug, Clone, Copy)]
+pub struct AdditionalDirs<'a> {
+    /// Directories available to reads but not writes.
+    pub read_only: &'a [&'a str],
+    /// Directories available to both reads and writes.
+    pub read_write: &'a [&'a str],
+}
+
+impl AdditionalDirs<'_> {
+    fn empty() -> Self {
+        Self {
+            read_only: &[],
+            read_write: &[],
+        }
+    }
+}
+
+/// Named inputs for rendering a complete profile.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ProfileSpec<'a> {
@@ -128,22 +96,11 @@ pub struct ProfileSpec<'a> {
     /// The violation message tag, used to attribute a kernel denial back to
     /// this session.
     pub tag: &'a str,
-    /// Extra directories the user added to the workspace at runtime. They land
-    /// in the fs allow-back alongside the workspace and temp dir so reads and
-    /// writes pass, while the mandatory exfiltration denies that follow still
-    /// hold inside them.
-    pub additional: &'a [&'a str],
-    /// Extra mach services (XPC service names) a skill or tool declares it
-    /// needs beyond the base set. Each emits an extra allow mach-lookup
-    /// global-name line after the base allow_set. The base set covers
-    /// process-start services; this is the extension point for skills that
-    /// talk to macOS system services the base set does not include.
+    /// Runtime-added directories separated by write capability.
+    pub additional: AdditionalDirs<'a>,
+    /// Additional validated Mach service names.
     pub extra_mach_services: &'a [&'a str],
-    /// Whether to grant LaunchServices app-launch (lsopen) plus the
-    /// coreservicesd and quarantine-resolver mach lookups, so a sandboxed
-    /// process can launch an app via open -a. Off by default so a sandboxed
-    /// command cannot launch arbitrary apps unless a skill declares the
-    /// need; a follow-up wires the opt-in from skill frontmatter.
+    /// Whether app-launch and its required service lookups are allowed.
     pub allow_app_launch: bool,
     /// How wide the network fence is opened. Defaults to fully contained.
     pub network: NetworkPolicy,
@@ -159,7 +116,7 @@ impl<'a> ProfileSpec<'a> {
             tmpdir,
             home,
             tag,
-            additional: &[],
+            additional: AdditionalDirs::empty(),
             extra_mach_services: &[],
             allow_app_launch: false,
             network: NetworkPolicy::contained(),
@@ -169,7 +126,14 @@ impl<'a> ProfileSpec<'a> {
     /// Set the runtime-added workspace directories.
     #[must_use]
     pub fn with_additional(mut self, additional: &'a [&'a str]) -> Self {
-        self.additional = additional;
+        self.additional.read_write = additional;
+        self
+    }
+
+    /// Set runtime-added directories that remain read-only.
+    #[must_use]
+    pub fn with_read_only(mut self, additional: &'a [&'a str]) -> Self {
+        self.additional.read_only = additional;
         self
     }
 
@@ -233,7 +197,13 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
         }
         s.push_str(&format!("(allow mach-lookup (global-name \"{name}\"))\n"));
     }
-    s.push_str(&filesystem_rules(workspace, tmpdir, tag, additional));
+    s.push_str(&filesystem_rules_with_access(
+        workspace,
+        tmpdir,
+        tag,
+        additional.read_only,
+        additional.read_write,
+    ));
     // Deny writes to the snapshot store inside the workspace so a destructive
     // command (rm -rf, git clean -fdx) cannot destroy its own undo data.
     // Last-match-wins: this lands after the workspace allow-write-back so the
@@ -247,7 +217,8 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     // sibling deny paths fired.
     let allow_paths: Vec<&str> = {
         let mut v: Vec<&str> = vec![workspace.to_str().unwrap_or(""), tmpdir];
-        v.extend(additional.iter().copied());
+        v.extend(additional.read_only.iter().copied());
+        v.extend(additional.read_write.iter().copied());
         v
     };
     s.push_str(&deny_read_always(DENY_REGIONS, &allow_paths, tag));
@@ -382,44 +353,45 @@ pub fn allow_app_launch_segment() -> String {
         .to_string()
 }
 
-/// Filesystem three-stage (srt macos-sandbox-utils:225-308): allow-all read
-/// -> deny broad regions -> re-allow workspace+tmpdir. Last-match-wins so
-/// workspace reads pass while /Users at large stays denied. Writes are
-/// allow-only (workspace + tmpdir + stdio devices) — there is no
-/// write-everything default.
+/// Render filesystem rules with read allow-backs and allow-only writes.
 pub fn filesystem_rules(workspace: &Path, tmpdir: &str, tag: &str, additional: &[&str]) -> String {
+    filesystem_rules_with_access(workspace, tmpdir, tag, &[], additional)
+}
+
+fn filesystem_rules_with_access(
+    workspace: &Path,
+    tmpdir: &str,
+    tag: &str,
+    read_only: &[&str],
+    read_write: &[&str],
+) -> String {
     let ws = workspace.to_string_lossy();
     let deny_regions = DENY_REGIONS
         .iter()
-        .map(|r| format!("(subpath \"{r}\")"))
+        .map(|region| format!("(subpath \"{region}\")"))
         .collect::<Vec<_>>()
         .join(" ");
-    // The allow-back subpaths: workspace + tmpdir + any user-added working
-    // directories. Each additional dir is re-allowed here (after the broad
-    // deny of /Users etc.) so last-match-wins lets reads through; the
-    // mandatory exfiltration denies that follow still hold inside them.
-    let mut allow_subs = format!("(subpath \"{ws}\") (subpath \"{tmpdir}\")");
-    for d in additional {
-        if d.is_empty() {
-            continue;
+    let mut read_subs = format!("(subpath \"{ws}\") (subpath \"{tmpdir}\")");
+    for directory in read_only.iter().chain(read_write) {
+        if !directory.is_empty() {
+            read_subs.push_str(&format!(" (subpath \"{directory}\")"));
         }
-        allow_subs.push_str(&format!(" (subpath \"{d}\")"));
+    }
+    let mut write_subs = format!("(subpath \"{ws}\") (subpath \"{tmpdir}\")");
+    for directory in read_write {
+        if !directory.is_empty() {
+            write_subs.push_str(&format!(" (subpath \"{directory}\")"));
+        }
     }
     format!(
         "(allow file-read*)\n\
          (deny file-read* {deny_regions} (with message \"{tag}\"))\n\
-         (allow file-read* {allow_subs})\n\
-         (allow file-write* {allow_subs} (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\"))\n"
+         (allow file-read* {read_subs})\n\
+         (allow file-write* {write_subs} (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\"))\n"
     )
 }
 
-/// denyReadAlways (srt macos-sandbox-utils:304-311): for each literal deny
-/// path that is nested inside an allow-back subpath, re-emit the deny after
-/// the allow-back so last-match-wins does not wash it out. Returns the empty
-/// string when no deny path is nested inside an allow path (the common case
-/// when the workspace lives in tmpdir, not under /Users). The builder stays
-/// parameterized so a richer configuration model can drive non-trivial
-/// allow-back sets without changing the render pipeline.
+/// Re-emit nested read denies after allow-backs so they remain authoritative.
 pub fn deny_read_always(deny_paths: &[&str], allow_paths: &[&str], tag: &str) -> String {
     let mut out = String::new();
     for deny in deny_paths {
@@ -530,6 +502,26 @@ mod tests {
             .filter(|i| p[*i..].contains("/Users/alice/projects/foo"))
             .expect("additional dir is in the write allow-back");
         assert!(write_back > read_back);
+    }
+
+    #[test]
+    fn test_read_only_dir() {
+        let profile = render(
+            &ProfileSpec::new(Path::new("/tmp/ws"), "/tmp", "/Users/alice", "tag-x")
+                .with_read_only(&["/Users/alice/reference"]),
+        );
+        let read = profile
+            .lines()
+            .find(|line| {
+                line.starts_with("(allow file-read*") && line.contains("/Users/alice/reference")
+            })
+            .unwrap();
+        let write = profile
+            .lines()
+            .find(|line| line.starts_with("(allow file-write*"))
+            .unwrap();
+        assert!(read.contains("/Users/alice/reference"));
+        assert!(!write.contains("/Users/alice/reference"));
     }
 
     #[test]

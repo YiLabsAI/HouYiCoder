@@ -559,6 +559,45 @@ async fn test_added_dir_accessible() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// A read-only runtime grant must not widen either host or kernel writes.
+#[tokio::test]
+#[ignore]
+async fn test_read_dir_denies_write() {
+    use houyicoder_api::sandbox::SandboxSession;
+    let session = MacSeatbeltSession::new().expect("session");
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let dir = std::path::PathBuf::from(home).join(format!(
+        "houyi-read-effect-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
+    std::fs::create_dir(&dir).expect("mkdir");
+    let file = dir.join("note.txt");
+    std::fs::write(&file, b"42").expect("seed file");
+    session.add_reading_dir(dir.to_str().unwrap()).unwrap();
+    assert_eq!(
+        session.read_file(file.to_str().unwrap(), 16).await.unwrap(),
+        b"42"
+    );
+    assert!(
+        session
+            .write_file(file.to_str().unwrap(), b"host".to_vec())
+            .await
+            .is_err(),
+        "host writes must reject a read-only grant"
+    );
+    let command = format!("echo kernel >> {}", file.display());
+    let result = session.exec(&command).await;
+    assert!(
+        !result
+            .as_ref()
+            .map(|value| value.is_success())
+            .unwrap_or(false),
+        "kernel writes must reject a read-only grant: {result:?}"
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// Spike (Slice -1, go/no-go gate for the worktree feature): prove the
 /// load-bearing bet "narrow fence to a linked worktree + .git allow-back
 /// lets git commit still work" holds under a real sandbox-exec. This combo

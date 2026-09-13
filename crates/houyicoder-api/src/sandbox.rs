@@ -237,6 +237,11 @@ pub trait Containment: Send + Sync {
     fn boundary_dirs(&self) -> Vec<PathBuf> {
         Vec::new()
     }
+
+    /// The writable subset of boundary_dirs.
+    fn boundary_write_dirs(&self) -> Vec<PathBuf> {
+        self.boundary_dirs()
+    }
 }
 
 /// The single workspace-boundary predicate: a canonical candidate is within
@@ -251,18 +256,25 @@ pub fn is_within_bounds(candidate: &Path, root: &Path, additional: &[PathBuf]) -
     candidate.starts_with(root) || additional.iter().any(|d| candidate.starts_with(d))
 }
 
-/// Extract the path-bearing args from grep/glob input for a boundary check.
-/// grep contributes its path; glob contributes its path and the directory
-/// portion of its pattern (the part that can escape via parent-dir segments).
-/// Other tools return empty. Shared by the gate's pre-check ask and the
-/// server's consent routing so the two layers cannot drift on which field is
-/// the path. The caller canonicalizes + applies is_within_bounds.
+/// Whether approving this tool's file target authorizes its parent directory.
+pub fn boundary_path_uses_parent(tool_name: &str) -> bool {
+    matches!(
+        tool_name.to_ascii_lowercase().as_str(),
+        "write" | "edit" | "multiedit"
+    )
+}
+
+/// Extract path-bearing arguments for a workspace boundary check. Write tools
+/// contribute their target path; grep contributes its path; glob contributes
+/// its path and the directory portion of its pattern. Other tools return
+/// empty. Shared by the gate's pre-check ask and consent routing so approval
+/// and enforcement cannot drift on which field carries the path.
 pub fn path_args_for_boundary(tool_name: &str, input: Option<&serde_json::Value>) -> Vec<String> {
     let Some(v) = input else {
         return Vec::new();
     };
     match tool_name.to_ascii_lowercase().as_str() {
-        "grep" => v
+        tool if boundary_path_uses_parent(tool) || tool == "grep" => v
             .get("path")
             .and_then(|x| x.as_str())
             .map(|s| vec![s.to_string()])
@@ -295,66 +307,8 @@ pub fn path_args_for_boundary(tool_name: &str, input: Option<&serde_json::Value>
 }
 
 #[cfg(test)]
-mod containment_tests {
-    use super::{Containment, Coverage, SideEffect};
-    use std::path::PathBuf;
-
-    /// A stub fence: Fenced with one root, blocks Network, permits everything
-    /// else. Pins the trait's contract before any real backend implements it,
-    /// so the real impl lights up an existing expectation rather than bringing
-    /// one in.
-    struct StubFence;
-
-    impl Containment for StubFence {
-        fn coverage(&self) -> Coverage {
-            Coverage::Fenced {
-                writable_roots: vec![PathBuf::from("/ws")],
-            }
-        }
-        fn would_block(&self, effect: SideEffect) -> Option<String> {
-            match effect {
-                SideEffect::Network => Some("egress is contained".into()),
-                _ => None,
-            }
-        }
-    }
-
-    /// The trait must be dyn-safe (the gate holds a trait object).
-    fn _assert_dyn_safe(_: &dyn Containment) {}
-
-    #[test]
-    fn test_stub_reports_fenced_coverage() {
-        let f = StubFence;
-        assert!(matches!(f.coverage(), Coverage::Fenced { .. }));
-    }
-
-    /// The trait's boundary_root + boundary_dirs default to None/empty when a
-    /// Containment impl does not override them (a stub or an unfenced fence).
-    /// Pins the defaults so a non-fence impl stays unchanged without knowing
-    /// the root, and the gate degrades to "do not ask" (no fence info).
-    #[test]
-    fn test_boundary_defaults_none_empty() {
-        let f = StubFence;
-        assert!(f.boundary_root().is_none(), "default boundary_root is None");
-        assert!(
-            f.boundary_dirs().is_empty(),
-            "default boundary_dirs is empty"
-        );
-    }
-
-    #[test]
-    fn test_stub_blocks_network_only() {
-        let f = StubFence;
-        assert!(f.would_block(SideEffect::Network).is_some());
-        assert!(f.would_block(SideEffect::None).is_none());
-    }
-
-    #[test]
-    fn test_stub_dyn_safe() {
-        let f = StubFence;
-        _assert_dyn_safe(&f);
-    }
-}
+#[path = "sandbox/containment_contract_tests.rs"]
+mod containment_contract_tests;
 
 /// The kernel fence status after session construction. The composition root
 /// checks this once to surface a user-visible notice when the fence did not
@@ -498,7 +452,7 @@ pub trait SandboxSession: Send + Sync {
     /// the same resolve() guard as read_file; the kernel fence is the real
     /// boundary. Takes owned bytes so an async backend moves them without clone.
     fn write_file(&self, path: &str, content: Vec<u8>) -> PFut<'_, Result<(), SandboxError>> {
-        let resolved = match self.resolve(path) {
+        let resolved = match self.resolve_write(path) {
             Ok(p) => p,
             Err(e) => return Box::pin(async move { Err(e) }),
         };
@@ -585,6 +539,12 @@ pub trait SandboxSession: Send + Sync {
         Ok(canonical)
     }
 
+    /// Resolve a write target. Backends with read-only external directories
+    /// override this so write_file cannot reuse a read grant.
+    fn resolve_write(&self, path: &str) -> Result<PathBuf, SandboxError> {
+        self.resolve(path)
+    }
+
     /// Narrow the fence to a linked worktree plus allow-back the repo .git so
     /// git ops can read/write objects and refs (the main working tree stays
     /// fenced out — the kernel fence is the real isolation). The worktree
@@ -623,8 +583,16 @@ pub trait SandboxSession: Send + Sync {
         ))
     }
 
+    /// Add a read-only directory beyond the workspace root. Write resolution
+    /// and the kernel write allow-back must continue to reject it.
+    fn add_reading_dir(&self, _path: &str) -> Result<(), SandboxError> {
+        Err(SandboxError::Unsupported(
+            "additional read dirs need a runtime-mutable sandbox fence".into(),
+        ))
+    }
+
     /// Remove a previously-added directory. No-op when the path was never
-    /// added. Backends without a runtime-mutable fence silently no-op.
+    /// added. Implementations remove matching read-only and read-write grants.
     fn remove_working_dir(&self, _path: &str) {}
 
     /// The canonicalized paths of the directories added at runtime (not
@@ -632,6 +600,16 @@ pub trait SandboxSession: Send + Sync {
     /// runtime-mutable fence or none have been added.
     fn working_dirs(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// The read-only subset of runtime-added directories.
+    fn reading_dirs(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The read-write subset of runtime-added directories.
+    fn writing_dirs(&self) -> Vec<String> {
+        self.working_dirs()
     }
     /// Replace the current skill's extra mach services; clear reverts to base.
     fn set_extra_mach_services(&self, _services: &[String]) {}
@@ -668,8 +646,13 @@ mod tests {
             s.add_working_dir("/tmp"),
             Err(SandboxError::Unsupported(_))
         ));
+        assert!(matches!(
+            s.add_reading_dir("/tmp"),
+            Err(SandboxError::Unsupported(_))
+        ));
         s.remove_working_dir("/tmp"); // no-op, no panic
         assert!(s.working_dirs().is_empty());
+        assert!(s.reading_dirs().is_empty());
     }
 
     /// Default mach-services no-op: set/clear do not panic.

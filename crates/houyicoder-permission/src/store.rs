@@ -146,9 +146,19 @@ pub trait RuleStore: Send + Sync {
         Vec::new()
     }
 
+    /// Read the union of read-only directory authorizations.
+    fn load_read_directories(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// Append a directory authorization to the given scope's envelope. Atomic
     /// (tmp + rename) like add. Default no-op so non-file impls stay unchanged.
     fn add_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    /// Append a read-only directory authorization.
+    fn add_read_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
         Ok(())
     }
 
@@ -243,7 +253,9 @@ impl FileRuleStore {
             std::fs::create_dir_all(parent).map_err(|_| StoreError::Io)?;
         }
         let tmp = path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec(env).map_err(|_| StoreError::Encode)?;
+        let mut persisted = env.clone();
+        persisted.version = 2;
+        let bytes = serde_json::to_vec(&persisted).map_err(|_| StoreError::Encode)?;
         std::fs::write(&tmp, bytes).map_err(|_| StoreError::Io)?;
         std::fs::rename(&tmp, path).map_err(|_| StoreError::Io)?;
         Ok(())
@@ -267,26 +279,24 @@ impl FileRuleStore {
     }
 }
 
-/// The on-disk shape of a scope's permissions: a versioned envelope holding
-/// the rule list and a directory-authorization list. Directories are 1:1 with
-/// the sandbox fence's additional_dirs — a directory auth covers grep/glob/
-/// read/edit/write, so persisting the list (not N per-tool rules) avoids
-/// drift between two rule shapes that mean the same thing. The version field
-/// is the migration anchor: a future revision that changes the shape reads it
-/// to dispatch, instead of inferring v0 from a missing field.
+/// Versioned permissions envelope with rules and separate read-only and
+/// read-write directory grants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PermissionsFile {
     pub version: u32,
     pub rules: Vec<Rule>,
     pub directories: Vec<PathBuf>,
+    #[serde(default)]
+    pub read_directories: Vec<PathBuf>,
 }
 
 impl PermissionsFile {
     fn empty() -> Self {
         Self {
-            version: 1,
+            version: 2,
             rules: Vec::new(),
             directories: Vec::new(),
+            read_directories: Vec::new(),
         }
     }
 }
@@ -314,9 +324,10 @@ fn decode_envelope(bytes: &[u8], scope: Scope) -> PermissionsFile {
         })
         .collect();
     PermissionsFile {
-        version: 1,
+        version: 2,
         rules,
         directories: Vec::new(),
+        read_directories: Vec::new(),
     }
 }
 
@@ -406,7 +417,30 @@ impl RuleStore for FileRuleStore {
         let mut env = self.read_envelope(scope);
         let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
         if env.directories.iter().all(|d| d != &canonical) {
+            env.read_directories.retain(|path| path != &canonical);
             env.directories.push(canonical);
+            self.write_envelope_unlocked(scope, &env)?;
+        }
+        Ok(())
+    }
+
+    fn load_read_directories(&self) -> Vec<PathBuf> {
+        let mut all = Vec::new();
+        for scope in [Scope::User, Scope::Project, Scope::Local] {
+            all.extend(self.read_envelope(scope).read_directories);
+        }
+        all
+    }
+
+    fn add_read_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
+        let _guard = self.lock.lock().expect("rule store lock");
+        let mut env = self.read_envelope(scope);
+        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        if env.directories.iter().any(|path| path == &canonical) {
+            return Ok(());
+        }
+        if env.read_directories.iter().all(|path| path != &canonical) {
+            env.read_directories.push(canonical);
             self.write_envelope_unlocked(scope, &env)?;
         }
         Ok(())
@@ -416,9 +450,10 @@ impl RuleStore for FileRuleStore {
         let _guard = self.lock.lock().expect("rule store lock");
         let mut env = self.read_envelope(scope);
         let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        let before = env.directories.len();
-        env.directories.retain(|d| d != &canonical);
-        if env.directories.len() == before {
+        let before = env.directories.len() + env.read_directories.len();
+        env.directories.retain(|path| path != &canonical);
+        env.read_directories.retain(|path| path != &canonical);
+        if env.directories.len() + env.read_directories.len() == before {
             return Ok(());
         }
         self.write_envelope_unlocked(scope, &env)

@@ -25,10 +25,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod helpers;
+mod runtime_dirs;
 mod seatbelt_stream;
 #[cfg(test)]
 use helpers::COUNTER;
 use helpers::{ExecCountGuard, kill_process_group, mkdtemp, tree_cpu_secs};
+use runtime_dirs::RuntimeDirs;
 use seatbelt_stream::stream_drain;
 
 /// A macOS Seatbelt sandbox session. The workspace is a temp dir, the user's
@@ -49,14 +51,8 @@ pub struct MacSeatbeltSession {
     /// The seatbelt tag (pid-derived) stored so exec can re-render the
     /// profile with the runtime-added working dirs without recomputing it.
     tag: String,
-    /// Directories the user added to the workspace at runtime, consulted by
-    /// exec to extend the seatbelt allow-back. Canonicalized + deduped under
-    /// the lock; the kernel fence is re-derived per exec so a dir added
-    /// mid-session takes effect on the next command (seatbelt profiles are
-    /// monotonic per-process, so the fence cannot be relaxed inside a running
-    /// sandbox — but each sandbox-exec is a fresh process with the current
-    /// profile string, so mutation between execs is honored).
-    additional_dirs: Arc<Mutex<Vec<PathBuf>>>,
+    /// Runtime directory grants, separated by write capability.
+    dirs: RuntimeDirs,
     /// Extra mach services (XPC names) a skill declared, consulted by
     /// current_profile to emit allow mach-lookup lines beyond the base set.
     /// Set by set_extra_mach_services, cleared by clear_extra_mach_services.
@@ -135,7 +131,7 @@ impl MacSeatbeltSession {
             tmpdir,
             profile,
             tag,
-            additional_dirs: Arc::new(Mutex::new(Vec::new())),
+            dirs: RuntimeDirs::default(),
             extra_mach_services: Arc::new(Mutex::new(Vec::new())),
             allow_app_launch: Arc::new(Mutex::new(false)),
             narrow_workspace: Arc::new(Mutex::new(None)),
@@ -176,7 +172,7 @@ impl MacSeatbeltSession {
             tmpdir,
             profile,
             tag,
-            additional_dirs: Arc::new(Mutex::new(Vec::new())),
+            dirs: RuntimeDirs::default(),
             extra_mach_services: Arc::new(Mutex::new(Vec::new())),
             allow_app_launch: Arc::new(Mutex::new(false)),
             narrow_workspace: Arc::new(Mutex::new(None)),
@@ -237,7 +233,8 @@ impl MacSeatbeltSession {
     /// honors the new dirs (a running sandbox cannot be relaxed, but none is
     /// running between execs).
     fn current_profile(&self) -> String {
-        let additional = self.additional_dirs.lock().expect("additional dirs lock");
+        let read_only = self.dirs.read_only();
+        let read_write = self.dirs.read_write();
         let mach = self
             .extra_mach_services
             .lock()
@@ -254,20 +251,30 @@ impl MacSeatbeltSession {
             .lock()
             .expect("narrow git common lock")
             .clone();
-        if additional.is_empty() && narrow_ws.is_none() && mach.is_empty() && !allow_app_launch {
+        if read_only.is_empty()
+            && read_write.is_empty()
+            && narrow_ws.is_none()
+            && mach.is_empty()
+            && !allow_app_launch
+        {
             return self.profile.clone();
         }
         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
-        let add_refs: Vec<&str> = additional
+        let read_refs: Vec<&str> = read_only
             .iter()
-            .map(|p| p.to_str().unwrap_or(""))
+            .map(|path| path.to_str().unwrap_or(""))
+            .collect();
+        let write_refs: Vec<&str> = read_write
+            .iter()
+            .map(|path| path.to_str().unwrap_or(""))
             .collect();
         let mach_refs: Vec<&str> = mach.iter().map(String::as_str).collect();
         // When narrowed, the profile binds the worktree; else the workspace.
         let ws = narrow_ws.as_ref().unwrap_or(&self.workspace);
         let mut p = render(
             &ProfileSpec::new(ws, &self.tmpdir.to_string_lossy(), &home, &self.tag)
-                .with_additional(&add_refs)
+                .with_additional(&write_refs)
+                .with_read_only(&read_refs)
                 .with_mach_services(&mach_refs)
                 .with_app_launch(allow_app_launch)
                 .with_network(self.network.clone()),
@@ -285,6 +292,34 @@ impl MacSeatbeltSession {
             ));
         }
         p
+    }
+
+    fn resolve_path(&self, path: &str, include_read_only: bool) -> Result<PathBuf, SandboxError> {
+        let workspace = self.effective_workspace();
+        let supplied = Path::new(path);
+        let base = if supplied.is_absolute() {
+            supplied.to_path_buf()
+        } else {
+            workspace.join(path)
+        };
+        let canonical = base
+            .parent()
+            .filter(|parent| parent.exists())
+            .and_then(|parent| dunce::canonicalize(parent).ok())
+            .map(|parent| parent.join(base.file_name().unwrap_or_default()))
+            .unwrap_or(base);
+        if canonical.starts_with(&workspace) || canonical.starts_with(&self.tmpdir) {
+            return Ok(canonical);
+        }
+        if self.dirs.allows_write(&canonical) {
+            return Ok(canonical);
+        }
+        if include_read_only && self.dirs.allows_read(&canonical) {
+            return Ok(canonical);
+        }
+        Err(SandboxError::PathTraversal(format!(
+            "path escapes workspace + authorized dirs: {path}"
+        )))
     }
 
     /// The current effective workspace root: the narrow worktree when
@@ -528,39 +563,12 @@ impl SandboxSession for MacSeatbeltSession {
         })
     }
 
-    /// Overrides the trait default: mac seatbelt authorizes external dirs
-    /// (add_working_dir + the session tmpdir) that bash reaches via the
-    /// re-derived profile, so absolute paths landing in an allowed root are
-    /// admitted, not just workspace-relative ones.
     fn resolve(&self, path: &str) -> Result<PathBuf, SandboxError> {
-        let ws = self.effective_workspace();
-        let p = Path::new(path);
-        let base = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            ws.join(path)
-        };
-        // Collapse .. by canonicalizing the parent when it exists; the kernel
-        // fence is the real boundary, this is a supplementary application guard.
-        let canonical = base
-            .parent()
-            .filter(|p| p.exists())
-            .and_then(|p| dunce::canonicalize(p).ok())
-            .map(|parent| parent.join(base.file_name().unwrap_or_default()))
-            .unwrap_or(base.clone());
-        if canonical.starts_with(&ws) {
-            return Ok(canonical);
-        }
-        if canonical.starts_with(&self.tmpdir) {
-            return Ok(canonical);
-        }
-        let dirs = self.additional_dirs.lock().expect("additional dirs lock");
-        if dirs.iter().any(|d| canonical.starts_with(d)) {
-            return Ok(canonical);
-        }
-        Err(SandboxError::PathTraversal(format!(
-            "path escapes workspace + authorized dirs: {path}"
-        )))
+        self.resolve_path(path, true)
+    }
+
+    fn resolve_write(&self, path: &str) -> Result<PathBuf, SandboxError> {
+        self.resolve_path(path, false)
     }
 
     fn workspace_root(&self) -> Arc<Path> {
@@ -612,53 +620,45 @@ impl SandboxSession for MacSeatbeltSession {
         // same Mutex). Runs on explicit restore or Drop.
         let narrow_ws = Arc::clone(&self.narrow_workspace);
         let narrow_git = Arc::clone(&self.narrow_git_common);
-        let additional_dirs = Arc::clone(&self.additional_dirs);
+        let dirs = self.dirs.clone();
         let git_common_for_restore = git_common.clone();
         Ok(WorktreeFenceGuard::new(Box::new(move || {
             *narrow_ws.lock().expect("restore: narrow ws lock") = None;
             *narrow_git.lock().expect("restore: narrow git lock") = None;
-            let mut dirs = additional_dirs.lock().expect("restore: additional lock");
-            dirs.retain(|d| d != &git_common_for_restore);
+            dirs.remove_write(&git_common_for_restore);
             Ok(())
         })))
     }
 
     fn add_working_dir(&self, path: &str) -> Result<(), SandboxError> {
-        // Canonicalize so mac /var -> /private/var symlinks and a trailing
-        // slash do not create duplicate entries, and so the seatbelt subpath
-        // matches the kernel's view of the path. Reject non-directory paths
-        // (a file or a missing path grants nothing).
-        let canonical = dunce::canonicalize(path)
-            .map_err(|e| SandboxError::NotFound(format!("dir canonicalize: {path}: {e}")))?;
-        if !canonical.is_dir() {
-            return Err(SandboxError::NotFound(format!("not a directory: {path}")));
-        }
-        let mut dirs = self.additional_dirs.lock().expect("additional dirs lock");
-        if dirs.iter().any(|d| d == &canonical) {
-            return Ok(()); // idempotent
-        }
-        dirs.push(canonical);
-        Ok(())
+        self.dirs.add_write(path)
+    }
+
+    fn add_reading_dir(&self, path: &str) -> Result<(), SandboxError> {
+        self.dirs.add_read(path)
     }
 
     fn remove_working_dir(&self, path: &str) {
-        // Match by canonical path when it resolves; if the path is gone now
-        // (canonicalize fails), fall back to a string compare so a stale entry
-        // for a deleted dir can still be cleared.
-        let canonical = dunce::canonicalize(path).ok();
-        let mut dirs = self.additional_dirs.lock().expect("additional dirs lock");
-        dirs.retain(|d| match &canonical {
-            Some(c) => d != c,
-            None => !d.to_string_lossy().eq_ignore_ascii_case(path),
-        });
+        self.dirs.remove(path);
     }
 
     fn working_dirs(&self) -> Vec<String> {
-        self.additional_dirs
-            .lock()
-            .expect("additional dirs lock")
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
+        self.dirs.all_strings()
+    }
+
+    fn reading_dirs(&self) -> Vec<String> {
+        self.dirs
+            .read_only()
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn writing_dirs(&self) -> Vec<String> {
+        self.dirs
+            .read_write()
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
             .collect()
     }
 
