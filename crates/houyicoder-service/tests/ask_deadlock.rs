@@ -30,7 +30,7 @@ use houyicoder_protocol::frontend::run::{
 use houyicoder_protocol::llm::{
     CompletionResponse, ModelCapabilities, OutputItem, ProviderError, Usage,
 };
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use serde_json::Value;
 
@@ -151,7 +151,7 @@ async fn test_reverse_request_permission_flow() {
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
     let server = Server::new(
@@ -277,7 +277,7 @@ async fn test_mid_ask_survives_status() {
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
     let server = Server::new(
@@ -413,7 +413,7 @@ async fn test_mid_ask_cancel_exits() {
     // Keep a raw sender for the session/cancel notification (a notification
     // has no req_id, so it is not a ClientFrame::Request the Client tracks).
     let mut raw_tx = client_tx.clone();
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
     let server = Server::new(
@@ -544,7 +544,7 @@ async fn test_mid_cancel_multi_approval() {
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
     let mut raw_tx = client_tx.clone();
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
     let server = Server::new(
@@ -680,7 +680,7 @@ async fn test_idle_cancel_skips_abort() {
     let runner_for_check = runner.clone();
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
     let server = Server::new(

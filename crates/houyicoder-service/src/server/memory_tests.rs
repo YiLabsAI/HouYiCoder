@@ -101,7 +101,7 @@ async fn memory_dispatch(
     let session = houyicoder_context::SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let mut server = Server::new(
         runner,
         session,
@@ -129,8 +129,27 @@ async fn memory_dispatch(
     payloads
 }
 
+/// A show request replies with the MemoryShow payload for the key, so the
+/// pane renders the entry on demand. The stub provider holds no entries, so
+/// the detail is None, but the branch still projects the lookup to the
+/// protocol form rather than dropping the request.
+#[tokio::test]
+async fn test_show_replies_memory_entry() {
+    let payload = memory_dispatch(
+        None,
+        vec![FrontendRequest::MemoryShow { key: "any".into() }],
+    )
+    .await
+    .pop()
+    .expect("one reply");
+    assert!(
+        matches!(payload, ResponsePayload::MemoryShow(_)),
+        "expected MemoryShow, got {payload:?}"
+    );
+}
+
 /// A forget that succeeds replies with the refreshed (empty) MemoryList so
-/// the pane narrows. Pins the Ok arm of the dispatch match.
+/// the pane narrows.
 #[tokio::test]
 async fn test_ok_replies_memory_list() {
     let payload = forget_dispatch("ok").await;
@@ -147,7 +166,7 @@ async fn test_ok_replies_memory_list() {
 
 /// A forget that hits an Io failure replies with an Error (not a silent
 /// MemoryList that would leave the entry present plus the user believing
-/// the delete worked). Pins the Io-failure surfacing.
+/// the delete worked).
 #[tokio::test]
 async fn test_io_failure_replies_error() {
     let payload = forget_dispatch("fail").await;

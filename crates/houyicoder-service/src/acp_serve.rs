@@ -6,7 +6,7 @@
 //! one is a notification (no reply). A frame that fails to parse either shape
 //! gets a ParseError response on the null id, per JSON-RPC 2.0.
 //!
-//! The carrier is futures mpsc String pairs, mirroring the frontend ServerIo
+//! The carrier is futures mpsc String pairs, mirroring the frontend FrameCarrier
 //! — one half the composition root hands to the client, the other here. Each
 //! frame is one NDJSON line; this module strips and appends the newline
 //! terminator so the wire bytes match a pipe.

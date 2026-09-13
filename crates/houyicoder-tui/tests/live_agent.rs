@@ -15,7 +15,7 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{RunOutcome, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_provider::OpenAiCompatibleProvider;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use houyicoder_tui::state::TranscriptLine;
 
@@ -34,7 +34,7 @@ fn pair_inproc(
     let event_sequencer = houyicoder_service::server::EventSequencer::new();
     event_sequencer.install_on(&mut runner);
     let runner = Arc::new(runner);
-    let server_io = ServerIo::new(s2c_tx, c2s_rx);
+    let server_io = FrameCarrier::new(s2c_tx, c2s_rx);
     // The server takes the composition's gate so wire mode/rule writes reach
     // the gate the GuardedTool wrappers actually use.
     let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;

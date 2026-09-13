@@ -146,11 +146,11 @@ pub struct RunResult {
 }
 
 /// A run failure, wire form. The engine RunError carries ContextError and
-/// ProviderError; here it is the kind plus the Display string the frontend
-/// records as an error line.
+/// ProviderError; here it is the category plus the Display string the
+/// frontend records as an error line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunError {
-    pub kind: String,
+    pub category: String,
     pub message: String,
 }
 
@@ -276,12 +276,27 @@ mod tests {
     #[test]
     fn test_error_round_trips() {
         let e = RunError {
-            kind: "provider_exhausted".to_string(),
+            category: "provider_exhausted".to_string(),
             message: "provider exhausted: timeout".to_string(),
         };
         let json = serde_json::to_string(&e).expect("serialize");
+        assert!(json.contains("\"category\""), "key is category: {json}");
+        assert!(!json.contains("\"kind\""), "old key is gone: {json}");
         let back: RunError = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.kind, "provider_exhausted");
+        assert_eq!(back.category, "provider_exhausted");
         assert!(back.message.contains("timeout"));
+    }
+
+    #[test]
+    fn test_run_error_serializes_exactly() {
+        let e = RunError {
+            category: "provider_exhausted".to_string(),
+            message: "provider exhausted: timeout".to_string(),
+        };
+        let json = serde_json::to_string(&e).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"category":"provider_exhausted","message":"provider exhausted: timeout"}"#
+        );
     }
 }

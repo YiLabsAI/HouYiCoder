@@ -15,7 +15,7 @@ use ratatui::{
 };
 
 use crate::records::{ContextView, SuggestionSeverity};
-use houyicoder_protocol::frontend::context::{ContextBreakdown, GridSquare};
+use houyicoder_protocol::frontend::context::{ContextBreakdown, GridCell};
 
 /// Midpoint glyph threshold: a cell at least this full draws the filled ball.
 const FULL_GLYPH_THRESHOLD: f32 = 0.7;
@@ -128,11 +128,7 @@ fn push_section(
 /// cell glyph follows the fill rules: free space draws the hollow square,
 /// reserved draws the reserved mark, a cell at least FULL_GLYPH_THRESHOLD full
 /// draws the filled ball, otherwise the hollow ball.
-fn grid_row_spans(
-    bd: &ContextBreakdown,
-    row: &[GridSquare],
-    row_start: usize,
-) -> Vec<Span<'static>> {
+fn grid_row_spans(bd: &ContextBreakdown, row: &[GridCell], row_start: usize) -> Vec<Span<'static>> {
     row.iter()
         .enumerate()
         .map(|(col, sq)| {

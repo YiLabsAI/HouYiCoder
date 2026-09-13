@@ -1,11 +1,11 @@
-//! Server-side wire slice for /trajectory: the frontend Trajectory request
-//! returns the session's turn events as a wire Vec<TrajectoryEntry>
-//! (ResponsePayload::Trajectory), so the TUI renders the audit log without
-//! importing the engine or context crate. Each entry carries the kind label,
-//! the ts, the event id, and the prev_hash linking it into the chain. This
-//! test drives the InProc frontend server with a Trajectory request after a
-//! run and asserts the wire trajectory carries the user + agent entries with
-//! their audit fields.
+//! Trajectory request contract across the frontend and server boundary: the
+//! frontend Trajectory request returns the session's turn events as a
+//! serialized Vec<TrajectoryEntry> (ResponsePayload::Trajectory), so the TUI
+//! renders the audit log without importing the engine or context crate. Each
+//! entry carries the kind label, the ts, the event id, and the prev_hash
+//! linking it into the chain. This test drives the InProc frontend server
+//! with a Trajectory request after a run and asserts the response trajectory
+//! carries the user + agent entries with their audit fields.
 
 use futures::SinkExt;
 use futures::StreamExt;
@@ -18,10 +18,10 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::run::ContentBlock;
-use houyicoder_protocol::frontend::{FrontendRequest, SessionId as WireSessionId};
+use houyicoder_protocol::frontend::{FrontendRequest, SessionId as FrontendSessionId};
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
@@ -43,10 +43,14 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     (Arc::new(runner), session)
 }
 
-fn pair() -> (ServerIo, mpsc::Sender<String>, mpsc::Receiver<String>) {
+fn pair() -> (FrameCarrier, mpsc::Sender<String>, mpsc::Receiver<String>) {
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
-    (ServerIo::new(server_tx, server_rx), client_tx, client_rx)
+    (
+        FrameCarrier::new(server_tx, server_rx),
+        client_tx,
+        client_rx,
+    )
 }
 
 async fn send(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
@@ -65,11 +69,12 @@ async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
         .to_string()
 }
 
-/// After a run, the Trajectory request returns the wire turn-event stream
-/// (the user message chunk + the agent message chunk the run produced),
-/// proving the server projects the engine trajectory to the wire form.
+/// After a run, the Trajectory request returns the serialized turn-event
+/// stream (the user message chunk + the agent message chunk the run produced),
+/// proving the server projects the engine trajectory to the protocol response
+/// form.
 #[tokio::test]
-async fn test_returns_wire_session_updates() {
+async fn test_returns_session_updates() {
     let (runner, session) = stub_runner();
     let session_str = session.to_string();
     let (server_io, mut client_tx, mut client_rx) = pair();
@@ -87,7 +92,7 @@ async fn test_returns_wire_session_updates() {
     let req = RequestEnvelope::new(
         RequestId(1),
         FrontendRequest::MessageSend {
-            session_id: WireSessionId::new(session_str.clone()),
+            session_id: FrontendSessionId::new(session_str.clone()),
             content: vec![ContentBlock::Text { text: "hi".into() }],
             disabled_skills: Default::default(),
         },

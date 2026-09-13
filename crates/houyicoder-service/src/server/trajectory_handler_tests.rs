@@ -61,7 +61,7 @@ async fn test_trajectory_handler_builds_response() {
     let session = houyicoder_context::SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -94,7 +94,7 @@ async fn test_trajectory_handler_builds_response() {
 /// turn event to the same session/update + acpx frame stream the parent
 /// accumulates. Seeds a child log with a user input + assistant message,
 /// drives the request, and asserts the response carries the projected
-/// frames. Covers the emit.rs projection loop the no-log wired TUI test
+/// frames. Covers the outbound projection loop the no-log wired TUI test
 /// skips.
 #[tokio::test]
 async fn test_child_transcript_projects_log() {
@@ -131,7 +131,7 @@ async fn test_child_transcript_projects_log() {
     let session = SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -213,7 +213,7 @@ async fn test_child_transcript_during_run() {
     let session = SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
-    let mut io = ServerIo::new(server_tx, server_rx);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -254,7 +254,7 @@ async fn test_permission_cycle_during_run() {
     let session = houyicoder_context::SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
-    let mut io = ServerIo::new(server_tx, server_rx);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -302,7 +302,7 @@ async fn test_child_fetch_during_run() {
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -375,7 +375,7 @@ async fn test_unserved_request_dropped() {
     let session = houyicoder_context::SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
-    let mut io = ServerIo::new(server_tx, server_rx);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,

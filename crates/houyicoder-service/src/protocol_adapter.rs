@@ -1,6 +1,6 @@
-//! Engine-to-wire boundary adapter. Pure mapping from engine types to
-//! protocol wire types — no I/O, no state — so the server loop stays apart
-//! and under the file-size gate.
+//! Engine-to-protocol boundary adapter. Pure mapping from engine types to
+//! protocol types — no I/O, no state — so the server loop stays decoupled
+//! from serialization.
 
 pub(crate) mod compaction;
 pub(crate) mod memory_view;
@@ -21,7 +21,7 @@ use houyicoder_protocol::frontend::run::{
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
-use houyicoder_protocol::frontend::status::StatusSnapshot as WireStatusSnapshot;
+use houyicoder_protocol::frontend::status::StatusSnapshot as ProtocolStatusSnapshot;
 pub(crate) use session_descriptor::map_session_descriptor;
 
 /// Map the engine run result to the protocol message form. Outcome
@@ -124,8 +124,8 @@ pub(crate) fn parse_approval_decision(
 /// engine or resilience crate.
 pub(crate) fn map_status_snapshot(
     s: &houyicoder_core::agent::StatusSnapshot,
-) -> WireStatusSnapshot {
-    WireStatusSnapshot {
+) -> ProtocolStatusSnapshot {
+    ProtocolStatusSnapshot {
         model: s.model.clone(),
         breaker_state: s.breaker_state.map(String::from),
         breaker_reason: s.breaker_reason.clone(),
@@ -177,14 +177,15 @@ pub(crate) fn map_context_breakdown(
     bd: &houyicoder_core::agent::ContextBreakdown,
 ) -> houyicoder_protocol::frontend::context::ContextBreakdown {
     use houyicoder_protocol::frontend::context::{
-        CategoryBreakdown as WireCat, ContextBreakdown as WireBd, GridSquare as WireGrid,
+        CategoryBreakdown as ProtocolCategoryBreakdown,
+        ContextBreakdown as ProtocolContextBreakdown, GridCell as ProtocolGridCell,
     };
-    let grid: Vec<Vec<WireGrid>> = bd
+    let grid: Vec<Vec<ProtocolGridCell>> = bd
         .grid
         .iter()
         .map(|row| {
             row.iter()
-                .map(|sq| WireGrid {
+                .map(|sq| ProtocolGridCell {
                     category_idx: sq.category_idx,
                     fullness: sq.fullness,
                 })
@@ -206,14 +207,14 @@ pub(crate) fn map_context_breakdown(
         }
         _ => None,
     };
-    WireBd {
+    ProtocolContextBreakdown {
         model: bd.model.clone(),
         total_tokens: bd.total_tokens,
         context_window: bd.context_window,
         categories: bd
             .categories
             .iter()
-            .map(|c| WireCat {
+            .map(|c| ProtocolCategoryBreakdown {
                 label: c.label.clone(),
                 color_hint: c.color_hint,
                 tokens: c.tokens,
@@ -229,11 +230,11 @@ pub(crate) fn map_context_breakdown(
     }
 }
 
-/// Map a run failure to the protocol message form. The kind is the
+/// Map a run failure to the protocol message form. The category is the
 /// variant name the frontend records; the message is the Display string it
 /// surfaces as an error line.
 pub(crate) fn map_run_error(e: &houyicoder_core::agent::RunError) -> RunError {
-    let kind = match e {
+    let category = match e {
         houyicoder_core::agent::RunError::Context(..) => "context",
         houyicoder_core::agent::RunError::ProviderFatal(..) => "provider_fatal",
         houyicoder_core::agent::RunError::ProviderExhausted(..) => "provider_exhausted",
@@ -269,7 +270,7 @@ pub(crate) fn map_run_error(e: &houyicoder_core::agent::RunError) -> RunError {
         other => other.to_string(),
     };
     RunError {
-        kind: kind.to_string(),
+        category: category.to_string(),
         message,
     }
 }

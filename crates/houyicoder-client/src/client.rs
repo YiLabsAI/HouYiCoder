@@ -10,9 +10,9 @@ use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponseEnvelope, ClientResponsePayload, RequestEnvelope, RequestId,
     ResumeFrom, ServerFrame,
 };
-use houyicoder_protocol::framing::{FrameError, encode};
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::handshake::{Hello, Negotiated, negotiate};
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
 /// A protocol client bound to one transport. One end of the connection; the
 /// service holds the other. The transport is carrier mechanics only (the
@@ -48,15 +48,15 @@ impl Client {
     /// validates the service's version + capabilities. Returns the negotiated
     /// peer capabilities the client can branch on. A version mismatch fails
     /// non-retriable.
-    pub async fn connect(&mut self) -> Result<Negotiated, WireError> {
+    pub async fn connect(&mut self) -> Result<Negotiated, ProtocolError> {
         let local = Hello {
             last_event_seq: self.resume.0,
             ..Hello::local()
         };
         self.send_typed(&local).await?;
-        let Some(frame) = self.transport.recv_frame().await.map_err(recv_to_wire)? else {
-            return Err(WireError::new(
-                WireErrorKind::Unavailable,
+        let Some(frame) = self.transport.recv_frame().await? else {
+            return Err(ProtocolError::new(
+                ErrorCategory::Unavailable,
                 "service closed before hello",
                 false,
             ));
@@ -80,7 +80,7 @@ impl Client {
         &mut self,
         req_id: RequestId,
         payload: houyicoder_protocol::frontend::FrontendRequest,
-    ) -> Result<(), WireError> {
+    ) -> Result<(), ProtocolError> {
         let env = RequestEnvelope::new(req_id, payload);
         self.send_typed(&ClientFrame::Request(env)).await
     }
@@ -92,7 +92,7 @@ impl Client {
         &mut self,
         req_id: RequestId,
         payload: ClientResponsePayload,
-    ) -> Result<(), WireError> {
+    ) -> Result<(), ProtocolError> {
         let env = ClientResponseEnvelope::new(req_id, payload);
         self.send_typed(&ClientFrame::Response(env)).await
     }
@@ -103,20 +103,17 @@ impl Client {
     pub async fn send_notification(
         &mut self,
         notif: houyicoder_protocol::acp_wire::AcpNotification,
-    ) -> Result<(), WireError> {
+    ) -> Result<(), ProtocolError> {
         self.send_typed(&notif).await
     }
 
     /// Receive the next server frame: an event on the seq stream or a
     /// response paired to a prior request. The client advances its resume
     /// cursor for each event so reconnect resumes from the tail.
-    pub async fn next_frame(&mut self) -> Result<ServerFrame, WireError> {
-        let frame = self
-            .transport
-            .recv_frame()
-            .await
-            .map_err(recv_to_wire)?
-            .ok_or_else(|| WireError::new(WireErrorKind::Unavailable, "service closed", false))?;
+    pub async fn next_frame(&mut self) -> Result<ServerFrame, ProtocolError> {
+        let frame = self.transport.recv_frame().await?.ok_or_else(|| {
+            ProtocolError::new(ErrorCategory::Unavailable, "service closed", false)
+        })?;
         let decoded = decode_frame::<ServerFrame>(&frame)?;
         if let ServerFrame::Event(ev) = &decoded
             && ev.seq.0 >= self.resume.0.map(|s| s.0).unwrap_or(0)
@@ -132,23 +129,15 @@ impl Client {
     }
 
     /// Encode a typed message and send it as one frame.
-    async fn send_typed<T: serde::Serialize>(&mut self, msg: &T) -> Result<(), WireError> {
-        let frame = encode(msg).map_err(frame_to_wire)?;
+    async fn send_typed<T: serde::Serialize>(&mut self, msg: &T) -> Result<(), ProtocolError> {
+        let frame = encode(msg)?;
         self.transport.send_frame(&frame).await
     }
 }
 
-/// Decode a frame string into a typed message. Surfaces bad framing as a wire
-/// error at the boundary.
-fn decode_frame<T: serde::de::DeserializeOwned>(frame: &str) -> Result<T, WireError> {
+/// Decode a frame string into a typed message. Surfaces bad framing as a
+/// protocol error at the boundary.
+fn decode_frame<T: serde::de::DeserializeOwned>(frame: &str) -> Result<T, ProtocolError> {
     serde_json::from_str(frame)
-        .map_err(|e| WireError::new(WireErrorKind::InvalidFrame, e.to_string(), false))
-}
-
-fn frame_to_wire(e: FrameError) -> WireError {
-    WireError::new(WireErrorKind::InvalidFrame, e.to_string(), false)
-}
-
-fn recv_to_wire(e: WireError) -> WireError {
-    e
+        .map_err(|e| ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false))
 }

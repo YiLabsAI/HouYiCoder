@@ -12,13 +12,13 @@ use houyicoder_protocol::envelope::{
     RequestEnvelope, RequestId, ResumeFrom, ServerFrame, ServerRequestEnvelope,
     ServerRequestPayload,
 };
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::{FrameDecoder, encode};
 use houyicoder_protocol::frontend::{
     FrontendEvent, FrontendRequest, SessionId,
     run::{ApprovalDecision, ApprovalRequest, ContentBlock},
 };
 use houyicoder_protocol::handshake::{Hello, PROTOCOL_VERSION, negotiate};
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
 fn sample_approval_request() -> ApprovalRequest {
     ApprovalRequest {
@@ -80,7 +80,7 @@ fn test_hello_round_trips_negotiates() {
         last_event_seq: None,
     };
     let err = negotiate(&local, &wrong).expect_err("mismatch must fail");
-    assert_eq!(err.kind, WireErrorKind::ProtocolVersion);
+    assert_eq!(err.category, ErrorCategory::ProtocolVersion);
     assert!(!err.retriable, "version mismatch is not retriable");
 }
 
@@ -153,17 +153,19 @@ fn test_resume_cursor_round_trips() {
     assert!(after_json.contains("3"), "after encodes the seq");
 }
 
-/// The wire error round-trips with its kind, retriable flag, and correlation.
-/// A peer that receives an error must be able to branch on kind and retry
-/// per the retriable hint. Compared field-by-field because the wire error
-/// carries a message string and does not derive value equality.
+/// The protocol error round-trips with its category, retriable flag, and
+/// correlation. A peer that receives an error must be able to branch on the
+/// category and retry per the retriable hint. Compared field-by-field
+/// because the error carries a message string and does not derive value
+/// equality.
 #[test]
-fn test_wire_error_round_trips() {
+fn test_error_frame_round_trips() {
     let err =
-        WireError::new(WireErrorKind::InvalidFrame, "bad json", true).with_correlation("req-1");
+        ProtocolError::new(ErrorCategory::InvalidFrame, "bad json", true).with_correlation("req-1");
     let frame = encode(&err).expect("encode");
-    let back: WireError = serde_json::from_str(frame.strip_suffix('\n').unwrap()).expect("decode");
-    assert_eq!(back.kind, WireErrorKind::InvalidFrame);
+    let back: ProtocolError =
+        serde_json::from_str(frame.strip_suffix('\n').unwrap()).expect("decode");
+    assert_eq!(back.category, ErrorCategory::InvalidFrame);
     assert_eq!(back.message, "bad json");
     assert!(back.retriable);
     assert_eq!(back.correlation.as_deref(), Some("req-1"));

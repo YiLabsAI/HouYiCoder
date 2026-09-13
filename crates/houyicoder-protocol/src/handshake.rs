@@ -3,13 +3,13 @@
 //! an unsupported required capability fails the handshake explicitly so a
 //! peer never enters a half-working session.
 
-use crate::wire::{WireError, WireErrorKind};
+use crate::error::{ErrorCategory, ProtocolError};
 use serde::{Deserialize, Serialize};
 
-/// The wire protocol version. Bumped only on a breaking change to the
-/// message set or framing; a peer that sees a different version fails the
-/// handshake rather than guessing.
-pub const PROTOCOL_VERSION: u16 = 3;
+/// The protocol version. Bumped only on a breaking change to the message
+/// set or framing; a peer that sees a different version fails the handshake
+/// rather than guessing.
+pub const PROTOCOL_VERSION: u16 = 4;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.
@@ -61,13 +61,13 @@ pub struct Negotiated {
 }
 
 /// Validate the peer's Hello against the local one. Fails on version mismatch
-/// (not retriable — the peer must upgrade) with a ProtocolVersion kind. The
-/// caller applies its own required-capability checks on top of the negotiated
-/// peer capabilities.
-pub fn negotiate(local: &Hello, peer: &Hello) -> Result<Negotiated, WireError> {
+/// (not retriable — the peer must upgrade) with a ProtocolVersion category.
+/// The caller applies its own required-capability checks on top of the
+/// negotiated peer capabilities.
+pub fn negotiate(local: &Hello, peer: &Hello) -> Result<Negotiated, ProtocolError> {
     if peer.protocol_version != local.protocol_version {
-        return Err(WireError::new(
-            WireErrorKind::ProtocolVersion,
+        return Err(ProtocolError::new(
+            ErrorCategory::ProtocolVersion,
             format!(
                 "version mismatch: local {} peer {}",
                 local.protocol_version, peer.protocol_version,
@@ -101,8 +101,29 @@ mod tests {
             last_event_seq: None,
         };
         let err = negotiate(&local, &peer).expect_err("mismatch fails");
-        assert_eq!(err.kind, WireErrorKind::ProtocolVersion);
+        assert_eq!(err.category, ErrorCategory::ProtocolVersion);
         assert!(!err.retriable, "version mismatch is not retriable");
+    }
+
+    #[test]
+    fn test_hello_uses_protocol_version() {
+        assert_eq!(Hello::local().protocol_version, PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn test_previous_version_is_rejected() {
+        let local = Hello::local();
+        let peer = Hello {
+            protocol_version: 3,
+            capabilities: Capabilities::default(),
+            last_event_seq: None,
+        };
+        let err = negotiate(&local, &peer).expect_err("superseded version fails");
+        assert_eq!(err.category, ErrorCategory::ProtocolVersion);
+        assert!(
+            !err.retriable,
+            "the peer must upgrade, retrying cannot help"
+        );
     }
 
     #[test]
@@ -111,5 +132,14 @@ mod tests {
         let json = serde_json::to_string(&h).expect("serialize");
         let back: Hello = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, h);
+    }
+
+    #[test]
+    fn test_hello_serializes_exactly() {
+        let json = serde_json::to_string(&Hello::local()).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"protocol_version":4,"capabilities":{"streaming":true,"cas":false,"detach":false},"last_event_seq":null}"#
+        );
     }
 }

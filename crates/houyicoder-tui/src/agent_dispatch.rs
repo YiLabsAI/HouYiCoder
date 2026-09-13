@@ -8,7 +8,7 @@ use std::iter;
 use std::time::Instant;
 
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::SessionId as WireSessionId;
+use houyicoder_protocol::frontend::SessionId as FrontendSessionId;
 use houyicoder_protocol::frontend::memory::{
     MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryDetail, MemoryOperation,
     MemorySummaryEntry, MemoryToggleWhich, ToggleState,
@@ -498,7 +498,7 @@ impl App {
                     if let Some(req_id) = self.mint_request_id() {
                         self.send_cmd(ClientCommand::ChildTranscriptQuery {
                             req_id,
-                            child_sid: WireSessionId(agent_id.clone()),
+                            child_sid: FrontendSessionId(agent_id.clone()),
                         });
                     }
                 }

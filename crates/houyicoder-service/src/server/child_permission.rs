@@ -12,8 +12,8 @@ use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, permission_response_topic,
 };
 
-use super::io::ServerIo;
-use super::{Server, WireError};
+use super::frame_carrier::FrameCarrier;
+use super::{ProtocolError, Server};
 
 impl Server {
     /// Wire the shared multi-agent bus so a child's permission ask reaches
@@ -31,9 +31,9 @@ impl Server {
 /// instead of hanging on a response that will not come.
 pub(crate) async fn handle(
     server: &mut Server,
-    io: &mut ServerIo,
+    io: &mut FrameCarrier,
     req: BusMessage,
-) -> Result<(), WireError> {
+) -> Result<(), ProtocolError> {
     let BusMessage::PermissionRequest {
         child_id,
         subagent_type,
@@ -96,7 +96,7 @@ pub(crate) async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::io::ServerIo;
+    use crate::server::frame_carrier::FrameCarrier;
     use futures::SinkExt;
     use futures::StreamExt;
     use futures::channel::mpsc;
@@ -147,7 +147,7 @@ mod tests {
         let (mut server, bus) = server_with_bus();
         let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
         let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
-        let mut io = ServerIo::new(server_tx, server_rx);
+        let mut io = FrameCarrier::new(server_tx, server_rx);
         let mut resp_rx = bus.subscribe(&permission_response_topic("c1", "call-1"));
         // Wire-mock feeder: read the Permission ask, send back an approve.
         let feeder = tokio::spawn(async move {
@@ -196,7 +196,7 @@ mod tests {
         let (mut server, _bus) = server_with_bus();
         let (_client_tx, server_rx) = mpsc::channel::<String>(8);
         let (server_tx, _client_rx) = mpsc::channel::<String>(8);
-        let mut io = ServerIo::new(server_tx, server_rx);
+        let mut io = FrameCarrier::new(server_tx, server_rx);
         handle(
             &mut server,
             &mut io,

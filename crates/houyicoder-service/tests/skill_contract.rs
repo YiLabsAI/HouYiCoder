@@ -43,7 +43,7 @@ fn write_skill(dir: &Path, name: &str, body: &str) {
 /// then prepare_body then inject with real files, not stubs.
 #[tokio::test]
 async fn test_run_slash_real_body() {
-    let tmp = std::env::temp_dir().join(format!("skill-wire-slash-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("skill-slash-{}", std::process::id()));
     write_skill(&tmp, "commit", "run git status\nstage changes\n");
     let reg: Arc<dyn SkillRegistry> =
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
@@ -116,7 +116,7 @@ async fn test_run_slash_real_body() {
 /// same real body.
 #[tokio::test]
 async fn test_run_model_skill_tool() {
-    let tmp = std::env::temp_dir().join(format!("skill-wire-model-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("skill-model-{}", std::process::id()));
     write_skill(&tmp, "commit", "run git status\nstage changes\n");
     let reg: Arc<dyn SkillRegistry> =
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
@@ -190,7 +190,7 @@ async fn test_run_model_skill_tool() {
 /// isolation applies to skill bodies (not just bash/grep output).
 #[tokio::test]
 async fn test_run_large_body_compacts() {
-    let tmp = std::env::temp_dir().join(format!("skill-wire-large-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("skill-large-{}", std::process::id()));
     // Body past ISOLATE_LARGE_OUTPUT_BYTES (8192) once the base-dir header
     // + JSON envelope are added.
     let large_body = "x".repeat(9_000);
@@ -272,7 +272,7 @@ async fn test_run_large_body_compacts() {
 async fn test_compact_reinjects_listing() {
     use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, TurnGroup};
 
-    let tmp = std::env::temp_dir().join(format!("skill-wire-compact-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("skill-compact-{}", std::process::id()));
     write_skill(&tmp, "commit", "run git status");
     let reg: Arc<dyn SkillRegistry> =
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));

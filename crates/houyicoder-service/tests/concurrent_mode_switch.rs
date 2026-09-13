@@ -31,7 +31,7 @@ use houyicoder_protocol::envelope::{
 };
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::FrontendRequest;
-use houyicoder_protocol::frontend::permission::PermissionMode as WireMode;
+use houyicoder_protocol::frontend::permission::PermissionMode as ProtocolPermissionMode;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_protocol::llm::{
@@ -259,7 +259,11 @@ async fn test_cycle_during_run() {
                 let ResponsePayload::PermissionMode(m) = env.payload else {
                     unreachable!()
                 };
-                assert_eq!(m, WireMode::Manual, "concurrent mode cycle -> Manual");
+                assert_eq!(
+                    m,
+                    ProtocolPermissionMode::Manual,
+                    "concurrent mode cycle -> Manual"
+                );
                 break;
             }
             _ => continue,

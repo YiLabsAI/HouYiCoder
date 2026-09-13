@@ -186,6 +186,21 @@ pub fn installed_path() -> Option<std::path::PathBuf> {
     HANDLE.get().and_then(|h| h.as_ref()).and_then(|h| h.path())
 }
 
+/// A handle whose subscriber was dropped, so set_level fails. Production
+/// keeps the subscriber for the process lifetime; tests use this to drive
+/// the failure path of a level change after teardown.
+#[cfg(test)]
+pub(crate) fn disconnected_handle() -> DiagnosticsHandle {
+    let path = std::env::temp_dir()
+        .join(format!("houyi-diag-disconnected-{}", std::process::id()))
+        .join("debug.log");
+    let file = open_log_file(&path).expect("open the throwaway log");
+    let (subscriber, handle) = build(file, path.clone());
+    drop(subscriber);
+    drop(std::fs::remove_dir_all(path.parent().expect("log parent")));
+    handle
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

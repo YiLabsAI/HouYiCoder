@@ -1,8 +1,8 @@
-//! Status-snapshot sidecar attachers: the env/config display fields + the
-//! per-model usage projection the server attaches to the wire StatusSnapshot
-//! after map_status_snapshot builds the runner-owned fields. Split from dispatch
-//! so that file stays under the size gate; these are pure readers of env +
-//! the observability log, with no Server state.
+//! Projects server-owned configuration and usage into status responses: the
+//! env/config display fields and the per-model usage the server attaches to
+//! the StatusSnapshot after map_status_snapshot builds the runner-owned
+//! fields. Pure readers of env and the observability log, with no Server
+//! state.
 
 use houyicoder_protocol::frontend::status::ModelUsageView;
 
@@ -40,7 +40,7 @@ pub(super) fn setting_sources_label() -> String {
     }
 }
 
-/// Trim the engine per-model usage to the wire view the Usage tab renders:
+/// Trim the engine per-model usage to the view the Usage tab renders:
 /// token counts only, no USD, no capability fields. The order is whatever
 /// Runner::by_model_usage returns (already sorted heaviest-first).
 pub(super) fn project_by_model(

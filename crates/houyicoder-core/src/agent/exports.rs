@@ -8,7 +8,7 @@ pub use super::compaction::{CompactionOutcome, LlmSummarizer, RecordedCompaction
 pub use super::conditional_activation::{ConditionalActivation, ConditionalSkillActivator};
 pub use super::context::{
     AssembledContext, CategoryBreakdown, ContextBreakdown, ContextBuilder, ContextMeasurement,
-    GridSquare, Section, SectionKind, Tokenizer, build_grid, stub_breakdown,
+    GridCell, Section, SectionKind, Tokenizer, build_grid, stub_breakdown,
 };
 pub use super::diff::unified_diff;
 pub use super::hook::HookError;

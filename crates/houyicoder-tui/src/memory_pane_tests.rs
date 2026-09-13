@@ -538,7 +538,7 @@ fn test_run_error_keeps_pending() {
         .begin_toggle(RequestId(1), MemoryToggleWhich::Auto);
     app.handle_agent_message(AgentMessage::Done {
         result: Err(RunError {
-            kind: "provider_exhausted".into(),
+            category: "provider_exhausted".into(),
             message: "provider exhausted: timeout".into(),
         }),
     });
@@ -561,20 +561,20 @@ fn test_dead_driver_toggle_rollback() {
     use crate::session::Session;
     use houyicoder_async::PFut;
     use houyicoder_client::Transport;
+    use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
     use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
-    use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
     /// A transport whose handshake fails immediately, so the driver exits
     /// (dropping the command receiver) before translating anything.
     struct FailOnConnect;
     impl Transport for FailOnConnect {
-        fn send_frame(&mut self, _frame: &str) -> PFut<'_, Result<(), WireError>> {
+        fn send_frame(&mut self, _frame: &str) -> PFut<'_, Result<(), ProtocolError>> {
             Box::pin(async { Ok(()) })
         }
-        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>> {
             Box::pin(async {
-                Err(WireError::new(
-                    WireErrorKind::Unavailable,
+                Err(ProtocolError::new(
+                    ErrorCategory::Unavailable,
                     "no server",
                     false,
                 ))

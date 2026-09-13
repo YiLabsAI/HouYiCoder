@@ -520,7 +520,7 @@ pub(crate) fn render_recall_text(entries: &[MemoryEntry]) -> String {
 
 // Protocol owns the serialized context breakdown types.
 pub use houyicoder_protocol::frontend::context::{
-    CategoryBreakdown, ContextBreakdown, GridSquare, build_grid,
+    CategoryBreakdown, ContextBreakdown, GridCell, build_grid,
 };
 
 /// Representative /context data for paths without a runner.

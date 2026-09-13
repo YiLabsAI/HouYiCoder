@@ -20,14 +20,14 @@ use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::run::ContentBlock;
-use houyicoder_protocol::frontend::{FrontendRequest, SessionId as WireSessionId};
+use houyicoder_protocol::frontend::{FrontendRequest, SessionId as FrontendSessionId};
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::acp_adapter::AcpAdapter;
 use houyicoder_service::acp_serve::AcpIo;
 use houyicoder_service::acp_server::AcpServer;
 use houyicoder_service::lifecycle::SessionLeaseStore;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
@@ -56,7 +56,7 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
 async fn frontend_turn_stop_reason(runner: Arc<Runner>, session: SessionId) -> String {
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -72,7 +72,7 @@ async fn frontend_turn_stop_reason(runner: Arc<Runner>, session: SessionId) -> S
     let req = RequestEnvelope::new(
         RequestId(7),
         FrontendRequest::MessageSend {
-            session_id: WireSessionId::new(session.to_string()),
+            session_id: FrontendSessionId::new(session.to_string()),
             content: vec![ContentBlock::Text { text: "hi".into() }],
             disabled_skills: Default::default(),
         },

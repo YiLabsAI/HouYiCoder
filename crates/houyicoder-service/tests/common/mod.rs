@@ -6,7 +6,7 @@
 //! so it compiles into each binary that includes it.
 //!
 //! Not every helper is used by every binary (server_contract has its own
-//! stub_runner with a specific canned reply; permission_wire uses the
+//! stub_runner with a specific canned reply; permission_contract uses the
 //! generic one). A module-level dead-code allow keeps the unused-in-some-
 //! binary helpers from gating the build.
 
@@ -25,7 +25,7 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::server::ServerIo;
+use houyicoder_service::server::FrameCarrier;
 use houyicoder_session::SessionStore;
 
 /// A minimal runner over a stub provider so a run completes in one turn (or
@@ -44,10 +44,14 @@ pub fn stub_runner() -> (Arc<Runner>, SessionId) {
 }
 
 /// The duplex channel pair a test client + the server share.
-pub fn pair() -> (ServerIo, mpsc::Sender<String>, mpsc::Receiver<String>) {
+pub fn pair() -> (FrameCarrier, mpsc::Sender<String>, mpsc::Receiver<String>) {
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    (ServerIo::new(server_tx, server_rx), client_tx, client_rx)
+    (
+        FrameCarrier::new(server_tx, server_rx),
+        client_tx,
+        client_rx,
+    )
 }
 
 /// Pull the next raw frame line the server sent, trailing newline stripped.

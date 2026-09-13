@@ -80,8 +80,8 @@ fn test_kill_child_notif_shape() {
 async fn test_drive_kill_child_forwards() {
     use houyicoder_async::PFut;
     use houyicoder_client::Transport;
+    use houyicoder_protocol::error::ProtocolError;
     use houyicoder_protocol::handshake::Hello;
-    use houyicoder_protocol::wire::WireError;
     use std::sync::{Arc, Mutex};
 
     struct CaptureTransport {
@@ -89,11 +89,11 @@ async fn test_drive_kill_child_forwards() {
         sent: Arc<Mutex<Vec<String>>>,
     }
     impl Transport for CaptureTransport {
-        fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), WireError>> {
+        fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), ProtocolError>> {
             self.sent.lock().unwrap().push(frame.to_string());
             Box::pin(async { Ok(()) })
         }
-        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>> {
             if !self.served {
                 self.served = true;
                 let mut h = houyicoder_protocol::framing::encode(&Hello::local()).expect("encode");
@@ -148,8 +148,8 @@ async fn test_drive_kill_child_forwards() {
 async fn test_drive_cancel_child_forwards() {
     use houyicoder_async::PFut;
     use houyicoder_client::Transport;
+    use houyicoder_protocol::error::ProtocolError;
     use houyicoder_protocol::handshake::Hello;
-    use houyicoder_protocol::wire::WireError;
     use std::sync::{Arc, Mutex};
 
     struct CaptureTransport {
@@ -157,11 +157,11 @@ async fn test_drive_cancel_child_forwards() {
         sent: Arc<Mutex<Vec<String>>>,
     }
     impl Transport for CaptureTransport {
-        fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), WireError>> {
+        fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), ProtocolError>> {
             self.sent.lock().unwrap().push(frame.to_string());
             Box::pin(async { Ok(()) })
         }
-        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>> {
             if !self.served {
                 self.served = true;
                 let mut h = houyicoder_protocol::framing::encode(&Hello::local()).expect("encode");
@@ -213,8 +213,8 @@ async fn test_drive_cancel_child_forwards() {
 async fn test_drive_client_read_done() {
     use houyicoder_async::PFut;
     use houyicoder_client::Transport;
+    use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
     use houyicoder_protocol::handshake::Hello;
-    use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
     /// A transport that serves one Hello (so connect succeeds) then fails
     /// every subsequent recv — the peer-gone condition drive_client must
@@ -223,10 +223,10 @@ async fn test_drive_client_read_done() {
         served: bool,
     }
     impl Transport for FailAfterHello {
-        fn send_frame(&mut self, _frame: &str) -> PFut<'_, Result<(), WireError>> {
+        fn send_frame(&mut self, _frame: &str) -> PFut<'_, Result<(), ProtocolError>> {
             Box::pin(async { Ok(()) })
         }
-        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>> {
             if !self.served {
                 self.served = true;
                 let mut h = houyicoder_protocol::framing::encode(&Hello::local()).expect("encode");
@@ -236,8 +236,8 @@ async fn test_drive_client_read_done() {
                 return Box::pin(async move { Ok(Some(h)) });
             }
             Box::pin(async {
-                Err(WireError::new(
-                    WireErrorKind::Unavailable,
+                Err(ProtocolError::new(
+                    ErrorCategory::Unavailable,
                     "peer gone",
                     false,
                 ))
@@ -287,18 +287,18 @@ async fn test_drive_translates_agent_status() {
     use houyicoder_async::PFut;
     use houyicoder_client::Transport;
     use houyicoder_protocol::envelope::{EventEnvelope, EventSeq, ServerFrame};
+    use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
     use houyicoder_protocol::frontend::event::FrontendEvent;
     use houyicoder_protocol::handshake::Hello;
-    use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
     struct AgentStatusTransport {
         served: usize,
     }
     impl Transport for AgentStatusTransport {
-        fn send_frame(&mut self, _frame: &str) -> PFut<'_, Result<(), WireError>> {
+        fn send_frame(&mut self, _frame: &str) -> PFut<'_, Result<(), ProtocolError>> {
             Box::pin(async { Ok(()) })
         }
-        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>> {
             self.served += 1;
             match self.served {
                 1 => {
@@ -329,7 +329,11 @@ async fn test_drive_translates_agent_status() {
                     Box::pin(async move { Ok(Some(line)) })
                 }
                 _ => Box::pin(async {
-                    Err(WireError::new(WireErrorKind::Unavailable, "done", false))
+                    Err(ProtocolError::new(
+                        ErrorCategory::Unavailable,
+                        "done",
+                        false,
+                    ))
                 }),
             }
         }

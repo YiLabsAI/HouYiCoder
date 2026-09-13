@@ -1,8 +1,9 @@
-//! Server-side wire slice for /status: the frontend Status request
-//! returns a wire StatusSnapshot (ResponsePayload::Status), so the TUI
-//! renders /status without importing the engine crate. This test drives
-//! the InProc frontend server with a Status request and asserts the wire
-//! snapshot carries the stub runner's model id + zeroed usage fields.
+//! Status request contract across the frontend and server boundary: the
+//! frontend Status request returns a serialized StatusSnapshot
+//! (ResponsePayload::Status), so the TUI renders /status without importing
+//! the engine crate. This test drives the InProc frontend server with a
+//! Status request and asserts the response payload carries the stub runner's
+//! model id + zeroed usage fields.
 
 use futures::SinkExt;
 use futures::StreamExt;
@@ -16,7 +17,7 @@ use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId, Res
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
@@ -38,17 +39,21 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     (Arc::new(runner), session)
 }
 
-fn pair() -> (ServerIo, mpsc::Sender<String>, mpsc::Receiver<String>) {
+fn pair() -> (FrameCarrier, mpsc::Sender<String>, mpsc::Receiver<String>) {
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
-    (ServerIo::new(server_tx, server_rx), client_tx, client_rx)
+    (
+        FrameCarrier::new(server_tx, server_rx),
+        client_tx,
+        client_rx,
+    )
 }
 
-/// The Status request returns a wire StatusSnapshot carrying the runner's
-/// model id, not a bare Ack — proving the wire slice is wired end-to-end
-/// on the server side.
+/// The Status request returns a serialized StatusSnapshot carrying the
+/// runner's model id, not a bare Ack — proving the request contract is
+/// served end-to-end on the server side.
 #[tokio::test]
-async fn test_request_returns_wire_snapshot() {
+async fn test_request_returns_status_snapshot() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
     let server = Server::new(
@@ -74,19 +79,19 @@ async fn test_request_returns_wire_snapshot() {
         }
     }
     assert!(!got.is_empty(), "no Status response: {got}");
-    // The wire snapshot carries the stub model id + the Status payload tag.
+    // The response payload carries the stub model id + the Status payload tag.
     assert!(got.contains(r#""type":"status""#), "payload tag: {got}");
     assert!(got.contains(r#""model":"stub-model""#), "model id: {got}");
-    // The settings-file memory toggles ride the wire snapshot (default both on
-    // when no settings file exists in the test env). Asserting they serialize
-    // guards against a future field rename dropping the wire contract.
+    // The settings-file memory toggles ride the response payload (default both
+    // on when no settings file exists in the test env). Asserting they
+    // serialize guards against a future field rename dropping the contract.
     assert!(
         got.contains(r#""autoMemory":true"#) || got.contains(r#""autoMemory":false"#),
-        "autoMemory toggle on the wire: {got}"
+        "autoMemory toggle in the payload: {got}"
     );
     assert!(
         got.contains(r#""autoDream":true"#) || got.contains(r#""autoDream":false"#),
-        "autoDream toggle on the wire: {got}"
+        "autoDream toggle in the payload: {got}"
     );
 
     drop(client_tx);
@@ -115,12 +120,12 @@ async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
 use ResponsePayload as _Resp;
 
 /// A fresh session (no turn run, so no durable append and no sidecar on
-/// disk) still carries the running build version on the wire StatusSnapshot.
-/// Version is a compile-time constant the server sets on the snapshot itself,
-/// not a sidecar-sourced field, so it is present before the sidecar lands.
-/// Asserting the concrete value (not just the label) guards the server-side
-/// set: deleting the assignment leaves the field empty on the wire, and this
-/// goes red.
+/// disk) still carries the running build version in the StatusSnapshot
+/// response. Version is a compile-time constant the server sets on the
+/// snapshot itself, not a sidecar-sourced field, so it is present before the
+/// sidecar lands. Asserting the concrete value (not just the label) guards
+/// the server-side set: deleting the assignment leaves the field empty in the
+/// response, and this goes red.
 #[tokio::test]
 async fn test_status_carries_build_version() {
     let (runner, session) = stub_runner();
@@ -147,7 +152,7 @@ async fn test_status_carries_build_version() {
         }
     }
     let expected = format!("\"version\":\"{}\"", env!("CARGO_PKG_VERSION"));
-    assert!(got.contains(&expected), "build version on wire: {got}");
+    assert!(got.contains(&expected), "build version in payload: {got}");
 
     drop(client_tx);
     drop(handle.await);

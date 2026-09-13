@@ -1,9 +1,9 @@
-//! Server-side wire slice for /tools: the frontend ToolList request
-//! returns a wire Tools payload (ResponsePayload::Tools), so the TUI
-//! renders the capability inventory without importing the engine
-//! registry. This test drives the InProc frontend server with a ToolList
-//! request and asserts the wire payload carries the registered tool's
-//! name + description.
+//! Tool list request contract across the frontend and server boundary: the
+//! frontend ToolList request returns a serialized Tools payload
+//! (ResponsePayload::Tools), so the TUI renders the capability inventory
+//! without importing the engine registry. This test drives the InProc
+//! frontend server with a ToolList request and asserts the response payload
+//! carries the registered tool's name + description.
 
 use futures::SinkExt;
 use futures::StreamExt;
@@ -17,7 +17,7 @@ use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
@@ -43,15 +43,19 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     (Arc::new(runner), session)
 }
 
-fn pair() -> (ServerIo, mpsc::Sender<String>, mpsc::Receiver<String>) {
+fn pair() -> (FrameCarrier, mpsc::Sender<String>, mpsc::Receiver<String>) {
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
-    (ServerIo::new(server_tx, server_rx), client_tx, client_rx)
+    (
+        FrameCarrier::new(server_tx, server_rx),
+        client_tx,
+        client_rx,
+    )
 }
 
-/// The ToolList request returns a wire Tools payload carrying the
+/// The ToolList request returns a serialized Tools payload carrying the
 /// registered tool's name + description, not a bare Ack — proving the
-/// wire slice is wired end-to-end on the server side.
+/// request contract is served end-to-end on the server side.
 #[tokio::test]
 async fn test_tool_list_returns_entries() {
     let (runner, session) = stub_runner();

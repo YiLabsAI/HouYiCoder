@@ -1,11 +1,6 @@
-//! ModelSet dispatch handler -- inline (src/) tests. The dispatch handler is
-//! async + needs ServerIo, which is testable inline via ServerIo::new, so the
-//! tests stay here (mirroring the rename_session_tests precedent) to count
-//! toward --lib diff-cov (make check's --lib lcov cannot see tests/ coverage).
-//! Covers the Some-id swap, the None-id keep-current branch, + effort
-//! pass-through to the reply. The Default-sentinel resolution, per-model
-//! effort persistence, and sidecar write land in a later task; here the wire
-//! shape is what is verified.
+//! Tests for the ModelSet dispatch handler. Covers the Some-id swap, the
+//! None-id keep-current branch, effort pass-through to the reply, and the
+//! info reply projecting the settings catalog.
 
 #![cfg(test)]
 
@@ -68,7 +63,7 @@ async fn test_model_set_some_swaps() {
     let session = SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner.clone(),
         session,
@@ -113,7 +108,7 @@ async fn test_set_none_resolves_sentinel() {
     let session = SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner.clone(),
         session,
@@ -172,7 +167,7 @@ async fn test_model_set_effort_applied() {
     let session = SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner.clone(),
         session,
@@ -224,7 +219,7 @@ async fn test_info_projects_settings_catalog() {
     .unwrap();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,

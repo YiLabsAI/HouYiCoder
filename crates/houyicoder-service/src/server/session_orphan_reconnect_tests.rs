@@ -119,7 +119,7 @@ async fn test_disconnect_orphan_repaired() {
     // timing; the ToolCall is appended before the tool executes.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
     let (server_tx1, client_rx1) = mpsc::channel::<String>(8);
-    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
     let host1 = host.clone();
     let s1 = session;
     let serve1 = tokio::spawn(async move {
@@ -192,7 +192,7 @@ async fn test_disconnect_orphan_repaired() {
     // the user input, then drive_loop calls the provider (turn 2 = "done").
     let (client_tx2, server_rx2) = mpsc::channel::<String>(8);
     let (server_tx2, client_rx2) = mpsc::channel::<String>(8);
-    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let s2 = session;
     let serve2 = tokio::spawn(async move {

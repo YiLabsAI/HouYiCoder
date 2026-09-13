@@ -1,10 +1,10 @@
 //! Routes frontend requests to server operations.
 
 use houyicoder_protocol::envelope::{RequestEnvelope, ResponsePayload};
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::FrontendRequest;
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
-use super::{Server, io::ServerIo};
+use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
 
 impl Server {
@@ -18,9 +18,9 @@ impl Server {
     #[expect(clippy::cognitive_complexity, reason = "inherent dispatch")]
     pub(super) async fn dispatch(
         &mut self,
-        io: &mut ServerIo,
+        io: &mut FrameCarrier,
         req: RequestEnvelope,
-    ) -> Result<(), WireError> {
+    ) -> Result<(), ProtocolError> {
         let req_id = req.req_id;
         match req.payload {
             FrontendRequest::MessageSend {
@@ -33,8 +33,8 @@ impl Server {
                         .send_response(
                             io,
                             req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::InvalidRequest,
+                            ResponsePayload::Error(ProtocolError::new(
+                                ErrorCategory::InvalidRequest,
                                 format!("session id mismatch: got {session_id}"),
                                 false,
                             )),
@@ -57,8 +57,8 @@ impl Server {
                         .send_response(
                             io,
                             req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::InvalidRequest,
+                            ResponsePayload::Error(ProtocolError::new(
+                                ErrorCategory::InvalidRequest,
                                 format!("session id mismatch: got {session_id}"),
                                 false,
                             )),
@@ -76,8 +76,8 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::Ack).await
             }
             FrontendRequest::Status => {
-                let wire = self.status_snapshot_wire();
-                self.send_response(io, req_id, ResponsePayload::Status(wire))
+                let status = self.build_status_snapshot();
+                self.send_response(io, req_id, ResponsePayload::Status(status))
                     .await
             }
             FrontendRequest::RenameSession { session_id, name } => {
@@ -86,8 +86,8 @@ impl Server {
                         .send_response(
                             io,
                             req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::InvalidRequest,
+                            ResponsePayload::Error(ProtocolError::new(
+                                ErrorCategory::InvalidRequest,
                                 format!("session id mismatch: got {session_id}"),
                                 false,
                             )),
@@ -103,8 +103,8 @@ impl Server {
                         .send_response(
                             io,
                             req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::Internal,
+                            ResponsePayload::Error(ProtocolError::new(
+                                ErrorCategory::Internal,
                                 "rename: no session descriptor store wired (stub mode)",
                                 false,
                             )),
@@ -138,8 +138,8 @@ impl Server {
                         .send_response(
                             io,
                             req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::Internal,
+                            ResponsePayload::Error(ProtocolError::new(
+                                ErrorCategory::Internal,
                                 detail,
                                 false,
                             )),
@@ -148,12 +148,12 @@ impl Server {
                 }
                 // Reply with a fresh status snapshot so the host re-renders
                 // /status + the picker reflects the new name on the next list.
-                let wire = self.status_snapshot_wire();
-                self.send_response(io, req_id, ResponsePayload::Status(wire))
+                let status = self.build_status_snapshot();
+                self.send_response(io, req_id, ResponsePayload::Status(status))
                     .await
             }
             FrontendRequest::ToolList => {
-                let wire =
+                let tools =
                     self.runner
                         .tools_snapshot()
                         .into_iter()
@@ -161,7 +161,7 @@ impl Server {
                             houyicoder_protocol::frontend::tools::ToolEntry { name, description }
                         })
                         .collect::<Vec<_>>();
-                self.send_response(io, req_id, ResponsePayload::Tools(wire))
+                self.send_response(io, req_id, ResponsePayload::Tools(tools))
                     .await
             }
             FrontendRequest::Agents => {
@@ -182,15 +182,15 @@ impl Server {
                 .await
             }
             FrontendRequest::Hooks => {
-                let mut wire = hooks_to_wire(self.runner.hooks_list());
-                wire.extend(hook_events_to_wire());
-                wire.sort_by(|a, b| a.name.cmp(&b.name));
-                self.send_response(io, req_id, ResponsePayload::Hooks(wire))
+                let mut hooks = hooks_to_wire(self.runner.hooks_list());
+                hooks.extend(hook_events_to_wire());
+                hooks.sort_by(|a, b| a.name.cmp(&b.name));
+                self.send_response(io, req_id, ResponsePayload::Hooks(hooks))
                     .await
             }
             FrontendRequest::Skills => {
-                let wire = skills_to_wire(self.runner.skills_snapshot());
-                self.send_response(io, req_id, ResponsePayload::Skills(wire))
+                let skills = skills_to_wire(self.runner.skills_snapshot());
+                self.send_response(io, req_id, ResponsePayload::Skills(skills))
                     .await
             }
             FrontendRequest::Undo => {
@@ -250,12 +250,12 @@ impl Server {
                     .iter()
                     .filter(|e| matches!(e.event, houyicoder_context::SessionEvent::Unknown))
                     .count() as u32;
-                let wire = houyicoder_protocol::frontend::trajectory::TrajectoryResponse {
+                let trajectory = houyicoder_protocol::frontend::trajectory::TrajectoryResponse {
                     entries,
                     redundant,
                     unknown_count,
                 };
-                self.send_response(io, req_id, ResponsePayload::Trajectory(wire))
+                self.send_response(io, req_id, ResponsePayload::Trajectory(trajectory))
                     .await
             }
             FrontendRequest::Context => {
@@ -305,8 +305,8 @@ impl Server {
                     bd.cache_hit_rate =
                         Some(usage.cache_read_input_tokens as f64 / usage.input_tokens as f64);
                 }
-                let wire = pa::map_context_breakdown(&bd);
-                self.send_response(io, req_id, ResponsePayload::Context(wire))
+                let context = pa::map_context_breakdown(&bd);
+                self.send_response(io, req_id, ResponsePayload::Context(context))
                     .await
             }
             FrontendRequest::Compact => {
@@ -322,16 +322,16 @@ impl Server {
                 // than hanging on the req_id.
                 match self.runner.compact(self.session).await {
                     Ok(outcome) => {
-                        let wire = pa::compaction::map_compact_reply(&outcome);
-                        self.send_response(io, req_id, ResponsePayload::Compact(wire))
+                        let reply = pa::compaction::map_compact_reply(&outcome);
+                        self.send_response(io, req_id, ResponsePayload::Compact(reply))
                             .await
                     }
                     Err(e) => {
                         self.send_response(
                             io,
                             req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::InvalidRequest,
+                            ResponsePayload::Error(ProtocolError::new(
+                                ErrorCategory::InvalidRequest,
                                 e.to_string(),
                                 false,
                             )),
@@ -341,13 +341,13 @@ impl Server {
                 }
             }
             FrontendRequest::MemoryList => {
-                let wire = pa::memory_view::map_memory_list(self.runner.memory_list());
-                self.send_response(io, req_id, ResponsePayload::MemoryList(wire))
+                let entries = pa::memory_view::map_memory_list(self.runner.memory_list());
+                self.send_response(io, req_id, ResponsePayload::MemoryList(entries))
                     .await
             }
             FrontendRequest::MemoryShow { key } => {
-                let wire = pa::memory_view::map_memory_entry(self.runner.memory_show(&key));
-                self.send_response(io, req_id, ResponsePayload::MemoryShow(wire))
+                let entry = pa::memory_view::map_memory_entry(self.runner.memory_show(&key));
+                self.send_response(io, req_id, ResponsePayload::MemoryShow(entry))
                     .await
             }
             FrontendRequest::MemoryForget { key, scope } => {
@@ -358,16 +358,16 @@ impl Server {
                 // the user believes the forget worked when it did not.
                 match self.runner.memory_forget(&key, &scope) {
                     Ok(()) | Err(houyicoder_context::MemoryError::NotFound) => {
-                        let wire = pa::memory_view::map_memory_list(self.runner.memory_list());
-                        self.send_response(io, req_id, ResponsePayload::MemoryList(wire))
+                        let entries = pa::memory_view::map_memory_list(self.runner.memory_list());
+                        self.send_response(io, req_id, ResponsePayload::MemoryList(entries))
                             .await
                     }
                     Err(e) => {
                         self.send_response(
                             io,
                             req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::Internal,
+                            ResponsePayload::Error(ProtocolError::new(
+                                ErrorCategory::Internal,
                                 format!("memory forget failed: {e}"),
                                 false,
                             )),
@@ -378,8 +378,8 @@ impl Server {
             }
             FrontendRequest::MemoryToggleState => {
                 let state = self.runner.memory_gate_state();
-                let wire = pa::memory_view::map_toggle_state(state.auto_memory, state.auto_dream);
-                self.send_response(io, req_id, ResponsePayload::ToggleState(wire))
+                let toggle = pa::memory_view::map_toggle_state(state.auto_memory, state.auto_dream);
+                self.send_response(io, req_id, ResponsePayload::ToggleState(toggle))
                     .await
             }
             FrontendRequest::MemoryToggle { which } => {
@@ -403,8 +403,8 @@ impl Server {
                         .send_response(
                             io,
                             req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::Internal,
+                            ResponsePayload::Error(ProtocolError::new(
+                                ErrorCategory::Internal,
                                 format!("failed to save settings: {e}"),
                                 false,
                             )),
@@ -415,28 +415,28 @@ impl Server {
                     MemoryToggleWhich::Auto => self.runner.set_auto_memory(auto_memory),
                     MemoryToggleWhich::Dream => self.runner.set_auto_dream(auto_dream),
                 }
-                let wire = pa::memory_view::map_toggle_state(auto_memory, auto_dream);
-                self.send_response(io, req_id, ResponsePayload::ToggleState(wire))
+                let toggle = pa::memory_view::map_toggle_state(auto_memory, auto_dream);
+                self.send_response(io, req_id, ResponsePayload::ToggleState(toggle))
                     .await
             }
             FrontendRequest::PermissionMode => {
-                let wire = pa::permission_mode_to_wire(self.gate.current());
-                self.send_response(io, req_id, ResponsePayload::PermissionMode(wire))
+                let mode = pa::permission_mode_to_wire(self.gate.current());
+                self.send_response(io, req_id, ResponsePayload::PermissionMode(mode))
                     .await
             }
             FrontendRequest::PermissionRules => {
                 self.send_response(
                     io,
                     req_id,
-                    ResponsePayload::PermissionRules(self.rule_set_wire()),
+                    ResponsePayload::PermissionRules(self.permission_rules()),
                 )
                 .await
             }
             FrontendRequest::PermissionCycleMode => {
                 let resp = match self.gate.tab_cycle() {
                     Ok(mode) => ResponsePayload::PermissionMode(pa::permission_mode_to_wire(mode)),
-                    Err(e) => ResponsePayload::Error(WireError::new(
-                        WireErrorKind::InvalidRequest,
+                    Err(e) => ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::InvalidRequest,
                         e.to_string(),
                         false,
                     )),
@@ -447,10 +447,10 @@ impl Server {
                 let resp = match pa::permission_rule_from_wire(&rule) {
                     Ok(r) => {
                         self.gate.add_rule(r);
-                        ResponsePayload::PermissionRules(self.rule_set_wire())
+                        ResponsePayload::PermissionRules(self.permission_rules())
                     }
-                    Err(e) => ResponsePayload::Error(WireError::new(
-                        WireErrorKind::InvalidRequest,
+                    Err(e) => ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::InvalidRequest,
                         e.to_string(),
                         false,
                     )),
@@ -461,10 +461,10 @@ impl Server {
                 // Respond with the updated rule set (mirrors AddRule) so the
                 // frontend's rules_cache stays in sync after a delete.
                 let resp = if self.gate.remove_rule(index) {
-                    ResponsePayload::PermissionRules(self.rule_set_wire())
+                    ResponsePayload::PermissionRules(self.permission_rules())
                 } else {
-                    ResponsePayload::Error(WireError::new(
-                        WireErrorKind::InvalidRequest,
+                    ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::InvalidRequest,
                         "rule index out of range",
                         false,
                     ))
@@ -479,15 +479,17 @@ impl Server {
                 // Workspace tab stays in sync without a poll.
                 let resp = match &self.sandbox_session {
                     Some(s) => match s.add_working_dir(&path) {
-                        Ok(()) => ResponsePayload::PermissionWorkingDirs(self.working_dirs_wire()),
-                        Err(e) => ResponsePayload::Error(WireError::new(
-                            WireErrorKind::InvalidRequest,
+                        Ok(()) => {
+                            ResponsePayload::PermissionWorkingDirs(self.working_directories())
+                        }
+                        Err(e) => ResponsePayload::Error(ProtocolError::new(
+                            ErrorCategory::InvalidRequest,
                             e.to_string(),
                             false,
                         )),
                     },
-                    None => ResponsePayload::Error(WireError::new(
-                        WireErrorKind::InvalidRequest,
+                    None => ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::InvalidRequest,
                         "no sandbox session attached; working dirs need a runtime-mutable fence",
                         false,
                     )),
@@ -503,7 +505,7 @@ impl Server {
                 self.send_response(
                     io,
                     req_id,
-                    ResponsePayload::PermissionWorkingDirs(self.working_dirs_wire()),
+                    ResponsePayload::PermissionWorkingDirs(self.working_directories()),
                 )
                 .await
             }
@@ -523,8 +525,8 @@ impl Server {
                         .send_response(
                             io,
                             req_id,
-                            ResponsePayload::Error(WireError::new(
-                                WireErrorKind::InvalidRequest,
+                            ResponsePayload::Error(ProtocolError::new(
+                                ErrorCategory::InvalidRequest,
                                 "session id mismatch",
                                 false,
                             )),
@@ -568,7 +570,7 @@ impl Server {
 
     /// Project the gate's durable rule set to the protocol form for /rules
     /// replies + the add/remove acks that ship the updated set.
-    fn rule_set_wire(&self) -> Vec<houyicoder_protocol::frontend::permission::PermissionRule> {
+    fn permission_rules(&self) -> Vec<houyicoder_protocol::frontend::permission::PermissionRule> {
         // The /permissions management view lists durable (writable-scope)
         // rules only — builtin rules ship with the binary and session rules
         // are transient in-memory consent, neither is user-managed here;
@@ -584,7 +586,7 @@ impl Server {
 
     /// Project the sandbox session's runtime working dirs for the Workspace
     /// tab + the add/remove acks. Empty when no session is attached.
-    fn working_dirs_wire(&self) -> Vec<String> {
+    fn working_directories(&self) -> Vec<String> {
         self.sandbox_session
             .as_ref()
             .map(|s| s.working_dirs())
@@ -593,9 +595,9 @@ impl Server {
 
     /// Build the current protocol status, deriving an unnamed session's display
     /// name from the first prompt when its descriptor is available.
-    fn status_snapshot_wire(&self) -> houyicoder_protocol::frontend::status::StatusSnapshot {
+    fn build_status_snapshot(&self) -> houyicoder_protocol::frontend::status::StatusSnapshot {
         let snap = self.runner.status_snapshot();
-        let mut wire = pa::map_status_snapshot(&snap);
+        let mut snapshot = pa::map_status_snapshot(&snap);
         if let Some(store) = self.descriptor_store.as_ref()
             && let Some(mut descriptor) = store.read_descriptor(self.session)
         {
@@ -607,22 +609,23 @@ impl Server {
             {
                 descriptor.name = first_prompt_slug(self.runner.store().as_ref(), self.session);
             }
-            wire.descriptor = Some(pa::map_session_descriptor(&descriptor));
+            snapshot.descriptor = Some(pa::map_session_descriptor(&descriptor));
         }
         // Running build version; always known, not sidecar-gated.
-        wire.version = env!("CARGO_PKG_VERSION").to_string();
+        snapshot.version = env!("CARGO_PKG_VERSION").to_string();
         // Attach the env-config display fields (auth token source, base URL,
         // setting sources) so the TUI renders them without importing the
         // config crate. The token source is the env var NAME, never the
         // secret value.
-        wire.auth_token_source = super::status_wire::auth_token_source();
-        wire.base_url = houyicoder_config::resolve_base_url();
-        wire.setting_sources = super::status_wire::setting_sources_label();
+        snapshot.auth_token_source = super::status_projection::auth_token_source();
+        snapshot.base_url = houyicoder_config::resolve_base_url();
+        snapshot.setting_sources = super::status_projection::setting_sources_label();
         let (toggles, _settings_warnings) = houyicoder_config::load_toggles();
-        wire.auto_memory = toggles.auto_memory;
-        wire.auto_dream = toggles.auto_dream;
-        wire.by_model = super::status_wire::project_by_model(self.runner.by_model_usage());
-        wire
+        snapshot.auto_memory = toggles.auto_memory;
+        snapshot.auto_dream = toggles.auto_dream;
+        snapshot.by_model =
+            super::status_projection::project_by_model(self.runner.by_model_usage());
+        snapshot
     }
 }
 
@@ -765,3 +768,11 @@ mod context_dispatch_tests;
 #[cfg(test)]
 #[path = "model_set_tests.rs"]
 mod model_set_tests;
+
+#[cfg(test)]
+#[path = "request_rejection_tests.rs"]
+mod request_rejection_tests;
+
+#[cfg(test)]
+#[path = "dispatch_response_tests.rs"]
+mod dispatch_response_tests;

@@ -81,7 +81,7 @@ fn test_grid_inline_renders_legend() {
 /// short-circuit before legend_rows runs) + all optional fields None. Each
 /// test overrides the field(s) it exercises.
 fn base_breakdown() -> houyicoder_protocol::frontend::context::ContextBreakdown {
-    use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridSquare};
+    use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
     ContextBreakdown {
         model: "test".into(),
         total_tokens: 100_000,
@@ -95,7 +95,7 @@ fn base_breakdown() -> houyicoder_protocol::frontend::context::ContextBreakdown 
         }],
         // One cell so the empty-grid guard (bd.grid.is_empty() → "no data
         // yet") does not short-circuit before legend_rows runs.
-        grid: vec![vec![GridSquare {
+        grid: vec![vec![GridCell {
             category_idx: 0,
             fullness: 1.0,
         }]],
@@ -241,7 +241,7 @@ fn test_legend_renders_category_row() {
 /// never asserted.
 #[test]
 fn test_legend_renders_reserved_row() {
-    use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridSquare};
+    use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
     let bd = ContextBreakdown {
         model: "test".into(),
         total_tokens: 100_000,
@@ -253,7 +253,7 @@ fn test_legend_renders_reserved_row() {
             is_deferred: false,
             is_reserved: true,
         }],
-        grid: vec![vec![GridSquare {
+        grid: vec![vec![GridCell {
             category_idx: 0,
             fullness: 1.0,
         }]],
@@ -279,10 +279,10 @@ fn test_legend_renders_reserved_row() {
 /// glyph for which fullness.
 #[test]
 fn test_grid_glyph_picks_fullness() {
-    use houyicoder_protocol::frontend::context::GridSquare;
+    use houyicoder_protocol::frontend::context::GridCell;
     fn bd_fullness(fullness: f32) -> houyicoder_protocol::frontend::context::ContextBreakdown {
         let mut bd = base_breakdown();
-        bd.grid = vec![vec![GridSquare {
+        bd.grid = vec![vec![GridCell {
             category_idx: 0,
             fullness,
         }]];
@@ -316,12 +316,12 @@ fn test_grid_glyph_picks_fullness() {
 /// the right flat cell index across a multi-cell grid.
 #[test]
 fn test_grid_renders_breakpoint_marker() {
-    use houyicoder_protocol::frontend::context::GridSquare;
+    use houyicoder_protocol::frontend::context::GridCell;
     let mut bd = base_breakdown();
     // A 5-cell single-row grid; breakpoint at cell 2 (cells 0,1 cached,
     // cell 2 onward fresh). base_breakdown's one category is idx 0.
     bd.grid = vec![vec![
-        GridSquare {
+        GridCell {
             category_idx: 0,
             fullness: 1.0
         };
@@ -340,7 +340,7 @@ fn test_grid_renders_breakpoint_marker() {
 /// grid_inline_renders_suggestions_section uses. pct=85 (>= 80), Messages
 /// 20k (>= 15%), System tools 6k (>= 5%) -- all three triggers met.
 fn full_context_breakdown() -> houyicoder_protocol::frontend::context::ContextBreakdown {
-    use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridSquare};
+    use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
     ContextBreakdown {
         model: "test".into(),
         total_tokens: 85_000,
@@ -375,7 +375,7 @@ fn full_context_breakdown() -> houyicoder_protocol::frontend::context::ContextBr
                 is_reserved: false,
             },
         ],
-        grid: vec![vec![GridSquare {
+        grid: vec![vec![GridCell {
             category_idx: 0,
             fullness: 1.0,
         }]],

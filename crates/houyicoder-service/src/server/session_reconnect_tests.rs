@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::channel::mpsc;
+use futures::{SinkExt, StreamExt};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
@@ -22,12 +23,16 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::envelope::{
-    ClientResponsePayload, EventEnvelope, RequestId, ServerFrame, ServerRequestPayload,
+    ClientFrame, ClientResponseEnvelope, ClientResponsePayload, EventEnvelope, RequestId,
+    ServerFrame, ServerRequestPayload,
 };
+use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
+use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_protocol::frontend::{FrontendEvent, FrontendRequest, QueuedInput};
+use houyicoder_protocol::handshake::Hello;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_session::SessionStore;
 use serde_json::Value;
@@ -199,7 +204,7 @@ async fn test_reconnect_projects_queued_input() {
 
     let (client_tx1, server_rx1) = mpsc::channel::<String>(64);
     let (server_tx1, client_rx1) = mpsc::channel::<String>(64);
-    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
     let host1 = host.clone();
     let serve1 = tokio::spawn(async move {
         drop(serve_session(host1, session, io1).await);
@@ -234,7 +239,7 @@ async fn test_reconnect_projects_queued_input() {
         .expect("first connection closes")
         .expect("first serve task");
 
-    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let serve2 = tokio::spawn(async move {
         drop(serve_session(host2, session, io2).await);
@@ -391,7 +396,7 @@ async fn test_reconnect_resumes_interruption() {
     // Connection 1: drive to the first Interruption, receive ask1, disconnect.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
     let (server_tx1, client_rx1) = mpsc::channel::<String>(8);
-    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
     let host1 = host.clone();
     let s1 = session;
     let serve1 = tokio::spawn(async move {
@@ -439,7 +444,7 @@ async fn test_reconnect_resumes_interruption() {
     // second resume lands final text; the run completes.
     let (client_tx2, server_rx2) = mpsc::channel::<String>(8);
     let (server_tx2, client_rx2) = mpsc::channel::<String>(8);
-    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let s2 = session;
     let serve2 = tokio::spawn(async move {
@@ -562,7 +567,7 @@ async fn test_deny_verdict_completes_run() {
     // Connection 1: receive ask1, disconnect before answering.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
     let (server_tx1, client_rx1) = mpsc::channel::<String>(8);
-    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
     let host1 = host.clone();
     let s1 = session;
     let serve1 = tokio::spawn(async move {
@@ -608,7 +613,7 @@ async fn test_deny_verdict_completes_run() {
     // text; the run completes. The audit trajectory records a Denied verdict.
     let (client_tx2, server_rx2) = mpsc::channel::<String>(8);
     let (server_tx2, client_rx2) = mpsc::channel::<String>(8);
-    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let s2 = session;
     let serve2 = tokio::spawn(async move {
@@ -680,7 +685,7 @@ async fn test_mid_reemit_disconnect_errors() {
     // Connection 1: receive ask1, disconnect before answering.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
     let (server_tx1, client_rx1) = mpsc::channel::<String>(8);
-    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
     let host1 = host.clone();
     let s1 = session;
     let serve1 = tokio::spawn(async move {
@@ -716,7 +721,7 @@ async fn test_mid_reemit_disconnect_errors() {
     // Connection 2: receive the re-emitted ask, then drop without answering.
     let (client_tx2, server_rx2) = mpsc::channel::<String>(8);
     let (server_tx2, client_rx2) = mpsc::channel::<String>(8);
-    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let s2 = session;
     let serve2 = tokio::spawn(async move {
@@ -769,7 +774,7 @@ async fn test_reconnect_drops_wrong_response() {
     // Connection 1: receive ask1, disconnect before answering.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
     let (server_tx1, client_rx1) = mpsc::channel::<String>(8);
-    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
     let host1 = host.clone();
     let s1 = session;
     let serve1 = tokio::spawn(async move {
@@ -806,7 +811,7 @@ async fn test_reconnect_drops_wrong_response() {
     // MISMATCHED req_id (not the one the server minted for the re-emit).
     let (client_tx2, server_rx2) = mpsc::channel::<String>(8);
     let (server_tx2, client_rx2) = mpsc::channel::<String>(8);
-    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let s2 = session;
     let serve2 = tokio::spawn(async move {
@@ -882,7 +887,7 @@ async fn test_reattach_cancelled_session_errors() {
     host.store().set_state(session, LifecycleState::Cancelled);
     let (_client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, _client_rx) = mpsc::channel::<String>(8);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let outcome =
         tokio::time::timeout(Duration::from_secs(2), serve_session(host, session, io)).await;
     assert!(
@@ -912,7 +917,7 @@ async fn test_reattach_occupied_session_errors() {
     // (state Running) and parks at the ask. Do NOT answer — keep it parked.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
     let (server_tx1, client_rx1) = mpsc::channel::<String>(8);
-    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
     let host1 = host.clone();
     let s1 = session;
     let serve1 = tokio::spawn(async move {
@@ -953,7 +958,7 @@ async fn test_reattach_occupied_session_errors() {
     // before any frame is exchanged, so no client is built for it.
     let (_client_tx2, server_rx2) = mpsc::channel::<String>(8);
     let (server_tx2, _client_rx2) = mpsc::channel::<String>(8);
-    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let s2 = session;
     let outcome = tokio::time::timeout(Duration::from_secs(2), serve_session(host2, s2, io2)).await;
@@ -981,4 +986,259 @@ async fn test_reattach_occupied_session_errors() {
         LifecycleState::Detached,
         "lease released after the holder disconnects"
     );
+}
+
+/// Encode a frame for the raw client ends that drive a channel pair without
+/// the Client wrapper.
+fn reconnect_encode(msg: &impl serde::Serialize) -> String {
+    let mut f = houyicoder_protocol::framing::encode(msg).expect("encode");
+    if !f.ends_with('\n') {
+        f.push('\n');
+    }
+    f
+}
+
+/// Build the parked-run harness the two failure tests below share: a host
+/// whose session run stops at a permission ask, plus the channel halves of
+/// a reattaching connection.
+fn parked_host(
+    responses: Vec<CompletionResponse>,
+    tools: ToolRegistry,
+) -> (Arc<SessionHost>, SessionId) {
+    let session = SessionId::new();
+    let append_notify = Arc::new(Notify::new());
+    let store = Arc::new(
+        SessionStore::new(Box::new(InMemoryBackend::new()))
+            .with_append_notify(append_notify.clone()),
+    );
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(responses));
+    let event_sequencer = EventSequencer::new();
+    let mut runner = Runner::with_shared_store(
+        store,
+        provider,
+        tools,
+        RunnerConfig {
+            model: "test".into(),
+            instructions: "test".into(),
+            max_turns: 10,
+            ..RunnerConfig::default()
+        },
+    );
+    event_sequencer.install_on(&mut runner);
+    let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
+    let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
+    host.insert(
+        session,
+        Arc::new(runner),
+        event_sequencer,
+        gate,
+        append_notify,
+    );
+    (host, session)
+}
+
+/// Drive the first connection to the parked ask, then disconnect so the
+/// session is resumable by the tests' second connection.
+async fn park_first_connection(host: &Arc<SessionHost>, session: SessionId) {
+    let (client_tx1, server_rx1) = mpsc::channel::<String>(64);
+    let (server_tx1, client_rx1) = mpsc::channel::<String>(64);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
+    let host1 = host.clone();
+    let serve1 = tokio::spawn(async move {
+        drop(serve_session(host1, session, io1).await);
+    });
+    let mut client1 = Client::new(Box::new(InProcTransport::from_halves(
+        client_tx1, client_rx1,
+    )));
+    client1.connect().await.expect("first handshake");
+    client1
+        .send_request(
+            RequestId(1),
+            FrontendRequest::MessageSend {
+                session_id: houyicoder_protocol::frontend::SessionId::new(session.to_string()),
+                content: vec![ContentBlock::Text { text: "go".into() }],
+                disabled_skills: Default::default(),
+            },
+        )
+        .await
+        .expect("start interrupted run");
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(2), client1.next_frame())
+            .await
+            .expect("first connection frame timeout")
+            .expect("first connection frame");
+        if matches!(frame, ServerFrame::Request(_)) {
+            break;
+        }
+    }
+    drop(client1);
+    tokio::time::timeout(Duration::from_secs(2), serve1)
+        .await
+        .expect("first connection closes")
+        .expect("first serve task");
+}
+
+/// Answering the re-emitted ask with the wrong payload shape fails the
+/// resumed session closed: the verdict cannot be guessed, so a trust payload
+/// against a permission ask is an InvalidFrame error.
+#[tokio::test]
+async fn test_reemit_wrong_payload_fails() {
+    let responses = vec![
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "toolu_approval".into(),
+                name: "approvable".into(),
+                input: serde_json::json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "done after approval".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+    ];
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(ApprovableTool));
+    let (host, session) = parked_host(responses, tools);
+    park_first_connection(&host, session).await;
+
+    let (client_tx2, server_rx2) = mpsc::channel::<String>(64);
+    let (server_tx2, client_rx2) = mpsc::channel::<String>(64);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
+    let host2 = host.clone();
+    let serve2 = tokio::spawn(async move { serve_session(host2, session, io2).await });
+    let mut client2 = Client::new(Box::new(InProcTransport::from_halves(
+        client_tx2, client_rx2,
+    )));
+    client2.connect().await.expect("second handshake");
+    let mut ask_id = None;
+    while ask_id.is_none() {
+        let frame = tokio::time::timeout(Duration::from_secs(2), client2.next_frame())
+            .await
+            .expect("re-emit frame timeout")
+            .expect("re-emit frame");
+        if let ServerFrame::Request(req) = frame {
+            ask_id = Some(req.req_id);
+        }
+    }
+    client2
+        .send_reverse_response(
+            ask_id.expect("re-emitted ask"),
+            ClientResponsePayload::TrustAccept(TrustAccept { accepted: true }),
+        )
+        .await
+        .expect("send the wrong payload");
+    let err = tokio::time::timeout(Duration::from_secs(2), serve2)
+        .await
+        .expect("second serve returns")
+        .expect("second serve join")
+        .expect_err("the wrong payload fails the resumed session closed");
+    assert_eq!(err.category, ErrorCategory::InvalidFrame);
+    assert_eq!(err.message, "expected a permission reverse response");
+}
+
+/// Closing the connection after approving the re-emitted ask, while the
+/// resumed run is still active, fails the resumed session with a typed
+/// Unavailable error rather than parking silently.
+#[tokio::test]
+async fn test_client_closed_during_resume() {
+    let entered = Arc::new(Notify::new());
+    let (release_tx, release_rx) = oneshot::channel();
+    let release = Arc::new(Mutex::new(Some(release_rx)));
+    let responses = vec![
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "toolu_approval".into(),
+                name: "approvable".into(),
+                input: serde_json::json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "toolu_blocking".into(),
+                name: "reconnect_blocking".into(),
+                input: serde_json::json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "never reached".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+    ];
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(ApprovableTool));
+    tools.register(Arc::new(ReconnectBlockingTool {
+        entered: entered.clone(),
+        release,
+    }));
+    let (host, session) = parked_host(responses, tools);
+    park_first_connection(&host, session).await;
+
+    // The second connection drives the raw channel: approve the re-emitted
+    // ask, then close the send half while the resumed run blocks inside the
+    // tool. The receive half stays alive so event flushes succeed and the
+    // closed-send branch is the only error path.
+    let (mut client_tx2, server_rx2) = mpsc::channel::<String>(64);
+    let (server_tx2, mut client_rx2) = mpsc::channel::<String>(64);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
+    let host2 = host.clone();
+    let serve2 = tokio::spawn(async move { serve_session(host2, session, io2).await });
+    client_tx2
+        .send(reconnect_encode(&Hello::local()))
+        .await
+        .expect("send hello");
+    let mut ask = None;
+    while ask.is_none() {
+        let line = tokio::time::timeout(Duration::from_secs(2), client_rx2.next())
+            .await
+            .expect("re-emit frame timeout")
+            .expect("re-emit frame");
+        if let Ok(ServerFrame::Request(req)) = serde_json::from_str(&line) {
+            ask = Some(req);
+        }
+    }
+    let ask = ask.expect("re-emitted ask");
+    let call_id = match &ask.payload {
+        ServerRequestPayload::Permission(a) => a.call_id.clone(),
+        other => panic!("expected a permission ask, got {other:?}"),
+    };
+    let decision = ClientResponsePayload::Permission(ApprovalDecision {
+        call_id,
+        approved: true,
+        updated_input: None,
+        scope: "once".to_string(),
+    });
+    client_tx2
+        .send(reconnect_encode(&ClientFrame::Response(
+            ClientResponseEnvelope::new(ask.req_id, decision),
+        )))
+        .await
+        .expect("approve the ask");
+
+    // Effect latch: the resumed run is inside the blocking tool, so the
+    // resume loop is live when the send half closes.
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .expect("resumed run entered the blocking tool");
+    drop(client_tx2);
+    let err = tokio::time::timeout(Duration::from_secs(2), serve2)
+        .await
+        .expect("second serve returns")
+        .expect("second serve join")
+        .expect_err("closing during the resume fails the session");
+    assert_eq!(err.category, ErrorCategory::Unavailable);
+    assert_eq!(err.message, "client closed mid-resume");
+    drop(release_tx);
+    drop(client_rx2);
 }

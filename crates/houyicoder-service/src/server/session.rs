@@ -12,13 +12,13 @@ use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
 };
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::run::ApprovalRequest;
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
 use crate::composition::SessionHost;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::protocol_adapter::parse_approval_decision;
-use crate::server::{EventSequencer, Server, ServerIo};
+use crate::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionLogEntry};
 
 impl Server {
@@ -100,8 +100,8 @@ impl Server {
 #[expect(clippy::too_many_lines, reason = "resume lifecycle")]
 pub(crate) async fn resume_pending(
     server: &mut Server,
-    io: &mut ServerIo,
-) -> Result<bool, WireError> {
+    io: &mut FrameCarrier,
+) -> Result<bool, ProtocolError> {
     let Some(host) = server.host.clone() else {
         return Ok(false);
     };
@@ -141,8 +141,8 @@ pub(crate) async fn resume_pending(
                 let frame = match io.next_frame().await {
                     Some(f) => f,
                     None => {
-                        return Err(WireError::new(
-                            WireErrorKind::Unavailable,
+                        return Err(ProtocolError::new(
+                            ErrorCategory::Unavailable,
                             "client closed mid-re-emit",
                             false,
                         ));
@@ -173,8 +173,8 @@ pub(crate) async fn resume_pending(
                     match r.payload {
                         ClientResponsePayload::Permission(d) => break d,
                         _ => {
-                            return Err(WireError::new(
-                                WireErrorKind::InvalidFrame,
+                            return Err(ProtocolError::new(
+                                ErrorCategory::InvalidFrame,
                                 "expected a permission reverse response",
                                 false,
                             ));
@@ -266,8 +266,8 @@ pub(crate) async fn resume_pending(
                             }
                         }
                         None => {
-                            return Err(WireError::new(
-                                WireErrorKind::Unavailable,
+                            return Err(ProtocolError::new(
+                                ErrorCategory::Unavailable,
                                 "client closed mid-resume",
                                 false,
                             ));
@@ -324,26 +324,26 @@ pub(crate) async fn resume_pending(
 pub(crate) async fn serve_session(
     host: Arc<SessionHost>,
     session: SessionId,
-    io: ServerIo,
-) -> Result<(), WireError> {
+    io: FrameCarrier,
+) -> Result<(), ProtocolError> {
     // Atomically check + take the lease under one lock. This closes the
     // TOCTOU race where two concurrent serve_session calls could both observe
     // Detached and both proceed to set Running.
     host.store().try_take_lease(session).map_err(|e| match e {
-        crate::lifecycle::LifecycleError::LeaseHeld(holder) => WireError::new(
-            WireErrorKind::Unavailable,
+        crate::lifecycle::LifecycleError::LeaseHeld(holder) => ProtocolError::new(
+            ErrorCategory::Unavailable,
             format!("session lease held by {holder}"),
             false,
         ),
-        _ => WireError::new(
-            WireErrorKind::Unavailable,
+        _ => ProtocolError::new(
+            ErrorCategory::Unavailable,
             "session is terminal; no reattach",
             false,
         ),
     })?;
     let handle = host.clone_handle(session).ok_or_else(|| {
-        WireError::new(
-            WireErrorKind::Unavailable,
+        ProtocolError::new(
+            ErrorCategory::Unavailable,
             "no live runner for session",
             false,
         )

@@ -3,8 +3,8 @@
 //! server/.
 
 use houyicoder_protocol::envelope::ResponsePayload;
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::debug::DebugLevel;
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
 use tracing_subscriber::filter::LevelFilter;
 
 use super::Server;
@@ -17,8 +17,8 @@ impl Server {
     /// that the diagnostic sink is absent rather than silently succeeding.
     pub(super) fn debug_response(&self, level: DebugLevel) -> ResponsePayload {
         let Some(h) = &self.diagnostics else {
-            return ResponsePayload::Error(WireError::new(
-                WireErrorKind::InvalidRequest,
+            return ResponsePayload::Error(ProtocolError::new(
+                ErrorCategory::InvalidRequest,
                 "no diagnostic sink is installed in this process",
                 false,
             ));
@@ -28,8 +28,8 @@ impl Server {
             DebugLevel::Debug => LevelFilter::DEBUG,
         };
         if let Err(e) = h.set_level(filter) {
-            return ResponsePayload::Error(WireError::new(
-                WireErrorKind::Internal,
+            return ResponsePayload::Error(ProtocolError::new(
+                ErrorCategory::Internal,
                 format!("could not change the diagnostic level: {e}"),
                 false,
             ));

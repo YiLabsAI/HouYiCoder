@@ -1,8 +1,9 @@
-//! Server-side wire slice for the /model select: the ModelSet request
-//! switches the runner's active model id + returns the applied model, so the
-//! TUI's /model pane select reaches the provider without importing the engine
-//! crate. Drives the InProc frontend server with a ModelSet request and
-//! asserts the runner's active_model changed + the reply echoes it.
+//! Model request contract across the frontend and server boundary: the
+//! ModelSet request switches the runner's active model id + returns the
+//! applied model, so the TUI's /model pane select reaches the provider
+//! without importing the engine crate. Drives the InProc frontend server with
+//! a ModelSet request and asserts the runner's active_model changed + the
+//! reply echoes it.
 
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
@@ -15,7 +16,7 @@ use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
@@ -44,17 +45,21 @@ fn temp_settings() -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("model-wire-{n}-{}.json", std::process::id()))
+    std::env::temp_dir().join(format!("model-contract-{n}-{}.json", std::process::id()))
 }
 
-fn pair() -> (ServerIo, mpsc::Sender<String>, mpsc::Receiver<String>) {
+fn pair() -> (FrameCarrier, mpsc::Sender<String>, mpsc::Receiver<String>) {
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
-    (ServerIo::new(server_tx, server_rx), client_tx, client_rx)
+    (
+        FrameCarrier::new(server_tx, server_rx),
+        client_tx,
+        client_rx,
+    )
 }
 
 /// The ModelSet request swaps the runner's active model id + replies with the
-/// applied model (the /model pane select over the wire).
+/// applied model (the /model pane select across the server boundary).
 #[tokio::test]
 async fn test_set_switches_runner_model() {
     let (runner, session) = stub_runner();

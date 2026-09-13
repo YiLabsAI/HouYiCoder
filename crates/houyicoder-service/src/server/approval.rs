@@ -9,11 +9,11 @@ use houyicoder_permission::{Decision, ToolRequest};
 use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
 };
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 
-use super::{Server, io::ServerIo, now_millis};
+use super::{Server, frame_carrier::FrameCarrier, now_millis};
 
 impl Server {
     /// Drive one approval request to a human answer. Reconstructs the Ask
@@ -27,10 +27,10 @@ impl Server {
     /// and returns the engine decision the runner resumes with.
     pub(super) async fn handle_approval(
         &mut self,
-        io: &mut ServerIo,
+        io: &mut FrameCarrier,
         approval: &houyicoder_core::agent::ApprovalRequest,
         delegation: Option<houyicoder_protocol::frontend::run::DelegationSource>,
-    ) -> Result<houyicoder_core::agent::ApprovalDecision, WireError> {
+    ) -> Result<houyicoder_core::agent::ApprovalDecision, ProtocolError> {
         let is_entitlement = approval.tool_name == houyicoder_protocol::extension::ENTITLEMENT_TOOL;
         let mut reason = if is_entitlement {
             // The entitlement ask is not a gate decision — reconstructing a
@@ -70,8 +70,8 @@ impl Server {
             let frame = match io.next_frame().await {
                 Some(f) => f,
                 None => {
-                    return Err(WireError::new(
-                        WireErrorKind::Unavailable,
+                    return Err(ProtocolError::new(
+                        ErrorCategory::Unavailable,
                         "client closed mid-permission",
                         false,
                     ));
@@ -113,8 +113,8 @@ impl Server {
             // non_exhaustive guard: a future reverse-response shape. The
             // reverse-request flow only asks Permission today.
             _ => {
-                return Err(WireError::new(
-                    WireErrorKind::InvalidFrame,
+                return Err(ProtocolError::new(
+                    ErrorCategory::InvalidFrame,
                     "expected a permission reverse response",
                     false,
                 ));

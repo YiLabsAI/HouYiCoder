@@ -10,7 +10,7 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 
-use super::{Server, io::ServerIo};
+use super::{Server, frame_carrier::FrameCarrier};
 
 impl Server {
     /// Handle a request received mid-run. Two payloads are safe to process
@@ -21,7 +21,11 @@ impl Server {
     /// so it does not race the parent run. Other payloads are dropped (no
     /// other mid-run verb today); they ride this arm because a mid-run client
     /// frame parses as a Request but most verbs mutate state and must wait.
-    pub(super) async fn handle_request_during_run(&self, io: &mut ServerIo, req: RequestEnvelope) {
+    pub(super) async fn handle_request_during_run(
+        &self,
+        io: &mut FrameCarrier,
+        req: RequestEnvelope,
+    ) {
         let req_id = req.req_id;
         match req.payload {
             FrontendRequest::PermissionCycleMode => {

@@ -388,7 +388,7 @@ pub fn pair_inproc_server_tracked(
     // race with later command output or test assertions.
     let startup_warnings = runner.drain_startup_warnings();
     let runner = Arc::new(runner);
-    let server_io = houyicoder_service::server::ServerIo::new(s2c_tx, c2s_rx);
+    let server_io = houyicoder_service::server::FrameCarrier::new(s2c_tx, c2s_rx);
     let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
     let server = houyicoder_service::server::Server::new_with_event_sequencer(
         runner.clone(),

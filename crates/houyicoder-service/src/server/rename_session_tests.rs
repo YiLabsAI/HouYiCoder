@@ -1,9 +1,5 @@
-//! RenameSession dispatch handler -- inline (src/) tests. The dispatch
-//! handler is async + needs ServerIo, which is testable inline via
-//! ServerIo::new, so the tests stay here (mirroring the
-//! trajectory_handler_tests precedent) to count toward --lib diff-cov
-//! (make check's --lib lcov cannot see tests/ coverage). Covers the happy
-//! path, empty-name-clears, + the three fail-closed branches + a write
+//! Tests for the RenameSession dispatch handler. Covers the happy path,
+//! empty-name-clears-to-auto, the three fail-closed branches, and a write
 //! failure.
 
 #![cfg(test)]
@@ -77,7 +73,7 @@ async fn test_rename_sets_user_name() {
     let store = seeded_store(session);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -122,7 +118,7 @@ async fn test_empty_clears_to_auto() {
     let store = seeded_store(session);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -156,13 +152,13 @@ async fn test_empty_clears_to_auto() {
 /// A mismatched session id fails closed with an InvalidRequest error.
 #[tokio::test]
 async fn test_rename_mismatch_sid_errors() {
-    use houyicoder_protocol::wire::WireErrorKind;
+    use houyicoder_protocol::error::ErrorCategory;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let store = seeded_store(session);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -186,8 +182,8 @@ async fn test_rename_mismatch_sid_errors() {
         ServerFrame::Response(r) => match r.payload {
             houyicoder_protocol::envelope::ResponsePayload::Error(e) => {
                 assert_eq!(
-                    e.kind,
-                    WireErrorKind::InvalidRequest,
+                    e.category,
+                    ErrorCategory::InvalidRequest,
                     "mismatch fails closed"
                 );
             }
@@ -201,13 +197,13 @@ async fn test_rename_mismatch_sid_errors() {
 /// A missing descriptor store returns an Internal error.
 #[tokio::test]
 async fn test_no_descriptor_store_errors() {
-    use houyicoder_protocol::wire::WireErrorKind;
+    use houyicoder_protocol::error::ErrorCategory;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let wire_sid = houyicoder_protocol::frontend::SessionId(session.to_string());
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -230,8 +226,8 @@ async fn test_no_descriptor_store_errors() {
         ServerFrame::Response(r) => match r.payload {
             houyicoder_protocol::envelope::ResponsePayload::Error(e) => {
                 assert_eq!(
-                    e.kind,
-                    WireErrorKind::Internal,
+                    e.category,
+                    ErrorCategory::Internal,
                     "no-store errors (server lacks the store)"
                 );
             }
@@ -245,14 +241,14 @@ async fn test_no_descriptor_store_errors() {
 /// A wired store with no sidecar for the session errors Internal.
 #[tokio::test]
 async fn test_rename_no_sidecar_errors() {
-    use houyicoder_protocol::wire::WireErrorKind;
+    use houyicoder_protocol::error::ErrorCategory;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let wire_sid = houyicoder_protocol::frontend::SessionId(session.to_string());
     let store: Arc<dyn SessionDescriptorStore> = Arc::new(InMemoryDescriptorStore::new());
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -276,8 +272,8 @@ async fn test_rename_no_sidecar_errors() {
         ServerFrame::Response(r) => match r.payload {
             houyicoder_protocol::envelope::ResponsePayload::Error(e) => {
                 assert_eq!(
-                    e.kind,
-                    WireErrorKind::Internal,
+                    e.category,
+                    ErrorCategory::Internal,
                     "no-sidecar errors (server has no sidecar)"
                 );
             }
@@ -326,7 +322,7 @@ impl SessionDescriptorStore for FailingDescriptorStore {
 /// A sidecar write failure surfaces as an Internal error.
 #[tokio::test]
 async fn test_rename_write_failure_errors() {
-    use houyicoder_protocol::wire::WireErrorKind;
+    use houyicoder_protocol::error::ErrorCategory;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let wire_sid = houyicoder_protocol::frontend::SessionId(session.to_string());
@@ -349,7 +345,7 @@ async fn test_rename_write_failure_errors() {
     let store: Arc<dyn SessionDescriptorStore> = Arc::new(FailingDescriptorStore(inner));
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -372,7 +368,11 @@ async fn test_rename_write_failure_errors() {
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
             houyicoder_protocol::envelope::ResponsePayload::Error(e) => {
-                assert_eq!(e.kind, WireErrorKind::Internal, "write failure => Internal");
+                assert_eq!(
+                    e.category,
+                    ErrorCategory::Internal,
+                    "write failure => Internal"
+                );
             }
             other => panic!("expected Error, got {other:?}"),
         },

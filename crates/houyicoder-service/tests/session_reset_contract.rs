@@ -1,8 +1,8 @@
-//! Server-side wire slice for /clear: the frontend SessionReset request
-//! zeros the runner's cumulative usage + audit trajectory. This test
-//! drives the InProc frontend server with a SessionReset request and
-//! asserts the Ack round-trips for the matching session id, and an
-//! Error for a mismatched id (the fail-closed guard).
+//! Session reset request contract across the frontend and server boundary:
+//! the frontend SessionReset request zeros the runner's cumulative usage +
+//! audit trajectory. This test drives the InProc frontend server with a
+//! SessionReset request and asserts the Ack round-trips for the matching
+//! session id, and an Error for a mismatched id (the fail-closed guard).
 
 use futures::SinkExt;
 use futures::StreamExt;
@@ -13,10 +13,10 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
-use houyicoder_protocol::frontend::{FrontendRequest, SessionId as WireSessionId};
+use houyicoder_protocol::frontend::{FrontendRequest, SessionId as FrontendSessionId};
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
@@ -38,10 +38,14 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     (Arc::new(runner), session)
 }
 
-fn pair() -> (ServerIo, mpsc::Sender<String>, mpsc::Receiver<String>) {
+fn pair() -> (FrameCarrier, mpsc::Sender<String>, mpsc::Receiver<String>) {
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
-    (ServerIo::new(server_tx, server_rx), client_tx, client_rx)
+    (
+        FrameCarrier::new(server_tx, server_rx),
+        client_tx,
+        client_rx,
+    )
 }
 
 async fn drain_until(rx: &mut mpsc::Receiver<String>, needle: &str) -> String {
@@ -64,7 +68,7 @@ async fn drain_until(rx: &mut mpsc::Receiver<String>, needle: &str) -> String {
 #[tokio::test]
 async fn test_session_reset_acks_matching() {
     let (runner, session) = stub_runner();
-    let session_id = WireSessionId(session.to_string());
+    let session_id = FrontendSessionId(session.to_string());
     let (server_io, mut client_tx, mut client_rx) = pair();
     let server = Server::new(
         runner,
@@ -105,7 +109,7 @@ async fn test_reset_rejects_mismatched_session() {
     let req = RequestEnvelope::new(
         RequestId(12),
         FrontendRequest::SessionReset {
-            session_id: WireSessionId("not-the-real-session".into()),
+            session_id: FrontendSessionId("not-the-real-session".into()),
         },
     );
     send(&mut client_tx, &ClientFrame::Request(req)).await;

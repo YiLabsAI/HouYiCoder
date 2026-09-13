@@ -101,8 +101,8 @@ pub enum ChildTranscriptFrame {
 /// The payload of a response to a request. Responses sit on the req_id axis
 /// (paired to their request); events sit on the seq axis. A run request returns
 /// either RunOk (the turn finished) or RunErr (the run failed before an
-/// outcome); other requests return Ack or a wire error when the request itself
-/// is invalid for the current state.
+/// outcome); other requests return Ack or a protocol error when the request
+/// itself is invalid for the current state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -116,7 +116,7 @@ pub enum ResponsePayload {
     /// produced, mapped to the wire form at the service boundary.
     RunOk(crate::frontend::run::RunResult),
     /// A run failed before producing an outcome (provider exhausted, context
-    /// error, max turns). The kind plus display string lets the frontend
+    /// error, max turns). The category plus display string lets the frontend
     /// surface an error line.
     RunErr(crate::frontend::run::RunError),
     /// A request that needs no payloaded reply (the effect landed; events on
@@ -204,7 +204,7 @@ pub enum ResponsePayload {
         frames: Vec<ChildTranscriptFrame>,
     },
     /// The request itself was invalid for the current state or capability.
-    Error(crate::wire::WireError),
+    Error(crate::error::ProtocolError),
 }
 
 /// A response envelope: the caller's req_id echoed back plus the response

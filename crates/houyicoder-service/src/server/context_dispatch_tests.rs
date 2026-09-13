@@ -1,7 +1,5 @@
-//! ContextQuery dispatch handler — inline (src/) tests. Covers the cache
-//! prefix + hit rate + compact buffer category injection in the /context
-//! reply. Mirrors the rename_session_tests pattern so these count toward
-//! --lib diff-cov.
+//! Tests for the ContextQuery dispatch handler. Covers the cache prefix,
+//! hit rate, and compact buffer category injection in the /context reply.
 
 #![cfg(test)]
 
@@ -84,7 +82,7 @@ async fn test_query_injects_compact_buffer() {
     seed_checkpoint(&runner, session).await;
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,

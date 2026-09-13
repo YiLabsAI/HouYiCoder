@@ -13,7 +13,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_async::PFut;
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::thread;
 
@@ -29,12 +29,12 @@ pub trait Transport: Send {
     /// Send one complete NDJSON frame (newline-terminated). The frame passes
     /// through verbatim; the caller owns encoding. An Err means the carrier
     /// is broken and the peer will not receive this or any later frame.
-    fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), WireError>>;
+    fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), ProtocolError>>;
 
     /// Receive the next complete frame as an owned string with the trailing
     /// newline stripped. None means the peer cleanly half-closed its send
     /// side; an Err means the carrier failed mid-stream.
-    fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>>;
+    fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>>;
 }
 
 /// An in-memory duplex transport backed by a pair of futures channels. This
@@ -68,14 +68,14 @@ impl InProcTransport {
 }
 
 impl Transport for InProcTransport {
-    fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), WireError>> {
+    fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), ProtocolError>> {
         // Lift the borrowed frame to an owned string before the async block so
         // the returned future borrows only self, not the caller's str.
         let owned = frame.to_string();
         Box::pin(async move {
             self.tx.send(owned).await.map_err(|_| {
-                WireError::new(
-                    WireErrorKind::Unavailable,
+                ProtocolError::new(
+                    ErrorCategory::Unavailable,
                     "in-proc transport peer closed (send failed)",
                     true,
                 )
@@ -83,7 +83,7 @@ impl Transport for InProcTransport {
         })
     }
 
-    fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+    fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>> {
         Box::pin(async move {
             match self.rx.next().await {
                 // Strip the trailing newline that encode appended so the
@@ -109,7 +109,7 @@ impl Transport for InProcTransport {
 /// limit guards against an unbounded peer streaming one frame to exhaust
 /// memory (the same guard the framing decoder enforces on the decode side).
 pub struct StdioTransport {
-    rx: mpsc::UnboundedReceiver<Result<Option<String>, WireError>>,
+    rx: mpsc::UnboundedReceiver<Result<Option<String>, ProtocolError>>,
     stdout: Box<dyn Write + Send>,
 }
 
@@ -137,8 +137,8 @@ impl StdioTransport {
                     Ok(_) => {
                         let line = buf.strip_suffix('\n').unwrap_or(&buf).to_string();
                         if line.len() > max_line {
-                            let _send = tx.unbounded_send(Err(WireError::new(
-                                WireErrorKind::InvalidFrame,
+                            let _send = tx.unbounded_send(Err(ProtocolError::new(
+                                ErrorCategory::InvalidFrame,
                                 format!("frame exceeds {max_line}-byte limit"),
                                 false,
                             )));
@@ -149,8 +149,8 @@ impl StdioTransport {
                         }
                     }
                     Err(_) => {
-                        let _send = tx.unbounded_send(Err(WireError::new(
-                            WireErrorKind::Unavailable,
+                        let _send = tx.unbounded_send(Err(ProtocolError::new(
+                            ErrorCategory::Unavailable,
                             "stdio read failed",
                             true,
                         )));
@@ -164,20 +164,20 @@ impl StdioTransport {
 }
 
 impl Transport for StdioTransport {
-    fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), WireError>> {
+    fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), ProtocolError>> {
         let owned = frame.to_string();
         Box::pin(async move {
             self.stdout.write_all(owned.as_bytes()).map_err(|_| {
-                WireError::new(WireErrorKind::Unavailable, "stdio write failed", true)
+                ProtocolError::new(ErrorCategory::Unavailable, "stdio write failed", true)
             })?;
             self.stdout.flush().map_err(|_| {
-                WireError::new(WireErrorKind::Unavailable, "stdio flush failed", true)
+                ProtocolError::new(ErrorCategory::Unavailable, "stdio flush failed", true)
             })?;
             Ok(())
         })
     }
 
-    fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+    fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>> {
         Box::pin(async move {
             match self.rx.next().await {
                 // The read thread dropped its sender (EOF or fatal) — a clean
@@ -222,10 +222,10 @@ impl UdsTransport {
 
 #[cfg(unix)]
 impl Transport for UdsTransport {
-    fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), WireError>> {
+    fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), ProtocolError>> {
         self.inner.send_frame(frame)
     }
-    fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+    fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>> {
         self.inner.recv_frame()
     }
 }
@@ -252,7 +252,7 @@ mod tests {
     async fn test_peer_close_reads_none() {
         let (a, mut b) = InProcTransport::pair(4);
         drop(a);
-        // WireError does not derive PartialEq (it carries a message string);
+        // ProtocolError does not derive PartialEq (it carries a message string);
         // assert the clean-close shape without comparing errors by value.
         let recv = b.recv_frame().await;
         assert!(recv.is_ok(), "clean close is not an error");
@@ -334,7 +334,7 @@ mod tests {
         let res = t.recv_frame().await;
         assert!(
             res.is_err(),
-            "an oversize frame must surface as a wire error"
+            "an oversize frame must surface as a protocol error"
         );
     }
 

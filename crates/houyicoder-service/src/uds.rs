@@ -19,16 +19,16 @@ use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_context::SessionId;
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::net::UnixStream;
 
 use crate::composition::SessionHost;
-use crate::server::ServerIo;
+use crate::server::FrameCarrier;
 use crate::server::session::serve_session;
 
-/// Bridge a connected UnixStream to a ServerIo channel pair and run
+/// Bridge a connected UnixStream to a FrameCarrier channel pair and run
 /// serve_session over it. Two tasks carry bytes: a reader pulling NDJSON
 /// lines into the inbound channel (client to server), and a writer draining
 /// the outbound channel onto the stream (server to client). When serve_session
@@ -38,7 +38,7 @@ pub async fn serve_uds_stream(
     host: Arc<SessionHost>,
     session: SessionId,
     stream: UnixStream,
-) -> Result<(), WireError> {
+) -> Result<(), ProtocolError> {
     let io = bridge_uds(stream).await;
     serve_session(host, session, io).await
 }
@@ -52,9 +52,10 @@ pub async fn listen_uds(
     host: Arc<SessionHost>,
     session: SessionId,
     path: impl AsRef<Path>,
-) -> Result<(), WireError> {
-    let listener = UnixListener::bind(path.as_ref())
-        .map_err(|e| WireError::new(WireErrorKind::Unavailable, format!("uds bind: {e}"), true))?;
+) -> Result<(), ProtocolError> {
+    let listener = UnixListener::bind(path.as_ref()).map_err(|e| {
+        ProtocolError::new(ErrorCategory::Unavailable, format!("uds bind: {e}"), true)
+    })?;
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
@@ -67,8 +68,8 @@ pub async fn listen_uds(
             }
             Err(e) => {
                 eprintln!("uds accept failed: {e}; stopping listener");
-                return Err(WireError::new(
-                    WireErrorKind::Unavailable,
+                return Err(ProtocolError::new(
+                    ErrorCategory::Unavailable,
                     format!("uds accept: {e}"),
                     true,
                 ));
@@ -77,10 +78,10 @@ pub async fn listen_uds(
     }
 }
 
-/// Build a ServerIo from a connected UnixStream, spawning the two carrier
+/// Build a FrameCarrier from a connected UnixStream, spawning the two carrier
 /// tasks. Factored out so a test can drive the carrier in isolation without
 /// a host or runner.
-async fn bridge_uds(stream: UnixStream) -> ServerIo {
+async fn bridge_uds(stream: UnixStream) -> FrameCarrier {
     let (read_half, write_half) = stream.into_split();
     // Bounded so a slow client back-pressures the server rather than
     // unbounded-buffering frames the client has not read.
@@ -119,7 +120,7 @@ async fn bridge_uds(stream: UnixStream) -> ServerIo {
         }
     });
 
-    ServerIo::new(outbound_tx, inbound_rx)
+    FrameCarrier::new(outbound_tx, inbound_rx)
 }
 
 #[cfg(test)]
@@ -127,7 +128,7 @@ mod tests {
     use super::*;
 
     /// A frame round-trips through the carrier: writing on one stream end
-    /// lands on the ServerIo inbound channel, and sending on the outbound
+    /// lands on the FrameCarrier inbound channel, and sending on the outbound
     /// channel lands on the other stream end. Proves the byte path without a
     /// host or runner.
     #[tokio::test]
@@ -195,5 +196,29 @@ mod tests {
         assert_eq!(n, 0, "server closed the stream with no runner");
         listen.abort();
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Binding under a parent directory that does not exist fails fast: the
+    /// error is Unavailable, marked retriable, and names the bind step.
+    #[tokio::test]
+    async fn test_bind_failure_reports_unavailable() {
+        use crate::lifecycle::SessionLeaseStore;
+
+        let missing =
+            std::env::temp_dir().join(format!("houyi-uds-missing-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&missing));
+        let path = missing.join("nested.sock");
+
+        let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
+        let err = listen_uds(host, SessionId::new(), &path)
+            .await
+            .expect_err("bind under a missing parent must fail");
+        assert_eq!(err.category, ErrorCategory::Unavailable);
+        assert!(err.retriable, "a bind failure is worth retrying");
+        assert!(
+            err.message.contains("uds bind"),
+            "the message names the failing step: {}",
+            err.message
+        );
     }
 }

@@ -12,10 +12,10 @@ use houyicoder_client::{Client, InProcTransport, Transport};
 use houyicoder_protocol::envelope::{
     EventEnvelope, EventSeq, RequestEnvelope, RequestId, ResumeFrom,
 };
+use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::framing::{FrameDecoder, encode};
 use houyicoder_protocol::frontend::{FrontendEvent, FrontendRequest};
 use houyicoder_protocol::handshake::{Hello, PROTOCOL_VERSION, negotiate};
-use houyicoder_protocol::wire::WireErrorKind;
 
 /// Drive a transport pair through a full protocol turn and assert the wire
 /// path preserves message content. Written against the transport trait (not
@@ -95,7 +95,7 @@ where
     let frame = transport
         .recv_frame()
         .await
-        .map_err(|e| format!("recv error: kind={:?} msg={}", e.kind, e.message))?
+        .map_err(|e| format!("recv error: category={:?} msg={}", e.category, e.message))?
         .ok_or_else(|| "expected a frame, got clean close".to_string())?;
     serde_json::from_str(&frame).map_err(|e| format!("decode error: {e}"))
 }
@@ -144,10 +144,10 @@ async fn test_closed_peer_surfaces_unavailable() {
     match next {
         Ok(Some(_) | None) => {}
         Err(e) => assert_eq!(
-            e.kind,
-            WireErrorKind::Unavailable,
+            e.category,
+            ErrorCategory::Unavailable,
             "post-close failure must be Unavailable, got {:?}",
-            e.kind
+            e.category
         ),
     }
 }

@@ -204,7 +204,7 @@ async fn test_run_cancel_acks() {
     drop(handle.await);
 }
 
-/// A bad frame (not a valid request envelope) surfaces as a wire error the
+/// A bad frame (not a valid request envelope) surfaces as a protocol error the
 /// client can branch on, and the loop keeps running for the next frame.
 #[tokio::test]
 async fn test_bad_frame_surfaces_error() {
@@ -223,7 +223,7 @@ async fn test_bad_frame_surfaces_error() {
     // Send a malformed frame (valid JSON, wrong shape for a request).
     client_tx.send("not-a-request\n".to_string()).await.unwrap();
 
-    // The server surfaces a wire error response, then stays up.
+    // The server surfaces a protocol error response, then stays up.
     let resp = recv_frame(&mut client_rx).await;
     match resp {
         ServerFrame::Response(r) => {

@@ -119,7 +119,7 @@ async fn test_inject_cancel_run_clear() {
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
 
@@ -235,7 +235,7 @@ async fn test_inject_reset_run_clear() {
     let (_runner, session, host) = runner_with_noop();
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
 

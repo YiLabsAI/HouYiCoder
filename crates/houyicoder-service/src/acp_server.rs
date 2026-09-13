@@ -29,8 +29,8 @@ use houyicoder_protocol::acp_wire::{
     AcpError, AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, JsonRpcVersion,
     PromptRequest, PromptResponse, RequestPermissionResponse,
 };
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
 /// The full ACP server. Owns the adapter (shared via Arc so the composition
 /// root and the IO bridge can hold the same one) plus the runner + session +
@@ -84,7 +84,7 @@ impl AcpServer {
     /// adapter and the reply is written back. A parse failure replies with a
     /// ParseError on the null id. Returns Ok for a clean close, Err for a
     /// carrier-level failure.
-    pub async fn serve(mut self, io: &mut AcpIo) -> Result<(), WireError> {
+    pub async fn serve(mut self, io: &mut AcpIo) -> Result<(), ProtocolError> {
         loop {
             let Some(frame) = io.next_frame().await else {
                 return Ok(());
@@ -93,7 +93,7 @@ impl AcpServer {
                 Ok(req) => {
                     if req.method == "session/prompt" {
                         if let Err(e) = self.handle_prompt(io, &req).await {
-                            self.send_wire_error(io, e.clone()).await.ok();
+                            self.send_protocol_error(io, e.clone()).await.ok();
                             return Err(e);
                         }
                     } else {
@@ -128,7 +128,11 @@ impl AcpServer {
     /// ask, reads the response, appends the verdict audit, and resumes. Only a
     /// final outcome replies to the original request id with a PromptResponse.
     #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
-    async fn handle_prompt(&mut self, io: &mut AcpIo, req: &AcpRequest) -> Result<(), WireError> {
+    async fn handle_prompt(
+        &mut self,
+        io: &mut AcpIo,
+        req: &AcpRequest,
+    ) -> Result<(), ProtocolError> {
         let params: PromptRequest = match req.params.as_ref() {
             Some(v) => match serde_json::from_value(v.clone()) {
                 Ok(p) => p,
@@ -210,16 +214,16 @@ impl AcpServer {
                     frame = io.next_frame() => match frame {
                         Some(f) => {
                             if !self.route_cancel_frame(&f).await? {
-                                return Err(WireError::new(
-                                    WireErrorKind::InvalidFrame,
+                                return Err(ProtocolError::new(
+                                    ErrorCategory::InvalidFrame,
                                     "unexpected frame mid-run",
                                     false,
                                 ));
                             }
                         }
                         None => {
-                            return Err(WireError::new(
-                                WireErrorKind::Unavailable,
+                            return Err(ProtocolError::new(
+                                ErrorCategory::Unavailable,
                                 "client closed mid-run",
                                 false,
                             ));
@@ -245,7 +249,11 @@ impl AcpServer {
                             let session_str = self.session.to_string();
                             let params = approval_to_acp_permission(&approval, session_str);
                             let params_value = serde_json::to_value(&params).map_err(|e| {
-                                WireError::new(WireErrorKind::InvalidFrame, e.to_string(), false)
+                                ProtocolError::new(
+                                    ErrorCategory::InvalidFrame,
+                                    e.to_string(),
+                                    false,
+                                )
                             })?;
                             let ask =
                                 AcpRequest::new(ask_id, "session/request_permission", params_value);
@@ -254,21 +262,25 @@ impl AcpServer {
                             let frame = match io.next_frame().await {
                                 Some(f) => f,
                                 None => {
-                                    return Err(WireError::new(
-                                        WireErrorKind::Unavailable,
+                                    return Err(ProtocolError::new(
+                                        ErrorCategory::Unavailable,
                                         "client closed mid-permission",
                                         false,
                                     ));
                                 }
                             };
                             let resp: AcpResponse = serde_json::from_str(&frame).map_err(|e| {
-                                WireError::new(WireErrorKind::InvalidFrame, e.to_string(), false)
+                                ProtocolError::new(
+                                    ErrorCategory::InvalidFrame,
+                                    e.to_string(),
+                                    false,
+                                )
                             })?;
                             let resp_value = match resp {
                                 AcpResponse::Result { result, .. } => result,
                                 AcpResponse::Error { error, .. } => {
-                                    return Err(WireError::new(
-                                        WireErrorKind::InvalidFrame,
+                                    return Err(ProtocolError::new(
+                                        ErrorCategory::InvalidFrame,
                                         format!("permission ask rejected: {error:?}"),
                                         false,
                                     ));
@@ -276,8 +288,8 @@ impl AcpServer {
                             };
                             let perm_resp: RequestPermissionResponse =
                                 serde_json::from_value(resp_value).map_err(|e| {
-                                    WireError::new(
-                                        WireErrorKind::InvalidFrame,
+                                    ProtocolError::new(
+                                        ErrorCategory::InvalidFrame,
                                         e.to_string(),
                                         false,
                                     )
@@ -341,16 +353,16 @@ impl AcpServer {
                                     frame = io.next_frame() => match frame {
                                         Some(f) => {
                                             if !self.route_cancel_frame(&f).await? {
-                                                return Err(WireError::new(
-                                                    WireErrorKind::InvalidFrame,
+                                                return Err(ProtocolError::new(
+                                                    ErrorCategory::InvalidFrame,
                                                     "unexpected frame mid-resume",
                                                     false,
                                                 ));
                                             }
                                         }
                                         None => {
-                                            return Err(WireError::new(
-                                                WireErrorKind::Unavailable,
+                                            return Err(ProtocolError::new(
+                                                ErrorCategory::Unavailable,
                                                 "client closed mid-resume",
                                                 false,
                                             ));
@@ -405,7 +417,7 @@ impl AcpServer {
     /// during a pending permission ask (the run paused at Interruption) does
     /// not cleanly abort the paused drive loop — the engine lacks a
     /// cancel-pending-resume path; that sub-case lands with engine support.
-    async fn route_cancel_frame(&self, frame: &str) -> Result<bool, WireError> {
+    async fn route_cancel_frame(&self, frame: &str) -> Result<bool, ProtocolError> {
         let Ok(notif) = serde_json::from_str::<AcpNotification>(frame) else {
             return Ok(false);
         };
@@ -429,7 +441,7 @@ impl AcpServer {
         &mut self,
         io: &mut AcpIo,
         ev: &SessionLogEntry,
-    ) -> Result<(), WireError> {
+    ) -> Result<(), ProtocolError> {
         if let Some(update) = map_session_update(&ev.event) {
             let params = serde_json::to_value(&update).expect("session update serialize");
             let notif = AcpNotification::new("session/update", params);
@@ -439,12 +451,20 @@ impl AcpServer {
     }
 
     /// Send a response paired to a request by id.
-    async fn send_response(&mut self, io: &mut AcpIo, resp: &AcpResponse) -> Result<(), WireError> {
+    async fn send_response(
+        &mut self,
+        io: &mut AcpIo,
+        resp: &AcpResponse,
+    ) -> Result<(), ProtocolError> {
         self.send_typed(io, resp).await
     }
 
-    /// Send a wire error with no correlation (the req_id is unknown).
-    async fn send_wire_error(&mut self, io: &mut AcpIo, err: WireError) -> Result<(), WireError> {
+    /// Send a protocol error with no correlation (the req_id is unknown).
+    async fn send_protocol_error(
+        &mut self,
+        io: &mut AcpIo,
+        err: ProtocolError,
+    ) -> Result<(), ProtocolError> {
         let resp = AcpResponse::err(
             AcpRequestId::Null,
             AcpErrorCode::InternalError,
@@ -458,17 +478,12 @@ impl AcpServer {
         &mut self,
         io: &mut AcpIo,
         msg: &T,
-    ) -> Result<(), WireError> {
-        let frame = encode(msg).map_err(frame_to_wire)?;
+    ) -> Result<(), ProtocolError> {
+        let frame = encode(msg)?;
         io.send_frame(frame)
             .await
-            .map_err(|e| WireError::new(WireErrorKind::Unavailable, e, false))
+            .map_err(|e| ProtocolError::new(ErrorCategory::Unavailable, e, false))
     }
-}
-
-/// Map a frame encoding failure to a wire error at the boundary.
-fn frame_to_wire(e: houyicoder_protocol::framing::FrameError) -> WireError {
-    WireError::new(WireErrorKind::InvalidFrame, e.to_string(), false)
 }
 
 /// The current wall clock as milliseconds since the Unix epoch.
@@ -478,3 +493,7 @@ fn now_millis() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+#[path = "acp_server_tests.rs"]
+mod acp_server_tests;

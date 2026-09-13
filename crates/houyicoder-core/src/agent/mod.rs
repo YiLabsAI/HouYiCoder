@@ -71,7 +71,7 @@ pub use exports::{
     CompactionOutcome, CompressPolicy, ConditionalActivation, ConditionalSkillActivator,
     ConflictRate, ContextBreakdown, ContextBuilder, ContextMeasurement, ConversationSearchTool,
     DelegationTool, EditTool, EnterWorktreeTool, ExitWorktreeTool, GitWorkspaceProbe, GlobTool,
-    GrepTool, GridSquare, HeuristicSummarizer, Hook, HookContext, HookEntry, HookError, HookEvent,
+    GrepTool, GridCell, HeuristicSummarizer, Hook, HookContext, HookEntry, HookError, HookEvent,
     HookId, HookPayload, HookPolicy, HookRegistry, HookSource, HookVerdict, HotPathReducer,
     LlmSummarizer, MakeCheckGate, MemoryAddTool, MemoryGateState, MemoryGates, MemoryRuntime,
     MultiEditTool, NextStep, ReadTool, RecordedCompaction, ReduceCtx, ReducedOutput, Section,

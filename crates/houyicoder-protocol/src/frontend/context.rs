@@ -32,7 +32,7 @@ pub struct CategoryBreakdown {
 /// of that cell the category covers (a boundary cell is partial).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GridSquare {
+pub struct GridCell {
     /// Index into categories for the category that fills this cell.
     pub category_idx: usize,
     /// Share of this cell the category covers (1.0 for a whole cell, the
@@ -56,7 +56,7 @@ pub struct ContextBreakdown {
     /// Per-category token footprints.
     pub categories: Vec<CategoryBreakdown>,
     /// The proportional-area grid the renderer draws.
-    pub grid: Vec<Vec<GridSquare>>,
+    pub grid: Vec<Vec<GridCell>>,
     /// Flat cell index of the cache breakpoint (cached prefix before it).
     pub cache_breakpoint: Option<usize>,
     /// When a compaction has run, a human-readable summary of what was folded
@@ -84,7 +84,7 @@ pub fn build_grid(
     categories: &[CategoryBreakdown],
     context_window: u32,
     terminal_cols: u16,
-) -> Vec<Vec<GridSquare>> {
+) -> Vec<Vec<GridCell>> {
     if context_window == 0 || categories.is_empty() {
         return Vec::new();
     }
@@ -98,11 +98,11 @@ pub fn build_grid(
     let reserved_count: usize = categories
         .iter()
         .filter(|c| c.is_reserved)
-        .map(|c| alloc_squares(c, context_window, total))
+        .map(|c| alloc_cells(c, context_window, total))
         .sum();
     let free_target = total.saturating_sub(reserved_count);
     let free_idx = categories.iter().position(|c| c.label == "Free space");
-    let mut cells: Vec<GridSquare> = Vec::with_capacity(total);
+    let mut cells: Vec<GridCell> = Vec::with_capacity(total);
     for (idx, c) in categories.iter().enumerate() {
         if c.is_reserved || c.is_deferred || c.label == "Free space" {
             continue;
@@ -113,7 +113,7 @@ pub fn build_grid(
         }
     }
     while cells.len() < free_target {
-        cells.push(GridSquare {
+        cells.push(GridCell {
             category_idx: free_idx.unwrap_or(usize::MAX),
             fullness: 1.0,
         });
@@ -135,7 +135,7 @@ pub fn build_grid(
 }
 
 /// Cells a non-free, non-reserved category gets: max(1, round(exact)).
-fn alloc_squares(c: &CategoryBreakdown, context_window: u32, total: usize) -> usize {
+fn alloc_cells(c: &CategoryBreakdown, context_window: u32, total: usize) -> usize {
     if c.tokens == 0 || c.label == "Free space" || c.is_reserved {
         return 0;
     }
@@ -146,7 +146,7 @@ fn alloc_squares(c: &CategoryBreakdown, context_window: u32, total: usize) -> us
 /// Push a category's cells: whole full cells plus one partial boundary cell
 /// whose fullness is the fractional part (round-down drops the fraction).
 fn push_cells(
-    cells: &mut Vec<GridSquare>,
+    cells: &mut Vec<GridCell>,
     idx: usize,
     c: &CategoryBreakdown,
     total: usize,
@@ -158,10 +158,10 @@ fn push_cells(
     let exact = c.tokens as f64 / context_window as f64 * total as f64;
     let whole = exact.floor() as usize;
     let frac = (exact - exact.floor()) as f32;
-    let squares = alloc_squares(c, context_window, total);
-    for i in 0..squares {
+    let n_cells = alloc_cells(c, context_window, total);
+    for i in 0..n_cells {
         let fullness = if i == whole && frac > 0.0 { frac } else { 1.0 };
-        cells.push(GridSquare {
+        cells.push(GridCell {
             category_idx: idx,
             fullness,
         });
@@ -269,29 +269,29 @@ mod tests {
         ];
         let grid = vec![
             vec![
-                GridSquare {
+                GridCell {
                     category_idx: 0,
                     fullness: 1.0,
                 },
-                GridSquare {
+                GridCell {
                     category_idx: 1,
                     fullness: 1.0,
                 },
-                GridSquare {
+                GridCell {
                     category_idx: 1,
                     fullness: 0.4,
                 },
             ],
             vec![
-                GridSquare {
+                GridCell {
                     category_idx: 2,
                     fullness: 1.0,
                 },
-                GridSquare {
+                GridCell {
                     category_idx: 3,
                     fullness: 1.0,
                 },
-                GridSquare {
+                GridCell {
                     category_idx: 3,
                     fullness: 1.0,
                 },

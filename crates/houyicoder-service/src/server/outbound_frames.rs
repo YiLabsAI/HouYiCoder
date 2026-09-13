@@ -1,15 +1,16 @@
-//! Sequenced projection and frame emission for one server connection.
+//! The outbound frame path of one server connection: sequenced event
+//! projection, responses, and protocol errors sent to the client.
 
 use crate::protocol_adapter::{map_acpx_notification, map_session_update};
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_protocol::envelope::{
     EventEnvelope, RequestId, ResponseEnvelope, ResponsePayload, ServerFrame,
 };
-use houyicoder_protocol::framing::{FrameError, encode};
+use houyicoder_protocol::error::ProtocolError;
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::{FrontendEvent, PendingInputId, QueuedInput};
-use houyicoder_protocol::wire::WireError;
 
-use super::{Server, ServerIo};
+use super::{FrameCarrier, Server};
 
 impl Server {
     fn project_turn_event(event: &SessionLogEntry) -> Vec<FrontendEvent> {
@@ -39,7 +40,10 @@ impl Server {
     /// The sequencer holds its producer lock while reading the durable cursor
     /// and draining runtime events, so a delta emitted after an append remains
     /// behind that append's projections.
-    pub(super) async fn flush_events(&mut self, io: &mut ServerIo) -> Result<(), WireError> {
+    pub(super) async fn flush_events(
+        &mut self,
+        io: &mut FrameCarrier,
+    ) -> Result<(), ProtocolError> {
         let runner = self.runner.clone();
         let session = self.session;
         let sequencer = self.event_sequencer.clone();
@@ -59,7 +63,10 @@ impl Server {
 
     /// Replay reliable history requested by Hello, then send events that
     /// accumulated while no connection was active.
-    pub(super) async fn replay_events(&mut self, io: &mut ServerIo) -> Result<(), WireError> {
+    pub(super) async fn replay_events(
+        &mut self,
+        io: &mut FrameCarrier,
+    ) -> Result<(), ProtocolError> {
         let runner = self.runner.clone();
         let session = self.session;
         let sequencer = self.event_sequencer.clone();
@@ -79,9 +86,9 @@ impl Server {
 
     async fn send_event_envelope(
         &mut self,
-        io: &mut ServerIo,
+        io: &mut FrameCarrier,
         frame: &EventEnvelope,
-    ) -> Result<(), WireError> {
+    ) -> Result<(), ProtocolError> {
         self.send_typed(io, &ServerFrame::Event(frame.clone()))
             .await
     }
@@ -113,20 +120,20 @@ impl Server {
     /// Send a response paired to a request by id.
     pub(super) async fn send_response(
         &mut self,
-        io: &mut ServerIo,
+        io: &mut FrameCarrier,
         req_id: RequestId,
         payload: ResponsePayload,
-    ) -> Result<(), WireError> {
+    ) -> Result<(), ProtocolError> {
         let frame = ServerFrame::Response(ResponseEnvelope::new(req_id, payload));
         self.send_typed(io, &frame).await
     }
 
-    /// Send a wire error as an unpaired response.
-    pub(super) async fn send_wire_error(
+    /// Send a protocol error as an unpaired response.
+    pub(super) async fn send_protocol_error(
         &mut self,
-        io: &mut ServerIo,
-        err: WireError,
-    ) -> Result<(), WireError> {
+        io: &mut FrameCarrier,
+        err: ProtocolError,
+    ) -> Result<(), ProtocolError> {
         self.send_response(io, RequestId(u64::MAX), ResponsePayload::Error(err))
             .await
     }
@@ -134,18 +141,10 @@ impl Server {
     /// Encode a typed server frame and push it through the carrier.
     pub(super) async fn send_typed<T: serde::Serialize>(
         &mut self,
-        io: &mut ServerIo,
+        io: &mut FrameCarrier,
         msg: &T,
-    ) -> Result<(), WireError> {
-        let frame = encode(msg).map_err(frame_to_wire)?;
+    ) -> Result<(), ProtocolError> {
+        let frame = encode(msg)?;
         io.send_frame(frame).await
     }
-}
-
-fn frame_to_wire(error: FrameError) -> WireError {
-    WireError::new(
-        houyicoder_protocol::wire::WireErrorKind::InvalidFrame,
-        error.to_string(),
-        false,
-    )
 }

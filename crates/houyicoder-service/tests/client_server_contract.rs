@@ -19,7 +19,7 @@ use houyicoder_protocol::envelope::{RequestId, ResponsePayload, ServerFrame};
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::run::{ContentBlock, RunOutcome};
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 
 fn stub_runner() -> (Arc<Runner>, SessionId) {
@@ -50,7 +50,7 @@ async fn test_drives_turn_over_wire() {
     // Allocate the pair here so both ends share it; no second allocation.
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
     let server = Server::new(
@@ -120,7 +120,7 @@ async fn test_resume_cursor_advances_events() {
     let (runner, session) = stub_runner();
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
     let server = Server::new(

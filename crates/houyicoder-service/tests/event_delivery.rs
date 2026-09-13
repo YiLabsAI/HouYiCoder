@@ -21,10 +21,10 @@ use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::frontend::{FrontendEvent, QueuedInput};
-use houyicoder_protocol::frontend::{FrontendRequest, SessionId as WireSessionId};
+use houyicoder_protocol::frontend::{FrontendRequest, SessionId as FrontendSessionId};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use serde_json::Value;
 use tokio::sync::Notify;
@@ -242,7 +242,7 @@ async fn await_notification_dispatch(client: &mut Client) {
         .send_request(
             req_id,
             FrontendRequest::ChildTranscript {
-                child_sid: WireSessionId::new(SessionId::new().to_string()),
+                child_sid: FrontendSessionId::new(SessionId::new().to_string()),
             },
         )
         .await
@@ -288,7 +288,7 @@ async fn spawn_server_with(
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
     let event_sequencer = houyicoder_service::server::EventSequencer::new();
     event_sequencer.install_on(&mut runner);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
     let server = Server::new_with_event_sequencer(
@@ -307,7 +307,7 @@ async fn spawn_server_with(
         .send_request(
             req_id,
             FrontendRequest::MessageSend {
-                session_id: WireSessionId::new(session.to_string()),
+                session_id: FrontendSessionId::new(session.to_string()),
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],

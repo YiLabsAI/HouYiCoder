@@ -8,7 +8,7 @@ use houyicoder_protocol::frontend::memory::{
 use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunError, RunResult,
 };
-use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as WireSessionId};
+use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as FrontendSessionId};
 use houyicoder_protocol::llm::EffortLevel;
 use std::time::{Duration, Instant};
 
@@ -357,7 +357,7 @@ pub enum AgentMessage {
     ModelInfoResult {
         catalog: houyicoder_protocol::frontend::model::ModelCatalog,
     },
-    /// A per-request wire error (a ResponsePayload::Error for a verb that is
+    /// A per-request protocol error (a ResponsePayload::Error for a verb that is
     /// NOT a run — a permission/working-dir/mode query the server rejected).
     /// Carries the req_id so the App can tell it apart from a run-failure
     /// (runs surface as Done{Err}); a non-run error becomes a system line,
@@ -391,7 +391,7 @@ pub enum ClientCommand {
     /// server can exclude them from the model listing before the run starts.
     SendMessage {
         req_id: RequestId,
-        session_id: WireSessionId,
+        session_id: FrontendSessionId,
         content: Vec<ContentBlock>,
         disabled_skills: std::collections::HashSet<String>,
     },
@@ -454,7 +454,7 @@ pub enum ClientCommand {
     /// push path uses, and returns a one-shot snapshot as ChildTranscriptResult.
     ChildTranscriptQuery {
         req_id: RequestId,
-        child_sid: WireSessionId,
+        child_sid: FrontendSessionId,
     },
     /// Request the registered hooks list over the wire (the /hooks command).
     /// Read-only visibility: which hook events are wired, their name + source.
@@ -561,7 +561,7 @@ pub enum ClientCommand {
     /// refresh together.
     RenameSessionQuery {
         req_id: RequestId,
-        session_id: WireSessionId,
+        session_id: FrontendSessionId,
         name: String,
     },
     /// Abort the in-flight run (Esc during a run). The driver forwards this
@@ -572,7 +572,7 @@ pub enum ClientCommand {
     /// watches for is the Done(Interrupted) message. The host sets a
     /// cancelling flag on send and clears it on that Done.
     AbortRun {
-        session_id: WireSessionId,
+        session_id: FrontendSessionId,
     },
     /// Inject a user message into the in-flight run at the next turn
     /// boundary (the mid-turn interjection path). Sent when the user submits
@@ -583,7 +583,7 @@ pub enum ClientCommand {
     /// queued + the host's run-boundary queue drains it as a follow-up run.
     /// Fire-and-forget notification carrying stable queue identity.
     InjectUser {
-        session_id: WireSessionId,
+        session_id: FrontendSessionId,
         input: QueuedInput,
     },
     /// Steer a running child the user is viewing (teammate view): route the
@@ -614,7 +614,7 @@ pub enum ClientCommand {
     /// Remove one identified queued message. A delayed removal is a no-op when
     /// that exact item was already drained, even if equal text was re-enqueued.
     QueueRemove {
-        session_id: WireSessionId,
+        session_id: FrontendSessionId,
         id: PendingInputId,
     },
     /// Reset the server's cumulative usage + trajectory for the session (the
@@ -622,7 +622,7 @@ pub enum ClientCommand {
     /// clears its local view in parallel.
     SessionReset {
         req_id: RequestId,
-        session_id: WireSessionId,
+        session_id: FrontendSessionId,
     },
     /// Toggle the process-wide diagnostic log level (the /debug command).
     /// The server applies the level to every crate that uses tracing and

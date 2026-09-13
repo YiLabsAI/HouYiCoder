@@ -5,16 +5,16 @@
 //! they arrive, holding a partial frame across pushes until its terminator.
 //!
 //! Framing parse failures are internal to the transport; the service maps
-//! them to a WireError (InvalidFrame) at the boundary so internal error types
-//! never cross the wire directly.
+//! them to a ProtocolError (InvalidFrame) at the boundary so internal error
+//! types never cross it directly.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::VecDeque;
 
 /// A framing failure: a line that is not valid JSON for the expected type, or
-/// a frame that exceeded the line limit. The transport maps this to a
-/// WireError::InvalidFrame at the boundary.
+/// a frame that exceeded the line limit. Converted at the boundary to
+/// ProtocolError::InvalidFrame.
 #[derive(Debug)]
 pub enum FrameError {
     /// The frame is not valid JSON, or does not deserialize to the expected type.

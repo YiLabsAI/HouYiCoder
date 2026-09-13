@@ -1,6 +1,5 @@
-//! /debug dispatch handler tests, inline (src/) so they count toward --lib
-//! diff-cov. Mirrors the model_set_tests precedent: the handler is async +
-//! needs ServerIo, which is testable inline via ServerIo::new.
+//! Tests for the /debug dispatch handler: the reply without a sink, a
+//! successful level change, and a failed level change.
 
 #![cfg(test)]
 
@@ -15,6 +14,7 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
 };
+use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_session::SessionStore;
@@ -50,7 +50,7 @@ async fn test_no_sink_replies_error() {
     let session = SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -107,7 +107,7 @@ async fn test_set_level_replies_enabled() {
 
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
-    let io = ServerIo::new(server_tx, server_rx);
+    let io = FrameCarrier::new(server_tx, server_rx);
     let server = Server::new(
         runner,
         session,
@@ -151,6 +151,51 @@ async fn test_set_level_replies_enabled() {
         ServerFrame::Response(r) => match r.payload {
             ResponsePayload::Debug(s) => assert!(!s.enabled, "disabled after Off set"),
             other => panic!("expected Debug state, got {other:?}"),
+        },
+        other => panic!("expected response, got {other:?}"),
+    }
+    handle.abort();
+}
+
+/// A /debug request whose subscriber is gone replies with an Internal error
+/// naming the failure: the level change is the whole contract of the verb,
+/// so a rejected change cannot masquerade as success.
+#[tokio::test]
+async fn test_set_level_failure_internal() {
+    let runner = stub_runner();
+    let session = SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
+    let io = FrameCarrier::new(server_tx, server_rx);
+    let server = Server::new(
+        runner,
+        session,
+        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+    )
+    .with_diagnostics(Some(diagnostics::disconnected_handle()));
+    let handle = tokio::spawn(async move { server.serve(io).await });
+    send_line(&mut client_tx, &Hello::local());
+    drop(client_rx.next().await);
+
+    send_line(
+        &mut client_tx,
+        &ClientFrame::Request(RequestEnvelope::new(
+            RequestId(1),
+            FrontendRequest::DebugSet {
+                level: houyicoder_protocol::frontend::debug::DebugLevel::Debug,
+            },
+        )),
+    );
+    match recv_frame(&mut client_rx).await {
+        ServerFrame::Response(r) => match r.payload {
+            ResponsePayload::Error(e) => {
+                assert_eq!(e.category, ErrorCategory::Internal);
+                assert!(
+                    e.message.contains("could not change the diagnostic level"),
+                    "expected the failure named, got {e:?}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
         },
         other => panic!("expected response, got {other:?}"),
     }

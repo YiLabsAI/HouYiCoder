@@ -1,21 +1,14 @@
-//! Permission wire-verb contract tests: drive the server through its PUBLIC
+//! Permission protocol verb contract tests: drive the server through its PUBLIC
 //! frame interface (serve loop + ClientFrame::Request) — NOT the internal
-//! dispatch() shortcut — so this exercises the full wire path a real client
+//! dispatch() shortcut — so this exercises the full frame path a real client
 //! uses (frame parse -> serve routing -> gate/sandbox -> response frame).
 //! Integration tests (real Runner + Server + mocked provider + real gate),
 //! so they live in tests/, not the --lib unit gate.
 //!
 //! Frame-based mirrors of the inline dispatch_* tests that used pub(super)
-//! Server::dispatch directly. The rejection paths assert WireErrorKind::
+//! Server::dispatch directly. The rejection paths assert ErrorCategory::
 //! InvalidRequest (a well-formed frame that is not a valid request for the
 //! current state), not InvalidFrame.
-//!
-//! Coverage note: diff-cov (make check, --lib) does not see these tests'
-//! coverage of server_dispatch.rs (they are not in the --lib lcov). That is
-//! correct gate behavior — make check passes now (no implementation change ->
-//! no diff to gate); the next change to server_dispatch.rs is required to
-//! bring its changed lines to 80% lib coverage (the ratchet), which is the
-//! gate's job, not a hole.
 
 mod common;
 
@@ -27,11 +20,11 @@ use houyicoder_permission::{DefaultModeGate, ModeGate};
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
 };
+use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::permission::{
     PermissionEffect, PermissionRule, PermissionRuleContent, RuleDestination,
 };
-use houyicoder_protocol::wire::WireErrorKind;
 use houyicoder_service::server::Server;
 
 use common::{pair, recv_frame, recv_hello, send_frame, stub_runner};
@@ -43,7 +36,7 @@ async fn handshake(
 ) -> (
     futures::channel::mpsc::Sender<String>,
     futures::channel::mpsc::Receiver<String>,
-    tokio::task::JoinHandle<Result<(), houyicoder_protocol::wire::WireError>>,
+    tokio::task::JoinHandle<Result<(), houyicoder_protocol::error::ProtocolError>>,
 ) {
     let (io, mut client_tx, mut client_rx) = pair();
     let handle = tokio::spawn(async move { server.serve(io).await });
@@ -118,7 +111,7 @@ impl SandboxSession for RecordingSession {
     }
 }
 
-/// A deny rule added via the wire verb must reach the gate AND a real tool
+/// A deny rule added via the protocol verb must reach the gate AND a real tool
 /// decision must honor it (Allow -> Deny). The UI add changes agent
 /// behavior, not just the rules list.
 #[tokio::test]
@@ -160,11 +153,11 @@ async fn test_add_rule_takes_effect() {
     }
     assert!(
         gate_assert.decide(&npm_req).outcome() == Outcome::Deny,
-        "deny rule takes effect on a real decision after the wire add"
+        "deny rule takes effect on a real decision after the protocol add"
     );
 }
 
-/// Add + Remove working dir round-trip through the wire verbs; the
+/// Add + Remove working dir round-trip through the protocol verbs; the
 /// PermissionWorkingDirs reply carries the live list.
 #[tokio::test]
 async fn test_working_dir_round_trips() {
@@ -225,7 +218,7 @@ async fn test_remove_rule_oob_rejects() {
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
             ResponsePayload::Error(e) => {
-                assert_eq!(e.kind, WireErrorKind::InvalidRequest);
+                assert_eq!(e.category, ErrorCategory::InvalidRequest);
                 assert!(e.message.contains("range"), "msg: {}", e.message);
             }
             other => panic!("expected Error, got {other:?}"),
@@ -252,7 +245,7 @@ async fn test_dir_no_session_rejects() {
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
             ResponsePayload::Error(e) => {
-                assert_eq!(e.kind, WireErrorKind::InvalidRequest);
+                assert_eq!(e.category, ErrorCategory::InvalidRequest);
                 assert!(e.message.contains("sandbox"), "msg: {}", e.message);
             }
             other => panic!("expected Error, got {other:?}"),
@@ -284,7 +277,7 @@ async fn test_message_wrong_session_rejects() {
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
             ResponsePayload::Error(e) => {
-                assert_eq!(e.kind, WireErrorKind::InvalidRequest);
+                assert_eq!(e.category, ErrorCategory::InvalidRequest);
                 assert!(e.message.contains("session"), "msg: {}", e.message);
             }
             other => panic!("expected Error, got {other:?}"),

@@ -152,7 +152,7 @@ async fn test_serve_drives_parked_turn() {
     let (_runner, session, host) = runner_and_host();
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
 
@@ -254,7 +254,7 @@ async fn test_reconnect_replays_pending_ask() {
     // disconnect (drop the client before answering).
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
     let (server_tx1, client_rx1) = mpsc::channel::<String>(8);
-    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
     let host1 = host.clone();
     let s1 = session;
     let serve1 = tokio::spawn(async move {
@@ -306,7 +306,7 @@ async fn test_reconnect_replays_pending_ask() {
     // re-emitted after the handshake, before the client sends anything.
     let (client_tx2, server_rx2) = mpsc::channel::<String>(8);
     let (server_tx2, client_rx2) = mpsc::channel::<String>(8);
-    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let s2 = session;
     let serve2 = tokio::spawn(async move {
@@ -414,7 +414,7 @@ async fn test_reconnect_batch_preserves_decided() {
     // Connection 1: answer a1, then disconnect when a2 arrives.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
     let (server_tx1, client_rx1) = mpsc::channel::<String>(8);
-    let io1 = ServerIo::new(server_tx1, server_rx1);
+    let io1 = FrameCarrier::new(server_tx1, server_rx1);
     let host1 = host.clone();
     let s1 = session;
     let serve1 = tokio::spawn(async move {
@@ -482,7 +482,7 @@ async fn test_reconnect_batch_preserves_decided() {
     // Reattach: resume_pending re-emits a2 + a3 (not a1).
     let (client_tx2, server_rx2) = mpsc::channel::<String>(8);
     let (server_tx2, client_rx2) = mpsc::channel::<String>(8);
-    let io2 = ServerIo::new(server_tx2, server_rx2);
+    let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let s2 = session;
     let serve2 = tokio::spawn(async move {
@@ -615,7 +615,7 @@ async fn test_between_runs_inject_drains() {
     let (_runner, session, host) = runner_with_noop();
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
 
@@ -757,7 +757,7 @@ async fn test_during_run_inject_caught() {
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let server_io = ServerIo::new(server_tx, server_rx);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
 

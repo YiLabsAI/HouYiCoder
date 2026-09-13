@@ -13,7 +13,7 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::trust::TrustAccept;
-use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as WireSessionId};
+use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as FrontendSessionId};
 
 use crate::agent_message::{AgentMessage, ClientCommand};
 use crate::transcript::TranscriptFrame;
@@ -93,7 +93,7 @@ impl Session {
     }
 
     /// Persist a new name for the live session and request refreshed status.
-    pub fn request_rename(&self, session_id: WireSessionId, name: String) {
+    pub fn request_rename(&self, session_id: FrontendSessionId, name: String) {
         let req_id = self.mint_request_id();
         self.send(ClientCommand::RenameSessionQuery {
             req_id,
@@ -545,7 +545,7 @@ async fn drive_connection(
                         let _send = agent_tx.send(AgentMessage::Done { result: Err(e) });
                     }
                     ResponsePayload::Error(e) => {
-                        // A wire error is per-request, NOT a run completion
+                        // A protocol error is per-request, NOT a run completion
                         // (runs use RunOk/RunErr). Carry the req_id so the App
                         // routes: a run's own error -> Done{Err}; a non-run
                         // verb's error -> a system line (not a false run-end
@@ -662,7 +662,7 @@ async fn drive_connection(
 }
 
 /// Build a session/inject notification with stable queue identity.
-fn inject_notification(session_id: &WireSessionId, input: &QueuedInput) -> AcpNotification {
+fn inject_notification(session_id: &FrontendSessionId, input: &QueuedInput) -> AcpNotification {
     AcpNotification::new(
         "session/inject",
         serde_json::json!({ "sessionId": session_id.0, "input": input }),
@@ -690,7 +690,10 @@ fn cancel_child_turn_notification(child_sid: &str) -> AcpNotification {
 }
 
 /// Build a session/queue_remove notification for one exact queue item.
-fn queue_remove_notification(session_id: &WireSessionId, id: PendingInputId) -> AcpNotification {
+fn queue_remove_notification(
+    session_id: &FrontendSessionId,
+    id: PendingInputId,
+) -> AcpNotification {
     AcpNotification::new(
         "session/queue_remove",
         serde_json::json!({ "sessionId": session_id.0, "id": id }),

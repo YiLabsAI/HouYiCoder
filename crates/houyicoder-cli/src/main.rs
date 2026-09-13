@@ -27,7 +27,7 @@ use std::sync::Arc;
 use houyicoder_client::{Client, InProcTransport};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
-use houyicoder_service::server::{Server, ServerIo};
+use houyicoder_service::server::{FrameCarrier, Server};
 
 mod cleanup;
 #[cfg(unix)]
@@ -712,7 +712,7 @@ fn pair_inproc_server(
             .handle()
             .clone(),
     );
-    let server_io = ServerIo::new(s2c_tx, c2s_rx);
+    let server_io = FrameCarrier::new(s2c_tx, c2s_rx);
     // The server takes the composition's gate — the same Arc the GuardedTool
     // wrappers hold — so wire /mode and /rules writes reach the gate that
     // actually guards the tools. The TUI holds no gate handle. The sandbox

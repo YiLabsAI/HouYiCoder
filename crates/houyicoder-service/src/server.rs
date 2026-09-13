@@ -28,44 +28,39 @@ use crate::protocol_adapter::{map_run_error, map_run_result};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_protocol::envelope::{ClientFrame, EventSeq, RequestId, ResponsePayload};
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::handshake::{Hello, Negotiated, negotiate};
-use houyicoder_protocol::wire::{WireError, WireErrorKind};
 
 mod event_sequencer;
 pub use event_sequencer::EventSequencer;
 
-/// The raw frame I/O lives in a child module so this file stays under the
-/// size gate.
-mod io;
-pub use io::ServerIo;
+/// The connection's raw frame I/O carrier.
+mod frame_carrier;
+pub use frame_carrier::FrameCarrier;
 
-/// Request dispatch (routing one frontend request to its handler) lives in a
-/// child module so this file stays under the size gate.
+/// Request dispatch: routes one frontend request to its handler.
 mod dispatch;
 
-/// The /debug request handler lives in a child module so this file stays
-/// under the size gate.
+/// The /debug request handler.
 mod debug_dispatch;
 
-/// Status-snapshot sidecar attachers (env/config display fields + per-model
-/// usage projection) live in a child module so dispatch stays under the size
-/// gate.
-mod status_wire;
+/// Status-snapshot sidecar attachers: env/config display fields + per-model
+/// usage projection.
+mod status_projection;
 
 /// Mid-run + between-run session-notification + permission-mode-cycle
-/// helpers live in a child module so this file stays under the size gate.
+/// helpers.
 mod notif;
 
-/// The mid-run permission reverse-request (ask the human, record the verdict
-/// audit, apply consent) lives in a child module so this file stays under the
-/// size gate.
+/// The mid-run permission reverse-request: ask the human, record the verdict
+/// audit, apply consent.
 mod approval;
 mod trust;
 
-/// Frame emission (push durable events, send typed responses/events on the
-/// seq stream) lives in a child module so this file stays under the size gate.
-mod emit;
+/// Outbound frame emission: push durable events, send typed responses/events
+/// on the seq stream.
+mod outbound_frames;
 
 /// The protocol server. Owns the runner handle + the session the connection
 /// drives, plus the monotonic event seq counter. serve runs the handshake
@@ -130,8 +125,7 @@ pub struct Server {
 }
 
 pub(crate) mod child_permission;
-/// Reconnect-replay entry points (serve_session, resume_pending) live in a
-/// child module to keep this file under the size gate.
+/// Reconnect-replay entry points: serve_session, resume_pending.
 pub(crate) mod session;
 
 impl Server {
@@ -265,9 +259,9 @@ impl Server {
     /// the pane renders the empty-state guidance rather than failing.
     async fn handle_model_info(
         &mut self,
-        io: &mut ServerIo,
+        io: &mut FrameCarrier,
         req_id: RequestId,
-    ) -> Result<(), WireError> {
+    ) -> Result<(), ProtocolError> {
         let (section, _warnings) = houyicoder_config::load_model_section_from(&self.settings_path);
         let catalog = houyicoder_protocol::frontend::model::ModelCatalog {
             active_id: section.id,
@@ -292,10 +286,10 @@ impl Server {
     /// Run the connection: handshake, then receive request frames until the
     /// client closes. Each request is dispatched; events the run produces are
     /// pushed on the seq stream and the run outcome returns as a response on
-    /// the req_id axis. Returns Ok for a clean close, Err for a wire-level
+    /// the req_id axis. Returns Ok for a clean close, Err for a carrier-level
     /// failure the host surfaces. Owns the I/O so the host can spawn the whole
     /// loop onto a runtime.
-    pub async fn serve(mut self, mut io: ServerIo) -> Result<(), WireError> {
+    pub async fn serve(mut self, mut io: FrameCarrier) -> Result<(), ProtocolError> {
         let _negotiated = self.handshake(&mut io).await?;
         // Ask the client to trust the project workspace before any run
         // proceeds. One-time, workspace-level (not per-call): a project not
@@ -362,9 +356,9 @@ impl Server {
                 Ok(cf) => cf,
                 Err(e) => {
                     log_bad_frame(&frame, &e);
-                    self.send_wire_error(
+                    self.send_protocol_error(
                         &mut io,
-                        WireError::new(WireErrorKind::InvalidFrame, e.to_string(), false),
+                        ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false),
                     )
                     .await?;
                     continue;
@@ -377,10 +371,10 @@ impl Server {
                 // consumed by handle_message_send. Fail closed rather than
                 // dropping the frame silently.
                 ClientFrame::Response(resp) => {
-                    self.send_wire_error(
+                    self.send_protocol_error(
                         &mut io,
-                        WireError::new(
-                            WireErrorKind::InvalidFrame,
+                        ProtocolError::new(
+                            ErrorCategory::InvalidFrame,
                             format!("unexpected reverse response for req_id {}", resp.req_id.0),
                             false,
                         ),
@@ -391,10 +385,10 @@ impl Server {
                 // non_exhaustive guard: a future client-frame shape the server
                 // does not know yet. Fail closed.
                 _ => {
-                    self.send_wire_error(
+                    self.send_protocol_error(
                         &mut io,
-                        WireError::new(
-                            WireErrorKind::InvalidFrame,
+                        ProtocolError::new(
+                            ErrorCategory::InvalidFrame,
                             "unknown client frame shape",
                             false,
                         ),
@@ -405,9 +399,9 @@ impl Server {
             };
             if let Err(e) = self.dispatch(&mut io, req).await {
                 // A carrier-level failure (client gone) is fatal to the loop;
-                // a per-request wire error is sent inside dispatch and we
+                // a per-request protocol error is sent inside dispatch and we
                 // continue. Best-effort surface then return.
-                self.send_wire_error(&mut io, e.clone()).await.ok();
+                self.send_protocol_error(&mut io, e.clone()).await.ok();
                 return Err(e);
             }
         }
@@ -417,20 +411,20 @@ impl Server {
     /// server validates the client's version and advertised capabilities. A
     /// version mismatch fails non-retriable so a peer never enters a
     /// half-working session.
-    async fn handshake(&mut self, io: &mut ServerIo) -> Result<Negotiated, WireError> {
+    async fn handshake(&mut self, io: &mut FrameCarrier) -> Result<Negotiated, ProtocolError> {
         let local = Hello::local();
         // Send our Hello first so a peer waiting on it can proceed; then read
         // the peer's Hello and validate it.
         self.send_typed(io, &local).await?;
         let Some(frame) = io.next_frame().await else {
-            return Err(WireError::new(
-                WireErrorKind::Unavailable,
+            return Err(ProtocolError::new(
+                ErrorCategory::Unavailable,
                 "client closed before hello",
                 false,
             ));
         };
         let peer: Hello = serde_json::from_str(&frame)
-            .map_err(|e| WireError::new(WireErrorKind::InvalidFrame, e.to_string(), false))?;
+            .map_err(|e| ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false))?;
         self.replay_after = peer.last_event_seq;
         negotiate(&local, &peer)
     }
@@ -455,10 +449,10 @@ impl Server {
     )]
     async fn handle_message_send(
         &mut self,
-        io: &mut ServerIo,
+        io: &mut FrameCarrier,
         req_id: RequestId,
         content: Vec<ContentBlock>,
-    ) -> Result<(), WireError> {
+    ) -> Result<(), ProtocolError> {
         // Collapse the multimodal content to the plain text the engine run
         // takes today. Non-text blocks are dropped at the service boundary
         // until a multimodal run path lands; an empty content vec degenerates
@@ -525,8 +519,8 @@ impl Server {
                             }
                         }
                         None => {
-                            return Err(WireError::new(
-                                WireErrorKind::Unavailable,
+                            return Err(ProtocolError::new(
+                                ErrorCategory::Unavailable,
                                 "client closed mid-run",
                                 false,
                             ));
@@ -627,8 +621,8 @@ impl Server {
                                             }
                                         }
                                         None => {
-                                            return Err(WireError::new(
-                                                WireErrorKind::Unavailable,
+                                            return Err(ProtocolError::new(
+                                                ErrorCategory::Unavailable,
                                                 "client closed mid-resume",
                                                 false,
                                             ));
@@ -679,3 +673,6 @@ mod git_ops_tests;
 
 #[cfg(test)]
 mod ask_rule_tests;
+
+#[cfg(test)]
+mod connection_failure_tests;

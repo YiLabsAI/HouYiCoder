@@ -453,7 +453,7 @@ async fn test_handle_drops_non_matching() {
     let mut server = ask_wait_server();
     let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
-    let mut io = super::ServerIo::new(server_tx, server_rx);
+    let mut io = super::FrameCarrier::new(server_tx, server_rx);
     let approval = houyicoder_core::agent::ApprovalRequest::new(
         "c1".into(),
         "bash".into(),
@@ -519,7 +519,7 @@ async fn test_handle_cancel_returns_deny() {
     let mut server = ask_wait_server();
     let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
-    let mut io = super::ServerIo::new(server_tx, server_rx);
+    let mut io = super::FrameCarrier::new(server_tx, server_rx);
     let approval = houyicoder_core::agent::ApprovalRequest::new(
         "c1".into(),
         "bash".into(),
@@ -549,4 +549,55 @@ async fn test_handle_cancel_returns_deny() {
         !decision.approved,
         "cancel mid-ask returns a deny, not a hang"
     );
+}
+
+/// A reverse response with the wrong payload shape fails closed: the ask
+/// expects a permission decision, and a trust payload is a protocol
+/// violation rather than a frame to drop.
+#[tokio::test]
+async fn test_handle_rejects_wrong_payload() {
+    use futures::SinkExt;
+    use futures::StreamExt;
+    use futures::channel::mpsc;
+    use houyicoder_protocol::envelope::{
+        ClientFrame, ClientResponseEnvelope, ClientResponsePayload, ServerFrame,
+    };
+    use houyicoder_protocol::error::ErrorCategory;
+    use houyicoder_protocol::frontend::trust::TrustAccept;
+
+    let mut server = ask_wait_server();
+    let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
+    let mut io = super::FrameCarrier::new(server_tx, server_rx);
+    let approval = houyicoder_core::agent::ApprovalRequest::new(
+        "c1".into(),
+        "bash".into(),
+        serde_json::json!({"command": "echo hi"}),
+    );
+    let feeder = tokio::spawn(async move {
+        let mut ask_id = None;
+        for _ in 0..16 {
+            let line = client_rx.next().await.expect("server frame");
+            if let Ok(ServerFrame::Request(req)) = serde_json::from_str(&line) {
+                ask_id = Some(req.req_id);
+                break;
+            }
+        }
+        let ask_id = ask_id.expect("permission ask sent");
+        let resp = ClientFrame::Response(ClientResponseEnvelope::new(
+            ask_id,
+            ClientResponsePayload::TrustAccept(TrustAccept { accepted: true }),
+        ));
+        client_tx
+            .send(encode_line(&resp))
+            .await
+            .expect("send the wrong payload");
+    });
+    let err = server
+        .handle_approval(&mut io, &approval, None)
+        .await
+        .expect_err("a trust payload cannot answer a permission ask");
+    feeder.await.expect("feeder done");
+    assert_eq!(err.category, ErrorCategory::InvalidFrame);
+    assert_eq!(err.message, "expected a permission reverse response");
 }

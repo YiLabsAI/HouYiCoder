@@ -501,7 +501,7 @@ fn test_handle_error_records_system() {
     let mut app = composition::app();
     let msg = AgentMessage::Done {
         result: Err(RunError {
-            kind: "provider_exhausted".to_string(),
+            category: "provider_exhausted".to_string(),
             message: "provider exhausted: rate limited".to_string(),
         }),
     };
