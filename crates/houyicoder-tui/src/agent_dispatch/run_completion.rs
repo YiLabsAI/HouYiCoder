@@ -2,7 +2,7 @@
 //! transcript, and recording the outcome. The final status controls whether
 //! queued input may drain.
 
-use houyicoder_protocol::frontend::run::{RunError, RunOutcome, RunResult};
+use houyicoder_protocol::frontend::run::{RunOutcome, RunResult};
 
 use super::super::should_preserve_interrupted_turn;
 use crate::records::TranscriptLine;
@@ -10,7 +10,11 @@ use crate::state::enums::LiveBlock;
 use crate::transcript::{turn_reasoning, turn_tool_summary};
 
 impl super::App {
-    pub(super) fn handle_run_completion(&mut self, result: Result<RunResult, RunError>) {
+    /// Finalize a run. The error side is a display string, not the protocol
+    /// error type: three sources settle a run (a server-classified run
+    /// failure, a per-request error routed to the active run, and driver
+    /// death), and all the presentation needs is the message.
+    pub(super) fn handle_run_completion(&mut self, result: Result<RunResult, String>) {
         let had_live_output =
             !self.live_assistant_text.is_empty() || !self.live_reasoning_text.is_empty();
         self.agent_busy = false;
@@ -93,8 +97,8 @@ impl super::App {
                 }
                 final_outcome
             }
-            Err(e) => {
-                self.system_line(format!("agent error: {}", e.message));
+            Err(message) => {
+                self.system_line(format!("agent error: {message}"));
                 false
             }
         };

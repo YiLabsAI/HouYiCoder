@@ -246,6 +246,12 @@ pub enum AgentMessage {
     /// Frame for the run, so the event loop rebuilds the transcript from its
     /// own log; no snapshot ships here.
     Done { result: Result<RunResult, RunError> },
+    /// The session driver died (connect, send, or read failure): no reply
+    /// can ever land again. Distinct from Done{Err}, which reports a run
+    /// failure the server classified; this is the transport itself gone.
+    /// The App ends any active run, sweeps pending pane marks that would
+    /// otherwise wait forever, and surfaces the message as an error line.
+    ConnectionLost { message: String },
     /// A status snapshot the /status command requested over the wire. The
     /// state renders it without importing the engine crate.
     StatusResult {
@@ -272,8 +278,12 @@ pub enum AgentMessage {
     },
     /// The stored-memory list the /memory command requested over the wire.
     /// Frontmatter-only summaries (no body); a /memory <key> show fetches the
-    /// body separately.
-    MemoryListResult { entries: Vec<MemorySummaryEntry> },
+    /// body separately. req_id pairs the reply with a pending pane action
+    /// (a forget re-list); plain refreshes carry an id no action waits on.
+    MemoryListResult {
+        req_id: RequestId,
+        entries: Vec<MemorySummaryEntry>,
+    },
     /// The full body of one memory the /memory <key> show requested, or None
     /// when the key was absent.
     MemoryShowResult {
@@ -283,7 +293,12 @@ pub enum AgentMessage {
     /// The toggle snapshot the /memory pane requested on open (a read) or the
     /// /memory toggle command requested (a flip). Both auto-memory and
     /// auto-dream ride back so the pane renders both rows from one round-trip.
-    MemoryToggleStateResult { state: ToggleState },
+    /// req_id tells a flip reply from a pane-open read so only the flip
+    /// writes a transcript outcome.
+    MemoryToggleStateResult {
+        req_id: RequestId,
+        state: ToggleState,
+    },
     /// Successful memory changes emitted together by one producer.
     MemoryChanged {
         id: MemoryChangeId,

@@ -824,10 +824,13 @@ fn test_agents_tools_round_trip() {
 /// when a session is wired (the carrier-present branch). The pane action routes
 /// the row's scope; the command form routes "auto". Pins the send sites so a
 /// refactor that drops the scope field or reverts to the no-carrier branch
-/// fails here.
+/// fails here. The observable is the registered pending action — the submit
+/// itself writes no transcript line; the outcome lands with the reply. A
+/// repeat submit of a key already in flight ships nothing.
 #[test]
 fn test_forget_ships_queries_wired() {
     use crate::agent_message::AgentMessage;
+    use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::SlashCommand;
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     let provider = Arc::new(FakeProvider::new(vec![]));
@@ -836,6 +839,7 @@ fn test_forget_ships_queries_wired() {
     // Seed a project-scope row so the cursor lands on a Some(row) + the
     // scope extraction runs (the no-carrier tests hit the None branch).
     app.handle_agent_message(AgentMessage::MemoryListResult {
+        req_id: RequestId(1),
         entries: vec![MemorySummaryEntry {
             key: "proj-gate".into(),
             description: "a project rule".into(),
@@ -845,20 +849,67 @@ fn test_forget_ships_queries_wired() {
         }],
     });
     app.forget_memory_at_cursor();
+    assert_eq!(
+        app.memory.pending_forget_keys(),
+        vec!["proj-gate".to_string()],
+        "pane d-action ships the forget query"
+    );
+    app.forget_memory_at_cursor();
+    assert_eq!(
+        app.memory.pending_forget_keys(),
+        vec!["proj-gate".to_string()],
+        "a repeat d-press on the same row ships nothing new"
+    );
     assert!(
-        app.transcript
+        !app.transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("forgetting"))),
-        "pane d-action ships the forget query"
+        "no dangling in-progress line while the forget is in flight"
     );
     // Command form: /memory forget <key> ships with scope "auto" (the
     // command form has no row to read a scope from).
     app.run_tui_local_command("memory forget build-gate");
-    assert!(
-        app.transcript
-            .iter()
-            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("forgetting"))),
+    assert_eq!(
+        app.memory.pending_forget_keys(),
+        vec!["build-gate".to_string(), "proj-gate".to_string()],
         "command form ships the forget query"
+    );
+    app.run_tui_local_command("memory forget build-gate");
+    assert_eq!(
+        app.memory.pending_forget_keys(),
+        vec!["build-gate".to_string(), "proj-gate".to_string()],
+        "a repeat command forget of the same key ships nothing new"
+    );
+}
+
+/// The repeat-press guard is enforced at the command layer: while one
+/// switch is flipping, a second toggle of the same switch registers nothing
+/// new, and the other switch still ships. The state-level guard has its own
+/// test; this pins the send-site observable.
+#[test]
+fn test_toggle_repeat_press_dropped() {
+    use houyicoder_protocol::frontend::SlashCommand;
+    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+    let provider = Arc::new(FakeProvider::new(vec![]));
+    let mut app = app_with_provider(provider, ToolRegistry::new());
+    app.run_command(SlashCommand::Memory);
+    app.run_tui_local_command("memory toggle auto");
+    assert!(
+        app.memory.toggle_pending(MemoryToggleWhich::Auto),
+        "first press registers the flip"
+    );
+    assert_eq!(app.memory.pending_toggle_count(), 1);
+    app.run_tui_local_command("memory toggle auto");
+    assert_eq!(
+        app.memory.pending_toggle_count(),
+        1,
+        "a repeat press on the flipping switch ships nothing"
+    );
+    app.run_tui_local_command("memory toggle dream");
+    assert_eq!(
+        app.memory.pending_toggle_count(),
+        2,
+        "the other switch stays operable mid-flip"
     );
 }
 

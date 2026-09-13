@@ -204,10 +204,11 @@ async fn test_drive_cancel_child_forwards() {
     );
 }
 
-/// A read failure (the server closed or a wire error mid-stream) must
-/// surface as Done{Err} so the App clears agent_busy. The prior silent
-/// return wedged the TUI on any server-side fatal. Pins the fix at the
-/// effect level: the driver sends a Done{Err} carrying the read error.
+/// A read failure (the server closed or the transport broke mid-stream)
+/// must surface as ConnectionLost so the App clears agent_busy and sweeps
+/// pending pane marks. The prior silent return wedged the TUI on any
+/// server-side fatal. Pins the fix at the effect level: the driver emits
+/// the typed event carrying the read error.
 #[tokio::test]
 async fn test_drive_client_read_done() {
     use houyicoder_async::PFut;
@@ -217,7 +218,7 @@ async fn test_drive_client_read_done() {
 
     /// A transport that serves one Hello (so connect succeeds) then fails
     /// every subsequent recv — the peer-gone condition drive_client must
-    /// translate to Done{Err}.
+    /// translate to ConnectionLost.
     struct FailAfterHello {
         served: bool,
     }
@@ -248,17 +249,16 @@ async fn test_drive_client_read_done() {
     let (_cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
     let (agent_tx, agent_rx) = std::sync::mpsc::channel::<AgentMessage>();
     drive_client(client, cmd_rx, agent_tx).await;
-    let msg = agent_rx.recv().expect("a Done message on read error");
-    let result = match msg {
-        AgentMessage::Done { result } => result,
-        _ => panic!("expected a Done message on read error"),
-    };
-    let e = result.expect_err("expected Err on the read-error Done");
-    assert!(
-        e.message.contains("connection lost"),
-        "expected a connection-lost message, got: {}",
-        e.message
-    );
+    let msg = agent_rx.recv().expect("a ConnectionLost on read error");
+    match msg {
+        AgentMessage::ConnectionLost { message } => {
+            assert!(
+                message.contains("connection lost"),
+                "expected a connection-lost message, got: {message}"
+            );
+        }
+        other => panic!("expected ConnectionLost on read error, got {other:?}"),
+    }
 }
 
 /// request_rename ships a RenameSessionQuery the driver forwards as a

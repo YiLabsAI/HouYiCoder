@@ -33,11 +33,11 @@ impl App {
     }
 
     /// Ship a command to the driver over the session's command channel.
-    /// No-op when no backend is wired.
-    pub fn send_cmd(&self, cmd: ClientCommand) {
-        if let Some(s) = &self.session {
-            s.send(cmd);
-        }
+    /// Returns false when no backend is connected or the driver is gone: the
+    /// command was not delivered, so no reply will come and the caller must
+    /// not leave state waiting on one.
+    pub fn send_cmd(&self, cmd: ClientCommand) -> bool {
+        self.session.as_ref().is_some_and(|s| s.send(cmd))
     }
 
     /// Start a user turn, steer input to the viewed child, or queue it while

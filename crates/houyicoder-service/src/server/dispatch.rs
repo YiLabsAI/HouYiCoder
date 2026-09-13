@@ -386,27 +386,35 @@ impl Server {
                 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
                 let current = self.runner.memory_gate_state();
                 let (auto_memory, auto_dream) = match which {
-                    MemoryToggleWhich::Auto => {
-                        let am = !current.auto_memory;
-                        self.runner.set_auto_memory(am);
-                        (am, current.auto_dream)
-                    }
-                    MemoryToggleWhich::Dream => {
-                        let ad = !current.auto_dream;
-                        self.runner.set_auto_dream(ad);
-                        (current.auto_memory, ad)
-                    }
+                    MemoryToggleWhich::Auto => (!current.auto_memory, current.auto_dream),
+                    MemoryToggleWhich::Dream => (current.auto_memory, !current.auto_dream),
                 };
-                // Persist the new pair so the choice survives a restart. The
-                // in-memory atomic already flipped, so a write failure only loses
-                // cross-session persistence (the session still sees the flip).
-                houyicoder_config::save_toggles_to(
+                // Persist before flipping the runtime gate: on a write failure
+                // the reply is an error and the session keeps the old state,
+                // so the pane never shows a toggle a restart would revert.
+                if let Err(e) = houyicoder_config::save_toggles_to(
                     &self.settings_path,
                     &houyicoder_config::MemoryToggles {
                         auto_memory,
                         auto_dream,
                     },
-                );
+                ) {
+                    return self
+                        .send_response(
+                            io,
+                            req_id,
+                            ResponsePayload::Error(WireError::new(
+                                WireErrorKind::Internal,
+                                format!("failed to save settings: {e}"),
+                                false,
+                            )),
+                        )
+                        .await;
+                }
+                match which {
+                    MemoryToggleWhich::Auto => self.runner.set_auto_memory(auto_memory),
+                    MemoryToggleWhich::Dream => self.runner.set_auto_dream(auto_dream),
+                }
                 let wire = pa::memory_view::map_toggle_state(auto_memory, auto_dream);
                 self.send_response(io, req_id, ResponsePayload::ToggleState(wire))
                     .await

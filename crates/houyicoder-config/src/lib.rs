@@ -348,29 +348,25 @@ pub fn load_toggles_from(path: &std::path::Path) -> (MemoryToggles, Vec<ConfigWa
     )
 }
 
-/// Persist the toggles to the settings file best-effort (atomic temp+rename).
-/// A write failure is logged and ignored — the in-memory toggle still takes
-/// effect for the session; only cross-session persistence is lost.
-pub fn save_toggles(toggles: &MemoryToggles) {
-    save_toggles_to(&settings_path(), toggles);
-}
-
 /// Pure saver against an explicit path; testable without env mutation.
 /// Delegates to update_settings so the write is merge-preserving (other keys
-/// like sandbox.network survive) and CAS-guarded. Best-effort: a write failure
-/// is dropped here — the caller still has the in-memory state. Surfacing the
-/// error to the UI is a follow-up once a runtime warning channel exists.
-pub fn save_toggles_to(path: &std::path::Path, toggles: &MemoryToggles) {
+/// like sandbox.network survive) and CAS-guarded. The write failure is
+/// returned, not dropped: callers flip runtime state only after Ok so a
+/// toggle that would not survive a restart is never reported as applied.
+pub fn save_toggles_to(
+    path: &std::path::Path,
+    toggles: &MemoryToggles,
+) -> Result<(), SettingsWriteError> {
     let auto_memory = toggles.auto_memory;
     let auto_dream = toggles.auto_dream;
-    drop(update_settings(
+    update_settings(
         path,
         |v| {
             v["auto_memory"] = auto_memory.into();
             v["auto_dream"] = auto_dream.into();
         },
         3,
-    ));
+    )
 }
 
 #[cfg(test)]
@@ -572,10 +568,25 @@ mod tests {
             auto_memory: false,
             auto_dream: true,
         };
-        save_toggles_to(&path, &toggles);
+        save_toggles_to(&path, &toggles).expect("save succeeds");
         let (loaded, _w) = load_toggles_from(&path);
         assert_eq!(loaded, toggles, "round-trip preserves the off/on state");
         drop(std::fs::remove_file(&path));
+    }
+
+    /// An unwritable settings path returns the failure instead of dropping
+    /// it, so the caller can keep runtime state unchanged.
+    #[test]
+    fn test_save_failure_returns_err() {
+        let blocker = std::env::temp_dir().join(format!("toggles-block-{}", std::process::id()));
+        std::fs::write(&blocker, "regular file, not a directory").unwrap();
+        let path = blocker.join("settings.json");
+        let err = save_toggles_to(&path, &MemoryToggles::default()).unwrap_err();
+        assert!(
+            matches!(err, SettingsWriteError::Io(_)),
+            "parent is a file, so the write fails with Io: {err:?}"
+        );
+        drop(std::fs::remove_file(&blocker));
     }
 
     /// config_home + settings_path resolve under the user HOME. Deterministic

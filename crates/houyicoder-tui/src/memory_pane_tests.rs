@@ -69,6 +69,7 @@ fn test_memory_forget_no_carrier() {
 #[test]
 fn test_list_result_resets_cursor() {
     use crate::agent_message::AgentMessage;
+    use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
@@ -79,6 +80,7 @@ fn test_list_result_resets_cursor() {
         .expect("clock")
         .as_secs();
     app.handle_agent_message(AgentMessage::MemoryListResult {
+        req_id: RequestId(1),
         entries: vec![MemorySummaryEntry {
             key: "fresh-gate".into(),
             description: "re-seeded".into(),
@@ -249,26 +251,88 @@ fn test_memory_pane_renders_rows() {
     app.run_command(SlashCommand::Memory);
     let on = render(&app);
     assert_eq!(app.pane, Pane::Memory);
+    // Footer verbs are static — the current state lives in the header row.
     assert!(
-        on.contains("a to disable auto-memory"),
+        on.contains("a to toggle auto-memory"),
         "auto-memory hint missing"
     );
     assert!(
-        on.contains("c to disable auto-dream"),
+        on.contains("c to toggle auto-dream"),
         "auto-dream hint missing"
     );
+    // Both switches default on: the status row renders filled glyphs.
+    assert!(on.contains("● auto-memory"), "on renders ●:\n{on}");
+    assert!(on.contains("● auto-dream"), "on renders ●:\n{on}");
     app.memory.set_toggles(ToggleState {
         auto_memory: false,
         auto_dream: false,
     });
     let off = render(&app);
+    assert!(off.contains("○ auto-memory"), "off renders ○:\n{off}");
+    assert!(off.contains("○ auto-dream"), "off renders ○:\n{off}");
     assert!(
-        off.contains("a to enable auto-memory"),
-        "auto-memory state missing"
+        off.contains("a to toggle auto-memory"),
+        "footer verb does not flip with the state"
     );
+}
+
+/// The header color contract per cell: on = ● Cyan+BOLD, off = ○ DarkGray,
+/// pending = ◌ Cyan. The whole item carries the style, glyph and label
+/// alike, so a refactor cannot silently drop the coloring half.
+#[test]
+fn test_header_status_row_styles() {
+    use houyicoder_protocol::envelope::RequestId;
+    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::{Color, Modifier, Style};
+
+    /// The style of the cell where needle starts, scanning rows top-down.
+    fn style_at(buf: &Buffer, needle: &str) -> Style {
+        for y in 0..buf.area.height {
+            let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+            if let Some(idx) = row.find(needle) {
+                let x = row[..idx].chars().count() as u16;
+                return buf[(x, y)].style();
+            }
+        }
+        panic!("needle {needle:?} not on screen");
+    }
+
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    let buf = crate::test_support::render_buffer(&app, 100, 28);
+    // Glyph cell and a label cell of the same item share the on-style.
+    for needle in ["● auto-memory", "auto-memory"] {
+        let st = style_at(&buf, needle);
+        assert_eq!(st.fg, Some(Color::Cyan), "on item is Cyan: {needle}");
+        assert!(
+            st.add_modifier.contains(Modifier::BOLD),
+            "on item is bold: {needle}"
+        );
+    }
+
+    app.memory.set_toggles(ToggleState {
+        auto_memory: false,
+        auto_dream: false,
+    });
+    let buf = crate::test_support::render_buffer(&app, 100, 28);
+    for needle in ["○ auto-memory", "auto-memory"] {
+        let st = style_at(&buf, needle);
+        assert_eq!(st.fg, Some(Color::DarkGray), "off item is dim: {needle}");
+        assert!(
+            !st.add_modifier.contains(Modifier::BOLD),
+            "off item is not bold: {needle}"
+        );
+    }
+
+    app.memory
+        .begin_toggle(RequestId(1), MemoryToggleWhich::Dream);
+    let buf = crate::test_support::render_buffer(&app, 100, 28);
+    let st = style_at(&buf, "◌ auto-dream");
+    assert_eq!(st.fg, Some(Color::Cyan), "pending item is Cyan");
     assert!(
-        off.contains("c to enable auto-dream"),
-        "auto-dream state missing"
+        !st.add_modifier.contains(Modifier::BOLD),
+        "pending is not bold — bold is reserved for confirmed on"
     );
 }
 
@@ -356,4 +420,390 @@ fn test_scope_tab_narrows_list() {
     let back = render(&app);
     assert!(back.contains("[All]"), "cycle wraps to All");
     assert!(back.contains("3 stored"), "All shows all three again");
+}
+
+/// A pending flip renders ◌ in the header, and the same switch cannot be
+/// submitted twice while its flip is in flight; the other switch stays
+/// operable.
+#[test]
+fn test_pending_blocks_repeat_toggle() {
+    use houyicoder_protocol::envelope::RequestId;
+    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    assert!(
+        app.memory
+            .begin_toggle(RequestId(1), MemoryToggleWhich::Auto)
+    );
+    assert!(
+        !app.memory
+            .begin_toggle(RequestId(2), MemoryToggleWhich::Auto),
+        "a repeat press on the flipping switch is dropped"
+    );
+    assert!(
+        app.memory
+            .begin_toggle(RequestId(3), MemoryToggleWhich::Dream),
+        "the other switch stays operable"
+    );
+    let out = render(&app);
+    assert!(out.contains("◌ auto-memory"), "pending renders ◌:\n{out}");
+    assert!(out.contains("◌ auto-dream"), "pending renders ◌:\n{out}");
+}
+
+/// A repeat forget of a key already in flight is dropped; a different key
+/// stays operable, mirroring the toggle guard.
+#[test]
+fn test_forget_pending_blocks_repeat() {
+    use houyicoder_protocol::envelope::RequestId;
+    let mut app = working();
+    assert!(app.memory.begin_forget(RequestId(1), "gate".into()));
+    assert!(
+        !app.memory.begin_forget(RequestId(2), "gate".into()),
+        "a repeat forget of the same key is dropped"
+    );
+    assert!(
+        app.memory.begin_forget(RequestId(3), "other".into()),
+        "a different key stays operable"
+    );
+    assert_eq!(
+        app.memory.pending_forget_keys(),
+        vec!["gate".to_string(), "other".to_string()]
+    );
+}
+
+/// A connection loss sweeps every in-flight pane mark: no reply can ever
+/// land for them, so a sticky pending mark would refuse its switch forever.
+/// A settled open detail is not pending and survives the sweep.
+#[test]
+fn test_connection_loss_clears_pending() {
+    use crate::agent_message::AgentMessage;
+    use houyicoder_protocol::envelope::RequestId;
+    use houyicoder_protocol::frontend::memory::{MemoryDetail, MemoryToggleWhich};
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    app.memory
+        .begin_toggle(RequestId(1), MemoryToggleWhich::Auto);
+    app.memory.request_detail(RequestId(2), "settled".into());
+    app.memory.apply_detail(
+        RequestId(2),
+        Some(MemoryDetail {
+            key: "settled".into(),
+            content: "body".into(),
+            source: "feedback".into(),
+            description: "body".into(),
+            mtime_secs: 1,
+        }),
+    );
+    app.handle_agent_message(AgentMessage::ConnectionLost {
+        message: "connection lost".into(),
+    });
+    assert_eq!(app.memory.pending_toggle_count(), 0, "toggle mark swept");
+    assert!(
+        app.memory.detail().is_some(),
+        "an open detail is settled state and survives"
+    );
+    assert!(
+        !render(&app).contains('◌'),
+        "no pending mark left on screen:\n{}",
+        render(&app)
+    );
+}
+
+/// A loading detail is pending too — a connection loss sweeps it, so no
+/// detail view sticks on a fetch that can never land.
+#[test]
+fn test_connection_loss_sweeps_detail() {
+    use crate::agent_message::AgentMessage;
+    use houyicoder_protocol::envelope::RequestId;
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    app.memory.request_detail(RequestId(2), "loading".into());
+    app.handle_agent_message(AgentMessage::ConnectionLost {
+        message: "connection lost".into(),
+    });
+    assert!(app.memory.detail().is_none(), "loading detail swept");
+}
+
+/// An ordinary run failure keeps in-flight pane marks: the driver is still
+/// alive, so their replies can still land.
+#[test]
+fn test_run_error_keeps_pending() {
+    use crate::agent_message::AgentMessage;
+    use houyicoder_protocol::envelope::RequestId;
+    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+    use houyicoder_protocol::frontend::run::RunError;
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    app.memory
+        .begin_toggle(RequestId(1), MemoryToggleWhich::Auto);
+    app.handle_agent_message(AgentMessage::Done {
+        result: Err(RunError {
+            kind: "provider_exhausted".into(),
+            message: "provider exhausted: timeout".into(),
+        }),
+    });
+    assert!(
+        app.memory.toggle_pending(MemoryToggleWhich::Auto),
+        "the pending flip survives a run failure"
+    );
+}
+
+/// A toggle pressed after the driver died must not register a pending flip:
+/// the send fails synchronously, the registration rolls back, and the pane
+/// writes a connection-lost failure line instead of waiting on a reply that
+/// can never arrive.
+#[test]
+fn test_dead_driver_toggle_rollback() {
+    use std::time::Duration;
+
+    use crate::agent_message::AgentMessage;
+    use crate::records::TranscriptLine;
+    use crate::session::Session;
+    use houyicoder_async::PFut;
+    use houyicoder_client::Transport;
+    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+    use houyicoder_protocol::wire::{WireError, WireErrorKind};
+
+    /// A transport whose handshake fails immediately, so the driver exits
+    /// (dropping the command receiver) before translating anything.
+    struct FailOnConnect;
+    impl Transport for FailOnConnect {
+        fn send_frame(&mut self, _frame: &str) -> PFut<'_, Result<(), WireError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, WireError>> {
+            Box::pin(async {
+                Err(WireError::new(
+                    WireErrorKind::Unavailable,
+                    "no server",
+                    false,
+                ))
+            })
+        }
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let client = houyicoder_client::Client::new(Box::new(FailOnConnect));
+    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<AgentMessage>();
+    let mut session = Session::spawn(client, agent_tx, agent_rx, &runtime);
+    // Effect latch: the driver drops the command receiver before emitting
+    // ConnectionLost, so once the event is observed the send below fails
+    // deterministically — no sleep involved.
+    let msg = session
+        .poll_startup(Duration::from_secs(5))
+        .expect("the dying driver emits ConnectionLost");
+    assert!(
+        matches!(msg, AgentMessage::ConnectionLost { .. }),
+        "driver death is the typed event, got {msg:?}"
+    );
+
+    let mut app = working();
+    app.session = Some(session);
+    app.run_command(SlashCommand::Memory);
+    app.toggle_memory_setting(MemoryToggleWhich::Auto);
+    assert_eq!(
+        app.memory.pending_toggle_count(),
+        0,
+        "the refused flip left no pending mark"
+    );
+    assert!(
+        app.transcript.iter().any(|l| matches!(
+            l,
+            TranscriptLine::System(s)
+                if s.contains("couldn't toggle auto-memory — connection lost")
+        )),
+        "the failure line names the switch and the cause"
+    );
+    // The switch stays operable: a repeat press is refused the same way
+    // instead of being swallowed by a stuck pending mark.
+    app.toggle_memory_setting(MemoryToggleWhich::Auto);
+    assert_eq!(app.memory.pending_toggle_count(), 0);
+    // Symmetry: the cursor actions roll back the same way.
+    app.forget_memory_at_cursor();
+    assert!(
+        app.memory.pending_forget_keys().is_empty(),
+        "the refused forget left no pending mark"
+    );
+    assert!(
+        app.transcript.iter().any(|l| matches!(
+            l,
+            TranscriptLine::System(s) if s.contains("couldn't forget build-gate — connection lost")
+        )),
+        "the forget failure line names the key and the cause"
+    );
+    app.show_memory_at_cursor();
+    assert!(
+        app.memory.detail().is_none(),
+        "the refused show left no loading detail"
+    );
+}
+
+/// The matching toggle reply clears the pending mark, applies the new
+/// state, and writes the confirmed outcome to the transcript.
+#[test]
+fn test_toggle_reply_writes_outcome() {
+    use crate::agent_message::AgentMessage;
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::envelope::RequestId;
+    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    app.memory
+        .begin_toggle(RequestId(7), MemoryToggleWhich::Auto);
+    app.handle_agent_message(AgentMessage::MemoryToggleStateResult {
+        req_id: RequestId(7),
+        state: ToggleState {
+            auto_memory: false,
+            auto_dream: true,
+        },
+    });
+    assert!(
+        app.transcript.iter().any(|l| matches!(
+            l,
+            TranscriptLine::System(s) if s.as_str() == "auto-memory off"
+        )),
+        "the outcome names the switch and its new state"
+    );
+    let out = render(&app);
+    assert!(
+        out.contains("○ auto-memory"),
+        "pending cleared, off renders ○:\n{out}"
+    );
+}
+
+/// A pane-open toggle-state read applies the snapshot but writes no
+/// transcript — only a pending flip produces an outcome line.
+#[test]
+fn test_toggle_read_skips_transcript() {
+    use crate::agent_message::AgentMessage;
+    use houyicoder_protocol::envelope::RequestId;
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    let before = app.transcript.len();
+    app.handle_agent_message(AgentMessage::MemoryToggleStateResult {
+        req_id: RequestId(99),
+        state: ToggleState {
+            auto_memory: false,
+            auto_dream: true,
+        },
+    });
+    assert!(
+        !app.memory.toggles().auto_memory,
+        "the snapshot still applies"
+    );
+    assert_eq!(
+        app.transcript.len(),
+        before,
+        "a plain state read writes no outcome"
+    );
+}
+
+/// A forget's re-list writes the outcome only when the list reply matches
+/// the registered pending action.
+#[test]
+fn test_forget_reply_writes_outcome() {
+    use crate::agent_message::AgentMessage;
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::envelope::RequestId;
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    app.memory
+        .begin_forget(RequestId(8), "build-gate".to_string());
+    app.handle_agent_message(AgentMessage::MemoryListResult {
+        req_id: RequestId(8),
+        entries: vec![],
+    });
+    assert!(
+        app.transcript.iter().any(|l| matches!(
+            l,
+            TranscriptLine::System(s) if s.as_str() == "forgot build-gate"
+        )),
+        "the confirmed forget writes one outcome"
+    );
+    assert!(
+        app.memory.pending_forget_keys().is_empty(),
+        "the pending action cleared"
+    );
+}
+
+/// A failed toggle names the action and the switch, keeps the header on
+/// the old value, and clears the pending mark.
+#[test]
+fn test_toggle_failure_names_action() {
+    use crate::agent_message::AgentMessage;
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::envelope::RequestId;
+    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    app.memory
+        .begin_toggle(RequestId(9), MemoryToggleWhich::Auto);
+    app.handle_agent_message(AgentMessage::RequestError {
+        req_id: RequestId(9),
+        message: "failed to save settings".to_string(),
+    });
+    assert!(
+        app.transcript.iter().any(|l| matches!(
+            l,
+            TranscriptLine::System(s) if s.contains("couldn't toggle auto-memory")
+                && s.contains("failed to save settings")
+        )),
+        "the failure names the action and the cause"
+    );
+    let out = render(&app);
+    assert!(
+        out.contains("● auto-memory"),
+        "the header keeps the unchanged value:\n{out}"
+    );
+    assert!(!out.contains("◌"), "the pending mark cleared");
+}
+
+/// A failed forget names the key that could not be deleted.
+#[test]
+fn test_forget_failure_names_action() {
+    use crate::agent_message::AgentMessage;
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::envelope::RequestId;
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    app.memory
+        .begin_forget(RequestId(10), "build-gate".to_string());
+    app.handle_agent_message(AgentMessage::RequestError {
+        req_id: RequestId(10),
+        message: "permission denied".to_string(),
+    });
+    assert!(
+        app.transcript.iter().any(|l| matches!(
+            l,
+            TranscriptLine::System(s) if s.contains("couldn't forget build-gate")
+                && s.contains("permission denied")
+        )),
+        "the failure names the key and the cause"
+    );
+}
+
+/// The footer keeps toggles and scope on one line while they fit, and
+/// moves the scope pair to a third line when the pane is too narrow.
+#[test]
+fn test_footer_splits_when_narrow() {
+    let mut app = working();
+    app.run_command(SlashCommand::Memory);
+    let wide = render_text(&app, 100, 28);
+    assert!(
+        wide.contains("toggle auto-dream · Tab/Left/Right to switch scope"),
+        "wide keeps the toggles and scope on one line:\n{wide}"
+    );
+    let narrow = render_text(&app, 70, 28);
+    assert!(
+        !narrow.contains("toggle auto-dream · Tab/Left/Right"),
+        "narrow moves the scope pair to its own line:\n{narrow}"
+    );
+    assert!(
+        narrow.contains("Tab/Left/Right to switch scope"),
+        "the scope hint is still present:\n{narrow}"
+    );
 }

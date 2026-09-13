@@ -58,8 +58,13 @@ fn test_pane_opens() {
         s.output()
     );
     assert!(
-        s.wait_for_screen("a to disable auto-memory", RENDER_TIMEOUT),
+        s.wait_for_screen("a to toggle auto-memory", RENDER_TIMEOUT),
         "auto-memory action should render:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for_screen("● auto-memory", RENDER_TIMEOUT),
+        "both switches default on in the header status row:\n{}",
         s.output()
     );
     drop(s);
@@ -123,11 +128,18 @@ fn test_toggle_flips_and_persists() {
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for_screen("a to disable auto-memory", RENDER_TIMEOUT),
-        "default auto-memory action should render:\n{}",
+        s.wait_for_screen("● auto-memory", RENDER_TIMEOUT),
+        "default state renders on in the header:\n{}",
         s.output()
     );
     s.send_key(&Key::Char('a'));
+    // The reply flips the header glyph off — the pane-visible proof that
+    // the round-trip landed.
+    assert!(
+        s.wait_for_screen("○ auto-memory", RENDER_TIMEOUT),
+        "the toggle reply should flip the header to off:\n{}",
+        s.output()
+    );
     // The server flips + persists; the settings file is the durable proof.
     let settings = home.join(".houyicoder").join("settings.json");
     let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
@@ -231,7 +243,7 @@ fn test_esc_closes_pane() {
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for_screen("a to disable auto-memory", RENDER_TIMEOUT),
+        s.wait_for_screen("a to toggle auto-memory", RENDER_TIMEOUT),
         "memory pane should render:\n{}",
         s.output()
     );
@@ -240,7 +252,7 @@ fn test_esc_closes_pane() {
     let screen = s.screen().contents();
     assert!(!screen.contains("memory —"), "pane should close:\n{screen}");
     assert!(
-        !screen.contains("disable auto-memory"),
+        !screen.contains("toggle auto-memory"),
         "footer should be gone:\n{screen}"
     );
     drop(s);

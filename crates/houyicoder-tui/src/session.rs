@@ -12,7 +12,6 @@ use houyicoder_protocol::envelope::{
 };
 use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_protocol::frontend::FrontendRequest;
-use houyicoder_protocol::frontend::run::RunError;
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as WireSessionId};
 
@@ -68,9 +67,12 @@ impl Session {
         RequestId(id)
     }
 
-    /// Queue a command for wire translation.
-    pub fn send(&self, cmd: ClientCommand) {
-        let _send = self.cmd_tx.send(cmd);
+    /// Queue a command for wire translation. Returns false when the driver
+    /// is gone (its receiver dropped): the command never left this process,
+    /// so the caller knows no reply will come and must not register state
+    /// waiting on one.
+    pub fn send(&self, cmd: ClientCommand) -> bool {
+        self.cmd_tx.send(cmd).is_ok()
     }
 
     /// Take one pending inbound message without blocking.
@@ -109,20 +111,32 @@ impl Session {
 
 /// Translate server frames into application messages and commands into wire
 /// requests. Durable history remains owned by the event loop.
-#[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn drive_client(
-    mut client: houyicoder_client::Client,
-    mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClientCommand>,
+    client: houyicoder_client::Client,
+    cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClientCommand>,
     agent_tx: mpsc::Sender<AgentMessage>,
 ) {
+    let death = drive_connection(client, cmd_rx, &agent_tx).await;
+    // The command receiver dropped with the driver body's frame, so by the
+    // time the App observes the event, every later send is refused
+    // deterministically — no window exists where a command could buffer
+    // into an orphaned channel and leave pane state waiting on a reply.
+    if let Some(message) = death {
+        let _send = agent_tx.send(AgentMessage::ConnectionLost { message });
+    }
+}
+
+/// The driver body: translate until the connection dies or the command
+/// channel closes. Returns the death message for the caller to announce,
+/// or None on a clean shutdown (no connection to lose).
+#[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
+async fn drive_connection(
+    mut client: houyicoder_client::Client,
+    mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClientCommand>,
+    agent_tx: &mpsc::Sender<AgentMessage>,
+) -> Option<String> {
     if let Err(e) = client.connect().await {
-        let _send = agent_tx.send(AgentMessage::Done {
-            result: Err(RunError {
-                kind: "wire".to_string(),
-                message: format!("connect failed: {e}"),
-            }),
-        });
-        return;
+        return Some(format!("connect failed: {e}"));
     }
     let mut outbound: VecDeque<Outbound> = VecDeque::new();
     loop {
@@ -135,13 +149,7 @@ async fn drive_client(
                 Outbound::Notification(n) => client.send_notification(n).await,
             };
             if let Err(e) = res {
-                let _send = agent_tx.send(AgentMessage::Done {
-                    result: Err(RunError {
-                        kind: "wire".to_string(),
-                        message: format!("send failed: {e}"),
-                    }),
-                });
-                return;
+                return Some(format!("send failed: {e}"));
             }
         }
         tokio::select! {
@@ -412,7 +420,7 @@ async fn drive_client(
                         payload: FrontendRequest::DebugSet { level },
                     });
                 }
-                None => return,
+                None => return None,
             },
             frame = client.next_frame() => match frame {
                 Ok(ServerFrame::Event(ev)) => match ev.payload {
@@ -605,7 +613,10 @@ async fn drive_client(
                         let _send = agent_tx.send(AgentMessage::SkillsResult { skills });
                     }
                     ResponsePayload::MemoryList(entries) => {
-                        let _send = agent_tx.send(AgentMessage::MemoryListResult { entries });
+                        let _send = agent_tx.send(AgentMessage::MemoryListResult {
+                            req_id: resp.req_id,
+                            entries,
+                        });
                     }
                     ResponsePayload::MemoryShow(entry) => {
                         let _send = agent_tx.send(AgentMessage::MemoryShowResult {
@@ -614,8 +625,10 @@ async fn drive_client(
                         });
                     }
                     ResponsePayload::ToggleState(state) => {
-                        let _send =
-                            agent_tx.send(AgentMessage::MemoryToggleStateResult { state });
+                        let _send = agent_tx.send(AgentMessage::MemoryToggleStateResult {
+                            req_id: resp.req_id,
+                            state,
+                        });
                     }
                     ResponsePayload::UndoResult(description) => {
                         let _send =
@@ -636,18 +649,12 @@ async fn drive_client(
                 // it rather than killing the driver.
                 Ok(_) => {}
                 Err(e) => {
-                    // A read failure (the server closed or a wire error) ends
-                    // the driver. Surface it as Done{Err} so the App clears
-                    // agent_busy — the two other drive_client error exits
-                    // (connect, send) already send Done{Err}; without it the
-                    // TUI waits on a run that can never finish.
-                    let _send = agent_tx.send(AgentMessage::Done {
-                        result: Err(RunError {
-                            kind: "wire".to_string(),
-                            message: format!("connection lost: {e}"),
-                        }),
-                    });
-                    return;
+                    // A read failure (the server closed or the transport
+                    // failed) ends the driver, same as the connect and send
+                    // exits. The announced death makes the App clear
+                    // agent_busy and sweep pending pane state — without it
+                    // the TUI waits on replies that can never arrive.
+                    return Some(format!("connection lost: {e}"));
                 }
             }
         }

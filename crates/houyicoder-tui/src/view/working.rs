@@ -577,18 +577,19 @@ fn draw_permission_pane(f: &mut Frame, area: Rect, app: &App) {
 /// 8-row list + footer. Capped at half the main area by the caller.
 const PERMISSION_PANE_HEIGHT: u16 = 18;
 
-/// Render the /memory pane: transcript tail above, the stored-memory list plus
-/// the auto-memory / auto-dream toggle rows in the lower band. Shares the
-/// draw_command_pane template with /permissions and /search so the three
-/// slash-command panes have one shape. The pane stays in-TUI (no external
-/// editor): the user browses, shows a body, and flips toggles without leaving
-/// the conversation.
+/// Render the /memory pane: transcript tail above, the stored-memory list in
+/// the lower band under a header carrying the auto-memory / auto-dream status
+/// row. Shares the draw_command_pane template with /permissions and /search so
+/// the three slash-command panes have one shape. The pane stays in-TUI (no
+/// external editor): the user browses, shows a body, and flips toggles without
+/// leaving the conversation.
 fn draw_memory_pane(f: &mut Frame, area: Rect, app: &App) {
     draw_command_pane(f, area, app, MEMORY_PANE_HEIGHT, memory_pane::draw_content);
 }
 
-/// Default height /memory asks for: a header + an 8-row list + 2 toggle rows
-/// + a footer hint. Capped at half the main area by the caller.
+/// Default height /memory asks for: a header with the status row + an 8-row
+/// list + a two- or three-row footer depending on width. Capped at half the
+/// main area by the caller.
 const MEMORY_PANE_HEIGHT: u16 = 16;
 
 /// Render the queue pane: transcript tail above, the queued-item list in

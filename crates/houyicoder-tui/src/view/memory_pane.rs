@@ -7,7 +7,7 @@
 //! returns to the list. Tabs, counts, memory switches, and action hints remain
 //! fixed while only the entry region scrolls.
 
-use houyicoder_protocol::frontend::memory::MemoryDetail;
+use houyicoder_protocol::frontend::memory::{MemoryDetail, MemoryToggleWhich};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -16,7 +16,7 @@ use ratatui::{
     widgets::{List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::memory_state::{MemoryDetailState, MemoryPaneState};
+use crate::memory_state::{MemoryDetailState, MemoryPaneState, toggle_label};
 use crate::state::enums::MemoryScopeTab;
 use crate::state::{App, MemoryEntry};
 use crate::view::line_wrap::{truncate_width, wrap_styled_line};
@@ -41,13 +41,19 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     let cursor = app.memory.cursor().min(n.saturating_sub(1));
     let header_lines = memory_header(app, tab, n);
     let header_h = header_lines.len() as u16;
+    // Pre-wrap the footer so the reserved height is exactly what renders.
+    let footer_rows: Vec<Line> = memory_footer(area.width)
+        .into_iter()
+        .flat_map(|line| wrap_styled_line(line, area.width as usize))
+        .collect();
+    let footer_h = footer_rows.len() as u16;
     // Header (fixed) + scrollable list + bottom (toggles + footer, fixed).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(header_h),
             Constraint::Min(0),
-            Constraint::Length(3),
+            Constraint::Length(footer_h),
         ])
         .split(area);
     f.render_widget(Paragraph::new(header_lines), chunks[0]);
@@ -68,28 +74,32 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             &mut state,
         );
     }
-    let auto_action = if app.memory.toggles().auto_memory {
-        "disable auto-memory"
+    f.render_widget(Paragraph::new(footer_rows), chunks[2]);
+}
+
+/// The footer key hints: navigation and row actions first, toggles second.
+/// The toggles line carries the scope pair while it fits on one row at this
+/// width; on a narrow pane the scope pair moves to a third line instead of
+/// wrapping mid-hint.
+fn memory_footer(width: u16) -> Vec<Line<'static>> {
+    let nav = key_hint(&[
+        ("Up/Down", "select"),
+        ("Enter", "open"),
+        ("d", "forget"),
+        ("Esc", "close"),
+    ]);
+    let toggles = key_hint(&[("a", "toggle auto-memory"), ("c", "toggle auto-dream")]);
+    let scope = key_hint(&[("Tab/Left/Right", "switch scope")]);
+    let combined = key_hint(&[
+        ("a", "toggle auto-memory"),
+        ("c", "toggle auto-dream"),
+        ("Tab/Left/Right", "switch scope"),
+    ]);
+    if wrap_styled_line(combined.clone(), width as usize).len() > 1 {
+        vec![nav, toggles, scope]
     } else {
-        "enable auto-memory"
-    };
-    let dream_action = if app.memory.toggles().auto_dream {
-        "disable auto-dream"
-    } else {
-        "enable auto-dream"
-    };
-    f.render_widget(
-        Paragraph::new(vec![
-            key_hint(&[("a", auto_action), ("c", dream_action)]),
-            key_hint(&[("Up/Down", "select"), ("Enter", "open")]),
-            key_hint(&[
-                ("d", "forget"),
-                ("Tab/Left/Right", "switch scope"),
-                ("Esc", "close"),
-            ]),
-        ]),
-        chunks[2],
-    );
+        vec![nav, combined]
+    }
 }
 
 fn draw_loading(f: &mut Frame, area: Rect, key: &str) {
@@ -205,7 +215,40 @@ fn memory_header(app: &App, tab: MemoryScopeTab, n: usize) -> Vec<Line<'static>>
                 .style(Style::new().fg(Color::DarkGray)),
         );
     }
+    lines.push(toggle_status_line(&app.memory));
     lines
+}
+
+/// The toggle status row: the current state of each switch, with an
+/// in-flight flip marked until its reply lands. On is ● (Cyan, bold), off
+/// is ○ (dim), pending is ◌ (Cyan).
+fn toggle_status_line(memory: &MemoryPaneState) -> Line<'static> {
+    let switches = [MemoryToggleWhich::Auto, MemoryToggleWhich::Dream];
+    let mut spans = vec![Span::raw("  ")];
+    for (i, which) in switches.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("    "));
+        }
+        let on = match which {
+            MemoryToggleWhich::Auto => memory.toggles().auto_memory,
+            MemoryToggleWhich::Dream => memory.toggles().auto_dream,
+        };
+        let (glyph, style) = if memory.toggle_pending(which) {
+            ("◌", Style::new().fg(Color::Cyan))
+        } else if on {
+            (
+                "●",
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            ("○", Style::new().fg(Color::DarkGray))
+        };
+        spans.push(Span::styled(
+            format!("{glyph} {}", toggle_label(which)),
+            style,
+        ));
+    }
+    Line::from(spans)
 }
 
 /// Build two-line list items: identity and recency first, description second.

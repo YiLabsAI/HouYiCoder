@@ -7,11 +7,12 @@ mod run_completion;
 use std::iter;
 use std::time::Instant;
 
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_protocol::frontend::memory::{
-    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryDetail, MemoryOperation,
+    MemorySummaryEntry, MemoryToggleWhich, ToggleState,
 };
-use houyicoder_protocol::frontend::run::RunError;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCallStatus};
 
 use crate::agent_message::{AgentMessage, ClientCommand, FleetEntry};
@@ -20,6 +21,7 @@ use crate::command::render::{
     render_trajectory_wire,
 };
 use crate::composition::suggestions_for;
+use crate::memory_state::{MemoryAction, toggle_label};
 use crate::pending_queue::PendingItem;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::enums::LiveBlock;
@@ -36,15 +38,37 @@ impl App {
         match msg {
             AgentMessage::Done { result } => {
                 self.active_run_req_id.set(None);
-                self.handle_run_completion(result);
+                self.handle_run_completion(result.map_err(|e| e.message));
+            }
+            AgentMessage::ConnectionLost { message } => {
+                // The driver is gone: no reply can land for anything in
+                // flight. End the active run if one is live, and sweep
+                // pending pane marks instead of leaving a mark that refuses
+                // its switch forever. Server state for in-flight mutations
+                // is unknown, so no per-action failure line is written —
+                // one generic connection-loss line covers all of them.
+                self.active_run_req_id.set(None);
+                self.memory.clear_pending();
+                self.handle_run_completion(Err(message));
             }
             AgentMessage::RequestError { req_id, message } => {
                 if self.active_run_req_id.get().is_some_and(|r| r == req_id) {
                     self.active_run_req_id.set(None);
-                    self.handle_run_completion(Err(RunError {
-                        kind: "wire".to_string(),
-                        message,
-                    }));
+                    self.handle_run_completion(Err(message));
+                } else if let Some(action) = self.memory.take_action(req_id) {
+                    // A failed pane mutation keeps the action context, so the
+                    // outcome says what did not happen instead of a bare error.
+                    // The pending mark clears and the header keeps the old
+                    // value — nothing was applied.
+                    let line = match action {
+                        MemoryAction::Toggle { which } => {
+                            format!("couldn't toggle {} — {message}", toggle_label(which))
+                        }
+                        MemoryAction::Forget { key } => {
+                            format!("couldn't forget {key} — {message}")
+                        }
+                    };
+                    self.system_line(line);
                 } else {
                     self.system_line(format!("error: {message}"));
                 }
@@ -195,8 +219,11 @@ impl App {
                 self.trust_choice = TrustChoice::Accept;
                 self.pending_trust_req_id = Some(req_id);
             }
-            // Completion and matching request errors are handled before this dispatch.
-            AgentMessage::Done { .. } | AgentMessage::RequestError { .. } => {
+            // Completion, driver death, and matching request errors are
+            // handled before this dispatch.
+            AgentMessage::Done { .. }
+            | AgentMessage::ConnectionLost { .. }
+            | AgentMessage::RequestError { .. } => {
                 unreachable!("run-end variants are intercepted by handle_agent_message")
             }
             AgentMessage::StatusResult { snapshot } => {
@@ -372,26 +399,15 @@ impl App {
                     self.model_sel = 0;
                 }
             }
-            AgentMessage::MemoryListResult { entries } => {
-                self.memory.set_entries(memory_entries_from_wire(&entries));
+            AgentMessage::MemoryListResult { req_id, entries } => {
+                self.apply_memory_list(req_id, entries);
             }
             AgentMessage::MemoryShowResult { req_id, entry } => {
-                if self.pane == Pane::Memory && self.memory.is_pending(req_id) {
-                    let missing = entry.is_none();
-                    self.memory.apply_detail(req_id, entry);
-                    if missing {
-                        self.system_line("memory: no such key");
-                    }
-                } else if self.pane != Pane::Memory && self.memory.pending_key().is_some() {
-                    self.memory.close_detail();
-                } else if self.memory.pending_key().is_none() {
-                    match entry {
-                        Some(entry) => self.system_line(render_memory_entry(&entry)),
-                        None => self.system_line("memory: no such key"),
-                    }
-                }
+                self.apply_memory_show(req_id, entry);
             }
-            AgentMessage::MemoryToggleStateResult { state } => self.memory.set_toggles(state),
+            AgentMessage::MemoryToggleStateResult { req_id, state } => {
+                self.apply_memory_toggles(req_id, state);
+            }
             AgentMessage::MemoryChanged {
                 id,
                 origin,
@@ -487,6 +503,54 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Apply a memory-list reply. A forget answers with the refreshed list;
+    /// the req_id match against a registered action tells it from a plain
+    /// refresh, which writes no transcript.
+    fn apply_memory_list(&mut self, req_id: RequestId, entries: Vec<MemorySummaryEntry>) {
+        let forgot = self.memory.take_forget(req_id);
+        self.memory.set_entries(memory_entries_from_wire(&entries));
+        if let Some(key) = forgot {
+            self.system_line(format!("forgot {key}"));
+        }
+    }
+
+    /// Apply a memory-detail reply: into the pane when the pane asked and the
+    /// request is still pending, otherwise rendered as one transcript line.
+    fn apply_memory_show(&mut self, req_id: RequestId, entry: Option<MemoryDetail>) {
+        if self.pane == Pane::Memory && self.memory.is_pending(req_id) {
+            let missing = entry.is_none();
+            self.memory.apply_detail(req_id, entry);
+            if missing {
+                self.system_line("memory: no such key");
+            }
+        } else if self.pane != Pane::Memory && self.memory.pending_key().is_some() {
+            self.memory.close_detail();
+        } else if self.memory.pending_key().is_none() {
+            match entry {
+                Some(entry) => self.system_line(render_memory_entry(&entry)),
+                None => self.system_line("memory: no such key"),
+            }
+        }
+    }
+
+    /// Apply a toggle-pair reply. A flip and a pane-open read answer with the
+    /// same shape; only the req_id a pending toggle was registered under
+    /// writes the outcome line.
+    fn apply_memory_toggles(&mut self, req_id: RequestId, state: ToggleState) {
+        let toggled = self.memory.take_toggle(req_id);
+        let outcome = toggled.map(|which| {
+            let on = match which {
+                MemoryToggleWhich::Auto => state.auto_memory,
+                MemoryToggleWhich::Dream => state.auto_dream,
+            };
+            format!("{} {}", toggle_label(which), if on { "on" } else { "off" })
+        });
+        self.memory.set_toggles(state);
+        if let Some(line) = outcome {
+            self.system_line(line);
         }
     }
 

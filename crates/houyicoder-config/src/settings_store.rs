@@ -9,6 +9,9 @@
 //! a writer that does not take the lock (e.g. a user hand-editing the
 //! file).
 
+use std::error::Error;
+use std::fmt;
+
 /// Error from a merge-preserving settings write. Separate from ConfigError
 /// (provider resolution) so a settings failure never masquerades as an auth
 /// problem. Callers surface these to the user, not the provider path.
@@ -22,6 +25,18 @@ pub enum SettingsWriteError {
     /// rename. The file is left in the last winner's state.
     CasRetriesExhausted,
 }
+
+impl fmt::Display for SettingsWriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(msg) => write!(f, "settings I/O failed: {msg}"),
+            Self::CorruptJson(msg) => write!(f, "settings file is corrupt: {msg}"),
+            Self::CasRetriesExhausted => write!(f, "settings writers kept conflicting"),
+        }
+    }
+}
+
+impl Error for SettingsWriteError {}
 
 /// Merge-preserving, atomic, CAS-guarded settings write. Reads the file as
 /// a JSON Value (preserving all unknown keys — serde's default is passthrough,

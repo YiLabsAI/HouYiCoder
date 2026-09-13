@@ -5,14 +5,33 @@
 //! key, wire, and view boundaries.
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::memory::{MemoryChangeId, MemoryDetail, ToggleState};
+use houyicoder_protocol::frontend::memory::{
+    MemoryChangeId, MemoryDetail, MemoryToggleWhich, ToggleState,
+};
 
 use crate::evidence::MemoryEntry;
 use crate::list_pane_state::ListPaneState;
 use crate::state::enums::{CyclicTab, MemoryScopeTab};
+
+/// The user-facing name of one toggle switch, shared by the pane header,
+/// the transcript outcomes, and the command layer.
+pub(crate) fn toggle_label(which: MemoryToggleWhich) -> &'static str {
+    match which {
+        MemoryToggleWhich::Auto => "auto-memory",
+        MemoryToggleWhich::Dream => "auto-dream",
+    }
+}
+
+/// An in-flight pane mutation, keyed by the request id its reply will carry.
+/// Reads (list refresh, toggle-state fetch) never register an action, so only
+/// a mutation's reply writes a transcript outcome.
+pub(crate) enum MemoryAction {
+    Toggle { which: MemoryToggleWhich },
+    Forget { key: String },
+}
 
 pub(crate) enum MemoryDetailState {
     Loading {
@@ -33,6 +52,7 @@ pub(crate) struct MemoryPaneState {
     list: ListPaneState,
     detail: Option<MemoryDetailState>,
     seen_changes: HashSet<MemoryChangeId>,
+    actions: HashMap<RequestId, MemoryAction>,
 }
 
 impl MemoryPaneState {
@@ -47,6 +67,7 @@ impl MemoryPaneState {
             list: ListPaneState::default(),
             detail: None,
             seen_changes: HashSet::new(),
+            actions: HashMap::new(),
         }
     }
 
@@ -66,6 +87,107 @@ impl MemoryPaneState {
 
     pub(crate) fn set_toggles(&mut self, toggles: ToggleState) {
         self.toggles = toggles;
+    }
+
+    /// Whether one switch has a flip in flight (the header's pending mark).
+    pub(crate) fn toggle_pending(&self, which: MemoryToggleWhich) -> bool {
+        self.actions.values().any(
+            |action| matches!(action, MemoryAction::Toggle { which: pending } if *pending == which),
+        )
+    }
+
+    /// Record an in-flight toggle flip. Returns false when the same switch
+    /// already has one pending, so a repeat press is dropped instead of
+    /// racing on→off→on; the other switch stays operable.
+    pub(crate) fn begin_toggle(&mut self, req_id: RequestId, which: MemoryToggleWhich) -> bool {
+        if self.toggle_pending(which) {
+            return false;
+        }
+        self.actions.insert(req_id, MemoryAction::Toggle { which });
+        true
+    }
+
+    /// Record an in-flight forget; the matching list reply writes the
+    /// outcome. Returns false when the same key already has one pending, so
+    /// a repeat d-press on a row ships a single delete.
+    pub(crate) fn begin_forget(&mut self, req_id: RequestId, key: String) -> bool {
+        let in_flight = self.actions.values().any(
+            |action| matches!(action, MemoryAction::Forget { key: pending } if *pending == key),
+        );
+        if in_flight {
+            return false;
+        }
+        self.actions.insert(req_id, MemoryAction::Forget { key });
+        true
+    }
+
+    /// Claim the action a reply's req_id belongs to, clearing it. None for
+    /// plain reads and refreshes — they write no transcript.
+    pub(crate) fn take_action(&mut self, req_id: RequestId) -> Option<MemoryAction> {
+        self.actions.remove(&req_id)
+    }
+
+    /// Claim an in-flight toggle flip. None when the id belongs to a forget,
+    /// a plain read, or was already claimed — the other action's pending
+    /// mark survives a mismatched claim.
+    pub(crate) fn take_toggle(&mut self, req_id: RequestId) -> Option<MemoryToggleWhich> {
+        match self.actions.get(&req_id) {
+            Some(MemoryAction::Toggle { which }) => {
+                let which = *which;
+                self.actions.remove(&req_id);
+                Some(which)
+            }
+            _ => None,
+        }
+    }
+
+    /// Claim an in-flight forget. None when the id belongs to a toggle, a
+    /// plain read, or was already claimed — the other action's pending mark
+    /// survives a mismatched claim.
+    pub(crate) fn take_forget(&mut self, req_id: RequestId) -> Option<String> {
+        match self.actions.get(&req_id) {
+            Some(MemoryAction::Forget { key }) => {
+                let key = key.clone();
+                self.actions.remove(&req_id);
+                Some(key)
+            }
+            _ => None,
+        }
+    }
+
+    /// Drop every in-flight mark: pending actions and a detail still
+    /// loading. Called when the connection dies — no reply can ever resolve
+    /// them, and a sticky pending mark would refuse the switch forever. An
+    /// open detail is settled state, not a pending one, and survives.
+    pub(crate) fn clear_pending(&mut self) {
+        self.actions.clear();
+        if matches!(self.detail, Some(MemoryDetailState::Loading { .. })) {
+            self.detail = None;
+        }
+    }
+
+    /// The keys with a forget in flight, sorted for deterministic assertions.
+    #[cfg(test)]
+    pub(crate) fn pending_forget_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self
+            .actions
+            .values()
+            .filter_map(|action| match action {
+                MemoryAction::Forget { key } => Some(key.clone()),
+                MemoryAction::Toggle { .. } => None,
+            })
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    /// How many switches have a flip in flight, for repeat-press assertions.
+    #[cfg(test)]
+    pub(crate) fn pending_toggle_count(&self) -> usize {
+        self.actions
+            .values()
+            .filter(|action| matches!(action, MemoryAction::Toggle { .. }))
+            .count()
     }
 
     pub(crate) fn scope(&self) -> MemoryScopeTab {

@@ -117,11 +117,13 @@ fn test_completed_cohort_stamped() {
 /// A toggle-state result updates memory state without changing the active pane.
 #[test]
 fn test_toggle_state_applies_view() {
+    use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::ToggleState;
     // On the pane: the snapshot applies + the pane stays open.
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Memory;
     app.handle_agent_message(AgentMessage::MemoryToggleStateResult {
+        req_id: RequestId(1),
         state: ToggleState {
             auto_memory: false,
             auto_dream: true,
@@ -135,6 +137,7 @@ fn test_toggle_state_applies_view() {
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Spec;
     app.handle_agent_message(AgentMessage::MemoryToggleStateResult {
+        req_id: RequestId(2),
         state: ToggleState {
             auto_memory: false,
             auto_dream: true,
@@ -154,11 +157,13 @@ fn test_toggle_state_applies_view() {
 /// A list refresh updates memory data without changing the active pane.
 #[test]
 fn test_memory_list_respects_dismissal() {
+    use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     // On the pane: the list populates + the pane stays open.
     let mut app = crate::composition::app();
     app.pane = Pane::Memory;
     app.handle_agent_message(AgentMessage::MemoryListResult {
+        req_id: RequestId(1),
         entries: vec![MemorySummaryEntry {
             key: "build-gate".to_string(),
             description: "make check stays green".to_string(),
@@ -177,6 +182,7 @@ fn test_memory_list_respects_dismissal() {
     let mut app = crate::composition::app();
     app.pane = Pane::Spec;
     app.handle_agent_message(AgentMessage::MemoryListResult {
+        req_id: RequestId(2),
         entries: vec![MemorySummaryEntry {
             key: "build-gate".to_string(),
             description: "make check stays green".to_string(),
