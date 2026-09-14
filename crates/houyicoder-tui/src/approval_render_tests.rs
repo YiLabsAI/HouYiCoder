@@ -110,7 +110,7 @@ fn multiline_call_then_reply() -> Vec<CompletionResponse> {
 /// artifact (the diff renderer leaving stale cells), not a logic bug.
 #[test]
 fn test_option3_no_duplicate_result() {
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     let (mut app, boom) = app_with_multiline_guarded_tool(
         houyicoder_permission::PermissionMode::Manual,
         multiline_call_then_reply(),

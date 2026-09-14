@@ -1,5 +1,5 @@
 //! /resume command: open the session picker, switch by sid/name, or resume
-//! from an export file. Split out of command.rs on size grounds.
+//! from an export file.
 
 use crate::state::{App, Pane};
 
@@ -12,8 +12,14 @@ impl App {
     /// continues the same event loop (no quit, no restart). An in-process
     /// switch-session path.
     pub(crate) fn run_resume(&mut self, arg: Option<&str>) {
+        if self.session.is_none() {
+            self.system_line("resume: not connected");
+            return;
+        }
+        // Connected but the session-history bridge is not installed: a
+        // capability gap, not a disconnect.
         let Some(lister) = self.session_lister.clone() else {
-            self.system_line("resume: no session store wired (stub mode)");
+            self.system_line("resume: session history unavailable");
             return;
         };
         let current_sid = self.session_id.0.clone();
@@ -112,6 +118,14 @@ mod tests {
     use crate::resume_picker::SessionRow;
     use std::sync::Arc;
 
+    /// The most recent system line pushed to the transcript, if any.
+    fn last_line(app: &App) -> Option<String> {
+        app.transcript.iter().rev().find_map(|l| match l {
+            crate::records::TranscriptLine::System(s) => Some(s.clone()),
+            _ => None,
+        })
+    }
+
     struct EmptyLister;
     impl crate::resume_picker::SessionLister for EmptyLister {
         fn list_sessions(&self, _current: &str) -> Vec<SessionRow> {
@@ -143,20 +157,41 @@ mod tests {
         fn resolve_detail(&self, _row: &mut SessionRow) {}
     }
 
-    /// /resume with no lister wired reports stub mode and never opens a pane.
+    /// A disconnected app reports not connected and never opens a pane.
     #[test]
-    fn test_no_lister_reports_stub() {
+    fn test_resume_disconnected() {
         let mut app = crate::composition::app();
         app.run_resume(None);
         assert!(app.resume_picker.rows.is_empty());
         assert!(!app.resume_picker.open);
         assert!(app.pending_resume_target.is_none());
+        assert!(
+            last_line(&app)
+                .expect("a system line lands")
+                .contains("resume: not connected"),
+            "disconnected /resume reports not connected"
+        );
+    }
+
+    /// A connected app without the session-history bridge reports the
+    /// capability gap, not a disconnect.
+    #[test]
+    fn test_resume_lister_gap() {
+        let mut app = crate::test_harness::connected_app();
+        app.run_resume(None);
+        assert!(!app.resume_picker.open);
+        assert!(
+            last_line(&app)
+                .expect("a system line lands")
+                .contains("resume: session history unavailable"),
+            "connected /resume without the bridge reports the capability gap"
+        );
     }
 
     /// /resume with no arg and no other sessions reports empty + no pane.
     #[test]
     fn test_empty_store_reports_none() {
-        let mut app = crate::composition::app();
+        let mut app = crate::test_harness::connected_app();
         app.session_lister = Some(Arc::new(EmptyLister));
         app.run_resume(None);
         assert!(!app.resume_picker.open);
@@ -166,7 +201,7 @@ mod tests {
     /// /resume with no arg and sessions opens the Resume pane.
     #[test]
     fn test_opens_pane_with_rows() {
-        let mut app = crate::composition::app();
+        let mut app = crate::test_harness::connected_app();
         app.session_lister = Some(Arc::new(TwoRowLister));
         app.run_resume(None);
         assert!(app.resume_picker.open);
@@ -177,7 +212,7 @@ mod tests {
     /// /resume with a sid arg matches a row by sid and sets the pending target.
     #[test]
     fn test_matches_sid_directly() {
-        let mut app = crate::composition::app();
+        let mut app = crate::test_harness::connected_app();
         app.session_lister = Some(Arc::new(TwoRowLister));
         app.run_resume(Some("aaaa1111"));
         assert_eq!(app.pending_resume_target.as_deref(), Some("aaaa1111"));
@@ -187,7 +222,7 @@ mod tests {
     /// /resume with a title substring matches case-insensitively.
     #[test]
     fn test_matches_title_substring() {
-        let mut app = crate::composition::app();
+        let mut app = crate::test_harness::connected_app();
         app.session_lister = Some(Arc::new(TwoRowLister));
         app.run_resume(Some("LOGIN"));
         assert_eq!(app.pending_resume_target.as_deref(), Some("aaaa1111"));
@@ -196,7 +231,7 @@ mod tests {
     /// /resume with a nonexistent token reports no match and does not quit.
     #[test]
     fn test_no_match_reports_error() {
-        let mut app = crate::composition::app();
+        let mut app = crate::test_harness::connected_app();
         app.session_lister = Some(Arc::new(TwoRowLister));
         app.run_resume(Some("zzz"));
         assert!(app.pending_resume_target.is_none());
@@ -233,7 +268,7 @@ mod tests {
     /// (read-only browsing is harmless). Only a specific target defers.
     #[test]
     fn test_busy_bare_opens_picker() {
-        let mut app = crate::composition::app();
+        let mut app = crate::test_harness::connected_app();
         app.session_lister = Some(Arc::new(TwoRowLister));
         app.agent_busy = true;
         app.screen = crate::state::Screen::Working;

@@ -11,7 +11,7 @@ fn test_drag_copies_agent_line() {
     use crate::composition;
     use crate::selection::RecordingClipboard;
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     use std::sync::{Arc, Mutex};
 
     let mut app = composition::app();
@@ -66,7 +66,7 @@ fn test_drag_copies_second_line() {
     use crate::composition;
     use crate::selection::RecordingClipboard;
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     use std::sync::{Arc, Mutex};
 
     let mut app = composition::app();

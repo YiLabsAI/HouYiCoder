@@ -315,7 +315,7 @@ pub enum AgentMessage {
     },
     /// The working directories added to the sandbox at runtime (/permissions
     /// Workspace tab). Refreshes on every add/remove so the tab stays in sync.
-    PermissionWorkingDirsResult { dirs: Vec<String> },
+    PermissionDirsResult { dirs: Vec<String> },
     /// The git-confirm checkpoint toggle state the /permission git command requested.
     PermissionAskBeforeGitResult { enabled: bool },
     /// The registered tool list the /tools command requested over the wire.
@@ -519,13 +519,13 @@ pub enum ClientCommand {
     /// Add a directory the sandboxed agent may touch beyond the workspace
     /// root (/permissions Workspace tab). The server canonicalizes + extends
     /// the kernel fence; the reply carries the updated directory list.
-    PermissionAddWorkingDirQuery {
+    PermissionAddDirQuery {
         req_id: RequestId,
         path: String,
     },
     /// Remove a previously-added working directory. No-op when the path was
     /// never added; the reply carries the updated list either way.
-    PermissionRemoveWorkingDirQuery {
+    PermissionRemoveDirQuery {
         req_id: RequestId,
         path: String,
     },

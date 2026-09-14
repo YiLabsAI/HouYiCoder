@@ -9,7 +9,7 @@ use houyicoder_protocol::frontend::SlashCommand;
 use crate::composition;
 use crate::keys::handle_working;
 use crate::state::{App, Pane, Screen, ViewportMode};
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)

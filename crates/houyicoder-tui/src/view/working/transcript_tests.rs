@@ -1,6 +1,6 @@
 use crate::records::TranscriptLine;
-use crate::test_support::render_text;
-use crate::test_support::working_app;
+use crate::test_harness::render_text;
+use crate::test_harness::working_app;
 
 fn bash_call(command: &str) -> TranscriptLine {
     TranscriptLine::Tool {
@@ -254,7 +254,7 @@ fn test_spinner_keeps_blank_above() {
 #[test]
 fn test_view_hides_tail() {
     use crate::records::TeammateView;
-    let mut app = crate::test_support::working_app();
+    let mut app = crate::test_harness::working_app();
     app.live_active = true;
     app.live_assistant_text = "parent streaming text".into();
     app.agent_busy = true;

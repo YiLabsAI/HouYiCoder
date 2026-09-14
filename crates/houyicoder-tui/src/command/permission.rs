@@ -1,15 +1,15 @@
-//! /permissions + /goal command dispatch. Split out of command.rs on size
-//! grounds. The permission surface (mode, durable rules, verdict log) is the
-//! server's authority; these commands either echo a cached view or ship a
-//! wire verb whose reply refreshes the cache.
+//! /permissions + /goal command dispatch. The permission surface (mode,
+//! durable rules, verdict log) is the server's authority; these commands
+//! either echo a cached view or send a request whose reply refreshes the
+//! cache.
 
-use crate::state::App;
 use houyicoder_protocol::frontend::permission::PermissionMode;
 
+use crate::permission_input::{add_rule_from_command, remove_rule_at};
+use crate::run_control::ClientCommand;
+use crate::state::{App, Pane};
+
 impl App {
-    /// /permissions dispatch. Returns true when the name matched. Extracted
-    /// from run_tui_local_command so that dispatcher stays under the
-    /// too-many-lines gate.
     pub(crate) fn run_permission_command(&mut self, name: &str) -> bool {
         // /permissions add <action> <allow|deny|ask> | del <idx> | list | view:
         // manage the durable rule set that overrides the mode default, or view
@@ -37,7 +37,7 @@ impl App {
         false
     }
 
-    /// /permissions list: show the durable rule set from the wire cache.
+    /// Show the durable rule set from the protocol cache.
     fn show_permission_rules(&mut self) {
         let rules = &self.rules_cache;
         if rules.is_empty() {
@@ -55,10 +55,7 @@ impl App {
         self.system_line(s);
     }
 
-    /// /permissions view: the full permission surface -- active mode, durable
-    /// rules, and the session verdict log. Mode + rules come from the wire
-    /// cache; the verdict log accumulates from the acpx
-    /// permission_decision stream.
+    /// Show the active mode, durable rules, and session verdict log.
     fn show_permission_view(&mut self) {
         let mode = self.current_mode();
         let ask_before_git = self.ask_before_git_enabled;
@@ -76,30 +73,23 @@ impl App {
     /// view switch, not a turn that needs an in-stream acknowledgment. Esc
     /// returns to the transcript.
     pub(crate) fn open_permission_pane(&mut self) {
-        self.pane = crate::state::Pane::Permission;
+        self.pane = Pane::Permission;
     }
 
-    /// /permissions add <action> <effect>: add a rule. The server is the
-    /// authority; the wire PermissionAddRule verb carries the full rule and the
-    /// server's reply refreshes the rules cache. Delegates to the shared
-    /// parser so the pane's Add sub-mode and this command stay in sync.
+    /// Add a rule through the same parser used by the permission pane.
     fn add_permission_rule(&mut self, action: &str, effect: &str) {
-        crate::permission_input::add_rule_from_command(self, action, effect);
+        add_rule_from_command(self, action, effect);
     }
 
-    /// /permissions del <idx>: remove a rule by index. The server is the
-    /// authority; the wire PermissionRemoveRule verb's reply refreshes the
-    /// rules cache. Delegates to the shared removal path used by the pane's
-    /// Remove sub-mode.
+    /// Remove a rule through the same path used by the permission pane.
     fn remove_permission_rule(&mut self, idx: &str) {
         match idx.parse::<usize>() {
-            Ok(i) => crate::permission_input::remove_rule_at(self, i),
+            Ok(i) => remove_rule_at(self, i),
             Err(_) => self.system_line("permission: usage /permissions del <idx>".to_string()),
         }
     }
 
-    /// The current permission mode (from the wire cache the server fills).
-    /// Defaults to Auto when no response has landed yet.
+    /// Return the cached permission mode, defaulting to Auto.
     pub fn current_mode(&self) -> PermissionMode {
         self.mode_cache.unwrap_or(PermissionMode::Auto)
     }
@@ -111,10 +101,13 @@ impl App {
         // Shift+Tab cycles the mode; the status-bar pill reflects it on the
         // next render, so no system line is pushed -- the footer pill is the
         // single source of mode truth. The server is the authority; it cycles
-        // + responds with the new mode, which lands in mode_cache. No-op in
-        // stub mode (no carrier, no permission surface).
-        if let Some(req_id) = self.mint_request_id() {
-            self.send_cmd(crate::run_control::ClientCommand::PermissionCycleModeQuery { req_id });
+        // + responds with the new mode, which lands in mode_cache.
+        let Some(req_id) = self.next_request_id() else {
+            self.system_line("permission: not connected");
+            return;
+        };
+        if !self.send_cmd(ClientCommand::PermissionCycleModeQuery { req_id }) {
+            self.system_line("permission: connection lost");
         }
     }
 
@@ -122,41 +115,46 @@ impl App {
     /// running (from the cache; a server round-trip refreshes it via
     /// PermissionAskBeforeGitResult).
     fn show_ask_before_git(&mut self) {
+        let Some(req_id) = self.next_request_id() else {
+            self.system_line("permission: not connected");
+            return;
+        };
+        // The refresh must reach the server before the cached state is shown:
+        // otherwise a dead driver leaves the user reading a possibly stale
+        // value as if it were the gate's authority.
+        let refresh = ClientCommand::PermissionAskBeforeGitQuery {
+            req_id,
+            enabled: None,
+        };
+        if !self.send_cmd(refresh) {
+            self.system_line("permission: connection lost");
+            return;
+        }
         let on = self.ask_before_git_enabled;
         self.system_line(format!(
             "permission: ask before git operations: {} (git commit/rebase/reset/tag {} before running; /permissions git on|off to toggle)",
             if on { "on" } else { "off" },
             if on { "ask" } else { "run without asking" },
         ));
-        // Refresh from the server so the cache reflects the gate's authority.
-        if let Some(req_id) = self.mint_request_id() {
-            self.send_cmd(
-                crate::run_control::ClientCommand::PermissionAskBeforeGitQuery {
-                    req_id,
-                    enabled: None,
-                },
-            );
-        }
     }
 
     /// /permissions git on|off: toggle whether git commit/rebase/reset/tag ask
     /// before running. The server is the authority; the reply
     /// (PermissionAskBeforeGitResult) refreshes the cache + surfaces the state.
     fn request_ask_before_git(&mut self, enabled: bool) {
-        if let Some(req_id) = self.mint_request_id() {
-            self.send_cmd(
-                crate::run_control::ClientCommand::PermissionAskBeforeGitQuery {
-                    req_id,
-                    enabled: Some(enabled),
-                },
-            );
-        } else {
-            // No server: update the cache optimistically (stub mode).
-            self.ask_before_git_enabled = enabled;
-            self.system_line(format!(
-                "permission: ask before git operations: {}",
-                if enabled { "on" } else { "off" }
-            ));
+        let Some(req_id) = self.next_request_id() else {
+            self.system_line("permission: not connected");
+            return;
+        };
+        // The server is the authority: the cache only moves when its reply
+        // lands, so a toggle that never reaches the server never fakes a
+        // persisted change.
+        let command = ClientCommand::PermissionAskBeforeGitQuery {
+            req_id,
+            enabled: Some(enabled),
+        };
+        if !self.send_cmd(command) {
+            self.system_line("permission: connection lost");
         }
     }
 }

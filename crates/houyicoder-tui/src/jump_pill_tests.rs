@@ -27,7 +27,7 @@ use houyicoder_protocol::frontend::session_update::{
 use crate::agent_message::AgentMessage;
 use crate::composition;
 use crate::state::Screen;
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 use crate::transcript::TranscriptFrame;
 
 fn agent_msg(text: &str) -> TranscriptFrame {

@@ -265,7 +265,7 @@ fn test_render_card_question_options() {
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("Which library?"),
         "question text missing:\n{out}"
@@ -286,7 +286,7 @@ fn test_render_card_cursor_marker() {
     let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     aq.cursors[0] = 1; // focus on "time"
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains('>'), "cursor marker missing:\n{out}");
     let lines: Vec<&str> = out.lines().collect();
     let chrono_line = lines.iter().find(|l| l.contains("chrono")).expect("chrono");
@@ -301,7 +301,7 @@ fn test_render_card_multi_hint() {
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &multi_input()).expect("parse");
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("toggle"), "multi-select hint missing:\n{out}");
     // Multi-select Other placeholder has no trailing period (single does).
     assert!(
@@ -320,7 +320,7 @@ fn test_render_card_single_hint() {
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("enter select"),
         "single-select hint missing:\n{out}"
@@ -333,7 +333,7 @@ fn test_render_card_esc_hint() {
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("esc cancel"), "esc hint missing:\n{out}");
 }
 
@@ -344,7 +344,7 @@ fn test_render_card_selected_checkbox() {
     let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     aq.selections[0] = vec![0]; // select chrono
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("[x]"), "checked box missing:\n{out}");
     assert!(out.contains("[ ]"), "unchecked box missing:\n{out}");
 }
@@ -355,7 +355,7 @@ fn test_render_card_separator() {
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains('-'), "separator line missing:\n{out}");
 }
 
@@ -663,7 +663,7 @@ fn test_render_submit_title() {
     aq.selections[1] = vec![1];
     aq.current = aq.questions.len(); // submit view
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("Review your answers"),
         "submit view title missing:\n{out}"
@@ -679,7 +679,7 @@ fn test_render_submit_answers() {
     aq.selections[1] = vec![1]; // d
     aq.current = aq.questions.len();
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("q1"), "question 1 missing:\n{out}");
     assert!(out.contains("-> a"), "answer 1 missing:\n{out}");
     assert!(out.contains("q2"), "question 2 missing:\n{out}");
@@ -695,7 +695,7 @@ fn test_render_submit_warning() {
     aq.selections[1] = vec![]; // Q2 unanswered
     aq.current = aq.questions.len();
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("not answered all questions"),
         "warning missing:\n{out}"
@@ -711,7 +711,7 @@ fn test_render_submit_cancel_opts() {
     aq.selections[1] = vec![1];
     aq.current = aq.questions.len();
     app.ask_question = Some(aq);
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("Submit answers"),
         "submit option missing:\n{out}"

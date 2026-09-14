@@ -7,7 +7,7 @@ use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
 
 use crate::composition;
 use crate::state::{Pane, Screen, Stage, Verdict};
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -46,19 +46,33 @@ fn test_palette_inline_filters() {
 }
 
 #[test]
-fn test_tab_cycle_no_pollution() {
-    // Shift+Tab ships a PermissionCycleMode wire verb; it must NOT push a
-    // system line — the status-bar pill is the single source of mode truth,
-    // so the chat surface stays clean (the cycle itself lands server-side;
-    // the pill flips when the PermissionMode reply arrives).
-    let mut app = working();
+fn test_tab_cycle_connected() {
+    // Connected Shift+Tab ships a PermissionCycleMode wire verb and must NOT
+    // push a system line — the status-bar pill is the single source of mode
+    // truth, so the chat surface stays clean (the cycle itself lands
+    // server-side; the pill flips when the PermissionMode reply arrives).
+    let mut app = crate::test_harness::connected_app();
     let before = app.transcript.len();
     app.tab_cycle_mode();
     assert_eq!(
         app.transcript.len(),
         before,
-        "Shift+Tab must not pollute the chat surface"
+        "connected Shift+Tab must not pollute the chat surface"
     );
+}
+
+#[test]
+fn test_tab_cycle_disconnected() {
+    // Disconnected Shift+Tab refuses honestly instead of a silent no-op.
+    let mut app = working();
+    let before = app.transcript.len();
+    app.tab_cycle_mode();
+    assert_eq!(
+        app.transcript.len(),
+        before + 1,
+        "disconnected Shift+Tab pushes exactly one report line"
+    );
+    assert!(render(&app).contains("permission: not connected"));
 }
 
 #[test]
@@ -149,8 +163,8 @@ fn test_resume_reports_no_store() {
     let out = render(&app);
     println!("--- after /resume (stub) ---\n{out}\n--- end ---");
     assert!(
-        out.contains("no session store wired"),
-        "stub /resume should report no store wired:\n{out}"
+        out.contains("resume: not connected"),
+        "disconnected /resume reports not connected:\n{out}"
     );
     assert!(
         !app.resume_picker.open,
@@ -274,8 +288,8 @@ fn test_compact_honest_and_preserves() {
     println!("--- /compact ---\n{out}\n--- end ---");
     // Without a server, compact adds one diagnostic and preserves the transcript.
     assert!(
-        out.contains("no server connected"),
-        "honest no-server message missing: {out}"
+        out.contains("compact: not connected"),
+        "honest disconnected message missing: {out}"
     );
     assert_eq!(
         app.transcript.len(),
@@ -369,5 +383,23 @@ fn test_trajectory_renders_chain() {
     assert!(
         out.contains("prev:abababab"),
         "second event shows its hash link: {out}"
+    );
+}
+
+#[test]
+fn test_compact_connection_lost() {
+    // A dead driver refuses the compact: no in-progress line is pushed.
+    let mut app = crate::test_harness::connection_lost_app();
+    let before = app.transcript.len();
+    app.run_command(SlashCommand::Compact);
+    let out = render(&app);
+    assert!(
+        out.contains("compact: connection lost"),
+        "send failure reports connection lost:\n{out}"
+    );
+    assert_eq!(
+        app.transcript.len(),
+        before + 1,
+        "only the refusal line is added"
     );
 }

@@ -17,7 +17,7 @@ fn test_subagent_renders_collapsed() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("explore"), "subagent type renders: {out}");
     assert!(out.contains("found auth module"), "summary renders: {out}");
     assert!(
@@ -44,7 +44,7 @@ fn test_subagent_renders_expanded() {
         color: None,
     });
     app.expanded_subagents.insert("child-1".into());
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("ctrl+o to collapse"),
         "expanded shows the collapse hint: {out}"
@@ -73,7 +73,7 @@ fn test_subagent_expanded_renders_child() {
         color: None,
     });
     app.expanded_subagents.insert("child-1".into());
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("child reply: auth is here"),
         "expanded with a loaded child renders the child row inline: {out}"
@@ -148,7 +148,7 @@ fn test_child_transcript_fills() {
         !folded.is_empty(),
         "ChildTranscriptResult fills folded_transcript, got empty"
     );
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.to_lowercase().contains("grep auth"),
         "expanded render shows the fetched child row: {out}"
@@ -177,19 +177,19 @@ fn test_subagent_toggle_repaints() {
         folded_transcript: vec![TranscriptLine::Agent("child reply here".into())],
         color: None,
     });
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         !out.contains("child reply here"),
         "first render is collapsed: {out}"
     );
     app.toggle_tail_expand();
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("child reply here"),
         "expand must repaint the child rows: {out}"
     );
     app.toggle_tail_expand();
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         !out.contains("child reply here"),
         "collapse must repaint too: {out}"
@@ -215,7 +215,7 @@ fn test_child_fetch_repaints() {
         color: None,
     });
     app.expanded_subagents.insert("child-1".into());
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("not yet loaded"),
         "warm the cache on the unloaded state: {out}"
@@ -228,7 +228,7 @@ fn test_child_fetch_repaints() {
             ToolCallStatus::Completed,
         )],
     });
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.to_lowercase().contains("grep auth"),
         "the fetched child rows must repaint: {out}"

@@ -1,10 +1,9 @@
 #![cfg(test)]
-//! /export command tests: the handler's three branches (no seam wired,
-//! successful write, write failure) + the string-dispatch path that routes
-//! an export with a path arg to the handler. Covers run_export end-to-end
-//! at the unit level (the PTY test pins the real-binary path; these pin
-//! the branches the PTY run does not reliably hit — the stub-seam +
-//! failure branches).
+//! /export command tests: the handler's branches (disconnected, capability
+//! gap, successful write, write failure) + the string-dispatch path that
+//! routes an export with a path arg to the handler. Covers run_export
+//! end-to-end at the unit level (the PTY test pins the real-binary path;
+//! these pin the branches the PTY run does not reliably hit).
 
 use std::sync::Arc;
 
@@ -44,7 +43,7 @@ fn test_export_writes_file_reports() {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let target = dir.join("out.json");
-    let mut app = crate::composition::app();
+    let mut app = crate::test_harness::connected_app();
     app.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "ignored.json".into(),
@@ -71,20 +70,33 @@ fn test_export_writes_file_reports() {
 }
 
 #[test]
-fn test_without_seam_reports_stub() {
+fn test_export_disconnected() {
     let mut app = crate::composition::app();
-    // export_log stays None (the default) — the stub-mode branch.
+    // session stays None (the default) — the disconnected branch.
     app.run_export(None);
     let line = last_system_line(&app).expect("a system line lands");
     assert!(
-        line.contains("export: no session log wired"),
-        "expected the stub-mode report, got: {line}"
+        line.contains("export: not connected"),
+        "expected the disconnected report, got: {line}"
+    );
+}
+
+#[test]
+fn test_export_lister_gap() {
+    let mut app = crate::test_harness::connected_app();
+    // Connected, but the export bridge is not installed — a capability gap,
+    // not a disconnect.
+    app.run_export(None);
+    let line = last_system_line(&app).expect("a system line lands");
+    assert!(
+        line.contains("export: unavailable in this session"),
+        "expected the capability report, got: {line}"
     );
 }
 
 #[test]
 fn test_unwritable_path_reports_error() {
-    let mut app = crate::composition::app();
+    let mut app = crate::test_harness::connected_app();
     app.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "x.json".into(),
@@ -114,7 +126,7 @@ fn test_dispatched_via_local_command() {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let target = dir.join("dispatched.json");
-    let mut app = crate::composition::app();
+    let mut app = crate::test_harness::connected_app();
     app.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "d.json".into(),

@@ -74,7 +74,7 @@ fn test_skills_pane_renders_entries() {
             usage: None,
         },
     ];
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("pdf-export"), "name row renders: {out}");
     assert!(out.contains("internal-only"), "second name renders: {out}");
     assert!(
@@ -127,7 +127,7 @@ fn test_skills_pane_showcase() {
             usage: None,
         },
     ];
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     println!("--- /skills pane showcase (80x24) ---\n{out}\n--- end ---");
     assert!(out.contains("Skills"), "pane title renders");
     assert!(out.contains("3 skills discovered"), "count line renders");
@@ -150,7 +150,7 @@ fn test_tools_pane_renders_entries() {
             description: "runs a command\nsecond line".into(),
         },
     ];
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("bash"), "bash row renders: {out}");
     assert!(out.contains("zed"), "zed row renders: {out}");
     // Sorted: bash before zed.
@@ -173,7 +173,7 @@ fn test_tools_pane_renders_empty() {
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Tools;
     app.tool_entries = vec![];
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("(no tools loaded)"),
         "empty tools renders placeholder: {out}"
@@ -187,7 +187,7 @@ fn test_agents_directory_renders_lines() {
     app.pane = crate::state::Pane::Agents;
     app.agent_directory =
         Some("## Available agents\n\n- explore: fast search\n- plan: design".into());
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     let header_row = out.lines().position(|l| l.contains("Available agents"));
     let explore_row = out.lines().position(|l| l.contains("explore"));
     assert!(header_row.is_some(), "header renders: {out}");
@@ -206,7 +206,7 @@ fn test_agents_directory_empty_placeholder() {
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Agents;
     app.agent_directory = Some(String::new());
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("(no agent directory loaded)"),
         "empty directory shows placeholder, not blank: {out}"

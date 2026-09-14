@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_banner_renders_name_hint() {
         use crate::records::TranscriptLine;
-        use crate::test_support::render_text;
+        use crate::test_harness::render_text;
         let mut app = app();
         app.screen = crate::state::Screen::Working;
         app.teammate_view = Some(crate::records::TeammateView {
@@ -131,7 +131,7 @@ mod tests {
     /// reserves a blank line.
     #[test]
     fn test_no_banner_without_teammate() {
-        use crate::test_support::render_text;
+        use crate::test_harness::render_text;
         let mut app = app();
         app.screen = crate::state::Screen::Working;
         let out = render_text(&app, 80, 24);
@@ -146,7 +146,7 @@ mod tests {
     /// regression that drops it.
     #[test]
     fn test_banner_carries_badge_color() {
-        use crate::test_support::{render_buffer, working_app};
+        use crate::test_harness::{render_buffer, working_app};
         let mut app = working_app();
         app.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c1".into(),

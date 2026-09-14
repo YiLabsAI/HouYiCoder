@@ -102,7 +102,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 #[cfg(test)]
 mod tests {
     use crate::composition;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
 
     use super::badge_color;
     use ratatui::style::Color;

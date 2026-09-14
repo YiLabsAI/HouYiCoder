@@ -83,7 +83,7 @@ mod tests {
 
     use crate::composition;
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
 
     /// A pending trust ask renders the project path + the two-button prompt,
     /// so the user sees which folder is asking + how to answer.

@@ -1,8 +1,4 @@
-//! The /compact command domain: guards against an in-flight run, mints a
-//! request id, surfaces a "compacting" line, and sends the CompactQuery. The
-//! server-side compaction fires PreCompact hooks, folds older events into a
-//! summary, persists a CheckpointManifest, fires PostCompact, and replies
-//! with the outcome.
+//! Starts manual compaction when the session is idle and connected.
 
 use crate::state::App;
 
@@ -23,11 +19,16 @@ impl App {
             );
             return;
         }
-        let Some(req_id) = self.mint_request_id() else {
-            self.system_line("compact: no server connected");
+        let Some(req_id) = self.next_request_id() else {
+            self.system_line("compact: not connected");
             return;
         };
+        // The in-progress line waits for the send: a dead driver must not
+        // leave the user watching a compaction that never started.
+        if !self.send_cmd(crate::run_control::ClientCommand::CompactQuery { req_id }) {
+            self.system_line("compact: connection lost");
+            return;
+        }
         self.system_line("compact: compacting...".to_string());
-        self.send_cmd(crate::run_control::ClientCommand::CompactQuery { req_id });
     }
 }

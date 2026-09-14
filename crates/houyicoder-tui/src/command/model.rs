@@ -1,9 +1,10 @@
-//! /model select: apply the row at the cursor (Default sentinel or a catalog
-//! id) to the active model. Sends a ModelSwitch over the wire; the host
-//! resolves + persists + replies with the applied ModelApplied.
+//! Applies the selected model and effort through the active session.
 
-use crate::state::App;
 use houyicoder_protocol::llm::EffortLevel;
+
+use crate::run_control::ClientCommand;
+use crate::state::{App, Pane};
+use crate::view::model_pane::{model_id_at, supports_effort};
 
 impl App {
     /// On cursor move (Up/Down), recompute the effort pick to follow the new
@@ -13,12 +14,12 @@ impl App {
         if self.model_effort_toggled {
             return;
         }
-        let model = crate::view::model_pane::model_id_at(self, self.model_sel);
+        let model = model_id_at(self, self.model_sel);
         let id = model
             .as_deref()
             .or(self.model_catalog.active_id.as_deref())
             .unwrap_or("");
-        self.model_effort = if crate::view::model_pane::supports_effort(id) {
+        self.model_effort = if supports_effort(id) {
             Some(EffortLevel::Medium)
         } else {
             None
@@ -29,12 +30,12 @@ impl App {
     /// Sets model_effort_toggled = true so subsequent cursor moves don't
     /// clobber the pick. No-op when the focused model is NotSupported.
     pub(crate) fn cycle_effort(&mut self, forward: bool) {
-        let model = crate::view::model_pane::model_id_at(self, self.model_sel);
+        let model = model_id_at(self, self.model_sel);
         let id = model
             .as_deref()
             .or(self.model_catalog.active_id.as_deref())
             .unwrap_or("");
-        if !crate::view::model_pane::supports_effort(id) {
+        if !supports_effort(id) {
             return;
         }
         let levels = [EffortLevel::Low, EffortLevel::Medium, EffortLevel::High];
@@ -50,29 +51,39 @@ impl App {
     }
 
     pub(crate) fn set_model_at_cursor(&mut self) {
+        // No request, no switch: the tier stays server-authoritative, the
+        // pane stays open for retry, and no success line is pushed.
+        let Some(req_id) = self.next_request_id() else {
+            self.system_line("model: not connected");
+            return;
+        };
         let idx = self.model_sel;
-        let id = crate::view::model_pane::model_id_at(self, idx);
+        let id = model_id_at(self, idx);
         let tier = id
             .clone()
             .or_else(|| Some("Default".into()))
             .unwrap_or_else(|| "Default".into());
+        let command = ClientCommand::ModelSwitch {
+            req_id,
+            model: id.clone(),
+            effort: self.model_effort,
+            effort_toggled: self.model_effort_toggled,
+        };
+        // Send before touching any local state: a dead driver must not leave
+        // the tier moved with no request sent.
+        if !self.send_cmd(command) {
+            self.system_line("model: connection lost");
+            return;
+        }
         self.model_tier = tier.clone();
         // status.model holds the resolved concrete (for the status pane +
         // snapshot, which show what is running). Set it for a concrete pick;
         // for Default the ModelResult reply fills the resolved value. The
         // status BAR reads model_tier via status_bar_model(), not this.
-        if let Some(ref concrete) = id {
-            self.status.model = concrete.clone();
+        if let Some(concrete) = id {
+            self.status.model = concrete;
         }
-        if let Some(req_id) = self.mint_request_id() {
-            self.send_cmd(crate::run_control::ClientCommand::ModelSwitch {
-                req_id,
-                model: id,
-                effort: self.model_effort,
-                effort_toggled: self.model_effort_toggled,
-            });
-        }
-        self.pane = crate::state::Pane::Transcript;
+        self.pane = Pane::Transcript;
         self.system_line(format!("model: {tier}"));
     }
 }

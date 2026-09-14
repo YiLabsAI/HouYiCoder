@@ -61,7 +61,7 @@ impl Session {
     }
 
     /// Mint a session-local monotonic request identifier.
-    pub fn mint_request_id(&self) -> RequestId {
+    pub fn next_request_id(&self) -> RequestId {
         let id = self.next_req_id.get();
         self.next_req_id.set(id.wrapping_add(1));
         RequestId(id)
@@ -88,23 +88,23 @@ impl Session {
     /// Ship a status query to refresh the cached status snapshot. Used by the
     /// status command and the periodic idle poll.
     pub fn request_status(&self) {
-        let req_id = self.mint_request_id();
+        let req_id = self.next_request_id();
         self.send(ClientCommand::StatusQuery { req_id });
     }
 
-    /// Persist a new name for the live session and request refreshed status.
-    pub fn request_rename(&self, session_id: FrontendSessionId, name: String) {
-        let req_id = self.mint_request_id();
+    /// Request the rename for the live session; false means the driver is gone.
+    pub fn request_rename(&self, session_id: FrontendSessionId, name: String) -> bool {
+        let req_id = self.next_request_id();
         self.send(ClientCommand::RenameSessionQuery {
             req_id,
             session_id,
             name,
-        });
+        })
     }
 
     /// Seed the permission-mode cache from the server.
     pub fn request_permission_mode(&self) {
-        let req_id = self.mint_request_id();
+        let req_id = self.next_request_id();
         self.send(ClientCommand::PermissionModeQuery { req_id });
     }
 }
@@ -325,13 +325,13 @@ async fn drive_connection(
                         payload: FrontendRequest::PermissionRemoveRule { index },
                     });
                 }
-                Some(ClientCommand::PermissionAddWorkingDirQuery { req_id, path }) => {
+                Some(ClientCommand::PermissionAddDirQuery { req_id, path }) => {
                     outbound.push_back(Outbound::Request {
                         req_id,
                         payload: FrontendRequest::PermissionAddWorkingDir { path },
                     });
                 }
-                Some(ClientCommand::PermissionRemoveWorkingDirQuery { req_id, path }) => {
+                Some(ClientCommand::PermissionRemoveDirQuery { req_id, path }) => {
                     outbound.push_back(Outbound::Request {
                         req_id,
                         payload: FrontendRequest::PermissionRemoveWorkingDir { path },
@@ -580,7 +580,7 @@ async fn drive_connection(
                     }
                     ResponsePayload::PermissionWorkingDirs(dirs) => {
                         let _send =
-                            agent_tx.send(AgentMessage::PermissionWorkingDirsResult { dirs });
+                            agent_tx.send(AgentMessage::PermissionDirsResult { dirs });
                     }
                     ResponsePayload::PermissionAskBeforeGit(enabled) => {
                         let _send =

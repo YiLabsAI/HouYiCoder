@@ -217,9 +217,9 @@ pub struct App {
     pub trajectory_log: Option<Arc<dyn TrajectoryLog>>,
     /// Optional export seam. The composition root injects an impl that reads
     /// the durable session log and serializes the full trajectory, tool
-    /// stats, usage, checkpoints, and errors to a JSON document. None in
-    /// stub or unwired modes, where /export reports "no session log wired"
-    /// instead of writing an empty file.
+    /// stats, usage, checkpoints, and errors to a JSON document. None when
+    /// the export bridge is not installed; /export then reports the reason
+    /// (disconnected, or unavailable in this session).
     pub export_log: Option<Arc<dyn ExportLog>>,
     /// Optional transcript-snapshot seam. The composition root injects an
     /// impl that loads the durable session log into a TranscriptLine
@@ -306,7 +306,7 @@ pub struct App {
     /// by the server task that owns the runner. None of the engine run/resume
     /// paths live here.
     pub session_id: SessionId,
-    /// The tokio runtime that drives async run/resume. None in stub mode.
+    /// The tokio runtime that drives async run/resume. None while disconnected.
     pub runtime: Option<Arc<tokio::runtime::Runtime>>,
     /// Sender cloned into each spawned task; the task ships the RunResult plus
     /// the session replay back over this channel.
@@ -557,9 +557,9 @@ pub struct App {
     /// The original working directory the session started in, shown at the top
     /// of the Workspace tab in /permissions (empty in a stub App).
     pub working_dir: String,
-    /// The last wire status snapshot, cached from the periodic poll the event loop drives while a carrier is wired. The per-frame status bar plus /sandbox and /compact read this so they never call the engine runner. None in stub mode (render falls back to a zeroed stub).
+    /// The latest protocol status snapshot. None while disconnected.
     pub status_cache: Option<StatusSnapshot>,
-    /// When the last periodic StatusQuery shipped. Fires every
+    /// When the last periodic StatusQuery was sent. Fires every
     /// STATUS_POLL_INTERVAL_SECS so the bar + /sandbox stay recent.
     pub last_status_poll: Option<Instant>,
     /// The registered-hook rows for the /hooks pane. Refreshed from the wire

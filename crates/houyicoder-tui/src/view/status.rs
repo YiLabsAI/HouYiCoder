@@ -72,11 +72,10 @@ fn stage_is_done(current: Stage, target: Stage) -> bool {
     order(current) > order(target)
 }
 
-/// Render the bottom status bar (Working mode). When a runner is wired
+/// Render the bottom status bar (Working mode). When a session is connected
 /// (agent-chat mode), shows one compact line: model | sandbox | busy/idle |
-/// tokens | copy hint. When no runner is wired (stub mode for tests/login),
-/// keeps the legacy progress bar + stage hint so existing tests render the
-/// same surface.
+/// tokens | copy hint. While disconnected (tests/login), keeps the legacy
+/// progress bar + stage hint so existing tests render the same surface.
 pub fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     // Approval pending: the modal popup (view::approval) is the sole approval
     // surface; the status bar keeps showing the normal agent bar (mode pill +

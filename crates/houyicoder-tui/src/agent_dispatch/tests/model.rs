@@ -172,11 +172,12 @@ fn test_model_pane_swallows_chars() {
 }
 
 /// Selecting a concrete model id sets status.model immediately (no flicker —
-/// the reply echoes the same id).
+/// the reply echoes the same id). Drives the connected path: a disconnected
+/// Enter refuses before touching the tier.
 #[test]
 fn test_concrete_id_sets_model() {
     use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
-    let mut app = crate::composition::app();
+    let mut app = crate::test_harness::connected_app();
     app.pane = crate::state::Pane::Model;
     app.status.model = "old".into();
     // Wire a catalog so cursor on row 1 returns "glm-5.2"
@@ -274,4 +275,44 @@ fn test_positions_cursor_on_open() {
         app.model_sel, 1,
         "cursor positioned on the active model's row, not left at 0"
     );
+}
+
+/// A dead driver refuses the switch: no tier or status change, the pane
+/// stays open for retry, and the refusal names the lost connection.
+#[test]
+fn test_model_send_failure() {
+    use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
+    let mut app = crate::test_harness::connection_lost_app();
+    app.pane = crate::state::Pane::Model;
+    app.model_catalog = ModelCatalog {
+        active_id: None,
+        effort_level: None,
+        catalog: vec![ModelCatalogEntry {
+            id: "glm-5.2".into(),
+            display_name: None,
+            description: None,
+            effort: None,
+        }],
+    };
+    app.model_sel = 0;
+    let tier_before = app.model_tier.clone();
+    let status_before = app.status.model.clone();
+    app.set_model_at_cursor();
+    assert_eq!(app.model_tier, tier_before, "the tier stays untouched");
+    assert_eq!(app.status.model, status_before, "status model untouched");
+    assert_eq!(
+        app.pane,
+        crate::state::Pane::Model,
+        "the pane stays open for retry"
+    );
+    let last = app.transcript.last().expect("a line was pushed");
+    match last {
+        crate::state::TranscriptLine::System(text) => {
+            assert!(
+                text.contains("model: connection lost"),
+                "expected connection-lost, got {text}"
+            );
+        }
+        other => panic!("expected a system line, got {other:?}"),
+    }
 }

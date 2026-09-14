@@ -24,7 +24,7 @@ fn working_app() -> App {
 #[test]
 fn test_status_bar_click_drags() {
     let mut app = working_app();
-    drop(crate::test_support::render_text(&app, 80, 24));
+    drop(crate::test_harness::render_text(&app, 80, 24));
     let srect = app.status_rect.get();
     assert!(srect.height > 0, "status rect published by the draw pass");
     let rows = app.last_status_rows.borrow();
@@ -66,7 +66,7 @@ fn test_status_bar_click_drags() {
 #[test]
 fn test_status_rows_refresh() {
     use crate::state::ViewportMode;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     let collect = |app: &App| -> String {
         app.last_status_rows
             .borrow()
@@ -131,7 +131,7 @@ fn test_status_rows_refresh() {
 #[test]
 fn test_status_rect_zeroed_offscreen() {
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
 
     let mut app = working_app();
     drop(render_text(&app, 80, 24));

@@ -116,7 +116,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         // If skills haven't been queried yet (the user hasn't opened
         // /skills), fetch them now so the picker isn't empty.
         if app.skill_entries.is_empty()
-            && let Some(req_id) = app.mint_request_id()
+            && let Some(req_id) = app.next_request_id()
         {
             app.send_cmd(crate::run_control::ClientCommand::SkillsQuery { req_id });
         }

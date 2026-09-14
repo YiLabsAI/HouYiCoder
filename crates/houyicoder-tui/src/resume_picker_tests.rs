@@ -4,14 +4,12 @@
 
 use houyicoder_protocol::frontend::SlashCommand;
 
-use crate::composition;
-use crate::state::Screen;
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
-    let mut app = composition::app();
-    app.screen = Screen::Working;
-    app
+    // Picker flows drive run_resume, which needs a live session (the
+    // disconnected branch refuses before the lister logic).
+    crate::test_harness::connected_app()
 }
 
 fn render(app: &crate::state::App) -> String {

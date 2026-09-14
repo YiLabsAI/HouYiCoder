@@ -1,26 +1,30 @@
-//! /debug command, split from command.rs so that file stays under the size
-//! gate.
+//! /debug command: set the engine-side debug level through the server.
 
+use houyicoder_protocol::frontend::debug::DebugLevel;
+
+use crate::run_control::ClientCommand;
 use crate::state::App;
 
 impl App {
     /// /debug [off]: toggle the process-wide diagnostic log level. No
-    /// restart needed. The request goes over the wire so the server — which
-    /// holds the subscriber handle — is the one that changes the level.
+    /// restart needed. The request goes to the server — which holds the
+    /// subscriber handle — so the server is the one that changes the level.
     /// This is what makes one toggle reach every crate: the engine, the
     /// sandbox and the permission gate all share the one subscriber the
     /// server installed, so a level change at the server is a level change
     /// everywhere. The host holds no subscriber handle of its own.
     pub(crate) fn run_debug(&mut self, arg: &str) {
         let level = if arg == "off" {
-            houyicoder_protocol::frontend::debug::DebugLevel::Off
+            DebugLevel::Off
         } else {
-            houyicoder_protocol::frontend::debug::DebugLevel::Debug
+            DebugLevel::Debug
         };
-        if let Some(req_id) = self.mint_request_id() {
-            self.send_cmd(crate::run_control::ClientCommand::DebugSet { req_id, level });
-        } else {
+        let Some(req_id) = self.next_request_id() else {
             self.system_line("debug: not connected");
+            return;
+        };
+        if !self.send_cmd(ClientCommand::DebugSet { req_id, level }) {
+            self.system_line("debug: connection lost");
         }
     }
 }
@@ -35,7 +39,7 @@ mod tests {
     /// service integration test that drives a real wire round-trip.
     #[test]
     fn test_debug_command_mints_request() {
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         app.run_debug("");
         app.run_debug("off");
     }
@@ -45,7 +49,7 @@ mod tests {
     /// without a runner takes.
     #[test]
     fn test_no_session_not_connected() {
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         app.session = None;
         app.run_debug("");
         let last = app.transcript.last().expect("a line was pushed");
@@ -64,7 +68,7 @@ mod tests {
     /// input box) reaches run_debug, same as the direct call above.
     #[test]
     fn test_debug_dispatched_via_command() {
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         assert!(app.run_tui_local_command("debug"));
         assert!(app.run_tui_local_command("debug off"));
     }
@@ -78,7 +82,7 @@ mod tests {
         use crate::agent_message::AgentMessage;
         use houyicoder_protocol::frontend::debug::DebugState;
 
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         app.handle_agent_message(AgentMessage::DebugResult {
             state: DebugState {
                 enabled: true,
@@ -108,6 +112,24 @@ mod tests {
                 assert!(
                     text.contains("off"),
                     "the off line should say off, got {text}"
+                );
+            }
+            other => panic!("expected a system line, got {other:?}"),
+        }
+    }
+
+    /// A dead driver refuses the level change: the refusal names the lost
+    /// connection instead of failing silently.
+    #[test]
+    fn test_debug_connection_lost() {
+        let mut app = crate::test_harness::connection_lost_app();
+        app.run_debug("");
+        let last = app.transcript.last().expect("a line was pushed");
+        match last {
+            crate::records::TranscriptLine::System(text) => {
+                assert!(
+                    text.contains("debug: connection lost"),
+                    "expected connection-lost, got {text}"
                 );
             }
             other => panic!("expected a system line, got {other:?}"),

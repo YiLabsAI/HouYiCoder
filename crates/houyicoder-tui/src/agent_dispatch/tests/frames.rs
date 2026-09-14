@@ -263,7 +263,7 @@ fn test_notice_shows_memory_changes() {
             .count(),
         1
     );
-    let out = crate::test_support::render_text(&app, 100, 24);
+    let out = crate::test_harness::render_text(&app, 100, 24);
     assert!(out.contains("auto-dream"), "origin should render: {out}");
     assert!(
         out.contains("promoted alpha"),
@@ -301,7 +301,7 @@ fn test_notice_wraps_long_keys() {
         origin: MemoryChangeOrigin::AutoMemory,
         changes,
     });
-    let out = crate::test_support::render_text(&app, 54, 36);
+    let out = crate::test_harness::render_text(&app, 54, 36);
     assert!(
         out.contains("Memory auto-memory: 4 changes · /memory"),
         "summary remains visible after wrapping: {out}"

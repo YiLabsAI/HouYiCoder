@@ -26,9 +26,9 @@ pub struct ExportPayload {
     pub json: String,
 }
 
-/// Project the durable session log into an export document. None in stub /
-/// unwired modes (the command then reports "no session log wired" instead of
-/// writing an empty file).
+/// Project the durable session log into an export document. None when the
+/// command reports not connected or unavailable in this session instead of
+/// writing an empty file.
 pub trait ExportLog: Send + Sync {
     fn export(&self) -> ExportPayload;
 }

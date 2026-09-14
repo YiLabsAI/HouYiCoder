@@ -8,7 +8,7 @@
 
 use crate::composition;
 use crate::state::{App, Pane};
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 fn app() -> App {
@@ -107,7 +107,7 @@ fn test_permission_view_shows_mode() {
 fn test_undo_no_shows_message() {
     let mut app = app();
     run(&mut app, "/undo");
-    assert!(last_system(&app).contains("no server connected"));
+    assert!(last_system(&app).contains("not connected"));
 }
 
 #[test]
@@ -240,34 +240,53 @@ fn entitlement_approval() -> crate::state::Approval {
 }
 
 #[test]
-fn test_git_ops_toggle_command() {
-    // /permissions git off flips the cached toggle (optimistic without a
-    // server); /permissions git shows the state. Drives the real command path.
+fn test_git_toggle_disconnected() {
+    // Disconnected, /permissions git off|on reports not connected and leaves
+    // the cached toggle untouched: the server is the authority, and the
+    // change never reached it.
     let mut app = app();
     assert!(app.ask_before_git_enabled, "default on");
     app.input.set("/permissions git off".to_string());
     app.submit_input();
     assert!(
-        !app.ask_before_git_enabled,
-        "off after /permissions git off"
+        app.ask_before_git_enabled,
+        "disconnected toggle must not flip the cached state"
     );
-    app.input.set("/permissions git on".to_string());
-    app.submit_input();
-    assert!(app.ask_before_git_enabled, "on after /permissions git on");
+    assert!(
+        last_system(&app).contains("permission: not connected"),
+        "disconnected toggle reports not connected: {}",
+        last_system(&app)
+    );
 }
 
 #[test]
-fn test_git_ops_show_command() {
-    // /permissions git (no on/off) reports the current toggle state. Without a
-    // server it reads the cache; the line names the git operations it governs.
+fn test_git_show_disconnected() {
+    // Disconnected, /permissions git reports not connected: the cached value
+    // may be stale and a refresh cannot ship, so no state line is pushed.
     let mut app = app();
     app.input.set("/permissions git".to_string());
     app.submit_input();
     assert!(
-        app.transcript
-            .iter()
-            .any(|l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("ask before git operations: on"))),
-        "bare /permissions git shows the on state"
+        last_system(&app).contains("permission: not connected"),
+        "disconnected show reports not connected: {}",
+        last_system(&app)
+    );
+    assert!(
+        !app.transcript.iter().any(|l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("ask before git operations:"))),
+        "no cached-state line is shown while disconnected"
+    );
+}
+
+#[test]
+fn test_mode_cycle_disconnected() {
+    // Disconnected Shift+Tab reports not connected and leaves the mode cache
+    // untouched: the server owns the mode.
+    let mut app = app();
+    app.tab_cycle_mode();
+    assert!(
+        last_system(&app).contains("permission: not connected"),
+        "disconnected mode cycle reports not connected: {}",
+        last_system(&app)
     );
 }
 
@@ -584,7 +603,7 @@ fn test_permission_workspace_add_flow() {
     );
     let sys = last_system(&app);
     assert!(
-        sys.contains("adding") || sys.contains("no server connected"),
+        sys.contains("adding") || sys.contains("not connected"),
         "AddDir surfaces a system line: {sys}"
     );
 }
@@ -681,4 +700,48 @@ fn test_permissions_pane_renders_wired() {
         "tab header renders in wired mode: {text}"
     );
     assert!(text.contains("Recent"), "Recent tab renders: {text}");
+}
+
+#[test]
+fn test_git_toggle_connection_lost() {
+    // A dead driver refuses the toggle: the cached state never moves and the
+    // refusal names the lost connection (no fake success).
+    let mut app = crate::test_harness::connection_lost_app();
+    assert!(app.ask_before_git_enabled, "default on");
+    app.input.set("/permissions git off".to_string());
+    app.submit_input();
+    assert!(
+        app.ask_before_git_enabled,
+        "a failed send must not flip the cached state"
+    );
+    assert!(
+        last_system(&app).contains("permission: connection lost"),
+        "send failure reports connection lost: {}",
+        last_system(&app)
+    );
+}
+
+#[test]
+fn test_git_show_connection_lost() {
+    // A dead driver refuses the refresh, so no cached state line is shown.
+    let mut app = crate::test_harness::connection_lost_app();
+    app.input.set("/permissions git".to_string());
+    app.submit_input();
+    assert!(
+        last_system(&app).contains("permission: connection lost"),
+        "send failure reports connection lost: {}",
+        last_system(&app)
+    );
+}
+
+#[test]
+fn test_undo_connection_lost() {
+    // A dead driver refuses the undo: no in-progress line is pushed.
+    let mut app = crate::test_harness::connection_lost_app();
+    run(&mut app, "/undo");
+    assert!(
+        last_system(&app).contains("undo: connection lost"),
+        "send failure reports connection lost: {}",
+        last_system(&app)
+    );
 }

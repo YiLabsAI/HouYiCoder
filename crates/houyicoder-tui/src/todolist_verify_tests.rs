@@ -7,7 +7,7 @@
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::composition;
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 use crate::todo_view::{TodoStatus, TodoView};
 
 /// Build the view list the wire accumulator would leave behind: the render

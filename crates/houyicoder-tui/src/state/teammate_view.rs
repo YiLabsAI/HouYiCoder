@@ -81,7 +81,7 @@ impl App {
         // the view swaps that source, so bump here or the cache holds the
         // parent rows and the child transcript never renders.
         self.bump_transcript_version();
-        if fire_fetch && let Some(req_id) = self.mint_request_id() {
+        if fire_fetch && let Some(req_id) = self.next_request_id() {
             self.send_cmd(crate::run_control::ClientCommand::ChildTranscriptQuery {
                 req_id,
                 child_sid: houyicoder_protocol::frontend::SessionId(child_sid.to_string()),

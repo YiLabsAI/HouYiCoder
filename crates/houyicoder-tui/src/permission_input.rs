@@ -105,25 +105,33 @@ fn add_rule_with_destination(
     };
     let label = crate::command::render::permission_effect_label(spec.effect);
     let action = wire_rule.action.clone();
-    let Some(req_id) = app.mint_request_id() else {
-        app.system_line("permission: no server connected");
+    let Some(req_id) = app.next_request_id() else {
+        app.system_line("permission: not connected");
         return;
     };
-    app.send_cmd(ClientCommand::PermissionAddRuleQuery {
+    // The added confirmation assumes delivery, so it waits for the send to
+    // reach the server; the rules cache only moves when the server replies.
+    if !app.send_cmd(ClientCommand::PermissionAddRuleQuery {
         req_id,
         rule: wire_rule,
-    });
+    }) {
+        app.system_line("permission: connection lost");
+        return;
+    }
     app.system_line(format!("permission: added {action} {label}"));
 }
 
 /// Remove the rule at the given index into the full rules_cache (the server
 /// sees the unfiltered set, not the tab-filtered view).
 pub(crate) fn remove_rule_at(app: &mut App, index: usize) {
-    let Some(req_id) = app.mint_request_id() else {
-        app.system_line("permission: no server connected");
+    let Some(req_id) = app.next_request_id() else {
+        app.system_line("permission: not connected");
         return;
     };
-    app.send_cmd(ClientCommand::PermissionRemoveRuleQuery { req_id, index });
+    if !app.send_cmd(ClientCommand::PermissionRemoveRuleQuery { req_id, index }) {
+        app.system_line("permission: connection lost");
+        return;
+    }
     app.system_line("permission: removed".to_string());
 }
 
@@ -400,7 +408,7 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
         KeyCode::Char('a') if empty && app.permission_tab == PermissionTab::Workspace => {
             // Add-directory flow: type a path in the main input box, Enter
             // ships it. The server canonicalizes + extends the fence; the
-            // PermissionWorkingDirsResult ack refreshes dirs_cache.
+            // PermissionDirsResult ack refreshes dirs_cache.
             app.permission_input = PermissionInput::AddDir;
             app.input.clear();
             true
@@ -497,14 +505,17 @@ pub(crate) fn submit_permission_input(app: &mut App, text: String) {
 
 /// Ship an add-directory request to the server. The server canonicalizes +
 /// validates the path is a directory and extends the fence; the ack
-/// (PermissionWorkingDirsResult) refreshes dirs_cache. A None req_id (no
+/// (PermissionDirsResult) refreshes dirs_cache. A None req_id (no
 /// session) surfaces a system line instead of panicking.
 fn submit_add_dir(app: &mut App, path: String) {
-    let Some(req_id) = app.mint_request_id() else {
-        app.system_line("permission: no server connected");
+    let Some(req_id) = app.next_request_id() else {
+        app.system_line("permission: not connected");
         return;
     };
-    app.send_cmd(ClientCommand::PermissionAddWorkingDirQuery { req_id, path });
+    if !app.send_cmd(ClientCommand::PermissionAddDirQuery { req_id, path }) {
+        app.system_line("permission: connection lost");
+        return;
+    }
     app.system_line("permission: adding directory".to_string());
 }
 
@@ -516,11 +527,14 @@ fn remove_dir_at(app: &mut App, index: usize) {
         app.system_line("permission: directory no longer present");
         return;
     };
-    let Some(req_id) = app.mint_request_id() else {
-        app.system_line("permission: no server connected");
+    let Some(req_id) = app.next_request_id() else {
+        app.system_line("permission: not connected");
         return;
     };
-    app.send_cmd(ClientCommand::PermissionRemoveWorkingDirQuery { req_id, path });
+    if !app.send_cmd(ClientCommand::PermissionRemoveDirQuery { req_id, path }) {
+        app.system_line("permission: connection lost");
+        return;
+    }
     app.system_line("permission: removing directory".to_string());
 }
 

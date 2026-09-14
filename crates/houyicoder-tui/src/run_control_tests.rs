@@ -489,7 +489,7 @@ fn test_approval_ask_carries_delegation() {
     let d = a.delegation.as_ref().expect("delegation carried");
     assert_eq!(d.child_id, "child-1");
     assert_eq!(d.subagent_type, "explore");
-    let out = crate::test_support::render_text(&app, 80, 24);
+    let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("explore"),
         "card header prefixes the child agent type: {out}"

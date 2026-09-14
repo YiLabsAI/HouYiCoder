@@ -5,7 +5,7 @@ use crate::state::{Pane, Screen};
 use houyicoder_protocol::frontend::skills::{SkillEntry, SkillUsage};
 
 fn render(app: &crate::state::App, w: u16, h: u16) -> String {
-    crate::test_support::render_text(app, w, h)
+    crate::test_harness::render_text(app, w, h)
 }
 
 #[test]

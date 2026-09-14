@@ -256,7 +256,7 @@ mod tests {
     /// the settings-file memory toggles (auto-memory / auto-dream).
     #[test]
     fn test_config_tab_has_knobs() {
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         app.status.model = "qwen3.8-max".into();
         app.status.sandbox = "mac-seatbelt".into();
         let s = render_config(&app);
@@ -273,7 +273,7 @@ mod tests {
     /// a hardcoded default).
     #[test]
     fn test_config_tab_reflects_state() {
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         let mut snap = app.snapshot_or_stub();
         snap.auto_memory = false;
         snap.auto_dream = true;
@@ -294,7 +294,7 @@ mod tests {
     /// The Usage tab renders the token counts from the snapshot.
     #[test]
     fn test_usage_tab_has_tokens() {
-        let app = crate::test_support::working_app();
+        let app = crate::test_harness::working_app();
         let s = render_usage(&app);
         assert!(s.contains("input:"), "input row: {s}");
         assert!(s.contains("output:"), "output row: {s}");
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn test_config_tab_shows_effort() {
         use houyicoder_protocol::llm::EffortLevel;
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         app.status.model = "qwen3.8-max".into();
         app.applied_effort = Some(EffortLevel::High);
         let s = render_config(&app);
@@ -320,7 +320,7 @@ mod tests {
     /// The Usage tab shows reasoning tokens (incl. in output) only when >0.
     #[test]
     fn test_usage_tab_shows_reasoning() {
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         let mut snap = app.snapshot_or_stub();
         snap.cumulative_usage.reasoning_tokens = 1500;
         app.status_cache = Some(snap);
@@ -329,7 +329,7 @@ mod tests {
         assert!(s.contains("incl. in output"), "inclusion note: {s}");
 
         // Hidden when 0.
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         let mut snap = app.snapshot_or_stub();
         snap.cumulative_usage.reasoning_tokens = 0;
         app.status_cache = Some(snap);
@@ -342,7 +342,7 @@ mod tests {
     /// flat rows and a per-model section would just repeat them.
     #[test]
     fn test_single_omits_per_model() {
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         let mut snap = app.snapshot_or_stub();
         snap.by_model = vec![houyicoder_protocol::frontend::status::ModelUsageView {
             model: "glm-5.2".into(),
@@ -363,7 +363,7 @@ mod tests {
     /// used any. Tokens render compact (k/m) so large counts fit one line.
     #[test]
     fn test_per_model_lists_models() {
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         let mut snap = app.snapshot_or_stub();
         snap.by_model = vec![
             houyicoder_protocol::frontend::status::ModelUsageView {

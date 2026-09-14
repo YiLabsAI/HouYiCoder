@@ -1,7 +1,7 @@
 //! In-place session-name edit on the /status Status tab. Split out of
 //! command.rs on size grounds (same pattern as resume / model). The user
 //! presses the e key on the Status tab to enter edit, types into an
-//! InputField, Enter commits (ships a RenameSession request), Esc cancels.
+//! InputField, Enter sends a RenameSession request, and Esc cancels.
 //! Houyi makes the session name inline-editable + syncs the terminal tab
 //! title via OSC 0/2 on the reply (rather than a rename command).
 
@@ -15,31 +15,30 @@ impl App {
     /// would pin the slug as name_source=User the moment the user pressed
     /// Enter without typing. An empty buffer + Enter clears to Auto (no
     /// pin); typing a name + Enter sets User. Opens unconditionally; the
-    /// session check lives at commit (the editor is harmless without a
-    /// session -- Enter reports stub mode then).
+    /// session check lives at commit (the editor is harmless while
+    /// disconnected -- Enter reports not connected then).
     pub(crate) fn enter_status_name_edit(&mut self) {
         self.status_name_edit = Some(InputField::new());
     }
 
-    /// Cancel the name edit: drop the buffer, no request shipped.
+    /// Cancel the name edit without sending a request.
     pub(crate) fn cancel_status_name_edit(&mut self) {
         self.status_name_edit = None;
     }
 
-    /// Commit the name edit: ship a RenameSession request with the buffer
-    /// contents, then drop the editor. The reply lands as a StatusResult,
-    /// which refreshes the pane + the terminal tab title. An empty buffer
-    /// clears the name back to Auto (the server derives the slug).
+    /// Send the buffered name; an empty value restores automatic naming.
     pub(crate) fn commit_status_name_edit(&mut self) {
         let Some(field) = self.status_name_edit.take() else {
             return;
         };
         let name = field.value().to_string();
         let Some(s) = self.session.as_ref() else {
-            self.system_line("rename: no session wired (stub mode)");
+            self.system_line("rename: not connected");
             return;
         };
-        s.request_rename(self.session_id.clone(), name);
+        if !s.request_rename(self.session_id.clone(), name) {
+            self.system_line("rename: connection lost");
+        }
     }
 }
 
@@ -47,9 +46,9 @@ impl App {
 mod tests {
     use super::*;
 
-    /// enter opens the editor even without a session wired; the session check
-    /// lives at commit (a stub-mode app can still open the editor; Enter reports
-    /// stub mode there).
+    /// enter opens the editor even without an active session; the session
+    /// check lives at commit (a disconnected app can still open the editor;
+    /// Enter reports not connected there).
     #[test]
     fn test_enter_opens_without_session() {
         let mut app = crate::composition::app();

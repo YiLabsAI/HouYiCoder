@@ -3,7 +3,7 @@
 
 use super::{cap_first, diff_preview};
 use crate::composition;
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use serde_json::json;
 

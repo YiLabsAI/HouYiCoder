@@ -91,7 +91,7 @@ fn test_context_cache_renders_repeat() {
     // Must be on the Working screen to render the transcript (app_with_provider
     // starts on Login).
     app.screen = crate::state::Screen::Working;
-    use crate::test_support::render_buffer;
+    use crate::test_harness::render_buffer;
     let buf = render_buffer(&app, 100, 40);
     let text: String = (0..buf.area().height)
         .map(|y| {

@@ -59,7 +59,7 @@ impl App {
                 self.pane = Pane::Agents;
                 let v = self.transcript_version.get();
                 self.agents.refresh(&self.transcript, v);
-                if let Some(req_id) = self.mint_request_id() {
+                if let Some(req_id) = self.next_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::AgentsQuery { req_id });
                 }
             }
@@ -70,7 +70,7 @@ impl App {
                 // between Some(resolved) and None across the two reply
                 // paths, which produced a two-frame cursor slide.
                 self.model_sel = crate::view::model_pane::row_for_tier(self, &self.model_tier);
-                if let Some(req_id) = self.mint_request_id() {
+                if let Some(req_id) = self.next_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::ModelInfoQuery { req_id });
                 }
             }
@@ -98,7 +98,7 @@ impl App {
                         composition::context_view(),
                     ));
                 }
-                if let Some(req_id) = self.mint_request_id() {
+                if let Some(req_id) = self.next_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::ContextQuery { req_id });
                 }
             }
@@ -122,29 +122,29 @@ impl App {
             }
             C::Tools => {
                 self.pane = Pane::Tools;
-                if let Some(req_id) = self.mint_request_id() {
+                if let Some(req_id) = self.next_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::ToolListQuery { req_id });
                 }
             }
             C::Skills => {
                 self.pane = Pane::Skills;
-                if let Some(req_id) = self.mint_request_id() {
+                if let Some(req_id) = self.next_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::SkillsQuery { req_id });
                 }
             }
             C::Hooks => {
                 self.pane = Pane::Hooks;
-                if let Some(req_id) = self.mint_request_id() {
+                if let Some(req_id) = self.next_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::HooksQuery { req_id });
                 }
             }
             C::Memory => {
                 self.pane = Pane::Memory;
                 self.memory.close_detail();
-                if let Some(req_id) = self.mint_request_id() {
+                if let Some(req_id) = self.next_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::MemoryListQuery { req_id });
                 }
-                if let Some(req_id) = self.mint_request_id() {
+                if let Some(req_id) = self.next_request_id() {
                     self.send_cmd(crate::run_control::ClientCommand::MemoryToggleStateQuery {
                         req_id,
                     });
@@ -163,11 +163,14 @@ impl App {
             }
             C::Compact => self.run_compact(),
             C::Undo => {
-                if let Some(req_id) = self.mint_request_id() {
-                    self.send_cmd(crate::run_control::ClientCommand::UndoQuery { req_id });
-                    self.system_line("undo: reverting most recent destructive op...");
+                let Some(req_id) = self.next_request_id() else {
+                    self.system_line("undo: not connected");
+                    return;
+                };
+                if !self.send_cmd(crate::run_control::ClientCommand::UndoQuery { req_id }) {
+                    self.system_line("undo: connection lost");
                 } else {
-                    self.system_line("undo: no server connected");
+                    self.system_line("undo: reverting most recent destructive op...");
                 }
             }
             // Palette-registered local commands. The argless select form (and
@@ -191,8 +194,14 @@ impl App {
     /// landed without opening the file.
     pub(crate) fn run_export(&mut self, path: Option<&str>) {
         use crate::view::export_log::write_atomic_0600;
+        if self.session.is_none() {
+            self.system_line("export: not connected");
+            return;
+        }
+        // Connected but the export bridge is not installed: a capability gap,
+        // not a disconnect.
         let Some(log) = self.export_log.as_ref() else {
-            self.system_line("export: no session log wired (stub mode)");
+            self.system_line("export: unavailable in this session");
             return;
         };
         let payload = log.export();
@@ -269,7 +278,7 @@ impl App {
         // Reset the server's cumulative usage tally + audit trajectory so
         // /context reflects the new session only. Fire-and-forget over the
         // wire; the host clears its local view in parallel.
-        if let Some(req_id) = self.mint_request_id() {
+        if let Some(req_id) = self.next_request_id() {
             let session_id = self.session_id.clone();
             self.send_cmd(crate::run_control::ClientCommand::SessionReset { req_id, session_id });
         }

@@ -8,7 +8,7 @@ use ratatui::style::Color;
 
 use crate::composition;
 use crate::state::{Pane, Screen, Stage};
-use crate::test_support::{render_buffer, render_text};
+use crate::test_harness::{render_buffer, render_text};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();

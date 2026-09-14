@@ -61,7 +61,7 @@ pub struct RunnerBundle {
     pub model: String,
     /// Injected TrajectoryLog bridge; None falls back to the mock trajectory.
     pub trajectory_log: Option<std::sync::Arc<dyn crate::view::trajectory_pane::TrajectoryLog>>,
-    /// Injected ExportLog bridge; None makes /export report no session log wired.
+    /// Injected ExportLog bridge; None makes /export report unavailable in this session.
     pub export_log: Option<std::sync::Arc<dyn crate::view::export_log::ExportLog>>,
     /// Injected snapshot bridge (loads the durable log for the search view); None falls back to the in-memory vec.
     pub snapshot: Option<std::sync::Arc<dyn crate::transcript::snapshot::TranscriptSnapshot>>,

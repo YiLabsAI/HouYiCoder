@@ -6,7 +6,7 @@ use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::composition;
 use crate::state::{Divergence, Pane, Screen, Stage, Verdict};
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();

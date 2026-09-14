@@ -12,7 +12,7 @@ use houyicoder_protocol::frontend::SlashCommand;
 use crate::composition;
 use crate::keys;
 use crate::state::{Pane, Screen, Stage, ViewportMode};
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();

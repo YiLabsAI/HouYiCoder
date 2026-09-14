@@ -193,7 +193,7 @@ impl App {
         self.pin_transcript_top();
         if expanding
             && needs_fetch
-            && let Some(req_id) = self.mint_request_id()
+            && let Some(req_id) = self.next_request_id()
         {
             self.send_cmd(crate::run_control::ClientCommand::ChildTranscriptQuery {
                 req_id,

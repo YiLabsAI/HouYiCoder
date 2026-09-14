@@ -133,7 +133,7 @@ fn test_approval_renders_inline() {
     // thin separator and the proceed question appear in the bottom rows when
     // an approval is pending, and are absent when none is pending.
     use crate::composition;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
 
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
@@ -633,8 +633,8 @@ fn test_context_grid_after_run() {
         "order wrong: ctx_user={cu} grid={cg} hi={hu} agent={ag}"
     );
     // Render and assert all are visible.
-    let buf = crate::test_support::render_buffer(&app, 100, 50);
-    let text = crate::test_support::dump_buffer(&buf);
+    let buf = crate::test_harness::render_buffer(&app, 100, 50);
+    let text = crate::test_harness::dump_buffer(&buf);
     assert!(
         text.contains("Context Usage"),
         "grid header not visible: {text}"
@@ -667,8 +667,8 @@ fn test_slash_echo_visible() {
         "ContextGrid missing from transcript"
     );
     // Render tall enough for the grid block.
-    let buf = crate::test_support::render_buffer(&app, 100, 50);
-    let text = crate::test_support::dump_buffer(&buf);
+    let buf = crate::test_harness::render_buffer(&app, 100, 50);
+    let text = crate::test_harness::dump_buffer(&buf);
     // The User echo renders as "> /context" (the render() glyph for User).
     assert!(
         text.contains("/context"),

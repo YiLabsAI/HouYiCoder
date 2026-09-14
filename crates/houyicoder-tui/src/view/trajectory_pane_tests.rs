@@ -308,7 +308,7 @@ fn test_trajectory_bar_invariants_mock() {
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Trajectory;
     app.trajectory_level.set(1);
-    let out = crate::test_support::render_text(&app, 100, 40);
+    let out = crate::test_harness::render_text(&app, 100, 40);
     assert!(
         out.contains('█'),
         "unicode block bar must render at the turn-detail level:\n{out}"

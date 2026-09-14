@@ -4,16 +4,16 @@
 //! render_invariant_tests so both stay under the size gate.
 
 use crate::records::TranscriptLine;
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 use crate::transcript::snapshot::{SnapshotLoad, TranscriptSnapshot, WindowLoad};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::sync::Arc;
 
 fn working() -> crate::state::App {
-    crate::test_support::working_app()
+    crate::test_harness::working_app()
 }
 
-use crate::test_support::MockSnapshot;
+use crate::test_harness::MockSnapshot;
 
 /// count==render must hold when the search view renders a frozen snapshot
 /// that differs from the live transcript. The accessor routes count + render

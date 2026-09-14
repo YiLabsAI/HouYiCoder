@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use crate::composition;
 use crate::selection::RecordingClipboard;
 use crate::state::Screen;
-use crate::test_support::{render_buffer, render_text};
+use crate::test_harness::{render_buffer, render_text};
 use houyicoder_protocol::frontend::SlashCommand;
 
 fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {

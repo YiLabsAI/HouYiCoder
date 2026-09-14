@@ -7,7 +7,7 @@
 
 use crate::composition;
 use crate::state::Screen;
-use crate::test_support::{render_buffer, render_text};
+use crate::test_harness::{render_buffer, render_text};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -491,7 +491,7 @@ fn test_n_walks_toward_older() {
 // point.
 #[test]
 fn test_search_current_match_yellow() {
-    use crate::test_support::render_buffer;
+    use crate::test_harness::render_buffer;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::style::Color;
     let mut app = working();

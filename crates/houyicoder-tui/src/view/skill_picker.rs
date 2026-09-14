@@ -210,7 +210,7 @@ mod tests {
             usage: None,
         }];
         app.skill_picker_open = true;
-        let out = crate::test_support::render_text(&app, 80, 24);
+        let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(out.contains("alpha"), "skill name in picker: {out}");
         assert!(out.contains("Enter to insert"), "nav hint in picker: {out}");
     }
@@ -221,7 +221,7 @@ mod tests {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
         app.skill_picker_open = true;
-        let out = crate::test_support::render_text(&app, 80, 24);
+        let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(
             out.contains("no skills match"),
             "empty state in picker: {out}"
@@ -256,7 +256,7 @@ mod tests {
         app.skill_picker_open = true;
         app.input.push('@');
         app.input.push('b');
-        let out = crate::test_support::render_text(&app, 80, 24);
+        let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(out.contains("beta"), "filter matches beta: {out}");
         assert!(!out.contains("alpha"), "alpha filtered out: {out}");
     }
@@ -275,7 +275,7 @@ mod tests {
             user_invocable: true,
             usage: None,
         }];
-        let out = crate::test_support::render_text(&app, 80, 24);
+        let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(
             !out.contains("Enter to insert"),
             "picker title must not render when closed: {out}"

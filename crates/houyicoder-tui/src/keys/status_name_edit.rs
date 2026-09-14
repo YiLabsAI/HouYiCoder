@@ -40,7 +40,7 @@ mod tests {
     /// A working app parked on the /status Status tab with an empty input box,
     /// the state the e key opens the editor from.
     fn status_tab_app() -> App {
-        let mut app = crate::test_support::working_app();
+        let mut app = crate::test_harness::working_app();
         app.screen = Screen::Working;
         app.viewport = ViewportMode::Working;
         app.pane = Pane::Status;
@@ -106,8 +106,8 @@ mod tests {
         assert!(app.status_name_edit.is_none(), "editor closed on Esc");
     }
 
-    /// Enter commits: with no session wired (stub), the commit reports stub
-    /// mode + drops the editor (does not panic).
+    /// Enter commits: while disconnected, the commit reports not connected
+    /// + drops the editor (does not panic).
     #[test]
     fn test_enter_commits_no_session() {
         let mut app = status_tab_app();

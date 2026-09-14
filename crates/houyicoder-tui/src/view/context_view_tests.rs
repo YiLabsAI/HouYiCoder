@@ -3,7 +3,7 @@
 use super::*;
 use crate::composition;
 use crate::state::Screen;
-use crate::test_support::render_buffer;
+use crate::test_harness::render_buffer;
 use houyicoder_protocol::frontend::SlashCommand;
 
 fn working_app() -> crate::state::App {

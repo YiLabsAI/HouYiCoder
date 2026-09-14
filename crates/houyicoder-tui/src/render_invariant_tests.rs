@@ -12,7 +12,7 @@ use crate::composition;
 use crate::keys;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::state::{Pane, Screen, Stage, ViewportMode};
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -78,7 +78,7 @@ fn test_transcript_diff_gutter_gap() {
 // dump trims trailing spaces so a text-only assertion cannot see the fill.
 #[test]
 fn test_transcript_diff_bg_fill() {
-    use crate::test_support::render_buffer;
+    use crate::test_harness::render_buffer;
     use ratatui::style::Color;
     let mut app = working();
     let orig = "fn foo() {\n    let a = 1;\n}\n";
@@ -127,7 +127,7 @@ fn test_transcript_diff_bg_fill() {
 // the cell level — the word background differs from the line background.
 #[test]
 fn test_transcript_diff_word_highlight() {
-    use crate::test_support::render_buffer;
+    use crate::test_harness::render_buffer;
     use ratatui::style::Color;
     let mut app = working();
     let orig = "fn foo() {\n    let x = 1;\n}\n";
@@ -146,7 +146,7 @@ fn test_transcript_diff_word_highlight() {
     }];
     app.expanded_results.insert("c1".to_string());
     let buf = render_buffer(&app, 100, 20);
-    let dump = crate::test_support::dump_buffer(&buf);
+    let dump = crate::test_harness::dump_buffer(&buf);
     println!("--- word-diff render ---\n{dump}\n--- end ---");
     let line_bg = Color::Rgb(28, 38, 32); // dim green add-line bar
     let word_bg = Color::Rgb(46, 120, 70); // darker word-added background
@@ -189,7 +189,7 @@ fn test_transcript_diff_word_highlight() {
 // a text dump cannot see the gutter gap (blank) or the per-row bar fill.
 #[test]
 fn test_transcript_diff_wraps() {
-    use crate::test_support::render_buffer;
+    use crate::test_harness::render_buffer;
     let mut app = working();
     let orig = "fn foo() {\n    let x = 1;\n}\n";
     let new = "fn foo() {\n    let x = ONE_TWO_THREE_FOUR_FIVE_SIX_SEVEN_EIGHT;\n}\n";
@@ -208,7 +208,7 @@ fn test_transcript_diff_wraps() {
     app.expanded_results.insert("c1".to_string());
     // A narrow pane forces the long added line to wrap to multiple rows.
     let buf = render_buffer(&app, 30, 14);
-    let dump = crate::test_support::dump_buffer(&buf);
+    let dump = crate::test_harness::dump_buffer(&buf);
     println!("--- wrapped diff render (30 cols) ---\n{dump}\n--- end ---");
     // The long add line wrapped across multiple rows, each carrying the
     // green add-line background (the bar fills every wrapped row, not just

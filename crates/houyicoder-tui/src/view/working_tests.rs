@@ -10,7 +10,7 @@ fn test_approval_keeps_prior_content() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::{Approval, Screen};
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript = vec![
@@ -48,7 +48,7 @@ fn test_thinking_not_above_answer() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
 
     let mut app = composition::app();
     app.screen = Screen::Working;
@@ -88,7 +88,7 @@ fn test_fold_collapse_expand_toggle() {
     use crate::keys;
     use crate::records::{ToolOutcome, TranscriptLine};
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -283,7 +283,7 @@ fn test_busy_count_matches_render() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript = vec![
@@ -325,7 +325,7 @@ fn test_markdown_strips_syntax() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript = vec![TranscriptLine::Agent(
@@ -360,7 +360,7 @@ fn test_copy_preserves_scrolled_content() {
     use crate::records::TranscriptLine;
     use crate::selection::{Selection, extract_text};
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     use ratatui::layout::Rect;
     let mut app = composition::app();
     app.screen = Screen::Working;
@@ -409,7 +409,7 @@ fn test_fold_expand_one_only() {
     use crate::composition;
     use crate::records::{ToolOutcome, TranscriptLine};
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     fn tcall(cid: &str, name: &str, brief: &str, oc: ToolOutcome) -> TranscriptLine {
@@ -521,7 +521,7 @@ fn test_anchor_clamped_to_content() {
     use crate::composition;
     use crate::selection::RecordingClipboard;
     use crate::state::Screen;
-    use crate::test_support::{render_buffer, render_text};
+    use crate::test_harness::{render_buffer, render_text};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::style::Color;
     use std::sync::{Arc, Mutex};
@@ -661,7 +661,7 @@ fn test_todo_count_matches_render() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     use crate::todo_view::{TodoStatus, TodoView};
 
     fn item(content: &str, status: TodoStatus) -> TodoView {
@@ -723,7 +723,7 @@ fn test_todo_rows_are_selectable() {
     use crate::records::TranscriptLine;
     use crate::selection::is_non_selectable;
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     use crate::todo_view::{TodoStatus, TodoView};
 
     let mut app = composition::app();
@@ -830,7 +830,7 @@ fn test_subagent_head_dim() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::Screen;
-    use crate::test_support::render_buffer;
+    use crate::test_harness::render_buffer;
     use ratatui::style::Color;
     let mut app = composition::app();
     app.screen = Screen::Working;
@@ -864,7 +864,7 @@ fn test_child_rows_hide_handles() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::Screen;
-    use crate::test_support::render_text;
+    use crate::test_harness::render_text;
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript.push(TranscriptLine::Subagent {
@@ -908,7 +908,7 @@ fn test_expanded_subagent_shaded() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::Screen;
-    use crate::test_support::render_buffer;
+    use crate::test_harness::render_buffer;
     use ratatui::style::Color;
     let shade = Color::Indexed(238);
     let mut app = composition::app();
@@ -986,7 +986,7 @@ fn test_fleet_click_selects() {
             started_at: None,
         });
     }
-    drop(crate::test_support::render_text(&app, 80, 24));
+    drop(crate::test_harness::render_text(&app, 80, 24));
     let rect = app.fleet.rect.get();
     assert!(rect.height >= 2, "the strip is drawn: {rect:?}");
     let click = |app: &mut crate::state::App, y: u16| {
@@ -1012,7 +1012,7 @@ fn test_user_background_band() {
     use crate::composition;
     use crate::records::TranscriptLine;
     use crate::state::Screen;
-    use crate::test_support::render_buffer;
+    use crate::test_harness::render_buffer;
     use ratatui::style::Color;
 
     let mut app = composition::app();

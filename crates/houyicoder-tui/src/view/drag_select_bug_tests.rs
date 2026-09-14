@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use crate::composition;
 use crate::selection::RecordingClipboard;
 use crate::state::Screen;
-use crate::test_support::{render_buffer, render_text};
+use crate::test_harness::{render_buffer, render_text};
 
 /// App with n numbered system lines, rendered once so rect/rows/scroll cells
 /// are published. Returns the app plus the clipboard capture handle.

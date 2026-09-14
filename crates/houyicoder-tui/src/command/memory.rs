@@ -44,10 +44,10 @@ impl App {
         if let Some(key) = body.strip_prefix("forget ").map(str::trim) {
             if key.is_empty() {
                 self.system_line("memory: usage /memory forget <key>");
-            } else if let Some(req_id) = self.mint_request_id() {
+            } else if let Some(req_id) = self.next_request_id() {
                 // The command form has no scope (the user typed a key); route
                 // to the auto root, the original command-form behavior. A
-                // repeat forget of a key already in flight ships nothing.
+                // repeat forget of a key already in flight sends nothing.
                 if self.memory.begin_forget(req_id, key.to_string())
                     && !self.send_cmd(ClientCommand::MemoryForgetQuery {
                         req_id,
@@ -55,28 +55,28 @@ impl App {
                         scope: "auto".to_string(),
                     })
                 {
-                    // The driver is gone: the delete never shipped. Roll the
+                    // The driver is gone: the delete was not sent. Roll the
                     // pending mark back so the key is not stuck in flight.
                     self.memory.take_forget(req_id);
                     self.system_line(format!("couldn't forget {key} — connection lost"));
                 }
             } else {
-                self.system_line("memory: no carrier (stub mode)");
+                self.system_line("memory: not connected");
             }
             return true;
         }
-        if let Some(req_id) = self.mint_request_id() {
-            let shipped = self.send_cmd(ClientCommand::MemoryShowQuery {
+        if let Some(req_id) = self.next_request_id() {
+            let sent = self.send_cmd(ClientCommand::MemoryShowQuery {
                 req_id,
                 key: body.to_string(),
             });
-            if shipped {
+            if sent {
                 self.system_line(format!("memory: fetching {body}..."));
             } else {
                 self.system_line(format!("memory: couldn't fetch {body} — connection lost"));
             }
         } else {
-            self.system_line("memory: no carrier (stub mode)");
+            self.system_line("memory: not connected");
         }
         true
     }
@@ -87,15 +87,15 @@ impl App {
     /// is already flipping is dropped so fast keypresses cannot race
     /// on→off→on against each other.
     pub(crate) fn toggle_memory_setting(&mut self, which: MemoryToggleWhich) {
-        let Some(req_id) = self.mint_request_id() else {
-            self.system_line("memory: no carrier (stub mode)");
+        let Some(req_id) = self.next_request_id() else {
+            self.system_line("memory: not connected");
             return;
         };
         if !self.memory.begin_toggle(req_id, which) {
             return;
         }
         if !self.send_cmd(ClientCommand::MemoryToggleQuery { req_id, which }) {
-            // The driver is gone: the flip never shipped. Roll the pending
+            // The driver is gone: the flip was not sent. Roll the pending
             // mark back — otherwise the switch refuses presses forever.
             self.memory.take_toggle(req_id);
             self.system_line(format!(
@@ -119,7 +119,8 @@ impl App {
 
     /// Forget the memory row under the cursor (the d action). Sends the
     /// selected key to the server; the MemoryList reply refreshes the pane
-    /// and writes the outcome. No-op when no carrier, the list is empty, or
+    /// and writes the outcome. Returns without mutation when disconnected,
+    /// the list is empty, or
     /// the same key already has a forget in flight.
     pub fn forget_memory_at_cursor(&mut self) {
         let Some(memory) = self.memory.selected() else {
@@ -127,8 +128,8 @@ impl App {
         };
         let key = memory.topic.clone();
         let scope = memory.scope.clone();
-        let Some(req_id) = self.mint_request_id() else {
-            self.system_line("memory: no carrier (stub mode)".to_string());
+        let Some(req_id) = self.next_request_id() else {
+            self.system_line("memory: not connected".to_string());
             return;
         };
         if !self.memory.begin_forget(req_id, key.clone()) {
@@ -149,13 +150,14 @@ impl App {
 
     /// Show the body of the memory row under the cursor (the enter action).
     /// Sends the selected key; the MemoryShow reply renders inline via the
-    /// existing show path. No-op when no carrier or the filtered list is empty.
+    /// existing show path. Returns without mutation when disconnected or the
+    /// filtered list is empty.
     pub fn show_memory_at_cursor(&mut self) {
         let Some(memory) = self.memory.selected() else {
             return;
         };
         let key = memory.topic.clone();
-        if let Some(req_id) = self.mint_request_id() {
+        if let Some(req_id) = self.next_request_id() {
             self.memory.request_detail(req_id, key.clone());
             if !self.send_cmd(ClientCommand::MemoryShowQuery {
                 req_id,
@@ -165,7 +167,7 @@ impl App {
                 self.system_line(format!("couldn't show {key} — connection lost"));
             }
         } else {
-            self.system_line("memory: no carrier (stub mode)".to_string());
+            self.system_line("memory: not connected".to_string());
         }
     }
 

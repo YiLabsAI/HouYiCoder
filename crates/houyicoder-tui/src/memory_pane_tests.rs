@@ -7,7 +7,7 @@ use houyicoder_protocol::frontend::memory::ToggleState;
 
 use crate::composition;
 use crate::state::Pane;
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -49,19 +49,25 @@ fn test_memory_cursor_moves() {
     assert_eq!(app.memory.cursor(), 0, "scope cycle resets cursor");
 }
 
-/// Forget actions report the missing carrier in stub mode.
+/// Forget actions report the disconnected state.
 #[test]
-fn test_memory_forget_no_carrier() {
+fn test_memory_forget_disconnected() {
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.move_memory_cursor(1);
     app.forget_memory_at_cursor();
     let d_out = render(&app);
-    assert!(d_out.contains("no carrier"), "d action reports no carrier");
+    assert!(
+        d_out.contains("not connected"),
+        "d action reports not connected"
+    );
     // Command form: /memory forget <key>.
     app.run_tui_local_command("memory forget build-gate");
     let cmd_out = render(&app);
-    assert!(cmd_out.contains("no carrier"), "command reports no carrier");
+    assert!(
+        cmd_out.contains("not connected"),
+        "command reports not connected"
+    );
 }
 
 /// A refreshed MemoryList (the reply a forget / rescan sends) repopulates the
@@ -122,13 +128,13 @@ fn test_memory_pane_keys_route() {
         &mut app,
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
     );
-    // d fires the forget action (stub mode reports no carrier).
+    // d fires the forget action (a disconnected app reports not connected).
     crate::keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
     );
     let out = render(&app);
-    assert!(out.contains("no carrier"), "d fires forget action");
+    assert!(out.contains("not connected"), "d fires forget action");
 }
 
 #[test]
@@ -252,7 +258,7 @@ fn test_enter_shows_no_carrier() {
     app.run_command(SlashCommand::Memory);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let out = render(&app);
-    assert!(out.contains("no carrier"), "enter fires show action");
+    assert!(out.contains("not connected"), "enter fires show action");
 }
 
 #[test]
@@ -313,7 +319,7 @@ fn test_header_status_row_styles() {
 
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    let buf = crate::test_support::render_buffer(&app, 100, 28);
+    let buf = crate::test_harness::render_buffer(&app, 100, 28);
     // Glyph cell and a label cell of the same item share the on-style.
     for needle in ["● auto-memory", "auto-memory"] {
         let st = style_at(&buf, needle);
@@ -328,7 +334,7 @@ fn test_header_status_row_styles() {
         auto_memory: false,
         auto_dream: false,
     });
-    let buf = crate::test_support::render_buffer(&app, 100, 28);
+    let buf = crate::test_harness::render_buffer(&app, 100, 28);
     for needle in ["○ auto-memory", "auto-memory"] {
         let st = style_at(&buf, needle);
         assert_eq!(st.fg, Some(Color::DarkGray), "off item is dim: {needle}");
@@ -340,7 +346,7 @@ fn test_header_status_row_styles() {
 
     app.memory
         .begin_toggle(RequestId(1), MemoryToggleWhich::Dream);
-    let buf = crate::test_support::render_buffer(&app, 100, 28);
+    let buf = crate::test_harness::render_buffer(&app, 100, 28);
     let st = style_at(&buf, "◌ auto-dream");
     assert_eq!(st.fg, Some(Color::Cyan), "pending item is Cyan");
     assert!(
@@ -356,8 +362,8 @@ fn test_memory_toggle_no_carrier() {
     assert!(handled, "toggle subcommand handled");
     let out = render(&app);
     assert!(
-        out.contains("no carrier"),
-        "stub mode reports no carrier:\n{out}"
+        out.contains("not connected"),
+        "disconnected app reports not connected:\n{out}"
     );
 }
 

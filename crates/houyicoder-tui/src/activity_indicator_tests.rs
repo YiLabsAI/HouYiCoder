@@ -4,7 +4,7 @@
 
 use crate::composition;
 use crate::state::Screen;
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -71,7 +71,7 @@ fn test_busy_border_stays_plain() {
         let mut app = working();
         app.agent_busy = busy;
         app.run_started = busy.then(std::time::Instant::now);
-        let buf = crate::test_support::render_buffer(&app, 80, 16);
+        let buf = crate::test_harness::render_buffer(&app, 80, 16);
         for y in 0..16 {
             for x in 0..80 {
                 let cell = buf.cell((x, y)).expect("cell");

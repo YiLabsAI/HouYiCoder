@@ -37,21 +37,32 @@ fn catalog_app(entries: &[&str]) -> App {
 }
 
 /// The /model pane Up/Down/Enter keys: Down moves the cursor, Up moves back,
-/// Enter on the Default row applies the sentinel + closes the pane.
+/// and a disconnected Enter reports not connected, keeps the pane open, and
+/// leaves the tier untouched (the connected Enter path that applies the
+/// sentinel + closes the pane is covered by the run-control model tests).
 #[test]
-fn test_model_pane_select_tier() {
+fn test_model_pane_keys() {
     let mut app = catalog_app(&["a", "b"]);
     app.pane = Pane::Model;
     handle_input(&mut app, key(KeyCode::Down));
     assert_eq!(app.model_sel, 1, "Down moves the cursor");
     handle_input(&mut app, key(KeyCode::Up));
     assert_eq!(app.model_sel, 0, "Up moves back");
+    let tier_before = app.model_tier.clone();
     handle_input(&mut app, key(KeyCode::Enter));
     assert_eq!(
-        app.model_tier, "Default",
-        "Enter on Default applies the sentinel"
+        app.model_tier, tier_before,
+        "disconnected Enter keeps the tier"
     );
-    assert_eq!(app.pane, Pane::Transcript, "Enter closes the pane");
+    assert_eq!(
+        app.pane,
+        Pane::Model,
+        "disconnected Enter keeps the pane open"
+    );
+    assert!(
+        app.transcript.iter().any(|l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("model: not connected"))),
+        "disconnected Enter reports not connected"
+    );
 }
 
 /// The /model pane Up/Down navigate + recompute effort for the new model.
@@ -1092,7 +1103,7 @@ fn test_worktree_esc_closes_busy() {
 }
 
 /// /worktrees pane key surface: Up/Down move the cursor, Enter/d route to
-/// the enter/remove actions (which report no-carrier in stub mode), Char
+/// the enter/remove actions (which report not connected while disconnected), Char
 /// types into the search query, Backspace edits it, Esc in search clears
 /// the query (a second Esc closes), and an unmapped key is a no-op. These
 /// cover the keys/worktree_pane::handle arms without a PTY.
@@ -1148,8 +1159,8 @@ fn test_worktree_e_enter() {
     assert!(
         app.transcript
             .iter()
-            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("no carrier"))),
-        "e in detail enters the worktree (no carrier in stub mode)"
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("not connected"))),
+        "e in detail enters the worktree (not connected while disconnected)"
     );
 }
 
@@ -1344,7 +1355,7 @@ fn test_teammate_esc_pane_first() {
 #[test]
 fn test_fleet_pill_renders_rows() {
     let app = fleet_app(2);
-    let text = crate::test_support::render_text(&app, 80, 24);
+    let text = crate::test_harness::render_text(&app, 80, 24);
     assert!(text.contains("explore"), "pill shows the child type");
     assert!(
         text.contains("searching") || text.contains("thinking"),
@@ -1451,7 +1462,7 @@ fn test_ctrl_o_follows_cursor() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    drop(crate::test_support::render_text(&app, 80, 24));
+    drop(crate::test_harness::render_text(&app, 80, 24));
     let ri = app
         .last_transcript_rows
         .borrow()
@@ -1511,13 +1522,13 @@ fn test_agents_esc_no_abort() {
 #[test]
 fn test_agents_pane_hides_input() {
     let mut app = working_app();
-    let before = crate::test_support::render_text(&app, 80, 24);
+    let before = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         before.contains("for commands"),
         "the input box shows its prompt while the transcript is up"
     );
     app.pane = Pane::Agents;
-    let after = crate::test_support::render_text(&app, 80, 24);
+    let after = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         !after.contains("for commands"),
         "the input box retracts while the agents pane is open:\n{after}"

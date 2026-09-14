@@ -28,8 +28,8 @@ pub use crate::agent_message::{AgentMessage, ClientCommand};
 impl App {
     /// Mint a fresh request id for a wire request. Delegates to the session;
     /// None when no backend is wired (stub path).
-    pub fn mint_request_id(&self) -> Option<RequestId> {
-        self.session.as_ref().map(|s| s.mint_request_id())
+    pub fn next_request_id(&self) -> Option<RequestId> {
+        self.session.as_ref().map(|s| s.next_request_id())
     }
 
     /// Ship a command to the driver over the session's command channel.
@@ -88,7 +88,7 @@ impl App {
             self.promote_next_pending();
             return;
         }
-        let Some(req_id) = self.session.as_ref().map(|s| s.mint_request_id()) else {
+        let Some(req_id) = self.session.as_ref().map(|s| s.next_request_id()) else {
             return;
         };
         // Only errors matching this request terminate the active run.

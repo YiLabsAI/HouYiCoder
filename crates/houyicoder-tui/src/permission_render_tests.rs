@@ -1,14 +1,13 @@
 //! Render-focused tests for the /permissions pane: tab filtering, the
 //! canonical rule label, the Recently-denied body, and the live SearchBox
-//! filter. Split from permission_tests.rs so neither file breaches the
-//! file-size gate. Drives the real App render path (no runner needed — the
-//! pane is a TUI-local surface that renders in stub mode).
+//! filter. Drives the real App render path (no runner needed — the pane is
+//! a TUI-local surface that renders while disconnected).
 
 #![cfg(test)]
 
 use crate::composition;
 use crate::state::{App, Pane};
-use crate::test_support::render_text;
+use crate::test_harness::render_text;
 
 fn app() -> App {
     let mut app = composition::app();
@@ -269,7 +268,7 @@ fn test_permission_workspace_cursor_clamps() {
         .collect();
     // Cursor set past the dirs list — must clamp to the last dir (index 1).
     app.permission_cursor = 4;
-    let buf = crate::test_support::render_buffer(&app, 80, 24);
+    let buf = crate::test_harness::render_buffer(&app, 80, 24);
     // Partial cell-style match: ratatui composes bg(Reset)/underline_color(Reset)
     // into the stored style, so a full Style == comparison never matches.
     let is_cyan_bold =
@@ -345,7 +344,7 @@ fn test_workspace_nav_two_dirs() {
     app.dirs_cache = vec!["/tmp/a".into(), "/tmp/b".into()];
 
     let scan = |app: &App| -> (bool, bool) {
-        let buf = crate::test_support::render_buffer(app, 80, 24);
+        let buf = crate::test_harness::render_buffer(app, 80, 24);
         let mut a = false;
         let mut b = false;
         for y in 0..buf.area.height {

@@ -302,7 +302,7 @@ impl App {
                 self.rules_cache = rules.clone();
                 self.system_line(render_permission_rules_wire(&rules));
             }
-            AgentMessage::PermissionWorkingDirsResult { dirs } => {
+            AgentMessage::PermissionDirsResult { dirs } => {
                 self.dirs_cache = dirs.clone();
             }
             AgentMessage::PermissionAskBeforeGitResult { enabled } => {
@@ -495,7 +495,7 @@ impl App {
                     && view.last_fetched_turn.is_none_or(|t| turn > t)
                 {
                     view.last_fetched_turn = Some(turn);
-                    if let Some(req_id) = self.mint_request_id() {
+                    if let Some(req_id) = self.next_request_id() {
                         self.send_cmd(ClientCommand::ChildTranscriptQuery {
                             req_id,
                             child_sid: FrontendSessionId(agent_id.clone()),
@@ -582,7 +582,7 @@ impl App {
         }
         self.system_line(notice);
         if self.pane == Pane::Memory
-            && let Some(req_id) = self.mint_request_id()
+            && let Some(req_id) = self.next_request_id()
         {
             self.send_cmd(ClientCommand::MemoryListQuery { req_id });
         }

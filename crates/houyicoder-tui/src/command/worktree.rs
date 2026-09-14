@@ -1,11 +1,8 @@
-//! /worktrees pane-action methods on App. Extracted from command.rs so that
-//! file stays under the file-size gate. The methods are the in-TUI surface:
-//! the list refresh on pane-open, the cursor up/down, and the Enter (enter
-//! the selected worktree) + d (remove it) actions. Enter and d route through
-//! spawn_run — the agent worktree tools are model-invoked (EnterWorktree
-//! is model-invoked the same way), so the pane composes a clear user
-//! instruction and the model calls the tool. The remove path still hits the
-//! approval gate because exit_worktree(remove) is registered to require it.
+//! Worktree pane state transitions and actions: the list refresh on
+//! pane-open, cursor movement, and the Enter (enter worktree) + d (remove)
+//! actions. Both route through spawn_run — the agent worktree tools are
+//! model-invoked, so the pane composes the instruction and the model calls
+//! the tool. The remove path still hits the approval gate.
 
 use crate::state::App;
 
@@ -65,7 +62,7 @@ impl App {
             return;
         };
         if self.session.is_none() {
-            self.system_line("worktree: no carrier (stub mode)".to_string());
+            self.system_line("worktree: not connected".to_string());
             return;
         }
         let slug = std::path::Path::new(&entry.path)
@@ -181,13 +178,13 @@ mod tests {
         let mut app = app();
         app.worktree_entries = vec![row("/some/wt")];
         app.worktree_list.cursor = 0;
-        // No session wired (stub mode): the enter path reports no carrier.
+        // Disconnected: the enter path reports it and enters nothing.
         app.enter_worktree_at_cursor();
         assert!(
             app.transcript
                 .iter()
-                .any(|l| matches!(l, crate::records::TranscriptLine::System(s) if s.contains("no carrier"))),
-            "stub mode should report no carrier"
+                .any(|l| matches!(l, crate::records::TranscriptLine::System(s) if s.contains("not connected"))),
+            "disconnected enter should report not connected"
         );
     }
 }
