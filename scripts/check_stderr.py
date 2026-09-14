@@ -81,6 +81,9 @@ _CONSOLE_OK: dict[str, int] = {
     "crates/houyicoder-cli/src/main.rs": 16,
     "crates/houyicoder-loader/src/main.rs": 2,
     "crates/houyicoder-service/src/uds.rs": 2,
+    # The frame-timing bench prints its summary for --nocapture; it runs on
+    # a TestBackend from make benchmark, never on the live terminal.
+    "crates/houyicoder-tui/src/frame_timing.rs": 2,
 }
 
 # Pre-existing runtime console writes. Each reaches the terminal while the

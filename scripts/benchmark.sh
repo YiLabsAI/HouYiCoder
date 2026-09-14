@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-    echo "expected one benchmark: reward" >&2
+    echo "expected one benchmark: reward | tui" >&2
     exit 2
 fi
 BENCHMARK="$1"
@@ -30,12 +30,18 @@ case "$BENCHMARK" in
         run env HOUYICODER_REWARD_OFF=1 "$CARGO" test -p houyicoder-service \
             --test reward_bench test_reward_off_pair -- --ignored --nocapture
         ;;
+    tui)
+        run env HOUYI_GIT_SHA="$(git rev-parse --short HEAD)" \
+            HOUYI_BENCH_RUN_ID="$(date +%Y-%m-%d-%H%M%S)-$(git rev-parse --short HEAD)" \
+            "$CARGO" test -p houyicoder-tui --lib frame_timing_benchmark \
+            --release -- --ignored --nocapture
+        ;;
     "")
-        echo "benchmark name required: reward" >&2
+        echo "benchmark name required: reward | tui" >&2
         exit 2
         ;;
     *)
-        echo "unknown benchmark: '$BENCHMARK' (expected: reward)" >&2
+        echo "unknown benchmark: '$BENCHMARK' (expected: reward | tui)" >&2
         exit 2
         ;;
 esac

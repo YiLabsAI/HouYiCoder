@@ -58,6 +58,8 @@ mod development_cycle_tests;
 #[cfg(test)]
 mod export_command_tests;
 #[cfg(test)]
+mod frame_timing;
+#[cfg(test)]
 mod jump_pill_tests;
 #[cfg(test)]
 mod memory_pane_tests;

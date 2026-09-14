@@ -5,7 +5,7 @@ SHELL := /bin/bash -o pipefail
 .PHONY: help install setup-hooks \
         format fmt-check lint typecheck \
         test suite benchmark test-cov \
-        unit integration all ui sandbox live reward \
+        unit integration all ui sandbox live reward tui \
         quick-check check check-full \
         check-deps check-stderr \
         deny clean
@@ -102,6 +102,11 @@ ui sandbox live:
 benchmark:
 	@./scripts/benchmark.sh $(filter-out $@,$(MAKECMDGOALS))
 
+tui:
+	@if [[ " $(MAKECMDGOALS) " != *" benchmark "* ]]; then \
+		echo "use: make benchmark $@" >&2; exit 2; \
+	fi
+
 reward:
 	@if [[ " $(MAKECMDGOALS) " != *" benchmark "* ]]; then \
 		echo "use: make benchmark $@" >&2; exit 2; \
@@ -128,7 +133,7 @@ check-full: check
 # Verify combines deterministic gates with ignored PTY and sandbox suites.
 # Real-provider tests, expected-failure reproductions, and benchmarks remain
 # explicit so verification never consumes network credentials or model tokens.
-NEXTEST_VERIFY_FILTER := -E 'not(test(/bug_repro/)) and not(binary(/live_agent/)) and not(binary(/openai_compat_real/)) and not(binary(/mcp_live_server/)) and not(binary(/reward_bench/))'
+NEXTEST_VERIFY_FILTER := -E 'not(test(/bug_repro/)) and not(binary(/live_agent/)) and not(binary(/openai_compat_real/)) and not(binary(/mcp_live_server/)) and not(binary(/reward_bench/)) and not(test(/frame_timing_benchmark/))'
 # Parallel-safety: fresh_temp_dir retries on AlreadyExists (nextest gives each
 # test its own process, so the per-process SEQ counter restarts at 0; an
 # OS-recycled pid could mint a path matching a leftover dir). No --retries

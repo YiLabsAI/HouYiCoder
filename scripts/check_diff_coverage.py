@@ -47,7 +47,7 @@ BASE = os.environ.get("COV_BASE", "HEAD")
 # your own via COV_IGNORE="foo:bar"; the defaults are appended.
 IGNORE = os.environ.get(
     "COV_IGNORE",
-    "_tests.rs:/tests/:houyicoder-cli:houyicoder-graph:houyicoder-wasm",
+    "_tests.rs:/tests/:houyicoder-cli:houyicoder-graph:houyicoder-wasm:frame_timing.rs",
 ).split(":")
 ROOT = Path(__file__).resolve().parent.parent
 
