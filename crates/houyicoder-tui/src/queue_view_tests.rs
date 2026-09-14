@@ -45,6 +45,7 @@ fn test_idle_esc_keeps() {
 #[test]
 fn test_busy_esc_keeps() {
     let mut app = working();
+    crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
@@ -74,6 +75,7 @@ fn test_recall_includes_parked() {
 #[test]
 fn test_recall_keeps_command() {
     let mut app = working();
+    crate::test_harness::attach_connection(&mut app);
     app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("do work".into()));
     app.pending.push(PendingItem::Command("/clear".into()));
@@ -91,6 +93,7 @@ fn test_recall_keeps_command() {
 #[test]
 fn test_recall_clear_loses() {
     let mut app = working();
+    crate::test_harness::attach_connection(&mut app);
     app.pane = Pane::Queue;
     app.pending
         .push(PendingItem::Message("important task".into()));
@@ -418,6 +421,7 @@ fn test_pane_enter_recalls_one() {
 #[test]
 fn test_pane_r_recalls_all() {
     let mut app = working();
+    crate::test_harness::attach_connection(&mut app);
     app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("a".into()));
     app.pending.push(PendingItem::Message("b".into()));

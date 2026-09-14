@@ -30,6 +30,7 @@ fn test_trust_ask_resets_choice() {
 #[test]
 fn test_trust_down_selects_exit() {
     let mut app = composition::app();
+    crate::test_harness::attach_connection(&mut app);
     app.pending_trust = Some(TrustPrompt {
         project_path: "/proj".into(),
         risks: Vec::new(),
@@ -45,6 +46,7 @@ fn test_trust_down_selects_exit() {
 #[test]
 fn test_login_enter_accepts_trust() {
     let mut app = composition::app();
+    crate::test_harness::attach_connection(&mut app);
     app.screen = Screen::Login;
     app.pending_trust = Some(TrustPrompt {
         project_path: "/proj".into(),
@@ -59,6 +61,7 @@ fn test_login_enter_accepts_trust() {
 #[test]
 fn test_resolve_trust_accept_clears() {
     let mut app = composition::app();
+    crate::test_harness::attach_connection(&mut app);
     app.pending_trust = Some(TrustPrompt {
         project_path: "/proj".into(),
         risks: Vec::new(),
@@ -77,6 +80,7 @@ fn test_resolve_trust_accept_clears() {
 #[test]
 fn test_resolve_trust_decline_clears() {
     let mut app = composition::app();
+    crate::test_harness::attach_connection(&mut app);
     app.pending_trust = Some(TrustPrompt {
         project_path: "/proj".into(),
         risks: Vec::new(),

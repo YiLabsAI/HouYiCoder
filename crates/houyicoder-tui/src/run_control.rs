@@ -41,9 +41,9 @@ impl App {
     }
 
     /// Start a user turn, steer input to the viewed child, or queue it while
-    /// another turn is active. New turns render an immediate user echo before
-    /// the durable transcript arrives.
-    pub fn spawn_run(&mut self, input: String) {
+    /// another turn is active. New turns render an immediate user echo after
+    /// the send is accepted. Returns false when the send was refused.
+    pub fn spawn_run(&mut self, input: String) -> bool {
         // A viewed child receives input directly and shows an optimistic echo.
         let steer = self
             .teammate_view
@@ -65,20 +65,25 @@ impl App {
                 // transcript so a child refetch cannot hide the message.
                 self.exit_teammate_view();
                 self.system_line("this child has finished — start a new task or /agents to review");
-            } else {
-                if let Some(view) = self.teammate_view.as_mut() {
-                    view.transcript.push(TranscriptLine::User(input.clone()));
-                    view.pending_echo = Some(input.clone());
-                    self.transcript_scroll.follow_tail = true;
-                }
-                // Invalidate cached rows after the optimistic echo.
-                self.bump_transcript_version();
-                self.send_cmd(ClientCommand::InjectToChild {
-                    child_sid,
-                    text: input,
-                });
+                return true;
             }
-            return;
+            // The echo follows the send: a refused injection must not leave a
+            // ghost copy in the child transcript.
+            if !self.send_cmd(ClientCommand::InjectToChild {
+                child_sid,
+                text: input.clone(),
+            }) {
+                self.system_line("child: connection lost");
+                return false;
+            }
+            if let Some(view) = self.teammate_view.as_mut() {
+                view.transcript.push(TranscriptLine::User(input.clone()));
+                view.pending_echo = Some(input);
+                self.transcript_scroll.follow_tail = true;
+            }
+            // Invalidate cached rows after the optimistic echo.
+            self.bump_transcript_version();
+            return true;
         }
         // Active turns park new input locally. Promotion keeps at most one
         // server-side copy while preserving queue order.
@@ -86,57 +91,87 @@ impl App {
             self.pending
                 .push(PendingItem::ParkedMessage(input.clone().into()));
             self.promote_next_pending();
-            return;
+            return true;
         }
         let Some(req_id) = self.session.as_ref().map(|s| s.next_request_id()) else {
-            return;
+            return false;
         };
+        let session_id = self.session_id.clone();
+        let content = vec![ContentBlock::Text {
+            text: input.clone(),
+        }];
+        let disabled_skills = self.skill_disabled.clone();
+        // Send before touching any run state: a dead driver must not leave a
+        // fake running turn behind.
+        if !self.send_cmd(ClientCommand::SendMessage {
+            req_id,
+            session_id,
+            content,
+            disabled_skills,
+        }) {
+            self.system_line("run: connection lost");
+            return false;
+        }
         // Only errors matching this request terminate the active run.
         self.active_run_req_id.set(Some(req_id));
         // Preserve the submitted input in case interruption restores the turn.
         self.last_run_input = Some(input.clone());
-        self.push_transcript_line(TranscriptLine::User(input.clone()));
+        self.push_transcript_line(TranscriptLine::User(input));
         self.agent_busy = true;
         self.run_started = Some(Instant::now());
         self.last_delta_at = None;
         self.displayed_tokens.set(0);
         self.thinking_started_at = None;
         self.live_block = LiveBlock::None;
-        let session_id = self.session_id.clone();
-        let content = vec![ContentBlock::Text { text: input }];
-        let disabled_skills = self.skill_disabled.clone();
-        self.send_cmd(ClientCommand::SendMessage {
-            req_id,
-            session_id,
-            content,
-            disabled_skills,
-        });
+        true
     }
 
     /// Consume the pending queue head in first-in, first-out order. Clean
     /// completion may start the next turn; other outcomes leave input parked.
     /// At most one parked message is promoted to the server queue. Returns
-    /// false when no item is available.
+    /// false when no item is available or the send was refused.
     pub fn drain_pending_head(&mut self) -> bool {
         let Some(item) = self.pending.first().cloned() else {
             return false;
         };
-        self.pending.remove(0);
         match item {
-            PendingItem::Command(text) => self.run_slash_text(&text),
+            PendingItem::Command(text) => {
+                self.pending.remove(0);
+                self.run_slash_text(&text);
+                true
+            }
             PendingItem::Message(head) => {
-                // Remove the stale server copy before starting a fresh run.
+                // Remove the stale server copy before starting a fresh run; a
+                // refused removal keeps the head queued so the local copy and
+                // the server mirror cannot diverge.
                 let session_id = self.session_id.clone();
-                self.send_cmd(ClientCommand::QueueRemove {
+                if !self.send_cmd(ClientCommand::QueueRemove {
                     session_id,
                     id: head.id,
-                });
-                self.spawn_run(head.text);
+                }) {
+                    self.system_line("queue: connection lost");
+                    return false;
+                }
+                self.pending.remove(0);
+                let text = head.text.clone();
+                if !self.spawn_run(head.text) {
+                    // The mirror is gone but the run could not start: keep the
+                    // user content parked at the head so nothing is lost.
+                    self.pending
+                        .insert(0, PendingItem::ParkedMessage(text.into()));
+                    return false;
+                }
                 self.promote_next_pending();
                 true
             }
             PendingItem::ParkedMessage(input) => {
-                self.spawn_run(input.text);
+                self.pending.remove(0);
+                let text = input.text.clone();
+                if !self.spawn_run(input.text) {
+                    self.pending
+                        .insert(0, PendingItem::ParkedMessage(text.into()));
+                    return false;
+                }
                 self.promote_next_pending();
                 true
             }
@@ -147,9 +182,16 @@ impl App {
     /// verdict as the matching reverse response. No-op when no request awaits
     /// a decision.
     pub fn resolve_current_approval(&mut self, decision: ApprovalDecision) {
-        let Some(req_id) = self.pending_permission_req_id.take() else {
+        let Some(req_id) = self.pending_permission_req_id.get() else {
             return;
         };
+        // Deliver first: the card and the run-resume state only move once the
+        // verdict actually reached the driver.
+        if !self.send_cmd(ClientCommand::Verdict { req_id, decision }) {
+            self.system_line("permission: connection lost");
+            return;
+        }
+        self.pending_permission_req_id.take();
         self.pending_approvals.clear();
         self.approval = None;
         self.ask_question = None;
@@ -160,16 +202,21 @@ impl App {
         // Clear stale thinking state before post-resume streaming begins.
         self.live_block = LiveBlock::None;
         self.thinking_started_at = None;
-        self.send_cmd(ClientCommand::Verdict { req_id, decision });
     }
 
-    /// Send the startup trust verdict. Rejection also exits the local TUI.
+    /// Send the startup trust verdict. Rejection also exits the local TUI,
+    /// but only after the verdict was actually delivered.
     pub fn resolve_trust(&mut self, accept: bool) {
         let Some(req_id) = self.pending_trust_req_id.take() else {
             return;
         };
+        if !self.send_cmd(ClientCommand::TrustVerdict { req_id, accept }) {
+            // The host still waits for this verdict: restore the request id.
+            self.pending_trust_req_id = Some(req_id);
+            self.system_line("trust: connection lost");
+            return;
+        }
         self.pending_trust = None;
-        self.send_cmd(ClientCommand::TrustVerdict { req_id, accept });
         if !accept {
             self.quit = true;
         }
@@ -349,11 +396,16 @@ impl App {
     /// Abort the active run. The driver propagates cancellation through the
     /// execution pipeline and records the request for auditing.
     pub fn abort_run(&mut self) {
-        // Keep cancellation visible until run completion clears the state.
-        self.cancelling = true;
-        self.send_cmd(ClientCommand::AbortRun {
+        // Cancellation becomes visible only after the driver accepted it: a
+        // refused abort would otherwise wait forever for a completion that
+        // never comes.
+        if !self.send_cmd(ClientCommand::AbortRun {
             session_id: self.session_id.clone(),
-        });
+        }) {
+            self.system_line("run: connection lost");
+            return;
+        }
+        self.cancelling = true;
     }
 
     /// Recall the queued item at the cursor position into the input box.
@@ -391,42 +443,48 @@ impl App {
     }
 
     /// Recall queued messages into the input box before the current draft.
-    /// Commands remain queued, and server-side message copies are removed.
+    /// Commands remain queued. A message leaves the queue only together with
+    /// its server mirror: a refused mirror removal keeps the entry queued so
+    /// the input cannot duplicate on the next drain.
     pub fn pop_queued_to_input(&mut self) {
-        let messages: Vec<String> = self
+        if self
             .pending
             .iter()
-            .filter_map(|it| match it {
-                PendingItem::Message(input) | PendingItem::ParkedMessage(input) => {
-                    Some(input.text.clone())
-                }
-                PendingItem::Command(_) => None,
-            })
-            .collect();
-        if messages.is_empty() {
+            .all(|it| matches!(it, PendingItem::Command(_)))
+        {
             return;
         }
-        // Drain only message items; keep commands in place so they stay queued.
         let mut keep: Vec<PendingItem> = Vec::new();
+        let mut recalled: Vec<String> = Vec::new();
+        let mut refused = false;
         for it in std::mem::take(&mut self.pending) {
-            match &it {
+            match it {
                 PendingItem::Message(input) => {
-                    self.send_cmd(ClientCommand::QueueRemove {
-                        session_id: self.session_id.clone(),
+                    let session_id = self.session_id.clone();
+                    if self.send_cmd(ClientCommand::QueueRemove {
+                        session_id,
                         id: input.id,
-                    });
+                    }) {
+                        recalled.push(input.text);
+                    } else {
+                        refused = true;
+                        keep.push(PendingItem::Message(input));
+                    }
                 }
-                PendingItem::ParkedMessage(_) => {}
-                PendingItem::Command(_) => {
-                    keep.push(it);
-                }
+                PendingItem::ParkedMessage(input) => recalled.push(input.text),
+                other => keep.push(other),
             }
         }
         self.pending = keep;
+        if refused {
+            self.system_line("queue: connection lost — some entries stayed queued");
+        }
+        if recalled.is_empty() {
+            return;
+        }
         // Explicit recall supersedes automatic interrupted-turn restoration.
         self.last_run_input = None;
-        let text = messages.join("\n");
-        self.merge_recalled_text(text);
+        self.merge_recalled_text(recalled.join("\n"));
     }
 
     /// Insert recalled text before the current draft. The cursor remains at
@@ -488,3 +546,7 @@ mod agent_dispatch;
 #[cfg(test)]
 #[path = "run_control_tests.rs"]
 pub(crate) mod run_control_tests;
+
+#[cfg(test)]
+#[path = "send_failure_tests.rs"]
+mod send_failure_tests;

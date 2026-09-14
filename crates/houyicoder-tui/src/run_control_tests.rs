@@ -666,6 +666,7 @@ fn test_resolve_clears_thinking_window() {
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::run::ApprovalDecision;
     let mut app = composition::app();
+    crate::test_harness::attach_connection(&mut app);
     app.pending_permission_req_id.set(Some(RequestId(1)));
     app.thinking_started_at = Some(std::time::Instant::now());
     app.live_block = LiveBlock::Thinking;

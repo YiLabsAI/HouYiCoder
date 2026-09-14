@@ -406,6 +406,7 @@ fn test_esc_closes_memory_pane() {
 #[test]
 fn test_esc_closes_memory_busy() {
     let mut app = working();
+    crate::test_harness::attach_connection(&mut app);
     app.run_command(SlashCommand::Memory);
     app.agent_busy = true;
     assert_eq!(app.pane, Pane::Memory, "memory pane open mid-run");

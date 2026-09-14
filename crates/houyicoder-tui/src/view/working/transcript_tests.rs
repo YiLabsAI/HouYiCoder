@@ -181,6 +181,7 @@ fn test_steer_echo_renders() {
     use crate::agent_message::FleetEntry;
     use crate::records::TeammateView;
     let mut app = working_app();
+    crate::test_harness::attach_connection(&mut app);
     app.fleet.entries.push(FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),

@@ -116,6 +116,7 @@ fn test_steer_completed_surfaces_notice() {
     use crate::agent_message::FleetEntry;
     use crate::records::{TeammateView, TranscriptLine};
     let mut app = crate::composition::app();
+    crate::test_harness::attach_connection(&mut app);
     app.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()

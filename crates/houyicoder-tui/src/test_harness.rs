@@ -245,6 +245,20 @@ impl Transport for FailedHandshakeTransport {
     }
 }
 
+/// Attach a live recording connection to an existing test App, so send
+/// paths succeed without rebuilding the App. Use this when a fixture built
+/// its own state (catalog, queues, cards) must now take its connected
+/// branch.
+pub(crate) fn attach_connection(app: &mut App) {
+    let runtime = crate::composition::shared_runtime();
+    let (events_tx, _events_rx) = mpsc::channel();
+    let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
+    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<crate::agent_message::AgentMessage>();
+    let session = crate::session::Session::spawn(client, agent_tx, agent_rx, &runtime);
+    app.runtime = Some(runtime);
+    app.session = Some(session);
+}
+
 /// An App whose driver exited on a failed handshake: the session object is
 /// present, the connection is lost, and the ConnectionLost event has already
 /// arrived. Send attempts are refused deterministically, so tests can drive

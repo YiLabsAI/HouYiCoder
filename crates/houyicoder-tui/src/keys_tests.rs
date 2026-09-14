@@ -781,6 +781,7 @@ fn test_review_rework_key_routes() {
 fn test_repeated_esc_keeps() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
+    crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
@@ -801,6 +802,7 @@ fn test_repeated_esc_keeps() {
 fn test_recall_merges_draft() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
+    crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
     app.input.set("half draft".into());
@@ -819,6 +821,7 @@ fn test_recall_merges_draft() {
 fn test_esc_cancelling_closes_pane() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
+    crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
     // Esc1: interrupt (cancelling, agent_busy still true, queue intact).
@@ -847,6 +850,7 @@ fn test_esc_cancelling_closes_pane() {
 fn test_esc_cancelling_backs_trajectory() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
+    crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
@@ -1075,6 +1079,7 @@ fn test_esc_keeps_input() {
 #[test]
 fn test_busy_esc_keeps_draft() {
     let mut app = working_app();
+    crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
     app.input.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));

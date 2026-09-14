@@ -308,12 +308,13 @@ fn test_live_blocks_restore() {
 #[test]
 fn test_recall_survives_interrupt() {
     let mut app = composition::app();
+    crate::test_harness::attach_connection(&mut app);
     app.screen = crate::state::Screen::Working;
     app.agent_busy = true;
     app.last_run_input = Some("first".into());
     app.handle_agent_message(AgentMessage::Frame(user_msg("first")));
     // Queue a message while the run is in flight (spawn_run's busy path:
-    // pending push; no session is wired so the wire side is a no-op).
+    // pending push; the busy branch takes no send).
     app.spawn_run("zzsecond".into());
     assert!(!app.pending.is_empty(), "message queues while busy");
     // Esc1: interrupt the run. The queue stays intact; input stays empty.

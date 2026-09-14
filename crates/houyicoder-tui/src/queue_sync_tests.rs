@@ -29,6 +29,7 @@ fn working() -> crate::state::App {
 #[test]
 fn test_final_output_defers_drain() {
     let mut app = working();
+    crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("head".into()));
     app.pending.push(PendingItem::ParkedMessage("tail".into()));
@@ -56,7 +57,9 @@ fn test_final_output_defers_drain() {
         app.drain_pending_head(),
         "head drained after final completion"
     );
-    assert_eq!(app.pending, vec![PendingItem::ParkedMessage("tail".into())]);
+    // With a live connection the parked tail is promoted to the single
+    // server-side mirror right after the head drained.
+    assert_eq!(app.pending, vec![PendingItem::Message("tail".into())]);
 }
 
 /// Interruption clears busy and parks the queued message after its server
@@ -65,6 +68,7 @@ fn test_final_output_defers_drain() {
 #[test]
 fn test_interrupt_demotes_then_drains() {
     let mut app = working();
+    crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("parked".into()));
     app.handle_agent_message(AgentMessage::Done {
@@ -333,6 +337,7 @@ fn test_clear_orphans_pending_mirror() {
 #[test]
 fn test_head_drains_first_fifo() {
     let mut app = working();
+    crate::test_harness::attach_connection(&mut app);
     app.pending.push(PendingItem::Message("head msg".into()));
     app.pending.push(PendingItem::Command("/clear".into()));
     assert!(app.drain_pending_head(), "head Message drains");
@@ -348,6 +353,7 @@ fn test_head_drains_first_fifo() {
 #[test]
 fn test_parked_head_drains_first() {
     let mut app = working();
+    crate::test_harness::attach_connection(&mut app);
     app.pending
         .push(PendingItem::ParkedMessage("parked".into()));
     app.pending

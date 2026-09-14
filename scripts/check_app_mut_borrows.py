@@ -88,6 +88,11 @@ def mut_app_counts(root: Path) -> list[tuple[str, int]]:
             src = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        # Test-only modules (crate-level cfg(test), after any doc comments)
+        # are not production broad access: their &mut App helpers never ship
+        # to a binary.
+        if re.search(r"#!\[cfg\(test\)\]", src[:800]):
+            continue
         n = sum(
             1 for m in re.finditer(r"\bfn\s+\w+", src)
             if _sig_has_mut_app_param(src, m.start())
