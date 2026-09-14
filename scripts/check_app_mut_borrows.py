@@ -36,9 +36,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rules.monitored_structs import ACTIVE_OWNERS
 from rules.paths import is_test_file
 
-MUT_APP_BASELINE = 44
+# Broad-access baseline comes from the shared monitored-struct list (one
+# source for both gates). Strict-pin: the regex matches the struct name, so
+# renaming the struct drops the count and drift-blocks until the registry
+# and baseline move in the same commit. cfg(test)-only modules are excluded
+# (their helpers never ship).
+MUT_APP_BASELINE = next(
+    cfg["mut_app"] for cfg in ACTIVE_OWNERS.values() if "mut_app" in cfg
+)
 
 
 def evaluate(total, baseline=MUT_APP_BASELINE) -> int:

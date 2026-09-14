@@ -1,81 +1,77 @@
 #!/usr/bin/env python3
-"""Struct field-count ratchet (strict-pin): the total field count of
-structs with more than FIELD_WARN_THRESHOLD fields must equal the
-baseline exactly.
+"""Struct field gates, driven by the monitored-struct list.
 
-Growth (total > baseline) blocks: a God-struct refactor must move
-fields, not add. Drift (total < baseline) also blocks: once a refactor
-lowers the count, every subsequent commit is red until
-STRUCT_FIELD_BASELINE is lowered to match -- the floor tracks reality,
-so the count cannot silently drift below a stale baseline. Strict-pin:
-actual must equal baseline; both directions return 1.
-
-For a temporary increase (add sub-structs first, move fields out
-after), bump STRUCT_FIELD_BASELINE in the same commit with a reason,
-then lower it when the move completes.
-
-The field-counting is shared with report_structure_facts (the L3
-report-only detector in make verify); this gate is the L2 blocking
-counterpart in make check.
+Per-owner: strict-pin the field count of every registry owner. Growth and
+drift both block, and a registered owner that disappears (renamed or
+deleted without re-registering) also blocks -- renaming cannot evade the
+gate. The global raw field total is report-only during the migration:
+splitting fields into wrappers grows it legitimately, so the total is
+printed as a trend, never blocking, and never silently treated as green.
+Baselines live in owner_registry.py and move only with a reviewed reason
+in the same commit that changes reality.
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from report_structure_facts import (  # noqa: E402
-    FIELD_WARN_THRESHOLD,
-    struct_field_counts,
-)
+from rules.monitored_structs import ACTIVE_OWNERS  # noqa: E402
+from report_structure_facts import struct_field_counts  # noqa: E402
 
-STRUCT_FIELD_BASELINE = 579
-APP_FIELD_BASELINE = 171
-
-def evaluate(total, baseline=STRUCT_FIELD_BASELINE) -> int:
-    """Pure strict-pin: 0 only when total == baseline. Growth (>) and
-    drift (<) both return 1 -- the floor tracks reality. Pure so the
-    regression test can lock both directions without touching the filesystem."""
-    return 0 if total == baseline else 1
+# The real raw total at migration start, measured right after the parser
+# fix. Report-only trend reference, never blocking.
+GLOBAL_TOTAL_AT_MIGRATION_START = 582
 
 
-def evaluate_app(count, baseline=APP_FIELD_BASELINE) -> int:
-    """Strict-pin the central App field count independently."""
-    return 0 if count == baseline else 1
+def evaluate_owner(actual, baseline):
+    """Strict-pin per owner: 0 only when actual == baseline."""
+    return 0 if actual == baseline else 1
+
+
+def evaluate_registry(counts, registry=ACTIVE_OWNERS):
+    """Run per-owner gates against a counts mapping. Returns error strings
+    (empty == green). Pure; tested by test_struct_fields. A registered
+    owner missing from counts is an error -- renaming or deleting without
+    re-registering cannot go green. The global total is deliberately not
+    gated here."""
+    errors = []
+    for key, cfg in registry.items():
+        actual = counts.get(key)
+        if actual is None:
+            errors.append(
+                f"registered owner {key} disappeared from the struct "
+                "counts -- register the new fully-qualified name in "
+                "owner_registry.py in the same commit"
+            )
+        elif actual != cfg["fields"]:
+            kind = "grew" if actual > cfg["fields"] else "dropped"
+            errors.append(
+                f"{key} field count {kind}: {actual} != {cfg['fields']} -- "
+                "move fields with the owner, or re-baseline with a "
+                "reviewed reason in the same commit"
+            )
+    return errors
 
 
 def main() -> int:
-    counts = struct_field_counts()
-    total = sum(n for _, n in counts)
-    if total > STRUCT_FIELD_BASELINE:
+    counts = dict(struct_field_counts())
+    errors = evaluate_registry(counts)
+    total = sum(counts.values())
+    delta = total - GLOBAL_TOTAL_AT_MIGRATION_START
+    trend = f"+{delta}" if delta >= 0 else str(delta)
+    if errors:
+        for e in errors:
+            print(f"error: {e}", file=sys.stderr)
         print(
-            f"error: struct field-count ratchet breached: {total} > "
-            f"{STRUCT_FIELD_BASELINE} (+{total - STRUCT_FIELD_BASELINE}). A "
-            f"God-struct refactor must not increase the total field count — "
-            f"split and move fields, do not split and add. If this is a "
-            f"temporary refactor state, bump STRUCT_FIELD_BASELINE with a "
-            f"reason and lower it when the move completes.",
-            file=sys.stderr,
-        )
-        for name, n in sorted(counts, key=lambda x: -x[1])[:5]:
-            print(f"  {n} fields: {name}", file=sys.stderr)
-        return 1
-    if total < STRUCT_FIELD_BASELINE:
-        print(
-            f"error: struct field-count ratchet drifted: {total} < "
-            f"{STRUCT_FIELD_BASELINE} (-{STRUCT_FIELD_BASELINE - total}). "
-            f"Lower STRUCT_FIELD_BASELINE to {total} in this commit so the "
-            f"floor tracks reality (strict-pin: drift blocks until fixed).",
+            f"\n[struct-fields] {len(errors)} owner gate(s) red. Global "
+            f"raw total {total} ({trend} vs migration start) is "
+            "report-only during the migration.",
             file=sys.stderr,
         )
         return 1
-    app_fields = next((count for name, count in counts if name.endswith(":App")), 0)
-    if app_fields != APP_FIELD_BASELINE:
-        print(
-            f"error: App field-count ratchet drifted: {app_fields} != "
-            f"{APP_FIELD_BASELINE}. Update APP_FIELD_BASELINE only when App "
-            f"ownership deliberately changes.",
-            file=sys.stderr,
-        )
-        return 1
+    print(
+        f"[struct-fields] {len(ACTIVE_OWNERS)} owner(s) green. Global raw "
+        f"total {total} ({trend} vs migration start) -- report-only."
+    )
     return 0
 
 

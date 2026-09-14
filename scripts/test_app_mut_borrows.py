@@ -42,6 +42,14 @@ def test_other_type_ignored():
     assert not _sig_has_mut_app_param(source, 0)
 
 
+def test_owner_rename_drops_count():
+    # Renaming App to AppModel makes the regex stop matching: the count
+    # drops below baseline and the gate blocks -- renaming cannot present
+    # itself as progress. Locking this semantic keeps the evasion path red.
+    source = "fn dispatch(app: &mut crate::state::AppModel) {}"
+    assert not _sig_has_mut_app_param(source, 0)
+
+
 if __name__ == "__main__":
     from test_runner import run
     sys.exit(run("app-mut-borrows", dict(globals())))

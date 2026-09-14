@@ -194,7 +194,7 @@ def struct_field_counts() -> list[tuple[str, int]]:
     inflate depth and overshoot past the struct's real closing brace)."""
     results = []
     struct_re = re.compile(r"^\s*(?:pub\s+)?struct\s+([A-Z]\w+)\s*\{")
-    field_re = re.compile(r"^\s*(?:pub\s+)?\w+\s*:")
+    field_re = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?\w+\s*:")
     for f in rs_source_files(REPO):
         try:
             lines = f.read_text(encoding="utf-8").splitlines()

@@ -35,9 +35,9 @@ _TYPE_TAG = re.compile(r"(?:e2e|integration)", re.IGNORECASE)
 _NUMBERED_TEST_FILE = re.compile(r"_tests?\d+\.rs$")
 
 _COMMENT_DENSITY_CAP = 8
-_BASELINE_FILES = {"check_struct_fields.py", "check_file_size.py"}
+_BASELINE_FILES = {"monitored_structs.py", "check_file_size.py"}
 _BASELINE_COMMENT = re.compile(
-    r"^(STRUCT_FIELD_BASELINE|EXCESS_BASELINE)\s*=\s*\d+\s*#"
+    r'^\s*"(?:fields|mut_app|EXCESS_BASELINE)":\s*\d+,\s*#'
 )
 
 
