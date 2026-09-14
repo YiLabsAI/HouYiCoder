@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::state::TranscriptLine;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, StopReason};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use houyicoder_provider::FakeProvider;
@@ -754,4 +755,135 @@ fn test_guarded_tool_auto_asks() {
     }
     assert!(raised, "Auto should raise an approval popup");
     assert!(!boom.ran(), "the tool must not run before approval");
+}
+
+// Records current timing and queue behavior, including known defects, so
+// the run-state migration can prove what changed.
+
+fn approval_ask(call_id: &str) -> ApprovalRequest {
+    ApprovalRequest {
+        call_id: call_id.into(),
+        tool_name: "bash".into(),
+        input: serde_json::json!({"command": "ls"}),
+        options: Vec::new(),
+        reason: None,
+        delegation: None,
+    }
+}
+
+// The ask clears the run start point; the verdict resets it to now.
+#[test]
+fn test_ask_clears_start() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(
+        app.spawn_run("work".into()),
+        "run starts on a live connection"
+    );
+    let original_start = app.run_started;
+    assert!(original_start.is_some(), "precondition: run started");
+    app.raise_agent_approval(approval_ask("c1"));
+    assert!(
+        app.run_started.is_none(),
+        "recorded defect: the ask clears the run start point"
+    );
+    app.resolve_current_approval(ApprovalDecision {
+        call_id: "c1".into(),
+        approved: true,
+        updated_input: None,
+        scope: "once".into(),
+    });
+    assert_ne!(
+        app.run_started, original_start,
+        "recorded defect: the verdict resets the start point to now"
+    );
+}
+
+// Finish clears run_started before it is copied into the session start.
+#[test]
+fn test_finish_clears_start() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    app.handle_agent_message(AgentMessage::Done {
+        result: Ok(RunResult {
+            outcome: RunOutcome::FinalOutput {
+                content: vec![ContentBlock::Text { text: "ok".into() }],
+            },
+            usage: Usage::default(),
+            turns: 1,
+            stop_reason: StopReason::EndTurn,
+        }),
+    });
+    assert!(
+        app.session_started_at.is_none(),
+        "recorded defect: session start point is cleared before the copy"
+    );
+}
+
+// Each approval cycle rewrites the start point.
+#[test]
+fn test_cycles_rewrite_start() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    let first_start = app.run_started;
+    for round in 0..2 {
+        app.raise_agent_approval(approval_ask(&format!("c{round}")));
+        assert!(app.run_started.is_none(), "cycle {round}: ask clears start");
+        app.resolve_current_approval(ApprovalDecision {
+            call_id: format!("c{round}"),
+            approved: true,
+            updated_input: None,
+            scope: "once".into(),
+        });
+        assert_ne!(
+            app.run_started, first_start,
+            "cycle {round}: verdict rewrites the start point"
+        );
+    }
+}
+
+// With a card up the run is not busy, so a direct submit starts a second
+// run; the keys layer is the only guard today.
+#[test]
+fn test_starts_second_run() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("first".into()));
+    let first_req = app.active_run_req_id.get();
+    app.raise_agent_approval(approval_ask("c1"));
+    assert!(!app.agent_busy, "approval pauses the busy flag");
+    app.spawn_run("second".into());
+    assert!(
+        app.agent_busy,
+        "recorded defect: a direct submit during Waiting starts a second run"
+    );
+    assert_ne!(
+        app.active_run_req_id.get(),
+        first_req,
+        "recorded defect: the second run replaced the waiting run's request id"
+    );
+}
+
+// A direct submit while busy parks locally.
+#[test]
+fn test_busy_submit_parks() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("first".into()));
+    app.spawn_run("second".into());
+    assert!(app.agent_busy, "no second run while busy");
+    assert_eq!(app.pending.len(), 1, "the extra input parks in the queue");
+    // promote_next_pending attaches the single server mirror right away
+    // (the live connection accepts it) — the contract is at most one.
+    assert!(
+        matches!(app.pending.first(), Some(PendingItem::Message(_))),
+        "the parked input is promoted to the single server mirror"
+    );
 }
