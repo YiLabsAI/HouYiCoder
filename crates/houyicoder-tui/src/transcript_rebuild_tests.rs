@@ -244,8 +244,11 @@ fn test_resumed_batches_paused() {
     );
 }
 
+/// A rewind replays the truncated transcript as restored history: the
+/// all-completed list retires with its stamps instead of re-entering the
+/// completion visibility window.
 #[test]
-fn test_rewind_keeps_stamp() {
+fn test_rewind_retires_completed() {
     let mut app = fresh_app();
     pump(&mut app, user_msg("go"));
     pump(
@@ -261,11 +264,35 @@ fn test_rewind_keeps_stamp() {
 
     app.rewind_to_last_user_input();
 
-    assert_eq!(
-        app.todos.items[0].status,
-        crate::todo_view::TodoStatus::Completed
+    assert!(app.todos.items.is_empty());
+    assert!(app.todos.completion_at.is_empty());
+}
+
+/// The other side of a rewind: open work survives as restored history, and
+/// the stamps recorded before the rewind are cleared instead of riding into
+/// the replay.
+#[test]
+fn test_rewind_keeps_open() {
+    let mut app = fresh_app();
+    pump(&mut app, user_msg("go"));
+    pump(
+        &mut app,
+        todo_write_frame(
+            "c1",
+            &[("task one", "in_progress"), ("task two", "pending")],
+        ),
+    );
+    pump(
+        &mut app,
+        todo_write_frame("c2", &[("task one", "completed"), ("task two", "pending")]),
     );
     assert!(app.todos.completion_at.contains_key("task one"));
+    pump(&mut app, user_msg("later"));
+
+    app.rewind_to_last_user_input();
+
+    assert_eq!(app.todos.items.len(), 2);
+    assert!(app.todos.completion_at.is_empty());
 }
 
 /// A tool call with no result does not move the current-turn boundary backward.

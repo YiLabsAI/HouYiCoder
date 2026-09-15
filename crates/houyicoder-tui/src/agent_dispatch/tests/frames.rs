@@ -95,7 +95,7 @@ fn test_done_clears_running_tools() {
 }
 
 #[test]
-fn test_completed_cohort_stamped() {
+fn test_completed_list_timestamped() {
     // Historic completions are not recent while unresolved work remains.
     let mut app = crate::composition::app();
     app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
@@ -104,7 +104,8 @@ fn test_completed_cohort_stamped() {
     ])));
     app.handle_agent_message(done_msg());
     assert!(app.todos.completion_at.is_empty());
-    // Completing the cohort timestamps every item for one shared retirement.
+    // Completing the whole list timestamps every item for one shared
+    // retirement.
     app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
         ("old work", "completed"),
         ("current", "completed"),
@@ -112,6 +113,48 @@ fn test_completed_cohort_stamped() {
     app.handle_agent_message(done_msg());
     assert!(app.todos.completion_at.contains_key("current"));
     assert!(app.todos.completion_at.contains_key("old work"));
+}
+
+/// Replaying a session whose latest task list is all-completed, what a
+/// resume does, retires the list on the spot: no items install, no
+/// timestamps record, and the rendered terminal never shows the historic
+/// tasks. Every repeat attach behaves the same way.
+#[test]
+fn test_replayed_done_retires() {
+    for _ in 0..3 {
+        let mut app = crate::composition::app();
+        app.screen = crate::state::Screen::Working;
+        app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
+            ("old work", "completed"),
+            ("current", "completed"),
+        ])));
+        app.handle_agent_message(done_msg());
+        assert!(app.todos.items.is_empty());
+        assert!(app.todos.completion_at.is_empty());
+        let out = crate::test_harness::render_text(&app, 100, 24);
+        assert!(
+            !out.contains("old work"),
+            "historic tasks must not render after a resume: {out}"
+        );
+    }
+}
+
+/// The other half of the resume matrix: a replayed list with open work
+/// still renders, so retirement targets finished history only.
+#[test]
+fn test_replayed_open_renders() {
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
+        ("old work", "completed"),
+        ("open task", "pending"),
+    ])));
+    app.handle_agent_message(done_msg());
+    let out = crate::test_harness::render_text(&app, 100, 24);
+    assert!(
+        out.contains("open task"),
+        "resumed open work must render: {out}"
+    );
 }
 
 /// A toggle-state result updates memory state without changing the active pane.

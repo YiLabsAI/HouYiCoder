@@ -8,7 +8,10 @@
 //! Last-write-wins: the tool posts the full list each call, so the most
 //! recent todo-write frame determines the current checklist. The accumulator
 //! advances an append-only frame cursor; unrelated user boundaries retain the
-//! last checklist instead of clearing it.
+//! last checklist instead of clearing it. A cold projection, idle replay or
+//! rewind, is restored history rather than a live event: it records no
+//! completion timestamps, and an all-completed list retires on the spot
+//! instead of installing.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -66,8 +69,13 @@ impl TodoState {
     /// Apply newly appended todo-write frames using last-write-wins semantics.
     pub(crate) fn update(&mut self, frames: &[TranscriptFrame], run_active: bool) {
         if self.cursor > frames.len() {
+            // Rewind: the transcript shrank below the cursor, so the
+            // projection restarts from zero. Timestamps go with the items;
+            // a retained one would hold the replayed list inside the
+            // completion visibility window.
             self.cursor = 0;
             self.items.clear();
+            self.completion_at.clear();
         }
         let mut latest = None;
         for frame in frames.iter().skip(self.cursor) {
@@ -88,7 +96,22 @@ impl TodoState {
         if !run_active {
             pause_inactive(&mut items);
         }
-        if !initial_projection {
+        // Cold is inferred, not identified: an empty view while the run is
+        // inactive, as after a resume replay or a rewind. It restores a
+        // snapshot rather than transitioning live, so it records no
+        // completion timestamps.
+        let cold_projection = initial_projection && !run_active;
+        if cold_projection
+            && !items.is_empty()
+            && items
+                .iter()
+                .all(|item| item.status == TodoStatus::Completed)
+        {
+            // A restored all-completed list is finished history; retire it
+            // on the spot instead of installing items for the next prune.
+            return;
+        }
+        if !cold_projection {
             let old_completed: HashSet<String> = self
                 .items
                 .iter()
@@ -107,9 +130,12 @@ impl TodoState {
             .filter(|item| item.status == TodoStatus::Completed)
             .map(|item| item.content.clone())
             .collect();
+        // Drop timestamps for content the new list no longer shows as
+        // completed.
         self.completion_at
             .retain(|content, _| completed.contains(content));
-        if !items.is_empty()
+        if !cold_projection
+            && !items.is_empty()
             && items
                 .iter()
                 .all(|item| item.status == TodoStatus::Completed)
@@ -124,8 +150,10 @@ impl TodoState {
         self.items = items;
     }
 
-    /// Hide the whole checklist after every item has remained completed for the
-    /// cohort visibility window.
+    /// Hide the whole checklist after every item has remained completed for
+    /// the completion visibility window. An untimestamped completed list also
+    /// retires as a defensive fallback; cold projections normally retire in
+    /// update before installing any items.
     pub(crate) fn prune(&mut self, now: Instant) -> bool {
         if self.items.is_empty()
             || self
@@ -136,7 +164,7 @@ impl TodoState {
                 .completion_at
                 .values()
                 .max()
-                .is_none_or(|completed| now.duration_since(*completed) < COMPLETED_LIST_TTL)
+                .is_some_and(|completed| now.duration_since(*completed) < COMPLETED_LIST_TTL)
         {
             return false;
         }
@@ -316,5 +344,117 @@ mod tests {
         assert!(state.prune(now));
         assert!(state.items.is_empty());
         assert!(state.completion_at.is_empty());
+    }
+
+    #[test]
+    fn test_prune_keeps_open() {
+        let now = Instant::now();
+        let mut state = TodoState {
+            items: vec![TodoView {
+                content: "open".into(),
+                status: TodoStatus::Pending,
+                active_form: None,
+            }],
+            completion_at: HashMap::new(),
+            ..Default::default()
+        };
+
+        assert!(!state.prune(now));
+        assert_eq!(state.items.len(), 1);
+    }
+
+    /// A cold replay of an all-completed list retires on the spot: the view
+    /// installs nothing and records no timestamps, and every fresh
+    /// accumulator (each resume) behaves the same.
+    #[test]
+    fn test_cold_replay_retires() {
+        let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [{"content": "done", "status": "completed"}]
+        })));
+        for _ in 0..3 {
+            let mut state = TodoState::default();
+            state.update(std::slice::from_ref(&frame), false);
+            assert!(state.items.is_empty());
+            assert!(state.completion_at.is_empty());
+            assert!(!state.prune(Instant::now()), "nothing left to prune");
+        }
+    }
+
+    /// A rewind truncates the transcript below the cursor. The rollback
+    /// drops items and completion timestamps together, so the replayed
+    /// history cannot re-enter the completion visibility window.
+    #[test]
+    fn test_rewind_clears_completion() {
+        let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [{"content": "done", "status": "completed"}]
+        })));
+        let mut state = TodoState::default();
+        state.update(std::slice::from_ref(&frame), true);
+        assert!(state.completion_at.contains_key("done"));
+
+        state.set_cursor(4);
+        state.update(std::slice::from_ref(&frame), false);
+        assert!(state.items.is_empty());
+        assert!(state.completion_at.is_empty());
+    }
+
+    /// A live run reaching the all-completed state records timestamps and
+    /// keeps the list visible for the grace window.
+    #[test]
+    fn test_live_done_timestamped() {
+        let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [{"content": "done", "status": "completed"}]
+        })));
+        let mut state = TodoState::default();
+        state.update(std::slice::from_ref(&frame), true);
+
+        assert!(state.completion_at.contains_key("done"));
+        assert!(!state.prune(Instant::now()));
+    }
+
+    /// An idle replay with open work stays visible; only the completion
+    /// timestamp recording is suppressed.
+    #[test]
+    fn test_replay_open_kept() {
+        let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [
+                {"content": "done", "status": "completed"},
+                {"content": "open", "status": "pending"}
+            ]
+        })));
+        let mut state = TodoState::default();
+        state.update(std::slice::from_ref(&frame), false);
+
+        assert_eq!(state.items.len(), 2);
+        assert!(state.completion_at.is_empty());
+        assert!(!state.prune(Instant::now()));
+    }
+
+    /// A live run completing the last open item after a restored mixed list
+    /// records timestamps for the whole list (one shared retirement window);
+    /// the restore itself recorded none.
+    #[test]
+    fn test_live_completion_after_restore() {
+        let mixed = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [
+                {"content": "old", "status": "completed"},
+                {"content": "current", "status": "in_progress"}
+            ]
+        })));
+        let mut state = TodoState::default();
+        state.update(std::slice::from_ref(&mixed), false);
+        assert!(state.completion_at.is_empty());
+
+        let finished = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [
+                {"content": "old", "status": "completed"},
+                {"content": "current", "status": "completed"}
+            ]
+        })));
+        let frames = vec![mixed, finished];
+        state.update(&frames, true);
+
+        assert!(state.completion_at.contains_key("current"));
+        assert!(state.completion_at.contains_key("old"));
     }
 }
