@@ -21,6 +21,7 @@ use crate::palette::PaletteState;
 use crate::review_queue::ReviewQueue;
 use crate::scroll::{SearchState, TranscriptScroll};
 use crate::selection::Selection;
+use crate::session::SessionConnection;
 use crate::state::{
     App, Pane, PermissionInput, PermissionTab, Screen, SpecContext, Stage, StatusStub,
     TranscriptLine, ViewportMode,
@@ -137,7 +138,7 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     // to the server task that owns the runner, and the transcript rides the
     // accumulated frames — not a store replay.
     let driver_agent_tx = agent_tx.clone();
-    let live_session = crate::session::Session::spawn(client, driver_agent_tx, agent_rx, &runtime);
+    let live_session = SessionConnection::spawn(client, driver_agent_tx, agent_rx, &runtime);
     if skip_login {
         app.screen = crate::state::Screen::Working;
         app.login_mode = Some(houyicoder_protocol::frontend::LoginMode::Local);

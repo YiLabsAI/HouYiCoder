@@ -406,7 +406,7 @@ fn test_tears_down_old_server() {
         !old_serve.is_finished(),
         "old server alive before swap (handshake done, waiting on input)"
     );
-    // Swap: build_app resets self, dropping the old Session. The driver
+    // Swap: build_app resets self, dropping the old connection. The driver
     // JoinHandle is detached (the task is not aborted), but the driver exits
     // when its command channel returns None.
     app.swap_session(test_bundle());

@@ -35,7 +35,7 @@ use crate::resume_picker::{SessionLister, SessionPickerState};
 use crate::review_queue::ReviewQueue;
 use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
 use crate::selection::{ClipboardWriter, Selection};
-use crate::session::Session;
+use crate::session::SessionConnection;
 use crate::todo_view::TodoState;
 use crate::transcript::TranscriptFrame;
 use crate::transcript::snapshot::TranscriptSnapshot;
@@ -311,10 +311,10 @@ pub struct App {
     /// Sender cloned into each spawned task; the task ships the RunResult plus
     /// the session replay back over this channel.
     pub agent_tx: Option<mpsc::Sender<AgentMessage>>,
-    /// The live session with the engine: owns the command channel to the
+    /// The live connection with the engine: owns the command channel to the
     /// driver, the message channel back to the event loop, the request-id
     /// counter, and the driver task handle. None in the pure-stub path.
-    pub session: Option<Session>,
+    pub session: Option<SessionConnection>,
     /// The reverse-request req_id of the currently-shown permission ask,
     /// echoed back with the verdict. None when no approval card is up.
     pub pending_permission_req_id: Cell<Option<RequestId>>,

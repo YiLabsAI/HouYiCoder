@@ -15,7 +15,7 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 use crate::agent_message::AgentMessage;
 use crate::app::apply_selection_overlay;
 use crate::records::TranscriptLine;
-use crate::session::Session;
+use crate::session::SessionConnection;
 use crate::state::{App, Screen};
 use crate::transcript::snapshot::{IndexProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad};
 use crate::view::draw;
@@ -217,7 +217,7 @@ fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {
     let (events_tx, events_rx) = mpsc::channel();
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
     let (agent_tx, agent_rx) = mpsc::channel::<AgentMessage>();
-    let session = Session::spawn(client, agent_tx, agent_rx, &runtime);
+    let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     let mut app = working_app();
     app.runtime = Some(runtime);
     app.session = Some(session);
@@ -254,7 +254,7 @@ pub(crate) fn attach_connection(app: &mut App) {
     let (events_tx, _events_rx) = mpsc::channel();
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
     let (agent_tx, agent_rx) = std::sync::mpsc::channel::<crate::agent_message::AgentMessage>();
-    let session = crate::session::Session::spawn(client, agent_tx, agent_rx, &runtime);
+    let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     app.runtime = Some(runtime);
     app.session = Some(session);
 }
@@ -267,7 +267,7 @@ pub(crate) fn connection_lost_app() -> App {
     let runtime = crate::composition::shared_runtime();
     let client = Client::new(Box::new(FailedHandshakeTransport));
     let (agent_tx, agent_rx) = mpsc::channel::<AgentMessage>();
-    let mut session = Session::spawn(client, agent_tx, agent_rx, &runtime);
+    let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     // Effect latch: the driver announces its own death; from this point the
     // send path is deterministically refused.
     let death = session

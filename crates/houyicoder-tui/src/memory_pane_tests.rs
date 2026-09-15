@@ -577,7 +577,7 @@ fn test_dead_driver_toggle_rollback() {
 
     use crate::agent_message::AgentMessage;
     use crate::records::TranscriptLine;
-    use crate::session::Session;
+    use crate::session::SessionConnection;
     use houyicoder_async::PFut;
     use houyicoder_client::Transport;
     use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
@@ -608,7 +608,7 @@ fn test_dead_driver_toggle_rollback() {
         .expect("runtime");
     let client = houyicoder_client::Client::new(Box::new(FailOnConnect));
     let (agent_tx, agent_rx) = std::sync::mpsc::channel::<AgentMessage>();
-    let mut session = Session::spawn(client, agent_tx, agent_rx, &runtime);
+    let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     // Effect latch: the driver drops the command receiver before emitting
     // ConnectionLost, so once the event is observed the send below fails
     // deterministically — no sleep involved.

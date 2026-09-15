@@ -683,9 +683,7 @@ fn test_resolve_clears_thinking_window() {
     );
 }
 
-/// Slash commands that ship a wire query (context / status / model) take the
-/// mint-and-send path only when a session is wired. Drives the
-/// command.rs branches that were uncovered after the Session extraction.
+/// Slash queries (context / status / model) only ship with a live connection.
 #[test]
 fn test_slash_queries_ship_wired() {
     use houyicoder_protocol::frontend::SlashCommand;
