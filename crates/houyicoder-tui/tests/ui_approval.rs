@@ -27,6 +27,11 @@ const BASH_ASK_SCRIPT: &str = r#"[
   [{"type":"Text","text":"done"}]
 ]"#;
 
+const LONG_BASH_ASK_SCRIPT: &str = r#"[
+  [{"type":"ToolCall","id":"c1","name":"bash","input":{"command":"python3 -c \"print('command-start'); payload='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; print('command-end')\""}}],
+  [{"type":"Text","text":"done"}]
+]"#;
+
 /// Seed a throwaway git repo the binary can run in (a workspace manifest so
 /// resolve_project_workspace pins the dir, one commit so branching from HEAD
 /// succeeds). PTY tests should run in an isolated repo, not the developer
@@ -98,6 +103,33 @@ fn test_approve_bash_no_error() {
         !s.output().contains("error:"),
         "the transcript must not leave a stale error after approving:\n{}",
         s.output()
+    );
+}
+
+/// A long Bash command keeps its head and tail visible through terminal-width
+/// wrapping, while the approval options remain actionable below it.
+#[test]
+#[ignore]
+fn test_long_bash_wraps() {
+    let mut session = pty_session_in_repo(make_temp_repo(3), LONG_BASH_ASK_SCRIPT);
+    session.send_key(&Key::Backtab);
+    assert!(session.wait_for("manual mode on", RENDER_TIMEOUT));
+    session.send_str("run it");
+    session.send_key(&Key::Enter);
+    assert!(
+        session.wait_for("command-start", RENDER_TIMEOUT),
+        "command head must render:\n{}",
+        session.output()
+    );
+    assert!(
+        session.wait_for("command-end", RENDER_TIMEOUT),
+        "command tail must render after wrapping:\n{}",
+        session.output()
+    );
+    assert!(
+        session.output().contains("1. Yes"),
+        "approval options must remain visible:\n{}",
+        session.output()
     );
 }
 

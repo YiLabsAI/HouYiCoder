@@ -362,13 +362,15 @@ fn test_read_card_compact() {
     );
 }
 
-/// A long command in the args block is tail-truncated so the reason
-/// and option lines below stay visible in the card's bounded area.
+/// A long command keeps both ends and wraps before the reason and options.
 #[test]
-fn test_long_command_truncated() {
+fn test_long_command_wraps() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    let long_cmd = format!("echo {}", "x".repeat(120));
+    let long_cmd = format!(
+        "python3 -c \"print('command-start'); payload='{}'; print('command-end')\"",
+        "x".repeat(120)
+    );
     app.approval = Some(crate::state::Approval {
         tool: "bash".into(),
         args: serde_json::to_string(&serde_json::json!({ "command": long_cmd })).unwrap(),
@@ -380,9 +382,64 @@ fn test_long_command_truncated() {
     });
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains('…'),
-        "truncated long command should show ellipsis: {out}"
+        out.contains("python3 -c"),
+        "command head must remain: {out}"
     );
+    assert!(
+        out.contains("command-end"),
+        "command tail must remain: {out}"
+    );
+    assert!(
+        out.contains("Do you want to proceed?"),
+        "question missing: {out}"
+    );
+    assert!(out.contains("1. Yes"), "options missing: {out}");
+    assert!(
+        app.approval_rect.get().height > 8,
+        "wrapped command must increase card height"
+    );
+
+    let narrow = render_text(&app, 48, 36);
+    assert!(
+        narrow.contains("python3 -c"),
+        "narrow head missing: {narrow}"
+    );
+    assert!(
+        narrow.contains("command-end"),
+        "narrow tail missing: {narrow}"
+    );
+    assert!(
+        narrow.contains("1. Yes"),
+        "narrow options missing: {narrow}"
+    );
+}
+
+/// Explicit shell newlines remain visible instead of collapsing to a tail.
+#[test]
+fn test_multiline_command_visible() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.approval = Some(crate::state::Approval {
+        tool: "bash".into(),
+        args: serde_json::json!({
+            "command": "python3 - <<'PY'\nprint('first-line')\nprint('last-line')\nPY"
+        })
+        .to_string(),
+        reason: "test".into(),
+        selected: 0,
+        call_id: String::new(),
+        options: Vec::new(),
+        ..Default::default()
+    });
+
+    let out = render_text(&app, 60, 24);
+    assert!(
+        out.contains("python3 - <<'PY'"),
+        "command head missing: {out}"
+    );
+    assert!(out.contains("first-line"), "command body missing: {out}");
+    assert!(out.contains("last-line"), "command tail missing: {out}");
+    assert!(out.contains("1. Yes"), "options missing: {out}");
 }
 
 /// A detection-sourced ask (not SystemSafety) keeps the remember option.

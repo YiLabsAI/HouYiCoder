@@ -142,16 +142,31 @@ pub(super) fn card_height(a: &crate::state::Approval, width: u16) -> u16 {
 
 fn args_height(a: &crate::state::Approval, width: u16) -> u16 {
     let parsed = serde_json::from_str::<Value>(&a.args).ok();
-    let lines = if a.is_entitlement() {
-        entitlement_detail(&a.args, parsed.as_ref())
-    } else if let Some(lines) = parsed.as_ref().and_then(|v| diff_preview(&a.tool, v)) {
-        lines
-    } else {
-        vec![Line::from(format!(
-            "   {}",
-            args_command(&a.tool, parsed.as_ref(), &a.args)
-        ))]
-    };
+    if a.is_entitlement() {
+        return lines_height(&entitlement_detail(&a.args, parsed.as_ref()), width);
+    }
+    if let Some(lines) = parsed
+        .as_ref()
+        .and_then(|value| diff_preview(&a.tool, value))
+    {
+        return lines_height(&lines, width);
+    }
+    command_lines(&a.tool, parsed.as_ref(), &a.args, width)
+        .len()
+        .max(1) as u16
+}
+
+fn command_lines(tool: &str, value: Option<&Value>, raw: &str, width: u16) -> Vec<Line<'static>> {
+    let command = args_command(tool, value, raw);
+    let available = width.saturating_sub(3) as usize;
+    command
+        .split('\n')
+        .flat_map(|logical| super::line_wrap::wrap_line(logical, available))
+        .map(|row| Line::from(format!("   {row}")))
+        .collect()
+}
+
+fn lines_height(lines: &[Line<'_>], width: u16) -> u16 {
     lines
         .iter()
         .map(|line| wrapped_height(&line.to_string(), width))
@@ -194,11 +209,9 @@ fn render_args(f: &mut Frame, a: &crate::state::Approval, slot: Rect) {
             f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), slot);
         }
         None => {
-            let cmd = args_command(&a.tool, args_value.as_ref(), &a.args);
+            let lines = command_lines(&a.tool, args_value.as_ref(), &a.args, slot.width);
             f.render_widget(
-                Paragraph::new(format!("   {cmd}"))
-                    .style(Style::new().fg(Color::White))
-                    .wrap(Wrap { trim: false }),
+                Paragraph::new(lines).style(Style::new().fg(Color::White)),
                 slot,
             );
         }
@@ -340,22 +353,20 @@ fn source_label(a: &crate::state::Approval) -> &'static str {
 }
 
 /// Extract the human-readable command from the tool args. For bash, the
-/// "command" field holds the shell string; for other tools, fall back to
-/// the raw args JSON. Returns the raw string when JSON parsing fails.
-/// Long commands are tail-truncated so the reason and option lines below
-/// stay visible in the card's bounded area.
+/// command field holds the shell string; for other tools, fall back to the
+/// raw args JSON. Returns the raw string when JSON parsing fails. The full
+/// command is preserved so the renderer can wrap it to the terminal width.
 fn args_command(tool: &str, value: Option<&Value>, raw: &str) -> String {
     let field = match tool.to_ascii_lowercase().as_str() {
         "read" | "write" | "edit" | "multiedit" | "patch" | "str_replace" => "path",
         _ => "command",
     };
-    let text = value
+    value
         .and_then(|v| v.get(field))
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| value.map(Value::to_string))
-        .unwrap_or_else(|| raw.to_string());
-    truncate_tail(&text, 80)
+        .unwrap_or_else(|| raw.to_string())
 }
 
 fn approval_title(tool: &str) -> String {
