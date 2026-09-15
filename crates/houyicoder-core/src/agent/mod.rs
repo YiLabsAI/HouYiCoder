@@ -348,6 +348,11 @@ impl Runner {
         self
     }
 
+    /// The sandbox session shared by tools and reconnecting service hosts.
+    pub fn sandbox_session(&self) -> Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>> {
+        self.sandbox_session.clone()
+    }
+
     /// Install the per-skill grant store.
     pub fn with_skill_grants(
         mut self,

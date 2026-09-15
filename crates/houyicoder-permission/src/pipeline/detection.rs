@@ -4,7 +4,7 @@
 //! preserved exactly; the validators are thin adapters over the shared
 //! context, not a re-derivation of the rules.
 
-use houyicoder_api::sandbox::{Containment, is_within_bounds, path_args_for_boundary};
+use houyicoder_api::sandbox::{BoundaryAccess, Containment, boundary_grants_for};
 use std::sync::Arc;
 
 use crate::compound::compound_safe;
@@ -339,16 +339,12 @@ impl Validator for CompoundCommandValidator {
     }
 }
 
-/// A write-tool path whose canonical form the fence says is outside the
-/// workspace and authorized dirs surfaces an Ask so approval can widen the
-/// live fence before execution, instead of approving a call the inner tool
-/// will still reject. Bypass-immune safety fires in Auto as well. The gate only asks; it does not judge
-/// in-bounds (an uncertain canonicalize or a missing fence degrades to None,
-/// letting confine_path / the kernel fence enforce). Holds the containment
-/// handle directly (not via GateCtx — the design keeps GateCtx fence-free); the
-/// gate injects it when with_containment wires the fence. deny-wins is
-/// preserved: RuleDeny fires earlier in the ladder, so a Deny grep rule blocks
-/// before this asks.
+/// Asks before a write or search tool touches a path the fence places
+/// outside the workspace and authorized dirs, so approval widens the fence
+/// instead of authorizing a call the fence still refuses. Paths resolve
+/// through the shared normalizer; an unresolvable path asks (fail-ask), a
+/// missing fence degrades to no check. Deny rules fire earlier in the
+/// ladder, so this never overrides a Deny.
 pub struct PathBoundsValidator {
     containment: Option<Arc<dyn Containment>>,
 }
@@ -375,44 +371,32 @@ impl Validator for PathBoundsValidator {
     fn check(&self, req: &ToolRequest<'_>, _ctx: &GateCtx<'_>) -> Option<Decision> {
         let containment = self.containment.as_ref()?;
         let root = containment.boundary_root()?;
-        let additional = if houyicoder_api::sandbox::boundary_path_uses_parent(req.tool_name) {
-            containment.boundary_write_dirs()
-        } else {
-            containment.boundary_dirs()
-        };
-        for p in path_args_for_boundary(req.tool_name, req.input) {
-            let candidate = root.join(&p);
-            if let Ok(canonical) = std::fs::canonicalize(&candidate)
-                && !is_within_bounds(&canonical, &root, &additional)
-            {
-                if consent_allows(req, _ctx) {
-                    return None;
-                }
-                let detail = if houyicoder_api::sandbox::boundary_path_uses_parent(req.tool_name) {
-                    let parent = canonical.parent().unwrap_or(&canonical);
-                    format!(
-                        "path outside the workspace; approval authorizes parent directory {}; choosing always persists it",
-                        parent.display()
-                    )
-                } else {
-                    let directory = if canonical.is_file() {
-                        canonical.parent().unwrap_or(&canonical)
-                    } else {
-                        &canonical
-                    };
-                    format!(
-                        "path outside the workspace; approval authorizes read-only directory {}; choosing always persists it",
-                        directory.display()
-                    )
-                };
-                return Some(Decision::Ask(AskReason {
-                    source: AskSource::Detection,
-                    validator: self.name(),
-                    detail,
-                    containment_note: None,
-                }));
-            }
+        let grants = boundary_grants_for(
+            req.tool_name,
+            req.input,
+            &root,
+            &containment.boundary_dirs(),
+            &containment.boundary_write_dirs(),
+        );
+        let grant = grants.first()?;
+        if consent_allows(req, _ctx) {
+            return None;
         }
-        None
+        let detail = match grant.access {
+            BoundaryAccess::ReadOnly => format!(
+                "path outside the workspace; approval authorizes read-only directory {}; choosing always persists it",
+                grant.directory.display()
+            ),
+            BoundaryAccess::ReadWrite => format!(
+                "path outside the workspace; approval authorizes parent directory {} with read-write access; choosing always persists it",
+                grant.directory.display()
+            ),
+        };
+        Some(Decision::Ask(AskReason {
+            source: AskSource::Detection,
+            validator: self.name(),
+            detail,
+            containment_note: None,
+        }))
     }
 }

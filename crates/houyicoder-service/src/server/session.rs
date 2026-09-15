@@ -1,8 +1,5 @@
-//! The reconnect-replay entry points: a server re-hydrated from a session
-//! host and the serve_session driver that rebuilds a Server per connection.
-//! Kept in a child module so server.rs stays under the file-size gate;
-//! inherent impls here access Server's private fields (a child module sees
-//! the parent's privates).
+//! Reconnect replay, pending-turn recovery, and the per-connection session
+//! server lifecycle.
 
 use std::sync::Arc;
 
@@ -13,11 +10,11 @@ use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
-use houyicoder_protocol::frontend::run::ApprovalRequest;
 
 use crate::composition::SessionHost;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
-use crate::protocol_adapter::parse_approval_decision;
+use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
+use crate::server::approval::disclose_directory_grants;
 use crate::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionLogEntry};
 
@@ -33,6 +30,7 @@ impl Server {
         host: Arc<SessionHost>,
         append_notify: Arc<tokio::sync::Notify>,
     ) -> Self {
+        let sandbox_session = runner.sandbox_session();
         Self {
             runner,
             session,
@@ -40,7 +38,7 @@ impl Server {
             replay_after: None,
             next_req_id: 0,
             gate,
-            sandbox_session: None,
+            sandbox_session,
             host: Some(host),
             settings_path: houyicoder_config::settings_path(),
             project_path: None,
@@ -118,17 +116,23 @@ pub(crate) async fn resume_pending(
         let mut cancelled = false;
         'asks: while !turn.remaining.is_empty() {
             let ask_perm = turn.remaining.remove(0);
+            let mut reason = server.reconstruct_reason(&ask_perm.tool, &ask_perm.input);
+            let directory_grants =
+                server.approval_directory_grants(&ask_perm.tool, &ask_perm.input);
+            disclose_directory_grants(&mut reason, &directory_grants);
+            let engine_approval = houyicoder_core::agent::ApprovalRequest::new(
+                ask_perm.call_id.clone(),
+                ask_perm.tool.clone(),
+                ask_perm.input.clone(),
+            );
             let ask_id = server.mint_req_id();
             let ask = ServerRequestEnvelope::new(
                 ask_id,
-                ServerRequestPayload::Permission(ApprovalRequest {
-                    call_id: ask_perm.call_id.clone(),
-                    tool_name: ask_perm.tool.clone(),
-                    input: ask_perm.input.clone(),
-                    options: Vec::new(),
-                    reason: None,
-                    delegation: None,
-                }),
+                ServerRequestPayload::Permission(build_approval_request(
+                    &engine_approval,
+                    reason.as_ref(),
+                    None,
+                )),
             );
             server.send_typed(io, &ServerFrame::Request(ask)).await?;
             // Loop, not a single read: a reattaching connection's first status
@@ -213,19 +217,23 @@ pub(crate) async fn resume_pending(
             if decision.approved
                 && ask_perm.tool != houyicoder_protocol::extension::ENTITLEMENT_TOOL
             {
-                // Route by reason, not tool name: re-decide reconstructs the
-                // Ask reason (same display-only reconstruction as
-                // handle_approval), then route_consent sends a path-bounds ask
-                // to the directory grant and everything else to the rule path.
-                // Entitlement consent skips: the grant-store write in the
-                // engine's apply path is the persistence.
-                let reason = server.reconstruct_reason(&ask_perm.tool, &ask_perm.input);
-                server.route_consent(
-                    &ask_perm.tool,
-                    &ask_perm.input,
-                    &decision.scope,
-                    reason.as_ref(),
-                );
+                server
+                    .route_consent_with_grants(
+                        &ask_perm.tool,
+                        &ask_perm.input,
+                        &decision.scope,
+                        reason.as_ref(),
+                        &directory_grants,
+                    )
+                    .map_err(|error| {
+                        ProtocolError::new(
+                            ErrorCategory::Unavailable,
+                            format!(
+                                "approved directory capability could not be installed: {error}"
+                            ),
+                            false,
+                        )
+                    })?;
             }
             host.store()
                 .advance_pending(server.session, decision.clone());
@@ -372,9 +380,9 @@ pub(crate) async fn serve_session(
 mod tests;
 
 #[cfg(test)]
-#[path = "session_reconnect_tests.rs"]
+#[path = "reconnect_tests.rs"]
 mod reconnect_tests;
 
 #[cfg(test)]
-#[path = "session_orphan_reconnect_tests.rs"]
-mod orphan_reconnect_tests;
+#[path = "orphan_recovery_tests.rs"]
+mod orphan_recovery_tests;

@@ -1,9 +1,6 @@
-//! The disconnect-orphan reconnect test: split from session_reconnect_tests
-//! so that file stays under the file-size gate. Covers the real trigger path
-//! for the orphan-ToolCall brick — a mid-run disconnect drops run_fut
-//! without cancelling via the token, leaving a ToolCall on disk with no
-//! ToolResult — and proves run()'s entry reconcile repairs it before the new
-//! user input so the next provider request ships a legal role:"tool".
+//! Recovery contract for tool calls orphaned by a mid-run disconnect.
+//! A subsequent run must append the missing terminal result before new
+//! model input is assembled.
 
 use super::tests::*;
 use super::*;
@@ -26,9 +23,8 @@ use houyicoder_session::SessionStore;
 use crate::composition::SessionHost;
 use crate::lifecycle::SessionLeaseStore;
 
-// A tool whose execute future never resolves until the drive loop drops it.
-// Pins the run mid-flight — ToolCall already persisted, ToolResult pending —
-// so a disconnect at that instant leaves the exact orphan a hard crash would.
+// The pending execution keeps ToolCall durable while ToolResult is absent,
+// reproducing the state left by a mid-run disconnect.
 struct BlockingTool;
 impl houyicoder_api::tool::Tool for BlockingTool {
     fn name(&self) -> &str {

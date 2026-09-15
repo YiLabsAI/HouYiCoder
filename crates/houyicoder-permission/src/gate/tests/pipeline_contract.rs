@@ -5,6 +5,10 @@ use crate::decision::{Decision, DenySource, Outcome};
 use crate::gate::{DefaultModeGate, ModeGate};
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{Immunity, Pipeline, Stage};
+use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::thread;
 
 use super::bash_req;
 
@@ -151,8 +155,6 @@ fn test_concurrent_gate_decide_safe() {
     // Concurrent decide() callers share the gate's internal Mutex on rules +
     // mode. No panic and no corruption: every decision is a valid variant.
     // Stress both the rules lock (decide_inner) and the mode lock (set_mode).
-    use std::sync::Arc;
-    use std::thread;
     let g = Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto));
     let n_threads = 8;
     let per_thread = 500;
@@ -186,10 +188,6 @@ fn test_concurrent_gate_decide_safe() {
 
 #[test]
 fn test_outside_edit_asks_path() {
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
-    use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-
     struct BoundsFence(PathBuf);
     impl Containment for BoundsFence {
         fn coverage(&self) -> Coverage {
@@ -241,11 +239,6 @@ fn test_outside_edit_asks_path() {
 /// "only ask, never judge" discipline (the network-posture precedent).
 #[test]
 fn test_outside_asks_inside_defers() {
-    use crate::decision::Outcome;
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
-    use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-
     let root = std::env::temp_dir().join(format!("gate-bounds-root-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("mkdir root");
     let outside = std::env::temp_dir().join(format!("gate-bounds-out-{}", std::process::id()));
@@ -359,6 +352,95 @@ fn test_outside_asks_inside_defers() {
     assert!(
         !matches!(d2.outcome(), Outcome::Ask),
         "no containment → gate does not ask (confine_path is the backstop): {d2:?}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+/// A write targeting a file that does not exist yet outside the workspace
+/// still asks: the shared normalizer resolves the missing target through
+/// its nearest existing ancestor, so the pre-check and the fence agree on
+/// what the target is.
+#[test]
+fn test_outside_new_file_asks() {
+    let base = std::env::temp_dir().join(format!("gate-newfile-{}", std::process::id()));
+    let root = base.join("root");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&root).expect("mkdir root");
+    std::fs::create_dir_all(&outside).expect("mkdir outside");
+    let croot = std::fs::canonicalize(&root).unwrap();
+
+    struct BoundsFence {
+        root: PathBuf,
+    }
+    impl Containment for BoundsFence {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![self.root.clone()],
+            }
+        }
+        fn would_block(&self, _e: SideEffect) -> Option<String> {
+            None
+        }
+        fn boundary_root(&self) -> Option<Arc<Path>> {
+            Some(Arc::from(self.root.clone().into_boxed_path()))
+        }
+    }
+    let g = DefaultModeGate::new_without_builtins().with_containment(Arc::new(BoundsFence {
+        root: croot.clone(),
+    }));
+
+    // Write creating a new file in an existing outside directory → Ask.
+    let new_file = outside.join("brand-new-settings.json");
+    let v = serde_json::json!({"path": new_file.to_string_lossy()});
+    let req = ToolRequest {
+        tool_name: "write",
+        input: Some(&v),
+        is_destructive: true,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    let decision = g.decide(&req);
+    assert!(
+        matches!(decision, Decision::Ask(ref reason)
+            if reason.validator == "path-bounds"
+                && reason.detail.contains("authorizes parent directory")),
+        "write to a not-yet-existing outside file must ask: {decision:?}"
+    );
+
+    // Write creating a new file under a not-yet-existing outside directory
+    // tree → still Ask (parent chain resolves to the nearest existing
+    // ancestor).
+    let deep_new = outside.join("new-dir/sub/file.txt");
+    let v = serde_json::json!({"path": deep_new.to_string_lossy()});
+    let req = ToolRequest {
+        tool_name: "write",
+        input: Some(&v),
+        is_destructive: true,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    let decision = g.decide(&req);
+    assert!(
+        matches!(decision.outcome(), Outcome::Ask),
+        "write under a new outside directory tree must ask: {decision:?}"
+    );
+
+    // A new file inside the workspace defers to the pipeline (no Ask).
+    let inside_new = root.join("fresh-file.txt");
+    let v = serde_json::json!({"path": inside_new.to_string_lossy()});
+    let req = ToolRequest {
+        tool_name: "write",
+        input: Some(&v),
+        is_destructive: true,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    let d = g.decide(&req);
+    assert!(
+        !matches!(d.outcome(), Outcome::Ask),
+        "in-workspace new file does not ask: {d:?}"
     );
 
     std::fs::remove_dir_all(&root).ok();

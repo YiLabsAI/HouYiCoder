@@ -1,16 +1,18 @@
-//! The mid-run permission reverse-request: the serve loop surfaced an
-//! ApprovalRequest (the gate returned Ask), so the server pauses the run,
-//! asks the human over the wire, records the verdict audit, applies any
-//! yes-don't-ask-again consent, and returns the engine decision for resume.
-//! Split from server.rs so that file stays under the file-size gate.
+//! Mid-run permission requests, verdict auditing, and scoped consent
+//! capabilities applied before execution resumes.
 
-use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionLogEntry};
-use houyicoder_permission::{Decision, ToolRequest};
+use houyicoder_api::sandbox::{BoundaryAccess, BoundaryGrant, Containment, boundary_grants_for};
+use houyicoder_context::{EventId, PermissionVerdict, SandboxError, SessionEvent, SessionLogEntry};
+use houyicoder_core::agent::{
+    ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest,
+};
+use houyicoder_permission::{AskSource, Decision, ToolRequest};
 use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 
+use crate::composition::ContainmentAdapter;
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 
 use super::{Server, frame_carrier::FrameCarrier, now_millis};
@@ -28,9 +30,9 @@ impl Server {
     pub(super) async fn handle_approval(
         &mut self,
         io: &mut FrameCarrier,
-        approval: &houyicoder_core::agent::ApprovalRequest,
+        approval: &EngineApprovalRequest,
         delegation: Option<houyicoder_protocol::frontend::run::DelegationSource>,
-    ) -> Result<houyicoder_core::agent::ApprovalDecision, ProtocolError> {
+    ) -> Result<EngineApprovalDecision, ProtocolError> {
         let is_entitlement = approval.tool_name == houyicoder_protocol::extension::ENTITLEMENT_TOOL;
         let mut reason = if is_entitlement {
             // The entitlement ask is not a gate decision — reconstructing a
@@ -40,13 +42,11 @@ impl Server {
         } else {
             self.reconstruct_reason(&approval.tool_name, &approval.input)
         };
-        // Enrich the wire-display detail with the skill script path so the
-        // card shows what would run. Only this path pays the detection IO;
-        // resume_pending calls reconstruct_reason to route consent and
-        // discards the detail, so it skips the augment.
-        if let Some(ref mut r) = reason {
-            self.augment_skill_script_reason(r, &approval.tool_name, &approval.input);
+        let directory_grants = self.approval_directory_grants(&approval.tool_name, &approval.input);
+        if let Some(ref mut current) = reason {
+            self.augment_skill_script_reason(current, &approval.tool_name, &approval.input);
         }
+        disclose_directory_grants(&mut reason, &directory_grants);
 
         let ask_id = self.mint_req_id();
         let ask = ServerRequestEnvelope::new(
@@ -86,7 +86,7 @@ impl Server {
                     // Esc: abort + return a deny so the serve loop resumes the
                     // now-cancelled run instead of hanging on a response the
                     // client will not send.
-                    return Ok(houyicoder_core::agent::ApprovalDecision {
+                    return Ok(EngineApprovalDecision {
                         call_id: approval.call_id.clone(),
                         approved: false,
                         updated_input: None,
@@ -149,21 +149,12 @@ impl Server {
             // trail.
             tracing::warn!("permission-decision audit append failed: {e}");
         }
-        // Route the consent by the ASK REASON, not the tool name: a path-bounds
-        // approval grants the directory (apply_consent_directory); anything
-        // else takes the rule path on scope "always". Shared with resume_pending
-        // via route_consent so the two consent sites cannot drift.
         if decision.approved && !is_entitlement {
             // Entitlement consent skips the rule/directory paths: the
             // grant-store write in the engine's apply path IS the
             // persistence. Persisting a rule for the synthetic tool would
             // pollute the store with a rule nothing reads.
-            self.route_consent(
-                &approval.tool_name,
-                &approval.input,
-                &decision.scope,
-                reason.as_ref(),
-            );
+            self.install_approved_consent(approval, &decision, reason.as_ref(), &directory_grants)?;
         }
         // Move this ask from remaining into decided so a mid-batch disconnect
         // re-emits only the tail and the runner resumes with the full decided
@@ -245,95 +236,191 @@ impl Server {
         reason.detail = format_skill_script_detail(&scripts);
     }
 
-    /// Route an approval's consent by the ASK REASON, not the tool name: only a
-    /// path-bounds ask grants a directory (apply_consent_directory); an ask
-    /// with any OTHER reason takes the rule path (apply_consent_rule) on scope
-    /// "always". A None reason — the re-decide could not reproduce why the gate
-    /// asked — fails closed: nothing is persisted. Routing by tool name was
-    /// wrong (any approved grep/glob got a directory grant even when the ask
-    /// was a user-Ask rule), and routing a None reason to the rule path was
-    /// worse: apply_consent_rule's non-bash terminal is a contentless
-    /// tool-level Allow rule (matches the tool regardless of input, persisted
-    /// at Project scope), so a batch that grants a directory then re-decides a
-    /// nested path to Allow would silently install a permanent blanket grep
-    /// allow that shadows all later path-bounds asks. None means "the consent
-    /// authority does not know why this ask happened"; writing any durable
-    /// authorization in that state would grant a permission the user never
-    /// chose. Shared by handle_approval + resume_pending so the two consent
-    /// sites cannot drift. The carry-reason follow-up threads the original
-    /// AskReason through the engine's ApprovalRequest so this re-decide (and
-    /// its None case) disappears from the consent path.
+    fn install_approved_consent(
+        &self,
+        approval: &EngineApprovalRequest,
+        decision: &houyicoder_protocol::frontend::run::ApprovalDecision,
+        reason: Option<&houyicoder_permission::AskReason>,
+        grants: &[BoundaryGrant],
+    ) -> Result<(), ProtocolError> {
+        self.route_consent_with_grants(
+            &approval.tool_name,
+            &approval.input,
+            &decision.scope,
+            reason,
+            grants,
+        )
+        .map_err(|error| {
+            ProtocolError::new(
+                ErrorCategory::Unavailable,
+                format!("approved directory capability could not be installed: {error}"),
+                false,
+            )
+        })
+    }
+
+    /// Route an approved call to the directory capability required by its
+    /// target and to any durable rule selected by the approval scope.
     pub(crate) fn route_consent(
         &self,
         tool_name: &str,
         input: &serde_json::Value,
         scope: &str,
         reason: Option<&houyicoder_permission::AskReason>,
-    ) {
-        let is_path_bounds = reason.is_some_and(|r| r.validator == "path-bounds");
-        if is_path_bounds {
-            self.apply_consent_directory(tool_name, input, scope);
-        } else if reason.is_some() && scope == "always" {
-            self.apply_consent_rule(tool_name, input);
-        }
-        // reason == None: fail closed. Persist nothing.
+    ) -> Result<(), SandboxError> {
+        let grants = self.approval_directory_grants(tool_name, input);
+        self.route_consent_with_grants(tool_name, input, scope, reason, &grants)
     }
 
-    /// Route a path-bounds approval (grep/glob) to the two persistence layers:
-    /// the kernel fence (additional_dirs, always — so the gate's re-check on
-    /// resume passes instead of re-asking in a loop) and the durable store
-    /// (only on scope "always", so startup restores the directory into the fence on
-    /// restart). Mirrors apply_consent_rule for bash: same scope contract
-    /// ("always" = persist, "once" = this session), reusing Scope rather than
-    /// a new concept. The path extraction is the shared path_args_for_boundary
-    /// (the gate uses the same helper for its pre-check ask) so the two layers
-    /// cannot drift on which field is the path.
+    /// Apply the exact directory grants disclosed on the approval card.
+    pub(crate) fn route_consent_with_grants(
+        &self,
+        tool_name: &str,
+        input: &serde_json::Value,
+        scope: &str,
+        reason: Option<&houyicoder_permission::AskReason>,
+        grants: &[BoundaryGrant],
+    ) -> Result<(), SandboxError> {
+        self.install_directory_grants(grants, scope)?;
+        let is_path_bounds = reason.is_some_and(|current| current.validator == "path-bounds");
+        let is_directory_capability =
+            reason.is_some_and(|current| current.validator == "directory-capability");
+        let is_system_safety =
+            reason.is_some_and(|current| current.source == AskSource::SystemSafety);
+        if !is_path_bounds
+            && !is_directory_capability
+            && !is_system_safety
+            && reason.is_some()
+            && scope == "always"
+        {
+            self.apply_consent_rule(tool_name, input);
+        }
+        Ok(())
+    }
+
+    /// Analyze directory capabilities required by one approved target.
+    pub(crate) fn approval_directory_grants(
+        &self,
+        tool_name: &str,
+        input: &serde_json::Value,
+    ) -> Vec<BoundaryGrant> {
+        let Some(session) = &self.sandbox_session else {
+            return Vec::new();
+        };
+        let bounds = ContainmentAdapter(session.clone());
+        let Some(root) = bounds.boundary_root() else {
+            return Vec::new();
+        };
+        boundary_grants_for(
+            tool_name,
+            Some(input),
+            &root,
+            &bounds.boundary_dirs(),
+            &bounds.boundary_write_dirs(),
+        )
+    }
+
+    /// Install directory grants derived from a structured tool target.
     pub(crate) fn apply_consent_directory(
         &self,
         tool_name: &str,
         input: &serde_json::Value,
         scope: &str,
-    ) {
-        let paths = houyicoder_api::sandbox::path_args_for_boundary(tool_name, Some(input));
-        for path in paths {
-            let grant = boundary_grant_dir(tool_name, std::path::Path::new(&path));
-            let grant_display = grant.to_string_lossy();
-            let write_access = houyicoder_api::sandbox::boundary_path_uses_parent(tool_name);
-            if let Some(session) = &self.sandbox_session {
-                let result = if write_access {
-                    session.add_working_dir(&grant_display)
-                } else {
-                    session.add_reading_dir(&grant_display)
-                };
-                if let Err(error) = result {
-                    tracing::warn!(
-                        "path-bounds consent: sandbox grant failed for {grant_display}: {error}; the tool will still refuse the path"
-                    );
-                }
+    ) -> Result<(), SandboxError> {
+        let grants = self.approval_directory_grants(tool_name, input);
+        self.install_directory_grants(&grants, scope)
+    }
+
+    /// Install runtime grants before persisting them. A partial runtime update
+    /// is rolled back when a later grant fails.
+    fn install_directory_grants(
+        &self,
+        grants: &[BoundaryGrant],
+        scope: &str,
+    ) -> Result<(), SandboxError> {
+        if grants.is_empty() {
+            return Ok(());
+        }
+        let session = self.sandbox_session.as_ref().ok_or_else(|| {
+            SandboxError::SandboxUnavailable("no sandbox session for directory grant".into())
+        })?;
+        let mut installed: Vec<&BoundaryGrant> = Vec::new();
+        for grant in grants {
+            if !grant.directory.is_dir() {
+                rollback_directory_grants(session.as_ref(), &installed);
+                return Err(SandboxError::NotFound(format!(
+                    "authorized directory does not exist: {}",
+                    grant.directory.display()
+                )));
             }
-            if scope == "always" {
-                if write_access {
-                    self.gate
-                        .add_directory(&grant, houyicoder_permission::Scope::Local);
-                } else {
-                    self.gate
-                        .add_read_directory(&grant, houyicoder_permission::Scope::Local);
+            let path = grant.directory.to_string_lossy();
+            let result = match grant.access {
+                BoundaryAccess::ReadOnly => session.add_reading_dir(&path),
+                BoundaryAccess::ReadWrite => session.add_working_dir(&path),
+            };
+            if let Err(error) = result {
+                rollback_directory_grants(session.as_ref(), &installed);
+                return Err(error);
+            }
+            installed.push(grant);
+        }
+        if scope == "always" {
+            for grant in grants {
+                match grant.access {
+                    BoundaryAccess::ReadOnly => self
+                        .gate
+                        .add_read_directory(&grant.directory, houyicoder_permission::Scope::Local),
+                    BoundaryAccess::ReadWrite => self
+                        .gate
+                        .add_directory(&grant.directory, houyicoder_permission::Scope::Local),
                 }
             }
         }
+        Ok(())
     }
 }
 
-fn boundary_grant_dir(tool_name: &str, path: &std::path::Path) -> std::path::PathBuf {
-    match tool_name {
-        tool if houyicoder_api::sandbox::boundary_path_uses_parent(tool) => path
-            .parent()
-            .map_or_else(|| path.to_path_buf(), std::path::Path::to_path_buf),
-        _ if path.is_file() => path
-            .parent()
-            .map_or_else(|| path.to_path_buf(), std::path::Path::to_path_buf),
-        _ => path.to_path_buf(),
+fn rollback_directory_grants(
+    session: &dyn houyicoder_api::sandbox::SandboxSession,
+    grants: &[&BoundaryGrant],
+) {
+    for grant in grants {
+        session.remove_working_dir(&grant.directory.to_string_lossy());
     }
+}
+
+/// Add the effective directory capability to the approval reason.
+pub(crate) fn disclose_directory_grants(
+    reason: &mut Option<houyicoder_permission::AskReason>,
+    grants: &[BoundaryGrant],
+) {
+    if grants.is_empty()
+        || reason
+            .as_ref()
+            .is_some_and(|current| current.validator == "path-bounds")
+    {
+        return;
+    }
+    let current = reason.get_or_insert_with(|| houyicoder_permission::AskReason {
+        source: AskSource::Detection,
+        validator: "directory-capability",
+        detail: "external path requires a sandbox directory capability".into(),
+        containment_note: None,
+    });
+    let first = &grants[0];
+    let capability = match first.access {
+        BoundaryAccess::ReadOnly => "read-only directory",
+        BoundaryAccess::ReadWrite => "parent directory with read-write access",
+    };
+    let remaining = if grants.len() > 1 {
+        format!(" and {} additional directories", grants.len() - 1)
+    } else {
+        String::new()
+    };
+    current.detail.push_str(&format!(
+        "; approval also authorizes {capability} {}{remaining} for this session; choosing always persists it",
+        first.directory.display()
+    ));
 }
 
 /// Format the approval-card detail for a Bash command that runs one or more
@@ -362,3 +449,7 @@ fn format_skill_script_detail(scripts: &[houyicoder_api::skill::SkillScriptRef])
 #[cfg(test)]
 #[path = "approval_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "consent_chain_tests.rs"]
+mod consent_chain_tests;

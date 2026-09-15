@@ -14,7 +14,7 @@
 use crate::{ProfileSpec, ShellSnapshot, render};
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
-    WorktreeFenceGuard,
+    WorktreeFenceGuard, normalize_tool_path,
 };
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
@@ -302,12 +302,7 @@ impl MacSeatbeltSession {
         } else {
             workspace.join(path)
         };
-        let canonical = base
-            .parent()
-            .filter(|parent| parent.exists())
-            .and_then(|parent| dunce::canonicalize(parent).ok())
-            .map(|parent| parent.join(base.file_name().unwrap_or_default()))
-            .unwrap_or(base);
+        let canonical = normalize_tool_path(&base).unwrap_or(base);
         if canonical.starts_with(&workspace) || canonical.starts_with(&self.tmpdir) {
             return Ok(canonical);
         }

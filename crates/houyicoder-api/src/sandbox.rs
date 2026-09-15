@@ -244,67 +244,11 @@ pub trait Containment: Send + Sync {
     }
 }
 
-/// The single workspace-boundary predicate: a canonical candidate is within
-/// bounds when it is under the canonical root or any additional authorized
-/// dir. Shared by confine_path (tool execution) and the gate (pre-check ask)
-/// so the two layers cannot drift on what "inside the workspace" means. The
-/// network-posture incident taught that a second authority drifts: the gate
-/// asks when this returns false, it does not itself judge in-bounds (an
-/// uncertain canonicalize or a missing fence degrades to "do not ask", letting
-/// confine_path / the kernel fence enforce).
-pub fn is_within_bounds(candidate: &Path, root: &Path, additional: &[PathBuf]) -> bool {
-    candidate.starts_with(root) || additional.iter().any(|d| candidate.starts_with(d))
-}
-
-/// Whether approving this tool's file target authorizes its parent directory.
-pub fn boundary_path_uses_parent(tool_name: &str) -> bool {
-    matches!(
-        tool_name.to_ascii_lowercase().as_str(),
-        "write" | "edit" | "multiedit"
-    )
-}
-
-/// Extract path-bearing arguments for a workspace boundary check. Write tools
-/// contribute their target path; grep contributes its path; glob contributes
-/// its path and the directory portion of its pattern. Other tools return
-/// empty. Shared by the gate's pre-check ask and consent routing so approval
-/// and enforcement cannot drift on which field carries the path.
-pub fn path_args_for_boundary(tool_name: &str, input: Option<&serde_json::Value>) -> Vec<String> {
-    let Some(v) = input else {
-        return Vec::new();
-    };
-    match tool_name.to_ascii_lowercase().as_str() {
-        tool if boundary_path_uses_parent(tool) || tool == "grep" => v
-            .get("path")
-            .and_then(|x| x.as_str())
-            .map(|s| vec![s.to_string()])
-            .unwrap_or_default(),
-        "glob" => {
-            let mut out = Vec::new();
-            if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
-                out.push(p.to_string());
-            }
-            if let Some(pat) = v.get("pattern").and_then(|x| x.as_str()) {
-                // Truncate at the first wildcard char so the dir portion
-                // canonicalizes cleanly (../cc-bck/**/*.rs → ../cc-bck/). This
-                // mirrors the glob tool's own check_pattern_confined logic so
-                // the gate's pre-check + the tool's enforcement agree on what
-                // the "dir portion" is.
-                let prefix = match pat.find(['*', '?', '[']) {
-                    Some(pos) => &pat[..pos],
-                    None => pat,
-                };
-                let dir = prefix.rfind('/').map(|i| &prefix[..i]).unwrap_or(prefix);
-                let dir = dir.trim_end_matches('/');
-                if !dir.is_empty() {
-                    out.push(dir.to_string());
-                }
-            }
-            out
-        }
-        _ => Vec::new(),
-    }
-}
+mod boundary;
+pub use boundary::{
+    BoundaryAccess, BoundaryGrant, boundary_grants_for, boundary_path_uses_parent,
+    is_within_bounds, normalize_tool_path, path_args_for_boundary,
+};
 
 #[cfg(test)]
 #[path = "sandbox/containment_contract_tests.rs"]
@@ -661,43 +605,6 @@ mod tests {
         let s = Stub;
         s.set_extra_mach_services(&["test.dummy.xpc".to_string()]);
         s.clear_extra_mach_services();
-    }
-
-    /// The fence guard runs the restore closure on explicit restore(), and
-    /// again on Drop (best-effort) — the second call is a no-op. A guard
-    /// dropped WITHOUT explicit restore also runs the closure (best-effort
-    /// path). Covers the Drop branch + the idempotent second-call path.
-    #[test]
-    fn test_fence_guard_restore_drop() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let count = Arc::new(AtomicUsize::new(0));
-        let c = Arc::clone(&count);
-        let guard = WorktreeFenceGuard::new(Box::new(move || {
-            c.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }));
-        assert!(guard.restore().is_ok());
-        assert_eq!(count.load(Ordering::SeqCst), 1, "explicit restore ran once");
-        drop(guard); // Drop best-effort — closure already taken, no-op.
-        assert_eq!(
-            count.load(Ordering::SeqCst),
-            1,
-            "drop after restore is a no-op"
-        );
-
-        // A guard dropped WITHOUT restore: Drop runs the closure.
-        let c2 = Arc::clone(&count);
-        let guard2 = WorktreeFenceGuard::new(Box::new(move || {
-            c2.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }));
-        drop(guard2);
-        assert_eq!(
-            count.load(Ordering::SeqCst),
-            2,
-            "drop without restore runs the closure"
-        );
     }
 
     struct Stub;
