@@ -247,7 +247,11 @@ async fn test_drive_translates_agent_status() {
     });
     engine.close();
     let run = engine.drive(Vec::new()).await;
-    match run.msgs.first() {
+    assert!(
+        matches!(run.msgs.first(), Some(AgentMessage::ConnectionReady)),
+        "the handshake success arrives first: {run:?}"
+    );
+    match run.msgs.get(1) {
         Some(AgentMessage::AgentStatus {
             agent_id,
             turn,
@@ -657,8 +661,8 @@ async fn test_drive_translates_events() {
     // the Metrics event is skipped, not translated and not fatal
     assert_eq!(
         run.msgs.len(),
-        3 + 1,
-        "three events plus the death: {run:?}"
+        3 + 1 + 1,
+        "three events plus readiness and the death: {run:?}"
     );
 }
 
@@ -711,7 +715,11 @@ async fn test_drive_translates_tool_progress() {
         ),
         "a tick without elapsed_secs must be dropped, not half-built: {run:?}"
     );
-    assert_eq!(run.msgs.len(), 2 + 1, "two ticks plus the death: {run:?}");
+    assert_eq!(
+        run.msgs.len(),
+        2 + 1 + 1,
+        "two ticks plus readiness and the death: {run:?}"
+    );
 }
 
 /// Core responses translate with their fields intact; Ack maps to no
@@ -784,8 +792,8 @@ async fn test_drive_translates_core_responses() {
     );
     assert_eq!(
         run.msgs.len(),
-        6 + 1,
-        "Ack maps to nothing, the other six translate, plus the death: {run:?}"
+        6 + 1 + 1,
+        "Ack maps to nothing, the other six translate, plus readiness and the death: {run:?}"
     );
 }
 
@@ -835,8 +843,8 @@ async fn test_drive_translates_permission_responses() {
     );
     assert_eq!(
         run.msgs.len(),
-        5 + 1,
-        "five answers plus the death: {run:?}"
+        5 + 1 + 1,
+        "five answers plus readiness and the death: {run:?}"
     );
 }
 
@@ -908,8 +916,8 @@ async fn test_drive_translates_catalog_responses() {
     );
     assert_eq!(
         run.msgs.len(),
-        5 + 1,
-        "five listings plus the death: {run:?}"
+        5 + 1 + 1,
+        "five listings plus readiness and the death: {run:?}"
     );
 }
 
@@ -981,7 +989,11 @@ async fn test_drive_translates_memory_responses() {
             .any(|m| matches!(m, AgentMessage::UndoResult { description: None })),
         "empty undo stack must surface as None: {run:?}"
     );
-    assert_eq!(run.msgs.len(), 6 + 1, "six answers plus the death: {run:?}");
+    assert_eq!(
+        run.msgs.len(),
+        6 + 1 + 1,
+        "six answers plus readiness and the death: {run:?}"
+    );
 }
 
 /// Model answers translate, and the server's reverse trust request keeps
@@ -1026,8 +1038,8 @@ async fn test_drive_translates_trust_ask() {
     );
     assert_eq!(
         run.msgs.len(),
-        2 + 1 + 1,
-        "two model answers, the trust ask, the death: {run:?}"
+        2 + 1 + 1 + 1,
+        "two model answers, the trust ask, readiness, the death: {run:?}"
     );
 }
 

@@ -246,6 +246,10 @@ pub enum AgentMessage {
     /// Frame for the run, so the event loop rebuilds the transcript from its
     /// own log; no snapshot ships here.
     Done { result: Result<RunResult, RunError> },
+    /// The Hello handshake succeeded: the connection is ready for requests.
+    /// Emitted once per connection, before any Frame or Request the same
+    /// connection produces. The App marks the connection Ready on receipt.
+    ConnectionReady,
     /// The session driver died (connect, send, or read failure): no reply
     /// can ever land again. Distinct from Done{Err}, which reports a run
     /// failure the server classified; this is the transport itself gone.

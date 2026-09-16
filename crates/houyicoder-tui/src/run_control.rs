@@ -11,7 +11,7 @@ use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 use crate::pending_queue::PendingItem;
 use crate::records::{Approval, AskQuestion, TranscriptLine};
-use crate::session::EnqueueError;
+use crate::session::{ConnectionStatus, EnqueueError, PollOutcome};
 use crate::state::App;
 use crate::state::enums::LiveBlock;
 use crate::transcript::{TranscriptFrame, chunk_text};
@@ -62,6 +62,15 @@ impl App {
             // Acknowledged, not dropped: the ConnectionLost event announces
             // the loss and sweeps state on the next poll.
         }
+    }
+
+    /// The lifecycle of the current connection. Disconnected is the absent
+    /// session, so callers read one four-state view instead of folding an
+    /// Option over a three-state enum.
+    pub fn connection_status(&self) -> ConnectionStatus {
+        self.session
+            .as_ref()
+            .map_or(ConnectionStatus::Disconnected, |s| s.status().clone())
     }
 
     /// Record a single request-id exhaustion notice for an auto path. The
@@ -369,18 +378,33 @@ impl App {
             // Poll one owned message off the session so the session borrow
             // ends before the mutable dispatch below. The batch cap returns
             // control to terminal input even when producers remain saturated.
-            let msg = self.session.as_mut().and_then(|s| s.poll());
-            match msg {
-                Some(AgentMessage::Frame(frame)) => {
+            let outcome = self.session.as_mut().map(|s| s.poll());
+            match outcome {
+                Some(PollOutcome::Message(AgentMessage::Frame(frame))) => {
                     batch.push(frame);
                     applied = true;
                 }
-                Some(m) => {
+                Some(PollOutcome::Message(m)) => {
                     self.apply_frames(batch.drain(..));
                     self.handle_agent_message(m);
                     applied = true;
                 }
-                None => break,
+                Some(PollOutcome::Idle) | None => break,
+                Some(PollOutcome::Closed) => {
+                    // The driver ended without a death announcement (task
+                    // panic or abort): the connection is lost even though no
+                    // ConnectionLost message will arrive. The shared loss
+                    // settlement runs the full cleanup only on the first
+                    // observation; a later Closed (after an announced death
+                    // already settled the loss) changes nothing and stays
+                    // quiet — poll_agent reflects that by not re-marking
+                    // dirty.
+                    self.apply_frames(batch.drain(..));
+                    if self.apply_connection_loss("connection driver stopped".into()) {
+                        applied = true;
+                    }
+                    break;
+                }
             }
         }
         self.apply_frames(batch);

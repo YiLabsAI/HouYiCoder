@@ -308,13 +308,16 @@ pub(crate) fn connection_lost_app() -> App {
     let death = session
         .poll_startup(Duration::from_secs(5))
         .expect("the failed handshake reports ConnectionLost");
-    assert!(
-        matches!(death, AgentMessage::ConnectionLost { .. }),
-        "expected ConnectionLost, got {death:?}"
-    );
     let mut app = working_app();
     app.runtime = Some(runtime);
     app.session = Some(session);
+    // Apply the death so the app holds the settled state: Lost with its
+    // cause, active run swept. Tests start from the post-loss world instead
+    // of half-applying the event themselves.
+    let AgentMessage::ConnectionLost { message } = death else {
+        panic!("expected ConnectionLost, got {death:?}");
+    };
+    app.handle_agent_message(AgentMessage::ConnectionLost { message });
     app
 }
 

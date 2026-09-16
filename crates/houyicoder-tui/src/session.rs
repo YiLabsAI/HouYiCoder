@@ -4,4 +4,6 @@
 
 mod connection;
 
-pub use connection::{EnqueueError, RequestIdExhausted, SessionConnection};
+pub use connection::{
+    ConnectionStatus, EnqueueError, PollOutcome, RequestIdExhausted, SessionConnection,
+};

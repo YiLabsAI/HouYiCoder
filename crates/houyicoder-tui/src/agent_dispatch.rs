@@ -40,6 +40,16 @@ impl App {
                 self.active_run_req_id.set(None);
                 self.handle_run_completion(result.map_err(|e| e.message));
             }
+            AgentMessage::ConnectionReady => {
+                // The Hello handshake succeeded. Ready reflects the confirmed
+                // handshake, not the connection object existing, so a failed
+                // Hello leaves the status at Connecting until the loss lands.
+                // The transition is constrained: a late confirmation cannot
+                // revive a lost connection.
+                if let Some(s) = self.session.as_mut() {
+                    s.mark_ready();
+                }
+            }
             AgentMessage::ConnectionLost { message } => {
                 // The driver is gone: no reply can land for anything in
                 // flight. End the active run if one is live, and sweep
@@ -47,9 +57,7 @@ impl App {
                 // its switch forever. Server state for in-flight mutations
                 // is unknown, so no per-action failure line is written —
                 // one generic connection-loss line covers all of them.
-                self.active_run_req_id.set(None);
-                self.memory.clear_pending();
-                self.handle_run_completion(Err(message));
+                self.apply_connection_loss(message);
             }
             AgentMessage::RequestError { req_id, message } => {
                 if self.active_run_req_id.get().is_some_and(|r| r == req_id) {
@@ -77,6 +85,29 @@ impl App {
                 self.handle_agent_message_inner(other);
             }
         }
+    }
+
+    /// Settle a connection loss, returning whether this call performed the
+    /// non-Lost → Lost cleanup. The first-cause-wins transition gates the
+    /// work, so an announced death followed by a closed channel (or a repeat
+    /// closed observation) neither overwrites the cause nor repeats the
+    /// completion. A session-less App (the no-backend path) has no cause to
+    /// record but still sweeps that observation.
+    pub(crate) fn apply_connection_loss(&mut self, cause: String) -> bool {
+        let first = match self.session.as_mut() {
+            Some(s) => s.mark_lost(cause.clone()),
+            // No connection exists: nothing was lost twice, so run the sweep
+            // for this observation. A synthetic loss on a session-less App
+            // (tests, the stub path) still clears run and pane state.
+            None => true,
+        };
+        if !first {
+            return false;
+        }
+        self.active_run_req_id.set(None);
+        self.memory.clear_pending();
+        self.handle_run_completion(Err(cause));
+        true
     }
 
     /// Fill the teammate view with the fetched child transcript. A pending
@@ -219,12 +250,15 @@ impl App {
                 self.trust_choice = TrustChoice::Accept;
                 self.pending_trust_req_id = Some(req_id);
             }
-            // Completion, driver death, and matching request errors are
-            // handled before this dispatch.
+            // Completion, driver death, readiness, and matching request
+            // errors are handled before this dispatch.
             AgentMessage::Done { .. }
+            | AgentMessage::ConnectionReady
             | AgentMessage::ConnectionLost { .. }
             | AgentMessage::RequestError { .. } => {
-                unreachable!("run-end variants are intercepted by handle_agent_message")
+                unreachable!(
+                    "lifecycle and run-end variants are intercepted by handle_agent_message"
+                )
             }
             AgentMessage::StatusResult { snapshot } => {
                 // Cache the snapshot for the status bar + /status pane. NOTE:

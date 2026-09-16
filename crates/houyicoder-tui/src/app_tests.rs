@@ -2,8 +2,12 @@
 //! Child module of app (declared via #[path] in app.rs), so use super::*
 //! reaches app private items the same way the inline mod tests did.
 use super::*;
+use crate::agent_message::AgentMessage;
+use crate::session::{ConnectionStatus, PollOutcome, SessionConnection};
 use crate::state::{Pane, Stage, TranscriptLine, ViewportMode};
-use crate::test_harness::{connected_app_events, connection_lost_app, wait_for_request};
+use crate::test_harness::{
+    FailedHandshakeTransport, connected_app_events, connection_lost_app, wait_for_request,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SlashCommand};
 
@@ -699,42 +703,219 @@ fn test_closed_clear_no_repeat() {
 }
 
 /// Auto refreshes never compete with the ConnectionLost event for the single
-/// connection-loss notice: before the event is processed they write nothing,
-/// the event itself writes the one notice, and later auto refreshes add no
-/// second line.
+/// connection-loss notice. The fixture applies the driver's real death first
+/// (one notice), so every later auto refresh and closed-channel observation
+/// adds nothing.
 #[test]
 fn test_auto_refresh_silent() {
-    use crate::agent_message::AgentMessage;
     let mut app = connection_lost_app();
-    let before = app.transcript.len();
-    // Before the event is processed: the enqueue returns Closed but no
-    // transcript line is written.
-    app.run_command(SlashCommand::Agents);
-    assert_eq!(
-        app.transcript.len(),
-        before,
-        "an auto refresh before the event writes nothing"
-    );
-    // The ConnectionLost event writes exactly one loss notice.
-    app.handle_agent_message(AgentMessage::ConnectionLost {
-        message: "connection lost".into(),
-    });
-    let after_loss = app.transcript.len();
-    assert_eq!(
-        after_loss,
-        before + 1,
-        "the ConnectionLost event writes exactly one loss notice"
-    );
+    // The fixture applied the real death: exactly one loss line landed and
+    // the cause is the driver's specific message.
     assert_eq!(
         last_system(&app),
-        "agent error: connection lost",
-        "the notice is the run-completion error line"
+        "agent error: connect failed: no server",
+        "the settled loss writes the run-completion error line"
     );
-    // After the event: a later auto refresh still adds no second line.
+    let after_loss = app.transcript.len();
+    assert!(matches!(
+        app.connection_status(),
+        ConnectionStatus::Lost(ref cause) if !cause.contains("driver stopped")
+    ));
+    // Later auto refreshes write nothing (enqueue returns Closed, the notice
+    // was already settled by the death).
+    app.run_command(SlashCommand::Agents);
     app.run_command(SlashCommand::Model);
     assert_eq!(
         app.transcript.len(),
         after_loss,
-        "an auto refresh after the event writes no second line"
+        "auto refreshes after the settled loss write no second line"
+    );
+    // The closed channel (a repeat observation) also stays quiet.
+    app.poll_agent();
+    assert_eq!(
+        app.transcript.len(),
+        after_loss,
+        "a closed channel after the settled loss stays quiet"
+    );
+}
+
+/// A fresh connection is Connecting until the Hello handshake succeeds. The
+/// real driver event drives the transition: poll_startup blocks for the
+/// driver's ConnectionReady, which the App applies to reach Ready. A repeat
+/// confirmation is idempotent.
+#[test]
+fn test_connection_status_ready() {
+    let (mut app, _events) = connected_app_events();
+    assert_eq!(
+        app.session.as_ref().expect("session").status(),
+        &ConnectionStatus::Connecting,
+        "before the handshake result the status is Connecting"
+    );
+    // Block for the driver's real ConnectionReady and apply it.
+    let msg = app
+        .session
+        .as_mut()
+        .expect("session")
+        .poll_startup(std::time::Duration::from_secs(5))
+        .expect("the handshake result arrives");
+    assert!(
+        matches!(msg, AgentMessage::ConnectionReady),
+        "the driver announces readiness, got {msg:?}"
+    );
+    app.handle_agent_message(msg);
+    assert_eq!(
+        app.connection_status(),
+        ConnectionStatus::Ready,
+        "the confirmed handshake marks the connection Ready"
+    );
+    // A repeat confirmation is idempotent: still Ready.
+    app.handle_agent_message(AgentMessage::ConnectionReady);
+    assert_eq!(app.connection_status(), ConnectionStatus::Ready);
+}
+
+/// A late ConnectionReady cannot revive a lost connection: the transition
+/// only moves Connecting to Ready, so a confirmation that arrives after the
+/// death announcement leaves the status Lost.
+#[test]
+fn test_late_ready_keeps_lost() {
+    let mut app = connection_lost_app();
+    assert!(
+        matches!(app.connection_status(), ConnectionStatus::Lost(_)),
+        "the failed handshake leaves the connection Lost, got {:?}",
+        app.connection_status()
+    );
+    app.handle_agent_message(AgentMessage::ConnectionReady);
+    assert!(
+        matches!(app.connection_status(), ConnectionStatus::Lost(_)),
+        "a late confirmation cannot revive a lost connection"
+    );
+}
+
+/// The second loss observation neither overwrites the first cause nor
+/// repeats the completion: the closed channel after an announced death
+/// stays quiet and the specific cause survives.
+#[test]
+fn test_first_loss_cause_wins() {
+    let mut app = connection_lost_app();
+    let after_death = app.transcript.len();
+    // The closed channel (a second observation after the announced death)
+    // must not overwrite the cause or write another line.
+    app.poll_agent();
+    assert_eq!(
+        app.transcript.len(),
+        after_death,
+        "a closed channel after the announced death stays quiet"
+    );
+    match app.connection_status() {
+        ConnectionStatus::Lost(cause) => assert!(
+            !cause.contains("driver stopped"),
+            "the first cause survives later observations, got {cause}"
+        ),
+        other => panic!("expected Lost, got {other:?}"),
+    }
+}
+
+/// An app with no session reports Disconnected through the unified
+/// projection, distinct from every live state.
+#[test]
+fn test_connection_status_disconnected() {
+    let app = working_app();
+    assert_eq!(
+        app.connection_status(),
+        ConnectionStatus::Disconnected,
+        "the absent session projects as Disconnected"
+    );
+}
+
+/// Poll distinguishes an empty channel from a closed one. A live driver's
+/// quiet moment is Idle after its handshake message is consumed; a dead
+/// driver's exhausted channel is Closed. Folding the two hid dead
+/// connections behind a None.
+#[test]
+fn test_poll_closed_distinct() {
+    let mut app = connection_lost_app();
+    // The fixture consumed the death announcement; the channel is exhausted.
+    let outcome = app.session.as_mut().expect("session").poll();
+    assert!(
+        matches!(outcome, PollOutcome::Closed),
+        "an exhausted channel reports Closed, not Idle: {outcome:?}"
+    );
+    // A live connection's quiet moment is Idle: block for the driver's real
+    // ConnectionReady, then poll the quiet channel.
+    let (mut live, _events) = connected_app_events();
+    let msg = live
+        .session
+        .as_mut()
+        .expect("session")
+        .poll_startup(std::time::Duration::from_secs(5))
+        .expect("the handshake result arrives");
+    assert!(
+        matches!(msg, AgentMessage::ConnectionReady),
+        "the driver announces readiness, got {msg:?}"
+    );
+    let outcome = live.session.as_mut().expect("session").poll();
+    assert!(
+        matches!(outcome, PollOutcome::Idle),
+        "a live quiet channel reports Idle, not Closed: {outcome:?}"
+    );
+}
+
+/// A closed channel with no prior death announcement settles the full loss
+/// once: the run ends, pending marks sweep, one error line lands, and the
+/// connection records the cause. This is the task-panic path, where the
+/// announcement never arrived.
+#[test]
+fn test_closed_settles_loss() {
+    let mut app = {
+        let runtime = crate::composition::shared_runtime();
+        let client = houyicoder_client::Client::new(Box::new(FailedHandshakeTransport));
+        let (agent_tx, agent_rx) = std::sync::mpsc::channel();
+        let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
+        let mut a = working_app();
+        a.runtime = Some(runtime);
+        a.session = Some(session);
+        a
+    };
+    // Consume the death announcement WITHOUT applying it — the panic path
+    // is the announcement being lost, leaving a closed channel whose status
+    // is still Connecting. poll_startup blocks for the driver's death
+    // message, so the arrival does not race the assertion.
+    let death = app
+        .session
+        .as_mut()
+        .expect("session")
+        .poll_startup(std::time::Duration::from_secs(5))
+        .expect("the failed handshake reports the death");
+    assert!(
+        matches!(death, AgentMessage::ConnectionLost { .. }),
+        "the death is readable but treated as lost, got {death:?}"
+    );
+    let before = app.transcript.len();
+    let first_changed = app.poll_agent();
+    assert!(
+        first_changed,
+        "the first closed observation marks state dirty"
+    );
+    assert_eq!(
+        app.transcript.len(),
+        before + 1,
+        "the closed channel settles one visible loss line"
+    );
+    assert!(
+        matches!(app.connection_status(), ConnectionStatus::Lost(_)),
+        "the closed channel records the loss cause"
+    );
+    assert!(!app.agent_busy, "the closed channel ends any active run");
+    // A repeat poll stays quiet: no second settlement, no line, not dirty.
+    let after_loss = app.transcript.len();
+    let repeat_changed = app.poll_agent();
+    assert!(
+        !repeat_changed,
+        "a repeat closed observation does not re-mark dirty"
+    );
+    assert_eq!(
+        app.transcript.len(),
+        after_loss,
+        "a repeat closed observation does not settle again"
     );
 }
