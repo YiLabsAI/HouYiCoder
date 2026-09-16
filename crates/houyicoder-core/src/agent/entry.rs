@@ -27,17 +27,25 @@ impl Runner {
         config: RunnerConfig,
     ) -> Self {
         let observability = obs_wire::new_log(provider.capabilities().context_window);
-        let active_model = Arc::new(RwLock::new(config.model.clone()));
-        let active_effort = Arc::new(RwLock::new(None));
+        // Seed Explicit for the resolved id by default; the composition root
+        // calls with_model_choice(Default) when it resolved the sentinel. The
+        // apply path overwrites this with each pick's real intent.
+        let initial_model = config.model.clone();
         let memory = memory::MemoryRuntime::new(store.clone());
         let runner = Self {
             store,
             provider,
             tools,
             config,
-            active_model,
-            active_effort,
-            effort_resolver: None,
+            inference: Arc::new(RwLock::new(InferenceConfig {
+                choice: ModelChoice::Explicit {
+                    id: initial_model.clone(),
+                },
+                model: initial_model,
+                effort: None,
+                speed: SpeedMode::Standard,
+            })),
+            catalog_resolver: None,
             context_builder: ContextBuilder::new(),
             events: AgentEventHandlers::default(),
             inbox: Mutex::new(None),
@@ -73,6 +81,7 @@ impl Runner {
             cache_prev_read: Mutex::new(None),
             cache_compact_flag: AtomicBool::new(false),
             cache_model_switch_flag: AtomicBool::new(false),
+            last_request_model: Mutex::new(None),
             cached_prefix: Arc::new(cache_liveness::CachedPrefixState::new()),
             reducer: None,
             input_queue: input_queue::InputQueue::new(),

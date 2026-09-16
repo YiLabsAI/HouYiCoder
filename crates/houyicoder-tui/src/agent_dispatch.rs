@@ -14,7 +14,6 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SessionId as FrontendSessionId;
 use houyicoder_protocol::frontend::compact::CompactReply;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
-use houyicoder_protocol::frontend::model::ModelCatalog;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCallStatus};
 
 use crate::agent_message::{
@@ -29,7 +28,6 @@ use crate::state::enums::LiveBlock;
 use crate::state::{App, BashProgress, TrustChoice};
 use crate::terminal_title::sync as sync_terminal_title;
 use crate::transcript::{TranscriptFrame, transcript_from_frames};
-use crate::view::model_pane::row_for_tier;
 
 impl App {
     /// Apply an inbound agent message to application state. Dispatch follows
@@ -453,13 +451,11 @@ impl App {
             ServerResponse::Skills { skills } => {
                 self.skill_entries = skills;
             }
-            ServerResponse::Model { model, effort } => {
-                self.status.model = model.clone();
-                self.model_catalog.active_id = Some(model);
-                self.applied_effort = effort;
+            ServerResponse::Model { result } => {
+                self.apply_model_result(request, result);
             }
             ServerResponse::ModelInfo { catalog } => {
-                self.apply_model_info(catalog);
+                self.model_picker.refresh_snapshot(catalog);
             }
             ServerResponse::MemoryList { entries } => {
                 self.apply_memory_list(request, entries);
@@ -490,6 +486,13 @@ impl App {
     fn apply_response_error(&mut self, request: RequestId, message: String) {
         if self.active_run_req_id().is_some_and(|r| r == request) {
             self.handle_run_completion(Err(message));
+        } else if self
+            .model_picker
+            .pending_request
+            .as_ref()
+            .is_some_and(|p| p.req_id == request)
+        {
+            self.fail_model_pick(request, &message);
         } else if let Some(action) = self.memory.take_action(request) {
             // A failed pane mutation keeps the action context, so the
             // outcome says what did not happen instead of a bare error.
@@ -594,28 +597,6 @@ impl App {
             .is_some_and(|v| v.child_sid == child_sid)
         {
             self.fill_teammate_view(&child_sid, folded);
-        }
-    }
-
-    /// Apply the /model pane catalog snapshot: the rows reflect
-    /// settings.json rather than a hardcoded model list.
-    fn apply_model_info(&mut self, catalog: ModelCatalog) {
-        self.model_catalog = catalog;
-        // Sync the tier from the server's active_id so a resumed
-        // session (tier defaults to Default) picks up the real
-        // mode. None = Default mode, Some = that concrete id.
-        self.model_tier = self
-            .model_catalog
-            .active_id
-            .as_deref()
-            .unwrap_or("Default")
-            .to_string();
-        // Position by tier (stable) so a refresh does not slide
-        // the cursor when active_id flips between the two paths.
-        self.model_sel = row_for_tier(self, &self.model_tier);
-        let max_sel = self.model_catalog.catalog.len();
-        if self.model_sel > max_sel {
-            self.model_sel = 0;
         }
     }
 

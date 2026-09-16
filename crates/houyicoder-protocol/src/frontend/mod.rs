@@ -560,15 +560,20 @@ pub enum FrontendRequest {
     ModelInfo,
     /// Switch the runner's active model (the /model pane select). The host
     /// resolves a Default sentinel, applies the model id, and persists the
-    /// pick; the reply carries the applied ModelApplied so the status bar
-    /// renders what is actually being sent. model None means Default; effort
-    /// None means the user left effort on auto; effort_toggled records whether
-    /// the user touched effort in the picker, which the host needs to apply the
-    /// persistence rule (effort equal to the model default is not persisted).
+    /// pick; the reply carries the ModelApplyResult so the status bar and
+    /// transcript render what is actually being sent. model None means
+    /// Default; effort None means the user left effort on auto;
+    /// effort_toggled records whether the user touched effort in the picker,
+    /// which the host needs to apply the persistence rule (effort equal to
+    /// the model default is not persisted). speed None leaves the session
+    /// speed tier untouched, so a host that predates Fast mode still
+    /// applies the model and effort.
     ModelSet {
         model: Option<String>,
         effort: Option<crate::llm::EffortLevel>,
         effort_toggled: bool,
+        #[serde(default)]
+        speed: Option<crate::frontend::model::SpeedMode>,
     },
     /// Rename the current session: persist the display name to the session
     /// sidecar (name + name_source=User). An empty name clears back to Auto

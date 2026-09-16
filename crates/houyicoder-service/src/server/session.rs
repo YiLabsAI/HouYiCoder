@@ -16,7 +16,9 @@ use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 use crate::server::approval::disclose_directory_grants;
 use crate::server::{EventSequencer, FrameCarrier, Server};
-use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionLogEntry};
+use houyicoder_context::{
+    EventId, PermissionVerdict, SessionDescriptorStore, SessionEvent, SessionLogEntry,
+};
 
 impl Server {
     /// Build a server re-hydrated from a session host. The runner and event
@@ -65,23 +67,33 @@ impl Server {
     /// Attach the descriptor store used by status and session updates.
     pub fn with_descriptor_store(
         mut self,
-        descriptor_store: Arc<dyn houyicoder_context::SessionDescriptorStore>,
+        descriptor_store: Arc<dyn SessionDescriptorStore>,
     ) -> Self {
         self.descriptor_store = Some(descriptor_store);
         self
     }
 
     /// Write the session sidecar's model field so a later --resume restores
-    /// this session's model. Best-effort: a missing store (stub path) or
-    /// sidecar is skipped — the in-memory pick + settings.json persistence
-    /// still take effect; only the resume-restore is lost.
-    pub(super) fn persist_sidecar_model(&self, model: &str) {
-        let Some(store) = self.descriptor_store.as_ref() else {
-            return;
+    /// this session's model. A missing store means the session was built
+    /// without sidecar persistence (the stub path), which is nothing to
+    /// record rather than a failure; a store that rejects the write is
+    /// reported so the transcript can say the switch will not survive resume.
+    /// Takes its parts by value so the write can run on the blocking pool
+    /// instead of stalling the serve loop.
+    pub(super) fn write_sidecar_model(
+        store: Option<Arc<dyn SessionDescriptorStore>>,
+        session: SessionId,
+        model: &str,
+    ) -> Result<(), String> {
+        let Some(store) = store else {
+            return Ok(());
         };
-        drop(store.update_descriptor(self.session, &mut |descriptor| {
-            descriptor.model = model.to_string();
-        }));
+        store
+            .update_descriptor(session, &mut |descriptor| {
+                descriptor.model = model.to_string();
+            })
+            .map(drop)
+            .map_err(|e| e.to_string())
     }
 }
 

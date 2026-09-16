@@ -153,20 +153,13 @@ fn render_config(app: &App) -> String {
     let on_off = |b: bool| if b { "on" } else { "off" };
     let mut s = String::new();
     // Config tab shows the resolved model id (not the tier label) + the
-    // applied effort (None = no effort parameter sent, hidden per I8).
-    let model_label = app
-        .model_catalog
-        .active_id
-        .as_deref()
-        .unwrap_or(&app.status.model);
-    s.push_str(&f("Model", model_label));
-    if let Some(effort) = app.applied_effort {
-        let label = match effort {
-            houyicoder_protocol::llm::EffortLevel::Low => "low",
-            houyicoder_protocol::llm::EffortLevel::Medium => "medium",
-            houyicoder_protocol::llm::EffortLevel::High => "high",
-        };
-        s.push_str(&f("effort", label));
+    // applied effort (None = no effort parameter sent, hidden per I8). Both
+    // come from the host snapshot, so the tab cannot name a model the session
+    // is not running.
+    let applied = &app.model_picker.snapshot.applied;
+    s.push_str(&f("Model", &applied.id));
+    if let Some(effort) = applied.effort {
+        s.push_str(&f("effort", effort.label()));
     }
     s.push_str(&f(
         "Permission mode",
@@ -257,7 +250,7 @@ mod tests {
     #[test]
     fn test_config_tab_has_knobs() {
         let mut app = crate::test_harness::working_app();
-        app.status.model = "qwen3.8-max".into();
+        app.model_picker.snapshot.applied.id = "qwen3.8-max".into();
         app.status.sandbox = "mac-seatbelt".into();
         let s = render_config(&app);
         assert!(s.contains("qwen3.8-max"), "model: {s}");
@@ -301,18 +294,18 @@ mod tests {
     }
 
     /// The Config tab renders the resolved model id + the effort badge
-    /// (only when a real effort is applied).
+    /// (only when the next request really carries an effort parameter).
     #[test]
     fn test_config_tab_shows_effort() {
         use houyicoder_protocol::llm::EffortLevel;
         let mut app = crate::test_harness::working_app();
-        app.status.model = "qwen3.8-max".into();
-        app.applied_effort = Some(EffortLevel::High);
+        app.model_picker.snapshot.applied.id = "qwen3.8-max".into();
+        app.model_picker.snapshot.applied.effort = Some(EffortLevel::High);
         let s = render_config(&app);
         assert!(s.contains("effort:"), "effort row: {s}");
         assert!(s.contains("high"), "high level: {s}");
         // Effort row hidden when None.
-        app.applied_effort = None;
+        app.model_picker.snapshot.applied.effort = None;
         let s = render_config(&app);
         assert!(!s.contains("effort:"), "no effort row when None: {s}");
     }

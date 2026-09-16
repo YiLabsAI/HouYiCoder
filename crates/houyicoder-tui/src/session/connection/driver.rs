@@ -254,6 +254,7 @@ async fn drive_connection(
                     model,
                     effort,
                     effort_toggled,
+                    speed,
                 }) => {
                     outbound.push_back(Outbound::Request {
                         req_id,
@@ -261,6 +262,7 @@ async fn drive_connection(
                             model,
                             effort,
                             effort_toggled,
+                            speed,
                         },
                     });
                 }
@@ -589,10 +591,9 @@ async fn drive_connection(
                         ResponsePayload::UndoResult(description) => {
                             Some(ServerResponse::Undo { description })
                         }
-                        ResponsePayload::ModelResult(applied) => Some(ServerResponse::Model {
-                            model: applied.model,
-                            effort: applied.effort,
-                        }),
+                        ResponsePayload::ModelResult(result) => {
+                            Some(ServerResponse::Model { result })
+                        }
                         ResponsePayload::ModelInfo(catalog) => {
                             Some(ServerResponse::ModelInfo { catalog })
                         }

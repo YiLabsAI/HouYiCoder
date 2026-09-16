@@ -17,8 +17,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 ACTIVE_OWNERS = {
     "crates/houyicoder-tui/src/state.rs:App": {
-        # RunState owns the run lifecycle; four fields removed.
-        "fields": 170,
+        # RunState owns the run lifecycle (four fields removed); the model
+        # picker consolidates six model fields into one.
+        "fields": 165,
         "mut_app": 44,
     },
 }

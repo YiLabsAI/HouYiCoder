@@ -3,13 +3,19 @@ use super::input::{cycle_pane, handle_input};
 use super::palette::handle_palette;
 use super::*;
 use crate::composition;
+use crate::state::ModelSettingFocus;
 use crate::state::Screen;
 use crate::state::TranscriptLine;
 use crate::state::Verdict;
-use crate::test_harness::{connected_app_events, wait_for_request};
+use crate::test_harness::{
+    TransportEvent, connected_app_with_events, model_app, model_caps, model_entry, model_snapshot,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
-use houyicoder_protocol::frontend::{FrontendRequest, LoginMode};
+use houyicoder_protocol::frontend::LoginMode;
+use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_protocol::frontend::model::{ModelCatalog, ModelChoice, SpeedMode};
+use houyicoder_protocol::llm::EffortLevel;
+use std::time::{Duration, Instant};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -19,41 +25,46 @@ fn working_app() -> App {
     app.screen = Screen::Working;
     app
 }
-fn catalog_app(entries: &[&str]) -> App {
-    let mut app = working_app();
-    app.model_catalog = ModelCatalog {
-        active_id: None,
-        effort_level: None,
-        catalog: entries
-            .iter()
-            .map(|id| ModelCatalogEntry {
-                id: id.to_string(),
-                display_name: Some(id.to_string()),
-                description: None,
-                effort: None,
-            })
-            .collect(),
+fn catalog_app(rows: &[(&str, bool, bool)]) -> App {
+    let entries = rows
+        .iter()
+        .map(|(id, effort, fast)| model_entry(id, id, model_caps(*effort, *fast)))
+        .collect();
+    let head = rows.first().map(|r| r.0).unwrap_or_default().to_string();
+    let mut catalog = ModelCatalog {
+        entries,
+        ..ModelCatalog::default()
     };
-    app
+    catalog.applied.id = head.clone();
+    catalog.resolved_default.id = head.clone();
+    catalog.selected = ModelChoice::Explicit { id: head };
+    // A global fallback level, so a row without a per-model pick resolves to
+    // the chain rather than to nothing.
+    catalog.effort_level = Some(EffortLevel::Medium);
+    model_app(catalog)
 }
 
-/// The /model pane Up/Down/Enter keys: Down moves the cursor, Up moves back,
-/// and a disconnected Enter reports not connected, keeps the pane open, and
-/// leaves the tier untouched (the connected Enter path that applies the
-/// sentinel + closes the pane is covered by the run-control model tests).
+/// The /model pane Up/Down/Enter keys: the draft opens on the row the session
+/// runs, Down moves the focus down the list, Up moves back, and a disconnected
+/// Enter reports not connected, keeps the pane open, and leaves the applied
+/// model untouched.
 #[test]
 fn test_model_pane_keys() {
-    let mut app = catalog_app(&["a", "b"]);
+    let mut app = catalog_app(&[("a", true, true), ("b", true, true), ("c", true, true)]);
     app.pane = Pane::Model;
+    assert_eq!(
+        app.model_picker.draft.row, 1,
+        "the draft opens on the session's model"
+    );
     handle_input(&mut app, key(KeyCode::Down));
-    assert_eq!(app.model_sel, 1, "Down moves the cursor");
+    assert_eq!(app.model_picker.draft.row, 2, "Down moves the focus");
     handle_input(&mut app, key(KeyCode::Up));
-    assert_eq!(app.model_sel, 0, "Up moves back");
-    let tier_before = app.model_tier.clone();
+    assert_eq!(app.model_picker.draft.row, 1, "Up moves back");
+    let applied = app.model_picker.snapshot.applied.clone();
     handle_input(&mut app, key(KeyCode::Enter));
     assert_eq!(
-        app.model_tier, tier_before,
-        "disconnected Enter keeps the tier"
+        app.model_picker.snapshot.applied, applied,
+        "disconnected Enter keeps the applied model"
     );
     assert_eq!(
         app.pane,
@@ -61,93 +72,246 @@ fn test_model_pane_keys() {
         "disconnected Enter keeps the pane open"
     );
     assert!(
-        app.transcript.iter().any(|l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("model: not connected"))),
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("model: not connected"))),
         "disconnected Enter reports not connected"
     );
 }
 
-/// The /model pane Up/Down navigate + recompute effort for the new model.
+/// Moving the model focus re-resolves the level from that row's chain. A level
+/// the user adjusted on one row is not carried onto another: the chain owns
+/// the per-model value, not a draft-wide toggle.
 #[test]
-fn test_model_pane_recomputes_effort() {
-    let mut app = catalog_app(&["qwen3.7-max", "deepseek-chat"]);
+fn test_model_pane_reseeds_effort() {
+    let mut app = catalog_app(&[("qwen3.7-max", true, true), ("deepseek-chat", false, true)]);
     app.pane = Pane::Model;
-    // Down to row 1 (qwen3 supports effort) → effort defaults to Medium.
-    handle_input(&mut app, key(KeyCode::Down));
     assert_eq!(
-        app.model_effort,
-        Some(houyicoder_protocol::llm::EffortLevel::Medium),
-        "qwen3 supports effort → Medium default"
+        app.model_picker.draft.effort,
+        Some(EffortLevel::Medium),
+        "qwen3 supports effort -> the chain's medium"
     );
-    // Down to row 2 (deepseek = NotSupported) → effort None.
+    handle_input(&mut app, key(KeyCode::Right));
+    assert_eq!(app.model_picker.draft.effort, Some(EffortLevel::High));
+    // Down to the model that speaks no effort dialect: no level at all.
     handle_input(&mut app, key(KeyCode::Down));
-    assert!(app.model_effort.is_none(), "deepseek not supported → None");
-    // Up back to qwen3 → effort Medium again (not toggled).
+    assert!(
+        app.model_picker.draft.effort.is_none(),
+        "a model without an effort dialect carries no level"
+    );
+    assert!(!app.model_picker.draft.effort_touched, "not touched");
+    // Up back to qwen3: the chain's value again, not the adjusted one.
     handle_input(&mut app, key(KeyCode::Up));
     assert_eq!(
-        app.model_effort,
-        Some(houyicoder_protocol::llm::EffortLevel::Medium),
-        "back to qwen3 → Medium (not toggled)"
+        app.model_picker.draft.effort,
+        Some(EffortLevel::Medium),
+        "back to qwen3 -> the chain's medium"
     );
 }
 
-/// ←/→ cycles the effort pick and sets model_effort_toggled.
+/// Left/Right adjust the focused setting: the level wraps through
+/// low/medium/high and the adjustment drops the default marker.
 #[test]
-fn test_model_pane_cycles_effort() {
-    let mut app = catalog_app(&["qwen3.7-max"]);
+fn test_model_pane_adjusts_effort() {
+    let mut app = catalog_app(&[("qwen3.7-max", true, true)]);
     app.pane = Pane::Model;
-    // Down to the qwen3 row (idx 1) so supports_effort is true.
     handle_input(&mut app, key(KeyCode::Down));
-    assert_eq!(app.model_sel, 1);
-    // Default Medium → Right → High.
+    assert_eq!(app.model_picker.draft.row, 1);
     handle_input(&mut app, key(KeyCode::Right));
     assert_eq!(
-        app.model_effort,
-        Some(houyicoder_protocol::llm::EffortLevel::High),
-        "Right cycles to High"
+        app.model_picker.draft.effort,
+        Some(EffortLevel::High),
+        "Right cycles to high"
     );
-    assert!(app.model_effort_toggled, "toggled flag set");
-    // Left → back to Medium.
+    assert!(app.model_picker.draft.effort_touched, "touched flag set");
     handle_input(&mut app, key(KeyCode::Left));
     assert_eq!(
-        app.model_effort,
-        Some(houyicoder_protocol::llm::EffortLevel::Medium),
-        "Left cycles back to Medium"
+        app.model_picker.draft.effort,
+        Some(EffortLevel::Medium),
+        "Left cycles back to medium"
     );
-    // Left again → Low.
     handle_input(&mut app, key(KeyCode::Left));
     assert_eq!(
-        app.model_effort,
-        Some(houyicoder_protocol::llm::EffortLevel::Low),
-        "Left wraps to Low"
+        app.model_picker.draft.effort,
+        Some(EffortLevel::Low),
+        "Left wraps to low"
     );
-    // Toggled flag sticks: cursor move no longer clobbers.
-    handle_input(&mut app, key(KeyCode::Up));
-    assert_eq!(
-        app.model_effort,
-        Some(houyicoder_protocol::llm::EffortLevel::Low),
-        "toggled pick survives cursor move"
-    );
+    assert!(app.model_picker.draft.dirty, "the draft is modified");
 }
 
-/// ←/→ is a no-op on a not-supported model.
+/// Left/Right is a no-op on a model that speaks no effort dialect, and Tab
+/// cannot move the setting focus onto a setting the model does not support.
 #[test]
-fn test_model_pane_noop_unsupported() {
-    let mut app = catalog_app(&["deepseek-chat"]);
+fn test_model_pane_ignores_unsupported() {
+    let mut app = catalog_app(&[("deepseek-chat", false, false)]);
     app.pane = Pane::Model;
-    // Down to the deepseek row.
     handle_input(&mut app, key(KeyCode::Down));
     handle_input(&mut app, key(KeyCode::Right));
-    assert!(app.model_effort.is_none(), "no-op on not-supported model");
-    assert!(!app.model_effort_toggled, "toggled flag not set");
+    assert!(
+        app.model_picker.draft.effort.is_none(),
+        "no effort on an unsupported model"
+    );
+    assert!(!app.model_picker.draft.effort_touched, "not touched");
+    handle_input(&mut app, key(KeyCode::Tab));
+    assert_eq!(
+        app.model_picker.draft.focus,
+        ModelSettingFocus::Effort,
+        "neither setting is supported, so the focus stays on effort"
+    );
+    assert_eq!(
+        app.pane,
+        Pane::Model,
+        "Tab inside the pane never switches panes"
+    );
 }
 
-/// The /model pane Esc key closes back to the transcript.
+/// Tab moves the setting focus between Reasoning Effort and Fast Mode when the
+/// focused model supports both.
+#[test]
+fn test_model_pane_tab_focus() {
+    let mut app = catalog_app(&[("qwen3.7-max", true, true)]);
+    app.pane = Pane::Model;
+    handle_input(&mut app, key(KeyCode::Down));
+    assert_eq!(app.model_picker.draft.focus, ModelSettingFocus::Effort);
+    handle_input(&mut app, key(KeyCode::Tab));
+    assert_eq!(
+        app.model_picker.draft.focus,
+        ModelSettingFocus::Fast,
+        "Tab moves the focus to Fast"
+    );
+    handle_input(&mut app, key(KeyCode::BackTab));
+    assert_eq!(
+        app.model_picker.draft.focus,
+        ModelSettingFocus::Effort,
+        "Shift+Tab moves it back"
+    );
+}
+
+/// The /model pane Esc key discards the draft and closes back to the
+/// transcript: nothing the user adjusted reaches the applied state.
 #[test]
 fn test_model_pane_esc_closes() {
-    let mut app = working_app();
+    let mut app = catalog_app(&[("qwen3.7-max", true, true), ("other", true, true)]);
     app.pane = Pane::Model;
+    let applied = app.model_picker.snapshot.applied.clone();
+    handle_input(&mut app, key(KeyCode::Down));
+    handle_input(&mut app, key(KeyCode::Right));
     handle_input(&mut app, key(KeyCode::Esc));
     assert_eq!(app.pane, Pane::Transcript);
+    assert_eq!(
+        app.model_picker.snapshot.applied, applied,
+        "Esc applies nothing"
+    );
+    assert_eq!(
+        app.model_picker.draft.row, 1,
+        "the draft re-seeds on reopen"
+    );
+    assert_eq!(
+        app.model_picker.draft.effort,
+        Some(EffortLevel::Medium),
+        "the adjusted level is discarded"
+    );
+}
+
+/// Fast Mode is edited in the same pane as the model and the level: Tab takes
+/// the arrows to the setting, the arrows move the tier, and Enter commits it
+/// with the pick. No command reaches the tier, so it cannot be changed behind
+/// the pane's back.
+#[test]
+fn test_picker_fast_inline() {
+    let (mut app, events) = connected_app_with_events();
+    app.model_picker
+        .refresh_snapshot(model_snapshot(vec![model_entry(
+            "glm-5.2",
+            "Fable",
+            model_caps(true, true),
+        )]));
+    app.pane = Pane::Model;
+    // The level is adjusted while the arrows are on Effort, so the commit has
+    // all three dimensions to carry.
+    handle_input(&mut app, key(KeyCode::Right));
+    assert_eq!(
+        app.model_picker.draft.effort,
+        Some(EffortLevel::High),
+        "Right adjusts the level the focus starts on"
+    );
+    handle_input(&mut app, key(KeyCode::Tab));
+    assert_eq!(
+        app.model_picker.draft.focus,
+        ModelSettingFocus::Fast,
+        "Tab takes the arrows to the Fast setting"
+    );
+    handle_input(&mut app, key(KeyCode::Right));
+    assert_eq!(
+        app.model_picker.effective_speed(),
+        SpeedMode::Fast,
+        "Right turns the tier on"
+    );
+    assert!(
+        SlashCommand::ALL.iter().all(|cmd| cmd.name() != "fast"),
+        "the palette offers no tier command"
+    );
+    app.input.set("/fast".to_string());
+    app.submit_input();
+    assert_eq!(
+        app.model_picker.effective_speed(),
+        SpeedMode::Fast,
+        "a typed slash word does not move the tier"
+    );
+    handle_input(&mut app, key(KeyCode::Enter));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut shipped = String::new();
+    while Instant::now() < deadline {
+        match events.recv_timeout(Duration::from_millis(200)) {
+            Ok(TransportEvent::Frame(frame)) if frame.contains("ModelSet") => {
+                shipped = frame;
+                break;
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+    assert!(
+        shipped.contains("glm-5.2") && shipped.contains("high") && shipped.contains("\"fast\""),
+        "one request carries the model, the level and the tier: {shipped}"
+    );
+}
+
+/// A tier the focused model cannot serve is reported off before Enter: the
+/// pane names the reason in place of the tier, and the draft commits
+/// Standard rather than a tier the host would drop.
+#[test]
+fn test_picker_fast_refused_off() {
+    let mut app = catalog_app(&[("glm-5.2", true, true), ("plain-model", true, false)]);
+    app.pane = Pane::Model;
+    handle_input(&mut app, key(KeyCode::Tab));
+    handle_input(&mut app, key(KeyCode::Right));
+    assert_eq!(
+        app.model_picker.effective_speed(),
+        SpeedMode::Fast,
+        "the focused model serves the tier"
+    );
+    handle_input(&mut app, key(KeyCode::Down));
+    assert!(
+        app.model_picker.fast_forced_off(),
+        "the new focus cannot serve the tier the draft holds"
+    );
+    assert_eq!(
+        app.model_picker.effective_speed(),
+        SpeedMode::Standard,
+        "the draft does not ask for a tier this model cannot serve"
+    );
+    let out = crate::test_harness::render_text(&app, 84, 24);
+    assert!(
+        out.contains("off (required by selected model)"),
+        "the pane says why the tier is off: {out}"
+    );
+    // The narrow layout renders the same line from another chunk index, so the
+    // reason has to survive that path too.
+    let narrow = crate::test_harness::render_text(&app, 64, 24);
+    assert!(
+        narrow.contains("off (required by selected model)"),
+        "the reason shows in the narrow layout as well: {narrow}"
+    );
 }
 
 /// The /skills pane Esc key closes back to the transcript, through the real
@@ -1584,15 +1748,4 @@ fn test_agents_enter_follows_list() {
         Some("live"),
         "Enter opens the selected fleet child"
     );
-}
-
-/// Opening the @ picker with an empty skill cache fires a Skills fetch so the
-/// picker is not empty on first use.
-#[test]
-fn test_at_picker_fetches_skills() {
-    let (mut app, events) = connected_app_events();
-    handle_working(&mut app, key(KeyCode::Char('@')));
-    assert!(app.skill_picker_open, "@ opens the picker");
-    let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::Skills));
-    assert_eq!(req.req_id.0, 0, "first request on a fresh session");
 }

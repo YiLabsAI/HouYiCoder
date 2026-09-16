@@ -1,6 +1,7 @@
 //! Run approval, cancellation, restoration, and completion-state tests.
 
 use super::*;
+use crate::agent_message::ServerResponse;
 use crate::state::TranscriptLine;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, StopReason};

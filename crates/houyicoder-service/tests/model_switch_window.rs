@@ -181,7 +181,7 @@ async fn test_switch_shrunk_window_compacts() {
         Arc::new(WindowlessProvider),
         ToolRegistry::new(),
         RunnerConfig {
-            model: "glm-4.6[1m]".into(),
+            model: "glm-5.1[1m]".into(),
             instructions: "test".into(),
             // One turn per run: the run budget has no remaining turns, which
             // keeps the cost-saving compact gate out of the picture so the
@@ -227,15 +227,16 @@ async fn test_switch_shrunk_window_compacts() {
     let switch = RequestEnvelope::new(
         RequestId(2),
         FrontendRequest::ModelSet {
-            model: Some("glm-4.6".into()),
+            model: Some("glm-5.1".into()),
             effort: None,
             effort_toggled: false,
+            speed: None,
         },
     );
     send_frame(&mut client_tx, &ClientFrame::Request(switch)).await;
     match wait_response(&mut client_rx, RequestId(2)).await {
         ResponsePayload::ModelResult(applied) => {
-            assert_eq!(applied.model, "glm-4.6", "the pick applied");
+            assert_eq!(applied.applied.id, "glm-5.1", "the pick applied");
         }
         other => panic!("expected ModelResult, got {other:?}"),
     }

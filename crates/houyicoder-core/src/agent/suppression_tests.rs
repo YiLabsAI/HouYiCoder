@@ -89,15 +89,21 @@ fn test_runner_set_get_clear() {
 #[test]
 fn test_model_switch_clears_sticky() {
     // A model switch may resolve a larger window, so a sticky suppress set
-    // under the old (smaller) window lifts. Turn-level is left to the
-    // turn-start self-heal.
+    // under the old (smaller) window lifts — at the next request boundary,
+    // not when the pick lands. Turn-level is left to the turn-start
+    // self-heal.
     let r = runner();
+    // Seed the served marker so the runner has a prior id to switch from.
+    r.snapshot_inference();
     r.set_compaction_suppression(CompactionSuppression::Sticky);
-    r.set_model("glm-4.6[1m]".into());
+    r.set_model("glm-5.1[1m]".into());
+    assert_eq!(r.compaction_suppression(), CompactionSuppression::Sticky);
+    r.snapshot_inference();
     assert_eq!(r.compaction_suppression(), CompactionSuppression::None);
 
     r.set_compaction_suppression(CompactionSuppression::Turn);
-    r.set_model("glm-4.6".into());
+    r.set_model("glm-5.1".into());
+    r.snapshot_inference();
     assert_eq!(
         r.compaction_suppression(),
         CompactionSuppression::Turn,

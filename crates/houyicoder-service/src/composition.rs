@@ -9,10 +9,11 @@
 #![allow(dead_code)] // composition root consumed by other crates; locally unused
 
 mod api_key;
-mod effort_resolver;
+pub(crate) mod catalog_resolver;
 pub mod fleet_status_relay;
 pub mod notification_drain;
-pub use effort_resolver::{effort_to_persist, persist_model_pick};
+use catalog_resolver::SettingsCatalogResolver;
+pub use catalog_resolver::{effort_to_persist, persist_model_pick};
 mod built_in_tools;
 mod hook_compose;
 mod memory;
@@ -43,6 +44,9 @@ use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::trust::TrustState;
+use houyicoder_config::{
+    ModelSelection, load_model_section_from, resolve_model_selection_from, settings_path,
+};
 use houyicoder_context::ContextBackend;
 use houyicoder_context::SessionDescriptorStore;
 use houyicoder_context::SessionId;
@@ -59,6 +63,7 @@ use houyicoder_memory::{
     FileDescriptorStore, InMemoryBackend, InMemoryDescriptorStore, LocalFileBackend,
 };
 use houyicoder_permission::{DefaultModeGate, ModeGate, RuleStore};
+use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_provider::{FakeProvider, OpenAiCompatibleProvider};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
 use houyicoder_sandbox::PlatformSession;
@@ -202,7 +207,8 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
         .backend
         .unwrap_or_else(|| Box::new(InMemoryBackend::new()));
     let session = SessionId::new();
-    let model = houyicoder_config::resolve_model();
+    let model_selection = resolve_model_selection_from(&settings_path());
+    let model = model_selection.model.clone();
     let descriptor_store = options
         .descriptor_store
         .unwrap_or_else(|| Arc::new(InMemoryDescriptorStore::new()));
@@ -222,7 +228,7 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
     assemble(
         store,
         session,
-        model,
+        model_selection,
         project,
         options.rule_store,
         append_notify,
@@ -243,13 +249,14 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
 pub(crate) fn assemble(
     store: Arc<SessionStore>,
     session: SessionId,
-    model: String,
+    model_selection: ModelSelection,
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
     append_notify: Arc<Notify>,
     resolved: ResolvedProvider,
     descriptor_store: Arc<dyn SessionDescriptorStore>,
 ) -> AssembledRunner {
+    let model = model_selection.model.clone();
     let model_for_extractor = model.clone();
     let ResolvedProvider {
         provider,
@@ -434,6 +441,10 @@ pub(crate) fn assemble(
     // The assembled path is the default; the override is reserved for a future
     // CLI --system-prompt flag.
     let max_output_tokens = model_window::resolve_max_output_tokens(&model);
+    // The resolution chain already carries the intent (settings id →
+    // Explicit; fallback → Default), so the runner seeds the real selection
+    // rather than one guessed from id equality.
+    let model_choice = model_selection.choice;
     let config = RunnerConfig {
         model,
         instructions: String::new(),
@@ -508,8 +519,11 @@ pub(crate) fn assemble(
         Arc::clone(&provider_for_extractor),
         model_for_extractor.clone(),
     ));
-    let (effort_resolver, effort_warnings) =
-        effort_resolver::SettingsEffortResolver::load_with_warnings();
+    let (section, effort_warnings) = load_model_section_from(&settings_path());
+    // One section read feeds both the catalog resolver and the speed seed, so
+    // a restart keeps the tier the user picked without a second load.
+    let speed_mode = section.speed_mode;
+    let catalog = SettingsCatalogResolver::from_section(section);
     // The sessions root the store's backend owns, captured before the
     // runner takes the store: the retention backlog notice reads it (never
     // the global root - reader and writer must never disagree), and an
@@ -519,7 +533,9 @@ pub(crate) fn assemble(
         .with_recall_meter(recall_meter)
         .with_breaker(breaker)
         .with_summarizer(summarizer)
-        .with_effort_resolver(std::sync::Arc::new(effort_resolver))
+        .with_catalog_resolver(Arc::new(catalog))
+        .with_model_choice(model_choice)
+        .with_speed_mode(speed_mode.unwrap_or(SpeedMode::Standard))
         .with_denied_agents(std::sync::Arc::clone(&denied_agents))
         .with_spawn_handle(spawn_handle)
         .with_skill_registry(std::sync::Arc::clone(&skill_registry)

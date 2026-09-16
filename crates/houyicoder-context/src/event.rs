@@ -249,7 +249,8 @@ pub enum SessionEvent {
         /// the terminal (non-retry) call. Old logs deserialize to false.
         #[serde(default)]
         recovery: bool,
-        /// The effort level actually sent on this call (low/medium/high), or
+        /// The effort level actually sent on this call (low/medium/high today;
+        /// xhigh/max land here when a dialect offers them), or None when no
         /// None when no effort parameter was sent (the model does not support
         /// it, the user left it on auto, or an old log predates the field).
         /// Inlined as a string rather than the typed enum so the context crate

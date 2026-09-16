@@ -30,9 +30,11 @@ pub mod extractor;
 mod fact;
 pub mod git_discard;
 pub(crate) mod hook;
+pub mod inference;
 mod input_queue;
 mod manifest;
 mod memory;
+mod model_display;
 pub mod model_window;
 mod obs_wire;
 mod prompt;
@@ -63,7 +65,7 @@ pub mod worktree_session;
 pub mod multi_agent;
 
 pub use effort::{
-    EffortResolver, apply_effort_settings, effort_default_for, resolve_applied_effort,
+    ModelCatalogResolver, apply_effort_settings, effort_default_for, resolve_applied_effort,
 };
 pub use exports::{
     ApprovalDecision, ApprovalRequest, ArbitratedVerdict, AskUserQuestionTool, AssembledContext,
@@ -84,14 +86,18 @@ pub use exports::{
     render_backbone_block, stub_breakdown, thinking_brief, turn_reasoning, turn_tool_summary,
     unified_diff,
 };
+pub use inference::{InferenceConfig, RequestInferenceConfig};
 
-use std::sync::Arc;
+use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use tokio_util::sync::CancellationToken;
 
 use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::SessionId;
+use houyicoder_protocol::frontend::model::{ModelChoice, SpeedMode};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, EffortLevel};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
@@ -120,21 +126,16 @@ pub struct Runner {
     provider: Arc<dyn ModelProvider>,
     tools: ToolRegistry,
     config: RunnerConfig,
-    /// The active model id, mutable at runtime (the /model pane select).
-    /// Seeded from config.model at construction; set_model swaps it so the
-    /// next completion request serves the new id without rebuilding the provider
-    /// (the provider is stateless about the model — the id is per-request).
-    active_model: Arc<std::sync::RwLock<String>>,
-    /// The active effort pick for the session, or None to follow the
-    /// resolution chain (catalog[id].effort → model.effort_level →
-    /// effort_default_for(model) → None). Seeded None at construction; the
-    /// /model pane's effort toggle sets it. set_effort swaps it so the next
-    /// completion request carries the new level without rebuilding anything.
-    active_effort: Arc<std::sync::RwLock<Option<EffortLevel>>>,
-    /// Optional catalog-backed effort resolver (the composition root wires an
-    /// impl backed by the loaded ModelSection). None on the stub path; the
-    /// chain then stops at the in-session pick + built-in default.
-    effort_resolver: Option<Arc<dyn EffortResolver>>,
+    /// The atomic inference state: model id, effort and speed tier under one
+    /// lock so a switch swaps the whole config and a request reads one
+    /// snapshot. The selection intent is stored here, not derived from id
+    /// equality (an explicit pick of the default id stays Explicit).
+    inference: Arc<RwLock<inference::InferenceConfig>>,
+    /// Optional catalog resolver (the composition root wires an impl backed
+    /// by the loaded ModelSection): the catalog-side effort, window, output
+    /// cap and Fast tiers. None on the stub path; the chains then stop at
+    /// the in-session pick + built-in default.
+    catalog_resolver: Option<Arc<dyn ModelCatalogResolver>>,
     /// Composes the assembled context per turn: the assembled system prompt +
     /// the projected message history. The loop calls build_for_turn() each
     /// turn so the assembled context and the /context breakdown share one
@@ -147,13 +148,13 @@ pub struct Runner {
     /// BusMessage::Inbox texts and the drive loop drains them at each turn
     /// boundary, appending each as a user message before the next model
     /// call. None for the top-level runner (no bus steering).
-    inbox: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<BusMessage>>>,
+    inbox: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<BusMessage>>>,
     /// Startup warnings (bad settings fields, network policy typos) queued
     /// for the host to surface as initial transcript system lines. The
     /// composition root collects these during build; the host drains them at
     /// pair time + pushes them synchronously so they land before any run
     /// output (no async-sink race with test assertions).
-    startup_warnings: std::sync::Mutex<Vec<String>>,
+    startup_warnings: Mutex<Vec<String>>,
     /// Optional aggregate resource breaker shared with the sandbox. Attached at
     /// the composition root so status reads the same breaker the sandbox
     /// enforces against; enforcement stays in the sandbox (the runner never
@@ -171,9 +172,9 @@ pub struct Runner {
     /// when the run returns. abort() cancels it so the in-flight stream loop
     /// flushes partial text + reconciles orphan tool results. Guarded by a
     /// std Mutex (held only for the brief set/read at run start + abort).
-    cancel: std::sync::Mutex<Option<CancellationToken>>,
-    aborted: std::sync::atomic::AtomicBool,
-    paused: std::sync::atomic::AtomicBool,
+    cancel: Mutex<Option<CancellationToken>>,
+    aborted: AtomicBool,
+    paused: AtomicBool,
     /// The active turn's cancellation token, set at each turn start +
     /// cleared when the turn ends. A per-turn abort (the viewed-child Esc
     /// path) cancels it so the in-flight model fetch for this turn aborts
@@ -181,7 +182,7 @@ pub struct Runner {
     /// marker + starts the next turn with a fresh token. Distinct from
     /// the cancel field (the lifecycle token, terminal). Guarded by a std
     /// Mutex.
-    turn_cancel: std::sync::Mutex<Option<CancellationToken>>,
+    turn_cancel: Mutex<Option<CancellationToken>>,
     /// Optional post-run verification gate. When set, after a run reaches
     /// FinalOutput the runner calls verify before returning. A failed verify
     /// surfaces RunOutcome::VerifyFailed instead of FinalOutput so the caller
@@ -189,7 +190,7 @@ pub struct Runner {
     verify_gate: Option<Arc<dyn VerifyGate>>,
     /// The undo stack + snapshot store for recoverable destructive ops.
     /// Shared with the BashTool (which pushes); undo_last pops + restores.
-    undo_stack: Option<Arc<std::sync::Mutex<crate::snapshot::UndoStack>>>,
+    undo_stack: Option<Arc<Mutex<crate::snapshot::UndoStack>>>,
     snapshot_store: Option<Arc<crate::snapshot::SnapshotStore>>,
     /// Snapshot retention TTL in seconds; prune_snapshots drops older entries.
     snapshot_ttl_secs: u64,
@@ -219,7 +220,7 @@ pub struct Runner {
     /// The skill whose entitlements are active for the current run. Shared
     /// with the SkillTool so both invocation paths can set it. Read by the
     /// post-bash-failure approval to attribute discovered services.
-    active_skill: Arc<std::sync::Mutex<Option<String>>>,
+    active_skill: Arc<Mutex<Option<String>>>,
     /// Optional hook registry. When configured, the runner fires PreToolUse
     /// before each tool execution and PostToolUse / PostToolUseFailure
     /// after, arbitrating verdicts (Deny blocks, Feedback surfaces a
@@ -256,7 +257,7 @@ pub struct Runner {
     /// compute a recall rate (recalls / folded count) for the compaction
     /// report. Shared (Arc) so the tool + the compaction path share one
     /// counter across the session. A fresh meter starts at 0 (no recalls).
-    recall_meter: Arc<std::sync::atomic::AtomicU32>,
+    recall_meter: Arc<AtomicU32>,
     /// Optional workspace probe for the re-derivable compaction backbone's
     /// derivation watermark (git rev + dirty-tree hash). None in tests + the
     /// pure-stub path; the composition root wires a GitWorkspaceProbe sharing
@@ -266,19 +267,23 @@ pub struct Runner {
     /// Auto-compact suppression level (a CompactionSuppression as u8). Set by
     /// a deterministic compact failure, read by the pre-flight economy gate;
     /// manual /compact bypasses it. Turn-level clears at turn start.
-    compaction_suppression: std::sync::atomic::AtomicU8,
+    compaction_suppression: AtomicU8,
     /// Cached-prefix liveness + per-block stable retention decisions; shared
     /// with the ContextBuilder (see cache_liveness).
-    cached_prefix: std::sync::Arc<cache_liveness::CachedPrefixState>,
+    cached_prefix: Arc<cache_liveness::CachedPrefixState>,
     /// Consecutive transient auto-compaction failures. Repeated failures
     /// become sticky to stop retry churn. Reset by success or budget changes.
-    compaction_transient_failures: std::sync::atomic::AtomicU32,
+    compaction_transient_failures: AtomicU32,
     /// Previous turn's cache_read for break detection (None before first turn).
-    cache_prev_read: std::sync::Mutex<Option<u64>>,
+    cache_prev_read: Mutex<Option<u64>>,
     /// Flag: compaction ran since the previous provider response.
-    cache_compact_flag: std::sync::atomic::AtomicBool,
+    cache_compact_flag: AtomicBool,
     /// Flag: model switched since the previous provider response.
-    cache_model_switch_flag: std::sync::atomic::AtomicBool,
+    cache_model_switch_flag: AtomicBool,
+    /// The model id the previous request ran on. The request boundary
+    /// compares it against the live config to decide whether a switch's
+    /// cache side effects fire now — not when the pick arrived.
+    last_request_model: Mutex<Option<String>>,
     /// Optional tool-output reducer; the isolate stage reduces a large tool
     /// result before serving it.
     reducer: Option<Arc<dyn reducer::ToolOutputReducer>>,
@@ -290,19 +295,19 @@ pub struct Runner {
     /// Lower-priority child-completion notifications. Drained only after
     /// input_queue is empty, so user input never starves. std Mutex: drain
     /// is non-blocking, no await under the lock.
-    queued_notifications: std::sync::Mutex<std::collections::VecDeque<(String, String)>>,
+    queued_notifications: Mutex<VecDeque<(String, String)>>,
     /// Redundant-call detector — a harness self-evolution observer,
     /// independent of the user hook registry (which early-returns when no
     /// hooks are configured). check_batch runs before arbitrate_pre_tool_use
     /// (resolve_turn); record runs next to fire_post_tool_use. Held behind a
     /// std Mutex, brief pure compute, no await in the lock.
-    redundancy: std::sync::Mutex<redundancy::RedundancyTracker>,
+    redundancy: Mutex<redundancy::RedundancyTracker>,
     /// Agent types deny rules block, threaded into every ToolCtx so the
     /// agent tool can tell a denial from an unknown type. Set once at the
     /// composition root (where permission rules live); empty by default.
-    denied_agents: std::sync::Arc<std::collections::HashSet<String>>,
+    denied_agents: Arc<HashSet<String>>,
     /// Spawn port + identity the dispatch threads into the agent tool's ctx.
-    spawn_handle: Option<std::sync::Arc<dyn houyicoder_api::spawn::SpawnHandle>>,
+    spawn_handle: Option<Arc<dyn houyicoder_api::spawn::SpawnHandle>>,
     agent_identity: houyicoder_api::spawn::AgentIdentity,
 }
 
@@ -377,7 +382,7 @@ impl Runner {
     }
 
     /// Override the active-skill cell with one shared with the SkillTool.
-    pub fn with_active_skill(mut self, cell: Arc<std::sync::Mutex<Option<String>>>) -> Self {
+    pub fn with_active_skill(mut self, cell: Arc<Mutex<Option<String>>>) -> Self {
         self.active_skill = cell;
         self
     }
@@ -387,80 +392,148 @@ impl Runner {
         self.memory.dream_session_log_root()
     }
 
-    /// The active model id (the /model pane select). The runner reads this per
-    /// request; set_model swaps it so the next completion serves the new id
-    /// without rebuilding the provider (the id is per-request).
+    /// The active model id (the /model pane select). Reads the atomic
+    /// inference state; apply_inference swaps it so the next completion serves
+    /// the new id without rebuilding the provider.
     pub fn active_model(&self) -> String {
-        self.active_model
+        self.inference
             .read()
-            .map(|m| m.clone())
+            .map(|c| c.model.clone())
             .unwrap_or_default()
     }
 
-    /// The active effort pick, or None to follow the resolution chain
-    /// (catalog → model.effort_level → per-model default → None). The runner
-    /// reads this per request when building ModelSettings; set_effort swaps
-    /// it so the next completion carries the new level.
-    pub fn active_effort(&self) -> Option<EffortLevel> {
-        self.active_effort.read().map(|e| *e).ok().flatten()
+    /// The stored selection intent (Default vs Explicit), not derived from id
+    /// equality. A pick that resolved to the default id but was explicit stays
+    /// Explicit — the receipt and the snapshot report the real intent.
+    pub fn active_choice(&self) -> ModelChoice {
+        self.inference
+            .read()
+            .map(|c| c.choice.clone())
+            .unwrap_or_default()
     }
 
-    /// Set the active effort for the session (the /model pane effort toggle).
-    /// None means follow the resolution chain (auto); a level is a sticky
-    /// per-session pick. The next completion request carries the new value.
-    pub fn set_effort(&self, effort: Option<EffortLevel>) {
-        if let Ok(mut e) = self.active_effort.write() {
-            *e = effort;
-        }
+    /// The active effort pick, or None to follow the resolution chain.
+    pub fn active_effort(&self) -> Option<EffortLevel> {
+        self.inference.read().map(|c| c.effort).ok().flatten()
+    }
+
+    /// The active speed tier. Reported in the receipt so the pane describes the
+    /// tier the session holds rather than the draft's ask.
+    pub fn active_speed(&self) -> SpeedMode {
+        self.inference
+            .read()
+            .map(|c| c.speed)
+            .unwrap_or(SpeedMode::Standard)
     }
 
     /// Resolve the effort level the next completion request should carry,
-    /// following the chain: active pick → catalog (via the configured resolver) →
-    /// per-model default → None. Short-circuits to None for a model the dialect
-    /// probe does not recognize (I8). The composition root wires the resolver
-    /// from the loaded ModelSection; None means the stub path stops at the
-    /// active pick + built-in default.
+    /// following the chain: active pick → catalog → per-model default → None.
+    /// Short-circuits to None for a model the dialect probe does not recognize.
     pub fn resolve_applied_effort(&self) -> Option<EffortLevel> {
-        let model = self.active_model();
-        resolve_applied_effort(
-            &model,
-            self.active_effort(),
-            self.effort_resolver.as_deref(),
-        )
+        let (model, effort) = self
+            .inference
+            .read()
+            .map(|c| (c.model.clone(), c.effort))
+            .ok()
+            .unwrap_or_default();
+        resolve_applied_effort(&model, effort, self.catalog_resolver.as_deref())
     }
 
-    /// Install a catalog-backed effort resolver (the composition root injects an
-    /// impl backed by the loaded ModelSection). Builder-style so the runner
+    /// Frozen per-request view of the inference config with resolved
+    /// capabilities. Also the request boundary where a model switch's cache
+    /// side effects fire.
+    pub fn snapshot_inference(&self) -> RequestInferenceConfig {
+        let cfg = self.inference.read().map(|c| c.clone()).unwrap_or_default();
+        let previous = self.last_request_model.lock().ok().and_then(|m| m.clone());
+        // The first request has no prior id to switch from, so it only seeds
+        // the marker; every later request compares against the id the
+        // previous request ran on, so an in-flight request's attribution
+        // survives a mid-run pick.
+        if let Some(previous) = previous.as_deref()
+            && previous != cfg.model
+        {
+            self.clear_sticky_compaction_suppression();
+            self.cached_prefix.invalidate();
+            if let Ok(mut ol) = self.observability.lock() {
+                ol.clear_last_turn_delta();
+            }
+            self.cache_model_switch_flag.store(true, Ordering::Relaxed);
+        }
+        if let Ok(mut m) = self.last_request_model.lock() {
+            *m = Some(cfg.model.clone());
+        }
+        let capabilities = self.resolve_request_capabilities(&cfg.model);
+        RequestInferenceConfig {
+            model: cfg.model,
+            effort: cfg.effort,
+            speed: cfg.speed,
+            context_window: capabilities.context_window,
+            max_output_tokens: capabilities.max_output_tokens,
+        }
+    }
+
+    /// Apply a model pick atomically: choice, model, effort and speed land
+    /// together under one write. Change detection is not done here — the
+    /// next request boundary (snapshot_inference) compares against the id
+    /// the previous request ran on, so racing applies cannot slip past it.
+    pub fn apply_inference(&self, next: InferenceConfig) {
+        if let Ok(mut current) = self.inference.write() {
+            *current = next;
+        }
+    }
+
+    /// Set the active effort alone (the multi-agent child-spawn path; the
+    /// child runs on its assembled model at Standard speed, the same cost
+    /// discipline that pins children to the lowest effort tier). Prefer
+    /// apply_inference for a pick that carries model and speed together.
+    pub fn set_effort(&self, effort: Option<EffortLevel>) {
+        if let Ok(mut c) = self.inference.write() {
+            c.effort = effort;
+        }
+    }
+
+    /// Install the catalog resolver (the composition root injects an impl
+    /// backed by the loaded ModelSection). Builder-style so the runner
     /// assembles in one statement.
-    pub fn with_effort_resolver(mut self, resolver: Arc<dyn EffortResolver>) -> Self {
-        self.effort_resolver = Some(resolver);
+    pub fn with_catalog_resolver(mut self, resolver: Arc<dyn ModelCatalogResolver>) -> Self {
+        self.catalog_resolver = Some(resolver);
+        self
+    }
+
+    /// Set the initial selection intent (the composition root passes Default
+    /// when it resolved the sentinel).
+    pub fn with_model_choice(self, choice: ModelChoice) -> Self {
+        if let Ok(mut c) = self.inference.write() {
+            c.choice = choice;
+        }
+        self
+    }
+
+    /// Restore the speed tier the user persisted, so a restart keeps it.
+    /// A startup model with no fast tier falls back to Standard here;
+    /// wire the catalog resolver first, as the fallback consults it.
+    pub fn with_speed_mode(self, speed: SpeedMode) -> Self {
+        let model = self
+            .inference
+            .read()
+            .map(|c| c.model.clone())
+            .unwrap_or_default();
+        let effective =
+            if speed == SpeedMode::Fast && !self.display_capabilities(&model).fast.is_available() {
+                SpeedMode::Standard
+            } else {
+                speed
+            };
+        if let Ok(mut c) = self.inference.write() {
+            c.speed = effective;
+        }
         self
     }
 
     /// Set the denied-agent set the agent tool reads at resolve time.
-    pub fn with_denied_agents(mut self, denied: Arc<std::collections::HashSet<String>>) -> Self {
+    pub fn with_denied_agents(mut self, denied: Arc<HashSet<String>>) -> Self {
         self.denied_agents = denied;
         self
-    }
-
-    /// Resolve the output-token cap the next request carries, same-source for
-    /// the pre-flight reserve and the request body (no overflow when the two
-    /// disagree). A catalog override (ModelEntry.max_output_tokens) wins over
-    /// the construction-time config value; otherwise the config value stands
-    /// (the family default resolved at the composition root).
-    pub fn resolve_max_output_tokens(&self) -> u32 {
-        let model = self.active_model();
-        let resolved = self
-            .effort_resolver
-            .as_deref()
-            .and_then(|r| r.catalog_max_output_tokens(&model))
-            .unwrap_or(self.config.max_output_tokens);
-        // The provider's declared cap is its own real limit; take the min so
-        // a provider reporting a smaller cap (tests, a constrained gateway)
-        // is respected — the catalog default is a fallback for unknown
-        // families, not a floor that overstates the provider's actual room.
-        let provider_cap = self.provider.capabilities().max_output_tokens;
-        resolved.min(provider_cap)
     }
 
     /// Return whether compaction uses the model-backed summarizer.
@@ -471,26 +544,24 @@ impl Runner {
             .is_some()
     }
 
-    /// Switch the active model id (the /model pane select). The provider is
-    /// stateless about the model — it serves whatever id the request carries —
-    /// so this is a cheap swap, not a provider rebuild.
+    /// Switch the active model id (the --model flag override and the
+    /// child-spawn path), keeping the current effort and speed. A Fast
+    /// tier the target model lacks falls back to Standard here, the same
+    /// clamp the pick path applies.
     pub fn set_model(&self, model: String) {
-        if let Ok(mut m) = self.active_model.write() {
-            *m = model;
+        let mut next = self
+            .inference
+            .read()
+            .map(|c| c.clone())
+            .unwrap_or_else(|_| InferenceConfig::for_model(model.clone(), true));
+        next.choice = ModelChoice::Explicit { id: model.clone() };
+        next.model = model;
+        if next.speed == SpeedMode::Fast
+            && !self.display_capabilities(&next.model).fast.is_available()
+        {
+            next.speed = SpeedMode::Standard;
         }
-        // A model switch may change the context window; a larger window
-        // lifts a sticky suppress set by a fatal compact under the old one.
-        self.clear_sticky_compaction_suppression();
-        // A model switch changes the provider-facing prefix, so the cached
-        // prefix generation + the last observed input tokens are stale.
-        self.cached_prefix.invalidate();
-        if let Ok(mut ol) = self.observability.lock() {
-            ol.clear_last_turn_delta();
-        }
-        // Flag for cache-break attribution: a model switch likely breaks the
-        // prompt cache (different model id on the provider side).
-        self.cache_model_switch_flag
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.apply_inference(next);
     }
 
     /// The loop body. turn is the model-call count before this invocation

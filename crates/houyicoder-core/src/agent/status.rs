@@ -198,8 +198,13 @@ impl crate::agent::Runner {
         // (RwLock) and the next request resolves the new window; status must
         // reflect both so a post-switch /status does not show stale fields.
         let model = self.active_model();
-        let resolved_caps =
-            super::model_window::resolve_capabilities(&model, self.provider.capabilities());
+        let resolved_caps = super::model_window::resolve_capabilities(
+            &model,
+            self.provider.capabilities(),
+            self.catalog_resolver
+                .as_deref()
+                .and_then(|r| r.catalog_context_window(&model)),
+        );
         StatusSnapshot {
             model,
             breaker_state,

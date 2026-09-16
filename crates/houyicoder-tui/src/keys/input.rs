@@ -8,7 +8,6 @@ use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 
 use crate::state::enums::{CyclicTab, StatusTab};
 use crate::state::{App, Pane};
-use crate::view::model_pane::model_row_count;
 use crate::view::skills_pane::display_order;
 
 use super::approval::handle_approval;
@@ -178,6 +177,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         {
             app.enter_status_name_edit();
         }
+        KeyCode::Tab if app.pane == Pane::Model => app.cycle_model_setting(),
         KeyCode::Tab if !editing => cycle_pane(app),
         // /memory pane: Up/Down move the cursor, d forgets the row under it,
         // enter shows the body, Left/Right cycle the storage-scope filter,
@@ -219,8 +219,10 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
                 app.enter_teammate_view_for_sid(&sid, true);
             }
         }
-        // Shift+Tab cycles the permission mode: default, auto, bypass, default. No pane shadows it now (the /memory scope filter moved to
-        // Left/Right), so Shift+Tab is always the global mode cycle.
+        // Shift+Tab moves the /model pane's setting focus (the pane owns Tab while
+        // it is on top); everywhere else it cycles the permission mode:
+        // default, auto, bypass, default.
+        KeyCode::BackTab if app.pane == Pane::Model => app.cycle_model_setting(),
         KeyCode::BackTab => app.tab_cycle_mode(),
         KeyCode::Char('a') if app.pane == Pane::Memory && app.input.is_empty() => {
             app.toggle_memory_setting(MemoryToggleWhich::Auto)
@@ -250,26 +252,20 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Esc if app.pane == Pane::Status => {
             app.pane = Pane::Transcript;
         }
-        KeyCode::Down if app.pane == Pane::Model => {
-            let len = model_row_count(app);
-            app.model_sel = (app.model_sel + 1).min(len.saturating_sub(1));
-            app.recompute_effort_on_cursor_move();
-        }
-        KeyCode::Up if app.pane == Pane::Model => {
-            app.model_sel = app.model_sel.saturating_sub(1);
-            app.recompute_effort_on_cursor_move();
-        }
-        KeyCode::Left if app.pane == Pane::Model => {
-            app.cycle_effort(false);
-        }
-        KeyCode::Right if app.pane == Pane::Model => {
-            app.cycle_effort(true);
-        }
+        // /model pane: Up/Down move the model focus, Tab switches the setting
+        // focus, Left/Right adjust the focused setting, Enter commits the
+        // draft, Esc discards it. Tab is taken by the pane (the global Tab
+        // cycles panes elsewhere), and Shift+Tab moves the setting focus here
+        // rather than cycling the permission mode.
+        KeyCode::Down if app.pane == Pane::Model => app.move_model_focus(1),
+        KeyCode::Up if app.pane == Pane::Model => app.move_model_focus(-1),
+        KeyCode::Left if app.pane == Pane::Model => app.adjust_model_setting(false),
+        KeyCode::Right if app.pane == Pane::Model => app.adjust_model_setting(true),
         KeyCode::Enter if app.pane == Pane::Model && app.input.is_empty() => {
-            app.set_model_at_cursor();
+            app.commit_model_pick();
         }
         KeyCode::Esc if app.pane == Pane::Model => {
-            app.pane = Pane::Transcript;
+            app.discard_model_pick();
         }
         KeyCode::Esc if app.pane == Pane::Skills => {
             if app.skill_level.get() > 0 {

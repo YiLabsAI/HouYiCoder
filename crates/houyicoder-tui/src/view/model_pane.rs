@@ -1,9 +1,11 @@
-//! /model pane content: renders a Default sentinel row + the catalog rows
-//! from settings.json into the shared Pane template. The active id renders
-//! with a check mark; the cursor row is highlighted. Up / Down navigate,
-//! Enter selects (Default sends the sentinel; a catalog row sends that id),
-//! Esc closes. The catalog arrives over the wire (ModelInfoResult), so the
-//! rows reflect settings.json, not a hardcoded list.
+//! /model pane content: a responsive picker over the catalog rows the host
+//! reports. The wide layout puts the display name, the id the provider sees
+//! and the effective context window on one row per model; the narrow layout
+//! keeps one line per model and moves the focused row's id and context into a
+//! fixed detail row below the list, so scrolling never shifts the settings.
+//!
+//! The applied check and the focus marker are separate: the check follows the
+//! host's applied selection, the marker follows the cursor.
 
 use ratatui::{
     Frame,
@@ -12,62 +14,66 @@ use ratatui::{
     text::{Line, Span},
     widgets::{List, ListItem, ListState, Paragraph},
 };
+use unicode_width::UnicodeWidthStr;
 
-use crate::state::App;
+use crate::state::{App, ModelPickerState, ModelSettingFocus};
+use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
-use houyicoder_protocol::frontend::model::ModelCatalogEntry;
+use houyicoder_protocol::frontend::model::{ContextWindow, ContextWindowSource, ModelChoice};
 
-/// Default height /model asks for: a header + the list + a footer. Capped at
-/// half the main area by draw_command_pane.
-pub(crate) const MODEL_PANE_HEIGHT: u16 = 12;
+/// Default height /model asks for: a title, the list, the focus detail on the
+/// narrow layout, the two settings, and a footer. Capped at half the main
+/// area by draw_command_pane.
+pub(crate) const MODEL_PANE_HEIGHT: u16 = 13;
 
-/// The number of rows the pane lists: the Default sentinel (always present)
-/// plus the catalog entries. Used by Up/Down to clamp the cursor.
-pub fn model_row_count(app: &App) -> usize {
-    app.model_catalog.catalog.len() + 1
-}
+/// The inner width at which the pane switches to the wide layout. Below it the
+/// per-row copy is cut back so the settings and the footer keep their rows.
+pub(crate) const WIDE_INNER_WIDTH: u16 = 76;
 
-/// The id to send for a given row index, or None for the Default sentinel.
-/// Index 0 is Default; index i>=1 maps to catalog[i-1]. None for an
-/// out-of-range row (clamped by the caller).
-pub fn model_id_at(app: &App, idx: usize) -> Option<String> {
-    if idx == 0 {
-        None
-    } else {
-        app.model_catalog.catalog.get(idx - 1).map(|e| e.id.clone())
-    }
-}
+/// The share of a wide row's width the name column takes, in tenths, and the
+/// smallest it is allowed to be. The id and context fill what is left.
+const WIDE_NAME_TENTHS: usize = 4;
+const WIDE_NAME_MIN: usize = 14;
 
-/// The row index for a given model id, or 0 (Default) when the id is None
-/// or not found in the catalog. The inverse of model_id_at: row 0 is the
-/// Default sentinel, row i+1 is catalog[i]. Callers that position the
-/// cursor from a catalog index must add 1 to account for the Default row
-/// — this helper is the single point that owns that +1 so the two spaces
-/// (row index vs catalog index) never get conflated.
-pub(crate) fn row_for_model_id(app: &App, id: Option<&str>) -> usize {
-    match id {
-        None => 0,
-        Some(id) => app
-            .model_catalog
-            .catalog
-            .iter()
-            .position(|e| e.id == id)
-            .map(|idx| idx + 1)
-            .unwrap_or(0),
-    }
-}
+/// The least gap between the name column and the id it prefixes.
+const WIDE_GAP: usize = 2;
 
-/// Render the /model content into the Pane inner rect. Header + list + footer.
+/// The marker in a row's gutter: the focused row, and the blank gutter that
+/// keeps the labels aligned.
+const FOCUS_MARKER: &str = "\u{276f} ";
+const BLANK_MARKER: &str = "  ";
+
+/// The mark on the row the host reports as applied.
+const APPLIED_MARK: &str = " \u{2714}";
+
+/// Render the /model content into the Pane inner rect.
 pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
+    let picker = &app.model_picker;
+    let wide = inner.width >= WIDE_INNER_WIDTH;
+    let chunks = if wide {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(inner)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(inner)
+    };
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             "Select a model",
@@ -75,465 +81,557 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         )])),
         chunks[0],
     );
-    let active_id = app.model_catalog.active_id.as_deref();
-    let tier = app.model_tier.as_str();
-    let items: Vec<ListItem> = std::iter::once(default_row(active_id, tier))
-        .chain(
-            app.model_catalog
-                .catalog
-                .iter()
-                .enumerate()
-                .map(|(i, e)| catalog_row(i, e, tier)),
-        )
+    draw_list(f, chunks[1], picker, wide);
+    let base = if wide { 2 } else { 3 };
+    if !wide {
+        let detail = focused_detail(picker, chunks[2].width as usize);
+        f.render_widget(Paragraph::new(detail), chunks[2]);
+    }
+    f.render_widget(Paragraph::new(effort_line(picker)), chunks[base]);
+    f.render_widget(Paragraph::new(fast_line(picker)), chunks[base + 1]);
+    f.render_widget(Paragraph::new(footer_line(picker, wide)), chunks[base + 2]);
+}
+
+/// The model list, scrolled by the list state so the title, the detail and
+/// the settings keep their rows however long the catalog is.
+fn draw_list(f: &mut Frame, area: Rect, picker: &ModelPickerState, wide: bool) {
+    if picker.snapshot.entries.is_empty() {
+        // No rows to pick from; the guidance belongs to the list body, not
+        // the footer, so a narrow width cannot truncate the escape hint.
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "no catalog configured; add model.catalog entries to settings.json",
+                Style::new().fg(Color::DarkGray),
+            ))),
+            area,
+        );
+        return;
+    }
+    let width = area.width as usize;
+    let items: Vec<ListItem> = (0..picker.rows())
+        .map(|row| ListItem::new(row_line(picker, row, wide, width)))
         .collect();
     let mut state = ListState::default();
-    state.select(Some(
-        app.model_sel.min(model_row_count(app).saturating_sub(1)),
-    ));
+    state.select(Some(picker.draft.row.min(picker.rows().saturating_sub(1))));
     let list = List::new(items)
         .style(Style::default().fg(Color::White))
         .highlight_style(
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("> ");
-    f.render_stateful_widget(list, chunks[1], &mut state);
-    // Effort selector row: three levels + "default: X" + ←/→ hint, or
-    // "not supported" when the focused model speaks no effort dialect.
-    let focused_id = model_id_at(app, app.model_sel);
-    let effort_line = effort_selector_line(&focused_id, app);
-    f.render_widget(Paragraph::new(effort_line), chunks[2]);
-    let footer = if app.model_catalog.catalog.is_empty() {
+        );
+    f.render_stateful_widget(list, area, &mut state);
+}
+
+/// One row: on the wide layout the name column is padded so the ids line up;
+/// on the narrow layout the row is the name alone, cut to the width.
+fn row_line(picker: &ModelPickerState, row: usize, wide: bool, width: usize) -> Line<'static> {
+    let (left, style) = row_left(picker, row);
+    if !wide {
+        return Line::from(Span::styled(truncate_width(&left, width), style));
+    }
+    let name_col = (width * WIDE_NAME_TENTHS / 10).max(WIDE_NAME_MIN);
+    let pad = name_col.saturating_sub(UnicodeWidthStr::width(left.as_str()));
+    let pad = pad.max(WIDE_GAP);
+    let taken = UnicodeWidthStr::width(left.as_str()) + pad;
+    let right = truncate_width(&row_right(picker, row), width.saturating_sub(taken));
+    Line::from(vec![
+        Span::styled(format!("{left}{}", " ".repeat(pad)), style),
+        Span::styled(right, Style::new().fg(Color::DarkGray)),
+    ])
+}
+
+/// The left column of a row: the gutter marker, the number, the label and the
+/// applied mark, plus the style the whole column takes.
+fn row_left(picker: &ModelPickerState, row: usize) -> (String, Style) {
+    let marker = if row == picker.draft.row {
+        FOCUS_MARKER
+    } else {
+        BLANK_MARKER
+    };
+    let (label, applied) = match picker.entry_at(row) {
+        Some(entry) => (
+            entry.label().to_string(),
+            picker.snapshot.selected
+                == ModelChoice::Explicit {
+                    id: entry.id.clone(),
+                },
+        ),
+        None => (
+            crate::state::DEFAULT_LABEL.to_string(),
+            picker.snapshot.selected == ModelChoice::Default,
+        ),
+    };
+    let mark = if applied { APPLIED_MARK } else { "" };
+    let style = if applied {
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(Color::White)
+    };
+    (format!("{marker}{}. {label}{mark}", row + 1), style)
+}
+
+/// The right column of a wide row: the id the provider sees and the effective
+/// context window.
+fn row_right(picker: &ModelPickerState, row: usize) -> String {
+    let (id, window) = match picker.entry_at(row) {
+        Some(entry) => (entry.id.as_str(), entry.capabilities.context_window),
+        None => (
+            picker.snapshot.resolved_default.id.as_str(),
+            picker.snapshot.resolved_default.capabilities.context_window,
+        ),
+    };
+    match context_label(window) {
+        Some(context) => format!("{id} · {context} context"),
+        None => id.to_string(),
+    }
+}
+
+/// The fixed detail row under the narrow list: the focused model's id and
+/// context always, preceded by as much of the description, the output cap and
+/// the window provenance as the width allows. Nothing here belongs to the
+/// applied model, so moving the focus swaps the text in place.
+fn focused_detail(picker: &ModelPickerState, width: usize) -> Line<'static> {
+    let default = &picker.snapshot.resolved_default;
+    let focused = picker.focused();
+    let (id, max_output, window) = match focused {
+        Some(entry) => (
+            entry.id.as_str(),
+            entry.capabilities.max_output_tokens,
+            entry.capabilities.context_window,
+        ),
+        None => (
+            default.id.as_str(),
+            default.capabilities.max_output_tokens,
+            default.capabilities.context_window,
+        ),
+    };
+    let context = context_label(window);
+    let text = compose_detail(
+        focused.and_then(|e| e.description.as_deref()),
+        max_output,
+        window,
+        id,
+        context.as_deref(),
+        width,
+    );
+    Line::from(Span::styled(text, Style::new().fg(Color::DarkGray)))
+}
+
+/// Build the detail text, dropping copy in the order the pane degrades: the
+/// description, then the output cap, then the window provenance. The id and
+/// the context number are never dropped, and the word that says what the
+/// number is goes last of all.
+fn compose_detail(
+    description: Option<&str>,
+    max_output: Option<u32>,
+    window: Option<ContextWindow>,
+    id: &str,
+    context: Option<&str>,
+    width: usize,
+) -> String {
+    let mut prefixes: Vec<String> = Vec::new();
+    if let Some(description) = description {
+        prefixes.push(description.to_string());
+    }
+    if let Some(max) = max_output {
+        prefixes.push(format!("{max} max out"));
+    }
+    if let Some(window) = window {
+        prefixes.push(source_label(window.source).to_string());
+    }
+    let head = match context {
+        Some(context) => format!("{id} · {context}"),
+        None => id.to_string(),
+    };
+    let sources: [Option<String>; 2] = [
+        context.is_some().then(|| format!("{head} context")),
+        Some(head.clone()),
+    ];
+    // The tail outranks the prefixes: a candidate drops the provenance copy to
+    // keep the word that gives the window number its meaning, never the other
+    // way round.
+    for tail in sources.iter().flatten() {
+        for start in 0..=prefixes.len() {
+            let candidate = join_segments(&prefixes[start..], tail);
+            if UnicodeWidthStr::width(candidate.as_str()) <= width {
+                return candidate;
+            }
+        }
+    }
+    truncate_width(&head, width)
+}
+
+/// Join the surviving detail segments with the separator the pane uses.
+fn join_segments(prefixes: &[String], tail: &str) -> String {
+    let mut parts: Vec<&str> = prefixes.iter().map(String::as_str).collect();
+    parts.push(tail);
+    parts.join(" · ")
+}
+
+/// The Reasoning Effort setting: the level the draft would send, marked as the
+/// chain's default until the user adjusts it. A model that speaks no effort
+/// dialect says so rather than offering levels that would not be sent.
+fn effort_line(picker: &ModelPickerState) -> Line<'static> {
+    let label = setting_label(
+        "Reasoning Effort:",
+        picker.draft.focus == ModelSettingFocus::Effort,
+    );
+    let value = if !picker.effort_supported() {
+        "unavailable".to_string()
+    } else {
+        match picker.draft.effort {
+            Some(level) => {
+                let marker = if picker.draft.effort_touched {
+                    ""
+                } else {
+                    " (default)"
+                };
+                format!("{}{marker}", level.label())
+            }
+            None => "auto".to_string(),
+        }
+    };
+    Line::from(vec![
+        Span::raw("  "),
+        label,
+        Span::styled(value, Style::new().fg(Color::White)),
+    ])
+}
+
+/// The Fast Mode setting: the tier the draft would send, the reason a target
+/// model forces it off, or why the setting cannot be taken at all.
+fn fast_line(picker: &ModelPickerState) -> Line<'static> {
+    let label = setting_label("Fast Mode:", picker.draft.focus == ModelSettingFocus::Fast);
+    let availability = picker.focused_capabilities().fast;
+    let value = if picker.fast_forced_off() {
+        "off (required by selected model)".to_string()
+    } else if availability.is_available() {
+        picker.draft.speed.label().to_string()
+    } else {
+        match availability.reason() {
+            Some(reason) => format!("unavailable ({reason})"),
+            None => "unavailable".to_string(),
+        }
+    };
+    let style = if picker.draft.focus == ModelSettingFocus::Fast {
+        Style::new().fg(Color::White)
+    } else {
+        Style::new().fg(Color::DarkGray)
+    };
+    Line::from(vec![Span::raw("  "), label, Span::styled(value, style)])
+}
+
+/// A setting name, highlighted while it holds the arrows.
+fn setting_label(name: &'static str, focused: bool) -> Span<'static> {
+    let style = if focused {
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(Color::DarkGray)
+    };
+    Span::styled(format!("{name} "), style)
+}
+
+/// The key hints. The pane has no save key of its own: Enter commits the
+/// draft, and a pick that fails keeps the pane open for another try. While a
+/// commit is with the host Enter and Esc are held, so the footer says the
+/// save is in flight instead of promising keys that do nothing. On a narrow
+/// pane only the commit and cancel hints survive the width; those two must
+/// never be the ones truncated away.
+fn footer_line(picker: &ModelPickerState, wide: bool) -> Line<'static> {
+    if picker.is_pending() {
+        return Line::from(Span::styled(
+            "saving\u{2026}",
+            Style::new().fg(Color::Yellow),
+        ));
+    }
+    if picker.snapshot.entries.is_empty() {
+        // Short so a narrow width cannot truncate the Esc hint; the
+        // configuration guidance lives in the list body above.
         let mut line = Line::from(Span::styled(
-            "no catalog configured; add model.catalog entries to settings.json · ",
+            "No models configured · ",
             Style::new().fg(Color::DarkGray),
         ));
-        line.spans.extend(key_hint(&[("Esc", "close")]).spans);
-        line
+        line.spans.extend(key_hint(&[("Esc", "cancel")]).spans);
+        return line;
+    }
+    if wide {
+        key_hint(&[
+            ("Tab", "setting"),
+            ("Left/Right", "adjust"),
+            ("Up/Down", "select"),
+            ("Enter", "save"),
+            ("Esc", "cancel"),
+        ])
     } else {
-        key_hint(&[("Up/Down", "select"), ("Enter", "save"), ("Esc", "close")])
-    };
-    f.render_widget(Paragraph::new(footer), chunks[3]);
-}
-
-/// Build the effort selector line for the focused model. Shows the three
-/// levels (low/medium/high) with the current pick highlighted + "default: X"
-/// when the pick matches the dialect's default, + a ←/→ hint. Renders "not
-/// supported" when the focused model speaks no effort dialect.
-fn effort_selector_line(focused_id: &Option<String>, app: &App) -> Line<'static> {
-    let model = focused_id
-        .as_deref()
-        .or(app.model_catalog.active_id.as_deref())
-        .unwrap_or("");
-    let dim = Style::new().fg(Color::DarkGray);
-    let bold = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-    if !supports_effort(model) {
-        return Line::from(vec![
-            Span::styled("  ", dim),
-            Span::styled("Effort not supported", dim),
-        ]);
+        key_hint(&[("Enter", "save"), ("Esc", "cancel")])
     }
-    let levels = [
-        houyicoder_protocol::llm::EffortLevel::Low,
-        houyicoder_protocol::llm::EffortLevel::Medium,
-        houyicoder_protocol::llm::EffortLevel::High,
-    ];
-    let labels = ["low", "medium", "high"];
-    let current = app.model_effort;
-    let mut spans = vec![Span::raw("  ")];
-    for (i, (level, label)) in levels.iter().zip(labels.iter()).enumerate() {
-        if i > 0 {
-            spans.push(Span::raw(" / "));
-        }
-        let is_current = current == Some(*level);
-        spans.push(Span::styled(
-            if is_current {
-                format!("[{label}]")
-            } else {
-                format!(" {label} ")
-            },
-            if is_current { bold } else { dim },
-        ));
+}
+
+/// The token count as the pane prints it. None when the window is unknown, so
+/// the row shows the id alone rather than a zero.
+fn context_label(window: Option<ContextWindow>) -> Option<String> {
+    let window = window?;
+    if window.tokens == 0 {
+        return None;
     }
-    spans.push(Span::raw("  ← → to adjust"));
-    Line::from(spans)
-}
-
-/// Whether a model id speaks an effort dialect (qwen3 / o1·o3·gpt-5). Matches
-/// the core + provider substring probes — TUI cannot depend on either crate,
-/// so the probe lives here. Not a validity check: a typo still matches, an
-/// unlisted model still runs.
-pub fn supports_effort(model: &str) -> bool {
-    let m = model.to_lowercase();
-    m.contains("qwen3") || m.contains("o1") || m.contains("o3") || m.contains("gpt-5")
-}
-
-/// The Default sentinel row. Active when the user's tier is Default. The
-/// resolved concrete id (active_id) only feeds the description line.
-fn default_row(active_id: Option<&str>, tier: &str) -> ListItem<'static> {
-    let is_active = tier == "Default";
-    let desc = active_id
-        .map(|id| format!("use the default model (currently {id})"))
-        .unwrap_or_else(|| "use the default model".to_string());
-    ListItem::new(format_row_line(0, "Default", &desc, is_active))
-}
-
-/// One catalog row. Active when its id matches the user's tier.
-fn catalog_row(idx: usize, entry: &ModelCatalogEntry, tier: &str) -> ListItem<'static> {
-    let name = entry.display_name.as_deref().unwrap_or(&entry.id);
-    let desc = entry.description.as_deref().unwrap_or("");
-    let is_active = tier == entry.id.as_str();
-    ListItem::new(format_row_line(idx + 1, name, desc, is_active))
-}
-
-/// The row index for a tier string: 0 for the Default sentinel, else the
-/// catalog row for that id (+1). Drives cursor positioning from the
-/// user's mode choice (tier), which is stable across catalog refreshes —
-/// unlike active_id, which flips between Some(resolved) and None across
-/// the two reply paths and caused a two-frame cursor slide.
-pub(crate) fn row_for_tier(app: &App, tier: &str) -> usize {
-    if tier == "Default" {
-        0
+    let tokens = u64::from(window.tokens);
+    Some(if tokens >= 1_000_000 {
+        format!("{}M", tokens / 1_000_000)
+    } else if tokens >= 1_000 {
+        format!("{}K", tokens / 1_000)
     } else {
-        row_for_model_id(app, Some(tier))
-    }
+        tokens.to_string()
+    })
 }
 
-/// One row's Line: number + name (+ ✔ when active) + a dim description.
-fn format_row_line(idx: usize, name: &str, desc: &str, is_active: bool) -> Line<'static> {
-    let check = if is_active { " ✔" } else { "  " };
-    Line::from(vec![
-        Span::raw(format!("  {}.", idx + 1)),
-        Span::styled(
-            format!(" {name}{check}"),
-            Style::new()
-                .fg(if is_active { Color::Cyan } else { Color::White })
-                .add_modifier(if is_active {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ),
-        Span::styled(format!("  {desc}"), Style::new().fg(Color::DarkGray)),
-    ])
+/// Where the window came from, dropped last when the detail row runs out of
+/// width.
+fn source_label(source: ContextWindowSource) -> &'static str {
+    match source {
+        ContextWindowSource::Provider => "from provider",
+        ContextWindowSource::Learned => "learned limit",
+        ContextWindowSource::ExplicitConfig => "from settings",
+        ContextWindowSource::ModelSuffix => "from model suffix",
+        ContextWindowSource::ModelCatalog => "from model table",
+        ContextWindowSource::Fallback => "default window",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{Pane, PendingCommit};
+    use crate::test_harness::{model_app, model_caps, model_entry, model_snapshot, render_text};
+    use houyicoder_protocol::envelope::RequestId;
+    use houyicoder_protocol::frontend::model::{
+        FastModeAvailability, ModelDisplayCapabilities, SpeedMode,
+    };
 
-    fn rendered(line: Line<'_>) -> String {
-        line.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
+    /// The catalog every layout test draws: distinct ids and names, all
+    /// advertising the same window so a row's right column is checkable.
+    const ROWS: [(&str, &str); 5] = [
+        ("model-one", "One"),
+        ("model-two", "Two"),
+        ("model-three", "Three"),
+        ("model-four", "Four"),
+        ("model-five", "Five"),
+    ];
 
-    /// The Default row is active when no concrete id is set (the sentinel).
-    #[test]
-    fn test_default_active_no_id() {
-        let is_active = Option::<&str>::None.is_none();
-        let line = format_row_line(0, "Default", "use the default model", is_active);
-        assert!(rendered(line).contains("✔"), "Default active when no id");
-    }
-
-    /// The Default row is inactive when a concrete id is set.
-    #[test]
-    fn test_default_inactive_id_set() {
-        let is_active = Option::<&str>::Some("qwen3.7-max").is_none();
-        let line = format_row_line(
-            0,
-            "Default",
-            "use the default model (currently qwen3.7-max)",
-            is_active,
-        );
-        assert!(
-            !rendered(line).contains("✔"),
-            "Default inactive when id set"
-        );
-    }
-
-    /// A catalog row renders its display name + the check on id match.
-    #[test]
-    fn test_catalog_row_renders_name() {
-        let line = format_row_line(1, "Max", "most capable", true);
-        let r = rendered(line);
-        assert!(r.contains("✔"), "active catalog row shows check");
-        assert!(r.contains("Max"), "display name rendered");
-
-        let line = format_row_line(1, "Max", "most capable", false);
-        assert!(
-            !rendered(line).contains("✔"),
-            "inactive catalog row no check"
-        );
-    }
-
-    /// The effort selector renders three levels + ←/→ hint for a supported
-    /// model, and "not supported" for an unsupported one.
-    #[test]
-    fn test_effort_selector_renders_levels() {
-        let mut app = crate::composition::app();
-        app.model_effort = Some(houyicoder_protocol::llm::EffortLevel::High);
-        let line = effort_selector_line(&Some("qwen3.7-max".into()), &app);
-        let r = rendered(line);
-        assert!(r.contains("high"), "current level shown");
-        assert!(r.contains("low"), "low level listed");
-        assert!(r.contains("medium"), "medium level listed");
-        assert!(r.contains("← → to adjust"), "arrow hint shown");
-    }
-
-    #[test]
-    fn test_effort_selector_not_supported() {
-        let app = crate::composition::app();
-        let line = effort_selector_line(&Some("deepseek-chat".into()), &app);
-        let r = rendered(line);
-        assert!(r.contains("not supported"), "not supported shown");
-        assert!(!r.contains("low"), "no levels for unsupported");
-    }
-
-    /// supports_effort matches qwen3 / o1 / o3 / gpt-5; misses deepseek/glm.
-    #[test]
-    fn test_supports_effort_matches_families() {
-        assert!(supports_effort("qwen3.7-max"));
-        assert!(supports_effort("QWEN3-CODER"));
-        assert!(supports_effort("o3-mini"));
-        assert!(supports_effort("gpt-5"));
-        assert!(!supports_effort("deepseek-chat"));
-        assert!(!supports_effort("glm-5.2"));
-        assert!(!supports_effort(""));
-    }
-
-    fn app_with_catalog(ids: &[&str], active: Option<&str>) -> App {
-        let mut app = crate::composition::app();
-        app.model_catalog.catalog = ids
-            .iter()
-            .map(|id| ModelCatalogEntry {
-                id: (*id).into(),
-                display_name: Some((*id).into()),
-                description: None,
-                effort: None,
-            })
-            .collect();
-        app.model_catalog.active_id = active.map(|s| s.to_string());
+    /// An App showing /model over the given rows, each advertising the same
+    /// window; a terminal width of w leaves the pane an inner width of w-4.
+    fn pane_app(rows: &[(&str, &str)]) -> App {
+        let mut app = model_app(model_snapshot(
+            rows.iter()
+                .map(|(id, name)| model_entry(id, name, model_caps(true, false)))
+                .collect(),
+        ));
+        app.pane = Pane::Model;
         app
     }
 
-    /// row_for_model_id is the inverse of model_id_at: row 0 is Default,
-    /// row i+1 is catalog[i]. None or not-found maps to 0 (Default).
-    #[test]
-    fn test_row_for_model_inverse() {
-        let app = app_with_catalog(&["fable", "max", "mini"], Some("max"));
-        assert_eq!(row_for_model_id(&app, None), 0, "None -> Default row 0");
-        assert_eq!(
-            row_for_model_id(&app, Some("fable")),
-            1,
-            "catalog[0] -> row 1"
-        );
-        assert_eq!(
-            row_for_model_id(&app, Some("max")),
-            2,
-            "catalog[1] -> row 2"
-        );
-        assert_eq!(
-            row_for_model_id(&app, Some("mini")),
-            3,
-            "catalog[2] -> row 3"
-        );
-        assert_eq!(
-            row_for_model_id(&app, Some("nonexistent")),
-            0,
-            "not found -> Default row 0"
-        );
-        // Round-trip: model_id_at(row_for_model_id(id)) == id
-        for id in &["fable", "max", "mini"] {
-            let row = row_for_model_id(&app, Some(id));
-            let back = model_id_at(&app, row);
-            assert_eq!(back.as_deref(), Some(*id), "round-trip {id}");
-        }
-        // Default round-trips to None
-        let row = row_for_model_id(&app, None);
-        assert_eq!(model_id_at(&app, row), None, "Default round-trips to None");
+    /// The rendered line carrying the focused model's window, which only the
+    /// narrow layout's fixed detail row carries.
+    fn detail_line(out: &str) -> &str {
+        out.lines()
+            .find(|line| line.contains("1M context"))
+            .unwrap_or_else(|| panic!("the detail row renders: {out}"))
     }
 
-    /// The cursor lands on the active model's row, not one row above it.
-    /// This is the bug: catalog index was used as the row index, missing
-    /// the +1 for the Default sentinel. With the active model at
-    /// catalog[1], the cursor must be on row 2 (the model's row), not
-    /// row 1 (the previous model's row).
-    #[test]
-    fn test_cursor_on_active_row() {
-        let mut app = app_with_catalog(&["fable", "max", "mini"], Some("max"));
-        // Simulate the command.rs positioning path
-        if let Some(ref active) = app.model_catalog.active_id {
-            app.model_sel = row_for_model_id(&app, Some(active));
-        }
-        assert_eq!(
-            app.model_sel, 2,
-            "active model at catalog[1] -> row 2, not row 1"
-        );
-        // The id at the cursor row must be the active model's id
-        let id_at_cursor = model_id_at(&app, app.model_sel);
-        assert_eq!(
-            id_at_cursor.as_deref(),
-            Some("max"),
-            "cursor row resolves to the active model"
-        );
+    fn line_index(out: &str, needle: &str) -> usize {
+        out.lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} renders: {out}"))
     }
 
-    /// Opening /model with no concrete active id (Default sentinel active)
-    /// must jump the cursor to row 0. The prior code only jumped when
-    /// active_id was Some, so the cursor stayed stale on the last concrete
-    /// row whenever the user was in Default mode.
+    /// A Cooldown availability renders its reason and never takes the
+    /// setting focus, the same as an unavailable tier: the pane shows why,
+    /// the arrows skip it.
     #[test]
-    fn test_open_default_cursor() {
-        use houyicoder_protocol::frontend::SlashCommand;
-        let mut app = crate::composition::app();
-        app.pane = crate::state::Pane::Transcript;
-        app.model_catalog = houyicoder_protocol::frontend::model::ModelCatalog {
-            active_id: None,
-            effort_level: None,
-            catalog: vec![
-                houyicoder_protocol::frontend::model::ModelCatalogEntry {
-                    id: "a".into(),
-                    display_name: None,
-                    description: None,
-                    effort: None,
+    fn test_picker_cooldown_fast() {
+        let mut app = model_app(model_snapshot(vec![model_entry(
+            "model-one",
+            "One",
+            ModelDisplayCapabilities {
+                fast: FastModeAvailability::Cooldown {
+                    reason: "rate limited until 12:00".into(),
+                    reset_at_ms: 1_000,
                 },
-                houyicoder_protocol::frontend::model::ModelCatalogEntry {
-                    id: "b".into(),
-                    display_name: None,
-                    description: None,
-                    effort: None,
-                },
-            ],
-        };
-        // Stale cursor on a concrete row, as if the user last selected row 2.
-        app.model_sel = 2;
-        app.run_command(SlashCommand::Model);
-        assert_eq!(
-            app.pane,
-            crate::state::Pane::Model,
-            "open puts the model pane on top"
-        );
-        assert_eq!(
-            app.model_sel, 0,
-            "cursor jumped to row 0 (Default) when no concrete id is active"
-        );
-    }
-
-    /// A ModelInfo catalog refresh while in Default mode (active_id
-    /// None) must also jump the cursor to row 0, mirroring the /model open
-    /// path. The prior handler only jumped on Some, so a refresh left the
-    /// cursor stale on the last concrete row.
-    #[test]
-    fn test_refresh_default_cursor() {
-        use crate::agent_message::{ServerResponse, SessionMessage};
-        use houyicoder_protocol::envelope::RequestId;
-        use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
-        let mut app = crate::composition::app();
-        app.pane = crate::state::Pane::Model;
-        app.model_sel = 2;
-        app.handle_agent_message(SessionMessage::Response {
-            request: RequestId(1),
-            response: ServerResponse::ModelInfo {
-                catalog: ModelCatalog {
-                    active_id: None,
-                    effort_level: None,
-                    catalog: vec![
-                        ModelCatalogEntry {
-                            id: "a".into(),
-                            display_name: None,
-                            description: None,
-                            effort: None,
-                        },
-                        ModelCatalogEntry {
-                            id: "b".into(),
-                            display_name: None,
-                            description: None,
-                            effort: None,
-                        },
-                    ],
-                },
+                ..model_caps(true, false)
             },
+        )]));
+        app.pane = Pane::Model;
+        let out = render_text(&app, WIDE_INNER_WIDTH + 4, 24);
+        assert!(
+            out.contains("unavailable (rate limited until 12:00)"),
+            "the cooldown reason renders: {out}"
+        );
+        app.model_picker.cycle_setting_focus();
+        assert_eq!(
+            app.model_picker.draft.focus,
+            ModelSettingFocus::Effort,
+            "a cooldown tier is not focusable"
+        );
+    }
+
+    /// The empty-catalog footer stays short so a narrow width keeps the Esc
+    /// hint; the configuration guidance lives in the list body.
+    #[test]
+    fn test_picker_empty_footer_short() {
+        let mut app = model_app(model_snapshot(Vec::new()));
+        app.pane = Pane::Model;
+        let out = render_text(&app, 40, 24);
+        assert!(
+            out.contains("no catalog configured"),
+            "the guidance renders in the body: {out}"
+        );
+        let footer = out
+            .lines()
+            .find(|l| l.contains("No models configured"))
+            .unwrap_or_else(|| panic!("the empty footer renders: {out}"));
+        assert!(
+            footer.contains("Esc to cancel"),
+            "the Esc hint survives a narrow width: {footer}"
+        );
+    }
+
+    /// The layout switches on the pane's own inner width, not on the terminal
+    /// width: a terminal one column either side of the threshold picks the
+    /// other layout. The wide side puts each row's window on its row; the
+    /// narrow side keeps one window line, the focused row's.
+    #[test]
+    fn test_picker_layout_boundary() {
+        let app = pane_app(&ROWS[..2]);
+        let wide = render_text(&app, WIDE_INNER_WIDTH + 4, 24);
+        assert_eq!(
+            wide.lines().filter(|l| l.contains("1M context")).count(),
+            3,
+            "at the threshold inner width every row carries its window: {wide}"
+        );
+        let narrow = render_text(&app, WIDE_INNER_WIDTH + 3, 24);
+        assert_eq!(
+            narrow.lines().filter(|l| l.contains("1M context")).count(),
+            1,
+            "one column under the threshold the window moves to the detail row: {narrow}"
+        );
+    }
+
+    /// M-30: at a wide inner width every row carries its name, the id the
+    /// provider sees and its window on one line, so the catalog can be scanned
+    /// without moving the cursor.
+    #[test]
+    fn test_picker_wide_rows() {
+        let app = pane_app(&ROWS);
+        let out = render_text(&app, 84, 24);
+        for (id, name) in ROWS {
+            let line = out
+                .lines()
+                .find(|line| line.contains(id))
+                .unwrap_or_else(|| panic!("the row for {id} renders: {out}"));
+            assert!(
+                line.contains(name) && line.contains("1M context"),
+                "one line carries the name, the id and the window: {line}"
+            );
+        }
+        assert_eq!(
+            out.lines()
+                .filter(|line| line.contains("1M context"))
+                .count(),
+            ROWS.len() + 1,
+            "one line per catalog row plus the Default row: {out}"
+        );
+    }
+
+    /// M-31: at a narrow inner width each model keeps one line and the focused
+    /// model's id and window move to a fixed detail row. The detail row and the
+    /// settings keep their lines as the focus moves, and the id and window
+    /// survive the narrowest width.
+    #[test]
+    fn test_picker_narrow_detail() {
+        let mut app = pane_app(&ROWS[..2]);
+        // The reseed already puts the cursor on the session's model (row 1).
+        let first = render_text(&app, 64, 24);
+        let detail = detail_line(&first);
+        assert!(
+            detail.contains("model-one"),
+            "the detail names the focused model's id: {detail}"
+        );
+        assert_eq!(
+            first
+                .lines()
+                .filter(|line| line.contains("1M context"))
+                .count(),
+            1,
+            "the window lives in the fixed detail row, not per row: {first}"
+        );
+        let effort_row = line_index(&first, "Reasoning Effort:");
+        let detail_row = line_index(&first, "1M context");
+
+        app.move_model_focus(1);
+        let second = render_text(&app, 64, 24);
+        assert!(
+            detail_line(&second).contains("model-two"),
+            "the detail swaps in place: {}",
+            detail_line(&second)
+        );
+        assert_eq!(
+            line_index(&second, "Reasoning Effort:"),
+            effort_row,
+            "the settings keep their line as the focus moves"
+        );
+        assert_eq!(
+            line_index(&second, "1M context"),
+            detail_row,
+            "the detail keeps its line as the focus moves"
+        );
+        let squeezed = render_text(&app, 44, 24);
+        let detail = detail_line(&squeezed);
+        assert!(
+            detail.contains("model-two") && detail.contains("1M context"),
+            "the id and the window survive the narrowest width: {detail}"
+        );
+        assert!(
+            !detail.contains("from model table"),
+            "the provenance goes before the word that names the window: {detail}"
+        );
+    }
+
+    /// A 40-column pane still shows the commit and cancel keys: the narrow
+    /// footer cuts the navigation hints, never the two keys that close it.
+    #[test]
+    fn test_picker_narrow_footer_keys() {
+        let app = pane_app(&ROWS);
+        let narrow = render_text(&app, 40, 24);
+        assert!(
+            narrow
+                .lines()
+                .any(|l| l.contains("Enter to save") && l.contains("Esc to cancel")),
+            "the narrow footer keeps both closing keys: {narrow}"
+        );
+        let wide = render_text(&app, WIDE_INNER_WIDTH + 4, 24);
+        assert!(
+            wide.lines().any(|l| l.contains("Tab to setting")),
+            "the wide footer keeps the navigation hints: {wide}"
+        );
+    }
+
+    /// While a commit is with the host the footer reports the in-flight save
+    /// instead of promising keys that are held.
+    #[test]
+    fn test_picker_pending_footer_saving() {
+        let mut app = pane_app(&ROWS);
+        app.model_picker.pending_request = Some(PendingCommit {
+            req_id: RequestId(1),
+            prior_speed: SpeedMode::Standard,
         });
-        assert_eq!(
-            app.model_sel, 0,
-            "catalog refresh in Default mode jumped the cursor to row 0"
+        let out = render_text(&app, WIDE_INNER_WIDTH + 4, 24);
+        assert!(
+            out.lines().any(|l| l.contains("saving")),
+            "the footer reports the in-flight save: {out}"
         );
-    }
-
-    /// The slide bug (#178): after switching to Default, active_id still
-    /// holds the stale concrete (until the catalog refresh clears it), but
-    /// the user's tier is already Default. The cursor must land on row 0
-    /// (Default) on open, not on the stale concrete row. This staging
-    /// distinguishes the tier-driven fix from the prior active_id-driven
-    /// code: revert the fix and this test fails (cursor follows the stale
-    /// Some to the concrete row), while the active_id=None tests pass
-    /// either way.
-    #[test]
-    fn test_open_default_stale_id() {
-        use houyicoder_protocol::frontend::SlashCommand;
-        let mut app = crate::composition::app();
-        app.pane = crate::state::Pane::Transcript;
-        app.model_catalog = houyicoder_protocol::frontend::model::ModelCatalog {
-            active_id: Some("stale".into()),
-            effort_level: None,
-            catalog: vec![
-                houyicoder_protocol::frontend::model::ModelCatalogEntry {
-                    id: "stale".into(),
-                    display_name: None,
-                    description: None,
-                    effort: None,
-                },
-                houyicoder_protocol::frontend::model::ModelCatalogEntry {
-                    id: "other".into(),
-                    display_name: None,
-                    description: None,
-                    effort: None,
-                },
-            ],
-        };
-        app.model_tier = "Default".to_string();
-        app.model_sel = 1;
-        app.run_command(SlashCommand::Model);
-        assert_eq!(
-            app.model_sel, 0,
-            "cursor on Default despite a stale concrete active_id, \
-             not slid to the stale row"
-        );
-    }
-
-    /// Selecting Default sets status.model to "Default" (the tier), not the
-    /// resolved concrete, so the status bar updates immediately on select
-    /// without waiting for the ModelResult reply. The reply leaves
-    /// status.model alone in Default mode. Revert the set_model_at_cursor
-    /// change (status.model = tier) and this fails — status.model stays at
-    /// the prior concrete.
-    #[test]
-    fn test_select_default_sets_status() {
-        use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
-        let mut app = crate::composition::app();
-        app.pane = crate::state::Pane::Model;
-        app.status.model = "qwen3.6-flash".into();
-        app.model_catalog = ModelCatalog {
-            active_id: Some("qwen3.6-flash".into()),
-            effort_level: None,
-            catalog: vec![ModelCatalogEntry {
-                id: "qwen3.6-flash".into(),
-                display_name: None,
-                description: None,
-                effort: None,
-            }],
-        };
-        // Cursor on row 0 (the Default sentinel).
-        app.model_sel = 0;
-        app.set_model_at_cursor();
-        assert_eq!(
-            app.model_tier, "Default",
-            "selecting Default sets the tier the status bar reads via status_bar_model"
-        );
-        assert_eq!(
-            app.status_bar_model(),
-            "Default",
-            "the status bar seam returns the Default mode, not the resolved concrete"
+        assert!(
+            !out.lines().any(|l| l.contains("Enter to save")),
+            "held keys are not promised while pending: {out}"
         );
     }
 }

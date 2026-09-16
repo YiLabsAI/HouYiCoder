@@ -9,18 +9,26 @@ use houyicoder_protocol::envelope::{
 };
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::model::EffectiveFrom;
 
-use super::{Server, frame_carrier::FrameCarrier};
+use super::Server;
+use super::frame_carrier::FrameCarrier;
+use super::model_apply::ModelSelection;
 
 impl Server {
-    /// Handle a request received mid-run. Two payloads are safe to process
-    /// while a turn is in flight: the permission-mode cycle (Shift+Tab)
-    /// updates the Mutex-protected gate the drive loop reads at decide() time,
-    /// so the switch lands before the next tool call; the child transcript
-    /// fetch is a read-only store query (replay + project, no side effects)
-    /// so it does not race the parent run. Other payloads are dropped (no
-    /// other mid-run verb today); they ride this arm because a mid-run client
-    /// frame parses as a Request but most verbs mutate state and must wait.
+    /// Handle a request received mid-run. The payloads safe to process while
+    /// a turn is in flight are the ones that either read state or take effect
+    /// at a boundary: the permission-mode cycle (Shift+Tab) updates the
+    /// Mutex-protected gate the drive loop reads at decide() time, so the
+    /// switch lands before the next tool call; the child transcript fetch and
+    /// the model query are read-only projections (no side effects) so they do
+    /// not race the parent run; the model set routes through the same apply
+    /// path the between-runs dispatch uses, so a pick submitted while a turn
+    /// is in flight takes effect on the next request rather than being
+    /// dropped. The in-flight request already built its body from the old
+    /// model, so the switch reports NextRequest; other payloads ride this arm
+    /// because a mid-run client frame parses as a Request but most verbs
+    /// mutate state that must wait.
     pub(super) async fn handle_request_during_run(
         &self,
         io: &mut FrameCarrier,
@@ -50,6 +58,39 @@ impl Server {
                 let frame = ServerFrame::Response(ResponseEnvelope::new(
                     req_id,
                     ResponsePayload::ChildTranscript { child_sid, frames },
+                ));
+                if let Ok(encoded) = encode(&frame) {
+                    drop(io.send_frame(encoded).await);
+                }
+            }
+            FrontendRequest::ModelInfo => {
+                let payload = match self.model_catalog_snapshot().await {
+                    Ok(catalog) => ResponsePayload::ModelInfo(catalog),
+                    Err(e) => ResponsePayload::Error(e),
+                };
+                let frame = ServerFrame::Response(ResponseEnvelope::new(req_id, payload));
+                if let Ok(encoded) = encode(&frame) {
+                    drop(io.send_frame(encoded).await);
+                }
+            }
+            FrontendRequest::ModelSet {
+                model,
+                effort,
+                effort_toggled,
+                speed,
+            } => {
+                let result = self
+                    .apply_model_selection(ModelSelection {
+                        model,
+                        effort,
+                        effort_toggled,
+                        speed,
+                        effective_from: EffectiveFrom::NextRequest,
+                    })
+                    .await;
+                let frame = ServerFrame::Response(ResponseEnvelope::new(
+                    req_id,
+                    ResponsePayload::ModelResult(result),
                 ));
                 if let Ok(encoded) = encode(&frame) {
                     drop(io.send_frame(encoded).await);

@@ -12,6 +12,7 @@ use std::time::Instant;
 pub(crate) mod app_methods;
 pub(crate) mod counts;
 pub(crate) mod enums;
+mod model_picker;
 mod scroll;
 mod search_view;
 mod teammate_view;
@@ -46,7 +47,10 @@ use houyicoder_protocol::acp_wire::PermissionOptionKind;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::hooks::HookEntry;
-use houyicoder_protocol::frontend::model::ModelCatalog;
+
+pub use crate::state::model_picker::{
+    DEFAULT_LABEL, ModelDraft, ModelPickerState, ModelSettingFocus, PendingCommit,
+};
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionMode, PermissionRule,
 };
@@ -56,7 +60,6 @@ use houyicoder_protocol::frontend::status::StatusSnapshot;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
 use houyicoder_protocol::frontend::{LoginMode, SessionId};
-use houyicoder_protocol::llm::EffortLevel;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
@@ -585,19 +588,8 @@ pub struct App {
     /// The selected event index in the /hooks Level-0 list.
     pub hooks_sel: Cell<usize>,
     pub loaded_from_frame: Cell<usize>,
-    /// The current model tier label in the /model pane. The active row renders
-    /// with a check; the provider model id updates on select.
-    pub model_tier: String,
-    /// The /model pane cursor (Up/Down moves, Enter selects); clamped to list len.
-    pub model_sel: usize,
-    /// The /model pane catalog (ModelInfo reply); empty until it lands.
-    pub model_catalog: ModelCatalog,
-    /// Applied effort (ModelApplied reply); None hides the badge.
-    pub applied_effort: Option<EffortLevel>,
-    /// Picker effort pick (None = auto); updated by arrows.
-    pub model_effort: Option<EffortLevel>,
-    /// True once arrows pressed; cursor-move stops clobbering.
-    pub model_effort_toggled: bool,
+    /// The /model picker: host snapshot, draft, and the commit in flight.
+    pub model_picker: ModelPickerState,
     /// The active /status sub-tab (Status / Config / Usage). Tab or Left/Right
     /// cycles it; the pane header renders the three titles with the active one
     /// highlighted. A Settings-modal-style multiple tabs.

@@ -3,7 +3,9 @@
 use houyicoder_protocol::envelope::{RequestEnvelope, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::model::EffectiveFrom;
 
+use super::model_apply::ModelSelection;
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
 
@@ -211,35 +213,19 @@ impl Server {
                 model,
                 effort,
                 effort_toggled,
+                speed,
             } => {
-                // Resolve the Default sentinel, swap the model, set the session
-                // effort, persist the pick (settings + sidecar), and reply
-                // with the actually-applied model + effort. Best-effort
-                // persistence: a write failure does not fail the request.
-                let resolved = model
-                    .as_deref()
-                    .map(str::to_string)
-                    .unwrap_or_else(houyicoder_config::resolve_model);
-                self.runner.set_model(resolved.clone());
-                self.runner.set_effort(effort);
-                // Best-effort: a write failure does not fail the request —
-                // the in-memory pick still takes effect this session.
-                crate::composition::persist_model_pick(
-                    &self.settings_path,
-                    model.as_deref(),
-                    effort,
-                    effort_toggled,
-                );
-                self.persist_sidecar_model(&resolved);
-                self.send_response(
-                    io,
-                    req_id,
-                    ResponsePayload::ModelResult(houyicoder_protocol::envelope::ModelApplied {
-                        model: self.runner.active_model(),
-                        effort: self.runner.resolve_applied_effort(),
-                    }),
-                )
-                .await
+                let result = self
+                    .apply_model_selection(ModelSelection {
+                        model,
+                        effort,
+                        effort_toggled,
+                        speed,
+                        effective_from: EffectiveFrom::Immediate,
+                    })
+                    .await;
+                self.send_response(io, req_id, ResponsePayload::ModelResult(result))
+                    .await
             }
             FrontendRequest::Trajectory => {
                 let events = self.runner.store().trajectory_snapshot(self.session);

@@ -244,6 +244,40 @@ async fn test_child_transcript_during_run() {
     );
 }
 
+/// A ModelInfo request received MID-RUN must be answered, not dropped. The
+/// pane opens from a keystroke the user can press while a turn streams, so a
+/// query that only lands between runs leaves it on the empty-state guide for
+/// the whole turn and makes a catalog row unpickable exactly when the user
+/// wants to switch. Read-only projection: it does not race the parent run.
+#[tokio::test]
+async fn test_model_query_during_run() {
+    let runner = stub_runner();
+    let session = houyicoder_context::SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (_client_tx, server_rx) = mpsc::channel::<String>(256);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
+    let server = Server::new(
+        runner,
+        session,
+        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+    );
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(RequestId(9), FrontendRequest::ModelInfo),
+        )
+        .await;
+    let resp = client_rx.next().await.unwrap();
+    assert!(
+        resp.contains("model_info"),
+        "the mid-run handler answered the query: {resp}"
+    );
+    assert!(
+        resp.contains("\"test\""),
+        "the reply describes the session's live model: {resp}"
+    );
+}
+
 /// A PermissionCycleMode request received mid-run cycles the gate + ships a
 /// PermissionMode response. Pins the other arm of handle_request_during_run,
 /// the one the existing integration test exercises through the serve loop but

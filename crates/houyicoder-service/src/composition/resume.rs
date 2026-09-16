@@ -148,7 +148,7 @@ pub fn build_runner_for_resume_export(
     let assembled = assemble(
         store,
         session,
-        model,
+        ModelSelection::explicit(model),
         project,
         rule_store,
         append_notify,
@@ -238,7 +238,7 @@ pub fn build_runner_for_resume_sid(
     let assembled = assemble(
         store,
         sid,
-        model,
+        ModelSelection::explicit(model),
         project,
         rule_store,
         append_notify,
@@ -348,7 +348,7 @@ pub fn build_runner_for_fork(
     let assembled = assemble(
         store,
         new_session,
-        model,
+        ModelSelection::explicit(model),
         project,
         rule_store,
         append_notify,

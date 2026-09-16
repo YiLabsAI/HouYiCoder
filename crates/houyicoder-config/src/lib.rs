@@ -27,6 +27,7 @@ pub use sandbox_network::{
 };
 pub use settings_store::{SettingsWriteError, update_settings};
 pub mod model_section;
+use houyicoder_protocol::frontend::model::ModelChoice;
 pub use houyicoder_protocol::llm::EffortLevel;
 pub use model_section::{ModelEntry, ModelSection, load_model_section_from};
 pub mod served_models;
@@ -206,6 +207,14 @@ pub fn resolve_model() -> String {
 /// a blank id all yield DEFAULT_MODEL — the load_model_section_from helper
 /// already degrades per-field with warnings, so this layer only picks the id.
 pub fn resolve_model_from(path: &std::path::Path) -> String {
+    resolve_model_selection_from(path).model
+}
+
+/// The resolved model with its provenance, so the session seeds the real
+/// selection intent instead of guessing it from id equality later: an
+/// explicit model.id that happens to equal the default constant stays
+/// Explicit, and the fallback is Default, never a coincidental match.
+pub fn resolve_model_selection_from(path: &std::path::Path) -> ModelSelection {
     let (section, _warnings) = load_model_section_from(path);
     match section
         .id
@@ -213,9 +222,41 @@ pub fn resolve_model_from(path: &std::path::Path) -> String {
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        Some(id) => id.to_string(),
-        None => DEFAULT_MODEL.to_string(),
+        Some(id) => ModelSelection::explicit(id.to_string()),
+        None => ModelSelection::default_choice(DEFAULT_MODEL.to_string()),
     }
+}
+
+/// A resolved model plus the intent that produced it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelSelection {
+    pub choice: ModelChoice,
+    pub model: String,
+}
+
+impl ModelSelection {
+    pub fn explicit(model: String) -> Self {
+        Self {
+            choice: ModelChoice::Explicit { id: model.clone() },
+            model,
+        }
+    }
+
+    pub fn default_choice(model: String) -> Self {
+        Self {
+            choice: ModelChoice::Default,
+            model,
+        }
+    }
+}
+
+/// The model a Default pick resolves to: the built-in constant. Deliberately
+/// reads no settings: model.id is the selection this pick replaces, so
+/// reading it would strand the session on the model the user just
+/// deselected. Distinct from resolve_model, which does read model.id for a
+/// fresh session that has not selected anything yet.
+pub fn resolve_default_model() -> String {
+    DEFAULT_MODEL.to_string()
 }
 
 /// The list of external tool servers configured via env. An empty or unset var
@@ -502,6 +543,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolve_model_from(&path), "qwen3-coder");
+        drop(std::fs::remove_file(&path));
+    }
+
+    #[test]
+    fn test_default_pick_ignores_settings() {
+        // The Default pick resolves to the constant even when settings names
+        // another id: that id is the selection the pick replaces, so reading
+        // it would keep the session on the model the user deselected.
+        assert_eq!(resolve_default_model(), DEFAULT_MODEL);
+        let path = std::env::temp_dir().join(format!("default-pick-{}.json", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"{"model":{"id":"glm-5.2","catalog":[{"id":"glm-5.2"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_model_from(&path),
+            "glm-5.2",
+            "a fresh session still honours the persisted id"
+        );
+        assert_eq!(
+            resolve_default_model(),
+            DEFAULT_MODEL,
+            "a Default pick does not read the persisted id"
+        );
         drop(std::fs::remove_file(&path));
     }
 

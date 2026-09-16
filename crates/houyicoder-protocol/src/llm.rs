@@ -172,12 +172,28 @@ pub struct ToolDef {
 /// state (no explicit choice) is carried by Option<EffortLevel>, not a
 /// variant — the wire never sends an "auto" string, a default-resolution
 /// layer decides what concrete level (if any) applies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EffortLevel {
     Low,
     Medium,
     High,
+    XHigh,
+    Max,
+}
+
+impl EffortLevel {
+    /// The lowercase name shared by the serde form and the durable TurnUsage
+    /// record, so the two spellings never drift.
+    pub fn label(self) -> &'static str {
+        match self {
+            EffortLevel::Low => "low",
+            EffortLevel::Medium => "medium",
+            EffortLevel::High => "high",
+            EffortLevel::XHigh => "xhigh",
+            EffortLevel::Max => "max",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -194,6 +210,31 @@ pub struct ModelSettings {
     /// thinking_budget for the qwen3 family (clamped below max_output_tokens).
     #[serde(default)]
     pub thinking_budget: Option<u32>,
+    /// The provider service tier to request. The canonical form is the speed
+    /// mode; the provider's raw tier string lives only in the lowering layer.
+    #[serde(default)]
+    pub speed: Option<SpeedMode>,
+}
+
+/// The provider service tier a request asks for. Only the tiers the product
+/// contract defines exist here; the wire string each provider expects is the
+/// lowering layer's concern.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpeedMode {
+    #[default]
+    Standard,
+    Fast,
+}
+
+impl SpeedMode {
+    /// The label the transcript and pane print.
+    pub fn label(self) -> &'static str {
+        match self {
+            SpeedMode::Standard => "off",
+            SpeedMode::Fast => "on",
+        }
+    }
 }
 
 /// A prepared model-call request. Instructions is a static string (the loop

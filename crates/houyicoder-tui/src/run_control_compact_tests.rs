@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent_message::ServerResponse;
 
 /// A ContextResult lands as a ContextGrid transcript line (the inline grid),
 /// not a flat system string. Guards the /context handler regression where the

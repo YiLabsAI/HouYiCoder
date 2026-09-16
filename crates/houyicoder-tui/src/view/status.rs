@@ -113,8 +113,8 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         Span::raw(" "),
         Span::styled(app.status_bar_model().to_string(), dim),
         Span::styled(" · ", dim),
-        Span::styled(mode_label, mode_style),
     ];
+    left.push(Span::styled(mode_label, mode_style));
     if let Some(hint) = agents_hint(app) {
         left.push(Span::styled(" · ", dim));
         left.push(Span::styled(hint, dim));
@@ -540,13 +540,21 @@ mod tests {
         assert_eq!(ViewportMode::for_stage(Stage::Done), ViewportMode::Working);
     }
 
+    /// The status bar shows the active model id so the user knows which
+    /// model the next request uses. Effort lives in the /model pane and the
+    /// Config status tab, not duplicated on the bar.
     #[test]
-    fn test_bar_no_effort_badge() {
+    fn test_bar_shows_model_id() {
+        use houyicoder_protocol::frontend::model::AppliedModel;
+        use houyicoder_protocol::frontend::model::SpeedMode;
         use houyicoder_protocol::llm::EffortLevel;
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
-        app.model_tier = "qwen3.7-max".into();
-        app.applied_effort = Some(EffortLevel::High);
+        app.model_picker.snapshot.applied = AppliedModel {
+            id: "qwen3.7-max".into(),
+            effort: Some(EffortLevel::High),
+            speed: SpeedMode::Standard,
+        };
         let backend = TestBackend::new(80, 3);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| draw_agent_status_bar(f, f.area(), &app))
@@ -558,8 +566,23 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(!text.contains("high"), "no effort badge: {text}");
         assert!(text.contains("qwen3.7-max"), "model id shown: {text}");
+
+        // No effort parameter sent -> the whole segment goes.
+        app.model_picker.snapshot.applied.effort = None;
+        let backend = TestBackend::new(80, 3);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_agent_status_bar(f, f.area(), &app))
+            .unwrap();
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(!text.contains("effort"), "no effort segment: {text}");
+        assert!(text.contains("qwen3.7-max"), "model id still shown: {text}");
     }
 
     #[test]
@@ -573,7 +596,7 @@ mod tests {
         use houyicoder_protocol::llm::Usage;
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
-        app.model_tier = "test-model".into();
+        app.model_picker.snapshot.applied.id = "test-model".into();
         app.status_cache = Some(StatusSnapshot {
             model: "test-model".into(),
             breaker_state: None,

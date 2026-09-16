@@ -9,14 +9,14 @@
 //! The catalog layers (catalog[id].effort + model.effort_level) live in the
 //! config crate, which the agent layer cannot depend on (config is a leaf
 //! below core; core stays free of config I/O). So the catalog read crosses
-//! the boundary through the EffortResolver port: the agent loop holds the
-//! trait, the composition root supplies an impl backed by the loaded
+//! the boundary through the ModelCatalogResolver port: the agent loop holds
+//! the trait, the composition root supplies an impl backed by the loaded
 //! ModelSection. None in the resolver means no catalog is wired (the stub
 //! path) and the chain stops at the in-session pick + the built-in default.
 
 use houyicoder_protocol::llm::{EffortLevel, ModelSettings};
 
-use super::model_window::{EffortDialect, effort_dialect};
+use super::model_window::{EffortDialect, dialect_effort_levels, effort_dialect};
 
 /// Thinking budget the qwen3 family sends for Medium effort (the effort-to-params table).
 pub const QWEN_THINKING_BUDGET_MEDIUM: u32 = 8_192;
@@ -29,8 +29,16 @@ pub const QWEN_THINKING_BUDGET_HIGH: u32 = 16_384;
 /// in-session pick is None. None from the resolver means the catalog has no
 /// effort for this model (or no catalog is wired), and the chain falls to the
 /// per-model default.
-pub trait EffortResolver: Send + Sync {
+pub trait ModelCatalogResolver: Send + Sync {
     fn catalog_effort(&self, model: &str) -> Option<EffortLevel>;
+
+    /// The catalog's per-model list of effort levels (ModelEntry
+    /// effort_levels). None keeps the dialect's full set. A listed level the
+    /// dialect does not serve is dropped, so the list cannot grant what the
+    /// model cannot speak.
+    fn catalog_effort_levels(&self, _model: &str) -> Option<Vec<EffortLevel>> {
+        None
+    }
 
     /// The user-set context_window override for a model (ModelEntry.context_window),
     /// above the family-default table. None when the catalog has no override
@@ -47,6 +55,14 @@ pub trait EffortResolver: Send + Sync {
     fn catalog_max_output_tokens(&self, _model: &str) -> Option<u32> {
         None
     }
+
+    /// Whether the catalog declares a Fast tier for a model
+    /// (ModelEntry.fast). None when the catalog says nothing, which reads as
+    /// unavailable — no name probe grants the tier, because a family name is
+    /// no evidence that an endpoint offers a faster variant of it.
+    fn catalog_fast(&self, _model: &str) -> Option<bool> {
+        None
+    }
 }
 
 /// The built-in per-model effort default. The fallback is undefined for
@@ -58,22 +74,50 @@ pub fn effort_default_for(_model: &str) -> Option<EffortLevel> {
     None
 }
 
+/// The effort levels available for a model: the dialect's set, minus any
+/// the catalog's per-model list excludes. A listed level the dialect does
+/// not carry is dropped, and an empty result reads as no effort.
+pub fn effort_levels_for(
+    model: &str,
+    resolver: Option<&dyn ModelCatalogResolver>,
+) -> Vec<EffortLevel> {
+    let dialect_levels = dialect_effort_levels(effort_dialect(model)).to_vec();
+    match resolver.and_then(|r| r.catalog_effort_levels(model)) {
+        Some(listed) => dialect_levels
+            .into_iter()
+            .filter(|level| listed.contains(level))
+            .collect(),
+        None => dialect_levels,
+    }
+}
+
 /// Resolve the effort level a request should carry, following the chain:
 /// active_effort → catalog (via the resolver) → per-model default → None.
-/// Short-circuits to None when the model speaks no effort dialect (the unsupported-dialect invariant): a
-/// model the dialect probe does not recognize gets no effort parameter even
-/// if a stale in-session pick or catalog entry exists.
+/// Short-circuits to None when no levels are available (no dialect, or a
+/// per-model list that emptied the set). A resolved level above the
+/// available set clamps to the set's top — a stale pick above what the
+/// model accepts asks for a tier it lacks, the same way an unoffered Fast
+/// tier clamps down.
 pub fn resolve_applied_effort(
     model: &str,
     active: Option<EffortLevel>,
-    resolver: Option<&dyn EffortResolver>,
+    resolver: Option<&dyn ModelCatalogResolver>,
 ) -> Option<EffortLevel> {
-    if effort_dialect(model) == EffortDialect::NotSupported {
+    let available = effort_levels_for(model, resolver);
+    if available.is_empty() {
         return None;
     }
     active
         .or_else(|| resolver.and_then(|r| r.catalog_effort(model)))
         .or_else(|| effort_default_for(model))
+        .map(|level| {
+            available
+                .iter()
+                .copied()
+                .rev()
+                .find(|a| *a <= level)
+                .unwrap_or(available[0])
+        })
 }
 
 /// Fill a ModelSettings with the effort-derived fields the request body
@@ -101,7 +145,9 @@ pub fn apply_effort_settings(
                 settings.enable_thinking = Some(true);
                 settings.thinking_budget = Some(QWEN_THINKING_BUDGET_HIGH);
             }
-            None => {}
+            // The resolution clamp keeps the upper rungs off the qwen
+            // ladder until their budgets are verified.
+            _ => {}
         },
         EffortDialect::OpenaiReasoning => {
             if let Some(e) = effort {
@@ -118,10 +164,80 @@ mod tests {
 
     /// A resolver with a fixed catalog effort, for chain-order tests.
     struct FixedCatalog(Option<EffortLevel>);
-    impl EffortResolver for FixedCatalog {
+    impl ModelCatalogResolver for FixedCatalog {
         fn catalog_effort(&self, _model: &str) -> Option<EffortLevel> {
             self.0
         }
+    }
+
+    /// A resolver that lists per-model levels, for the exclude rules.
+    struct ListedCatalog(Vec<EffortLevel>);
+    impl ModelCatalogResolver for ListedCatalog {
+        fn catalog_effort(&self, _model: &str) -> Option<EffortLevel> {
+            None
+        }
+        fn catalog_effort_levels(&self, _model: &str) -> Option<Vec<EffortLevel>> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// The OpenAI reasoning dialect offers only the three levels with verified
+    /// wire values; xhigh and max stay out until the API spec confirms them,
+    /// so a stale upper pick clamps to High before it reaches the wire.
+    #[test]
+    fn test_reasoning_clamps_upper_pick() {
+        assert_eq!(
+            resolve_applied_effort("gpt-5.6", Some(EffortLevel::XHigh), None),
+            Some(EffortLevel::High)
+        );
+        let resolved = resolve_applied_effort("o3", Some(EffortLevel::Max), None);
+        assert_eq!(resolved, Some(EffortLevel::High));
+        let mut s = ModelSettings::default();
+        apply_effort_settings(&mut s, "o3", resolved);
+        assert_eq!(
+            s.reasoning_effort,
+            Some(EffortLevel::High),
+            "the clamped level lowers to the verified wire value"
+        );
+    }
+
+    /// The qwen3 budget ladder stops at High: an XHigh pick clamps to the
+    /// top of the available set rather than sending an unverified budget.
+    #[test]
+    fn test_qwen_clamps_upper_pick() {
+        assert_eq!(
+            resolve_applied_effort("qwen3.7-max", Some(EffortLevel::XHigh), None),
+            Some(EffortLevel::High)
+        );
+        let mut s = ModelSettings::default();
+        apply_effort_settings(&mut s, "qwen3.7-max", Some(EffortLevel::Max));
+        assert!(
+            s.thinking_budget.is_none(),
+            "an unverified budget never reaches the wire"
+        );
+    }
+
+    /// A per-model list removes levels from the dialect's set, and cannot
+    /// add what the dialect does not carry.
+    #[test]
+    fn test_per_model_list_excludes() {
+        let r = ListedCatalog(vec![EffortLevel::Low, EffortLevel::High]);
+        assert_eq!(
+            effort_levels_for("qwen3.7-max", Some(&r)),
+            vec![EffortLevel::Low, EffortLevel::High]
+        );
+        // A listed upper rung the qwen ladder does not verify is dropped.
+        let grants = ListedCatalog(vec![EffortLevel::High, EffortLevel::XHigh]);
+        assert_eq!(
+            effort_levels_for("qwen3.7-max", Some(&grants)),
+            vec![EffortLevel::High],
+            "the list cannot grant what the dialect does not carry"
+        );
+        // A pick above the remaining set clamps to its top.
+        assert_eq!(
+            resolve_applied_effort("qwen3.7-max", Some(EffortLevel::Max), Some(&r)),
+            Some(EffortLevel::High)
+        );
     }
 
     #[test]
@@ -180,7 +296,7 @@ mod tests {
     fn test_resolver_send_sync() {
         // The trait object crosses into the runner (Send + Sync); compile-check.
         fn _assert_send_sync<T: ?Sized + Send + Sync>() {}
-        _assert_send_sync::<dyn EffortResolver>();
+        _assert_send_sync::<dyn ModelCatalogResolver>();
     }
 
     #[test]

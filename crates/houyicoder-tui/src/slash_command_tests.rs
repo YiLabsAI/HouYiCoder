@@ -2,12 +2,12 @@
 
 #![cfg(test)]
 
-use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
-use houyicoder_protocol::frontend::{FrontendRequest, SlashCommand};
+use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_protocol::llm::EffortLevel;
 
 use crate::composition;
 use crate::state::{Pane, Screen, Stage, Verdict};
-use crate::test_harness::{connected_app_events, render_text, wait_for_request};
+use crate::test_harness::{model_caps, model_entry, model_snapshot, render_text};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -216,29 +216,72 @@ fn test_model_opens_pane() {
     app.run_command(SlashCommand::Model);
     assert_eq!(app.pane, crate::state::Pane::Model, "/model opens the pane");
     // Simulate the ModelInfo reply landing (stub app has no session to fetch).
-    app.model_catalog = ModelCatalog {
-        active_id: None,
-        effort_level: None,
-        catalog: vec![ModelCatalogEntry {
-            id: "glm-5.2".into(),
-            display_name: Some("Fable".into()),
-            description: None,
-            effort: None,
-        }],
-    };
+    app.model_picker
+        .refresh_snapshot(model_snapshot(vec![model_entry(
+            "glm-5.2",
+            "Fable",
+            model_caps(true, true),
+        )]));
     let out = render(&app);
     // Default sentinel row + the catalog row both render.
     assert!(out.contains("Default"), "Default row missing");
     assert!(out.contains("Fable"), "catalog row missing");
 }
 
-/// An empty catalog renders the empty-state guidance footer (no panic).
+/// The Default row's chain seed clamps against the resolved default's own
+/// capabilities, not against a catalog entry: when the default model has no
+/// row (every catalog that omits it), the pane still shows the level the
+/// host would send from the global fallback.
+#[test]
+fn test_default_row_chain_effort() {
+    let mut app = working();
+    app.run_command(SlashCommand::Model);
+    // The catalog lists no qwen3.7-max row; the global fallback is medium.
+    let mut snapshot = model_snapshot(vec![model_entry(
+        "glm-5.2",
+        "Fable",
+        model_caps(true, false),
+    )]);
+    snapshot.effort_level = Some(EffortLevel::Medium);
+    app.model_picker.refresh_snapshot(snapshot);
+    app.model_picker.draft.row = 0;
+    app.model_picker.reseed();
+    assert_eq!(
+        app.model_picker.draft.effort,
+        Some(EffortLevel::Medium),
+        "the Default row shows the fallback level the host would send"
+    );
+}
+
+/// A persisted level above the levels the focused model accepts clamps in
+/// the pane too: the draft shows what would run, never a level the host
+/// would drop on send.
+#[test]
+fn test_model_clamps_persisted_effort() {
+    let mut app = working();
+    app.run_command(SlashCommand::Model);
+    let mut entry = model_entry("qwen3.7-max", "Max", model_caps(true, false));
+    entry.effort = Some(EffortLevel::XHigh);
+    let mut snapshot = model_snapshot(vec![entry]);
+    snapshot.applied.id = "qwen3.7-max".into();
+    app.model_picker.refresh_snapshot(snapshot);
+    app.model_picker.reseed();
+    // The chain seed for the focused row clamps XHigh to the model's top.
+    let shown = app.model_picker.draft.effort;
+    assert_ne!(
+        shown,
+        Some(EffortLevel::XHigh),
+        "the pane never shows xhigh on a model without it"
+    );
+}
+
+/// An empty catalog renders the empty-state guidance, with no rows to pick
+/// from (a Default row would resolve to the same missing resolution chain).
 #[test]
 fn test_model_empty_catalog_guide() {
     let mut app = working();
     app.run_command(SlashCommand::Model);
     let out = render(&app);
-    assert!(out.contains("Default"));
     assert!(out.contains("no catalog configured"), "guide: {out}");
 }
 
@@ -402,14 +445,4 @@ fn test_compact_connection_lost() {
         before + 1,
         "only the refusal line is added"
     );
-}
-
-/// The /skills command ships a Skills query carrying a request id.
-#[test]
-fn test_skills_command_ships_query() {
-    let (mut app, events) = connected_app_events();
-    app.run_command(SlashCommand::Skills);
-    let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::Skills));
-    assert_eq!(req.req_id.0, 0, "first request on a fresh session");
-    assert_eq!(app.pane, Pane::Skills);
 }

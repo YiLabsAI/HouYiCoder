@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 
 /// The protocol version. Bumped only on a breaking change to the message
 /// set or framing; a peer that sees a different version fails the handshake
-/// rather than guessing.
-pub const PROTOCOL_VERSION: u16 = 4;
+/// rather than guessing. v5: ModelInfo/ModelResult payloads changed shape
+/// (selected/applied/resolved_default entries and ModelApplyResult replace
+/// the v4 active_id/catalog and ModelApplied forms) — old and new v4 peers
+/// would handshake through and then fail payload decode.
+pub const PROTOCOL_VERSION: u16 = 5;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.
@@ -139,7 +142,21 @@ mod tests {
         let json = serde_json::to_string(&Hello::local()).expect("serialize");
         assert_eq!(
             json,
-            r#"{"protocol_version":4,"capabilities":{"streaming":true,"cas":false,"detach":false},"last_event_seq":null}"#
+            r#"{"protocol_version":5,"capabilities":{"streaming":true,"cas":false,"detach":false},"last_event_seq":null}"#
         );
+    }
+
+    /// A v4 peer (the pre-ModelCatalog-shape build) is refused at the
+    /// handshake, not later at payload decode: the v4 model payloads carry
+    /// different field names, so a passthrough would half-work.
+    #[test]
+    fn test_v4_peer_refused() {
+        let v4 = Hello {
+            protocol_version: 4,
+            capabilities: Capabilities::default(),
+            last_event_seq: None,
+        };
+        let err = negotiate(&Hello::local(), &v4).expect_err("v4 must fail");
+        assert_eq!(err.category, ErrorCategory::ProtocolVersion);
     }
 }

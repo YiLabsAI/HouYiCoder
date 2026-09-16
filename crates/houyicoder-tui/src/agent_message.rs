@@ -5,6 +5,7 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::{
     MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryDetail, MemorySummaryEntry, ToggleState,
 };
+use houyicoder_protocol::frontend::model::{ModelApplyResult, SpeedMode};
 use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunError, RunResult,
 };
@@ -414,16 +415,14 @@ pub enum ServerResponse {
     /// The /undo reply: a description of what was undone, or None when the
     /// undo stack was empty.
     Undo { description: Option<String> },
-    /// The /model select reply: the model id and effort the host actually
-    /// applied, so the status bar renders what is being sent rather than
-    /// what the picker requested. effort None means no effort parameter is
-    /// sent.
-    Model {
-        model: String,
-        effort: Option<EffortLevel>,
-    },
-    /// The /model pane catalog snapshot: the entries to list, the active id,
-    /// and the global effort fallback. The pane renders from this rather than
+    /// The /model select reply: what the host actually applied, so the
+    /// status bar renders what is being sent rather than what the picker
+    /// requested, and the receipt is formatted from the reply. Carries
+    /// the effective-from marker and the persistence outcome.
+    Model { result: ModelApplyResult },
+    /// The /model pane snapshot: the catalog rows to list, the live
+    /// session's selection and applied model, the resolved Default target
+    /// and the global effort fallback.
     /// a hardcoded model list, so the rows reflect settings.json.
     ModelInfo {
         catalog: houyicoder_protocol::frontend::model::ModelCatalog,
@@ -609,6 +608,7 @@ pub enum ClientCommand {
         model: Option<String>,
         effort: Option<EffortLevel>,
         effort_toggled: bool,
+        speed: Option<SpeedMode>,
     },
     /// Rename the current session (the /status Status tab inline edit). The
     /// server writes the sidecar name + name_source=User (or clears to Auto

@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::frontend::model::ModelApplyResult;
+
 /// A caller-minted request id. Unique within a session; the response echoes it
 /// so the caller pairs reply to request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -63,20 +65,6 @@ impl EventEnvelope {
     pub fn new(seq: EventSeq, payload: crate::frontend::FrontendEvent) -> Self {
         Self { seq, payload }
     }
-}
-
-/// The applied model the host reports back after a /model select. The model
-/// id is the resolved id (a Default pick is resolved to the constant on the
-/// host, so the status bar shows a real id, not a sentinel). effort is what the
-/// host will actually send on the next completion; None means no effort
-/// parameter is sent (the model does not support it, or the user left it on
-/// auto). Carrying effort back keeps the status bar honest: the picker cannot
-/// know whether the host can honor an effort for this model.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ModelApplied {
-    pub model: String,
-    #[serde(default)]
-    pub effort: Option<crate::llm::EffortLevel>,
 }
 
 /// One frame of a child agent's transcript, fetched on demand when the
@@ -169,14 +157,16 @@ pub enum ResponsePayload {
     /// The /undo reply: a description of what was undone, or None when the
     /// undo stack was empty.
     UndoResult(Option<String>),
-    /// The /model select reply: the model id and effort the host actually
-    /// applied, so the status bar renders what is being sent rather than what
-    /// the picker requested. effort None means the host is not sending an
-    /// effort parameter for this model (unsupported, or auto).
-    ModelResult(ModelApplied),
-    /// The /model pane catalog snapshot (/model command): the active id,
-    /// the global effort fallback, and the catalog rows in written order, so
-    /// the host renders the pane without importing the config crate.
+    /// The /model select reply: the selection the host applied, the model the
+    /// next request will send, when the pick takes effect, and whether it
+    /// persisted. The transcript and status bar format from this rather than
+    /// from the draft, so a pick that failed or only reached memory cannot
+    /// render as a saved success.
+    ModelResult(ModelApplyResult),
+    /// The /model pane catalog snapshot (/model command): the selection, the
+    /// applied model, the Default resolution, the global effort fallback and
+    /// the catalog rows in written order, so the host renders the pane
+    /// without importing the config crate.
     ModelInfo(crate::frontend::model::ModelCatalog),
     /// The /memory list reply: every stored memory as a frontmatter-only
     /// summary (no body), so the TUI renders the index without importing the
@@ -332,7 +322,13 @@ pub enum ClientFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::model::{
+        AppliedModel, ContextWindow, ContextWindowSource, EffectiveFrom, EffortCapability,
+        FastModeAvailability, ModelCatalog, ModelCatalogEntry, ModelChoice,
+        ModelDisplayCapabilities, PersistenceOutcome, ResolvedModel, SpeedMode,
+    };
     use crate::frontend::run::{ApprovalDecision, ApprovalRequest};
+    use crate::llm::EffortLevel;
     use serde_json::Value;
 
     fn sample_ask() -> ApprovalRequest {
@@ -470,15 +466,16 @@ mod tests {
     fn test_model_set_roundtrips_field() {
         // The /model select request: model None = Default sentinel, effort
         // None = auto, effort_toggled records whether the picker touched
-        // effort. All three fields survive a wire round-trip, verified by
-        // re-serializing the deserialized envelope and comparing byte for
-        // byte (field-level equality on the wire form).
+        // effort, speed carries the Fast tier (None = leave it untouched).
+        // Every field survives a wire round-trip, verified by re-serializing
+        // the deserialized envelope and comparing byte for byte.
         let req = RequestEnvelope::new(
             RequestId(9),
             crate::frontend::FrontendRequest::ModelSet {
                 model: None,
-                effort: Some(crate::llm::EffortLevel::High),
+                effort: Some(EffortLevel::High),
                 effort_toggled: true,
+                speed: Some(SpeedMode::Fast),
             },
         );
         let json = serde_json::to_string(&req).expect("serialize");
@@ -494,61 +491,116 @@ mod tests {
             json.contains(r#""effort_toggled":true"#),
             "toggled flag: {json}"
         );
+        assert!(json.contains(r#""speed":"fast""#), "speed tier: {json}");
         let back: RequestEnvelope = serde_json::from_str(&json).expect("deserialize");
         let json2 = serde_json::to_string(&back).expect("reserialize");
-        assert_eq!(json, json2, "round-trip preserves all three fields");
+        assert_eq!(json, json2, "round-trip preserves every field");
     }
 
     #[test]
-    fn test_model_applied_roundtrips() {
+    fn test_model_set_speed_optional() {
+        // A host that predates Fast mode sends no speed field; the request
+        // still decodes with speed None, which leaves the tier untouched.
+        let legacy = r#"{"req_id":9,"payload":{"ModelSet":{"model":"glm-5.2","effort":null,"effort_toggled":false}}}"#;
+        let back: RequestEnvelope = serde_json::from_str(legacy).expect("deserialize");
+        match back.payload {
+            crate::frontend::FrontendRequest::ModelSet { speed, .. } => {
+                assert!(speed.is_none(), "absent speed leaves the tier untouched");
+            }
+            other => panic!("expected ModelSet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_model_result_roundtrips() {
         // The reply: the host resolves the sentinel to a real id and reports
         // the effort it will actually send. effort None is honest when the
         // host is not sending an effort parameter.
         let reply = ResponseEnvelope::new(
             RequestId(9),
-            ResponsePayload::ModelResult(ModelApplied {
-                model: "qwen3.7-max".into(),
-                effort: None,
+            ResponsePayload::ModelResult(ModelApplyResult {
+                selected: ModelChoice::Default,
+                applied: AppliedModel {
+                    id: "qwen3.7-max".into(),
+                    effort: None,
+                    speed: SpeedMode::Standard,
+                },
+                effective_from: EffectiveFrom::Immediate,
+                persistence: PersistenceOutcome::Saved,
             }),
         );
         let json = serde_json::to_string(&reply).expect("serialize");
         let back: ResponseEnvelope = serde_json::from_str(&json).expect("deserialize");
         let json2 = serde_json::to_string(&back).expect("reserialize");
-        assert_eq!(json, json2, "ModelApplied round-trips byte for byte");
+        assert_eq!(json, json2, "ModelApplyResult round-trips byte for byte");
         assert!(json.contains(r#""type":"model_result""#));
         assert!(json.contains(r#""effort":null"#));
         assert!(json.contains("qwen3.7-max"));
     }
 
     #[test]
-    fn test_model_applied_without_effort() {
-        // An older host that predates the effort field still produces a
-        // ModelResult the new client can read: effort defaults to None.
-        let legacy = r#"{"req_id":9,"payload":{"type":"model_result","data":{"model":"glm-5.2"}}}"#;
-        let back: ResponseEnvelope = serde_json::from_str(legacy).expect("deserialize");
-        let json2 = serde_json::to_string(&back).expect("reserialize");
+    fn test_model_result_defaults_apply() {
+        // Optional facts (effort, speed) default rather than failing the
+        // decode; persistence does not — a payload without it fails closed
+        // instead of reading an unknown outcome as Saved.
+        let legacy = r#"{"req_id":9,"payload":{"type":"model_result","data":{"selected":{"mode":"default"},"applied":{"id":"glm-5.2"},"effective_from":"immediate"}}}"#;
+        let err = serde_json::from_str::<ResponseEnvelope>(legacy)
+            .expect_err("a payload without persistence must not decode");
         assert!(
-            json2.contains(r#""effort":null"#),
-            "missing effort defaults to None, not a decode error: {json2}"
+            err.to_string().contains("persistence"),
+            "the decode names the missing field: {err}"
         );
-        assert!(json2.contains("glm-5.2"));
+        let with_persistence = r#"{"req_id":9,"payload":{"type":"model_result","data":{"selected":{"mode":"default"},"applied":{"id":"glm-5.2"},"effective_from":"immediate","persistence":{"outcome":"saved"}}}}"#;
+        let back: ResponseEnvelope = serde_json::from_str(with_persistence).expect("deserialize");
+        match back.payload {
+            ResponsePayload::ModelResult(result) => {
+                assert_eq!(result.applied.id, "glm-5.2");
+                assert_eq!(result.applied.effort, None, "effort defaults to auto");
+                assert_eq!(result.applied.speed, SpeedMode::Standard);
+                assert_eq!(result.persistence, PersistenceOutcome::Saved);
+            }
+            other => panic!("expected ModelResult, got {other:?}"),
+        }
     }
 
     #[test]
     fn test_model_info_catalog_roundtrips() {
         // The /model pane catalog snapshot survives a wire round-trip: the
-        // active id, effort fallback, and catalog entries (with display_name
-        // + description + effort) all preserve.
+        // selection, applied model, Default resolution, effort fallback and
+        // catalog entries (with display_name + description + effort +
+        // capabilities) all preserve.
         let reply = ResponseEnvelope::new(
             RequestId(11),
-            ResponsePayload::ModelInfo(crate::frontend::model::ModelCatalog {
-                active_id: Some("qwen3.7-max".into()),
-                effort_level: Some(crate::llm::EffortLevel::High),
-                catalog: vec![crate::frontend::model::ModelCatalogEntry {
+            ResponsePayload::ModelInfo(ModelCatalog {
+                selected: ModelChoice::Explicit {
+                    id: "qwen3.7-max".into(),
+                },
+                applied: AppliedModel {
+                    id: "qwen3.7-max".into(),
+                    effort: Some(EffortLevel::High),
+                    speed: SpeedMode::Fast,
+                },
+                resolved_default: ResolvedModel {
+                    id: "qwen3.7-max".into(),
+                    capabilities: Default::default(),
+                },
+                effort_level: Some(EffortLevel::High),
+                entries: vec![ModelCatalogEntry {
                     id: "qwen3.7-max".into(),
                     display_name: Some("Max".into()),
                     description: Some("most capable".into()),
-                    effort: Some(crate::llm::EffortLevel::Medium),
+                    effort: Some(EffortLevel::Medium),
+                    capabilities: ModelDisplayCapabilities {
+                        context_window: Some(ContextWindow {
+                            tokens: 1_000_000,
+                            source: ContextWindowSource::ModelSuffix,
+                        }),
+                        max_output_tokens: Some(32_768),
+                        effort: EffortCapability::Supported {
+                            levels: vec![EffortLevel::Low, EffortLevel::Medium, EffortLevel::High],
+                        },
+                        fast: FastModeAvailability::Available,
+                    },
                 }],
             }),
         );
@@ -556,13 +608,29 @@ mod tests {
         let back: ResponseEnvelope = serde_json::from_str(&json).expect("deserialize");
         match back.payload {
             ResponsePayload::ModelInfo(catalog) => {
-                assert_eq!(catalog.active_id.as_deref(), Some("qwen3.7-max"));
-                assert_eq!(catalog.effort_level, Some(crate::llm::EffortLevel::High));
-                assert_eq!(catalog.catalog.len(), 1);
-                assert_eq!(catalog.catalog[0].display_name.as_deref(), Some("Max"));
                 assert_eq!(
-                    catalog.catalog[0].effort,
-                    Some(crate::llm::EffortLevel::Medium)
+                    catalog.selected,
+                    ModelChoice::Explicit {
+                        id: "qwen3.7-max".into()
+                    }
+                );
+                assert_eq!(catalog.applied.id, "qwen3.7-max");
+                assert_eq!(catalog.applied.speed, SpeedMode::Fast);
+                assert_eq!(catalog.resolved_default.id, "qwen3.7-max");
+                assert_eq!(catalog.effort_level, Some(EffortLevel::High));
+                assert_eq!(catalog.entries.len(), 1);
+                assert_eq!(catalog.entries[0].display_name.as_deref(), Some("Max"));
+                assert_eq!(catalog.entries[0].effort, Some(EffortLevel::Medium));
+                assert_eq!(
+                    catalog.entries[0].capabilities.context_window,
+                    Some(ContextWindow {
+                        tokens: 1_000_000,
+                        source: ContextWindowSource::ModelSuffix,
+                    })
+                );
+                assert_eq!(
+                    catalog.entries[0].capabilities.max_output_tokens,
+                    Some(32_768)
                 );
             }
             other => panic!("expected ModelInfo, got {other:?}"),

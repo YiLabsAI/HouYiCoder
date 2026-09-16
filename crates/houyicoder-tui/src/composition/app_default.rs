@@ -7,7 +7,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use houyicoder_protocol::frontend::SessionId;
-use houyicoder_protocol::frontend::model::ModelCatalog;
 
 use crate::history::HistoryNav;
 use crate::input::InputField;
@@ -20,7 +19,9 @@ use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
-use crate::state::{CurrentTurnBoundary, LiveBlock, QueueViewState, StatusTab, TrustChoice};
+use crate::state::{
+    CurrentTurnBoundary, LiveBlock, ModelPickerState, QueueViewState, StatusTab, TrustChoice,
+};
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub fn app() -> App {
@@ -191,12 +192,7 @@ pub fn app() -> App {
         hooks_level: Cell::new(0),
         hooks_sel: Cell::new(0),
         loaded_from_frame: Cell::new(usize::MAX),
-        model_tier: "Default".to_string(),
-        model_sel: 0,
-        model_catalog: ModelCatalog::default(),
-        applied_effort: None,
-        model_effort: None,
-        model_effort_toggled: false,
+        model_picker: ModelPickerState::default(),
         status_tab: StatusTab::default(),
         status_name_edit: None,
         last_title: None,

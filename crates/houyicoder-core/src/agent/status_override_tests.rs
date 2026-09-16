@@ -2,7 +2,7 @@
 
 #![cfg(test)]
 
-use crate::agent::{EffortResolver, Runner, RunnerConfig, ToolRegistry};
+use crate::agent::{ModelCatalogResolver, Runner, RunnerConfig, ToolRegistry};
 use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
 use houyicoder_protocol::llm::EffortLevel;
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,7 @@ fn stub_runner(config_max: u32) -> Runner {
 
 /// A resolver that returns a fixed catalog override for max_output_tokens.
 struct OverrideResolver(u32);
-impl EffortResolver for OverrideResolver {
+impl ModelCatalogResolver for OverrideResolver {
     fn catalog_effort(&self, _model: &str) -> Option<EffortLevel> {
         None
     }
@@ -36,7 +36,7 @@ impl EffortResolver for OverrideResolver {
 /// to the provider's declared cap (min).
 #[test]
 fn test_resolve_max_tokens_catalog() {
-    let runner = stub_runner(32_768).with_effort_resolver(Arc::new(OverrideResolver(9999)));
+    let runner = stub_runner(32_768).with_catalog_resolver(Arc::new(OverrideResolver(9999)));
     // FakeProvider caps max_output = 8000; min(9999, 8000) = 8000.
     assert_eq!(
         runner.resolve_max_output_tokens(),

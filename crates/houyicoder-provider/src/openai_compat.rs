@@ -30,7 +30,7 @@ use houyicoder_async::PFut;
 use houyicoder_protocol::cache_policy::BreakpointKind;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, EffortLevel, InputItem, LlmEvent, ModelCapabilities,
-    OutputItem, ProviderError, Usage,
+    OutputItem, ProviderError, SpeedMode, Usage,
 };
 use serde_json::{Value, json};
 
@@ -527,11 +527,7 @@ pub fn effort_dialect(model: &str) -> EffortDialect {
 
 /// The wire string for an effort level (lowercase, matching the serde form).
 fn effort_str(effort: EffortLevel) -> &'static str {
-    match effort {
-        EffortLevel::Low => "low",
-        EffortLevel::Medium => "medium",
-        EffortLevel::High => "high",
-    }
+    effort.label()
 }
 
 /// Clamp a thinking budget below the output-token cap (invariant: budget <
@@ -643,6 +639,13 @@ fn build_request_body(req: &CompletionRequest) -> Value {
     }
     if let Some(p) = req.settings.top_p {
         body["top_p"] = json!(p);
+    }
+    // Fast mode lowers to the provider's service_tier wire string here — the
+    // only place the raw string exists. Set only when the caller pinned Fast
+    // (the apply path gates this on catalog-declared model support); absent
+    // leaves the project default tier in place.
+    if req.settings.speed == Some(SpeedMode::Fast) {
+        body["service_tier"] = json!("fast");
     }
     // Lower the symbolic cache breakpoints to OpenAI's prompt_cache_key: a
     // single stable label for the cached prefix (system + tools). OpenAI

@@ -24,6 +24,7 @@ pub mod keys;
 mod list_pane_state;
 pub mod markdown;
 mod memory_state;
+mod model_receipt;
 pub mod notifications;
 pub mod palette;
 pub mod paste;

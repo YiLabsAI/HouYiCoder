@@ -11,7 +11,7 @@ use super::runner_tests::{HangingProvider, runner_with};
 use super::*;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_context::SessionEvent;
-use houyicoder_protocol::llm::{CompletionResponse, LlmEvent, OutputItem, Usage};
+use houyicoder_protocol::llm::{CompletionResponse, EffortLevel, LlmEvent, OutputItem, Usage};
 
 fn usage_response() -> CompletionResponse {
     CompletionResponse {
@@ -29,6 +29,51 @@ fn usage_response() -> CompletionResponse {
         },
         model: "stub-model".into(),
     }
+}
+
+/// A High pick on a dialect model lands on the durable TurnUsage: the turn
+/// is attributed to the effort the request actually carried, so /trajectory
+/// does not silently under-report what ran.
+#[tokio::test]
+async fn test_usage_records_effort() {
+    let p = std::sync::Arc::new(FakeProvider::new(vec![usage_response()]));
+    let runner = runner_with(p, ToolRegistry::new());
+    let mut pick = InferenceConfig::for_model("qwen3.7-max".into(), true);
+    pick.effort = Some(EffortLevel::High);
+    runner.apply_inference(pick);
+    let session = SessionId::new();
+    runner.run(session, "hi".into()).await.unwrap();
+    let events = runner.store().replay(session).await.expect("replay");
+    let effort = events
+        .iter()
+        .find_map(|e| match &e.event {
+            SessionEvent::TurnUsage { effort, .. } => Some(effort.clone()),
+            _ => None,
+        })
+        .expect("a TurnUsage event lands per turn");
+    assert_eq!(effort.as_deref(), Some("high"));
+}
+
+/// A pick on a model that speaks no effort dialect sends no effort parameter,
+/// so the TurnUsage records None rather than the stale in-session pick.
+#[tokio::test]
+async fn test_usage_skips_effort() {
+    let p = std::sync::Arc::new(FakeProvider::new(vec![usage_response()]));
+    let runner = runner_with(p, ToolRegistry::new());
+    let mut pick = InferenceConfig::for_model("deepseek-chat".into(), true);
+    pick.effort = Some(EffortLevel::High);
+    runner.apply_inference(pick);
+    let session = SessionId::new();
+    runner.run(session, "hi".into()).await.unwrap();
+    let events = runner.store().replay(session).await.expect("replay");
+    let effort = events
+        .iter()
+        .find_map(|e| match &e.event {
+            SessionEvent::TurnUsage { effort, .. } => Some(effort.clone()),
+            _ => None,
+        })
+        .expect("a TurnUsage event lands per turn");
+    assert_eq!(effort, None, "no dialect, no parameter, no record");
 }
 
 #[tokio::test]

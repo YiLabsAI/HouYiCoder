@@ -4,14 +4,18 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use houyicoder_async::PFut;
 use houyicoder_client::{Client, Transport};
-use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
-use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::model::{
+    AppliedModel, ContextWindow, ContextWindowSource, EffortCapability, FastModeAvailability,
+    ModelCatalog, ModelCatalogEntry, ModelChoice, ModelDisplayCapabilities, ResolvedModel,
+    SpeedMode,
+};
 use houyicoder_protocol::handshake::Hello;
+use houyicoder_protocol::llm::EffortLevel;
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
 use crate::agent_message::{ConnectionEvent, SessionMessage};
@@ -166,6 +170,82 @@ pub(crate) fn working_app() -> App {
     app
 }
 
+/// The capabilities a fixture model advertises: a fixed window and output cap,
+/// with an effort dialect and a fast tier the caller turns on or off.
+pub(crate) fn model_caps(effort: bool, fast: bool) -> ModelDisplayCapabilities {
+    ModelDisplayCapabilities {
+        context_window: Some(ContextWindow {
+            tokens: 1_000_000,
+            source: ContextWindowSource::ModelCatalog,
+        }),
+        max_output_tokens: Some(32_000),
+        effort: if effort {
+            EffortCapability::Supported {
+                levels: vec![EffortLevel::Low, EffortLevel::Medium, EffortLevel::High],
+            }
+        } else {
+            EffortCapability::Unsupported
+        },
+        fast: if fast {
+            FastModeAvailability::Available
+        } else {
+            FastModeAvailability::Unavailable {
+                reason: "no fast tier".into(),
+            }
+        },
+    }
+}
+
+/// One catalog row: the id the provider sees, the name the pane prints, and
+/// the capabilities it reports for it.
+pub(crate) fn model_entry(
+    id: &str,
+    name: &str,
+    caps: ModelDisplayCapabilities,
+) -> ModelCatalogEntry {
+    ModelCatalogEntry {
+        id: id.into(),
+        display_name: Some(name.into()),
+        description: Some(format!("{name} description")),
+        effort: None,
+        capabilities: caps,
+    }
+}
+
+/// A working App whose /model picker holds the given snapshot with the draft
+/// seeded from it, as if the host's query reply had just landed.
+pub(crate) fn model_app(catalog: ModelCatalog) -> App {
+    let mut app = working_app();
+    app.model_picker.snapshot = catalog;
+    app.model_picker.reseed();
+    app
+}
+
+/// A /model snapshot over the given rows: the first row is the session's pick
+/// and the default resolves to the built-in model. Tests that care about
+/// another selection overwrite the fields they assert on.
+pub(crate) fn model_snapshot(entries: Vec<ModelCatalogEntry>) -> ModelCatalog {
+    let head = entries.first().map(|entry| entry.id.clone());
+    let default_id = houyicoder_config::DEFAULT_MODEL.to_string();
+    ModelCatalog {
+        selected: match &head {
+            Some(id) => ModelChoice::Explicit { id: id.clone() },
+            None => ModelChoice::Default,
+        },
+        applied: AppliedModel {
+            id: head.unwrap_or_else(|| default_id.clone()),
+            effort: None,
+            speed: SpeedMode::Standard,
+        },
+        resolved_default: ResolvedModel {
+            capabilities: model_caps(true, false),
+            id: default_id,
+        },
+        effort_level: None,
+        entries,
+    }
+}
+
 pub(crate) enum TransportEvent {
     Frame(String),
     Dropped,
@@ -214,34 +294,20 @@ pub(crate) fn connected_app() -> App {
     connected_app_with_events().0
 }
 
-/// Build a connected App plus the transport's outbound frame log: each
-/// frame the session ships arrives as a TransportEvent, so tests can pin
-/// exactly what a command path put on the connection.
+/// Same as connected_app_with_events, under the name dev's tests use.
 pub(crate) fn connected_app_events() -> (App, Receiver<TransportEvent>) {
     connected_app_with_events()
 }
 
-fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {
-    let runtime = crate::composition::shared_runtime();
-    let (events_tx, events_rx) = mpsc::channel();
-    let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
-    let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
-    let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
-    let mut app = working_app();
-    app.runtime = Some(runtime);
-    app.session = Some(session);
-    (app, events_rx)
-}
-
 /// Wait for the connected transport to ship a request frame whose payload
-/// matches the predicate, then return its envelope (req_id + payload). Frame
-/// arrival is the synchronization point: recv_timeout blocks until the next transport
-/// event and skips non-matching frames, so no polling sleep is needed. Panics
-/// when the transport drops or no matching request arrives within two seconds.
+/// matches the predicate, then return its envelope. Panics when the
+/// transport drops or no matching request arrives within two seconds.
 pub(crate) fn wait_for_request(
     events: &Receiver<TransportEvent>,
-    want: impl Fn(&FrontendRequest) -> bool,
-) -> RequestEnvelope {
+    want: impl Fn(&houyicoder_protocol::frontend::FrontendRequest) -> bool,
+) -> houyicoder_protocol::envelope::RequestEnvelope {
+    use houyicoder_protocol::envelope::ClientFrame;
+    use std::time::{Duration, Instant};
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -257,6 +323,20 @@ pub(crate) fn wait_for_request(
             Err(_) => panic!("no matching request frame within 2s"),
         }
     }
+}
+
+/// Build an App with an active negotiated test session, plus the transport
+/// events it records, so tests can assert on the frames it shipped.
+pub(crate) fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {
+    let runtime = crate::composition::shared_runtime();
+    let (events_tx, events_rx) = mpsc::channel();
+    let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
+    let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
+    let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
+    let mut app = working_app();
+    app.runtime = Some(runtime);
+    app.session = Some(session);
+    (app, events_rx)
 }
 
 /// A transport whose handshake fails immediately: the driver exits and drops
@@ -288,14 +368,14 @@ pub(crate) fn attach_connection(app: &mut App) {
     let runtime = crate::composition::shared_runtime();
     let (events_tx, _events_rx) = mpsc::channel();
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
-    let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
+    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<crate::agent_message::SessionMessage>();
     let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     app.runtime = Some(runtime);
     app.session = Some(session);
 }
 
 /// An App whose driver exited on a failed handshake: the session object is
-/// present, the connection is lost, and the Lost event has already
+/// present, the connection is lost, and the ConnectionLost event has already
 /// arrived. Send attempts are refused deterministically, so tests can drive
 /// the send-failure branches without racing the scheduler.
 pub(crate) fn connection_lost_app() -> App {
@@ -303,24 +383,24 @@ pub(crate) fn connection_lost_app() -> App {
     let client = Client::new(Box::new(FailedHandshakeTransport));
     let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
     let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
-    // Synchronization point: the driver announces its own death; from this
-    // point the enqueue path is deterministically refused.
+    // Effect latch: the driver announces its own death; from this point the
+    // send path is deterministically refused.
     let death = session
         .poll_startup(Duration::from_secs(5))
-        .expect("the failed handshake reports the Lost event");
+        .expect("the failed handshake reports ConnectionLost");
+    assert!(
+        matches!(
+            death,
+            SessionMessage::Connection(ConnectionEvent::Lost { .. })
+        ),
+        "expected ConnectionLost, got {death:?}"
+    );
     let mut app = working_app();
     app.runtime = Some(runtime);
     app.session = Some(session);
-    // Apply the death so the app holds the settled state: Lost with its
-    // cause, active run swept. Tests start from the post-loss world instead
-    // of half-applying the event themselves.
-    let SessionMessage::Connection(ConnectionEvent::Lost { cause, .. }) = death else {
-        panic!("expected ConnectionEvent::Lost, got {death:?}");
-    };
-    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
-        cause,
-        not_sent: Vec::new(),
-    }));
+    // Apply the real loss so the error line lands and the session state
+    // reflects it — tests assert on both.
+    app.handle_agent_message(death);
     app
 }
 

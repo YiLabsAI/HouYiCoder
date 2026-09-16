@@ -1,5 +1,6 @@
 //! Streaming behavior for transient output and durable completion frames.
 use super::*;
+use crate::agent_message::ServerResponse;
 
 /// Streamed reasoning remains transient until completion records it in the
 /// transcript.

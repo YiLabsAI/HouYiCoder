@@ -18,7 +18,8 @@
 //! the broken-out fields when non-zero so a misreported inclusive field
 //! cannot undercount.
 
-use houyicoder_protocol::llm::{ModelCapabilities, Usage};
+use houyicoder_protocol::frontend::model::ContextWindowSource;
+use houyicoder_protocol::llm::{EffortLevel, ModelCapabilities, Usage};
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
@@ -65,6 +66,23 @@ pub fn effort_dialect(model: &str) -> EffortDialect {
         EffortDialect::OpenaiReasoning
     } else {
         EffortDialect::NotSupported
+    }
+}
+
+/// The effort levels a dialect offers. Each dialect exposes only the levels
+/// with verified wire values: the qwen3 budget ladder maps low/medium/high
+/// to enable_thinking + thinking_budget; the OpenAI reasoning dialect takes
+/// the same three into reasoning_effort. The upper rungs (xhigh, max) stay
+/// out of every dialect until their wire values are verified against each
+/// API, so the resolver clamps a stale upper pick to the dialect's top
+/// rather than sending an unverified value.
+pub fn dialect_effort_levels(dialect: EffortDialect) -> &'static [EffortLevel] {
+    match dialect {
+        EffortDialect::Qwen3 => &[EffortLevel::Low, EffortLevel::Medium, EffortLevel::High],
+        EffortDialect::OpenaiReasoning => {
+            &[EffortLevel::Low, EffortLevel::Medium, EffortLevel::High]
+        }
+        EffortDialect::NotSupported => &[],
     }
 }
 
@@ -136,12 +154,12 @@ pub fn normalize_model_for_api(model: &str) -> String {
 
 /// Best-effort context window for well-known open-weight model families
 /// served by OpenAI-compatible gateways whose models-list endpoint omits
-/// the context-length field. Keyed on the lowercased model id so the same
-/// family resolves regardless of how the gateway spells version numbers
-/// (glm-4.7, glm-47, glm-4p7). The first substring hit wins; the catalog
-/// is ordered most-specific first so a broad arm cannot absorb a narrow
-/// one. The error-response learner overrides a stale entry earlier in the
-/// flow the first time the provider enforces the real limit.
+/// the context-length field. Keyed on the lowercased model id by substring
+/// match, so the canonical spelling of a catalogued family resolves it. The
+/// first substring hit wins; the catalog is ordered most-specific first so a
+/// broad entry cannot absorb a narrow one. The error-response learner
+/// overrides a stale entry earlier in the flow the first time the provider
+/// enforces the real limit.
 fn open_weight_family_window(model: &str) -> Option<u32> {
     let m = model.to_lowercase();
     open_weight_catalog()
@@ -218,26 +236,51 @@ pub fn resolve_context_window(model: &str) -> u32 {
     resolve_context_window_opt(model).unwrap_or(DEFAULT_CONTEXT_WINDOW)
 }
 
-/// Resolve a full ModelCapabilities for a model id. Priority: a provider that
-/// reports a non-zero context window is authoritative (it negotiated the real
-/// per-model limit). When the provider does not know (0 — the common case for
-/// OpenAI-compatible gateways that omit context-length), the catalog (family
-/// table) + [1m] suffix + learned limits resolve it. An unknown model with no
-/// catalog entry falls to the conservative default so the pre-flight gate
-/// never false-fires. The other capability flags always come from the provider.
-pub fn resolve_capabilities(model: &str, provider_caps: ModelCapabilities) -> ModelCapabilities {
-    if provider_caps.context_window > 0 {
-        return provider_caps;
+/// Resolve the context window the next request is measured against, with its
+/// provenance. One chain serves both the pane's display row and the
+/// pre-flight gate, so the number the user reads is the number the request
+/// uses: learned (provider-enforced limits) first, then the [1m] suffix
+/// opt-in, the user's per-model override, the shipped family table, the
+/// provider's negotiated window, and the conservative default last.
+pub fn resolve_window_info(
+    model: &str,
+    provider_window: u32,
+    config_override: Option<u32>,
+) -> (u32, ContextWindowSource) {
+    if let Some(learned) = lookup_learned_context_window(model) {
+        return (learned, ContextWindowSource::Learned);
     }
-    match resolve_context_window_opt(model) {
-        Some(w) => ModelCapabilities {
-            context_window: w,
-            ..provider_caps
-        },
-        None => ModelCapabilities {
-            context_window: DEFAULT_CONTEXT_WINDOW,
-            ..provider_caps
-        },
+    if has_long_context_suffix(model) {
+        return (LONG_CONTEXT_WINDOW, ContextWindowSource::ModelSuffix);
+    }
+    if let Some(window) = config_override {
+        return (window, ContextWindowSource::ExplicitConfig);
+    }
+    if let Some(window) = catalog_window(model) {
+        return (window, ContextWindowSource::ModelCatalog);
+    }
+    if provider_window > 0 {
+        return (provider_window, ContextWindowSource::Provider);
+    }
+    (DEFAULT_CONTEXT_WINDOW, ContextWindowSource::Fallback)
+}
+
+/// Resolve a full ModelCapabilities for a model id, on the same chain as
+/// resolve_window_info so the display row and the request gate never
+/// disagree: a provider that reports a non-zero context window is one source
+/// in the chain, not an override — the user's explicit override and a
+/// provider-enforced learned limit both rank above it. The other capability
+/// flags always come from the provider.
+pub fn resolve_capabilities(
+    model: &str,
+    provider_caps: ModelCapabilities,
+    config_override: Option<u32>,
+) -> ModelCapabilities {
+    let (window, _source) =
+        resolve_window_info(model, provider_caps.context_window, config_override);
+    ModelCapabilities {
+        context_window: window,
+        ..provider_caps
     }
 }
 
@@ -354,13 +397,14 @@ mod tests {
     }
 
     #[test]
-    fn test_glm4_falls_to_default() {
-        // GLM-4 and earlier are intentionally absent from the catalog; they
-        // fall to the 200K default rather than over-reporting a window the
-        // provider will not serve. The error-response learner corrects an
-        // over-estimate the first time the provider enforces the real limit.
-        assert_eq!(resolve_context_window("glm-4.6"), DEFAULT_CONTEXT_WINDOW);
-        assert_eq!(resolve_context_window("glm-4.5"), DEFAULT_CONTEXT_WINDOW);
+    fn test_unlisted_falls_to_default() {
+        // An id outside the catalog — a superseded family, or one this build
+        // has no entry for — falls to the conservative 200K default rather
+        // than over-reporting a window the provider will not serve. The
+        // error-response learner corrects an over-estimate the first time the
+        // provider enforces the real limit.
+        assert_eq!(resolve_context_window("unknown-a"), DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(resolve_context_window("unknown-b"), DEFAULT_CONTEXT_WINDOW);
     }
 
     #[test]
@@ -532,9 +576,9 @@ mod tests {
 
     #[test]
     fn test_resolve_capabilities_overrides_only() {
-        // The provider's non-zero window is authoritative; the [1m] suffix
-        // and catalog are fallbacks for when the provider does not know (0).
-        // Here the provider reports 200K — that wins over the catalog.
+        // The [1m] suffix is an explicit user opt-in and outranks the
+        // provider's negotiated window; the provider stays one source in the
+        // chain, not an override.
         let provider_caps = ModelCapabilities {
             streaming: true,
             tools: true,
@@ -542,8 +586,8 @@ mod tests {
             context_window: 200_000,
             max_output_tokens: 8_000,
         };
-        let resolved = resolve_capabilities("glm-5.2[1m]", provider_caps);
-        assert_eq!(resolved.context_window, 200_000, "provider non-zero wins");
+        let resolved = resolve_capabilities("glm-5.2[1m]", provider_caps, None);
+        assert_eq!(resolved.context_window, 1_000_000, "suffix opt-in wins");
         assert!(resolved.streaming);
         assert!(resolved.vision);
         assert_eq!(resolved.max_output_tokens, 8_000);
@@ -562,7 +606,7 @@ mod tests {
             context_window: 200,
             max_output_tokens: 1_000,
         };
-        let resolved = resolve_capabilities("stub-test-model", small);
+        let resolved = resolve_capabilities("stub-test-model", small, None);
         assert_eq!(resolved.context_window, 200, "provider window trusted");
         assert_eq!(resolved.max_output_tokens, 1_000);
     }
@@ -576,7 +620,7 @@ mod tests {
             max_output_tokens: 8_000,
             ..Default::default()
         };
-        let resolved = resolve_capabilities("glm-5.2", caps);
+        let resolved = resolve_capabilities("glm-5.2", caps, None);
         assert_eq!(
             resolved.context_window, 1_000_000,
             "provider 0 => catalog wins"
@@ -592,7 +636,7 @@ mod tests {
             max_output_tokens: 4_000,
             ..Default::default()
         };
-        let resolved = resolve_capabilities("totally-unknown-model", caps);
+        let resolved = resolve_capabilities("totally-unknown-model", caps, None);
         assert_eq!(
             resolved.context_window, DEFAULT_CONTEXT_WINDOW,
             "unknown + provider 0 => conservative default"

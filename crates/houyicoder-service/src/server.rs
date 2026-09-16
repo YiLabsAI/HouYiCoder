@@ -53,6 +53,11 @@ mod status_projection;
 /// helpers.
 mod notif;
 
+/// The one place a model pick is applied: the between-runs dispatch and the
+/// mid-run request handler both route through it, so a switch takes the same
+/// path whether or not a turn is in flight.
+mod model_apply;
+
 /// The mid-run permission reverse-request: ask the human, record the verdict
 /// audit, apply consent.
 mod approval;
@@ -165,6 +170,10 @@ impl Server {
 
     /// Override the settings path the /memory toggle handler persists to.
     /// Tests pass a temp path so a flip never writes the real settings file.
+    /// The runner's model resolver is built at composition time from the
+    /// global path, so a caller that overrides this one builds the runner over
+    /// the same file too - otherwise a catalog row and the capabilities
+    /// reported for it come from different files.
     pub fn with_settings_path(mut self, path: std::path::PathBuf) -> Self {
         self.settings_path = path;
         self
@@ -254,30 +263,24 @@ impl Server {
         ResponsePayload::PermissionAskBeforeGit(self.gate.git_checkpoint_enabled())
     }
 
-    /// Project the settings model section into the /model pane snapshot. A
-    /// missing file or a malformed section yields defaults (no catalog), so
-    /// the pane renders the empty-state guidance rather than failing.
+    /// Project the live session plus the settings model section into the
+    /// /model pane snapshot. A missing or malformed section yields defaults
+    /// (no catalog), so the pane renders the empty-state guidance rather than
+    /// failing. The session side comes from the runner, never from settings:
+    /// a session started on another model reports that model until the user
+    /// picks again.
     async fn handle_model_info(
         &mut self,
         io: &mut FrameCarrier,
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
-        let (section, _warnings) = houyicoder_config::load_model_section_from(&self.settings_path);
-        let catalog = houyicoder_protocol::frontend::model::ModelCatalog {
-            active_id: section.id,
-            effort_level: section.effort_level,
-            catalog: section
-                .catalog
-                .into_iter()
-                .map(
-                    |e| houyicoder_protocol::frontend::model::ModelCatalogEntry {
-                        id: e.id,
-                        display_name: e.display_name,
-                        description: e.description,
-                        effort: e.effort,
-                    },
-                )
-                .collect(),
+        let catalog = match self.model_catalog_snapshot().await {
+            Ok(catalog) => catalog,
+            Err(e) => {
+                self.send_response(io, req_id, ResponsePayload::Error(e))
+                    .await?;
+                return Ok(());
+            }
         };
         self.send_response(io, req_id, ResponsePayload::ModelInfo(catalog))
             .await

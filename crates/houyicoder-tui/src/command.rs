@@ -70,20 +70,7 @@ impl App {
                 }
             }
             C::Model => {
-                self.pane = Pane::Model;
-                // Position by the user's mode choice (tier), not active_id.
-                // Tier is stable across catalog refreshes; active_id flips
-                // between Some(resolved) and None across the two reply
-                // paths, which produced a two-frame cursor slide.
-                self.model_sel = crate::view::model_pane::row_for_tier(self, &self.model_tier);
-                if let Some(s) = self.session.as_ref() {
-                    match s.next_request_id() {
-                        Ok(req_id) => {
-                            self.enqueue_refresh(ClientCommand::ModelInfoQuery { req_id });
-                        }
-                        Err(_) => self.note_request_id_exhausted(),
-                    }
-                }
+                self.open_model_pane();
             }
             C::Sandbox => self.system_line(render::render_sandbox(
                 &self.snapshot_or_stub(),
@@ -292,12 +279,10 @@ impl App {
     /// so /context /status /sandbox still render a real-shaped layout with
     /// zeroed usage instead of a canned string that hides which fields are
     /// live.
-    /// The model label the status bar shows: the user's mode choice (tier),
-    /// not the resolved concrete (status.model, which the status pane +
-    /// snapshot read). Assembled here so the view depends on this seam, not
-    /// on the model_tier field scattered across callers.
+    /// The model label the status bar shows: the applied model the host
+    /// reported, from the picker's snapshot.
     pub(crate) fn status_bar_model(&self) -> &str {
-        &self.model_tier
+        &self.model_picker.snapshot.applied.id
     }
 
     pub(crate) fn snapshot_or_stub(&self) -> StatusSnapshot {

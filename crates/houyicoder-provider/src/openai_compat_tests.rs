@@ -1,6 +1,6 @@
 use super::*;
 use crate::http_error::{classify_status, classify_with_body, parse_retry_after};
-use houyicoder_protocol::llm::{AssistantToolCall, EffortLevel, ModelSettings, ToolDef};
+use houyicoder_protocol::llm::{AssistantToolCall, EffortLevel, ModelSettings, SpeedMode, ToolDef};
 
 fn req(input: Vec<InputItem>, tools: Vec<ToolDef>) -> CompletionRequest {
     CompletionRequest {
@@ -55,6 +55,32 @@ fn test_build_body_user_assistant() {
     assert!(msgs[2]["tool_calls"][0]["function"]["arguments"].is_string());
     assert_eq!(msgs[3]["role"], "tool");
     assert_eq!(msgs[3]["tool_call_id"], "c1");
+}
+
+/// Fast lowers to the OpenAI service_tier request field; Standard and an
+/// unset tier leave the field absent so the project default stands.
+#[test]
+fn test_service_tier_lowering() {
+    let base = || {
+        req(
+            vec![InputItem::User {
+                content: "hi".into(),
+            }],
+            vec![],
+        )
+    };
+
+    let mut fast = base();
+    fast.settings.speed = Some(SpeedMode::Fast);
+    let body = build_request_body(&fast);
+    assert_eq!(body["service_tier"], "fast", "fast tier is sent");
+
+    let standard = base();
+    let body = build_request_body(&standard);
+    assert!(
+        body.get("service_tier").is_none(),
+        "unset tier sends no field: {body}"
+    );
 }
 
 #[test]

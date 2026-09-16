@@ -211,17 +211,11 @@ fn test_model_opens_selector_pane() {
         "/model should render the model selector header:\n{}",
         s.output_plain()
     );
+    // An empty catalog has no rows to pick from (a Default row would resolve
+    // through the same missing chain); the guide names the settings file, which
+    // has no internal space so ratatui's cell-diff render cannot drop an
+    // inter-word space from the accumulated stream.
     let out = s.output_plain();
-    assert!(
-        out.contains("Default"),
-        "/model selector should list the Default sentinel:\n{out}"
-    );
-    // Assert on the no-internal-space tail of the empty-state guide rather
-    // than "no catalog configured": when the status bar is hidden the footer
-    // lands on the terminal's last row, and ratatui's cell-diff render skips
-    // a space cell that was already a space in the prior frame, so the
-    // accumulated stream can drop an inter-word space. settings.json is
-    // unique to this footer and has no internal space, so it survives.
     assert!(
         out.contains("settings.json"),
         "empty-state guide should render when no catalog:\n{out}"

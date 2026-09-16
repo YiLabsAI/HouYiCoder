@@ -1030,14 +1030,24 @@ async fn test_drive_translates_memory_responses() {
 /// its own req_id so the reply can route back.
 #[tokio::test]
 async fn test_drive_translates_trust_ask() {
-    use houyicoder_protocol::envelope::ModelApplied;
     use houyicoder_protocol::frontend::model::ModelCatalog;
+    use houyicoder_protocol::frontend::model::{
+        AppliedModel, EffectiveFrom, ModelApplyResult, ModelChoice, PersistenceOutcome, SpeedMode,
+    };
     use houyicoder_protocol::frontend::trust::TrustPrompt;
 
     let mut engine = FakeEngine::new();
-    engine.response(ResponsePayload::ModelResult(ModelApplied {
-        model: "qwen3.7-max".into(),
-        effort: None,
+    engine.response(ResponsePayload::ModelResult(ModelApplyResult {
+        selected: ModelChoice::Explicit {
+            id: "qwen3.7-max".into(),
+        },
+        applied: AppliedModel {
+            id: "qwen3.7-max".into(),
+            effort: None,
+            speed: SpeedMode::Standard,
+        },
+        effective_from: EffectiveFrom::Immediate,
+        persistence: PersistenceOutcome::Saved,
     }));
     engine.response(ResponsePayload::ModelInfo(ModelCatalog::default()));
     engine.reverse_request(
@@ -1051,8 +1061,8 @@ async fn test_drive_translates_trust_ask() {
     let run = engine.drive(Vec::new()).await;
 
     assert!(run.msgs.iter().any(
-        |m| matches!(m, SessionMessage::Response { response: ServerResponse::Model { model, effort: None }, .. }
-            if model == "qwen3.7-max")
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::Model { result }, .. }
+            if result.applied.id == "qwen3.7-max")
     ));
     assert!(run.msgs.iter().any(|m| matches!(
         m,

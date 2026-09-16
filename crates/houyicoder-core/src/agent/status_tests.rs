@@ -184,13 +184,13 @@ fn test_snapshot_reflects_model_switch() {
         after.model, "glm-5.2",
         "snapshot reads active_model, not config.model"
     );
-    // FakeProvider reports 200K (non-zero), so the provider's window wins
-    // over the catalog (which would give glm-5.2 1M). In production,
-    // OpenAiCompatibleProvider reports 0 (unknown), so the catalog is
-    // consulted. The priority: provider non-zero > catalog.
+    // One chain for display and request: the family table (glm-5.2 => 1M)
+    // outranks the provider's non-zero window, because a provider-declared
+    // window is one source, not an override. FakeProvider reports 200K; the
+    // catalog knows the model and wins.
     assert_eq!(
-        after.context_window, 200_000,
-        "provider non-zero wins over catalog"
+        after.context_window, 1_000_000,
+        "catalog family table wins over provider window"
     );
 }
 

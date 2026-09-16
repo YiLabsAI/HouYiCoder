@@ -2,6 +2,7 @@
 //! fallback, and the catalog the /model panel lists. Loaded per-field-recoverable
 //! via ConfigWarning so one malformed entry does not reset the section.
 
+use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::llm::EffortLevel;
 
 use crate::ConfigWarning;
@@ -24,7 +25,9 @@ pub const DEFAULT_CATALOG: &[(&str, &str)] = &[
 /// overrides. effort is the persisted per-model pick (None = follow the
 /// resolution chain). context_window / max_output_tokens override the
 /// family-default table; both are optional because the family default is the
-/// common case.
+/// common case. fast declares whether this model can run in Fast mode; the
+/// catalog is the only source (no name probe grants a tier), so None reads
+/// as unavailable and false is how a user revokes a declared tier.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelEntry {
     pub id: String,
@@ -37,21 +40,31 @@ pub struct ModelEntry {
     pub description: Option<String>,
     #[serde(default)]
     pub effort: Option<EffortLevel>,
+    /// The effort levels the picker cycles for this model; None keeps the
+    /// dialect's full set. A listed level the dialect does not serve is
+    /// dropped at resolution, so the list cannot grant it.
+    #[serde(default)]
+    pub effort_levels: Option<Vec<EffortLevel>>,
     #[serde(default)]
     pub context_window: Option<u32>,
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+    #[serde(default)]
+    pub fast: Option<bool>,
 }
 
 /// The model section of settings.json: the active id (None = Default
 /// sentinel, resolved to the constant), a global effort fallback for
-/// catalog entries without one, and the catalog the /model panel lists.
+/// catalog entries without one, the global speed preference, and the
+/// catalog the /model panel lists.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelSection {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
     pub effort_level: Option<EffortLevel>,
+    #[serde(default)]
+    pub speed_mode: Option<SpeedMode>,
     #[serde(default)]
     pub catalog: Vec<ModelEntry>,
 }
@@ -125,9 +138,12 @@ pub fn load_model_section_from(path: &std::path::Path) -> (ModelSection, Vec<Con
         &mut warnings,
     );
     let catalog = extract_catalog(model_value, &mut warnings);
+    let speed_mode =
+        extract_field::<SpeedMode>(model_value, "speed_mode", "model.speed_mode", &mut warnings);
     let mut section = ModelSection {
         id,
         effort_level,
+        speed_mode,
         catalog,
     };
     // Fallback to the shipped default catalog when the user has not
@@ -251,13 +267,22 @@ fn parse_catalog_entry(
         &label("max_output_tokens"),
         warnings,
     );
+    let fast = extract_field::<bool>(value, "fast", &label("fast"), warnings);
+    let effort_levels = extract_field::<Vec<EffortLevel>>(
+        value,
+        "effort_levels",
+        &label("effort_levels"),
+        warnings,
+    );
     Some(ModelEntry {
         id,
         display_name,
         description,
         effort,
+        effort_levels,
         context_window,
         max_output_tokens,
+        fast,
     })
 }
 
@@ -312,8 +337,8 @@ fn validate_catalog(section: &mut ModelSection, served: &[String]) -> Vec<Config
 
     // Served-models existence check: when a provider served-id cache exists
     // (written by the startup /v1/models fetch), warn on catalog entries the
-    // provider does not actually serve — a stale id or a typo that the
-    // substring name-match (supports_effort) cannot catch. Fault-tolerant:
+    // provider does not actually serve — a stale id or a typo that no name
+    // pattern would catch. Fault-tolerant:
     // no cache (fetch failed, stub mode, never ran) => skip entirely, because
     // an empty cache means "cannot know", not "nothing is served". Never
     // blocks loading or drops the entry; the next fetch may add it back.
@@ -343,8 +368,10 @@ mod tests {
             display_name: None,
             description: None,
             effort: None,
+            effort_levels: None,
             context_window: None,
             max_output_tokens: None,
+            fast: None,
         }
     }
 
@@ -352,8 +379,58 @@ mod tests {
         ModelSection {
             id: id.map(str::to_string),
             effort_level: None,
+            speed_mode: None,
             catalog: catalog.to_vec(),
         }
+    }
+
+    #[test]
+    fn test_speed_mode_roundtrips() {
+        // The global speed preference round-trips through settings.json, and
+        // a bad value degrades to None with a warning rather than resetting
+        // the section.
+        let path = std::env::temp_dir().join(format!("speed-mode-{}.json", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"{"model":{"speed_mode":"fast","catalog":[{"id":"a"}]}}"#,
+        )
+        .unwrap();
+        let (s, w) = load_model_section_from(&path);
+        assert_eq!(s.speed_mode, Some(SpeedMode::Fast));
+        assert_eq!(s.catalog.len(), 1, "sibling catalog survives");
+        assert!(w.is_empty(), "a valid speed_mode does not warn: {w:?}");
+        drop(std::fs::remove_file(&path));
+
+        std::fs::write(&path, r#"{"model":{"speed_mode":"warp"}}"#).unwrap();
+        let (s, w) = load_model_section_from(&path);
+        assert_eq!(s.speed_mode, None, "bad value falls back to the default");
+        assert!(
+            w.iter().any(|x| x.field == "model.speed_mode"),
+            "warning names the bad field: {w:?}"
+        );
+        assert!(!s.catalog.is_empty(), "catalog survives a bad sibling");
+        drop(std::fs::remove_file(&path));
+    }
+
+    #[test]
+    fn test_entry_fast_override() {
+        // A per-model fast flag parses on its own entry; a bad value nulls
+        // only that field.
+        let path = std::env::temp_dir().join(format!("entry-fast-{}.json", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"{"model":{"catalog":[{"id":"a","fast":true},{"id":"b","fast":"yes"}]}}"#,
+        )
+        .unwrap();
+        let (s, w) = load_model_section_from(&path);
+        assert_eq!(s.catalog.len(), 2, "both entries kept");
+        assert_eq!(s.catalog[0].fast, Some(true));
+        assert_eq!(s.catalog[1].fast, None, "bad boolean nulled, entry kept");
+        assert!(
+            w.iter().any(|x| x.field == "model.catalog[1].fast"),
+            "warning names the bad field: {w:?}"
+        );
+        drop(std::fs::remove_file(&path));
     }
 
     #[test]

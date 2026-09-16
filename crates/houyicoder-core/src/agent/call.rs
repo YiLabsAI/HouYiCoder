@@ -3,12 +3,19 @@ use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use houyicoder_context::{SessionEvent, SessionId, TruncationSignal};
+use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::llm::{
-    CompletionRequest, CompletionResponse, InputItem, ModelSettings, OutputItem, ProviderError,
+    CompletionRequest, CompletionResponse, EffortLevel, InputItem, ModelSettings, OutputItem,
+    ProviderError,
 };
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 
 use super::compaction::{CompactionSuppression, SuppressionCause};
+use super::economy::{economy_decision, economy_projection};
+use super::model_window::{
+    conservative_input_tokens, fill_omitted_usage, normalize_model_for_api,
+    record_learned_context_window,
+};
 use super::truncation::{classify_truncation_signal, is_length_reason};
 use super::{RunError, Runner, new_event, obs_wire};
 use houyicoder_api::agent_event::{EventHandler, ResponseStreamEvent};
@@ -129,6 +136,13 @@ impl Runner {
             // provider-omits-usage, passed to record_turn at turn end.
             let estimated_input_tokens = assembled.measurement.token_count();
 
+            // Freeze the inference config once per request: pre-flight,
+            // request construction, overflow learning and usage attribution
+            // all read this snapshot, never the live state, so a mid-run switch
+            // cannot hand any of them a mixed config or attribute the old
+            // request onto the new model.
+            let inference = self.snapshot_inference();
+
             // Convergence reminder: when the turn count is within the
             // reminder window of the hard cap, inject a user message that
             // tells the model to synthesize and answer. Without this, an
@@ -152,27 +166,18 @@ impl Runner {
                 });
             }
 
-            // Pre-flight: estimated tokens exceed the absolute reserve (model
-            // response room, capped, + estimation margin) → compress first,
-            // fail-closed so an oversized request never reaches the provider.
-            // See pre_flight_threshold: an absolute buffer beats a 95% ratio,
-            // which on a 200k window left only 10k headroom — too thin for a
-            // model that needs 8-16k to respond. The window resolves from the
-            // active model id ([1m] suffix / per-provider catalog / conservative
-            // default), not the provider's static capabilities, so a
-            // long-context model gets its real window and an unknown model
-            // never over-reports.
-            let caps = super::model_window::resolve_capabilities(
-                &self.active_model(),
-                self.provider.capabilities(),
-            );
-            let window = caps.context_window;
+            // Pre-flight: an absolute reserve (response room, capped, +
+            // estimation margin) beats a 95% ratio, which on a 200k window
+            // left only 10k headroom. Fail closed so an oversized request
+            // never reaches the provider. The window and the output cap come
+            // frozen on the inference snapshot, so the gate, the request
+            // body and the pane row read one value.
+            let window = inference.context_window;
             if window > 0 {
-                // The pre-flight reserve uses the same max_output_tokens the
-                // request body sends (catalog override else config), not the
-                // provider caps' static max_output — so the room the gate
-                // reserves matches the room the request asks for.
-                let threshold = pre_flight_threshold(window, self.resolve_max_output_tokens());
+                // The reserve uses the frozen output cap — the same value
+                // the request body sends — so the room the gate reserves
+                // matches the room the request asks for.
+                let threshold = pre_flight_threshold(window, inference.max_output_tokens);
                 // Floor the estimate to the last observed input tokens so a
                 // tiktoken undercount on a non-native model cannot false-trip
                 // the gate. The max is the conservative floor.
@@ -181,10 +186,8 @@ impl Runner {
                     .lock()
                     .ok()
                     .and_then(|ol| ol.last_turn_delta().map(|d| d.input));
-                let conservative_input_tokens = super::model_window::conservative_input_tokens(
-                    estimated_input_tokens,
-                    last_observed,
-                );
+                let conservative_input_tokens =
+                    conservative_input_tokens(estimated_input_tokens, last_observed);
                 // Economy gate: compact proactively when the remaining turns
                 // make the rewrite + summarizer cost pay back in cache-read
                 // savings. Runs before the ceiling so an expensive view
@@ -196,11 +199,9 @@ impl Runner {
                     && !economy_fired_this_turn
                     && self.compaction_suppression() == CompactionSuppression::None
                 {
-                    let projection = super::economy::economy_projection(
-                        conservative_input_tokens,
-                        remaining as u64,
-                    );
-                    let decision = super::economy::economy_decision(projection, &cost);
+                    let projection =
+                        economy_projection(conservative_input_tokens, remaining as u64);
+                    let decision = economy_decision(projection, &cost);
                     if decision.compact {
                         // Mark fired before the await so a re-entry after
                         // continue cannot re-fire (the compact itself is
@@ -271,21 +272,30 @@ impl Runner {
             // system verbatim. Custom text lands at the end; the default
             // prompt is kept.
             let instructions = assemble_instructions(&assembled.system, &self.config.instructions);
-            let active_model = self.active_model();
+            let active_model = inference.model.clone();
             let mut settings = ModelSettings {
-                max_output_tokens: Some(self.resolve_max_output_tokens()),
+                max_output_tokens: Some(inference.max_output_tokens),
                 ..Default::default()
             };
-            // Per-request effort, resolved fresh each call from the active pick
-            // + the catalog + per-model default, then lowered to the dialect's
-            // fields. Reads no stale construction-time value (I4) and no env.
-            super::apply_effort_settings(
-                &mut settings,
+            // Per-request effort, resolved from the frozen snapshot (not the
+            // live state) + the catalog + per-model default, then lowered to
+            // the dialect's fields. Reads no stale construction-time value.
+            // The same resolved level lands on the durable TurnUsage, so each
+            // turn is attributed to the effort that actually ran.
+            let applied_effort = super::resolve_applied_effort(
                 &active_model,
-                self.resolve_applied_effort(),
+                inference.effort,
+                self.catalog_resolver.as_deref(),
             );
+            super::apply_effort_settings(&mut settings, &active_model, applied_effort);
+            // Fast lowers to the provider's fast service tier on models that
+            // declare one. The apply path clamps an unsupported Fast to
+            // Standard, so a Fast snapshot value means the model accepts it.
+            if inference.speed == SpeedMode::Fast {
+                settings.speed = Some(SpeedMode::Fast);
+            }
             let mut request = CompletionRequest {
-                model: super::model_window::normalize_model_for_api(&active_model),
+                model: normalize_model_for_api(&active_model),
                 instructions,
                 input: assembled.messages,
                 tools: self.tools.tool_defs(),
@@ -350,8 +360,12 @@ impl Runner {
                         // the catalog self-corrects: the next resolution trusts
                         // the provider's enforced value over the static table.
                         Some(Err(ProviderError::ContextOverflow { enforced_limit })) => {
-                            let active = self.active_model();
-                            super::model_window::record_learned_context_window(
+                            // Attribute the overflow to the model the request
+                            // used (the frozen snapshot), not the live state:
+                            // a mid-run switch must not record the old
+                            // request's enforced limit onto the new model.
+                            let active = inference.model.clone();
+                            record_learned_context_window(
                                 &active,
                                 enforced_limit,
                             );
@@ -424,13 +438,13 @@ impl Runner {
                 let ev = tokio::select! {
                     biased;
                     _ = token.cancelled() => {
-                        let response = state.clone().into_response(self.config.model.clone());
+                        let response = state.clone().into_response(inference.model.clone());
                         self.append_response_events(session, &response).await?;
                         return Ok(None);
                     }
                     _ = turn_token.cancelled() => {
                         // Per-turn abort mid-stream: flush partial; drive loop appends marker + next turn.
-                        let response = state.clone().into_response(self.config.model.clone());
+                        let response = state.clone().into_response(inference.model.clone());
                         self.append_response_events(session, &response).await?;
                         return Ok(None);
                     }
@@ -441,7 +455,7 @@ impl Runner {
                     },
                     _ = tokio::time::sleep(stream_idle_timeout()) => {
                         // Stall mid-stream: flush the partial so text is not lost, then fail (no retry — would replay emitted events).
-                        let response = state.clone().into_response(self.config.model.clone());
+                        let response = state.clone().into_response(inference.model.clone());
                         self.append_response_events(session, &response).await?;
                         return Err(RunError::ProviderFatal(ProviderError::Network));
                     }
@@ -452,7 +466,7 @@ impl Runner {
             // Provider-omits-usage fallback: some OpenAI-compat streams
             // ignore stream_options.include_usage; substitute the estimated
             // input tokens so the status gauge + tally read the real footprint.
-            super::model_window::fill_omitted_usage(&mut state.usage, estimated_input_tokens);
+            fill_omitted_usage(&mut state.usage, estimated_input_tokens);
             // Capture the raw provider finish_reason BEFORE dialect
             // normalization so the verdict carries the original dialect
             // (max_tokens / MAX_TOKENS / length / stop). Without this the
@@ -481,7 +495,7 @@ impl Runner {
                     &state.assistant_text,
                     &state.usage,
                     self_count_output_tokens,
-                    self.config.max_output_tokens,
+                    inference.max_output_tokens,
                 );
                 if truncation_signal != TruncationSignal::None {
                     state.finish_reason = Some("length".into());
@@ -507,13 +521,13 @@ impl Runner {
                             signal: truncation_signal,
                             server_output_tokens: state.usage.output_tokens,
                             self_count_output_tokens,
-                            max_output_tokens: self.config.max_output_tokens,
+                            max_output_tokens: inference.max_output_tokens,
                             recovery_attempts: length_retries,
                             recovery_fired: true,
                         },
                     ))
                     .await?;
-                let partial = state.clone().into_response(self.config.model.clone());
+                let partial = state.clone().into_response(inference.model.clone());
                 self.append_response_events(session, &partial).await?;
                 // Record the partial call's cost before the nudge (the nudge
                 // is the next call's input; the usage is this call's). A
@@ -530,12 +544,18 @@ impl Runner {
                     &partial.usage,
                     estimated_input_tokens,
                     api_start.elapsed().as_millis() as u64,
-                    caps.context_window,
-                    self.resolve_max_output_tokens(),
+                    window,
+                    inference.max_output_tokens,
                 );
                 self.record_turn_cache(&partial.usage);
-                self.append_turn_usage(session, &partial.model, &partial.usage, true, None)
-                    .await?;
+                self.append_turn_usage(
+                    session,
+                    &partial.model,
+                    &partial.usage,
+                    true,
+                    applied_effort.map(EffortLevel::label),
+                )
+                .await?;
                 self.append_resume_nudge(session).await?;
                 continue 'outer;
             }
@@ -563,7 +583,7 @@ impl Runner {
             // distinguishes the two cases — no separate emission needed.
             let normalized_reason = state.finish_reason.clone();
             let server_output_tokens = state.usage.output_tokens;
-            let response = state.into_response(self.config.model.clone());
+            let response = state.into_response(inference.model.clone());
             self.append_response_events(session, &response).await?;
             self.store
                 .append(new_event(
@@ -574,7 +594,7 @@ impl Runner {
                         signal: truncation_signal,
                         server_output_tokens,
                         self_count_output_tokens,
-                        max_output_tokens: self.config.max_output_tokens,
+                        max_output_tokens: inference.max_output_tokens,
                         recovery_attempts: length_retries,
                         recovery_fired: false,
                     },
@@ -590,12 +610,18 @@ impl Runner {
                 &response.usage,
                 estimated_input_tokens,
                 api_start.elapsed().as_millis() as u64,
-                caps.context_window,
-                self.resolve_max_output_tokens(),
+                window,
+                inference.max_output_tokens,
             );
             self.record_turn_cache(&response.usage);
-            self.append_turn_usage(session, &response.model, &response.usage, false, None)
-                .await?;
+            self.append_turn_usage(
+                session,
+                &response.model,
+                &response.usage,
+                false,
+                applied_effort.map(EffortLevel::label),
+            )
+            .await?;
             return Ok(Some(response));
         }
     }

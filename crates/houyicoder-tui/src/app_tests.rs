@@ -501,7 +501,7 @@ fn test_exhausted_commands_report() {
     assert_eq!(last_system(&app), "undo: request ids exhausted");
     app.run_memory_subcommand("forget some-key");
     assert_eq!(last_system(&app), "memory: request ids exhausted");
-    app.set_model_at_cursor();
+    app.commit_model_pick();
     assert_eq!(last_system(&app), "model: request ids exhausted");
     app.tab_cycle_mode();
     assert_eq!(last_system(&app), "permission: request ids exhausted");
@@ -647,7 +647,7 @@ fn test_closed_commands_report_loss() {
         last_system(&app),
         "couldn't forget some-key — connection lost"
     );
-    app.set_model_at_cursor();
+    app.commit_model_pick();
     assert_eq!(last_system(&app), "model: connection lost");
     app.tab_cycle_mode();
     assert_eq!(last_system(&app), "permission: connection lost");

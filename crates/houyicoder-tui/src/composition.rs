@@ -145,7 +145,9 @@ pub fn build_app(bundle: RunnerBundle) -> App {
         app.login_mode = Some(houyicoder_protocol::frontend::LoginMode::Local);
     }
     app.status.model = model.clone();
-    app.model_tier = model;
+    // The launch model stands in for the applied model until the host
+    // snapshot lands, so the status bar names what the session runs.
+    app.model_picker.snapshot.applied.id = model;
     app.status.sandbox = "mac-seatbelt".to_string();
     app.session_id = session_id;
     app.runtime = Some(runtime);
