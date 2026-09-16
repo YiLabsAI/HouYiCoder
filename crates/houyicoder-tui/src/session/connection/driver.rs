@@ -35,6 +35,35 @@ enum Outbound {
     Notification(AcpNotification),
 }
 
+impl Outbound {
+    /// The request id this outbound carries, or None for a notification
+    /// (which has no id and no reply).
+    fn req_id(&self) -> Option<RequestId> {
+        match self {
+            Outbound::Request { req_id, .. } | Outbound::Reverse { req_id, .. } => Some(*req_id),
+            Outbound::Notification(_) => None,
+        }
+    }
+}
+
+/// What the driver learned when it died: the cause and the request ids it
+/// can prove were never attempted (the queue tail after a send failure).
+/// Every other in-flight request is conservatively unknown — a write or
+/// flush may have delivered the frame even though the carrier then broke.
+pub(crate) struct DriverDeath {
+    pub(crate) cause: String,
+    pub(crate) not_sent: Vec<RequestId>,
+}
+
+impl DriverDeath {
+    fn from_cause(cause: String) -> Self {
+        Self {
+            cause,
+            not_sent: Vec::new(),
+        }
+    }
+}
+
 pub(crate) async fn drive_client(
     client: houyicoder_client::Client,
     cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClientCommand>,
@@ -45,22 +74,25 @@ pub(crate) async fn drive_client(
     // time the App observes the event, every later send is refused
     // deterministically — no window exists where a command could buffer
     // into an orphaned channel and leave pane state waiting on a reply.
-    if let Some(cause) = death {
-        let _send = agent_tx.send(SessionMessage::Connection(ConnectionEvent::Lost { cause }));
+    if let Some(death) = death {
+        let _send = agent_tx.send(SessionMessage::Connection(ConnectionEvent::Lost {
+            cause: death.cause,
+            not_sent: death.not_sent,
+        }));
     }
 }
 
 /// The driver body: translate until the connection dies or the command
-/// channel closes. Returns the death message for the caller to announce,
+/// channel closes. Returns the death record for the caller to announce,
 /// or None on a clean shutdown (no connection to lose).
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn drive_connection(
     mut client: houyicoder_client::Client,
     mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClientCommand>,
     agent_tx: &mpsc::Sender<SessionMessage>,
-) -> Option<String> {
+) -> Option<DriverDeath> {
     if let Err(e) = client.connect().await {
-        return Some(format!("connect failed: {e}"));
+        return Some(DriverDeath::from_cause(format!("connect failed: {e}")));
     }
     // Hello succeeded: announce readiness before any frame or request this
     // connection produces, so the App marks the connection Ready on a
@@ -77,7 +109,14 @@ async fn drive_connection(
                 Outbound::Notification(n) => client.send_notification(n).await,
             };
             if let Err(e) = res {
-                return Some(format!("send failed: {e}"));
+                // The failed frame is unknown (a write or flush may have
+                // delivered it); the remaining queue tail is provably
+                // not sent — the driver never attempted it.
+                let not_sent = outbound.iter().filter_map(|o| o.req_id()).collect();
+                return Some(DriverDeath {
+                    cause: format!("send failed: {e}"),
+                    not_sent,
+                });
             }
         }
         tokio::select! {
@@ -580,7 +619,9 @@ async fn drive_connection(
                     // exits. The announced death makes the App clear
                     // agent_busy and sweep pending pane state — without it
                     // the TUI waits on replies that can never arrive.
-                    return Some(format!("connection lost: {e}"));
+                    return Some(DriverDeath::from_cause(format!(
+                        "connection lost: {e}"
+                    )));
                 }
             }
         }

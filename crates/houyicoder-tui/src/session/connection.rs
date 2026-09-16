@@ -98,7 +98,17 @@ pub struct SessionConnection {
     next_req_id: Cell<u64>,
     exhaustion_reported: Cell<bool>,
     status: ConnectionStatus,
-    _driver: tokio::task::JoinHandle<()>,
+    driver: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for SessionConnection {
+    fn drop(&mut self) {
+        // Dropping cmd_tx signals the driver to exit cleanly (its cmd_rx
+        // recv returns None). But the driver may be stuck in a transport
+        // await that never returns, so abort the task as well. Abort stops
+        // the task at its next yield point; the runtime reclaims it.
+        self.driver.abort();
+    }
 }
 
 impl SessionConnection {
@@ -110,14 +120,14 @@ impl SessionConnection {
         runtime: &tokio::runtime::Runtime,
     ) -> Self {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
-        let _driver = runtime.spawn(driver::drive_client(client, cmd_rx, agent_tx));
+        let driver = runtime.spawn(driver::drive_client(client, cmd_rx, agent_tx));
         Self {
             cmd_tx,
             agent_rx,
             next_req_id: Cell::new(0),
             exhaustion_reported: Cell::new(false),
             status: ConnectionStatus::Connecting,
-            _driver,
+            driver,
         }
     }
 

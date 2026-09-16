@@ -5,7 +5,7 @@ use crate::state::TranscriptLine;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, StopReason};
 use houyicoder_protocol::llm::Usage;
-use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
+use houyicoder_protocol::llm::{CompletionResponse, OutputItem, ProviderError};
 use houyicoder_provider::FakeProvider;
 
 /// Monotonic counter for unique temp-dir names, avoiding same-nanosecond
@@ -442,9 +442,7 @@ impl ModelProvider for HangingProvider {
         '_,
         Result<CompletionResponse, houyicoder_protocol::llm::ProviderError>,
     > {
-        let e = houyicoder_protocol::llm::ProviderError::Unknown(
-            "hanging provider does not complete".into(),
-        );
+        let e = ProviderError::Unknown("hanging provider does not complete".into());
         Box::pin(async move { Err(e) })
     }
     fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
@@ -938,4 +936,45 @@ fn test_busy_submit_parks() {
         matches!(app.pending.first(), Some(PendingItem::Message(_))),
         "the parked input is promoted to the single server mirror"
     );
+}
+
+// A connection loss whose not_sent list contains the active run's id
+// reports the run as not sent: it never left this process. A loss with an
+// empty not_sent list reports the run as unknown: a write or flush may
+// have delivered the frame even though the carrier then broke.
+#[test]
+fn test_loss_unsent_vs_unknown() {
+    use crate::agent_message::{ConnectionEvent, SessionMessage};
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    let run_req = app.active_run_req_id.get().unwrap();
+
+    // not sent: the run's id is in the not_sent list.
+    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
+        cause: "send failed: pipe broken".into(),
+        not_sent: vec![run_req],
+    }));
+    let last = app.transcript.last().expect("a line landed");
+    assert!(
+        matches!(last, TranscriptLine::System(s) if s.contains("not sent")),
+        "a not sent run must say so, got {last:?}"
+    );
+
+    // Reset for the unknown case.
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
+        cause: "send failed: pipe broken".into(),
+        not_sent: vec![],
+    }));
+    let last = app.transcript.last().expect("a line landed");
+    assert!(
+        matches!(last, TranscriptLine::System(s) if s.contains("send failed")),
+        "an unknown run must carry the cause, got {last:?}"
+    );
+    assert!(!app.agent_busy, "either way the active run ends");
 }

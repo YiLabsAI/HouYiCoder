@@ -227,7 +227,14 @@ pub enum ConnectionEvent {
     /// The session driver died (connect, send, or read failure): no reply
     /// can ever land again. The App ends any active run, sweeps pending
     /// pane marks that would otherwise wait forever, and records the cause.
-    Lost { cause: String },
+    /// not_sent lists request ids the driver can prove it never attempted
+    /// (the queue tail after a send failure); every other in-flight request
+    /// is conservatively unknown — a write or flush may have delivered the
+    /// frame even though the carrier then broke.
+    Lost {
+        cause: String,
+        not_sent: Vec<RequestId>,
+    },
 }
 
 /// One child's live status snapshot, grouped so the dispatch hand-off

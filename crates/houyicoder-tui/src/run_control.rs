@@ -401,7 +401,7 @@ impl App {
                     // quiet — poll_agent reflects that by not re-marking
                     // dirty.
                     self.apply_frames(batch.drain(..));
-                    if self.apply_connection_loss("connection driver stopped".into()) {
+                    if self.apply_connection_loss("connection driver stopped".into(), Vec::new()) {
                         applied = true;
                     }
                     break;

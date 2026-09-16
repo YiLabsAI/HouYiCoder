@@ -521,6 +521,7 @@ fn test_connection_loss_clears_pending() {
     );
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
         cause: "connection lost".into(),
+        not_sent: Vec::new(),
     }));
     assert_eq!(app.memory.pending_toggle_count(), 0, "toggle mark swept");
     assert!(
@@ -545,6 +546,7 @@ fn test_connection_loss_sweeps_detail() {
     app.memory.request_detail(RequestId(2), "loading".into());
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
         cause: "connection lost".into(),
+        not_sent: Vec::new(),
     }));
     assert!(app.memory.detail().is_none(), "loading detail swept");
 }

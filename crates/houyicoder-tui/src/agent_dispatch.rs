@@ -48,14 +48,14 @@ impl App {
                         s.mark_ready();
                     }
                 }
-                ConnectionEvent::Lost { cause } => {
+                ConnectionEvent::Lost { cause, not_sent } => {
                     // The driver is gone: no reply can land for anything in
                     // flight. End the active run if one is live, and sweep
                     // pending pane marks instead of leaving a mark that
                     // refuses its switch forever. Server state for in-flight
                     // mutations is unknown, so no per-action failure line is
                     // written — one generic connection-loss line covers all.
-                    self.apply_connection_loss(cause);
+                    self.apply_connection_loss(cause, not_sent);
                 }
             },
             SessionMessage::Response { request, response } => {
@@ -74,7 +74,16 @@ impl App {
     /// closed observation) neither overwrites the cause nor repeats the
     /// completion. A session-less App (the no-backend path) has no cause to
     /// record but still sweeps that observation.
-    pub(crate) fn apply_connection_loss(&mut self, cause: String) -> bool {
+    ///
+    /// not_sent lists request ids the driver can prove it never attempted;
+    /// the active run and memory actions whose ids appear in it are not sent
+    /// (never left this process). Every other in-flight request is
+    /// conservatively unknown — a write or flush may have delivered the frame.
+    pub(crate) fn apply_connection_loss(
+        &mut self,
+        cause: String,
+        not_sent: Vec<RequestId>,
+    ) -> bool {
         let first = match self.session.as_mut() {
             Some(s) => s.mark_lost(cause.clone()),
             // No connection exists: nothing was lost twice, so run the sweep
@@ -85,9 +94,20 @@ impl App {
         if !first {
             return false;
         }
+        // Distinguish not sent (provably never attempted) from unknown (a
+        // write or flush may have partially delivered). The run's completion
+        // line tells the user which: a not sent run never left the process;
+        // an unknown run may have reached the server with no reply coming.
+        let run_req = self.active_run_req_id.get();
+        let run_not_sent = run_req.is_some_and(|r| not_sent.contains(&r));
         self.active_run_req_id.set(None);
         self.memory.clear_pending();
-        self.handle_run_completion(Err(cause));
+        let run_line = if run_not_sent {
+            "run not sent — connection failed before the request reached the transport"
+        } else {
+            cause.as_str()
+        };
+        self.handle_run_completion(Err(run_line.to_string()));
         true
     }
 

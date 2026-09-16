@@ -314,10 +314,13 @@ pub(crate) fn connection_lost_app() -> App {
     // Apply the death so the app holds the settled state: Lost with its
     // cause, active run swept. Tests start from the post-loss world instead
     // of half-applying the event themselves.
-    let SessionMessage::Connection(ConnectionEvent::Lost { cause }) = death else {
+    let SessionMessage::Connection(ConnectionEvent::Lost { cause, .. }) = death else {
         panic!("expected ConnectionEvent::Lost, got {death:?}");
     };
-    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost { cause }));
+    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
+        cause,
+        not_sent: Vec::new(),
+    }));
     app
 }
 

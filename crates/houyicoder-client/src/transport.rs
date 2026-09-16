@@ -28,7 +28,10 @@ use std::thread;
 pub trait Transport: Send {
     /// Send one complete NDJSON frame (newline-terminated). The frame passes
     /// through verbatim; the caller owns encoding. An Err means the carrier
-    /// is broken and the peer will not receive this or any later frame.
+    /// broke during the write or flush; because a partial or even complete
+    /// frame may have reached the peer, the per-frame delivery outcome is
+    /// Unknown, not provably NotSent. The caller must not auto-retry a
+    /// mutation on this error.
     fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), ProtocolError>>;
 
     /// Receive the next complete frame as an owned string with the trailing

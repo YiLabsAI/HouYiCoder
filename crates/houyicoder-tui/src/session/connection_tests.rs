@@ -198,7 +198,7 @@ async fn test_drive_client_read_done() {
     engine.close();
     let run = engine.drive(Vec::new()).await;
     match run.msgs.last() {
-        Some(SessionMessage::Connection(ConnectionEvent::Lost { cause: message })) => {
+        Some(SessionMessage::Connection(ConnectionEvent::Lost { cause: message, .. })) => {
             assert!(
                 message.contains("connection lost"),
                 "expected a connection-lost message, got: {message}"
@@ -1087,12 +1087,105 @@ async fn test_send_failure_announces_death() {
         }])
         .await;
     match run.msgs.last() {
-        Some(SessionMessage::Connection(ConnectionEvent::Lost { cause: message })) => {
+        Some(SessionMessage::Connection(ConnectionEvent::Lost { cause: message, .. })) => {
             assert!(
                 message.contains("send failed"),
                 "expected a send-failed death, got: {message}"
             );
         }
         other => panic!("expected ConnectionLost, got {other:?}"),
+    }
+}
+
+/// A send failure surfaces the not_sent list so the App can distinguish
+/// requests the driver never attempted (not sent) from the one whose
+/// write or flush broke (unknown). The driver drains one outbound at a
+/// time, so the failed frame has no remaining queue tail; the list is
+/// empty, and the failed frame itself is classified unknown (its id is
+/// absent from the list).
+#[tokio::test]
+async fn test_send_failure_carries_unsent() {
+    let run = FakeEngine::new()
+        .fail_sends_after(1)
+        .drive(vec![ClientCommand::StatusQuery {
+            req_id: RequestId(1),
+        }])
+        .await;
+    match run.msgs.last() {
+        Some(SessionMessage::Connection(ConnectionEvent::Lost { not_sent, .. })) => {
+            assert!(
+                not_sent.is_empty(),
+                "one-at-a-time drain leaves no queue tail, got {not_sent:?}"
+            );
+        }
+        other => panic!("expected ConnectionLost, got {other:?}"),
+    }
+}
+
+/// A transport write that breaks mid-frame classifies the attempted
+/// request as unknown, not not sent: the carrier may have delivered a
+/// partial or complete frame before failing. The failed frame's id
+/// must not appear in the not_sent list (it was attempted), and the
+/// Lost cause must carry "send failed".
+#[tokio::test]
+async fn test_write_breaks_mid_frame() {
+    let run = FakeEngine::new()
+        .fail_sends_after(1)
+        .drive(vec![ClientCommand::StatusQuery {
+            req_id: RequestId(5),
+        }])
+        .await;
+    let lost = run
+        .msgs
+        .iter()
+        .find(|m| matches!(m, SessionMessage::Connection(ConnectionEvent::Lost { .. })));
+    let Some(SessionMessage::Connection(ConnectionEvent::Lost { cause, not_sent })) = lost else {
+        panic!("expected a Lost event, got {:?}", run.msgs.last());
+    };
+    assert!(
+        cause.contains("send failed"),
+        "the death must carry a send-failed cause, got {cause}"
+    );
+    assert!(
+        !not_sent.contains(&RequestId(5)),
+        "the attempted frame is unknown, not not sent: {not_sent:?}"
+    );
+}
+
+/// Dropping a SessionConnection aborts the driver task (Drop calls
+/// handle.abort) rather than orphaning it. A driver stuck in a transport
+/// await that never resolves is reclaimable: abort stops the task at its
+/// yield point and the runtime drops the future.
+#[tokio::test]
+async fn test_drop_reclaims_driver() {
+    struct StuckTransport;
+    impl houyicoder_client::Transport for StuckTransport {
+        fn send_frame(
+            &mut self,
+            _frame: &str,
+        ) -> houyicoder_async::PFut<'_, Result<(), ProtocolError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn recv_frame(
+            &mut self,
+        ) -> houyicoder_async::PFut<'_, Result<Option<String>, ProtocolError>> {
+            Box::pin(std::future::pending())
+        }
+    }
+    let runtime = crate::composition::shared_runtime();
+    let client = houyicoder_client::Client::new(Box::new(StuckTransport));
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
+    let (agent_tx, _agent_rx) = std::sync::mpsc::channel::<SessionMessage>();
+    let handle = runtime.spawn(drive_client(client, cmd_rx, agent_tx));
+    // The driver is stuck in connect().await (recv_frame never resolves).
+    // Drop the command sender (what SessionConnection Drop does) and abort
+    // the handle (what SessionConnection Drop does next).
+    drop(cmd_tx);
+    handle.abort();
+    // An aborted task resolves to Err(JoinError) deterministically — no
+    // polling loop needed. The timeout is a safety bound, not a sleep.
+    match tokio::time::timeout(Duration::from_millis(500), handle).await {
+        Ok(_) => {}
+        Err(_) => panic!("driver was not reclaimed within 500ms after abort"),
     }
 }
