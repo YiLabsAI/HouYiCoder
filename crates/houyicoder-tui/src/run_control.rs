@@ -342,9 +342,11 @@ impl App {
         self.pending_permission_req_id.get().is_some()
     }
 
-    /// Request an initial status snapshot and wait for the first bounded
-    /// startup message before the run loop begins. The handshake prevents the
-    /// login screen from flashing when a trust prompt is already queued.
+    /// Enqueue the status query, then drain startup messages by type until the
+    /// trust gate resolves. Ready arrives before any trust prompt, so the drain
+    /// keeps reading past it: the loop dispatches each polled message by type
+    /// and stops once the trust card is raised or the status reply proves the
+    /// workspace passed the gate.
     pub fn startup_handshake(&mut self, timeout: Duration) {
         if let Some(session) = self.session.as_ref() {
             match session.next_request_id() {
@@ -359,13 +361,20 @@ impl App {
                 Err(_) => self.note_request_id_exhausted(),
             }
         }
-        let startup = self
-            .session
-            .as_mut()
-            .and_then(|session| session.poll_startup(timeout));
-        if let Some(message) = startup {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let Some(message) = self
+                .session
+                .as_mut()
+                .and_then(|session| session.poll_startup(remaining))
+            else {
+                break;
+            };
             self.handle_agent_message(message);
-            self.poll_agent();
+            if self.pending_trust.is_some() || self.status_cache.is_some() {
+                break;
+            }
         }
     }
 

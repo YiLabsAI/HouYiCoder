@@ -213,7 +213,7 @@ impl SessionConnection {
         }
     }
 
-    /// Wait for the first bounded startup response before the initial draw.
+    /// Block up to the timeout for the next inbound message during startup.
     pub fn poll_startup(&mut self, timeout: Duration) -> Option<SessionMessage> {
         self.agent_rx.recv_timeout(timeout).ok()
     }
