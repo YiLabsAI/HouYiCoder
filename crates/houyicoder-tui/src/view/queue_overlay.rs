@@ -68,7 +68,7 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     let dim = Style::new().fg(Color::DarkGray);
     // Drain gate: open while busy or after a clean run end; closed when idle
     // after a non-final end (interrupt/error), so the queue parks.
-    let gate_closed = !app.agent_busy && !app.status.last_run_final;
+    let gate_closed = !app.agent_busy() && !app.status.last_run_final;
     let mut lines: Vec<Line> = Vec::new();
     let one_row_summary = area.height <= 1 && items.len() > 1;
     if one_row_summary {

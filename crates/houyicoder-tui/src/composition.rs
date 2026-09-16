@@ -213,7 +213,7 @@ impl App {
     /// interrupt must not auto-fire pending input; recall remains an explicit
     /// queue strip or pane action.
     pub fn idle_drain(&mut self, resume_builder: Option<&ResumeBuilderRef>, dirty: &mut bool) {
-        if !self.agent_busy && !self.reverse_request_in_flight() {
+        if !self.agent_busy() && !self.reverse_request_in_flight() {
             self.try_swap_session(resume_builder, dirty);
             if self.status.last_run_final && self.drain_pending_head() {
                 *dirty = true;

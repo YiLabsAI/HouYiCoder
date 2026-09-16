@@ -134,9 +134,10 @@ impl App {
             self.bump_transcript_version();
             return true;
         }
-        // Active turns park new input locally. Promotion keeps at most one
-        // server-side copy while preserving queue order.
-        if self.agent_busy {
+        // Active or waiting runs park new input locally. A waiting run
+        // (approval card up) does not accept a second submit — the card
+        // is the gate, not agent_busy.
+        if self.run_state.is_active() {
             self.pending
                 .push(PendingItem::ParkedMessage(input.clone().into()));
             self.promote_next_pending();
@@ -166,12 +167,10 @@ impl App {
             return false;
         }
         // Only errors matching this request terminate the active run.
-        self.active_run_req_id.set(Some(req_id));
+        self.run_state.start(req_id, Instant::now());
         // Preserve the submitted input in case interruption restores the turn.
         self.last_run_input = Some(input.clone());
         self.push_transcript_line(TranscriptLine::User(input));
-        self.agent_busy = true;
-        self.run_started = Some(Instant::now());
         self.last_delta_at = None;
         self.displayed_tokens.set(0);
         self.thinking_started_at = None;
@@ -248,9 +247,9 @@ impl App {
         self.pending_approvals.clear();
         self.approval = None;
         self.ask_question = None;
-        // Keep the resumed run busy without resetting its displayed tokens.
-        self.agent_busy = true;
-        self.run_started = Some(Instant::now());
+        // Resume the run without resetting its clock: end_waiting flips
+        // Waiting → Running preserving the original started_at.
+        self.run_state.end_waiting();
         self.last_delta_at = None;
         // Clear stale thinking state before post-resume streaming begins.
         self.live_block = LiveBlock::None;
@@ -282,8 +281,9 @@ impl App {
         let call_id = ask.call_id.clone();
         let tool = ask.tool_name.clone();
         // Pause the spinner while the run waits on the human verdict.
-        self.agent_busy = false;
-        self.run_started = None;
+        // begin_waiting preserves the run's identity and start time so the
+        // verdict can resume without resetting the clock.
+        self.run_state.begin_waiting();
         self.pending_approvals = vec![ask.clone()];
         if tool == "AskUserQuestion"
             && let Some(aq) = AskQuestion::parse(&call_id, &ask.input)
@@ -433,7 +433,7 @@ impl App {
         // Refresh status while idle. Active runs and reverse requests retain
         // exclusive ownership of response frames.
         const STATUS_POLL_INTERVAL_SECS: u64 = 1;
-        if !self.agent_busy
+        if !self.agent_busy()
             && !self.reverse_request_in_flight()
             && self
                 .last_status_poll
@@ -481,7 +481,7 @@ impl App {
             self.transcript_scroll
                 .top_offset(self.transcript_display_rows()),
             self.approval.is_some(),
-            self.agent_busy,
+            self.agent_busy(),
         );
     }
 
@@ -497,7 +497,7 @@ impl App {
             self.system_line(Self::enqueue_failure_line("run", e));
             return;
         }
-        self.cancelling = true;
+        self.run_state.begin_cancel();
     }
 
     /// Recall the queued item at the cursor position into the input box.

@@ -150,7 +150,7 @@ fn test_option3_no_duplicate_result() {
     let mut settled = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy && !app.reverse_request_in_flight() {
+        if !app.agent_busy() && !app.reverse_request_in_flight() {
             settled = true;
             break;
         }

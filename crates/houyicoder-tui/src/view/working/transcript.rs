@@ -38,7 +38,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // the old every-frame agent_busy bypass.
     let slots_version = {
         let mut v = app.transcript_version.get();
-        v = v.wrapping_mul(31).wrapping_add(app.agent_busy as u64);
+        v = v.wrapping_mul(31).wrapping_add(app.agent_busy() as u64);
         v = v.wrapping_mul(31).wrapping_add(app.verbose as u64);
         v = v
             .wrapping_mul(31)
@@ -182,7 +182,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     let dim = Style::new().fg(Color::DarkGray);
     let exp_grp = app.last_row_expanded_group.borrow();
     let exp_groups = &app.expanded_fold_groups;
-    let spin_elapsed = app.run_started.map(|t| t.elapsed()).unwrap_or_default();
+    let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();
     // A running tool produces no token deltas but is not a stall: exempt it
     // from the stall gradient; its presence drives the breathing pulse.
     let tool_active = !app.running_tools.is_empty();
@@ -722,7 +722,7 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
 
     let slots = crate::fold::display_slots(
         app.active_transcript(),
-        app.agent_busy,
+        app.agent_busy(),
         &app.expanded_fold_groups,
         app.verbose,
     );

@@ -157,12 +157,12 @@ fn test_model_pane_esc_closes() {
 #[test]
 fn test_skills_pane_esc_closes() {
     let mut app = working_app();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pane = Pane::Skills;
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(app.pane, Pane::Transcript);
     assert!(
-        !app.cancelling,
+        !app.cancelling(),
         "closing a pane must not interrupt the running agent"
     );
 }
@@ -783,7 +783,7 @@ fn test_repeated_esc_keeps() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
     handle_working(&mut app, key(KeyCode::Esc));
@@ -794,7 +794,7 @@ fn test_repeated_esc_keeps() {
         "repeated Esc keeps the queued message"
     );
     assert!(app.input.is_empty(), "Esc does not touch the input box");
-    assert!(app.cancelling, "Esc leaves cancellation in flight");
+    assert!(app.cancelling(), "Esc leaves cancellation in flight");
 }
 
 /// Explicit queue recall merges a queued message with a half-typed draft
@@ -804,7 +804,7 @@ fn test_recall_merges_draft() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("task a".into()));
     app.input.set("half draft".into());
     app.pane = Pane::Queue;
@@ -823,11 +823,11 @@ fn test_esc_cancelling_closes_pane() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("task a".into()));
     // Esc1: interrupt (cancelling, agent_busy still true, queue intact).
     handle_working(&mut app, key(KeyCode::Esc));
-    assert!(app.cancelling);
+    assert!(app.cancelling());
     // Open a pane with its own Esc, then Esc: the pane closes, the queue
     // is NOT popped (the pane-close key is not stolen for a recall).
     app.pane = Pane::Memory;
@@ -852,10 +852,10 @@ fn test_esc_cancelling_backs_trajectory() {
     use crate::pending_queue::PendingItem;
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
-    assert!(app.cancelling);
+    assert!(app.cancelling());
     app.pane = Pane::Trajectory;
     app.trajectory_level.set(1);
     handle_working(&mut app, key(KeyCode::Esc));
@@ -1081,10 +1081,10 @@ fn test_esc_keeps_input() {
 fn test_busy_esc_keeps_draft() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.input.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
-    assert!(app.cancelling, "busy Esc interrupts the run");
+    assert!(app.cancelling(), "busy Esc interrupts the run");
     assert_eq!(app.input.value(), "draft", "the draft is left untouched");
 }
 
@@ -1098,12 +1098,12 @@ fn test_busy_esc_keeps_draft() {
 fn test_worktree_esc_closes_busy() {
     let mut app = working_app();
     app.pane = Pane::Worktree;
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.input.clear();
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(app.pane, Pane::Transcript, "Esc closes the worktree pane");
     assert!(
-        !app.cancelling,
+        !app.cancelling(),
         "must not abort the run when dismissing the worktree pane"
     );
 }
@@ -1317,7 +1317,7 @@ fn test_shift_arrow_exits_teammate() {
 fn test_teammate_esc_no_leak() {
     use crate::records::TeammateView;
     let mut app = fleet_app(1);
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.input.set("a draft steering note".into());
     app.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
@@ -1325,7 +1325,7 @@ fn test_teammate_esc_no_leak() {
     });
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(
-        !app.cancelling,
+        !app.cancelling(),
         "Esc in the teammate view must not interrupt the parent run"
     );
     assert!(
@@ -1344,7 +1344,7 @@ fn test_teammate_esc_no_leak() {
 fn test_teammate_esc_pane_first() {
     use crate::records::TeammateView;
     let mut app = fleet_app(1);
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pane = Pane::Agents;
     app.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
@@ -1353,7 +1353,7 @@ fn test_teammate_esc_pane_first() {
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(app.pane, Pane::Transcript, "pane closes first");
     assert!(app.teammate_view.is_some(), "view stays open");
-    assert!(!app.cancelling, "child not interrupted");
+    assert!(!app.cancelling(), "child not interrupted");
 }
 
 /// Rendering a populated fleet paints one pill row per child, each carrying
@@ -1511,12 +1511,12 @@ fn test_esc_closes_agents_pane() {
 #[test]
 fn test_agents_esc_no_abort() {
     let mut app = working_app();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pane = Pane::Agents;
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(app.pane, Pane::Transcript, "Esc closes the pane");
     assert!(
-        !app.cancelling,
+        !app.cancelling(),
         "a pane-open Esc must not interrupt the running agents"
     );
 }

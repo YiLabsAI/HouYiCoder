@@ -101,7 +101,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // asynchronous cancellation is pending. Queue recall is explicit through
     // its strip or pane, so a delayed terminal event cannot move unsent input.
     // Panes that own Esc are gated out so Esc closes the pane first.
-    if app.agent_busy && k.code == KeyCode::Esc && !pane_owns_esc(app.pane) {
+    if app.agent_busy() && k.code == KeyCode::Esc && !pane_owns_esc(app.pane) {
         tracing::debug!("abort_run (busy, queue left intact)");
         app.abort_run();
         return;

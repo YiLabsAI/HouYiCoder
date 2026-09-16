@@ -84,7 +84,7 @@ fn test_one_at_a_time() {
     let mut got_second = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() && app.agent_busy {
+        if app.approval.is_some() && app.agent_busy() {
             continue;
         }
         if app.approval.is_some() {
@@ -115,7 +115,7 @@ fn test_one_at_a_time() {
     let mut settled = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy && !app.reverse_request_in_flight() {
+        if !app.agent_busy() && !app.reverse_request_in_flight() {
             settled = true;
             break;
         }
@@ -383,7 +383,7 @@ fn test_status_snapshot_accumulates_live() {
     let mut settled = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             settled = true;
             break;
         }
@@ -490,7 +490,7 @@ fn test_esc_aborts_busy_run() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(streaming, "run should stream a delta before abort");
-    assert!(app.agent_busy, "run should still be in flight");
+    assert!(app.agent_busy(), "run should still be in flight");
     // Press Esc on the working surface — must call abort_run.
     crate::keys::handle_working(
         &mut app,
@@ -504,7 +504,7 @@ fn test_esc_aborts_busy_run() {
     let mut settled = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             settled = true;
             break;
         }
@@ -538,7 +538,7 @@ fn test_esc_abort_restores_input() {
     let mut app = app_with_provider(p, ToolRegistry::new());
     let original = "rewrite this as a pure function";
     app.spawn_run(original.into());
-    assert!(app.agent_busy, "run should be in flight");
+    assert!(app.agent_busy(), "run should be in flight");
     assert_eq!(app.last_run_input.as_deref(), Some(original));
     // The cancel token is installed inside the spawned run() task, which
     // starts on a worker thread. Re-fire abort each tick: it is a no-op
@@ -548,7 +548,7 @@ fn test_esc_abort_restores_input() {
     for _ in 0..300 {
         app.abort_run();
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             settled = true;
             break;
         }
@@ -588,7 +588,7 @@ fn test_context_grid_after_run() {
     let mut settled = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             settled = true;
             break;
         }
@@ -694,7 +694,7 @@ fn test_tui_lines_survive_runs() {
     app.spawn_run("hi".into());
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -703,7 +703,7 @@ fn test_tui_lines_survive_runs() {
     app.spawn_run("again".into());
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -770,9 +770,12 @@ fn approval_ask(call_id: &str) -> ApprovalRequest {
     }
 }
 
-// The ask clears the run start point; the verdict resets it to now.
+// RunState preserves the run start point across the Waiting (approval)
+// transition: begin_waiting keeps the ActiveRun with its original started_at,
+// so the verdict resume does not reset the clock. This was the B3 defect
+// (ask cleared run_started, verdict reset it); RunState fixes it naturally.
 #[test]
-fn test_ask_clears_start() {
+fn test_ask_preserves_start() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
     crate::test_harness::attach_connection(&mut app);
@@ -780,12 +783,13 @@ fn test_ask_clears_start() {
         app.spawn_run("work".into()),
         "run starts on a live connection"
     );
-    let original_start = app.run_started;
+    let original_start = app.run_started();
     assert!(original_start.is_some(), "precondition: run started");
     app.raise_agent_approval(approval_ask("c1"));
-    assert!(
-        app.run_started.is_none(),
-        "recorded defect: the ask clears the run start point"
+    assert_eq!(
+        app.run_started(),
+        original_start,
+        "the run start is preserved across the approval pause"
     );
     app.resolve_current_approval(ApprovalDecision {
         call_id: "c1".into(),
@@ -793,9 +797,10 @@ fn test_ask_clears_start() {
         updated_input: None,
         scope: "once".into(),
     });
-    assert_ne!(
-        app.run_started, original_start,
-        "recorded defect: the verdict resets the start point to now"
+    assert_eq!(
+        app.run_started(),
+        original_start,
+        "the verdict resumes without resetting the clock"
     );
 }
 
@@ -806,7 +811,7 @@ fn test_finish_clears_start() {
     app.screen = crate::state::Screen::Working;
     crate::test_harness::attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
-    let run_req = app.active_run_req_id.get().unwrap();
+    let run_req = app.active_run_req_id().unwrap();
     app.handle_agent_message(SessionMessage::Response {
         request: run_req,
         response: ServerResponse::Done {
@@ -834,7 +839,7 @@ fn test_stale_done_settles_nothing() {
     app.screen = crate::state::Screen::Working;
     crate::test_harness::attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
-    let run_req = app.active_run_req_id.get().unwrap();
+    let run_req = app.active_run_req_id().unwrap();
     let stale = RequestId(run_req.0 + 1);
     let done = || SessionMessage::Response {
         request: stale,
@@ -850,9 +855,9 @@ fn test_stale_done_settles_nothing() {
         },
     };
     app.handle_agent_message(done());
-    assert!(app.agent_busy, "a stale Done must not end the active run");
+    assert!(app.agent_busy(), "a stale Done must not end the active run");
     assert_eq!(
-        app.active_run_req_id.get(),
+        app.active_run_req_id(),
         Some(run_req),
         "a stale Done must not clear the active run's request id"
     );
@@ -869,54 +874,62 @@ fn test_stale_done_settles_nothing() {
             }),
         },
     });
-    assert!(!app.agent_busy, "the matching Done settles the run");
-    assert_eq!(app.active_run_req_id.get(), None);
+    assert!(!app.agent_busy(), "the matching Done settles the run");
+    assert_eq!(app.active_run_req_id(), None);
 }
 
-// Each approval cycle rewrites the start point.
+// Each approval cycle preserves the original start point — RunState keeps
+// the ActiveRun across Waiting transitions, so the clock is not reset.
 #[test]
-fn test_cycles_rewrite_start() {
+fn test_cycles_preserve_start() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
     crate::test_harness::attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
-    let first_start = app.run_started;
+    let first_start = app.run_started();
     for round in 0..2 {
         app.raise_agent_approval(approval_ask(&format!("c{round}")));
-        assert!(app.run_started.is_none(), "cycle {round}: ask clears start");
+        assert_eq!(
+            app.run_started(),
+            first_start,
+            "cycle {round}: start preserved across approval"
+        );
         app.resolve_current_approval(ApprovalDecision {
             call_id: format!("c{round}"),
             approved: true,
             updated_input: None,
             scope: "once".into(),
         });
-        assert_ne!(
-            app.run_started, first_start,
-            "cycle {round}: verdict rewrites the start point"
+        assert_eq!(
+            app.run_started(),
+            first_start,
+            "cycle {round}: verdict does not reset the clock"
         );
     }
 }
 
-// With a card up the run is not busy, so a direct submit starts a second
-// run; the keys layer is the only guard today.
+// With a card up the run is Waiting (still active in the state machine),
+// so a direct submit parks instead of starting a second run. This was the
+// B6 defect (Waiting relied on the UI card to intercept Enter); RunState
+// makes Waiting an active state that parks new input.
 #[test]
-fn test_starts_second_run() {
+fn test_waiting_submit_parks() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
     crate::test_harness::attach_connection(&mut app);
     assert!(app.spawn_run("first".into()));
-    let first_req = app.active_run_req_id.get();
+    let first_req = app.active_run_req_id();
     app.raise_agent_approval(approval_ask("c1"));
-    assert!(!app.agent_busy, "approval pauses the busy flag");
+    assert!(!app.agent_busy(), "the spinner pauses during Waiting");
     app.spawn_run("second".into());
-    assert!(
-        app.agent_busy,
-        "recorded defect: a direct submit during Waiting starts a second run"
-    );
-    assert_ne!(
-        app.active_run_req_id.get(),
+    assert_eq!(
+        app.active_run_req_id(),
         first_req,
-        "recorded defect: the second run replaced the waiting run's request id"
+        "a submit during Waiting does not replace the waiting run"
+    );
+    assert!(
+        app.pending.len() == 1,
+        "the submit parks in the queue instead of starting a second run"
     );
 }
 
@@ -928,7 +941,7 @@ fn test_busy_submit_parks() {
     crate::test_harness::attach_connection(&mut app);
     assert!(app.spawn_run("first".into()));
     app.spawn_run("second".into());
-    assert!(app.agent_busy, "no second run while busy");
+    assert!(app.agent_busy(), "no second run while busy");
     assert_eq!(app.pending.len(), 1, "the extra input parks in the queue");
     // promote_next_pending attaches the single server mirror right away
     // (the live connection accepts it) — the contract is at most one.
@@ -949,7 +962,7 @@ fn test_loss_unsent_vs_unknown() {
     app.screen = crate::state::Screen::Working;
     crate::test_harness::attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
-    let run_req = app.active_run_req_id.get().unwrap();
+    let run_req = app.active_run_req_id().unwrap();
 
     // not sent: the run's id is in the not_sent list.
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
@@ -976,5 +989,5 @@ fn test_loss_unsent_vs_unknown() {
         matches!(last, TranscriptLine::System(s) if s.contains("send failed")),
         "an unknown run must carry the cause, got {last:?}"
     );
-    assert!(!app.agent_busy, "either way the active run ends");
+    assert!(!app.agent_busy(), "either way the active run ends");
 }

@@ -197,7 +197,7 @@ fn test_todo_skips_chip() {
 #[test]
 fn test_todo_survives_user() {
     let mut app = fresh_app();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     pump(&mut app, user_msg("go"));
     pump(
         &mut app,

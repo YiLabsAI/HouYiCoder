@@ -16,8 +16,7 @@ fn working() -> crate::state::App {
 fn test_spinner_verb_reflects_phase() {
     // The spinner verb tracks the active stream phase.
     let mut app = working();
-    app.agent_busy = true;
-    app.run_started = Some(std::time::Instant::now());
+    app.start_run_for_test(0);
     // Reasoning streaming ⇒ Thinking.
     app.live_reasoning_text = "pondering the task".to_string();
     app.live_block = crate::state::enums::LiveBlock::Thinking;
@@ -45,8 +44,7 @@ fn test_spinner_verb_reflects_phase() {
 #[test]
 fn test_verb_works_text_streams() {
     let mut app = working();
-    app.agent_busy = true;
-    app.run_started = Some(std::time::Instant::now());
+    app.start_run_for_test(0);
     // Reasoning streamed first, then assistant text takes over.
     app.live_reasoning_text = "pondered".to_string();
     app.live_assistant_text = "Here is the answer".to_string();
@@ -69,8 +67,10 @@ fn test_busy_border_stays_plain() {
     let is_shimmer = |c: Color| matches!(c, Color::Rgb(0, g, b) if g == b && g > 0);
     for busy in [true, false] {
         let mut app = working();
-        app.agent_busy = busy;
-        app.run_started = busy.then(std::time::Instant::now);
+        if busy {
+            app.start_run_for_test(0);
+        }
+
         let buf = crate::test_harness::render_buffer(&app, 80, 16);
         for y in 0..16 {
             for x in 0..80 {

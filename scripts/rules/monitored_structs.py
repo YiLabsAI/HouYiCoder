@@ -17,7 +17,8 @@ REPO = Path(__file__).resolve().parent.parent
 
 ACTIVE_OWNERS = {
     "crates/houyicoder-tui/src/state.rs:App": {
-        "fields": 173,  # measured at migration start; re-baseline with a reason
-        "mut_app": 44,  # measured at migration start; re-baseline with a reason
+        # RunState owns the run lifecycle; four fields removed.
+        "fields": 170,
+        "mut_app": 44,
     },
 }

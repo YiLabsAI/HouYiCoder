@@ -17,7 +17,14 @@ impl super::App {
     pub(super) fn handle_run_completion(&mut self, result: Result<RunResult, String>) {
         let had_live_output =
             !self.live_assistant_text.is_empty() || !self.live_reasoning_text.is_empty();
-        self.agent_busy = false;
+        // finish() returns the ActiveRun by value and transitions to Idle;
+        // capture it so the elapsed computation can read started_at before
+        // the run state is gone.
+        let finished = self.run_state.finish();
+        let elapsed_secs = finished
+            .as_ref()
+            .map(|r| r.started_at.elapsed().as_secs())
+            .unwrap_or(0);
         self.live_active = false;
         self.live_assistant_text.clear();
         self.live_reasoning_text.clear();
@@ -26,10 +33,6 @@ impl super::App {
         self.running_tools.clear();
         self.bash_progress.clear();
         self.pending_permission_req_id.set(None);
-        // Every terminal outcome ends cancellation.
-        self.cancelling = false;
-        let elapsed_secs = self.run_started.map(|t| t.elapsed().as_secs()).unwrap_or(0);
-        self.run_started = None;
         self.rebuild_transcript();
         self.debug_render_done(&self.frames);
         let was_final = match result {
@@ -42,7 +45,7 @@ impl super::App {
                         self.cumulative_tokens += run.usage.total_tokens as u64;
                         self.cumulative_steps += run.turns;
                         if self.session_started_at.is_none() {
-                            self.session_started_at = self.run_started;
+                            self.session_started_at = self.run_started();
                         }
                         let reasoning: Option<String> = turn_reasoning(&self.frames);
                         let tool_summary: Option<String> = turn_tool_summary(&self.frames);
@@ -102,7 +105,7 @@ impl super::App {
                 false
             }
         };
-        if !self.agent_busy {
+        if !self.agent_busy() {
             self.last_run_input = None;
         }
         // Only final completion may advance queued input. Other outcomes

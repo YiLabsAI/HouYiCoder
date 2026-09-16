@@ -28,12 +28,12 @@ fn test_spawn_refused() {
     let mut app = connection_lost_app();
     app.spawn_run("hello".into());
     assert!(
-        !app.agent_busy,
+        !app.agent_busy(),
         "a refused send must not fake a running turn"
     );
-    assert!(app.run_started.is_none(), "no run start without delivery");
+    assert!(app.run_started().is_none(), "no run start without delivery");
     assert!(
-        app.active_run_req_id.get().is_none(),
+        app.active_run_req_id().is_none(),
         "no pending run id without delivery"
     );
     assert!(app.last_run_input.is_none(), "input stays editable");
@@ -102,7 +102,7 @@ fn test_drain_refused() {
         "the head stays queued when the send is refused"
     );
     assert!(
-        !app.agent_busy,
+        !app.agent_busy(),
         "a refused send must not fake a running turn"
     );
     assert!(
@@ -142,7 +142,7 @@ fn test_verdict_refused() {
         "the request id stays until the verdict is delivered"
     );
     assert!(
-        !app.agent_busy,
+        !app.agent_busy(),
         "the run does not resume without a delivered verdict"
     );
     assert!(
@@ -180,10 +180,10 @@ fn test_trust_refused() {
 #[test]
 fn test_abort_refused() {
     let mut app = connection_lost_app();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.abort_run();
     assert!(
-        !app.cancelling,
+        !app.cancelling(),
         "a refused abort must not fake the cancelling state"
     );
     assert!(

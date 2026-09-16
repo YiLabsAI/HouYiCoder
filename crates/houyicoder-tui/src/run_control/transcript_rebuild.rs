@@ -234,7 +234,7 @@ impl App {
             }
         }
         self.verdict_cursor = self.frames.len();
-        self.todos.update(&self.frames, self.agent_busy);
+        self.todos.update(&self.frames, self.agent_busy());
     }
 }
 

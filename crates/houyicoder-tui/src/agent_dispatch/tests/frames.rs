@@ -90,7 +90,7 @@ fn test_tool_frames_track_set() {
 #[test]
 fn test_done_clears_running_tools() {
     let mut app = crate::composition::app();
-    app.active_run_req_id.set(Some(RequestId(1)));
+    app.start_run_for_test(1);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
         "call_1",
         "bash",
@@ -102,18 +102,27 @@ fn test_done_clears_running_tools() {
 
 #[test]
 fn test_completed_list_timestamped() {
-    // Historic completions are not recent while unresolved work remains.
+    // A completed item in a live run gets a timestamp; an in-progress item
+    // does not. The distinction drives the footer grace window.
     let mut app = crate::composition::app();
-    app.active_run_req_id.set(Some(RequestId(1)));
+    app.start_run_for_test(1);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("old work", "completed"),
         ("current", "in_progress"),
     ]))));
     app.handle_agent_message(done_msg());
-    assert!(app.todos.completion_at.is_empty());
+    assert!(
+        app.todos.completion_at.contains_key("old work"),
+        "completed item timestamped: {:?}",
+        app.todos.completion_at
+    );
+    assert!(
+        !app.todos.completion_at.contains_key("current"),
+        "in-progress item not timestamped"
+    );
     // Completing the whole list timestamps every item for one shared
     // retirement.
-    app.active_run_req_id.set(Some(RequestId(1)));
+    app.start_run_for_test(1);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("old work", "completed"),
         ("current", "completed"),
@@ -136,7 +145,7 @@ fn test_replayed_done_retires() {
             ("old work", "completed"),
             ("current", "completed"),
         ]))));
-        app.active_run_req_id.set(Some(RequestId(1)));
+        app.start_run_for_test(1);
         app.handle_agent_message(done_msg());
         assert!(app.todos.items.is_empty());
         assert!(app.todos.completion_at.is_empty());
@@ -158,7 +167,7 @@ fn test_replayed_open_renders() {
         ("old work", "completed"),
         ("open task", "pending"),
     ]))));
-    app.active_run_req_id.set(Some(RequestId(1)));
+    app.start_run_for_test(1);
     app.handle_agent_message(done_msg());
     let out = crate::test_harness::render_text(&app, 100, 24);
     assert!(

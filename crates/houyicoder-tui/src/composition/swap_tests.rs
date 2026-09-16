@@ -100,7 +100,7 @@ fn test_switch_session_resets_view() {
     assert!(app.frames.is_empty(), "frames cleared");
     assert_eq!(app.session_id.0, new_sid, "session_id updated");
     assert!(app.session.is_some(), "new session driver wired");
-    assert!(!app.agent_busy, "agent_busy cleared");
+    assert!(!app.agent_busy(), "agent_busy cleared");
     assert!(app.transcript_scroll.follow_tail, "scroll reset");
     assert_eq!(app.pane, crate::state::Pane::Transcript, "pane reset");
 }
@@ -232,7 +232,7 @@ fn test_idle_drain_consumes_idle() {
 #[test]
 fn test_idle_drain_noop_busy() {
     let mut app = build_app(test_bundle());
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("queued".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
@@ -500,7 +500,7 @@ fn test_clean_end_drains_messages() {
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(dirty, "batch drain flagged dirty");
-    assert!(app.agent_busy, "head (m1) spawned a run");
+    assert!(app.agent_busy(), "head (m1) spawned a run");
     assert_eq!(
         app.pending,
         vec![
@@ -526,7 +526,7 @@ fn test_batch_stops_at_command() {
     app.pending.push(PendingItem::Message("m3".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
-    assert!(app.agent_busy, "head (m1) spawned a run");
+    assert!(app.agent_busy(), "head (m1) spawned a run");
     assert_eq!(
         app.pending,
         vec![

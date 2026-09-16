@@ -58,8 +58,8 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> TailRow
         }
     }
 
-    if app.agent_busy
-        && let Some(start) = app.run_started
+    if app.agent_busy()
+        && let Some(start) = app.run_started()
     {
         spacer_if_needed(&mut sink);
         let text = crate::view::spinner::spinner_row_text(app, start.elapsed(), area.width);

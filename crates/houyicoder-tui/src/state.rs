@@ -33,6 +33,7 @@ use crate::records::{AskQuestion, TeammateView, ToolOutcome};
 use crate::render_cache::RenderCache;
 use crate::resume_picker::{SessionLister, SessionPickerState};
 use crate::review_queue::ReviewQueue;
+use crate::run_state::RunState;
 use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::SessionConnection;
@@ -317,9 +318,6 @@ pub struct App {
     /// The reverse-request req_id of the currently-shown permission ask,
     /// echoed back with the verdict. None when no approval card is up.
     pub pending_permission_req_id: Cell<Option<RequestId>>,
-    /// True while a run or resume is in flight, so a second Enter queues
-    /// instead of stacking a second run.
-    pub agent_busy: bool,
     /// Transient notification toast: one-line auto-expiring hint above the
     /// input box (copy feedback, exit-again prompt). Poll-driven expiry.
     pub notifications: NotificationState,
@@ -328,10 +326,9 @@ pub struct App {
     /// window is unfocused, following a renderPlaceholder terminal
     /// focus gate. Defaults true (assume focused at startup).
     pub terminal_focused: bool,
-    pub active_run_req_id: Cell<Option<RequestId>>,
-    /// When the current run started (set on spawn, cleared on completion)
-    /// so the spinner row can show elapsed time and animate its glyph.
-    pub run_started: Option<Instant>,
+    /// The run lifecycle state machine: Idle, Running, Waiting, Cancelling.
+    /// The single source of truth for whether a run is in flight.
+    pub run_state: RunState,
     /// When the session's first run started, for end-to-end elapsed.
     pub session_started_at: Option<Instant>,
     /// Cumulative output tokens across all turns this session.
@@ -620,15 +617,45 @@ pub struct App {
     /// True between an Esc-abort and the matching Done(Interrupted). Set in
     /// abort_run when the session/cancel notification ships; cleared in the
     /// Done handler. The honest form for a wire abort: the token fire is
-    /// async (a round-trip to the server), so the UI shows a cancelling state
-    /// until the run resolves. In Mode B (cross-process) the direct token
-    /// does not physically exist, so this flag is the only abort surface.
-    pub cancelling: bool,
     /// Pluggable clipboard writer. Production holds a SystemClipboard
     /// (pbcopy/OSC 52); adversarial selection tests inject a RecordingClipboard
     /// so the exact copied text can be asserted without touching the OS
     /// clipboard. Arc<dyn> so App stays Send + Sync across the TUI/runner.
     pub clipboard: Arc<dyn ClipboardWriter>,
+}
+
+impl App {
+    /// True while a run is in flight and not paused for approval. Excludes
+    /// Waiting (the spinner stops while a card is up).
+    pub fn agent_busy(&self) -> bool {
+        matches!(
+            self.run_state,
+            RunState::Running(_) | RunState::Cancelling(_)
+        )
+    }
+
+    /// The wall-clock start of the active run, or None when idle.
+    pub fn run_started(&self) -> Option<Instant> {
+        self.run_state.started_at()
+    }
+
+    /// True only while the user cancelled and the run is resolving.
+    pub fn cancelling(&self) -> bool {
+        self.run_state.is_cancelling()
+    }
+
+    /// The request id of the active run, or None when idle.
+    pub fn active_run_req_id(&self) -> Option<RequestId> {
+        self.run_state.request_id()
+    }
+
+    /// Test seam: transition to Running with a specific request id.
+    /// Replaces the old direct agent_busy write that bypassed the state
+    /// machine.
+    #[cfg(test)]
+    pub fn start_run_for_test(&mut self, req_id: u64) {
+        self.run_state.start(RequestId(req_id), Instant::now());
+    }
 }
 
 impl std::fmt::Debug for App {
@@ -639,7 +666,7 @@ impl std::fmt::Debug for App {
             .field("pane", &self.pane)
             .field("viewport", &self.viewport)
             .field("transcript_len", &self.transcript.len())
-            .field("agent_busy", &self.agent_busy)
+            .field("agent_busy", &self.agent_busy())
             .field("pending_approvals", &self.pending_approvals.len())
             .field("pending_trust", &self.pending_trust.is_some())
             .field("quit", &self.quit)

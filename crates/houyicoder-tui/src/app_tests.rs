@@ -894,7 +894,16 @@ fn test_closed_settles_loss() {
         "the death is readable but treated as lost, got {death:?}"
     );
     let before = app.transcript.len();
-    let first_changed = app.poll_agent();
+    // The driver sent the death and returned, but the runtime may not have
+    // dropped the task's agent_tx yet — poll until the channel closes.
+    let mut first_changed = false;
+    for _ in 0..100 {
+        if app.poll_agent() {
+            first_changed = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
     assert!(
         first_changed,
         "the first closed observation marks state dirty"
@@ -908,7 +917,7 @@ fn test_closed_settles_loss() {
         matches!(app.connection_status(), ConnectionStatus::Lost(_)),
         "the closed channel records the loss cause"
     );
-    assert!(!app.agent_busy, "the closed channel ends any active run");
+    assert!(!app.agent_busy(), "the closed channel ends any active run");
     // A repeat poll stays quiet: no second settlement, no line, not dirty.
     let after_loss = app.transcript.len();
     let repeat_changed = app.poll_agent();

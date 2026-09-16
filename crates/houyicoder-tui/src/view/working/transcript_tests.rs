@@ -234,8 +234,7 @@ fn test_cache_version_stable_idle() {
 fn test_spinner_keeps_blank_above() {
     let mut app = working_app();
     app.transcript.push(TranscriptLine::User("hello".into()));
-    app.agent_busy = true;
-    app.run_started = Some(std::time::Instant::now());
+    app.start_run_for_test(0);
     let out = render_text(&app, 80, 24);
     let rows: Vec<&str> = out.lines().collect();
     let spinner = rows
@@ -262,8 +261,7 @@ fn test_view_hides_tail() {
     let mut app = crate::test_harness::working_app();
     app.live_active = true;
     app.live_assistant_text = "parent streaming text".into();
-    app.agent_busy = true;
-    app.run_started = Some(std::time::Instant::now());
+    app.start_run_for_test(0);
     app.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()

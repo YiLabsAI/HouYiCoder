@@ -23,7 +23,7 @@ fn test_reasoning_streams_and_persists() {
     let mut got = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             got = true;
             break;
         }
@@ -74,7 +74,7 @@ fn test_streamed_tail_survives_done() {
     let mut settled = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             settled = true;
             break;
         }
@@ -192,9 +192,9 @@ fn test_interrupted_content_shows_marker() {
             }),
         },
     };
-    app.active_run_req_id.set(Some(RequestId(11)));
+    app.start_run_for_test(11);
     app.handle_agent_message(msg);
-    assert!(!app.agent_busy, "Interrupted clears busy");
+    assert!(!app.agent_busy(), "Interrupted clears busy");
     assert!(
         app.transcript
             .iter()
@@ -227,7 +227,7 @@ fn test_interrupt_restores_input() {
             }),
         },
     };
-    app.active_run_req_id.set(Some(RequestId(12)));
+    app.start_run_for_test(12);
     app.handle_agent_message(msg);
     assert_eq!(app.input.value(), "draft", "input restored for editing");
     assert!(
@@ -278,7 +278,7 @@ fn test_commit_blocks_restore() {
         inputs: vec![committed],
     }));
 
-    app.active_run_req_id.set(Some(RequestId(13)));
+    app.start_run_for_test(13);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(13),
         response: ServerResponse::Done {
@@ -314,7 +314,7 @@ fn test_live_blocks_restore() {
         text: "visible response".into(),
     }));
 
-    app.active_run_req_id.set(Some(RequestId(14)));
+    app.start_run_for_test(14);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(14),
         response: ServerResponse::Done {
@@ -344,7 +344,7 @@ fn test_recall_survives_interrupt() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
     app.screen = crate::state::Screen::Working;
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.last_run_input = Some("first".into());
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("first"))));
     // Queue a message while the run is in flight (spawn_run's busy path:
@@ -357,7 +357,7 @@ fn test_recall_survives_interrupt() {
         crossterm::event::KeyModifiers::NONE,
     );
     crate::keys::handle_working(&mut app, esc);
-    assert!(app.cancelling, "first Esc interrupts the run");
+    assert!(app.cancelling(), "first Esc interrupts the run");
     assert!(!app.pending.is_empty(), "queue intact after the interrupt");
     app.pop_queued_to_input();
     assert_eq!(
@@ -366,7 +366,7 @@ fn test_recall_survives_interrupt() {
         "explicit recall moves the queue head into the input"
     );
     // The aborted run settles Interrupted with no real content.
-    app.active_run_req_id.set(Some(RequestId(15)));
+    app.start_run_for_test(15);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(15),
         response: ServerResponse::Done {
@@ -426,9 +426,9 @@ fn test_max_turns_records_hint() {
             }),
         },
     };
-    app.active_run_req_id.set(Some(RequestId(16)));
+    app.start_run_for_test(16);
     app.handle_agent_message(msg);
-    assert!(!app.agent_busy);
+    assert!(!app.agent_busy());
     assert!(app.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::System(s) if s.contains("reached max turns limit")
@@ -494,7 +494,7 @@ fn test_batch_keeps_tail() {
     app.pending.push(PendingItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
-    assert!(app.agent_busy, "first spawned a run");
+    assert!(app.agent_busy(), "first spawned a run");
     assert_eq!(app.pending.len(), 2, "second/third stay pending");
     assert_eq!(
         app.pending[0],
@@ -507,14 +507,14 @@ fn test_batch_keeps_tail() {
         "third has no copy (single-copy invariant)"
     );
     let mut tries = 0;
-    while app.agent_busy && tries < 1000 {
+    while app.agent_busy() && tries < 1000 {
         app.poll_agent();
-        if app.agent_busy {
+        if app.agent_busy() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         tries += 1;
     }
-    assert!(!app.agent_busy, "run reached Done");
+    assert!(!app.agent_busy(), "run reached Done");
     let texts: Vec<&str> = app.pending.iter().map(|it| it.display()).collect();
     assert!(
         matches!(texts.as_slice(), ["second", "third"] | ["third"]),
@@ -559,21 +559,21 @@ fn test_batch_delivers_via_drain() {
     app.pending.push(PendingItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
-    assert!(app.agent_busy, "first spawned a run");
+    assert!(app.agent_busy(), "first spawned a run");
     assert_eq!(
         app.pending[0],
         PendingItem::Message("second".into()),
         "second holds the copy; third parked"
     );
     let mut tries = 0;
-    while app.agent_busy && tries < 1000 {
+    while app.agent_busy() && tries < 1000 {
         app.poll_agent();
-        if app.agent_busy {
+        if app.agent_busy() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         tries += 1;
     }
-    assert!(!app.agent_busy, "run reached Done");
+    assert!(!app.agent_busy(), "run reached Done");
     assert!(
         app.pending.is_empty(),
         "race won: one run drained the chain one boundary at a time:\n{:?}",

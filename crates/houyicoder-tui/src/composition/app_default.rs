@@ -17,6 +17,7 @@ use crate::notifications::NotificationState;
 use crate::paste::PasteStore;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
+use crate::run_state::RunState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
 use crate::state::{CurrentTurnBoundary, LiveBlock, QueueViewState, StatusTab, TrustChoice};
@@ -108,11 +109,9 @@ pub fn app() -> App {
         agent_tx: None,
         session: None,
         pending_permission_req_id: Cell::new(None),
-        agent_busy: false,
         notifications: NotificationState::default(),
         terminal_focused: true,
-        active_run_req_id: Cell::new(None),
-        run_started: None,
+        run_state: RunState::Idle,
         session_started_at: None,
         cumulative_tokens: 0,
         cumulative_steps: 0,
@@ -201,7 +200,6 @@ pub fn app() -> App {
         status_tab: StatusTab::default(),
         status_name_edit: None,
         last_title: None,
-        cancelling: false,
         clipboard: Arc::new(SystemClipboard),
     }
 }

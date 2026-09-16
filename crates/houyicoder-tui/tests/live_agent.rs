@@ -56,7 +56,7 @@ fn drain(app: &mut houyicoder_tui::state::App, timeout_ms: u64) -> bool {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     while Instant::now() < deadline {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             return true;
         }
         std::thread::sleep(Duration::from_millis(50));

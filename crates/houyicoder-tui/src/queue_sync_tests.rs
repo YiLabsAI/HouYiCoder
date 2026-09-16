@@ -38,8 +38,7 @@ fn working_session() -> crate::state::App {
 fn test_final_output_defers_drain() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
-    app.agent_busy = true;
-    app.active_run_req_id.set(Some(RequestId(6)));
+    app.start_run_for_test(6);
     app.pending.push(PendingItem::Message("head".into()));
     app.pending.push(PendingItem::ParkedMessage("tail".into()));
     app.handle_agent_message(SessionMessage::Response {
@@ -55,7 +54,7 @@ fn test_final_output_defers_drain() {
             }),
         },
     });
-    assert!(!app.agent_busy, "busy cleared by run end");
+    assert!(!app.agent_busy(), "busy cleared by run end");
     assert_eq!(
         app.pending,
         vec![
@@ -81,8 +80,7 @@ fn test_final_output_defers_drain() {
 fn test_interrupt_demotes_then_drains() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
-    app.agent_busy = true;
-    app.active_run_req_id.set(Some(RequestId(7)));
+    app.start_run_for_test(7);
     app.pending.push(PendingItem::Message("parked".into()));
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(7),
@@ -97,7 +95,7 @@ fn test_interrupt_demotes_then_drains() {
             }),
         },
     });
-    assert!(!app.agent_busy, "busy cleared by interrupt");
+    assert!(!app.agent_busy(), "busy cleared by interrupt");
     assert_eq!(
         app.pending,
         vec![PendingItem::ParkedMessage("parked".into())],
@@ -117,16 +115,15 @@ fn test_interrupt_demotes_then_drains() {
 #[test]
 fn test_request_error_ends_run() {
     let mut app = working();
-    app.agent_busy = true;
-    app.active_run_req_id.set(Some(RequestId(7)));
+    app.start_run_for_test(7);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(7),
         response: ServerResponse::Error {
             message: "session mismatch".into(),
         },
     });
-    assert!(!app.agent_busy, "matching error clears busy");
-    assert!(app.active_run_req_id.get().is_none(), "req_id cleared");
+    assert!(!app.agent_busy(), "matching error clears busy");
+    assert!(app.active_run_req_id().is_none(), "req_id cleared");
 }
 
 /// A RequestError whose req_id does NOT match the in-flight run is a non-run
@@ -135,19 +132,15 @@ fn test_request_error_ends_run() {
 #[test]
 fn test_mismatched_error_system_line() {
     let mut app = working();
-    app.agent_busy = true;
-    app.active_run_req_id.set(Some(RequestId(7)));
+    app.start_run_for_test(7);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(99),
         response: ServerResponse::Error {
             message: "bad query".into(),
         },
     });
-    assert!(app.agent_busy, "non-matching error does not clear busy");
-    assert!(
-        app.active_run_req_id.get().is_some(),
-        "active req_id untouched"
-    );
+    assert!(app.agent_busy(), "non-matching error does not clear busy");
+    assert!(app.active_run_req_id().is_some(), "active req_id untouched");
 }
 
 /// drain_pending_head on an empty queue is a no-op (returns false) -- the
@@ -165,7 +158,7 @@ fn test_pending_head_empty_noop() {
 #[test]
 fn test_busy_clear_enqueues_feedback() {
     let mut app = working();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.transcript
         .push(TranscriptLine::User("pre-clear".into()));
     app.input.set("/clear".to_string());
@@ -205,7 +198,7 @@ fn test_drain_command_dispatches_clear() {
 #[test]
 fn test_second_enqueue_parks() {
     let mut app = working_session();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.spawn_run("task a".into());
     assert_eq!(
         app.pending,
@@ -239,7 +232,7 @@ fn test_second_enqueue_parks() {
 #[test]
 fn test_command_head_blocks() {
     let mut app = working();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Command("/rewind".into()));
     app.pending.push(PendingItem::ParkedMessage("after".into()));
     app.promote_next_pending();
@@ -262,7 +255,7 @@ fn test_command_head_blocks() {
 #[test]
 fn test_command_drain_promotes() {
     let mut app = working_session();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Command("/rewind".into()));
     app.pending.push(PendingItem::ParkedMessage("after".into()));
     // The Command drains (local dispatch removes it from the head).
@@ -292,7 +285,7 @@ fn test_orphan_promoted_on_enqueue() {
     // User submits a new message -> real-spawn path (agent_busy was false).
     // The test harness has no session, so spawn_run returns early without
     // setting agent_busy; simulate the post-spawn state manually.
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     assert_eq!(
         app.pending[0],
         PendingItem::ParkedMessage("orphan".into()),
@@ -392,13 +385,13 @@ fn test_busy_reqid_stable() {
     let p = Arc::new(FakeProvider::text("ok"));
     let mut app = app_with_provider(p, ToolRegistry::new());
     // Simulate an in-flight run with its request identifier tracked.
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     let in_flight = RequestId(42);
-    app.active_run_req_id.set(Some(in_flight));
+    app.start_run_for_test(42);
     // A second Enter while busy takes the queue path.
     app.spawn_run("second".into());
     assert_eq!(
-        app.active_run_req_id.get(),
+        app.active_run_req_id(),
         Some(in_flight),
         "queue path must not overwrite the in-flight run's req_id"
     );
@@ -411,7 +404,7 @@ fn test_busy_reqid_stable() {
 fn test_parked_head_promotes() {
     let p = Arc::new(FakeProvider::text("ok"));
     let mut app = app_with_provider(p, ToolRegistry::new());
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     // A parked head carried across a swap is promoted in the current run.
     app.pending
         .push(PendingItem::ParkedMessage("carried".into()));
@@ -428,7 +421,7 @@ fn test_parked_head_promotes() {
     );
     // A Message head already holds the copy, so the newcomer still parks.
     let mut app2 = app_with_provider(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
-    app2.agent_busy = true;
+    app2.start_run_for_test(0);
     app2.pending.push(PendingItem::Message("injected".into()));
     app2.spawn_run("newcomer".into());
     assert_eq!(
@@ -443,7 +436,7 @@ fn test_parked_head_promotes() {
 fn test_commit_promotes_next() {
     let p = Arc::new(FakeProvider::text("ok"));
     let mut app = app_with_provider(p, ToolRegistry::new());
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     let committed = houyicoder_protocol::frontend::QueuedInput::new("a");
     app.pending.push(PendingItem::Message(committed.clone()));
     app.pending.push(PendingItem::ParkedMessage("b".into()));
@@ -462,7 +455,7 @@ fn test_commit_promotes_next() {
 #[test]
 fn test_commit_identity() {
     let mut app = app_with_provider(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     let old = houyicoder_protocol::frontend::QueuedInput::new("same");
     let new = houyicoder_protocol::frontend::QueuedInput::new("same");
     app.pending.push(PendingItem::Message(new.clone()));
@@ -504,7 +497,7 @@ fn test_commit_clears_parked() {
 #[test]
 fn test_busy_submit_mirrors_queue() {
     let mut app = working_session();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.spawn_run("first interjection".into());
     assert_eq!(
         app.pending,

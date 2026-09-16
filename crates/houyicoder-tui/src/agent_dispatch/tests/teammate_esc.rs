@@ -493,7 +493,7 @@ fn test_teammate_submit_steers() {
         ..Default::default()
     });
     app.spawn_run("focus on auth".into());
-    assert!(!app.agent_busy, "steering does not start a parent run");
+    assert!(!app.agent_busy(), "steering does not start a parent run");
     assert!(
         !app.transcript
             .iter()

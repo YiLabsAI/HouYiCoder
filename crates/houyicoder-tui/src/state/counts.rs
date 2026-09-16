@@ -142,7 +142,7 @@ impl App {
                 .borrow_mut()
                 .live_agent_row_count(&self.live_assistant_text, w);
         }
-        if self.agent_busy && self.run_started.is_some() {
+        if self.agent_busy() && self.run_started().is_some() {
             if n > 0 || !prefix_empty {
                 n += 1;
             }

@@ -61,9 +61,9 @@ pub fn run_with_runner(
             dirty = true;
         }
         // Mirror busy transitions to supporting terminal chrome.
-        if app.agent_busy != reported_busy {
-            set_terminal_progress(app.agent_busy)?;
-            reported_busy = app.agent_busy;
+        if app.agent_busy() != reported_busy {
+            set_terminal_progress(app.agent_busy())?;
+            reported_busy = app.agent_busy();
         }
         // Idle drain consumes queued work only after a clean run; interrupted
         // work stays available for editing.
@@ -86,7 +86,7 @@ pub fn run_with_runner(
         if app.todos.prune(now) {
             dirty = true;
         }
-        if dirty || app.agent_busy {
+        if dirty || app.agent_busy() {
             // Load older history before rendering its scroll position.
             app.load_older_frames();
             app.native_cursor_position.set(None);
@@ -429,7 +429,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
             }
             return;
         }
-        if app.agent_busy {
+        if app.agent_busy() {
             app.abort_run();
         }
         return;

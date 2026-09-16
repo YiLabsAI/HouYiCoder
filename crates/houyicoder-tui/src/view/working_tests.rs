@@ -291,8 +291,7 @@ fn test_busy_count_matches_render() {
         TranscriptLine::Agent("working".to_string()),
     ];
     // All three trailing blocks active: live reasoning, live assistant, spinner.
-    app.agent_busy = true;
-    app.run_started = Some(std::time::Instant::now());
+    app.start_run_for_test(0);
     app.live_active = true;
     app.live_reasoning_text = "reasoning about the task".to_string();
     app.live_assistant_text = "partial answer streaming".to_string();

@@ -98,9 +98,8 @@ impl App {
         // write or flush may have partially delivered). The run's completion
         // line tells the user which: a not sent run never left the process;
         // an unknown run may have reached the server with no reply coming.
-        let run_req = self.active_run_req_id.get();
+        let run_req = self.active_run_req_id();
         let run_not_sent = run_req.is_some_and(|r| not_sent.contains(&r));
-        self.active_run_req_id.set(None);
         self.memory.clear_pending();
         let run_line = if run_not_sent {
             "run not sent — connection failed before the request reached the transport"
@@ -386,8 +385,7 @@ impl App {
                 // misattributed Done (its request id is not the active
                 // run's) must neither clear the active run nor complete
                 // it — the same gate the run's Error reply already applies.
-                if self.active_run_req_id.get().is_some_and(|r| r == request) {
-                    self.active_run_req_id.set(None);
+                if self.active_run_req_id().is_some_and(|r| r == request) {
                     self.handle_run_completion(result.map_err(|e| e.message));
                 }
             }
@@ -490,8 +488,7 @@ impl App {
     /// resolves its Done; a memory pane mutation's error keeps the action
     /// context; anything else becomes a plain system line.
     fn apply_response_error(&mut self, request: RequestId, message: String) {
-        if self.active_run_req_id.get().is_some_and(|r| r == request) {
-            self.active_run_req_id.set(None);
+        if self.active_run_req_id().is_some_and(|r| r == request) {
             self.handle_run_completion(Err(message));
         } else if let Some(action) = self.memory.take_action(request) {
             // A failed pane mutation keeps the action context, so the

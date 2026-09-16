@@ -463,7 +463,7 @@ impl App {
             // immediately even mid-run.
             let cmd = stripped.split_whitespace().next().unwrap_or("");
             let bare_resume = cmd == "resume" && stripped.trim() == cmd;
-            if self.agent_busy && is_state_changing(stripped) && !bare_resume {
+            if self.agent_busy() && is_state_changing(stripped) && !bare_resume {
                 self.pending.push(PendingItem::Command(text.clone()));
                 self.system_line(self.deferred_command_message(stripped));
                 return;

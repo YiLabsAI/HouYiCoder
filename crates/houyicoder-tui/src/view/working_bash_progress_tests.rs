@@ -41,7 +41,7 @@ fn test_bash_chip_shows_elapsed() {
     // agent_busy keeps the group active so it stays expanded and the chip
     // renders as a Line, not collapsed to a summary. Without this the call
     // would fold and the chip never renders.
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     // <2s: no suffix (fast commands stay clean).
     app.bash_progress.insert(
         "c1".into(),

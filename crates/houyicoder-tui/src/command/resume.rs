@@ -103,7 +103,7 @@ fn is_export_file_path(arg: &str) -> bool {
 /// (run_resume / picker Enter); the convergence point stays silent.
 impl App {
     pub(crate) fn resume_switch_message(&self, label: &str) -> String {
-        if self.agent_busy {
+        if self.agent_busy() {
             format!("resume: will switch to {label} when the run finishes")
         } else {
             format!("resume: switching to {label}...")
@@ -247,7 +247,7 @@ mod tests {
     fn test_busy_run_defers_resume() {
         let mut app = crate::composition::app();
         app.session_lister = Some(Arc::new(TwoRowLister));
-        app.agent_busy = true;
+        app.start_run_for_test(0);
         app.screen = crate::state::Screen::Working;
         // /resume <sid> mid-run -> enqueued as a Command, not executed.
         app.input.set("/resume aaaa1111".to_string());
@@ -261,7 +261,7 @@ mod tests {
             app.pending_resume_target.is_none(),
             "target not set at enqueue (the drain sets it at idle)"
         );
-        assert!(app.agent_busy, "the run is still in progress");
+        assert!(app.agent_busy(), "the run is still in progress");
     }
 
     /// A bare /resume (no arg) mid-run does NOT defer -- it opens the picker
@@ -270,7 +270,7 @@ mod tests {
     fn test_busy_bare_opens_picker() {
         let mut app = crate::test_harness::connected_app();
         app.session_lister = Some(Arc::new(TwoRowLister));
-        app.agent_busy = true;
+        app.start_run_for_test(0);
         app.screen = crate::state::Screen::Working;
         app.input.set("/resume".to_string());
         app.submit_input();

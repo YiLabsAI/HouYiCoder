@@ -408,7 +408,7 @@ fn test_esc_closes_memory_busy() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
     app.run_command(SlashCommand::Memory);
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     assert_eq!(app.pane, Pane::Memory, "memory pane open mid-run");
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
@@ -419,9 +419,8 @@ fn test_esc_closes_memory_busy() {
     // A second Esc (pane now closed) reaches the abort-run arm. abort_run
     // sets cancelling (agent_busy clears later in the Done handler, so
     // assert cancelling not agent_busy).
-    app.cancelling = false;
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(app.cancelling, "second Esc aborts the run");
+    assert!(app.cancelling(), "second Esc aborts the run");
 }
 
 #[test]

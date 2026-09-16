@@ -54,13 +54,13 @@ fn test_idle_esc_keeps() {
 fn test_busy_esc_keeps() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
     crate::keys::handle_working(&mut app, esc);
     crate::keys::handle_working(&mut app, esc);
-    assert!(app.cancelling, "Esc interrupts the run");
+    assert!(app.cancelling(), "Esc interrupts the run");
     assert!(app.input.is_empty(), "Esc does not touch the input box");
     assert_eq!(app.pending.len(), 2, "the queue stays intact");
 }
@@ -136,7 +136,7 @@ fn test_recall_clear_loses() {
 #[test]
 fn test_input_stable_while_busy() {
     let mut app = working();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     let buf = render_buffer(&app, 100, 28);
     let glyph = buf
         .content()
@@ -163,7 +163,7 @@ fn test_input_stable_while_busy() {
 #[test]
 fn test_queue_strip_renders() {
     let mut app = working();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("fix the bug".into()));
     app.pending
         .push(PendingItem::ParkedMessage("run tests".into()));
@@ -185,7 +185,7 @@ fn test_queue_strip_renders() {
 #[test]
 fn test_multiline_preview() {
     let mut app = working();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message(
         "first line\nsecond line\nthird line".into(),
     ));
@@ -208,7 +208,7 @@ fn test_multiline_preview() {
 #[test]
 fn test_queue_strip_in_focus() {
     let mut app = working();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
     app.stage = Stage::Implementing;
@@ -278,7 +278,7 @@ fn test_click_second_row_recalls() {
 #[test]
 fn test_queue_row_above_input() {
     let mut app = working();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("one".into()));
     app.pending.push(PendingItem::Message("two".into()));
     let text = render_text(&app, 100, 28);
@@ -302,7 +302,7 @@ fn test_queue_row_above_input() {
 #[test]
 fn test_queue_summary_one_row() {
     let mut app = working();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("a".into()));
     app.pending.push(PendingItem::Message("b".into()));
     app.pending.push(PendingItem::Message("c".into()));
@@ -344,7 +344,7 @@ fn test_queue_held_row() {
 #[test]
 fn test_queue_next_row() {
     let mut app = working();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("live".into()));
     app.pending
         .push(PendingItem::ParkedMessage("queued".into()));
@@ -467,7 +467,7 @@ fn test_pane_d_deletes_one() {
 #[test]
 fn test_pane_recall_promotes_next() {
     let mut app = working_session();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("first".into()));
     app.pending
@@ -481,7 +481,7 @@ fn test_pane_recall_promotes_next() {
 #[test]
 fn test_pane_delete_promotes_next() {
     let mut app = working_session();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("first".into()));
     app.pending
@@ -498,7 +498,7 @@ fn test_pane_delete_promotes_next() {
 #[test]
 fn test_strip_recall_promotes_next() {
     let mut app = working_session();
-    app.agent_busy = true;
+    app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("first".into()));
     app.pending
         .push(PendingItem::ParkedMessage("second".into()));

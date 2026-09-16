@@ -111,7 +111,7 @@ impl App {
     /// before the slot is swapped so a refused enqueue leaves the input
     /// parked, not falsely marked as holding a server mirror.
     pub(crate) fn promote_next_pending(&mut self) {
-        if !self.agent_busy {
+        if !self.agent_busy() {
             return;
         }
         // Clone the parked input without swapping the slot: the slot only

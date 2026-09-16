@@ -291,7 +291,7 @@ fn test_approve_yes_executes_tool() {
     let mut settled = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy && !app.reverse_request_in_flight() {
+        if !app.agent_busy() && !app.reverse_request_in_flight() {
             settled = true;
             break;
         }
@@ -351,7 +351,7 @@ fn test_reject_does_not_execute() {
     let mut settled = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy && !app.reverse_request_in_flight() {
+        if !app.agent_busy() && !app.reverse_request_in_flight() {
             settled = true;
             break;
         }
@@ -400,9 +400,9 @@ fn test_handle_final_output_refreshes() {
             }),
         },
     };
-    app.active_run_req_id.set(Some(RequestId(1)));
+    app.start_run_for_test(1);
     app.handle_agent_message(msg);
-    assert!(!app.agent_busy);
+    assert!(!app.agent_busy());
     assert_eq!(app.status.tokens, 42);
     assert!(app.transcript.iter().any(|l| matches!(
         l,
@@ -517,9 +517,9 @@ fn test_handle_error_records_system() {
             }),
         },
     };
-    app.active_run_req_id.set(Some(RequestId(2)));
+    app.start_run_for_test(2);
     app.handle_agent_message(msg);
-    assert!(!app.agent_busy);
+    assert!(!app.agent_busy());
     assert!(app.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::System(s) if s.contains("agent error")
@@ -537,7 +537,7 @@ fn test_spawn_run_final_output() {
     let mut got = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             got = true;
             break;
         }
@@ -548,7 +548,7 @@ fn test_spawn_run_final_output() {
         l,
         TranscriptLine::Agent(s) if s.contains("real reply")
     )));
-    assert!(!app.agent_busy);
+    assert!(!app.agent_busy());
 }
 
 #[test]
@@ -657,7 +657,7 @@ fn test_resume_after_approval() {
     let mut got2 = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.agent_busy {
+        if !app.agent_busy() {
             got2 = true;
             break;
         }
