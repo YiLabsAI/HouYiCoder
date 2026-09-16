@@ -5,9 +5,12 @@ use super::*;
 fn test_model_result_updates_status() {
     let mut app = crate::composition::app();
     app.status.model = "Max".into();
-    app.handle_agent_message(AgentMessage::ModelResult {
-        model: "qwen3.8-max".into(),
-        effort: None,
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(3),
+        response: ServerResponse::Model {
+            model: "qwen3.8-max".into(),
+            effort: None,
+        },
     });
     assert_eq!(
         app.status.model, "qwen3.8-max",
@@ -20,9 +23,9 @@ fn test_model_result_updates_status() {
 #[test]
 fn test_system_line_renders_notice() {
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::SystemLine {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::SystemLine {
         text: "set catalog context_window".into(),
-    });
+    }));
     assert!(
         app.transcript
             .iter()
@@ -39,24 +42,27 @@ fn test_model_result_stashes_catalog() {
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Model;
     app.model_sel = 5; // past the incoming list
-    app.handle_agent_message(AgentMessage::ModelInfoResult {
-        catalog: ModelCatalog {
-            active_id: Some("a".into()),
-            effort_level: None,
-            catalog: vec![
-                ModelCatalogEntry {
-                    id: "a".into(),
-                    display_name: None,
-                    description: None,
-                    effort: None,
-                },
-                ModelCatalogEntry {
-                    id: "b".into(),
-                    display_name: None,
-                    description: None,
-                    effort: None,
-                },
-            ],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(4),
+        response: ServerResponse::ModelInfo {
+            catalog: ModelCatalog {
+                active_id: Some("a".into()),
+                effort_level: None,
+                catalog: vec![
+                    ModelCatalogEntry {
+                        id: "a".into(),
+                        display_name: None,
+                        description: None,
+                        effort: None,
+                    },
+                    ModelCatalogEntry {
+                        id: "b".into(),
+                        display_name: None,
+                        description: None,
+                        effort: None,
+                    },
+                ],
+            },
         },
     });
     assert_eq!(app.model_catalog.catalog.len(), 2, "catalog stashed");
@@ -77,30 +83,33 @@ fn test_jumps_cursor_to_active() {
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Model;
     app.model_sel = 0;
-    app.handle_agent_message(AgentMessage::ModelInfoResult {
-        catalog: ModelCatalog {
-            active_id: Some("c".into()),
-            effort_level: None,
-            catalog: vec![
-                ModelCatalogEntry {
-                    id: "a".into(),
-                    display_name: None,
-                    description: None,
-                    effort: None,
-                },
-                ModelCatalogEntry {
-                    id: "b".into(),
-                    display_name: None,
-                    description: None,
-                    effort: None,
-                },
-                ModelCatalogEntry {
-                    id: "c".into(),
-                    display_name: None,
-                    description: None,
-                    effort: None,
-                },
-            ],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(5),
+        response: ServerResponse::ModelInfo {
+            catalog: ModelCatalog {
+                active_id: Some("c".into()),
+                effort_level: None,
+                catalog: vec![
+                    ModelCatalogEntry {
+                        id: "a".into(),
+                        display_name: None,
+                        description: None,
+                        effort: None,
+                    },
+                    ModelCatalogEntry {
+                        id: "b".into(),
+                        display_name: None,
+                        description: None,
+                        effort: None,
+                    },
+                    ModelCatalogEntry {
+                        id: "c".into(),
+                        display_name: None,
+                        description: None,
+                        effort: None,
+                    },
+                ],
+            },
         },
     });
     assert_eq!(
@@ -115,9 +124,12 @@ fn test_jumps_cursor_to_active() {
 fn test_model_result_stashes_effort() {
     use houyicoder_protocol::llm::EffortLevel;
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::ModelResult {
-        model: "qwen3.7-max".into(),
-        effort: Some(EffortLevel::High),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(6),
+        response: ServerResponse::Model {
+            model: "qwen3.7-max".into(),
+            effort: Some(EffortLevel::High),
+        },
     });
     assert_eq!(
         app.applied_effort,
@@ -126,9 +138,12 @@ fn test_model_result_stashes_effort() {
     );
 
     // A None effort (model unsupported, or auto) clears the badge.
-    app.handle_agent_message(AgentMessage::ModelResult {
-        model: "deepseek-chat".into(),
-        effort: None,
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(7),
+        response: ServerResponse::Model {
+            model: "deepseek-chat".into(),
+            effort: None,
+        },
     });
     assert!(app.applied_effort.is_none(), "None clears the badge");
 }
@@ -215,16 +230,19 @@ fn test_not_in_catalog_clamps() {
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Model;
     app.model_sel = 5;
-    app.handle_agent_message(AgentMessage::ModelInfoResult {
-        catalog: ModelCatalog {
-            active_id: Some("not-here".into()),
-            effort_level: None,
-            catalog: vec![ModelCatalogEntry {
-                id: "a".into(),
-                display_name: None,
-                description: None,
-                effort: None,
-            }],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(8),
+        response: ServerResponse::ModelInfo {
+            catalog: ModelCatalog {
+                active_id: Some("not-here".into()),
+                effort_level: None,
+                catalog: vec![ModelCatalogEntry {
+                    id: "a".into(),
+                    display_name: None,
+                    description: None,
+                    effort: None,
+                }],
+            },
         },
     });
     assert_eq!(

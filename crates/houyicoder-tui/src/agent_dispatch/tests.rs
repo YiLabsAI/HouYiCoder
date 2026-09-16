@@ -1,8 +1,9 @@
 use super::frame_log_msg;
-use crate::agent_message::AgentMessage;
+use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::state::Pane;
 use crate::test_harness::{connected_app_events, wait_for_request};
 use crate::transcript::TranscriptFrame;
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::session_update::{
     SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
@@ -36,18 +37,25 @@ fn tool_done_frame(id: &str) -> TranscriptFrame {
     )))
 }
 
-fn done_msg() -> AgentMessage {
-    AgentMessage::Done {
-        result: Ok(houyicoder_protocol::frontend::run::RunResult {
-            outcome: houyicoder_protocol::frontend::run::RunOutcome::FinalOutput {
-                content: vec![houyicoder_protocol::frontend::run::ContentBlock::Text {
-                    text: "ok".into(),
-                }],
-            },
-            usage: houyicoder_protocol::llm::Usage::default(),
-            turns: 1,
-            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
-        }),
+fn done_msg() -> SessionMessage {
+    done_msg_for(&RequestId(1))
+}
+
+fn done_msg_for(req: &RequestId) -> SessionMessage {
+    SessionMessage::Response {
+        request: *req,
+        response: ServerResponse::Done {
+            result: Ok(houyicoder_protocol::frontend::run::RunResult {
+                outcome: houyicoder_protocol::frontend::run::RunOutcome::FinalOutput {
+                    content: vec![houyicoder_protocol::frontend::run::ContentBlock::Text {
+                        text: "ok".into(),
+                    }],
+                },
+                usage: houyicoder_protocol::llm::Usage::default(),
+                turns: 1,
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+            }),
+        },
     }
 }
 
@@ -70,14 +78,14 @@ fn test_memory_change_refreshes_pane() {
     };
     let (mut app, events) = connected_app_events();
     app.pane = Pane::Memory;
-    app.handle_agent_message(AgentMessage::MemoryChanged {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-1".into()),
         origin: MemoryChangeOrigin::AutoMemory,
         changes: vec![MemoryChange {
             key: "alpha".into(),
             operation: MemoryOperation::Stored,
         }],
-    });
+    }));
     let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::MemoryList));
     assert_eq!(req.req_id.0, 0, "first request on a fresh session");
 }

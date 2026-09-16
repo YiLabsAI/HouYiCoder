@@ -55,8 +55,8 @@ fn fresh_app() -> App {
 }
 
 fn pump(app: &mut App, frame: TranscriptFrame) {
-    use crate::agent_message::AgentMessage;
-    app.handle_agent_message(AgentMessage::Frame(frame));
+    use crate::agent_message::{ServerEvent, SessionMessage};
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame)));
 }
 
 /// A ToolCall frame renders immediately without waiting for another boundary.

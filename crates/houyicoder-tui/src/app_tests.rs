@@ -2,7 +2,7 @@
 //! Child module of app (declared via #[path] in app.rs), so use super::*
 //! reaches app private items the same way the inline mod tests did.
 use super::*;
-use crate::agent_message::AgentMessage;
+use crate::agent_message::{ConnectionEvent, SessionMessage};
 use crate::session::{ConnectionStatus, PollOutcome, SessionConnection};
 use crate::state::{Pane, Stage, TranscriptLine, ViewportMode};
 use crate::test_harness::{
@@ -759,7 +759,7 @@ fn test_connection_status_ready() {
         .poll_startup(std::time::Duration::from_secs(5))
         .expect("the handshake result arrives");
     assert!(
-        matches!(msg, AgentMessage::ConnectionReady),
+        matches!(msg, SessionMessage::Connection(ConnectionEvent::Ready)),
         "the driver announces readiness, got {msg:?}"
     );
     app.handle_agent_message(msg);
@@ -769,7 +769,7 @@ fn test_connection_status_ready() {
         "the confirmed handshake marks the connection Ready"
     );
     // A repeat confirmation is idempotent: still Ready.
-    app.handle_agent_message(AgentMessage::ConnectionReady);
+    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Ready));
     assert_eq!(app.connection_status(), ConnectionStatus::Ready);
 }
 
@@ -784,7 +784,7 @@ fn test_late_ready_keeps_lost() {
         "the failed handshake leaves the connection Lost, got {:?}",
         app.connection_status()
     );
-    app.handle_agent_message(AgentMessage::ConnectionReady);
+    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Ready));
     assert!(
         matches!(app.connection_status(), ConnectionStatus::Lost(_)),
         "a late confirmation cannot revive a lost connection"
@@ -850,7 +850,7 @@ fn test_poll_closed_distinct() {
         .poll_startup(std::time::Duration::from_secs(5))
         .expect("the handshake result arrives");
     assert!(
-        matches!(msg, AgentMessage::ConnectionReady),
+        matches!(msg, SessionMessage::Connection(ConnectionEvent::Ready)),
         "the driver announces readiness, got {msg:?}"
     );
     let outcome = live.session.as_mut().expect("session").poll();
@@ -887,7 +887,10 @@ fn test_closed_settles_loss() {
         .poll_startup(std::time::Duration::from_secs(5))
         .expect("the failed handshake reports the death");
     assert!(
-        matches!(death, AgentMessage::ConnectionLost { .. }),
+        matches!(
+            death,
+            SessionMessage::Connection(ConnectionEvent::Lost { .. })
+        ),
         "the death is readable but treated as lost, got {death:?}"
     );
     let before = app.transcript.len();

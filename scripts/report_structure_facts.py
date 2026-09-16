@@ -51,7 +51,8 @@ REPO = Path(__file__).resolve().parent.parent
 WIRE_ENUMS = [
     "SessionEvent",
     "FrontendRequest",
-    "AgentMessage",
+    "SessionMessage",
+    "ServerResponse",
     "ToolCallStatus",
     "PermissionMode",
     "SessionUpdate",

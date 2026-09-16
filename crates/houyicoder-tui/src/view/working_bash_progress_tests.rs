@@ -1,9 +1,9 @@
 //! Bash chip progress render + dispatch tests, split from working_tests.rs +
 //! agent_dispatch.rs so those files stay under the file-size gate.
 
+use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::composition;
 use crate::records::{ToolOutcome, TranscriptLine};
-use crate::run_control::AgentMessage;
 use crate::state::{BashProgress, Screen};
 use crate::test_harness::render_text;
 use crate::transcript::TranscriptFrame;
@@ -106,26 +106,26 @@ fn tool_done_frame(id: &str) -> TranscriptFrame {
 fn test_tool_records_while_running() {
     let mut app = composition::app();
     // Not yet running: a stray tick (out of order) is dropped, not stored.
-    app.handle_agent_message(AgentMessage::ToolProgress {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::ToolProgress {
         call_id: "call_1".into(),
         elapsed_secs: 3,
         lines: None,
-    });
+    }));
     assert!(
         app.bash_progress.is_empty(),
         "tick before running is dropped"
     );
     // Running: the tick lands (elapsed + optional lines).
-    app.handle_agent_message(AgentMessage::Frame(tool_call_frame(
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
         "call_1",
         "bash",
         ToolCallStatus::InProgress,
-    )));
-    app.handle_agent_message(AgentMessage::ToolProgress {
+    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::ToolProgress {
         call_id: "call_1".into(),
         elapsed_secs: 5,
         lines: Some(14),
-    });
+    }));
     assert_eq!(
         app.bash_progress.get("call_1"),
         Some(&BashProgress {
@@ -134,6 +134,8 @@ fn test_tool_records_while_running() {
         })
     );
     // Result lands: retire_tool clears the entry.
-    app.handle_agent_message(AgentMessage::Frame(tool_done_frame("call_1")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_done_frame(
+        "call_1",
+    ))));
     assert!(!app.bash_progress.contains_key("call_1"));
 }

@@ -24,7 +24,7 @@ use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus,
 };
 
-use crate::agent_message::AgentMessage;
+use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::composition;
 use crate::state::Screen;
 use crate::test_harness::render_text;
@@ -74,21 +74,27 @@ fn app_scrolled_back() -> crate::state::App {
 fn test_agent_count_rises() {
     let mut app = app_scrolled_back();
     assert_eq!(app.jump_pill_new_count(), 0, "no new agent content yet");
-    app.handle_agent_message(AgentMessage::Frame(agent_msg("first response")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "first response",
+    ))));
     assert_eq!(
         app.jump_pill_new_count(),
         1,
         "one agent turn since snapshot"
     );
     // A tool call within the same turn does NOT start a new count.
-    app.handle_agent_message(AgentMessage::Frame(tool_call_frame("c1")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
+        "c1",
+    ))));
     assert_eq!(
         app.jump_pill_new_count(),
         1,
         "tool call within a turn does not split the count"
     );
     // More agent text after the tool is still the same turn — still 1.
-    app.handle_agent_message(AgentMessage::Frame(agent_msg("continuing")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "continuing",
+    ))));
     assert_eq!(
         app.jump_pill_new_count(),
         1,
@@ -103,7 +109,9 @@ fn test_agent_count_rises() {
 #[test]
 fn test_evicted_keeps_count() {
     let mut app = app_scrolled_back();
-    app.handle_agent_message(AgentMessage::Frame(agent_msg("response")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "response",
+    ))));
     assert_eq!(app.jump_pill_new_count(), 1);
     for i in 0..5000 {
         app.system_line(format!("filler line {i}"));
@@ -121,7 +129,9 @@ fn test_evicted_keeps_count() {
 #[test]
 fn test_rescroll_keeps_count() {
     let mut app = app_scrolled_back();
-    app.handle_agent_message(AgentMessage::Frame(agent_msg("response")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "response",
+    ))));
     let snapshot = app.scrolled_from_frame.expect("snapshot taken");
     // A second scroll-away: was already not following, so the null guard
     // keeps the original baseline.

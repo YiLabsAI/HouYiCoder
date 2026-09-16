@@ -124,13 +124,16 @@ fn test_child_transcript_fills() {
         color: None,
     });
     app.expanded_subagents.insert("child-1".into());
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "child-1".into(),
-        frames: vec![tool_call_frame(
-            "c1",
-            "grep auth",
-            ToolCallStatus::Completed,
-        )],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(16),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "child-1".into(),
+            frames: vec![tool_call_frame(
+                "c1",
+                "grep auth",
+                ToolCallStatus::Completed,
+            )],
+        },
     });
     let folded = app
         .transcript
@@ -220,13 +223,16 @@ fn test_child_fetch_repaints() {
         out.contains("not yet loaded"),
         "warm the cache on the unloaded state: {out}"
     );
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "child-1".into(),
-        frames: vec![tool_call_frame(
-            "c1",
-            "grep auth",
-            ToolCallStatus::Completed,
-        )],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(17),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "child-1".into(),
+            frames: vec![tool_call_frame(
+                "c1",
+                "grep auth",
+                ToolCallStatus::Completed,
+            )],
+        },
     });
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(

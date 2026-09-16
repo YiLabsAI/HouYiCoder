@@ -12,7 +12,7 @@ use houyicoder_protocol::llm::Usage;
 use houyicoder_provider::FakeProvider;
 use std::sync::Arc;
 
-use crate::agent_message::AgentMessage;
+use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition;
 use crate::state::{Screen, TranscriptLine};
 
@@ -39,17 +39,21 @@ fn test_final_output_defers_drain() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
+    app.active_run_req_id.set(Some(RequestId(6)));
     app.pending.push(PendingItem::Message("head".into()));
     app.pending.push(PendingItem::ParkedMessage("tail".into()));
-    app.handle_agent_message(AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::FinalOutput {
-                content: vec![ContentBlock::Text { text: "ok".into() }],
-            },
-            usage: Usage::default(),
-            turns: 1,
-            stop_reason: StopReason::EndTurn,
-        }),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(6),
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::FinalOutput {
+                    content: vec![ContentBlock::Text { text: "ok".into() }],
+                },
+                usage: Usage::default(),
+                turns: 1,
+                stop_reason: StopReason::EndTurn,
+            }),
+        },
     });
     assert!(!app.agent_busy, "busy cleared by run end");
     assert_eq!(
@@ -78,16 +82,20 @@ fn test_interrupt_demotes_then_drains() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
     app.agent_busy = true;
+    app.active_run_req_id.set(Some(RequestId(7)));
     app.pending.push(PendingItem::Message("parked".into()));
-    app.handle_agent_message(AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::Interrupted {
-                reason: "user abort".into(),
-            },
-            usage: Usage::default(),
-            turns: 0,
-            stop_reason: StopReason::Cancelled,
-        }),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(7),
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::Interrupted {
+                    reason: "user abort".into(),
+                },
+                usage: Usage::default(),
+                turns: 0,
+                stop_reason: StopReason::Cancelled,
+            }),
+        },
     });
     assert!(!app.agent_busy, "busy cleared by interrupt");
     assert_eq!(
@@ -111,9 +119,11 @@ fn test_request_error_ends_run() {
     let mut app = working();
     app.agent_busy = true;
     app.active_run_req_id.set(Some(RequestId(7)));
-    app.handle_agent_message(AgentMessage::RequestError {
-        req_id: RequestId(7),
-        message: "session mismatch".into(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(7),
+        response: ServerResponse::Error {
+            message: "session mismatch".into(),
+        },
     });
     assert!(!app.agent_busy, "matching error clears busy");
     assert!(app.active_run_req_id.get().is_none(), "req_id cleared");
@@ -127,9 +137,11 @@ fn test_mismatched_error_system_line() {
     let mut app = working();
     app.agent_busy = true;
     app.active_run_req_id.set(Some(RequestId(7)));
-    app.handle_agent_message(AgentMessage::RequestError {
-        req_id: RequestId(99),
-        message: "bad query".into(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(99),
+        response: ServerResponse::Error {
+            message: "bad query".into(),
+        },
     });
     assert!(app.agent_busy, "non-matching error does not clear busy");
     assert!(
@@ -381,7 +393,7 @@ fn test_busy_reqid_stable() {
     let mut app = app_with_provider(p, ToolRegistry::new());
     // Simulate an in-flight run with its request identifier tracked.
     app.agent_busy = true;
-    let in_flight = houyicoder_protocol::envelope::RequestId(42);
+    let in_flight = RequestId(42);
     app.active_run_req_id.set(Some(in_flight));
     // A second Enter while busy takes the queue path.
     app.spawn_run("second".into());
@@ -435,9 +447,9 @@ fn test_commit_promotes_next() {
     let committed = houyicoder_protocol::frontend::QueuedInput::new("a");
     app.pending.push(PendingItem::Message(committed.clone()));
     app.pending.push(PendingItem::ParkedMessage("b".into()));
-    app.handle_agent_message(AgentMessage::QueuedInputCommitted {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
         inputs: vec![committed],
-    });
+    }));
     assert_eq!(
         app.pending,
         vec![PendingItem::Message("b".into())],
@@ -455,7 +467,9 @@ fn test_commit_identity() {
     let new = houyicoder_protocol::frontend::QueuedInput::new("same");
     app.pending.push(PendingItem::Message(new.clone()));
 
-    app.handle_agent_message(AgentMessage::QueuedInputCommitted { inputs: vec![old] });
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
+        inputs: vec![old],
+    }));
 
     let PendingItem::Message(remaining) = &app.pending[0] else {
         panic!("new input must remain live");
@@ -474,9 +488,9 @@ fn test_commit_clears_parked() {
     app.pending
         .push(PendingItem::ParkedMessage(committed.clone()));
 
-    app.handle_agent_message(AgentMessage::QueuedInputCommitted {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
         inputs: vec![committed],
-    });
+    }));
 
     assert!(app.pending.is_empty(), "committed parked mirror retires");
     assert!(
@@ -510,9 +524,9 @@ fn test_consumed_removes_from_mirror() {
     let consumed = houyicoder_protocol::frontend::QueuedInput::new("alpha");
     app.pending.push(PendingItem::Message(consumed.clone()));
     app.pending.push(PendingItem::Message("beta".into()));
-    app.handle_agent_message(AgentMessage::QueuedInputCommitted {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
         inputs: vec![consumed],
-    });
+    }));
     assert_eq!(
         app.pending,
         vec![PendingItem::Message("beta".into())],

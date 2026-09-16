@@ -23,11 +23,13 @@
 //! to see the repo).
 
 use std::sync::Arc;
+use std::sync::mpsc::channel;
 
 use houyicoder_client::{Client, InProcTransport};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_service::server::{FrameCarrier, Server};
+use houyicoder_tui::agent_message::SessionMessage;
 
 mod cleanup;
 #[cfg(unix)]
@@ -315,7 +317,7 @@ fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn std::err
     use houyicoder_client::{Client, UdsTransport};
     let transport = UdsTransport::connect(&socket, 1024 * 1024)?;
     let client = Client::new(Box::new(transport));
-    let (tx, rx) = std::sync::mpsc::channel::<houyicoder_tui::run_control::AgentMessage>();
+    let (tx, rx) = channel::<SessionMessage>();
     let wire_session = houyicoder_protocol::frontend::SessionId(session_id);
     let bundle = houyicoder_tui::composition::RunnerBundle {
         client,
@@ -625,7 +627,7 @@ pub(crate) fn assemble_bundle(
     let export_log: Option<std::sync::Arc<dyn houyicoder_tui::view::export_log::ExportLog>> =
         Some(trajectory);
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
-    let (tx, rx) = std::sync::mpsc::channel::<houyicoder_tui::run_control::AgentMessage>();
+    let (tx, rx) = channel::<SessionMessage>();
     let (_runner, client, startup_warnings) = pair_inproc_server(
         runner,
         session,

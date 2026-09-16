@@ -108,9 +108,12 @@ fn test_teammate_view_fill_isomorphic() {
             },
         ))),
     ];
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames,
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(25),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames,
+        },
     });
     let view = app.teammate_view.as_ref().unwrap();
     assert_eq!(view.transcript.len(), 2, "view filled by the fetch");
@@ -167,13 +170,16 @@ fn test_other_child_keeps_view() {
     assert!(app.enter_teammate_view());
     assert_eq!(app.teammate_view.as_ref().unwrap().child_sid, "c1");
     // A fetch for c2 arrives while viewing c1.
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c2".into(),
-        frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text {
-                text: "other child".into(),
-            }),
-        ))],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(26),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c2".into(),
+            frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+                ContentChunk::new(ContentBlock::Text {
+                    text: "other child".into(),
+                }),
+            ))],
+        },
     });
     let view = app.teammate_view.as_ref().unwrap();
     assert_eq!(view.child_sid, "c1", "view unchanged");
@@ -289,7 +295,7 @@ fn test_cursor_after_fold_group() {
 #[test]
 fn test_agent_status_updates_fleet() {
     let mut app = crate::composition::app();
-    app.handle_agent_message(crate::run_control::AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         turn: 1,
@@ -297,13 +303,13 @@ fn test_agent_status_updates_fleet() {
         tool_uses: 2,
         last_activity: Some("grep".into()),
         completed: None,
-    });
+    }));
     assert_eq!(app.fleet.entries.len(), 1);
     assert_eq!(app.fleet.entries[0].agent_id, "c1");
     assert_eq!(app.fleet.entries[0].turn, 1);
     assert!(app.fleet.entries[0].completed.is_none());
 
-    app.handle_agent_message(crate::run_control::AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         turn: 3,
@@ -311,7 +317,7 @@ fn test_agent_status_updates_fleet() {
         tool_uses: 5,
         last_activity: Some("edit".into()),
         completed: Some("completed".into()),
-    });
+    }));
     assert_eq!(app.fleet.entries.len(), 1, "same agent updates in place");
     assert_eq!(app.fleet.entries[0].turn, 3);
     assert_eq!(app.fleet.entries[0].completed.as_deref(), Some("completed"));
@@ -323,15 +329,15 @@ fn test_agent_status_updates_fleet() {
 /// different child never touches the view.
 #[test]
 fn test_teammate_view_auto_exit() {
+    use crate::agent_message::{ServerEvent, SessionMessage};
     use crate::records::TeammateView;
-    use crate::run_control::AgentMessage;
     let mut app = crate::composition::app();
     app.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
     // A normal completion: the view stays.
-    app.handle_agent_message(AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         turn: 2,
@@ -339,10 +345,10 @@ fn test_teammate_view_auto_exit() {
         tool_uses: 1,
         last_activity: None,
         completed: Some("completed".into()),
-    });
+    }));
     assert!(app.teammate_view.is_some(), "completed stays for review");
     // A failure: the view auto-exits back to the parent.
-    app.handle_agent_message(AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         turn: 2,
@@ -350,7 +356,7 @@ fn test_teammate_view_auto_exit() {
         tool_uses: 1,
         last_activity: None,
         completed: Some("failed".into()),
-    });
+    }));
     assert!(
         app.teammate_view.is_none(),
         "abnormal terminal auto-exits the teammate view"
@@ -360,7 +366,7 @@ fn test_teammate_view_auto_exit() {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    app.handle_agent_message(AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c2".into(),
         subagent_type: "plan".into(),
         turn: 1,
@@ -368,13 +374,13 @@ fn test_teammate_view_auto_exit() {
         tool_uses: 0,
         last_activity: None,
         completed: Some("failed".into()),
-    });
+    }));
     assert!(
         app.teammate_view.is_some(),
         "a different child status does not exit the view"
     );
     // A turn-limit (max_turns hit): partial output, the view stays for review.
-    app.handle_agent_message(AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         turn: 9,
@@ -382,7 +388,7 @@ fn test_teammate_view_auto_exit() {
         tool_uses: 4,
         last_activity: None,
         completed: Some("turn_limit".into()),
-    });
+    }));
     assert!(
         app.teammate_view.is_some(),
         "turn-limit leaves the view for partial-output review"
@@ -395,14 +401,14 @@ fn test_teammate_view_auto_exit() {
 /// child does not touch the viewed child's turn.
 #[test]
 fn test_teammate_live_refetch() {
+    use crate::agent_message::{ServerEvent, SessionMessage};
     use crate::records::TeammateView;
-    use crate::run_control::AgentMessage;
     let mut app = crate::composition::app();
     app.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    app.handle_agent_message(AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         turn: 2,
@@ -410,14 +416,14 @@ fn test_teammate_live_refetch() {
         tool_uses: 1,
         last_activity: None,
         completed: None,
-    });
+    }));
     assert_eq!(
         app.teammate_view.as_ref().and_then(|v| v.last_fetched_turn),
         Some(2),
         "running status stamps the viewed child's last-fetched turn"
     );
     assert!(app.teammate_view.is_some(), "running keeps the view open");
-    app.handle_agent_message(AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         turn: 2,
@@ -425,13 +431,13 @@ fn test_teammate_live_refetch() {
         tool_uses: 1,
         last_activity: None,
         completed: None,
-    });
+    }));
     assert_eq!(
         app.teammate_view.as_ref().and_then(|v| v.last_fetched_turn),
         Some(2),
         "a same-turn echo does not refire the refetch guard"
     );
-    app.handle_agent_message(AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c2".into(),
         subagent_type: "plan".into(),
         turn: 5,
@@ -439,7 +445,7 @@ fn test_teammate_live_refetch() {
         tool_uses: 0,
         last_activity: None,
         completed: None,
-    });
+    }));
     assert_eq!(
         app.teammate_view.as_ref().and_then(|v| v.last_fetched_turn),
         Some(2),

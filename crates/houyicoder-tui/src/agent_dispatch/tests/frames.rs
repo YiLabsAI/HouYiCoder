@@ -48,17 +48,20 @@ fn test_frame_log_result_shape() {
 fn test_transcript_shows_redundant_calls() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::TrajectoryResult {
-        entries: vec![],
-        redundant: vec![
-            houyicoder_protocol::frontend::trajectory::RedundantCallEntry {
-                tool: "read".into(),
-                input_preview: "{\"file_path\":\"a.rs\"}".into(),
-                kind: "same-batch".into(),
-                gap: 0,
-                last_seq: 3,
-            },
-        ],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(2),
+        response: ServerResponse::Trajectory {
+            entries: vec![],
+            redundant: vec![
+                houyicoder_protocol::frontend::trajectory::RedundantCallEntry {
+                    tool: "read".into(),
+                    input_preview: "{\"file_path\":\"a.rs\"}".into(),
+                    kind: "same-batch".into(),
+                    gap: 0,
+                    last_seq: 3,
+                },
+            ],
+        },
     });
     assert!(
         app.transcript.iter().any(|l| matches!(
@@ -72,24 +75,27 @@ fn test_transcript_shows_redundant_calls() {
 #[test]
 fn test_tool_frames_track_set() {
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::Frame(tool_call_frame(
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
         "call_1",
         "bash",
         ToolCallStatus::InProgress,
-    )));
+    ))));
     assert!(app.running_tools.contains("call_1"));
-    app.handle_agent_message(AgentMessage::Frame(tool_done_frame("call_1")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_done_frame(
+        "call_1",
+    ))));
     assert!(app.running_tools.is_empty());
 }
 
 #[test]
 fn test_done_clears_running_tools() {
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::Frame(tool_call_frame(
+    app.active_run_req_id.set(Some(RequestId(1)));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
         "call_1",
         "bash",
         ToolCallStatus::InProgress,
-    )));
+    ))));
     app.handle_agent_message(done_msg());
     assert!(app.running_tools.is_empty());
 }
@@ -98,18 +104,20 @@ fn test_done_clears_running_tools() {
 fn test_completed_list_timestamped() {
     // Historic completions are not recent while unresolved work remains.
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
+    app.active_run_req_id.set(Some(RequestId(1)));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("old work", "completed"),
         ("current", "in_progress"),
-    ])));
+    ]))));
     app.handle_agent_message(done_msg());
     assert!(app.todos.completion_at.is_empty());
     // Completing the whole list timestamps every item for one shared
     // retirement.
-    app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
+    app.active_run_req_id.set(Some(RequestId(1)));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("old work", "completed"),
         ("current", "completed"),
-    ])));
+    ]))));
     app.handle_agent_message(done_msg());
     assert!(app.todos.completion_at.contains_key("current"));
     assert!(app.todos.completion_at.contains_key("old work"));
@@ -124,10 +132,11 @@ fn test_replayed_done_retires() {
     for _ in 0..3 {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
-        app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
+        app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
             ("old work", "completed"),
             ("current", "completed"),
-        ])));
+        ]))));
+        app.active_run_req_id.set(Some(RequestId(1)));
         app.handle_agent_message(done_msg());
         assert!(app.todos.items.is_empty());
         assert!(app.todos.completion_at.is_empty());
@@ -145,10 +154,11 @@ fn test_replayed_done_retires() {
 fn test_replayed_open_renders() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.handle_agent_message(AgentMessage::Frame(todo_frame(&[
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("old work", "completed"),
         ("open task", "pending"),
-    ])));
+    ]))));
+    app.active_run_req_id.set(Some(RequestId(1)));
     app.handle_agent_message(done_msg());
     let out = crate::test_harness::render_text(&app, 100, 24);
     assert!(
@@ -165,11 +175,13 @@ fn test_toggle_state_applies_view() {
     // On the pane: the snapshot applies + the pane stays open.
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Memory;
-    app.handle_agent_message(AgentMessage::MemoryToggleStateResult {
-        req_id: RequestId(1),
-        state: ToggleState {
-            auto_memory: false,
-            auto_dream: true,
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(1),
+        response: ServerResponse::MemoryToggleState {
+            state: ToggleState {
+                auto_memory: false,
+                auto_dream: true,
+            },
         },
     });
     assert!(!app.memory.toggles().auto_memory, "auto-memory applied");
@@ -179,11 +191,13 @@ fn test_toggle_state_applies_view() {
     // pane is NOT yanked back to Memory.
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Spec;
-    app.handle_agent_message(AgentMessage::MemoryToggleStateResult {
-        req_id: RequestId(2),
-        state: ToggleState {
-            auto_memory: false,
-            auto_dream: true,
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(2),
+        response: ServerResponse::MemoryToggleState {
+            state: ToggleState {
+                auto_memory: false,
+                auto_dream: true,
+            },
         },
     });
     assert!(
@@ -205,15 +219,17 @@ fn test_memory_list_respects_dismissal() {
     // On the pane: the list populates + the pane stays open.
     let mut app = crate::composition::app();
     app.pane = Pane::Memory;
-    app.handle_agent_message(AgentMessage::MemoryListResult {
-        req_id: RequestId(1),
-        entries: vec![MemorySummaryEntry {
-            key: "build-gate".to_string(),
-            description: "make check stays green".to_string(),
-            source: "project".to_string(),
-            scope: "project".to_string(),
-            mtime_secs: 0,
-        }],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(1),
+        response: ServerResponse::MemoryList {
+            entries: vec![MemorySummaryEntry {
+                key: "build-gate".to_string(),
+                description: "make check stays green".to_string(),
+                source: "project".to_string(),
+                scope: "project".to_string(),
+                mtime_secs: 0,
+            }],
+        },
     });
     assert_eq!(app.pane, Pane::Memory, "pane stays open on active refresh");
     assert!(
@@ -224,15 +240,17 @@ fn test_memory_list_respects_dismissal() {
     // NOT yanked back to Memory.
     let mut app = crate::composition::app();
     app.pane = Pane::Spec;
-    app.handle_agent_message(AgentMessage::MemoryListResult {
-        req_id: RequestId(2),
-        entries: vec![MemorySummaryEntry {
-            key: "build-gate".to_string(),
-            description: "make check stays green".to_string(),
-            source: "project".to_string(),
-            scope: "project".to_string(),
-            mtime_secs: 0,
-        }],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(2),
+        response: ServerResponse::MemoryList {
+            entries: vec![MemorySummaryEntry {
+                key: "build-gate".to_string(),
+                description: "make check stays green".to_string(),
+                source: "project".to_string(),
+                scope: "project".to_string(),
+                mtime_secs: 0,
+            }],
+        },
     });
     assert_eq!(
         app.pane,
@@ -252,15 +270,17 @@ fn test_pane_shows_command_result() {
 
     let mut app = crate::composition::app();
     app.pane = Pane::Memory;
-    app.handle_agent_message(AgentMessage::MemoryShowResult {
-        req_id: RequestId(9),
-        entry: Some(MemoryDetail {
-            key: "build-gate".into(),
-            content: "make check stays green".into(),
-            source: "project".into(),
-            description: "verification".into(),
-            mtime_secs: 0,
-        }),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(9),
+        response: ServerResponse::MemoryShow {
+            entry: Some(MemoryDetail {
+                key: "build-gate".into(),
+                content: "make check stays green".into(),
+                source: "project".into(),
+                description: "verification".into(),
+                mtime_secs: 0,
+            }),
+        },
     });
     assert!(app.transcript.iter().any(|line| matches!(
         line,
@@ -287,16 +307,16 @@ fn test_notice_shows_memory_changes() {
             operation: MemoryOperation::Deleted,
         },
     ];
-    app.handle_agent_message(AgentMessage::MemoryChanged {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-1".into()),
         origin: MemoryChangeOrigin::AutoDream,
         changes: changes.clone(),
-    });
-    app.handle_agent_message(AgentMessage::MemoryChanged {
+    }));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-1".into()),
         origin: MemoryChangeOrigin::AutoDream,
         changes,
-    });
+    }));
     assert_eq!(
         app.transcript
             .iter()
@@ -339,11 +359,11 @@ fn test_notice_wraps_long_keys() {
             operation: MemoryOperation::Stored,
         })
         .collect();
-    app.handle_agent_message(AgentMessage::MemoryChanged {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-long".into()),
         origin: MemoryChangeOrigin::AutoMemory,
         changes,
-    });
+    }));
     let out = crate::test_harness::render_text(&app, 54, 36);
     assert!(
         out.contains("Memory auto-memory: 4 changes · /memory"),

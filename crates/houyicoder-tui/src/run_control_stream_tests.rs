@@ -117,7 +117,9 @@ fn test_durable_clears_preview() {
     app.live_active = true;
     app.live_assistant_text = "same paragraph".into();
 
-    app.handle_agent_message(AgentMessage::Frame(agent_msg("same paragraph")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "same paragraph",
+    ))));
 
     assert!(app.live_assistant_text.is_empty());
     assert!(!app.live_active);
@@ -135,13 +137,21 @@ fn test_durable_clears_preview() {
 #[test]
 fn test_midturn_keeps_order() {
     let mut app = composition::app();
-    app.handle_agent_message(AgentMessage::Frame(user_msg("original")));
-    app.handle_agent_message(AgentMessage::Frame(agent_msg("earlier work")));
-    app.handle_agent_message(AgentMessage::Frame(user_msg("interjection")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
+        "original",
+    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "earlier work",
+    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
+        "interjection",
+    ))));
     app.live_active = true;
     app.live_assistant_text = "response".into();
 
-    app.handle_agent_message(AgentMessage::Frame(agent_msg("response")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "response",
+    ))));
 
     let user = app
         .transcript
@@ -165,18 +175,24 @@ fn test_midturn_keeps_order() {
 #[test]
 fn test_interrupted_content_shows_marker() {
     let mut app = composition::app();
-    app.handle_agent_message(AgentMessage::Frame(user_msg("hi")));
-    app.handle_agent_message(AgentMessage::Frame(agent_msg("partial reply")));
-    let msg = AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::Interrupted {
-                reason: "user".into(),
-            },
-            turns: 1,
-            usage: Usage::default(),
-            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
-        }),
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("hi"))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "partial reply",
+    ))));
+    let msg = SessionMessage::Response {
+        request: RequestId(11),
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::Interrupted {
+                    reason: "user".into(),
+                },
+                turns: 1,
+                usage: Usage::default(),
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+            }),
+        },
     };
+    app.active_run_req_id.set(Some(RequestId(11)));
     app.handle_agent_message(msg);
     assert!(!app.agent_busy, "Interrupted clears busy");
     assert!(
@@ -192,22 +208,26 @@ fn test_interrupted_content_shows_marker() {
 #[test]
 fn test_interrupt_restores_input() {
     let mut app = composition::app();
-    app.handle_agent_message(AgentMessage::Frame(user_msg("draft")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("draft"))));
     app.last_run_input = Some("draft".into());
     app.pending
         .push(crate::pending_queue::PendingItem::ParkedMessage(
             "queued".into(),
         ));
-    let msg = AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::Interrupted {
-                reason: "user".into(),
-            },
-            turns: 0,
-            usage: Usage::default(),
-            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
-        }),
+    let msg = SessionMessage::Response {
+        request: RequestId(12),
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::Interrupted {
+                    reason: "user".into(),
+                },
+                turns: 0,
+                usage: Usage::default(),
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+            }),
+        },
     };
+    app.active_run_req_id.set(Some(RequestId(12)));
     app.handle_agent_message(msg);
     assert_eq!(app.input.value(), "draft", "input restored for editing");
     assert!(
@@ -243,26 +263,34 @@ fn test_interrupt_restores_input() {
 #[test]
 fn test_commit_blocks_restore() {
     let mut app = composition::app();
-    app.handle_agent_message(AgentMessage::Frame(user_msg("origin")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
+        "origin",
+    ))));
     app.last_run_input = Some("origin".into());
     let committed = houyicoder_protocol::frontend::QueuedInput::new("follow-up");
     app.pending.push(crate::pending_queue::PendingItem::Message(
         committed.clone(),
     ));
-    app.handle_agent_message(AgentMessage::Frame(user_msg("follow-up")));
-    app.handle_agent_message(AgentMessage::QueuedInputCommitted {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
+        "follow-up",
+    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
         inputs: vec![committed],
-    });
+    }));
 
-    app.handle_agent_message(AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::Interrupted {
-                reason: "user".into(),
-            },
-            turns: 0,
-            usage: Usage::default(),
-            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
-        }),
+    app.active_run_req_id.set(Some(RequestId(13)));
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(13),
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::Interrupted {
+                    reason: "user".into(),
+                },
+                turns: 0,
+                usage: Usage::default(),
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+            }),
+        },
     });
 
     assert!(app.input.is_empty(), "stale origin is not restored");
@@ -278,21 +306,27 @@ fn test_commit_blocks_restore() {
 #[test]
 fn test_live_blocks_restore() {
     let mut app = composition::app();
-    app.handle_agent_message(AgentMessage::Frame(user_msg("origin")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
+        "origin",
+    ))));
     app.last_run_input = Some("origin".into());
-    app.handle_agent_message(AgentMessage::Delta {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
         text: "visible response".into(),
-    });
+    }));
 
-    app.handle_agent_message(AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::Interrupted {
-                reason: "user".into(),
-            },
-            turns: 0,
-            usage: Usage::default(),
-            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
-        }),
+    app.active_run_req_id.set(Some(RequestId(14)));
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(14),
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::Interrupted {
+                    reason: "user".into(),
+                },
+                turns: 0,
+                usage: Usage::default(),
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+            }),
+        },
     });
 
     assert!(app.input.is_empty(), "visible output prevents rollback");
@@ -312,7 +346,7 @@ fn test_recall_survives_interrupt() {
     app.screen = crate::state::Screen::Working;
     app.agent_busy = true;
     app.last_run_input = Some("first".into());
-    app.handle_agent_message(AgentMessage::Frame(user_msg("first")));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("first"))));
     // Queue a message while the run is in flight (spawn_run's busy path:
     // pending push; the busy branch takes no send).
     app.spawn_run("zzsecond".into());
@@ -332,15 +366,19 @@ fn test_recall_survives_interrupt() {
         "explicit recall moves the queue head into the input"
     );
     // The aborted run settles Interrupted with no real content.
-    app.handle_agent_message(AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::Interrupted {
-                reason: "user".into(),
-            },
-            turns: 0,
-            usage: Usage::default(),
-            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
-        }),
+    app.active_run_req_id.set(Some(RequestId(15)));
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(15),
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::Interrupted {
+                    reason: "user".into(),
+                },
+                turns: 0,
+                usage: Usage::default(),
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+            }),
+        },
     });
     assert_eq!(
         app.input.value(),
@@ -377,14 +415,18 @@ fn test_max_turns_records_hint() {
     // MaxTurnsReached is a graceful Ok outcome (not an Err payload): the
     // wire carries turns + usage, the TUI surfaces a resume hint.
     let mut app = composition::app();
-    let msg = AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::MaxTurnsReached { turns: 5 },
-            turns: 5,
-            usage: Usage::default(),
-            stop_reason: houyicoder_protocol::frontend::run::StopReason::MaxTurnRequests,
-        }),
+    let msg = SessionMessage::Response {
+        request: RequestId(16),
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::MaxTurnsReached { turns: 5 },
+                turns: 5,
+                usage: Usage::default(),
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::MaxTurnRequests,
+            }),
+        },
     };
+    app.active_run_req_id.set(Some(RequestId(16)));
     app.handle_agent_message(msg);
     assert!(!app.agent_busy);
     assert!(app.transcript.iter().any(|l| matches!(

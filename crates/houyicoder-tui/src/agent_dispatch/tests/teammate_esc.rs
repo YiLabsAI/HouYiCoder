@@ -69,13 +69,16 @@ fn test_teammate_echo_preserved() {
         ..Default::default()
     });
     // A refetch whose fetched transcript lacks the echo: preserve it.
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: vec![TranscriptFrame::Session(SessionUpdate::UserMessageChunk(
-            ContentChunk::new(ContentBlock::Text {
-                text: "child reply".into(),
-            }),
-        ))],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(18),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: vec![TranscriptFrame::Session(SessionUpdate::UserMessageChunk(
+                ContentChunk::new(ContentBlock::Text {
+                    text: "child reply".into(),
+                }),
+            ))],
+        },
     });
     let view = app.teammate_view.as_ref().expect("view stays");
     assert!(
@@ -91,13 +94,16 @@ fn test_teammate_echo_preserved() {
     );
     // A refetch whose fetched transcript carries the durable steering line:
     // the echo clears (the real line replaced it).
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: vec![TranscriptFrame::Session(SessionUpdate::UserMessageChunk(
-            ContentChunk::new(ContentBlock::Text {
-                text: "steer this".into(),
-            }),
-        ))],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(19),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: vec![TranscriptFrame::Session(SessionUpdate::UserMessageChunk(
+                ContentChunk::new(ContentBlock::Text {
+                    text: "steer this".into(),
+                }),
+            ))],
+        },
     });
     assert!(
         app.teammate_view
@@ -199,9 +205,12 @@ fn test_child_transcript_last_row() {
             color: None,
         });
     }
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: Vec::new(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(20),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: Vec::new(),
+        },
     });
     let folded: Vec<&[TranscriptLine]> = app
         .transcript
@@ -243,9 +252,12 @@ fn test_child_transcript_no_row() {
         completed_at: None,
         started_at: None,
     });
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: Vec::new(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(21),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: Vec::new(),
+        },
     });
     assert!(
         app.transcript
@@ -280,9 +292,12 @@ fn test_child_sid_unique() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "child-A".into(),
-        frames: Vec::new(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(22),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "child-A".into(),
+            frames: Vec::new(),
+        },
     });
     let child_b = app
         .transcript
@@ -405,9 +420,12 @@ fn test_running_child_starting() {
         completed_at: None,
         started_at: None,
     });
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: Vec::new(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(23),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: Vec::new(),
+        },
     });
     let view = app.teammate_view.as_ref().expect("view stays");
     assert!(
@@ -447,9 +465,12 @@ fn test_completed_child_unavailable() {
         completed_at: None,
         started_at: None,
     });
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: Vec::new(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(24),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: Vec::new(),
+        },
     });
     let view = app.teammate_view.as_ref().expect("view stays");
     assert!(

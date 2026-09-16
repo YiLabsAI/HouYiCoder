@@ -11,7 +11,7 @@ fn test_bundle() -> RunnerBundle {
     let gate = bundle.gate;
     let append_notify = bundle.append_notify;
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
-    let (tx, rx) = mpsc::channel::<crate::run_control::AgentMessage>();
+    let (tx, rx) = mpsc::channel::<SessionMessage>();
     let (runner, client, startup_warnings) =
         pair_inproc_server(runner, session, gate, append_notify, None);
     drop(runner);
@@ -42,7 +42,7 @@ fn test_bundle_tracked() -> (RunnerBundle, tokio::task::JoinHandle<()>) {
     let gate = bundle.gate;
     let append_notify = bundle.append_notify;
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
-    let (tx, rx) = mpsc::channel::<crate::run_control::AgentMessage>();
+    let (tx, rx) = mpsc::channel::<SessionMessage>();
     let (runner, client, serve, startup_warnings) =
         pair_inproc_server_tracked(runner, session, gate, append_notify, None);
     drop(runner);

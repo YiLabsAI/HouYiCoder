@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_in_result)]
 
 use std::sync::Arc;
+use std::sync::mpsc::{Sender, channel};
 use std::time::{Duration, Instant};
 
 use houyicoder_api::provider::ModelProvider;
@@ -17,6 +18,7 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_provider::OpenAiCompatibleProvider;
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
+use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::state::TranscriptLine;
 
 /// Pair an in-memory server + client around a runner, mirroring the CLI
@@ -27,7 +29,7 @@ fn pair_inproc(
     mut runner: Runner,
     session: SessionId,
     gate: Arc<houyicoder_permission::DefaultModeGate>,
-    _agent_tx: std::sync::mpsc::Sender<houyicoder_tui::run_control::AgentMessage>,
+    _agent_tx: Sender<SessionMessage>,
 ) -> (Arc<Runner>, Client) {
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
@@ -86,7 +88,7 @@ fn live_app_with_tools(manual: bool) -> houyicoder_tui::state::App {
         );
     }
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
-    let (tx, rx) = std::sync::mpsc::channel::<houyicoder_tui::run_control::AgentMessage>();
+    let (tx, rx) = channel::<SessionMessage>();
     let (runner, client) = pair_inproc(runner, session, gate, tx.clone());
     drop(runner); // server owns the runner; the TUI holds no engine handle.
     houyicoder_tui::composition::build_app(houyicoder_tui::composition::RunnerBundle {

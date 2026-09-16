@@ -16,7 +16,7 @@ mod scroll;
 mod search_view;
 mod teammate_view;
 
-use crate::agent_message::{FleetState, PaneAgents};
+use crate::agent_message::{FleetState, PaneAgents, SessionMessage};
 use crate::composition::WorktreeEntry;
 #[cfg(test)]
 use crate::composition::app as test_app;
@@ -78,7 +78,6 @@ pub use crate::evidence::{
     PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
 pub use crate::records::{Approval, SpecContext, StatusStub, TranscriptLine};
-pub use crate::run_control::AgentMessage;
 
 pub use crate::state::enums::*;
 
@@ -310,7 +309,7 @@ pub struct App {
     pub runtime: Option<Arc<tokio::runtime::Runtime>>,
     /// Sender cloned into each spawned task; the task ships the RunResult plus
     /// the session replay back over this channel.
-    pub agent_tx: Option<mpsc::Sender<AgentMessage>>,
+    pub agent_tx: Option<mpsc::Sender<SessionMessage>>,
     /// The live connection with the engine: owns the command channel to the
     /// driver, the message channel back to the event loop, the request-id
     /// counter, and the driver task handle. None in the pure-stub path.

@@ -1,6 +1,6 @@
 //! Trust-screen state and key-routing tests.
 
-use crate::agent_message::AgentMessage;
+use crate::agent_message::{ServerRequest, SessionMessage};
 use crate::composition;
 use crate::state::{Screen, TrustChoice};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -15,11 +15,13 @@ use houyicoder_protocol::frontend::trust::TrustPrompt;
 fn test_trust_ask_resets_choice() {
     let mut app = composition::app();
     app.trust_choice = TrustChoice::Exit;
-    app.handle_agent_message(AgentMessage::TrustAsk {
-        req_id: RequestId(3),
-        prompt: TrustPrompt {
-            project_path: "/proj".into(),
-            risks: Vec::new(),
+    app.handle_agent_message(SessionMessage::Request {
+        request: RequestId(3),
+        payload: ServerRequest::Trust {
+            prompt: TrustPrompt {
+                project_path: "/proj".into(),
+                risks: Vec::new(),
+            },
         },
     });
     assert_eq!(app.trust_choice, TrustChoice::Accept);

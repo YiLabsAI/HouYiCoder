@@ -189,15 +189,62 @@ impl FleetState {
 }
 
 /// One message shipped from the client-driver task back to the TUI event
-/// loop. The driver is a stateless translator: each durable frame the server
-/// ships becomes a Frame message the event loop pushes into its own history
-/// (App owns the frame log, not the driver — the
-/// frontend owns the message list and the SDK yields deltas). Delta
-/// carries streamed text chunks for the live preview. PermissionAsk raises
-/// the approval card; Done carries the final outcome. Neither carries a
-/// frame snapshot — the event loop's own frame log is the source of truth.
+/// loop, classified by protocol direction. The four directions follow the
+/// protocol envelope: connection lifecycle, request responses, server
+/// events, and server-initiated requests. Neither a response nor an event
+/// carries a frame snapshot — the event loop's own frame log is the source
+/// of truth.
 #[derive(Debug)]
-pub enum AgentMessage {
+pub enum SessionMessage {
+    /// The connection itself: handshake readiness and death.
+    Connection(ConnectionEvent),
+    /// A reply to a request the client issued. Every response keeps the
+    /// request id it answers, so routing never has to guess which verb a
+    /// reply belongs to.
+    Response {
+        request: RequestId,
+        response: ServerResponse,
+    },
+    /// A server-originated event: streaming deltas, durable frames, and
+    /// notifications pushed without a request.
+    Event(ServerEvent),
+    /// A server-initiated request the client must answer; the verdict
+    /// replies on the same request id.
+    Request {
+        request: RequestId,
+        payload: ServerRequest,
+    },
+}
+
+/// Connection lifecycle events: the handshake result and the driver's
+/// death. Lost is distinct from a failed run: the transport itself is gone.
+#[derive(Debug)]
+pub enum ConnectionEvent {
+    /// The Hello handshake succeeded: the connection is ready for requests.
+    /// Emitted once per connection, before any Frame or Request the same
+    /// connection produces. The App marks the connection Ready on receipt.
+    Ready,
+    /// The session driver died (connect, send, or read failure): no reply
+    /// can ever land again. The App ends any active run, sweeps pending
+    /// pane marks that would otherwise wait forever, and records the cause.
+    Lost { cause: String },
+}
+
+/// One child's live status snapshot, grouped so the dispatch hand-off
+/// passes one value rather than a field list.
+pub(crate) struct AgentStatusSnapshot {
+    pub agent_id: String,
+    pub subagent_type: String,
+    pub turn: u32,
+    pub tokens: u64,
+    pub tool_uses: u32,
+    pub last_activity: Option<String>,
+    pub completed: Option<String>,
+}
+
+/// Server-originated events: the event direction of the session protocol.
+#[derive(Debug)]
+pub enum ServerEvent {
     /// One durable wire frame the driver observed. The event loop pushes it
     /// into its own frame log; the transcript projection reads from there.
     Frame(TranscriptFrame),
@@ -218,161 +265,17 @@ pub enum AgentMessage {
     /// Each acknowledgement removes only the matching pending item, so delayed
     /// delivery cannot remove a newer input with the same text.
     QueuedInputCommitted { inputs: Vec<QueuedInput> },
-    /// A runtime notice the agent loop wants surfaced as a system line (e.g.
-    /// a provider rejected an over-long request without naming its limit,
-    /// pointing the user at the catalog override). The host renders the
-    /// pre-rendered text verbatim as a transcript system line.
-    SystemLine { text: String },
-    /// A mid-turn permission ask the server surfaced as a reverse request. The
-    /// TUI raises the approval card; the verdict returns via a ClientCommand
-    /// the driver forwards as the matching reverse response. The driver has
-    /// already shipped every Frame up to this point, so the event loop's own
-    /// frame log is current and the transcript rebuild reads it directly.
-    PermissionAsk {
-        req_id: RequestId,
-        ask: ApprovalRequest,
-    },
-    /// A startup workspace-trust ask the server surfaced as a reverse
-    /// request before the run loop. The TUI raises the trust card; the
-    /// verdict returns via a ClientCommand the driver forwards as the
-    /// matching reverse response. Fires once per project path (the answer
-    /// persists in user-level settings), so the card is simpler than
-    /// PermissionAsk: no tool call to resume, no run to pause.
-    TrustAsk {
-        req_id: RequestId,
-        prompt: houyicoder_protocol::frontend::trust::TrustPrompt,
-    },
-    /// The run finished (or failed). The driver has already shipped every
-    /// Frame for the run, so the event loop rebuilds the transcript from its
-    /// own log; no snapshot ships here.
-    Done { result: Result<RunResult, RunError> },
-    /// The Hello handshake succeeded: the connection is ready for requests.
-    /// Emitted once per connection, before any Frame or Request the same
-    /// connection produces. The App marks the connection Ready on receipt.
-    ConnectionReady,
-    /// The session driver died (connect, send, or read failure): no reply
-    /// can ever land again. Distinct from Done{Err}, which reports a run
-    /// failure the server classified; this is the transport itself gone.
-    /// The App ends any active run, sweeps pending pane marks that would
-    /// otherwise wait forever, and surfaces the message as an error line.
-    ConnectionLost { message: String },
-    /// A status snapshot the /status command requested over the wire. The
-    /// state renders it without importing the engine crate.
-    StatusResult {
-        snapshot: houyicoder_protocol::frontend::status::StatusSnapshot,
-    },
-    /// The session trajectory the /trajectory command requested over the wire.
-    /// Carries the audit-log entries (3-level drill-down) + the redundant-call
-    /// observations (self-evolution reward signal section).
-    TrajectoryResult {
-        entries: Vec<houyicoder_protocol::frontend::trajectory::TrajectoryEntry>,
-        redundant: Vec<houyicoder_protocol::frontend::trajectory::RedundantCallEntry>,
-    },
-    /// The context-window breakdown the /context command requested over the
-    /// wire. The state renders the grid without importing the engine crate.
-    ContextResult {
-        breakdown: houyicoder_protocol::frontend::context::ContextBreakdown,
-    },
-    /// The compaction outcome the /compact command requested over the wire.
-    /// Carries whether progress was made, the folded event count, the
-    /// persisted manifest id, and pre/post token estimates so the state
-    /// renders a one-line outcome without importing the engine crate.
-    CompactResult {
-        reply: houyicoder_protocol::frontend::compact::CompactReply,
-    },
-    /// The stored-memory list the /memory command requested over the wire.
-    /// Frontmatter-only summaries (no body); a /memory <key> show fetches the
-    /// body separately. req_id pairs the reply with a pending pane action
-    /// (a forget re-list); plain refreshes carry an id no action waits on.
-    MemoryListResult {
-        req_id: RequestId,
-        entries: Vec<MemorySummaryEntry>,
-    },
-    /// The full body of one memory the /memory <key> show requested, or None
-    /// when the key was absent.
-    MemoryShowResult {
-        req_id: RequestId,
-        entry: Option<MemoryDetail>,
-    },
-    /// The toggle snapshot the /memory pane requested on open (a read) or the
-    /// /memory toggle command requested (a flip). Both auto-memory and
-    /// auto-dream ride back so the pane renders both rows from one round-trip.
-    /// req_id tells a flip reply from a pane-open read so only the flip
-    /// writes a transcript outcome.
-    MemoryToggleStateResult {
-        req_id: RequestId,
-        state: ToggleState,
-    },
     /// Successful memory changes emitted together by one producer.
     MemoryChanged {
         id: MemoryChangeId,
         origin: MemoryChangeOrigin,
         changes: Vec<MemoryChange>,
     },
-    /// The current permission mode the /model read requested over the wire.
-    PermissionModeResult {
-        mode: houyicoder_protocol::frontend::permission::PermissionMode,
-    },
-    /// The durable rule set the /rules read requested over the wire.
-    PermissionRulesResult {
-        rules: Vec<houyicoder_protocol::frontend::permission::PermissionRule>,
-    },
-    /// The working directories added to the sandbox at runtime (/permissions
-    /// Workspace tab). Refreshes on every add/remove so the tab stays in sync.
-    PermissionDirsResult { dirs: Vec<String> },
-    /// The git-confirm checkpoint toggle state the /permission git command requested.
-    PermissionAskBeforeGitResult { enabled: bool },
-    /// The registered tool list the /tools command requested over the wire.
-    ToolListResult {
-        tools: Vec<houyicoder_protocol::frontend::tools::ToolEntry>,
-    },
-    /// The formatted agent directory string the /agents command requested.
-    AgentsResult { directory: String },
-    /// The on-demand child transcript for an expanded Subagent fold-group.
-    /// Frames arrive already converted to TranscriptFrame, so the fill site
-    /// runs transcript_from_frames to populate the child rows through the same
-    /// projection as the parent flow. child_sid keys the Subagent line to
-    /// update in place.
-    ChildTranscriptResult {
-        child_sid: String,
-        frames: Vec<TranscriptFrame>,
-    },
-    /// The registered hooks the /hooks command requested (read-only visibility).
-    HooksResult {
-        hooks: Vec<houyicoder_protocol::frontend::hooks::HookEntry>,
-    },
-    /// The discovered skills the /skills command requested.
-    SkillsResult {
-        skills: Vec<houyicoder_protocol::frontend::skills::SkillEntry>,
-    },
-    /// The /undo reply: a description of what was undone, or None when the
-    /// undo stack was empty.
-    UndoResult { description: Option<String> },
-    /// The /model select reply: the model id and effort the host actually
-    /// applied, so the status bar renders what is being sent rather than what
-    /// the picker requested. effort None means no effort parameter is sent.
-    ModelResult {
-        model: String,
-        effort: Option<EffortLevel>,
-    },
-    /// The /model pane catalog snapshot: the entries to list, the active id,
-    /// and the global effort fallback. The pane renders from this rather than
-    /// a hardcoded model list, so the rows reflect settings.json.
-    ModelInfoResult {
-        catalog: houyicoder_protocol::frontend::model::ModelCatalog,
-    },
-    /// A per-request protocol error (a ResponsePayload::Error for a verb that is
-    /// NOT a run — a permission/working-dir/mode query the server rejected).
-    /// Carries the req_id so the App can tell it apart from a run-failure
-    /// (runs surface as Done{Err}); a non-run error becomes a system line,
-    /// not a false run-completion (which would corrupt agent_busy mid-run).
-    RequestError { req_id: RequestId, message: String },
-    /// The /debug reply: whether the diagnostic sink is now recording and
-    /// the file path it writes to. Routed to a system line so the user is
-    /// told where to look.
-    DebugResult {
-        state: houyicoder_protocol::frontend::debug::DebugState,
-    },
+    /// A runtime notice the agent loop wants surfaced as a system line (e.g.
+    /// a provider rejected an over-long request without naming its limit,
+    /// pointing the user at the catalog override). The host renders the
+    /// pre-rendered text verbatim as a transcript system line.
+    SystemLine { text: String },
     /// A spawned child's live status snapshot, from the fleet status relay.
     /// Drives the agent status footer. completed is None while running.
     AgentStatus {
@@ -386,9 +289,149 @@ pub enum AgentMessage {
     },
 }
 
+/// Server-initiated requests: the request direction. The client answers each
+/// with a ClientCommand the driver forwards as the reverse response paired
+/// by the same request id the server minted.
+#[derive(Debug)]
+pub enum ServerRequest {
+    /// A mid-turn permission ask the server surfaced as a reverse request.
+    /// The TUI raises the approval card; the verdict returns via a
+    /// ClientCommand. The driver has already shipped every Frame up to this
+    /// point, so the event loop's own frame log is current and the
+    /// transcript rebuild reads it directly.
+    Permission { ask: Box<ApprovalRequest> },
+    /// A startup workspace-trust ask the server surfaced as a reverse
+    /// request before the run loop. The TUI raises the trust card; the
+    /// verdict returns via a ClientCommand the driver forwards as the
+    /// matching reverse response. Fires once per project path (the answer
+    /// persists in user-level settings), so the card is simpler than
+    /// Permission: no tool call to resume, no run to pause.
+    Trust {
+        prompt: houyicoder_protocol::frontend::trust::TrustPrompt,
+    },
+}
+
+/// Request responses: the response direction. Each variant is a reply to a
+/// specific request verb; the pairing request id rides the SessionMessage
+/// wrapper, not the variant, so no reply can drop its identity.
+#[derive(Debug)]
+pub enum ServerResponse {
+    /// The run finished (or failed). The driver has already shipped every
+    /// Frame for the run, so the event loop rebuilds the transcript from its
+    /// own log; no snapshot ships here.
+    Done { result: Result<RunResult, RunError> },
+    /// A per-request protocol error (a rejected verb that is not a run).
+    /// Distinct from a run failure the server classified; a non-run error
+    /// becomes a system line, not a false run-completion (which would
+    /// corrupt agent_busy mid-run).
+    Error { message: String },
+    /// A fire-and-forget request the server acknowledged (e.g. SessionReset).
+    /// The host acts on these locally at send time, so the acknowledgement
+    /// carries no payload — but it is still a response, and its request id
+    /// reaches the event loop like every other reply.
+    Ack,
+    /// A status snapshot the /status command requested over the wire. The
+    /// state renders it without importing the engine crate.
+    Status {
+        snapshot: Box<houyicoder_protocol::frontend::status::StatusSnapshot>,
+    },
+    /// The session trajectory the /trajectory command requested over the wire.
+    /// Carries the audit-log entries (3-level drill-down) + the redundant-call
+    /// observations (self-evolution reward signal section).
+    Trajectory {
+        entries: Vec<houyicoder_protocol::frontend::trajectory::TrajectoryEntry>,
+        redundant: Vec<houyicoder_protocol::frontend::trajectory::RedundantCallEntry>,
+    },
+    /// The context-window breakdown the /context command requested over the
+    /// wire. The state renders the grid without importing the engine crate.
+    Context {
+        breakdown: houyicoder_protocol::frontend::context::ContextBreakdown,
+    },
+    /// The compaction outcome the /compact command requested over the wire.
+    /// Carries whether progress was made, the folded event count, the
+    /// persisted manifest id, and pre/post token estimates so the state
+    /// renders a one-line outcome without importing the engine crate.
+    Compact {
+        reply: houyicoder_protocol::frontend::compact::CompactReply,
+    },
+    /// The stored-memory list the /memory command requested over the wire.
+    /// Frontmatter-only summaries (no body); a /memory <key> show fetches the
+    /// body separately.
+    MemoryList { entries: Vec<MemorySummaryEntry> },
+    /// The full body of one memory the /memory <key> show requested, or None
+    /// when the key was absent.
+    MemoryShow { entry: Option<MemoryDetail> },
+    /// The toggle snapshot the /memory pane requested on open (a read) or the
+    /// /memory toggle command requested (a flip). Both auto-memory and
+    /// auto-dream ride back so the pane renders both rows from one
+    /// round-trip.
+    MemoryToggleState { state: ToggleState },
+    /// The current permission mode the /model read requested over the wire.
+    PermissionMode {
+        mode: houyicoder_protocol::frontend::permission::PermissionMode,
+    },
+    /// The durable rule set the /rules read requested over the wire.
+    PermissionRules {
+        rules: Vec<houyicoder_protocol::frontend::permission::PermissionRule>,
+    },
+    /// The working directories added to the sandbox at runtime (/permissions
+    /// Workspace tab). Refreshes on every add/remove so the tab stays in sync.
+    PermissionDirs { dirs: Vec<String> },
+    /// The git-confirm checkpoint toggle state the /permission git command
+    /// requested.
+    PermissionAskBeforeGit { enabled: bool },
+    /// The registered tool list the /tools command requested over the wire.
+    Tools {
+        tools: Vec<houyicoder_protocol::frontend::tools::ToolEntry>,
+    },
+    /// The formatted agent directory string the /agents command requested.
+    Agents { directory: String },
+    /// The on-demand child transcript for an expanded Subagent fold-group.
+    /// Frames arrive already converted to TranscriptFrame, so the fill site
+    /// runs transcript_from_frames to populate the child rows through the
+    /// same projection as the parent flow. child_sid keys the Subagent line
+    /// to update in place.
+    ChildTranscript {
+        child_sid: String,
+        frames: Vec<TranscriptFrame>,
+    },
+    /// The registered hooks the /hooks command requested (read-only
+    /// visibility).
+    Hooks {
+        hooks: Vec<houyicoder_protocol::frontend::hooks::HookEntry>,
+    },
+    /// The discovered skills the /skills command requested.
+    Skills {
+        skills: Vec<houyicoder_protocol::frontend::skills::SkillEntry>,
+    },
+    /// The /undo reply: a description of what was undone, or None when the
+    /// undo stack was empty.
+    Undo { description: Option<String> },
+    /// The /model select reply: the model id and effort the host actually
+    /// applied, so the status bar renders what is being sent rather than
+    /// what the picker requested. effort None means no effort parameter is
+    /// sent.
+    Model {
+        model: String,
+        effort: Option<EffortLevel>,
+    },
+    /// The /model pane catalog snapshot: the entries to list, the active id,
+    /// and the global effort fallback. The pane renders from this rather than
+    /// a hardcoded model list, so the rows reflect settings.json.
+    ModelInfo {
+        catalog: houyicoder_protocol::frontend::model::ModelCatalog,
+    },
+    /// The /debug reply: whether the diagnostic recorder is now recording
+    /// and the file path it writes to. Routed to a system line so the user
+    /// is told where to look.
+    Debug {
+        state: houyicoder_protocol::frontend::debug::DebugState,
+    },
+}
+
 /// A command the TUI ships to the client-driver task. The driver owns the
 /// protocol Client; the App sends commands over this channel and receives
-/// results back as AgentMessage on the agent channel.
+/// results back as SessionMessage on the agent channel.
 pub enum ClientCommand {
     /// Send a MessageSend request (a new user turn). req_id comes from the
     /// session connection. disabled_skills carries the session-scoped
@@ -413,10 +456,9 @@ pub enum ClientCommand {
         accept: bool,
     },
     /// Request a runner status snapshot over the wire (the /status command).
-    /// The driver sends the request + ships the reply back as
-    /// AgentMessage::StatusResult. req_id comes from the session connection;
-    /// distinct from any active run's req_id so the driver routes the reply
-    /// correctly.
+    /// The driver sends the request + ships the reply back as a Status
+    /// response. req_id comes from the session connection; distinct from any
+    /// active run's req_id so the driver routes the reply correctly.
     StatusQuery {
         req_id: RequestId,
     },
@@ -457,13 +499,14 @@ pub enum ClientCommand {
     /// Subagent fold-group with no child rows yet. A re-expand reuses the
     /// cached rows. The server replays the child session log, projects each
     /// turn event through the same session/update + acpx projection the live
-    /// push path uses, and returns a one-shot snapshot as ChildTranscriptResult.
+    /// push path uses, and returns a one-shot snapshot as a ChildTranscript
+    /// response.
     ChildTranscriptQuery {
         req_id: RequestId,
         child_sid: FrontendSessionId,
     },
     /// Request the registered hooks list over the wire (the /hooks command).
-    /// Read-only visibility: which hook events are wired, their name + source.
+    /// Read-only visibility: which hook events are registered, name + source.
     HooksQuery {
         req_id: RequestId,
     },
@@ -499,7 +542,7 @@ pub enum ClientCommand {
     /// Forget one memory by key + scope (the /memory forget command or the
     /// pane d action). The scope routes the delete to the matching storage
     /// root so forgetting a user/project row deletes the explicit file. The
-    /// reply is a refreshed MemoryListResult so the pane narrows.
+    /// reply is a refreshed MemoryList response so the pane narrows.
     MemoryForgetQuery {
         req_id: RequestId,
         key: String,
@@ -542,8 +585,8 @@ pub enum ClientCommand {
         enabled: Option<bool>,
     },
     /// Query the /model pane catalog (the entries to list + active id +
-    /// effort fallback) over the wire. The reply arrives as
-    /// ModelInfoResult. Fired when the pane opens so the rows reflect
+    /// effort fallback) over the wire. The reply arrives as a ModelInfo
+    /// response. Fired when the pane opens so the rows reflect
     /// settings.json, not a hardcoded list.
     ModelInfoQuery {
         req_id: RequestId,
@@ -563,7 +606,7 @@ pub enum ClientCommand {
     /// Rename the current session (the /status Status tab inline edit). The
     /// server writes the sidecar name + name_source=User (or clears to Auto
     /// on an empty name) and replies with a fresh StatusSnapshot, which the
-    /// host routes to StatusResult so the pane + the terminal tab title
+    /// host routes to a Status response so the pane + the terminal tab title
     /// refresh together.
     RenameSessionQuery {
         req_id: RequestId,

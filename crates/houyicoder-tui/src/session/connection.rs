@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use houyicoder_protocol::envelope::RequestId;
 
-use crate::agent_message::{AgentMessage, ClientCommand};
+use crate::agent_message::{ClientCommand, SessionMessage};
 
 mod driver;
 
@@ -84,7 +84,7 @@ pub enum ConnectionStatus {
 )]
 pub enum PollOutcome {
     /// A message is ready to apply.
-    Message(AgentMessage),
+    Message(SessionMessage),
     /// No message is ready right now; the driver is still live.
     Idle,
     /// The message channel closed: the driver task has ended.
@@ -94,7 +94,7 @@ pub enum PollOutcome {
 /// Channels, request identifiers, and driver lifetime for one live connection.
 pub struct SessionConnection {
     cmd_tx: tokio::sync::mpsc::UnboundedSender<ClientCommand>,
-    agent_rx: mpsc::Receiver<AgentMessage>,
+    agent_rx: mpsc::Receiver<SessionMessage>,
     next_req_id: Cell<u64>,
     exhaustion_reported: Cell<bool>,
     status: ConnectionStatus,
@@ -105,8 +105,8 @@ impl SessionConnection {
     /// Spawn the protocol driver and retain the application-facing channels.
     pub fn spawn(
         client: houyicoder_client::Client,
-        agent_tx: mpsc::Sender<AgentMessage>,
-        agent_rx: mpsc::Receiver<AgentMessage>,
+        agent_tx: mpsc::Sender<SessionMessage>,
+        agent_rx: mpsc::Receiver<SessionMessage>,
         runtime: &tokio::runtime::Runtime,
     ) -> Self {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
@@ -204,7 +204,7 @@ impl SessionConnection {
     }
 
     /// Wait for the first bounded startup response before the initial draw.
-    pub fn poll_startup(&mut self, timeout: Duration) -> Option<AgentMessage> {
+    pub fn poll_startup(&mut self, timeout: Duration) -> Option<SessionMessage> {
         self.agent_rx.recv_timeout(timeout).ok()
     }
 }

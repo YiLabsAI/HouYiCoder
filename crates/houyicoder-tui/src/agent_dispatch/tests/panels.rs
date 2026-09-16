@@ -3,8 +3,11 @@ use super::*;
 #[test]
 fn test_agents_result_stores_directory() {
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::AgentsResult {
-        directory: "## Available agents\n\n- explore: fast".into(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(9),
+        response: ServerResponse::Agents {
+            directory: "## Available agents\n\n- explore: fast".into(),
+        },
     });
     assert_eq!(
         app.agent_directory.as_deref(),
@@ -15,11 +18,14 @@ fn test_agents_result_stores_directory() {
 #[test]
 fn test_tool_list_result_stored() {
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::ToolListResult {
-        tools: vec![houyicoder_protocol::frontend::tools::ToolEntry {
-            name: "bash".into(),
-            description: "run a command".into(),
-        }],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(10),
+        response: ServerResponse::Tools {
+            tools: vec![houyicoder_protocol::frontend::tools::ToolEntry {
+                name: "bash".into(),
+                description: "run a command".into(),
+            }],
+        },
     });
     assert_eq!(app.tool_entries.len(), 1);
     assert_eq!(app.tool_entries[0].name, "bash");
@@ -28,16 +34,19 @@ fn test_tool_list_result_stored() {
 #[test]
 fn test_skills_result_stored() {
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::SkillsResult {
-        skills: vec![houyicoder_protocol::frontend::skills::SkillEntry {
-            name: "pdf-export".into(),
-            description: "export chat to pdf".into(),
-            origin: "user".into(),
-            invocable: true,
-            body_token_estimate: 320,
-            user_invocable: true,
-            usage: None,
-        }],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(11),
+        response: ServerResponse::Skills {
+            skills: vec![houyicoder_protocol::frontend::skills::SkillEntry {
+                name: "pdf-export".into(),
+                description: "export chat to pdf".into(),
+                origin: "user".into(),
+                invocable: true,
+                body_token_estimate: 320,
+                user_invocable: true,
+                usage: None,
+            }],
+        },
     });
     assert_eq!(app.skill_entries.len(), 1);
     assert_eq!(app.skill_entries[0].name, "pdf-export");

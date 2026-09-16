@@ -1,6 +1,7 @@
 use crate::records::TranscriptLine;
 use crate::test_harness::render_text;
 use crate::test_harness::working_app;
+use houyicoder_protocol::envelope::RequestId;
 
 fn bash_call(command: &str) -> TranscriptLine {
     TranscriptLine::Tool {
@@ -138,7 +139,7 @@ fn test_exit_teammate_restores_parent() {
 /// so the cache rebuilds with the child rows.
 #[test]
 fn test_teammate_fill_renders_child() {
-    use crate::run_control::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use crate::transcript::TranscriptFrame;
     use houyicoder_protocol::frontend::run::ContentBlock;
     use houyicoder_protocol::frontend::session_update::ContentChunk;
@@ -157,13 +158,16 @@ fn test_teammate_fill_renders_child() {
     app.enter_teammate_view_for_sid("c1", true);
     drop(render_text(&app, 80, 24));
     // The fetch lands with the child's assistant text.
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text {
-                text: "auth is in src/auth".into(),
-            }),
-        ))],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(1),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+                ContentChunk::new(ContentBlock::Text {
+                    text: "auth is in src/auth".into(),
+                }),
+            ))],
+        },
     });
     let out = render_text(&app, 80, 24);
     assert!(

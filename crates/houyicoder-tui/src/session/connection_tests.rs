@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use houyicoder_async::PFut;
 use houyicoder_client::{Client, Transport};
 use houyicoder_protocol::envelope::{
-    ClientFrame, EventEnvelope, EventSeq, ResponseEnvelope, ResponsePayload, ServerFrame,
-    ServerRequestEnvelope, ServerRequestPayload,
+    ClientFrame, EventEnvelope, EventSeq, RequestId, ResponseEnvelope, ResponsePayload,
+    ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing;
@@ -15,6 +15,7 @@ use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::handshake::Hello;
 
 use super::*;
+use crate::agent_message::{ConnectionEvent, ServerEvent, ServerRequest, ServerResponse};
 use crate::test_harness::connected_app_events;
 
 fn sid() -> houyicoder_protocol::frontend::SessionId {
@@ -197,7 +198,7 @@ async fn test_drive_client_read_done() {
     engine.close();
     let run = engine.drive(Vec::new()).await;
     match run.msgs.last() {
-        Some(AgentMessage::ConnectionLost { message }) => {
+        Some(SessionMessage::Connection(ConnectionEvent::Lost { cause: message })) => {
             assert!(
                 message.contains("connection lost"),
                 "expected a connection-lost message, got: {message}"
@@ -232,7 +233,7 @@ async fn test_drive_forwards_rename_command() {
 }
 
 /// A ServerFrame::Event carrying AgentStatus is translated to
-/// AgentMessage::AgentStatus by the driver, preserving every field.
+/// SessionMessage::AgentStatus by the driver, preserving every field.
 #[tokio::test]
 async fn test_drive_translates_agent_status() {
     let mut engine = FakeEngine::new();
@@ -248,16 +249,19 @@ async fn test_drive_translates_agent_status() {
     engine.close();
     let run = engine.drive(Vec::new()).await;
     assert!(
-        matches!(run.msgs.first(), Some(AgentMessage::ConnectionReady)),
+        matches!(
+            run.msgs.first(),
+            Some(SessionMessage::Connection(ConnectionEvent::Ready))
+        ),
         "the handshake success arrives first: {run:?}"
     );
     match run.msgs.get(1) {
-        Some(AgentMessage::AgentStatus {
+        Some(SessionMessage::Event(ServerEvent::AgentStatus {
             agent_id,
             turn,
             tokens,
             ..
-        }) => {
+        })) => {
             assert_eq!(agent_id, "c1");
             assert_eq!(*turn, 2);
             assert_eq!(*tokens, 150);
@@ -346,7 +350,7 @@ impl FakeEngine {
     async fn drive(self, commands: Vec<ClientCommand>) -> SessionRun {
         let client = Client::new(Box::new(self));
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
-        let (agent_tx, agent_rx) = std::sync::mpsc::channel::<AgentMessage>();
+        let (agent_tx, agent_rx) = std::sync::mpsc::channel::<SessionMessage>();
         for cmd in commands {
             cmd_tx.send(cmd).ok();
         }
@@ -420,7 +424,7 @@ impl Drop for FakeEngine {
 /// driver emitted and every frame it sent.
 #[derive(Debug)]
 struct SessionRun {
-    msgs: Vec<AgentMessage>,
+    msgs: Vec<SessionMessage>,
     sent: Vec<String>,
 }
 
@@ -636,14 +640,14 @@ async fn test_drive_translates_events() {
 
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::QueuedInputCommitted { inputs }
+            |m| matches!(m, SessionMessage::Event(ServerEvent::QueuedInputCommitted { inputs })
                 if inputs.len() == 1 && inputs[0].text == "queued text")
         ),
         "queue commit identity lost: {run:?}"
     );
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::MemoryChanged { id, changes, .. }
+            |m| matches!(m, SessionMessage::Event(ServerEvent::MemoryChanged { id, changes, .. })
                 if id.0 == "m1" && changes.len() == 1)
         ),
         "memory change identity lost: {run:?}"
@@ -651,11 +655,14 @@ async fn test_drive_translates_events() {
     assert!(
         run.msgs
             .iter()
-            .any(|m| matches!(m, AgentMessage::SystemLine { text } if text == "notice")),
+            .any(|m| matches!(m, SessionMessage::Event(ServerEvent::SystemLine { text }) if text == "notice")),
         "system line text lost: {run:?}"
     );
     assert!(
-        matches!(run.msgs.last(), Some(AgentMessage::ConnectionLost { .. })),
+        matches!(
+            run.msgs.last(),
+            Some(SessionMessage::Connection(ConnectionEvent::Lost { .. }))
+        ),
         "the terminal read error ends the driver: {run:?}"
     );
     // the Metrics event is skipped, not translated and not fatal
@@ -697,21 +704,21 @@ async fn test_drive_translates_tool_progress() {
 
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::ToolProgress { call_id, elapsed_secs, lines: Some(12) }
+            |m| matches!(m, SessionMessage::Event(ServerEvent::ToolProgress { call_id, elapsed_secs, lines: Some(12) })
                 if call_id == "call-7" && *elapsed_secs == 4)
         ),
         "full progress tick lost its fields: {run:?}"
     );
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::ToolProgress { call_id, lines: None, .. }
+            |m| matches!(m, SessionMessage::Event(ServerEvent::ToolProgress { call_id, lines: None, .. })
                 if call_id == "call-8")
         ),
         "absent line count must surface as None: {run:?}"
     );
     assert!(
         !run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::ToolProgress { call_id, .. } if call_id == "call-9")
+            |m| matches!(m, SessionMessage::Event(ServerEvent::ToolProgress { call_id, .. }) if call_id == "call-9")
         ),
         "a tick without elapsed_secs must be dropped, not half-built: {run:?}"
     );
@@ -722,8 +729,8 @@ async fn test_drive_translates_tool_progress() {
     );
 }
 
-/// Core responses translate with their fields intact; Ack maps to no
-/// message at all.
+/// Core responses translate with their fields intact; Ack carries no
+/// payload but keeps the request id it answers.
 #[tokio::test]
 async fn test_drive_translates_core_responses() {
     use houyicoder_protocol::frontend::compact::CompactReply;
@@ -759,41 +766,59 @@ async fn test_drive_translates_core_responses() {
     assert!(
         run.msgs
             .iter()
-            .any(|m| matches!(m, AgentMessage::Done { result: Err(e) }
+            .any(|m| matches!(m, SessionMessage::Response { response: ServerResponse::Done { result: Err(e) }, .. }
                 if e.category == "provider" && e.message == "exhausted")),
         "run error must surface as Done with both fields: {run:?}"
     );
     assert!(
         run.msgs
             .iter()
-            .any(|m| matches!(m, AgentMessage::RequestError { message, .. }
+            .any(|m| matches!(m, SessionMessage::Response { response: ServerResponse::Error { message }, .. }
                 if message.contains("bad verb"))),
         "protocol error must carry the message: {run:?}"
     );
+    assert!(run.msgs.iter().any(|m| matches!(
+        m,
+        SessionMessage::Response {
+            response: ServerResponse::Status { .. },
+            ..
+        }
+    )));
+    assert!(run.msgs.iter().any(|m| matches!(
+        m,
+        SessionMessage::Response {
+            response: ServerResponse::Trajectory { .. },
+            ..
+        }
+    )));
+    assert!(run.msgs.iter().any(|m| matches!(
+        m,
+        SessionMessage::Response {
+            response: ServerResponse::Context { .. },
+            ..
+        }
+    )));
+    assert!(run.msgs.iter().any(|m| matches!(
+        m,
+        SessionMessage::Response {
+            response: ServerResponse::Compact { .. },
+            ..
+        }
+    )));
     assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::StatusResult { .. }))
-    );
-    assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::TrajectoryResult { .. }))
-    );
-    assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::ContextResult { .. }))
-    );
-    assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::CompactResult { .. }))
+        run.msgs.iter().any(|m| matches!(
+            m,
+            SessionMessage::Response {
+                request: RequestId(1),
+                response: ServerResponse::Ack
+            }
+        )),
+        "the first reply is the Ack, and it keeps its request id: {run:?}"
     );
     assert_eq!(
         run.msgs.len(),
-        6 + 1 + 1,
-        "Ack maps to nothing, the other six translate, plus readiness and the death: {run:?}"
+        7 + 1 + 1,
+        "seven responses translate, plus readiness and the death: {run:?}"
     );
 }
 
@@ -817,30 +842,33 @@ async fn test_drive_translates_permission_responses() {
     engine.close();
     let run = engine.drive(Vec::new()).await;
 
-    assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::PermissionModeResult { .. }))
-    );
+    assert!(run.msgs.iter().any(|m| matches!(
+        m,
+        SessionMessage::Response {
+            response: ServerResponse::PermissionMode { .. },
+            ..
+        }
+    )));
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::PermissionRulesResult { rules } if rules.len() == 1)
+            |m| matches!(m, SessionMessage::Response { response: ServerResponse::PermissionRules { rules }, .. } if rules.len() == 1)
         )
     );
     assert!(run.msgs.iter().any(
-        |m| matches!(m, AgentMessage::PermissionDirsResult { dirs, .. }
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::PermissionDirs { dirs, .. }, .. }
             if dirs.as_slice() == ["/work"])
     ));
     assert!(run.msgs.iter().any(|m| matches!(
         m,
-        AgentMessage::PermissionAskBeforeGitResult { enabled: true }
+        SessionMessage::Response {
+            response: ServerResponse::PermissionAskBeforeGit { enabled: true },
+            ..
+        }
     )));
-    assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::DebugResult { state }
-            if state.enabled && state.path == "/tmp/houyi.log"))
-    );
+    assert!(run.msgs.iter().any(
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::Debug { state }, .. }
+            if state.enabled && state.path == "/tmp/houyi.log")
+    ));
     assert_eq!(
         run.msgs.len(),
         5 + 1 + 1,
@@ -887,33 +915,27 @@ async fn test_drive_translates_catalog_responses() {
     engine.close();
     let run = engine.drive(Vec::new()).await;
 
-    assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::ToolListResult { tools }
-            if tools.len() == 1 && tools[0].name == "grep"))
-    );
+    assert!(run.msgs.iter().any(
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::Tools { tools }, .. }
+            if tools.len() == 1 && tools[0].name == "grep")
+    ));
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::AgentsResult { directory } if directory == "explore")
+            |m| matches!(m, SessionMessage::Response { response: ServerResponse::Agents { directory }, .. } if directory == "explore")
         )
     );
     assert!(run.msgs.iter().any(
-        |m| matches!(m, AgentMessage::ChildTranscriptResult { child_sid, frames }
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::ChildTranscript { child_sid, frames }, .. }
             if child_sid == "c1" && frames.is_empty())
     ));
-    assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::HooksResult { hooks }
-            if hooks.len() == 1 && hooks[0].name == "guard"))
-    );
-    assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::SkillsResult { skills }
-            if skills.len() == 1 && skills[0].name == "deploy"))
-    );
+    assert!(run.msgs.iter().any(
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::Hooks { hooks }, .. }
+            if hooks.len() == 1 && hooks[0].name == "guard")
+    ));
+    assert!(run.msgs.iter().any(
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::Skills { skills }, .. }
+            if skills.len() == 1 && skills[0].name == "deploy")
+    ));
     assert_eq!(
         run.msgs.len(),
         5 + 1 + 1,
@@ -955,38 +977,46 @@ async fn test_drive_translates_memory_responses() {
 
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::MemoryListResult { req_id, entries }
+            |m| matches!(m, SessionMessage::Response { request: req_id, response: ServerResponse::MemoryList { entries } }
                 if *req_id == RequestId(1) && entries.len() == 1)
         ),
         "memory list keeps its request identity: {run:?}"
     );
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::MemoryShowResult { entry: Some(d), .. }
+            |m| matches!(m, SessionMessage::Response { response: ServerResponse::MemoryShow { entry: Some(d) }, .. }
                 if d.key == "topic")
         ),
         "memory show carries the body: {run:?}"
     );
     assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::MemoryShowResult { entry: None, .. })),
+        run.msgs.iter().any(|m| matches!(
+            m,
+            SessionMessage::Response {
+                response: ServerResponse::MemoryShow { entry: None },
+                ..
+            }
+        )),
         "absent memory key must surface as None, not vanish: {run:?}"
     );
     assert!(run.msgs.iter().any(
-        |m| matches!(m, AgentMessage::MemoryToggleStateResult { state, .. }
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::MemoryToggleState { state }, .. }
             if state.auto_memory && !state.auto_dream)
     ));
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, AgentMessage::UndoResult { description: Some(d) } if d == "undid the edit")
+            |m| matches!(m, SessionMessage::Response { response: ServerResponse::Undo { description: Some(d) }, .. } if d == "undid the edit")
         ),
         "undo description lost: {run:?}"
     );
     assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::UndoResult { description: None })),
+        run.msgs.iter().any(|m| matches!(
+            m,
+            SessionMessage::Response {
+                response: ServerResponse::Undo { description: None },
+                ..
+            }
+        )),
         "empty undo stack must surface as None: {run:?}"
     );
     assert_eq!(
@@ -1021,18 +1051,20 @@ async fn test_drive_translates_trust_ask() {
     let run = engine.drive(Vec::new()).await;
 
     assert!(run.msgs.iter().any(
-        |m| matches!(m, AgentMessage::ModelResult { model, effort: None }
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::Model { model, effort: None }, .. }
             if model == "qwen3.7-max")
     ));
+    assert!(run.msgs.iter().any(|m| matches!(
+        m,
+        SessionMessage::Response {
+            response: ServerResponse::ModelInfo { .. },
+            ..
+        }
+    )));
     assert!(
         run.msgs
             .iter()
-            .any(|m| matches!(m, AgentMessage::ModelInfoResult { .. }))
-    );
-    assert!(
-        run.msgs
-            .iter()
-            .any(|m| matches!(m, AgentMessage::TrustAsk { req_id, prompt }
+            .any(|m| matches!(m, SessionMessage::Request { request: req_id, payload: ServerRequest::Trust { prompt } }
                 if *req_id == RequestId(90) && prompt.project_path == "/proj")),
         "trust ask must carry the reverse req_id: {run:?}"
     );
@@ -1055,7 +1087,7 @@ async fn test_send_failure_announces_death() {
         }])
         .await;
     match run.msgs.last() {
-        Some(AgentMessage::ConnectionLost { message }) => {
+        Some(SessionMessage::Connection(ConnectionEvent::Lost { cause: message })) => {
             assert!(
                 message.contains("send failed"),
                 "expected a send-failed death, got: {message}"

@@ -14,7 +14,9 @@ use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as FrontendSessionId};
 
-use crate::agent_message::{AgentMessage, ClientCommand};
+use crate::agent_message::{
+    ClientCommand, ConnectionEvent, ServerEvent, ServerRequest, ServerResponse, SessionMessage,
+};
 use crate::transcript::TranscriptFrame;
 
 /// A queued outbound frame. Sending between select rounds avoids aliasing the
@@ -36,15 +38,15 @@ enum Outbound {
 pub(crate) async fn drive_client(
     client: houyicoder_client::Client,
     cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClientCommand>,
-    agent_tx: mpsc::Sender<AgentMessage>,
+    agent_tx: mpsc::Sender<SessionMessage>,
 ) {
     let death = drive_connection(client, cmd_rx, &agent_tx).await;
     // The command receiver dropped with the driver body's frame, so by the
     // time the App observes the event, every later send is refused
     // deterministically — no window exists where a command could buffer
     // into an orphaned channel and leave pane state waiting on a reply.
-    if let Some(message) = death {
-        let _send = agent_tx.send(AgentMessage::ConnectionLost { message });
+    if let Some(cause) = death {
+        let _send = agent_tx.send(SessionMessage::Connection(ConnectionEvent::Lost { cause }));
     }
 }
 
@@ -55,7 +57,7 @@ pub(crate) async fn drive_client(
 async fn drive_connection(
     mut client: houyicoder_client::Client,
     mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClientCommand>,
-    agent_tx: &mpsc::Sender<AgentMessage>,
+    agent_tx: &mpsc::Sender<SessionMessage>,
 ) -> Option<String> {
     if let Err(e) = client.connect().await {
         return Some(format!("connect failed: {e}"));
@@ -63,7 +65,7 @@ async fn drive_connection(
     // Hello succeeded: announce readiness before any frame or request this
     // connection produces, so the App marks the connection Ready on a
     // confirmed handshake rather than inferring it from the object existing.
-    let _send = agent_tx.send(AgentMessage::ConnectionReady);
+    let _send = agent_tx.send(SessionMessage::Connection(ConnectionEvent::Ready));
     let mut outbound: VecDeque<Outbound> = VecDeque::new();
     loop {
         while let Some(out) = outbound.pop_front() {
@@ -352,7 +354,9 @@ async fn drive_connection(
                 Ok(ServerFrame::Event(ev)) => match ev.payload {
                     FrontendEvent::SessionUpdate { update } => {
                         let _send = agent_tx
-                            .send(AgentMessage::Frame(TranscriptFrame::Session(update)));
+                            .send(SessionMessage::Event(ServerEvent::Frame(
+                                TranscriptFrame::Session(update),
+                            )));
                     }
                     FrontendEvent::Acpx { notification } => {
                         // Token-level deltas ride the acpx/llm/* stream as
@@ -369,8 +373,9 @@ async fn drive_connection(
                                     .get("text")
                                     .and_then(|v| v.as_str())
                                 {
-                                    let _send = agent_tx
-                                        .send(AgentMessage::Delta { text: text.to_string() });
+                                    let _send = agent_tx.send(SessionMessage::Event(
+                                        ServerEvent::Delta { text: text.to_string() },
+                                    ));
                                 }
                             }
                             AcpxMethod::LlmReasoningDelta => {
@@ -379,9 +384,11 @@ async fn drive_connection(
                                     .get("text")
                                     .and_then(|v| v.as_str())
                                 {
-                                    let _send = agent_tx.send(AgentMessage::ReasoningDelta {
-                                        text: text.to_string(),
-                                    });
+                                    let _send = agent_tx.send(SessionMessage::Event(
+                                        ServerEvent::ReasoningDelta {
+                                            text: text.to_string(),
+                                        },
+                                    ));
                                 }
                             }
                             AcpxMethod::ToolProgress => {
@@ -393,35 +400,42 @@ async fn drive_connection(
                                         .params
                                         .get("lines")
                                         .and_then(|v| v.as_u64());
-                                    let _send = agent_tx.send(AgentMessage::ToolProgress {
-                                        call_id: call_id.to_string(),
-                                        elapsed_secs: elapsed,
-                                        lines,
-                                    });
+                                    let _send = agent_tx.send(SessionMessage::Event(
+                                        ServerEvent::ToolProgress {
+                                            call_id: call_id.to_string(),
+                                            elapsed_secs: elapsed,
+                                            lines,
+                                        },
+                                    ));
                                 }
                             }
                             _ => {
-                                let _send = agent_tx
-                                    .send(AgentMessage::Frame(TranscriptFrame::Acpx(notification)));
+                                let _send = agent_tx.send(SessionMessage::Event(
+                                    ServerEvent::Frame(TranscriptFrame::Acpx(notification)),
+                                ));
                             }
                         }
                     }
                     FrontendEvent::QueuedInputCommitted { inputs } => {
-                        let _send = agent_tx.send(AgentMessage::QueuedInputCommitted { inputs });
+                        let _send = agent_tx.send(SessionMessage::Event(
+                            ServerEvent::QueuedInputCommitted { inputs },
+                        ));
                     }
                     FrontendEvent::MemoryChanged {
                         id,
                         origin,
                         changes,
                     } => {
-                        let _send = agent_tx.send(AgentMessage::MemoryChanged {
+                        let _send = agent_tx.send(SessionMessage::Event(ServerEvent::MemoryChanged {
                             id,
                             origin,
                             changes,
-                        });
+                        }));
                     }
                     FrontendEvent::SystemLine { text } => {
-                        let _send = agent_tx.send(AgentMessage::SystemLine { text });
+                        let _send = agent_tx.send(SessionMessage::Event(ServerEvent::SystemLine {
+                            text,
+                        }));
                     }
                     FrontendEvent::AgentStatus {
                         agent_id,
@@ -432,7 +446,7 @@ async fn drive_connection(
                         last_activity,
                         completed,
                     } => {
-                        let _send = agent_tx.send(AgentMessage::AgentStatus {
+                        let _send = agent_tx.send(SessionMessage::Event(ServerEvent::AgentStatus {
                             agent_id,
                             subagent_type,
                             turn,
@@ -440,7 +454,7 @@ async fn drive_connection(
                             tool_uses,
                             last_activity,
                             completed,
-                        });
+                        }));
                     }
                     // A future event kind the driver does not model; ignore it
                     // rather than killing the driver.
@@ -452,125 +466,111 @@ async fn drive_connection(
                         // Every Frame up to this point has already shipped, so
                         // the event loop's own frame log is current and the
                         // transcript rebuild on receipt reads it directly.
-                        let _send = agent_tx.send(AgentMessage::PermissionAsk {
-                            req_id,
-                            ask: p,
+                        let _send = agent_tx.send(SessionMessage::Request {
+                            request: req_id,
+                            payload: ServerRequest::Permission { ask: Box::new(p) },
                         });
                     } else if let ServerRequestPayload::TrustPrompt(t) = ask.payload {
-                        let _send = agent_tx.send(AgentMessage::TrustAsk {
-                            req_id,
-                            prompt: t,
+                        let _send = agent_tx.send(SessionMessage::Request {
+                            request: req_id,
+                            payload: ServerRequest::Trust { prompt: t },
                         });
                     }
                 }
-                Ok(ServerFrame::Response(resp)) => match resp.payload {
-                    ResponsePayload::RunOk(r) => {
-                        let _send = agent_tx.send(AgentMessage::Done { result: Ok(r) });
-                    }
-                    ResponsePayload::RunErr(e) => {
-                        let _send = agent_tx.send(AgentMessage::Done { result: Err(e) });
-                    }
-                    ResponsePayload::Error(e) => {
-                        // A protocol error is per-request, NOT a run completion
-                        // (runs use RunOk/RunErr). Carry the req_id so the App
-                        // routes: a run's own error -> Done{Err}; a non-run
-                        // verb's error -> a system line (not a false run-end
-                        // that would corrupt agent_busy mid-run).
-                        let req_id = resp.req_id;
-                        let _send = agent_tx.send(AgentMessage::RequestError {
-                            req_id,
-                            message: e.to_string(),
-                        });
-                    }
-                    ResponsePayload::Ack => {}
-                    ResponsePayload::Status(s) => {
-                        let _send = agent_tx.send(AgentMessage::StatusResult { snapshot: s });
-                    }
-                    ResponsePayload::Trajectory(resp) => {
-                        let _send = agent_tx.send(AgentMessage::TrajectoryResult {
+                Ok(ServerFrame::Response(resp)) => {
+                    let req_id = resp.req_id;
+                    let response = match resp.payload {
+                        ResponsePayload::RunOk(r) => Some(ServerResponse::Done { result: Ok(r) }),
+                        ResponsePayload::RunErr(e) => {
+                            Some(ServerResponse::Done { result: Err(e) })
+                        }
+                        ResponsePayload::Error(e) => {
+                            // A protocol error is per-request, NOT a run
+                            // completion (runs use RunOk/RunErr). The App
+                            // routes by request id: a run's own error resolves
+                            // its Done; a non-run verb's error becomes a
+                            // system line (not a false run-end that would
+                            // corrupt agent_busy mid-run).
+                            Some(ServerResponse::Error { message: e.to_string() })
+                        }
+                        ResponsePayload::Status(s) => {
+                            Some(ServerResponse::Status {
+                                snapshot: Box::new(s),
+                            })
+                        }
+                        ResponsePayload::Trajectory(resp) => Some(ServerResponse::Trajectory {
                             entries: resp.entries,
                             redundant: resp.redundant,
-                        });
-                    }
-                    ResponsePayload::Context(bd) => {
-                        let _send = agent_tx.send(AgentMessage::ContextResult { breakdown: bd });
-                    }
-                    ResponsePayload::Compact(reply) => {
-                        let _send = agent_tx.send(AgentMessage::CompactResult { reply });
-                    }
-                    ResponsePayload::PermissionMode(mode) => {
-                        let _send = agent_tx.send(AgentMessage::PermissionModeResult { mode });
-                    }
-                    ResponsePayload::PermissionRules(rules) => {
-                        let _send = agent_tx.send(AgentMessage::PermissionRulesResult { rules });
-                    }
-                    ResponsePayload::PermissionWorkingDirs(dirs) => {
-                        let _send =
-                            agent_tx.send(AgentMessage::PermissionDirsResult { dirs });
-                    }
-                    ResponsePayload::PermissionAskBeforeGit(enabled) => {
-                        let _send =
-                            agent_tx.send(AgentMessage::PermissionAskBeforeGitResult { enabled });
-                    }
-                    ResponsePayload::Debug(state) => {
-                        let _send = agent_tx.send(AgentMessage::DebugResult { state });
-                    }
-                    ResponsePayload::Tools(tools) => {
-                        let _send = agent_tx.send(AgentMessage::ToolListResult { tools });
-                    }
-                    ResponsePayload::Agents(directory) => {
-                        let _send = agent_tx.send(AgentMessage::AgentsResult { directory });
-                    }
-                    ResponsePayload::ChildTranscript { child_sid, frames } => {
-                        // Convert the wire frames to the live-frame shape once,
-                        // at the driver boundary. The fill site then runs
-                        // transcript_from_frames unchanged.
-                        let frames: Vec<TranscriptFrame> =
-                            frames.into_iter().map(Into::into).collect();
-                        let _send = agent_tx.send(AgentMessage::ChildTranscriptResult {
-                            child_sid: child_sid.0,
-                            frames,
-                        });
-                    }
-                    ResponsePayload::Hooks(hooks) => {
-                        let _send = agent_tx.send(AgentMessage::HooksResult { hooks });
-                    }
-                    ResponsePayload::Skills(skills) => {
-                        let _send = agent_tx.send(AgentMessage::SkillsResult { skills });
-                    }
-                    ResponsePayload::MemoryList(entries) => {
-                        let _send = agent_tx.send(AgentMessage::MemoryListResult {
-                            req_id: resp.req_id,
-                            entries,
-                        });
-                    }
-                    ResponsePayload::MemoryShow(entry) => {
-                        let _send = agent_tx.send(AgentMessage::MemoryShowResult {
-                            req_id: resp.req_id,
-                            entry,
-                        });
-                    }
-                    ResponsePayload::ToggleState(state) => {
-                        let _send = agent_tx.send(AgentMessage::MemoryToggleStateResult {
-                            req_id: resp.req_id,
-                            state,
-                        });
-                    }
-                    ResponsePayload::UndoResult(description) => {
-                        let _send =
-                            agent_tx.send(AgentMessage::UndoResult { description });
-                    }
-                    ResponsePayload::ModelResult(applied) => {
-                        let _send = agent_tx.send(AgentMessage::ModelResult {
+                        }),
+                        ResponsePayload::Context(bd) => {
+                            Some(ServerResponse::Context { breakdown: bd })
+                        }
+                        ResponsePayload::Compact(reply) => {
+                            Some(ServerResponse::Compact { reply })
+                        }
+                        ResponsePayload::PermissionMode(mode) => {
+                            Some(ServerResponse::PermissionMode { mode })
+                        }
+                        ResponsePayload::PermissionRules(rules) => {
+                            Some(ServerResponse::PermissionRules { rules })
+                        }
+                        ResponsePayload::PermissionWorkingDirs(dirs) => {
+                            Some(ServerResponse::PermissionDirs { dirs })
+                        }
+                        ResponsePayload::PermissionAskBeforeGit(enabled) => {
+                            Some(ServerResponse::PermissionAskBeforeGit { enabled })
+                        }
+                        ResponsePayload::Debug(state) => Some(ServerResponse::Debug { state }),
+                        ResponsePayload::Tools(tools) => Some(ServerResponse::Tools { tools }),
+                        ResponsePayload::Agents(directory) => {
+                            Some(ServerResponse::Agents { directory })
+                        }
+                        ResponsePayload::ChildTranscript { child_sid, frames } => {
+                            // Convert the wire frames to the live-frame shape
+                            // once, at the driver boundary. The fill site then
+                            // runs transcript_from_frames unchanged.
+                            Some(ServerResponse::ChildTranscript {
+                                child_sid: child_sid.0,
+                                frames: frames.into_iter().map(Into::into).collect(),
+                            })
+                        }
+                        ResponsePayload::Hooks(hooks) => Some(ServerResponse::Hooks { hooks }),
+                        ResponsePayload::Skills(skills) => {
+                            Some(ServerResponse::Skills { skills })
+                        }
+                        ResponsePayload::MemoryList(entries) => {
+                            Some(ServerResponse::MemoryList { entries })
+                        }
+                        ResponsePayload::MemoryShow(entry) => {
+                            Some(ServerResponse::MemoryShow { entry })
+                        }
+                        ResponsePayload::ToggleState(state) => {
+                            Some(ServerResponse::MemoryToggleState { state })
+                        }
+                        ResponsePayload::UndoResult(description) => {
+                            Some(ServerResponse::Undo { description })
+                        }
+                        ResponsePayload::ModelResult(applied) => Some(ServerResponse::Model {
                             model: applied.model,
                             effort: applied.effort,
-                        });
+                        }),
+                        ResponsePayload::ModelInfo(catalog) => {
+                            Some(ServerResponse::ModelInfo { catalog })
+                        }
+                        // A known acknowledgement (e.g. SessionReset): the
+                        // host already acted locally, but the reply keeps
+                        // its request id like every other response.
+                        ResponsePayload::Ack => Some(ServerResponse::Ack),
+                        // A future payload shape the driver does not model
+                        // carries nothing for the App; skip it rather than
+                        // kill the driver.
+                        _ => None,
+                    };
+                    if let Some(response) = response {
+                        let _send =
+                            agent_tx.send(SessionMessage::Response { request: req_id, response });
                     }
-                    ResponsePayload::ModelInfo(catalog) => {
-                        let _send = agent_tx.send(AgentMessage::ModelInfoResult { catalog });
-                    }
-                    _ => {}
-                },
+                }
                 // A future server-frame shape the driver does not model; ignore
                 // it rather than killing the driver.
                 Ok(_) => {}

@@ -70,20 +70,24 @@ mod tests {
         assert!(app.run_tui_local_command("debug off"));
     }
 
-    /// A DebugResult message from the server renders as a system line the
+    /// A Debug reply from the server renders as a system line the
     /// user sees: the path when enabled, "logging off" when disabled. This
     /// is what tells the user where to look — the whole point of carrying
     /// the path in the reply.
     #[test]
     fn test_debug_result_renders_path() {
-        use crate::agent_message::AgentMessage;
+        use crate::agent_message::{ServerResponse, SessionMessage};
+        use houyicoder_protocol::envelope::RequestId;
         use houyicoder_protocol::frontend::debug::DebugState;
 
         let mut app = crate::test_harness::working_app();
-        app.handle_agent_message(AgentMessage::DebugResult {
-            state: DebugState {
-                enabled: true,
-                path: "/tmp/test.log".into(),
+        app.handle_agent_message(SessionMessage::Response {
+            request: RequestId(1),
+            response: ServerResponse::Debug {
+                state: DebugState {
+                    enabled: true,
+                    path: "/tmp/test.log".into(),
+                },
             },
         });
         let last = app.transcript.last().expect("a line was pushed");
@@ -97,10 +101,13 @@ mod tests {
             other => panic!("expected a system line, got {other:?}"),
         }
 
-        app.handle_agent_message(AgentMessage::DebugResult {
-            state: DebugState {
-                enabled: false,
-                path: String::new(),
+        app.handle_agent_message(SessionMessage::Response {
+            request: RequestId(2),
+            response: ServerResponse::Debug {
+                state: DebugState {
+                    enabled: false,
+                    path: String::new(),
+                },
             },
         });
         let last = app.transcript.last().expect("a line was pushed");

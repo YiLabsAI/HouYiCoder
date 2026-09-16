@@ -5,8 +5,10 @@
 
 #![cfg(test)]
 
+use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::pending_queue::PendingItem;
 use crate::test_harness::connection_lost_app;
+use houyicoder_protocol::envelope::RequestId;
 
 fn last_line(app: &crate::state::App) -> String {
     app.transcript
@@ -59,7 +61,7 @@ fn test_child_inject_refused() {
     });
     // A fleet entry for the viewed child (not completed) is what makes the
     // send take the injection branch.
-    app.handle_agent_message(crate::agent_message::AgentMessage::AgentStatus {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         turn: 1,
@@ -67,7 +69,7 @@ fn test_child_inject_refused() {
         tool_uses: 0,
         last_activity: None,
         completed: None,
-    });
+    }));
     app.spawn_run(" steer text ".into());
     let view = app.teammate_view.as_ref().expect("view stays open");
     assert!(
@@ -115,8 +117,7 @@ fn test_drain_refused() {
 #[test]
 fn test_verdict_refused() {
     let mut app = connection_lost_app();
-    app.pending_permission_req_id
-        .set(Some(houyicoder_protocol::envelope::RequestId(7)));
+    app.pending_permission_req_id.set(Some(RequestId(7)));
     app.approval = Some(crate::state::Approval {
         tool: "bash".into(),
         args: r#"{"command":"ls"}"#.into(),
@@ -156,7 +157,7 @@ fn test_verdict_refused() {
 #[test]
 fn test_trust_refused() {
     let mut app = connection_lost_app();
-    app.pending_trust_req_id = Some(houyicoder_protocol::envelope::RequestId(3));
+    app.pending_trust_req_id = Some(RequestId(3));
     app.pending_trust = Some(houyicoder_protocol::frontend::trust::TrustPrompt {
         project_path: "/proj".into(),
         risks: Vec::new(),

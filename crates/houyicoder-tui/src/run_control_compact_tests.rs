@@ -8,8 +8,11 @@ fn test_context_result_pushes_line() {
     use houyicoder_protocol::frontend::context::stub_breakdown;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
-    app.handle_agent_message(AgentMessage::ContextResult {
-        breakdown: stub_breakdown(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(8),
+        response: ServerResponse::Context {
+            breakdown: stub_breakdown(),
+        },
     });
     assert!(
         app.transcript
@@ -27,14 +30,17 @@ fn test_context_result_pushes_line() {
 fn test_result_renders_system_line() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
-    app.handle_agent_message(AgentMessage::CompactResult {
-        reply: houyicoder_protocol::frontend::compact::CompactReply::new(
-            true,
-            12,
-            "ckpt_abc",
-            Some(8000),
-            Some(3000),
-        ),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(9),
+        response: ServerResponse::Compact {
+            reply: houyicoder_protocol::frontend::compact::CompactReply::new(
+                true,
+                12,
+                "ckpt_abc",
+                Some(8000),
+                Some(3000),
+            ),
+        },
     });
     let line = app
         .transcript
@@ -63,14 +69,17 @@ fn test_result_renders_system_line() {
 fn test_result_no_progress_honest() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
-    app.handle_agent_message(AgentMessage::CompactResult {
-        reply: houyicoder_protocol::frontend::compact::CompactReply::new(
-            false,
-            0,
-            "ckpt_empty",
-            None,
-            None,
-        ),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(10),
+        response: ServerResponse::Compact {
+            reply: houyicoder_protocol::frontend::compact::CompactReply::new(
+                false,
+                0,
+                "ckpt_empty",
+                None,
+                None,
+            ),
+        },
     });
     assert!(
         app.transcript

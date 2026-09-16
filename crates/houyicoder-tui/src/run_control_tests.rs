@@ -3,9 +3,10 @@
 //! GuardedTool-through-real-runner mode-gate coverage. Split out of
 //! run_control.rs so that file stays under the size gate.
 //! the wire: a paired in-memory server drives runner.run, the TUI ships
-//! MessageSend, and permission asks arrive as AgentMessage::PermissionAsk
+//! MessageSend, and permission asks arrive as SessionMessage::PermissionAsk
 //! reverse requests.
 use super::*;
+use crate::agent_message::{ServerRequest, ServerResponse};
 use crate::composition;
 use crate::state::{Pane, TranscriptLine};
 use crate::test_harness::{connected_app_events, wait_for_request};
@@ -15,6 +16,7 @@ use houyicoder_core::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::run::{ContentBlock, RunError, RunOutcome, RunResult};
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
@@ -66,7 +68,7 @@ pub(crate) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolReg
             ..RunnerConfig::default()
         },
     );
-    let (tx, rx) = mpsc::channel::<AgentMessage>();
+    let (tx, rx) = mpsc::channel::<SessionMessage>();
     let gate = Arc::new(houyicoder_permission::DefaultModeGate::new());
     let (runner, client, startup_warnings) =
         composition::pair_inproc_server(runner, session, gate, append_notify, None);
@@ -376,23 +378,29 @@ fn test_handle_final_output_refreshes() {
     let mut app = composition::app();
     // The driver ships each durable frame; App owns the history. Push the
     // frames before Done so the rebuild on Done reads them.
-    app.handle_agent_message(AgentMessage::Frame(user_msg("hi")));
-    app.handle_agent_message(AgentMessage::Frame(agent_msg("hello back")));
-    let msg = AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::FinalOutput {
-                content: vec![ContentBlock::Text {
-                    text: "hello back".into(),
-                }],
-            },
-            turns: 1,
-            usage: Usage {
-                total_tokens: 42,
-                ..Usage::default()
-            },
-            stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
-        }),
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("hi"))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "hello back",
+    ))));
+    let msg = SessionMessage::Response {
+        request: RequestId(1),
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::FinalOutput {
+                    content: vec![ContentBlock::Text {
+                        text: "hello back".into(),
+                    }],
+                },
+                turns: 1,
+                usage: Usage {
+                    total_tokens: 42,
+                    ..Usage::default()
+                },
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+            }),
+        },
     };
+    app.active_run_req_id.set(Some(RequestId(1)));
     app.handle_agent_message(msg);
     assert!(!app.agent_busy);
     assert_eq!(app.status.tokens, 42);
@@ -417,9 +425,9 @@ fn test_permission_ask_raises_popup() {
         reason: None,
         delegation: None,
     };
-    app.handle_agent_message(AgentMessage::PermissionAsk {
-        req_id: houyicoder_protocol::envelope::RequestId(1),
-        ask,
+    app.handle_agent_message(SessionMessage::Request {
+        request: RequestId(1),
+        payload: ServerRequest::Permission { ask: Box::new(ask) },
     });
     assert!(app.approval.is_some());
     assert_eq!(app.pending_approvals.len(), 1);
@@ -446,9 +454,9 @@ fn test_entitlement_ask_two_option() {
         reason: None,
         delegation: None,
     };
-    app.handle_agent_message(AgentMessage::PermissionAsk {
-        req_id: houyicoder_protocol::envelope::RequestId(3),
-        ask,
+    app.handle_agent_message(SessionMessage::Request {
+        request: RequestId(3),
+        payload: ServerRequest::Permission { ask: Box::new(ask) },
     });
     let a = app.approval.as_ref().expect("approval raised");
     assert_eq!(a.tool, ENTITLEMENT_TOOL);
@@ -482,9 +490,9 @@ fn test_approval_ask_carries_delegation() {
             subagent_type: "explore".into(),
         }),
     };
-    app.handle_agent_message(AgentMessage::PermissionAsk {
-        req_id: houyicoder_protocol::envelope::RequestId(2),
-        ask,
+    app.handle_agent_message(SessionMessage::Request {
+        request: RequestId(2),
+        payload: ServerRequest::Permission { ask: Box::new(ask) },
     });
     let a = app.approval.as_ref().expect("approval raised");
     let d = a.delegation.as_ref().expect("delegation carried");
@@ -500,12 +508,16 @@ fn test_approval_ask_carries_delegation() {
 #[test]
 fn test_handle_error_records_system() {
     let mut app = composition::app();
-    let msg = AgentMessage::Done {
-        result: Err(RunError {
-            category: "provider_exhausted".to_string(),
-            message: "provider exhausted: rate limited".to_string(),
-        }),
+    let msg = SessionMessage::Response {
+        request: RequestId(2),
+        response: ServerResponse::Done {
+            result: Err(RunError {
+                category: "provider_exhausted".to_string(),
+                message: "provider exhausted: rate limited".to_string(),
+            }),
+        },
     };
+    app.active_run_req_id.set(Some(RequestId(2)));
     app.handle_agent_message(msg);
     assert!(!app.agent_busy);
     assert!(app.transcript.iter().any(|l| matches!(
@@ -664,7 +676,7 @@ fn test_resume_after_approval() {
 #[test]
 fn test_resolve_clears_thinking_window() {
     use crate::state::enums::LiveBlock;
-    use houyicoder_protocol::envelope::RequestId;
+    use RequestId;
     use houyicoder_protocol::frontend::run::ApprovalDecision;
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
@@ -829,8 +841,8 @@ fn test_agents_tools_round_trip() {
 /// repeat submit of a key already in flight ships nothing.
 #[test]
 fn test_forget_ships_queries_wired() {
-    use crate::agent_message::AgentMessage;
-    use houyicoder_protocol::envelope::RequestId;
+    use crate::agent_message::{ServerResponse, SessionMessage};
+    use RequestId;
     use houyicoder_protocol::frontend::SlashCommand;
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     let provider = Arc::new(FakeProvider::new(vec![]));
@@ -838,15 +850,17 @@ fn test_forget_ships_queries_wired() {
     app.run_command(SlashCommand::Memory);
     // Seed a project-scope row so the cursor lands on a Some(row) + the
     // scope extraction runs (the no-carrier tests hit the None branch).
-    app.handle_agent_message(AgentMessage::MemoryListResult {
-        req_id: RequestId(1),
-        entries: vec![MemorySummaryEntry {
-            key: "proj-gate".into(),
-            description: "a project rule".into(),
-            source: "project".into(),
-            scope: "project".into(),
-            mtime_secs: 0,
-        }],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(1),
+        response: ServerResponse::MemoryList {
+            entries: vec![MemorySummaryEntry {
+                key: "proj-gate".into(),
+                description: "a project rule".into(),
+                source: "project".into(),
+                scope: "project".into(),
+                mtime_secs: 0,
+            }],
+        },
     });
     app.forget_memory_at_cursor();
     assert_eq!(
@@ -952,9 +966,9 @@ fn test_idle_seeds_mode_query() {
 /// The /model pane Enter ships a ModelSwitch { model, effort, effort_toggled }
 /// over the wire when a session is wired (the carrier-present branch). Pumps
 /// the driver + the in-proc server round-trip so the ModelApplied reply lands
-/// as an AgentMessage::ModelResult the no-op handler absorbs without error.
+/// as an SessionMessage::ModelResult the no-op handler absorbs without error.
 /// Pins the TUI-side wire plumbing: the outbound ModelSwitch->ModelSet mapping
-/// and the inbound ModelResult->AgentMessage mapping, which the --lib lcov
+/// and the inbound ModelResult->SessionMessage mapping, which the --lib lcov
 /// gate sees (the integration model_wire test covers the server side only).
 #[test]
 fn test_model_switch_ships_wired() {
@@ -993,11 +1007,13 @@ fn test_startup_handshake_drains_trust() {
     // Queue a trust ask before the handshake, simulating a server that
     // surfaces the gate before the first draw.
     let tx = app.agent_tx.as_ref().expect("agent tx wired");
-    tx.send(AgentMessage::TrustAsk {
-        req_id: houyicoder_protocol::envelope::RequestId(7),
-        prompt: houyicoder_protocol::frontend::trust::TrustPrompt {
-            project_path: "/proj".into(),
-            risks: Vec::new(),
+    tx.send(SessionMessage::Request {
+        request: RequestId(7),
+        payload: ServerRequest::Trust {
+            prompt: houyicoder_protocol::frontend::trust::TrustPrompt {
+                project_path: "/proj".into(),
+                risks: Vec::new(),
+            },
         },
     })
     .unwrap();
@@ -1006,10 +1022,7 @@ fn test_startup_handshake_drains_trust() {
         app.pending_trust.is_some(),
         "handshake drains the trust ask"
     );
-    assert_eq!(
-        app.pending_trust_req_id,
-        Some(houyicoder_protocol::envelope::RequestId(7))
-    );
+    assert_eq!(app.pending_trust_req_id, Some(RequestId(7)));
 }
 
 /// The startup handshake is harmless when no message arrives within the

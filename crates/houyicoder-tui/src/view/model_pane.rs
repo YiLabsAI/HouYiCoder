@@ -419,35 +419,39 @@ mod tests {
         );
     }
 
-    /// A ModelInfoResult catalog refresh while in Default mode (active_id
+    /// A ModelInfo catalog refresh while in Default mode (active_id
     /// None) must also jump the cursor to row 0, mirroring the /model open
     /// path. The prior handler only jumped on Some, so a refresh left the
     /// cursor stale on the last concrete row.
     #[test]
     fn test_refresh_default_cursor() {
-        use crate::run_control::AgentMessage;
+        use crate::agent_message::{ServerResponse, SessionMessage};
+        use houyicoder_protocol::envelope::RequestId;
         use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
         let mut app = crate::composition::app();
         app.pane = crate::state::Pane::Model;
         app.model_sel = 2;
-        app.handle_agent_message(AgentMessage::ModelInfoResult {
-            catalog: ModelCatalog {
-                active_id: None,
-                effort_level: None,
-                catalog: vec![
-                    ModelCatalogEntry {
-                        id: "a".into(),
-                        display_name: None,
-                        description: None,
-                        effort: None,
-                    },
-                    ModelCatalogEntry {
-                        id: "b".into(),
-                        display_name: None,
-                        description: None,
-                        effort: None,
-                    },
-                ],
+        app.handle_agent_message(SessionMessage::Response {
+            request: RequestId(1),
+            response: ServerResponse::ModelInfo {
+                catalog: ModelCatalog {
+                    active_id: None,
+                    effort_level: None,
+                    catalog: vec![
+                        ModelCatalogEntry {
+                            id: "a".into(),
+                            display_name: None,
+                            description: None,
+                            effort: None,
+                        },
+                        ModelCatalogEntry {
+                            id: "b".into(),
+                            display_name: None,
+                            description: None,
+                            effort: None,
+                        },
+                    ],
+                },
             },
         });
         assert_eq!(

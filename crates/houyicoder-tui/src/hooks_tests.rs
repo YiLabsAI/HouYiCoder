@@ -1,17 +1,18 @@
 //! Hooks command tests split from scroll_tests.rs for file-size.
 
 use super::working;
+use houyicoder_protocol::envelope::RequestId;
 
 /// /hooks opens the Hooks pane (a live view, not a transcript system line) +
-/// requests the hook list when a runner is wired.
+/// requests the hook list when a runner is connected.
 #[test]
-fn test_hooks_opens_pane_wired() {
+fn test_hooks_opens_pane_connected() {
     let mut app = crate::composition::build_app_for_test(None);
     app.run_command(houyicoder_protocol::frontend::SlashCommand::Hooks);
     assert_eq!(app.pane, crate::state::Pane::Hooks, "/hooks opens the pane");
 }
 
-/// /hooks with no runner wired still opens the pane (shows the empty hook
+/// /hooks with no runner connected still opens the pane (shows the empty hook
 /// list row).
 #[test]
 fn test_opens_pane_no_runner() {
@@ -24,28 +25,31 @@ fn test_opens_pane_no_runner() {
 /// A HooksResult populates the pane's hook_entries cache (a live view).
 #[test]
 fn test_hooks_result_stores_entries() {
-    use crate::run_control::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use houyicoder_protocol::frontend::hooks::HookEntry;
     let mut app = working();
-    app.handle_agent_message(AgentMessage::HooksResult {
-        hooks: vec![
-            HookEntry {
-                name: "pre-check".into(),
-                events: vec!["PreToolUse".into()],
-                source: "Project".into(),
-                fired: true,
-                summary: String::new(),
-                description: String::new(),
-            },
-            HookEntry {
-                name: "PreToolUse".into(),
-                events: vec!["PreToolUse".into()],
-                source: "framework".into(),
-                fired: true,
-                summary: "Before tool execution".into(),
-                description: String::new(),
-            },
-        ],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(1),
+        response: ServerResponse::Hooks {
+            hooks: vec![
+                HookEntry {
+                    name: "pre-check".into(),
+                    events: vec!["PreToolUse".into()],
+                    source: "Project".into(),
+                    fired: true,
+                    summary: String::new(),
+                    description: String::new(),
+                },
+                HookEntry {
+                    name: "PreToolUse".into(),
+                    events: vec!["PreToolUse".into()],
+                    source: "framework".into(),
+                    fired: true,
+                    summary: "Before tool execution".into(),
+                    description: String::new(),
+                },
+            ],
+        },
     });
     assert_eq!(app.hook_entries.len(), 2);
     assert_eq!(app.hook_entries[0].name, "pre-check");
@@ -59,37 +63,40 @@ fn test_hooks_result_stores_entries() {
 /// open/Esc cases are covered by the PTY layer in tests/ui_hooks.
 #[test]
 fn test_hooks_pane_list_detail() {
-    use crate::run_control::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use houyicoder_protocol::frontend::hooks::HookEntry;
     let mut app = working();
     app.pane = crate::state::Pane::Hooks;
-    app.handle_agent_message(AgentMessage::HooksResult {
-        hooks: vec![
-            HookEntry {
-                name: "pre-check".into(),
-                events: vec!["PreToolUse".into()],
-                source: "Project".into(),
-                fired: true,
-                summary: String::new(),
-                description: String::new(),
-            },
-            HookEntry {
-                name: "PreToolUse".into(),
-                events: vec!["PreToolUse".into()],
-                source: "framework".into(),
-                fired: true,
-                summary: "Before tool execution".into(),
-                description: "Input to command is JSON".into(),
-            },
-            HookEntry {
-                name: "PostToolUse".into(),
-                events: vec!["PostToolUse".into()],
-                source: "framework".into(),
-                fired: false,
-                summary: "After tool execution".into(),
-                description: String::new(),
-            },
-        ],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(2),
+        response: ServerResponse::Hooks {
+            hooks: vec![
+                HookEntry {
+                    name: "pre-check".into(),
+                    events: vec!["PreToolUse".into()],
+                    source: "Project".into(),
+                    fired: true,
+                    summary: String::new(),
+                    description: String::new(),
+                },
+                HookEntry {
+                    name: "PreToolUse".into(),
+                    events: vec!["PreToolUse".into()],
+                    source: "framework".into(),
+                    fired: true,
+                    summary: "Before tool execution".into(),
+                    description: "Input to command is JSON".into(),
+                },
+                HookEntry {
+                    name: "PostToolUse".into(),
+                    events: vec!["PostToolUse".into()],
+                    source: "framework".into(),
+                    fired: false,
+                    summary: "After tool execution".into(),
+                    description: String::new(),
+                },
+            ],
+        },
     });
     let out = super::render(&app);
     assert!(

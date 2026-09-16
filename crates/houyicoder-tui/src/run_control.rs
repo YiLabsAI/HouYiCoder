@@ -23,7 +23,8 @@ const MAX_AGENT_MESSAGES_PER_POLL: usize = 4096;
 #[path = "run_control/transcript_rebuild.rs"]
 mod transcript_rebuild;
 
-pub use crate::agent_message::{AgentMessage, ClientCommand};
+pub use crate::agent_message::ClientCommand;
+use crate::agent_message::{ServerEvent, SessionMessage};
 
 impl App {
     /// Enqueue a command over the session's command channel. Ok means the
@@ -380,7 +381,7 @@ impl App {
             // control to terminal input even when producers remain saturated.
             let outcome = self.session.as_mut().map(|s| s.poll());
             match outcome {
-                Some(PollOutcome::Message(AgentMessage::Frame(frame))) => {
+                Some(PollOutcome::Message(SessionMessage::Event(ServerEvent::Frame(frame)))) => {
                     batch.push(frame);
                     applied = true;
                 }

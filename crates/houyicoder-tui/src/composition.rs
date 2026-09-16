@@ -11,6 +11,7 @@ pub use app_default::app;
 pub use placeholder::*;
 pub use worktree::{WorktreeEntry, parse_worktrees};
 
+use crate::agent_message::SessionMessage;
 use crate::artifact::{ArtifactSession, StubProposer};
 use crate::console_state::ConsoleState;
 use crate::evidence::{
@@ -51,9 +52,9 @@ pub struct RunnerBundle {
     pub client: Client,
     /// Sender cloned into the driver (permission asks + done + deltas routed
     /// from the wire). The TUI drains the receiver each poll tick.
-    pub agent_tx: mpsc::Sender<crate::run_control::AgentMessage>,
+    pub agent_tx: mpsc::Sender<SessionMessage>,
     /// Receiver drained by the TUI event loop each poll tick.
-    pub agent_rx: mpsc::Receiver<crate::run_control::AgentMessage>,
+    pub agent_rx: mpsc::Receiver<SessionMessage>,
     /// The active session id (wire-typed). The engine session id is converted
     /// at the composition root; the TUI never imports the engine SessionId.
     pub session: houyicoder_protocol::frontend::SessionId,
@@ -307,7 +308,7 @@ pub fn build_app_for_test(project: Option<String>) -> App {
     options.project = project;
     let bundle = houyicoder_service::composition::build_runner(options);
     let wire_session = houyicoder_protocol::frontend::SessionId(bundle.session.to_string());
-    let (tx, rx) = mpsc::channel::<crate::run_control::AgentMessage>();
+    let (tx, rx) = mpsc::channel::<SessionMessage>();
     let (runner, client, startup_warnings) = pair_inproc_server(
         bundle.runner,
         bundle.session,

@@ -74,7 +74,7 @@ fn test_memory_forget_disconnected() {
 /// pane entries + resets the cursor so it never points past the new list.
 #[test]
 fn test_list_result_resets_cursor() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     let mut app = working();
@@ -85,15 +85,17 @@ fn test_list_result_resets_cursor() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
         .as_secs();
-    app.handle_agent_message(AgentMessage::MemoryListResult {
-        req_id: RequestId(1),
-        entries: vec![MemorySummaryEntry {
-            key: "fresh-gate".into(),
-            description: "re-seeded".into(),
-            source: "project".into(),
-            scope: "project".into(),
-            mtime_secs: now,
-        }],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(1),
+        response: ServerResponse::MemoryList {
+            entries: vec![MemorySummaryEntry {
+                key: "fresh-gate".into(),
+                description: "re-seeded".into(),
+                source: "project".into(),
+                scope: "project".into(),
+                mtime_secs: now,
+            }],
+        },
     });
     assert_eq!(app.memory.cursor(), 0, "cursor reset on refresh");
     assert!(app.memory.entries().iter().any(|m| m.topic == "fresh-gate"));
@@ -145,7 +147,7 @@ fn test_detail_soft_wrap_max() {
 
 #[test]
 fn test_memory_detail_inline() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemoryDetail;
@@ -154,21 +156,23 @@ fn test_memory_detail_inline() {
     let transcript_len = app.transcript.len();
     let req_id = RequestId(7);
     app.memory.request_detail(req_id, "newest".into());
-    app.handle_agent_message(AgentMessage::MemoryShowResult {
-        req_id,
-        entry: Some(MemoryDetail {
-            key: "newest".into(),
-            content: format!(
-                "full memory body\n{}",
-                (0..40)
-                    .map(|index| format!("detail line {index}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
-            source: "feedback".into(),
-            description: "full memory body".into(),
-            mtime_secs: 1,
-        }),
+    app.handle_agent_message(SessionMessage::Response {
+        request: req_id,
+        response: ServerResponse::MemoryShow {
+            entry: Some(MemoryDetail {
+                key: "newest".into(),
+                content: format!(
+                    "full memory body\n{}",
+                    (0..40)
+                        .map(|index| format!("detail line {index}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
+                source: "feedback".into(),
+                description: "full memory body".into(),
+                mtime_secs: 1,
+            }),
+        },
     });
 
     let detail = render(&app);
@@ -206,22 +210,24 @@ fn test_memory_detail_inline() {
 
 #[test]
 fn test_stale_detail_ignored() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemoryDetail;
     let mut app = working();
     app.pane = Pane::Memory;
     app.memory.request_detail(RequestId(1), "old".into());
     app.memory.request_detail(RequestId(2), "new".into());
-    app.handle_agent_message(AgentMessage::MemoryShowResult {
-        req_id: RequestId(1),
-        entry: Some(MemoryDetail {
-            key: "old".into(),
-            content: "stale".into(),
-            source: "user".into(),
-            description: String::new(),
-            mtime_secs: 0,
-        }),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(1),
+        response: ServerResponse::MemoryShow {
+            entry: Some(MemoryDetail {
+                key: "old".into(),
+                content: "stale".into(),
+                source: "user".into(),
+                description: String::new(),
+                mtime_secs: 0,
+            }),
+        },
     });
     assert_eq!(app.memory.pending_key(), Some("new"));
     assert!(!render(&app).contains("stale"));
@@ -495,7 +501,7 @@ fn test_forget_pending_blocks_repeat() {
 /// A settled open detail is not pending and survives the sweep.
 #[test]
 fn test_connection_loss_clears_pending() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ConnectionEvent, SessionMessage};
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::{MemoryDetail, MemoryToggleWhich};
     let mut app = working();
@@ -513,9 +519,9 @@ fn test_connection_loss_clears_pending() {
             mtime_secs: 1,
         }),
     );
-    app.handle_agent_message(AgentMessage::ConnectionLost {
-        message: "connection lost".into(),
-    });
+    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
+        cause: "connection lost".into(),
+    }));
     assert_eq!(app.memory.pending_toggle_count(), 0, "toggle mark swept");
     assert!(
         app.memory.detail().is_some(),
@@ -532,14 +538,14 @@ fn test_connection_loss_clears_pending() {
 /// detail view sticks on a fetch that can never land.
 #[test]
 fn test_connection_loss_sweeps_detail() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ConnectionEvent, SessionMessage};
     use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.memory.request_detail(RequestId(2), "loading".into());
-    app.handle_agent_message(AgentMessage::ConnectionLost {
-        message: "connection lost".into(),
-    });
+    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
+        cause: "connection lost".into(),
+    }));
     assert!(app.memory.detail().is_none(), "loading detail swept");
 }
 
@@ -547,7 +553,7 @@ fn test_connection_loss_sweeps_detail() {
 /// alive, so their replies can still land.
 #[test]
 fn test_run_error_keeps_pending() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     use houyicoder_protocol::frontend::run::RunError;
@@ -555,11 +561,14 @@ fn test_run_error_keeps_pending() {
     app.run_command(SlashCommand::Memory);
     app.memory
         .begin_toggle(RequestId(1), MemoryToggleWhich::Auto);
-    app.handle_agent_message(AgentMessage::Done {
-        result: Err(RunError {
-            category: "provider_exhausted".into(),
-            message: "provider exhausted: timeout".into(),
-        }),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(3),
+        response: ServerResponse::Done {
+            result: Err(RunError {
+                category: "provider_exhausted".into(),
+                message: "provider exhausted: timeout".into(),
+            }),
+        },
     });
     assert!(
         app.memory.toggle_pending(MemoryToggleWhich::Auto),
@@ -575,7 +584,7 @@ fn test_run_error_keeps_pending() {
 fn test_dead_driver_toggle_rollback() {
     use std::time::Duration;
 
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ConnectionEvent, SessionMessage};
     use crate::records::TranscriptLine;
     use crate::session::SessionConnection;
     use houyicoder_async::PFut;
@@ -607,7 +616,7 @@ fn test_dead_driver_toggle_rollback() {
         .build()
         .expect("runtime");
     let client = houyicoder_client::Client::new(Box::new(FailOnConnect));
-    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<AgentMessage>();
+    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<SessionMessage>();
     let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     // Synchronization point: the driver drops the command receiver before
     // emitting ConnectionLost, so once the event is observed the enqueue
@@ -616,7 +625,10 @@ fn test_dead_driver_toggle_rollback() {
         .poll_startup(Duration::from_secs(5))
         .expect("the dying driver emits ConnectionLost");
     assert!(
-        matches!(msg, AgentMessage::ConnectionLost { .. }),
+        matches!(
+            msg,
+            SessionMessage::Connection(ConnectionEvent::Lost { .. })
+        ),
         "driver death is the typed event, got {msg:?}"
     );
 
@@ -665,7 +677,7 @@ fn test_dead_driver_toggle_rollback() {
 /// state, and writes the confirmed outcome to the transcript.
 #[test]
 fn test_toggle_reply_writes_outcome() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use crate::records::TranscriptLine;
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
@@ -673,11 +685,13 @@ fn test_toggle_reply_writes_outcome() {
     app.run_command(SlashCommand::Memory);
     app.memory
         .begin_toggle(RequestId(7), MemoryToggleWhich::Auto);
-    app.handle_agent_message(AgentMessage::MemoryToggleStateResult {
-        req_id: RequestId(7),
-        state: ToggleState {
-            auto_memory: false,
-            auto_dream: true,
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(7),
+        response: ServerResponse::MemoryToggleState {
+            state: ToggleState {
+                auto_memory: false,
+                auto_dream: true,
+            },
         },
     });
     assert!(
@@ -698,16 +712,18 @@ fn test_toggle_reply_writes_outcome() {
 /// transcript — only a pending flip produces an outcome line.
 #[test]
 fn test_toggle_read_skips_transcript() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     let before = app.transcript.len();
-    app.handle_agent_message(AgentMessage::MemoryToggleStateResult {
-        req_id: RequestId(99),
-        state: ToggleState {
-            auto_memory: false,
-            auto_dream: true,
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(99),
+        response: ServerResponse::MemoryToggleState {
+            state: ToggleState {
+                auto_memory: false,
+                auto_dream: true,
+            },
         },
     });
     assert!(
@@ -725,16 +741,16 @@ fn test_toggle_read_skips_transcript() {
 /// the registered pending action.
 #[test]
 fn test_forget_reply_writes_outcome() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use crate::records::TranscriptLine;
     use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.memory
         .begin_forget(RequestId(8), "build-gate".to_string());
-    app.handle_agent_message(AgentMessage::MemoryListResult {
-        req_id: RequestId(8),
-        entries: vec![],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(8),
+        response: ServerResponse::MemoryList { entries: vec![] },
     });
     assert!(
         app.transcript.iter().any(|l| matches!(
@@ -753,7 +769,7 @@ fn test_forget_reply_writes_outcome() {
 /// the old value, and clears the pending mark.
 #[test]
 fn test_toggle_failure_names_action() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use crate::records::TranscriptLine;
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
@@ -761,9 +777,11 @@ fn test_toggle_failure_names_action() {
     app.run_command(SlashCommand::Memory);
     app.memory
         .begin_toggle(RequestId(9), MemoryToggleWhich::Auto);
-    app.handle_agent_message(AgentMessage::RequestError {
-        req_id: RequestId(9),
-        message: "failed to save settings".to_string(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(9),
+        response: ServerResponse::Error {
+            message: "failed to save settings".to_string(),
+        },
     });
     assert!(
         app.transcript.iter().any(|l| matches!(
@@ -784,16 +802,18 @@ fn test_toggle_failure_names_action() {
 /// A failed forget names the key that could not be deleted.
 #[test]
 fn test_forget_failure_names_action() {
-    use crate::agent_message::AgentMessage;
+    use crate::agent_message::{ServerResponse, SessionMessage};
     use crate::records::TranscriptLine;
     use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.memory
         .begin_forget(RequestId(10), "build-gate".to_string());
-    app.handle_agent_message(AgentMessage::RequestError {
-        req_id: RequestId(10),
-        message: "permission denied".to_string(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(10),
+        response: ServerResponse::Error {
+            message: "permission denied".to_string(),
+        },
     });
     assert!(
         app.transcript.iter().any(|l| matches!(

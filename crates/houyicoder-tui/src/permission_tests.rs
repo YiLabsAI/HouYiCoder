@@ -6,9 +6,11 @@
 
 #![cfg(test)]
 
+use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition;
 use crate::state::{App, Pane};
 use crate::test_harness::render_text;
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 fn app() -> App {
@@ -27,9 +29,9 @@ fn test_reasoning_no_live_block() {
     // Echoing live reasoning each frame was a self-invented surplus that
     // surfaced a ctrl+o hint on every interaction.
     let mut app = app();
-    app.handle_agent_message(crate::run_control::AgentMessage::ReasoningDelta {
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::ReasoningDelta {
         text: "pondering deeply".into(),
-    });
+    }));
     assert_eq!(app.live_reasoning_text, "pondering deeply");
     assert!(app.live_active);
     let text = render_text(&app, 80, 24);
@@ -292,16 +294,18 @@ fn test_mode_cycle_disconnected() {
 
 #[test]
 fn test_git_ops_updates_cache() {
-    // The server's PermissionAskBeforeGitResult refreshes the cache so the
+    // The server's PermissionAskBeforeGit reply refreshes the cache so the
     // /permissions view reflects the gate's authoritative state.
     let mut app = app();
-    app.handle_agent_message(
-        crate::agent_message::AgentMessage::PermissionAskBeforeGitResult { enabled: false },
-    );
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(4),
+        response: ServerResponse::PermissionAskBeforeGit { enabled: false },
+    });
     assert!(!app.ask_before_git_enabled);
-    app.handle_agent_message(
-        crate::agent_message::AgentMessage::PermissionAskBeforeGitResult { enabled: true },
-    );
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(5),
+        response: ServerResponse::PermissionAskBeforeGit { enabled: true },
+    });
     assert!(app.ask_before_git_enabled);
 }
 

@@ -4,85 +4,66 @@
 #[path = "agent_dispatch/run_completion.rs"]
 mod run_completion;
 
+#[path = "agent_dispatch/memory.rs"]
+mod memory;
+
 use std::iter;
 use std::time::Instant;
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SessionId as FrontendSessionId;
-use houyicoder_protocol::frontend::memory::{
-    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryDetail, MemoryOperation,
-    MemorySummaryEntry, MemoryToggleWhich, ToggleState,
-};
+use houyicoder_protocol::frontend::compact::CompactReply;
+use houyicoder_protocol::frontend::context::ContextBreakdown;
+use houyicoder_protocol::frontend::model::ModelCatalog;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCallStatus};
 
-use crate::agent_message::{AgentMessage, ClientCommand, FleetEntry};
-use crate::command::render::{
-    memory_entries_from_wire, render_memory_entry, render_permission_rules_wire,
-    render_trajectory_wire,
+use crate::agent_message::{
+    AgentStatusSnapshot, ClientCommand, ConnectionEvent, FleetEntry, ServerEvent, ServerRequest,
+    ServerResponse, SessionMessage,
 };
+use crate::command::render::{render_permission_rules_wire, render_trajectory_wire};
 use crate::composition::suggestions_for;
-use crate::memory_state::{MemoryAction, toggle_label};
 use crate::pending_queue::PendingItem;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::enums::LiveBlock;
-use crate::state::{App, BashProgress, Pane, TrustChoice};
+use crate::state::{App, BashProgress, TrustChoice};
 use crate::terminal_title::sync as sync_terminal_title;
 use crate::transcript::{TranscriptFrame, transcript_from_frames};
 use crate::view::model_pane::row_for_tier;
 
 impl App {
-    /// Apply an inbound agent message to application state. Completion and a
-    /// matching request error settle the active run; other messages update the
-    /// live interface.
-    pub fn handle_agent_message(&mut self, msg: AgentMessage) {
+    /// Apply an inbound agent message to application state. Dispatch follows
+    /// the protocol's four directions: connection lifecycle, request
+    /// responses, server events, and server-initiated requests.
+    pub fn handle_agent_message(&mut self, msg: SessionMessage) {
         match msg {
-            AgentMessage::Done { result } => {
-                self.active_run_req_id.set(None);
-                self.handle_run_completion(result.map_err(|e| e.message));
-            }
-            AgentMessage::ConnectionReady => {
-                // The Hello handshake succeeded. Ready reflects the confirmed
-                // handshake, not the connection object existing, so a failed
-                // Hello leaves the status at Connecting until the loss lands.
-                // The transition is constrained: a late confirmation cannot
-                // revive a lost connection.
-                if let Some(s) = self.session.as_mut() {
-                    s.mark_ready();
+            SessionMessage::Connection(event) => match event {
+                ConnectionEvent::Ready => {
+                    // The Hello handshake succeeded. Ready reflects the
+                    // confirmed handshake, not the connection object existing,
+                    // so a failed Hello leaves the status at Connecting until
+                    // the loss lands. The transition is constrained: a late
+                    // confirmation cannot revive a lost connection.
+                    if let Some(s) = self.session.as_mut() {
+                        s.mark_ready();
+                    }
                 }
-            }
-            AgentMessage::ConnectionLost { message } => {
-                // The driver is gone: no reply can land for anything in
-                // flight. End the active run if one is live, and sweep
-                // pending pane marks instead of leaving a mark that refuses
-                // its switch forever. Server state for in-flight mutations
-                // is unknown, so no per-action failure line is written —
-                // one generic connection-loss line covers all of them.
-                self.apply_connection_loss(message);
-            }
-            AgentMessage::RequestError { req_id, message } => {
-                if self.active_run_req_id.get().is_some_and(|r| r == req_id) {
-                    self.active_run_req_id.set(None);
-                    self.handle_run_completion(Err(message));
-                } else if let Some(action) = self.memory.take_action(req_id) {
-                    // A failed pane mutation keeps the action context, so the
-                    // outcome says what did not happen instead of a bare error.
-                    // The pending mark clears and the header keeps the old
-                    // value — nothing was applied.
-                    let line = match action {
-                        MemoryAction::Toggle { which } => {
-                            format!("couldn't toggle {} — {message}", toggle_label(which))
-                        }
-                        MemoryAction::Forget { key } => {
-                            format!("couldn't forget {key} — {message}")
-                        }
-                    };
-                    self.system_line(line);
-                } else {
-                    self.system_line(format!("error: {message}"));
+                ConnectionEvent::Lost { cause } => {
+                    // The driver is gone: no reply can land for anything in
+                    // flight. End the active run if one is live, and sweep
+                    // pending pane marks instead of leaving a mark that
+                    // refuses its switch forever. Server state for in-flight
+                    // mutations is unknown, so no per-action failure line is
+                    // written — one generic connection-loss line covers all.
+                    self.apply_connection_loss(cause);
                 }
+            },
+            SessionMessage::Response { request, response } => {
+                self.apply_response(request, response);
             }
-            other => {
-                self.handle_agent_message_inner(other);
+            SessionMessage::Event(event) => self.apply_server_event(event),
+            SessionMessage::Request { request, payload } => {
+                self.apply_server_request(request, payload);
             }
         }
     }
@@ -156,13 +137,14 @@ impl App {
         TranscriptLine::System(msg.into())
     }
 
-    #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
-    fn handle_agent_message_inner(&mut self, msg: AgentMessage) {
-        match msg {
-            AgentMessage::Frame(frame) => {
+    /// Apply a server-originated event: durable frames, streaming deltas,
+    /// queue and progress notifications.
+    fn apply_server_event(&mut self, event: ServerEvent) {
+        match event {
+            ServerEvent::Frame(frame) => {
                 self.apply_frames(iter::once(frame));
             }
-            AgentMessage::Delta { text } => {
+            ServerEvent::Delta { text } => {
                 self.live_assistant_text.push_str(&text);
                 // Assistant text is now the active streaming block: the spinner
                 // verb must read Working, not Thinking (a sticky "reasoning
@@ -175,7 +157,7 @@ impl App {
                 // to the new tail when follow_tail is true, and a user who
                 // scrolled up to re-read history must stay where they scrolled.
             }
-            AgentMessage::ReasoningDelta { text } => {
+            ServerEvent::ReasoningDelta { text } => {
                 if self.live_reasoning_text.is_empty() && !text.is_empty() {
                     self.thinking_started_at = Some(Instant::now());
                 }
@@ -187,7 +169,7 @@ impl App {
                 self.live_active = true;
                 self.last_delta_at = Some(Instant::now());
             }
-            AgentMessage::ToolProgress {
+            ServerEvent::ToolProgress {
                 call_id,
                 elapsed_secs,
                 lines,
@@ -207,7 +189,7 @@ impl App {
                     );
                 }
             }
-            AgentMessage::QueuedInputCommitted { inputs } => {
+            ServerEvent::QueuedInputCommitted { inputs } => {
                 // A committed mid-turn input makes the original submission no
                 // longer eligible for no-output rollback.
                 if !inputs.is_empty() {
@@ -228,7 +210,129 @@ impl App {
                 }
                 self.promote_next_pending();
             }
-            AgentMessage::PermissionAsk { req_id, ask } => {
+            ServerEvent::MemoryChanged {
+                id,
+                origin,
+                changes,
+            } => self.show_memory_changes(&id, origin, &changes),
+            ServerEvent::SystemLine { text } => {
+                // A runtime notice the agent loop surfaced (e.g. an overflow
+                // the catalog could not self-heal). Render verbatim as a
+                // transcript system line.
+                self.system_line(text);
+            }
+            ServerEvent::AgentStatus {
+                agent_id,
+                subagent_type,
+                turn,
+                tokens,
+                tool_uses,
+                last_activity,
+                completed,
+            } => self.apply_agent_status(AgentStatusSnapshot {
+                agent_id,
+                subagent_type,
+                turn,
+                tokens,
+                tool_uses,
+                last_activity,
+                completed,
+            }),
+        }
+    }
+
+    /// Apply one child status snapshot to the fleet footer and the teammate
+    /// view's live refetch.
+    fn apply_agent_status(&mut self, status: AgentStatusSnapshot) {
+        let AgentStatusSnapshot {
+            agent_id,
+            subagent_type,
+            turn,
+            tokens,
+            tool_uses,
+            last_activity,
+            completed,
+        } = status;
+        // A running child (no completed status) drives the live
+        // refetch below; capture it before the fleet update moves
+        // the field.
+        let is_running = completed.is_none();
+        // Auto-exit the teammate view only when the viewed child is
+        // gone or broken (killed/failed). A turn-limit, budget, or
+        // normal completion leaves partial output worth reading, so
+        // the view stays — the user exits with Shift+Up/Down (Esc
+        // only interrupts the viewed child's current turn).
+        if self
+            .teammate_view
+            .as_ref()
+            .is_some_and(|v| v.child_sid == agent_id)
+            && completed
+                .as_deref()
+                .is_some_and(|s| matches!(s, "killed" | "failed"))
+        {
+            self.exit_teammate_view();
+        }
+        if let Some(entry) = self
+            .fleet
+            .entries
+            .iter_mut()
+            .find(|e| e.agent_id == agent_id)
+        {
+            entry.turn = turn;
+            entry.tokens = tokens;
+            entry.tool_uses = tool_uses;
+            entry.last_activity = last_activity;
+            // Stamp the terminal moment the first time a completion
+            // lands so the footer grace window starts then; a later
+            // status echoing the same completion does not reset it.
+            if completed.is_some() && entry.completed.is_none() {
+                entry.completed_at = Some(Instant::now());
+            }
+            entry.completed = completed;
+        } else {
+            self.fleet.entries.push(FleetEntry {
+                agent_id: agent_id.clone(),
+                subagent_type,
+                turn,
+                tokens,
+                tool_uses,
+                last_activity,
+                completed_at: completed.as_ref().map(|_| Instant::now()),
+                started_at: Some(Instant::now()),
+                completed,
+            });
+        }
+        // Live-tracking: when the user is viewing a running child,
+        // each turn-advance Progress refetches the child transcript
+        // so the drilled-in view streams the child's turns as they
+        // land (not a frozen snapshot taken at enter). The turn
+        // guard debounces: one fetch per turn, not one per status
+        // echo. A completed child stops refetching (the final fetch
+        // on enter already holds the full result).
+        if is_running
+            && let Some(view) = self.teammate_view.as_mut()
+            && view.child_sid == agent_id
+            && view.last_fetched_turn.is_none_or(|t| turn > t)
+        {
+            view.last_fetched_turn = Some(turn);
+            if let Some(s) = self.session.as_ref() {
+                match s.next_request_id() {
+                    Ok(req_id) => {
+                        self.enqueue_refresh(ClientCommand::ChildTranscriptQuery {
+                            req_id,
+                            child_sid: FrontendSessionId(agent_id.clone()),
+                        });
+                    }
+                    Err(_) => self.note_request_id_exhausted(),
+                }
+            }
+        }
+    }
+
+    /// Apply a server-initiated request: a reverse ask the user must answer.
+    fn apply_server_request(&mut self, request: RequestId, payload: ServerRequest) {
+        match payload {
+            ServerRequest::Permission { ask } => {
                 // Rebuild the transcript from the wire stream so the assistant
                 // pre-text + the tool call surface before the user decides.
                 // The server blocks on the reverse response, so the run is
@@ -238,108 +342,77 @@ impl App {
                 // already shipped every Frame up to this point, so App's own
                 // frame log is current.
                 self.rebuild_transcript();
-                self.pending_permission_req_id.set(Some(req_id));
-                self.raise_agent_approval(ask);
+                self.pending_permission_req_id.set(Some(request));
+                self.raise_agent_approval(*ask);
             }
-            AgentMessage::TrustAsk { req_id, prompt } => {
+            ServerRequest::Trust { prompt } => {
                 // Startup workspace-trust gate: the server blocks before the
                 // run loop until the user answers. Raise the trust card (no
                 // run to pause — busy is already false at startup, but the
                 // card's presence gates new message sends until resolved).
                 self.pending_trust = Some(prompt);
                 self.trust_choice = TrustChoice::Accept;
-                self.pending_trust_req_id = Some(req_id);
+                self.pending_trust_req_id = Some(request);
             }
-            // Completion, driver death, readiness, and matching request
-            // errors are handled before this dispatch.
-            AgentMessage::Done { .. }
-            | AgentMessage::ConnectionReady
-            | AgentMessage::ConnectionLost { .. }
-            | AgentMessage::RequestError { .. } => {
-                unreachable!(
-                    "lifecycle and run-end variants are intercepted by handle_agent_message"
-                )
+        }
+    }
+
+    /// Apply a reply to a request the client issued. The request id answers
+    /// which verb sent it; every response carries it.
+    fn apply_response(&mut self, request: RequestId, response: ServerResponse) {
+        match response {
+            ServerResponse::Done { result } => {
+                // Settle only the run this Done answers. A stale or
+                // misattributed Done (its request id is not the active
+                // run's) must neither clear the active run nor complete
+                // it — the same gate the run's Error reply already applies.
+                if self.active_run_req_id.get().is_some_and(|r| r == request) {
+                    self.active_run_req_id.set(None);
+                    self.handle_run_completion(result.map_err(|e| e.message));
+                }
             }
-            AgentMessage::StatusResult { snapshot } => {
+            ServerResponse::Error { message } => {
+                self.apply_response_error(request, message);
+            }
+            ServerResponse::Ack => {
+                // A fire-and-forget request (e.g. SessionReset) came back
+                // acknowledged. The host acted locally at send time, so
+                // there is nothing to apply — the acknowledgement only
+                // closes the request's identity at the event loop.
+            }
+            ServerResponse::Status { snapshot } => {
                 // Cache the snapshot for the status bar + /status pane. NOTE:
                 // rename's reply rides this variant (a racing /status is swallowed).
                 self.pending_status_command = false;
                 // Sync the terminal tab title (OSC 0/2) on change only (not
                 // unconditionally every status update).
                 sync_terminal_title(&snapshot, &mut self.last_title);
-                self.status_cache = Some(snapshot);
+                self.status_cache = Some(*snapshot);
             }
-            AgentMessage::TrajectoryResult { entries, redundant } => {
+            ServerResponse::Trajectory { entries, redundant } => {
                 self.system_line(render_trajectory_wire(&entries, &redundant));
             }
-            AgentMessage::ContextResult { breakdown } => {
-                // Cache the breakdown so the next /context renders immediately
-                // (no "fetching from server" placeholder); a fresh ContextQuery
-                // refreshes it in the background.
-                self.context_cache = Some(breakdown.clone());
-                // Render the breakdown as the inline context grid (a
-                // first-class transcript block) rather than a flat one-line
-                // system message, so the proportional grid, legend, and
-                // suggestions all render. Drill-down (memory files, skills)
-                // is empty until the server ships those sections; the grid
-                // itself is honest data from the breakdown.
-                let suggestions = suggestions_for(&breakdown);
-                let view = ContextView {
-                    breakdown,
-                    drill: ContextDrillDown::default(),
-                    suggestions,
-                };
-                // Replace the last ContextGrid (from the /context cache
-                // fast-path) so a refresh does not stack two grids. Search
-                // backwards instead of checking only the last line: a non-grid
-                // line (System, Agent chunk, hook notification) may land
-                // between the fast-path push and this reply, and the prior
-                // last()-only check would skip the pop → duplicate grid.
-                let last_grid = self
-                    .transcript
-                    .iter()
-                    .rposition(|l| matches!(l, TranscriptLine::ContextGrid(_)));
-                if let Some(idx) = last_grid {
-                    self.transcript.remove(idx);
-                }
-                self.push_transcript_line(TranscriptLine::ContextGrid(view));
+            ServerResponse::Context { breakdown } => {
+                self.apply_context_breakdown(breakdown);
             }
-            AgentMessage::CompactResult { reply } => {
-                // Render the compaction outcome as a one-line system message,
-                // "Compacted ..." / "Not enough
-                // messages to compact." wording (no "compact:" prefix on the
-                // outcome — the prefix stays on the guard errors only). The
-                // checkpoint id is internal (a future rewind handle), kept
-                // out of the transcript; the compact count + token drop are
-                // the user-facing outcome.
-                let line = if reply.made_progress {
-                    let tokens = match (reply.pre_compact_tokens, reply.post_compact_tokens) {
-                        (Some(pre), Some(post)) => {
-                            format!(" · {pre} → {post} estimated tokens")
-                        }
-                        _ => String::new(),
-                    };
-                    format!("Compacted {} events{}", reply.folded_count, tokens)
-                } else {
-                    "Not enough messages to compact.".to_string()
-                };
-                self.system_line(line);
+            ServerResponse::Compact { reply } => {
+                self.apply_compact(reply);
             }
-            AgentMessage::PermissionModeResult { mode } => {
+            ServerResponse::PermissionMode { mode } => {
                 // Silent update: the status bar reflects the new mode on the
                 // next render. No transcript line — mode switching is a
                 // background state change, not a conversation event. The
                 // /mode command pushes its own feedback when invoked.
                 self.mode_cache = Some(mode);
             }
-            AgentMessage::PermissionRulesResult { rules } => {
+            ServerResponse::PermissionRules { rules } => {
                 self.rules_cache = rules.clone();
                 self.system_line(render_permission_rules_wire(&rules));
             }
-            AgentMessage::PermissionDirsResult { dirs } => {
+            ServerResponse::PermissionDirs { dirs } => {
                 self.dirs_cache = dirs.clone();
             }
-            AgentMessage::PermissionAskBeforeGitResult { enabled } => {
+            ServerResponse::PermissionAskBeforeGit { enabled } => {
                 self.ask_before_git_enabled = enabled;
                 self.system_line(format!(
                     "permission: ask before git operations: {} (git commit/rebase/reset/tag {} before running)",
@@ -347,288 +420,185 @@ impl App {
                     if enabled { "ask" } else { "run without asking" },
                 ));
             }
-            AgentMessage::ToolListResult { tools } => {
+            ServerResponse::Tools { tools } => {
                 self.tool_entries = tools;
             }
-            AgentMessage::AgentsResult { directory } => {
+            ServerResponse::Agents { directory } => {
                 self.agent_directory = Some(directory);
             }
-            AgentMessage::ChildTranscriptResult { child_sid, frames } => {
-                // Project fetched child frames through the same pipeline as the
-                // parent flow. Empty frames mean the child log is missing or
-                // produced no durable events; the placeholder helper tells a
-                // running child (log not yet landed) from a real fetch failure
-                // so the error is not hidden behind a "starting" label.
-                let folded = if frames.is_empty() {
-                    vec![self.empty_child_transcript_line(&child_sid)]
-                } else {
-                    transcript_from_frames(&frames)
-                };
-                // Swap the child rows into the matching Subagent line in place
-                // to preserve position. Mirrors the ContextGrid refresh.
-                let idx = self
-                    .transcript
-                    .iter()
-                    .rposition(|l| matches!(l, TranscriptLine::Subagent { child_sid: c, .. } if c == &child_sid));
-                if let Some(idx) = idx {
-                    let mut line = self.transcript.remove(idx);
-                    if let TranscriptLine::Subagent {
-                        folded_transcript, ..
-                    } = &mut line
-                    {
-                        *folded_transcript = folded.clone();
-                    }
-                    self.transcript.insert(idx, line);
-                    // The swap mutates a line's payload in place instead of
-                    // pushing, so the row cache needs an explicit bump — the
-                    // fetched child rows would otherwise stay invisible until
-                    // an unrelated change invalidated the cache.
-                    self.bump_transcript_version();
-                }
-                // When the fetched child is the one the user is viewing, swap
-                // the rows into the teammate view too. The view-fill path
-                // (echo preservation + scroll) lives in its own helper so
-                // this dispatch arm does not balloon.
-                if self
-                    .teammate_view
-                    .as_ref()
-                    .is_some_and(|v| v.child_sid == child_sid)
-                {
-                    self.fill_teammate_view(&child_sid, folded);
-                }
+            ServerResponse::ChildTranscript { child_sid, frames } => {
+                self.apply_child_transcript(child_sid, frames);
             }
-            AgentMessage::HooksResult { hooks } => {
+            ServerResponse::Hooks { hooks } => {
                 self.hook_entries = hooks;
             }
-            AgentMessage::SkillsResult { skills } => {
+            ServerResponse::Skills { skills } => {
                 self.skill_entries = skills;
             }
-            AgentMessage::ModelResult { model, effort } => {
+            ServerResponse::Model { model, effort } => {
                 self.status.model = model.clone();
                 self.model_catalog.active_id = Some(model);
                 self.applied_effort = effort;
             }
-            AgentMessage::SystemLine { text } => {
-                // A runtime notice the agent loop surfaced (e.g. an overflow
-                // the catalog could not self-heal). Render verbatim as a
-                // transcript system line.
-                self.system_line(text);
+            ServerResponse::ModelInfo { catalog } => {
+                self.apply_model_info(catalog);
             }
-            AgentMessage::ModelInfoResult { catalog } => {
-                self.model_catalog = catalog;
-                // Sync the tier from the server's active_id so a resumed
-                // session (tier defaults to Default) picks up the real
-                // mode. None = Default mode, Some = that concrete id.
-                self.model_tier = self
-                    .model_catalog
-                    .active_id
-                    .as_deref()
-                    .unwrap_or("Default")
-                    .to_string();
-                // Position by tier (stable) so a refresh does not slide
-                // the cursor when active_id flips between the two paths.
-                self.model_sel = row_for_tier(self, &self.model_tier);
-                let max_sel = self.model_catalog.catalog.len();
-                if self.model_sel > max_sel {
-                    self.model_sel = 0;
-                }
+            ServerResponse::MemoryList { entries } => {
+                self.apply_memory_list(request, entries);
             }
-            AgentMessage::MemoryListResult { req_id, entries } => {
-                self.apply_memory_list(req_id, entries);
+            ServerResponse::MemoryShow { entry } => {
+                self.apply_memory_show(request, entry);
             }
-            AgentMessage::MemoryShowResult { req_id, entry } => {
-                self.apply_memory_show(req_id, entry);
+            ServerResponse::MemoryToggleState { state } => {
+                self.apply_memory_toggles(request, state);
             }
-            AgentMessage::MemoryToggleStateResult { req_id, state } => {
-                self.apply_memory_toggles(req_id, state);
-            }
-            AgentMessage::MemoryChanged {
-                id,
-                origin,
-                changes,
-            } => self.show_memory_changes(&id, origin, &changes),
-            AgentMessage::UndoResult { description } => match description {
+            ServerResponse::Undo { description } => match description {
                 Some(desc) => self.system_line(format!("undo: {desc}")),
                 None => self.system_line("undo: nothing to undo (stack empty)"),
             },
-            AgentMessage::DebugResult { state } => {
+            ServerResponse::Debug { state } => {
                 if state.enabled {
                     self.system_line(format!("debug: logging to {}", state.path));
                 } else {
                     self.system_line("debug: logging off");
                 }
             }
-            AgentMessage::AgentStatus {
-                agent_id,
-                subagent_type,
-                turn,
-                tokens,
-                tool_uses,
-                last_activity,
-                completed,
-            } => {
-                // A running child (no completed status) drives the live
-                // refetch below; capture it before the fleet update moves
-                // the field.
-                let is_running = completed.is_none();
-                // Auto-exit the teammate view only when the viewed child is
-                // gone or broken (killed/failed). A turn-limit, budget, or
-                // normal completion leaves partial output worth reading, so
-                // the view stays — the user exits with Shift+Up/Down (Esc
-                // only interrupts the viewed child's current turn).
-                if self
-                    .teammate_view
-                    .as_ref()
-                    .is_some_and(|v| v.child_sid == agent_id)
-                    && completed
-                        .as_deref()
-                        .is_some_and(|s| matches!(s, "killed" | "failed"))
-                {
-                    self.exit_teammate_view();
-                }
-                if let Some(entry) = self
-                    .fleet
-                    .entries
-                    .iter_mut()
-                    .find(|e| e.agent_id == agent_id)
-                {
-                    entry.turn = turn;
-                    entry.tokens = tokens;
-                    entry.tool_uses = tool_uses;
-                    entry.last_activity = last_activity;
-                    // Stamp the terminal moment the first time a completion
-                    // lands so the footer grace window starts then; a later
-                    // status echoing the same completion does not reset it.
-                    if completed.is_some() && entry.completed.is_none() {
-                        entry.completed_at = Some(Instant::now());
-                    }
-                    entry.completed = completed;
-                } else {
-                    self.fleet.entries.push(FleetEntry {
-                        agent_id: agent_id.clone(),
-                        subagent_type,
-                        turn,
-                        tokens,
-                        tool_uses,
-                        last_activity,
-                        completed_at: completed.as_ref().map(|_| Instant::now()),
-                        started_at: Some(Instant::now()),
-                        completed,
-                    });
-                }
-                // Live-tracking: when the user is viewing a running child,
-                // each turn-advance Progress refetches the child transcript
-                // so the drilled-in view streams the child's turns as they
-                // land (not a frozen snapshot taken at enter). The turn
-                // guard debounces: one fetch per turn, not one per status
-                // echo. A completed child stops refetching (the final fetch
-                // on enter already holds the full result).
-                if is_running
-                    && let Some(view) = self.teammate_view.as_mut()
-                    && view.child_sid == agent_id
-                    && view.last_fetched_turn.is_none_or(|t| turn > t)
-                {
-                    view.last_fetched_turn = Some(turn);
-                    if let Some(s) = self.session.as_ref() {
-                        match s.next_request_id() {
-                            Ok(req_id) => {
-                                self.enqueue_refresh(ClientCommand::ChildTranscriptQuery {
-                                    req_id,
-                                    child_sid: FrontendSessionId(agent_id.clone()),
-                                });
-                            }
-                            Err(_) => self.note_request_id_exhausted(),
-                        }
-                    }
-                }
-            }
         }
     }
 
-    /// Apply a memory-list reply. A forget answers with the refreshed list;
-    /// the req_id match against a registered action tells it from a plain
-    /// refresh, which writes no transcript.
-    fn apply_memory_list(&mut self, req_id: RequestId, entries: Vec<MemorySummaryEntry>) {
-        let forgot = self.memory.take_forget(req_id);
-        self.memory.set_entries(memory_entries_from_wire(&entries));
-        if let Some(key) = forgot {
-            self.system_line(format!("forgot {key}"));
+    /// Route a per-request protocol error: the active run's own error
+    /// resolves its Done; a memory pane mutation's error keeps the action
+    /// context; anything else becomes a plain system line.
+    fn apply_response_error(&mut self, request: RequestId, message: String) {
+        if self.active_run_req_id.get().is_some_and(|r| r == request) {
+            self.active_run_req_id.set(None);
+            self.handle_run_completion(Err(message));
+        } else if let Some(action) = self.memory.take_action(request) {
+            // A failed pane mutation keeps the action context, so the
+            // outcome says what did not happen instead of a bare error.
+            // The pending mark clears and the header keeps the old
+            // value — nothing was applied.
+            self.system_line(Self::memory_failure_line(action, &message));
+        } else {
+            self.system_line(format!("error: {message}"));
         }
     }
 
-    /// Apply a memory-detail reply: into the pane when the pane asked and the
-    /// request is still pending, otherwise rendered as one transcript line.
-    fn apply_memory_show(&mut self, req_id: RequestId, entry: Option<MemoryDetail>) {
-        if self.pane == Pane::Memory && self.memory.is_pending(req_id) {
-            let missing = entry.is_none();
-            self.memory.apply_detail(req_id, entry);
-            if missing {
-                self.system_line("memory: no such key");
-            }
-        } else if self.pane != Pane::Memory && self.memory.pending_key().is_some() {
-            self.memory.close_detail();
-        } else if self.memory.pending_key().is_none() {
-            match entry {
-                Some(entry) => self.system_line(render_memory_entry(&entry)),
-                None => self.system_line("memory: no such key"),
-            }
-        }
-    }
-
-    /// Apply a toggle-pair reply. A flip and a pane-open read answer with the
-    /// same shape; only the req_id a pending toggle was registered under
-    /// writes the outcome line.
-    fn apply_memory_toggles(&mut self, req_id: RequestId, state: ToggleState) {
-        let toggled = self.memory.take_toggle(req_id);
-        let outcome = toggled.map(|which| {
-            let on = match which {
-                MemoryToggleWhich::Auto => state.auto_memory,
-                MemoryToggleWhich::Dream => state.auto_dream,
-            };
-            format!("{} {}", toggle_label(which), if on { "on" } else { "off" })
-        });
-        self.memory.set_toggles(state);
-        if let Some(line) = outcome {
-            self.system_line(line);
-        }
-    }
-
-    fn show_memory_changes(
-        &mut self,
-        id: &MemoryChangeId,
-        origin: MemoryChangeOrigin,
-        changes: &[MemoryChange],
-    ) {
-        if !self.memory.register_change(id) {
-            return;
-        }
-        let source = match origin {
-            MemoryChangeOrigin::PrimaryAgent => "primary agent",
-            MemoryChangeOrigin::AutoMemory => "auto-memory",
-            MemoryChangeOrigin::AutoDream => "auto-dream",
+    /// Render a context-window breakdown as the inline context grid (a
+    /// first-class transcript block) rather than a flat one-line system
+    /// message, so the proportional grid, legend, and suggestions all
+    /// render. The breakdown is cached so the next /context renders
+    /// immediately; a fresh ContextQuery refreshes it in the background.
+    /// Drill-down (memory files, skills) is empty until the server ships
+    /// those sections; the grid itself is honest data from the breakdown.
+    fn apply_context_breakdown(&mut self, breakdown: ContextBreakdown) {
+        self.context_cache = Some(breakdown.clone());
+        let suggestions = suggestions_for(&breakdown);
+        let view = ContextView {
+            breakdown,
+            drill: ContextDrillDown::default(),
+            suggestions,
         };
-        let count = changes.len();
-        let noun = if count == 1 { "change" } else { "changes" };
-        let mut notice = format!("Memory {source}: {count} {noun} · /memory");
-        for change in changes {
-            let operation = match change.operation {
-                MemoryOperation::Stored => "stored",
-                MemoryOperation::Deleted => "deleted",
-                MemoryOperation::Promoted => "promoted",
-                MemoryOperation::Demoted => "demoted",
-            };
-            notice.push_str(&format!("\n  ⎿  {operation} {}", change.key));
+        // Replace the last ContextGrid (from the /context cache
+        // fast-path) so a refresh does not stack two grids. Search
+        // backwards instead of checking only the last line: a non-grid
+        // line (System, Agent chunk, hook notification) may land
+        // between the fast-path push and this reply, and the prior
+        // last()-only check would skip the pop → duplicate grid.
+        let last_grid = self
+            .transcript
+            .iter()
+            .rposition(|l| matches!(l, TranscriptLine::ContextGrid(_)));
+        if let Some(idx) = last_grid {
+            self.transcript.remove(idx);
         }
-        self.system_line(notice);
-        if self.pane == Pane::Memory
-            && let Some(s) = self.session.as_ref()
-        {
-            match s.next_request_id() {
-                Ok(req_id) => {
-                    self.enqueue_refresh(ClientCommand::MemoryListQuery { req_id });
+        self.push_transcript_line(TranscriptLine::ContextGrid(view));
+    }
+
+    /// Render the compaction outcome as a one-line system message,
+    /// "Compacted ..." / "Not enough messages to compact." wording (no
+    /// "compact:" prefix on the outcome — the prefix stays on the guard
+    /// errors only). The checkpoint id is internal (a future rewind
+    /// handle), kept out of the transcript; the compact count + token
+    /// drop are the user-facing outcome.
+    fn apply_compact(&mut self, reply: CompactReply) {
+        let line = if reply.made_progress {
+            let tokens = match (reply.pre_compact_tokens, reply.post_compact_tokens) {
+                (Some(pre), Some(post)) => {
+                    format!(" · {pre} → {post} estimated tokens")
                 }
-                Err(_) => self.note_request_id_exhausted(),
+                _ => String::new(),
+            };
+            format!("Compacted {} events{}", reply.folded_count, tokens)
+        } else {
+            "Not enough messages to compact.".to_string()
+        };
+        self.system_line(line);
+    }
+
+    /// Fill a Subagent fold-group with the fetched child transcript,
+    /// projected through the same pipeline as the parent flow; the teammate
+    /// view swaps too when it shows the same child.
+    fn apply_child_transcript(&mut self, child_sid: String, frames: Vec<TranscriptFrame>) {
+        // Empty frames mean the child log is missing or produced no durable
+        // events; the placeholder line tells a running child (log not yet
+        // landed) from a real fetch failure so the error is not hidden
+        // behind a "starting" label.
+        let folded = if frames.is_empty() {
+            vec![self.empty_child_transcript_line(&child_sid)]
+        } else {
+            transcript_from_frames(&frames)
+        };
+        // Swap the child rows into the matching Subagent line in place
+        // to preserve position. Mirrors the ContextGrid refresh.
+        let idx = self.transcript.iter().rposition(
+            |l| matches!(l, TranscriptLine::Subagent { child_sid: c, .. } if c == &child_sid),
+        );
+        if let Some(idx) = idx {
+            let mut line = self.transcript.remove(idx);
+            if let TranscriptLine::Subagent {
+                folded_transcript, ..
+            } = &mut line
+            {
+                *folded_transcript = folded.clone();
             }
+            self.transcript.insert(idx, line);
+            // The swap mutates a line's payload in place instead of
+            // pushing, so the row cache needs an explicit bump — the
+            // fetched child rows would otherwise stay invisible until
+            // an unrelated change invalidated the cache.
+            self.bump_transcript_version();
+        }
+        // When the fetched child is the one the user is viewing, swap
+        // the rows into the teammate view too.
+        if self
+            .teammate_view
+            .as_ref()
+            .is_some_and(|v| v.child_sid == child_sid)
+        {
+            self.fill_teammate_view(&child_sid, folded);
+        }
+    }
+
+    /// Apply the /model pane catalog snapshot: the rows reflect
+    /// settings.json rather than a hardcoded model list.
+    fn apply_model_info(&mut self, catalog: ModelCatalog) {
+        self.model_catalog = catalog;
+        // Sync the tier from the server's active_id so a resumed
+        // session (tier defaults to Default) picks up the real
+        // mode. None = Default mode, Some = that concrete id.
+        self.model_tier = self
+            .model_catalog
+            .active_id
+            .as_deref()
+            .unwrap_or("Default")
+            .to_string();
+        // Position by tier (stable) so a refresh does not slide
+        // the cursor when active_id flips between the two paths.
+        self.model_sel = row_for_tier(self, &self.model_tier);
+        let max_sel = self.model_catalog.catalog.len();
+        if self.model_sel > max_sel {
+            self.model_sel = 0;
         }
     }
 

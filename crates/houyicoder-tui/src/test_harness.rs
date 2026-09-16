@@ -14,7 +14,7 @@ use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::handshake::Hello;
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
-use crate::agent_message::AgentMessage;
+use crate::agent_message::{ConnectionEvent, SessionMessage};
 use crate::app::apply_selection_overlay;
 use crate::records::TranscriptLine;
 use crate::session::SessionConnection;
@@ -225,7 +225,7 @@ fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {
     let runtime = crate::composition::shared_runtime();
     let (events_tx, events_rx) = mpsc::channel();
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
-    let (agent_tx, agent_rx) = mpsc::channel::<AgentMessage>();
+    let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
     let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     let mut app = working_app();
     app.runtime = Some(runtime);
@@ -288,36 +288,36 @@ pub(crate) fn attach_connection(app: &mut App) {
     let runtime = crate::composition::shared_runtime();
     let (events_tx, _events_rx) = mpsc::channel();
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
-    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<crate::agent_message::AgentMessage>();
+    let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
     let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     app.runtime = Some(runtime);
     app.session = Some(session);
 }
 
 /// An App whose driver exited on a failed handshake: the session object is
-/// present, the connection is lost, and the ConnectionLost event has already
+/// present, the connection is lost, and the Lost event has already
 /// arrived. Send attempts are refused deterministically, so tests can drive
 /// the send-failure branches without racing the scheduler.
 pub(crate) fn connection_lost_app() -> App {
     let runtime = crate::composition::shared_runtime();
     let client = Client::new(Box::new(FailedHandshakeTransport));
-    let (agent_tx, agent_rx) = mpsc::channel::<AgentMessage>();
+    let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
     let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     // Synchronization point: the driver announces its own death; from this
     // point the enqueue path is deterministically refused.
     let death = session
         .poll_startup(Duration::from_secs(5))
-        .expect("the failed handshake reports ConnectionLost");
+        .expect("the failed handshake reports the Lost event");
     let mut app = working_app();
     app.runtime = Some(runtime);
     app.session = Some(session);
     // Apply the death so the app holds the settled state: Lost with its
     // cause, active run swept. Tests start from the post-loss world instead
     // of half-applying the event themselves.
-    let AgentMessage::ConnectionLost { message } = death else {
-        panic!("expected ConnectionLost, got {death:?}");
+    let SessionMessage::Connection(ConnectionEvent::Lost { cause }) = death else {
+        panic!("expected ConnectionEvent::Lost, got {death:?}");
     };
-    app.handle_agent_message(AgentMessage::ConnectionLost { message });
+    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost { cause }));
     app
 }
 

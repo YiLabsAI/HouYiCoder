@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::state::TranscriptLine;
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, StopReason};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
@@ -807,20 +808,71 @@ fn test_finish_clears_start() {
     app.screen = crate::state::Screen::Working;
     crate::test_harness::attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
-    app.handle_agent_message(AgentMessage::Done {
-        result: Ok(RunResult {
-            outcome: RunOutcome::FinalOutput {
-                content: vec![ContentBlock::Text { text: "ok".into() }],
-            },
-            usage: Usage::default(),
-            turns: 1,
-            stop_reason: StopReason::EndTurn,
-        }),
+    let run_req = app.active_run_req_id.get().unwrap();
+    app.handle_agent_message(SessionMessage::Response {
+        request: run_req,
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::FinalOutput {
+                    content: vec![ContentBlock::Text { text: "ok".into() }],
+                },
+                usage: Usage::default(),
+                turns: 1,
+                stop_reason: StopReason::EndTurn,
+            }),
+        },
     });
     assert!(
         app.session_started_at.is_none(),
         "recorded defect: session start point is cleared before the copy"
     );
+}
+
+// A Done whose request id is not the active run's settles nothing; the
+// matching Done then settles the run.
+#[test]
+fn test_stale_done_settles_nothing() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    let run_req = app.active_run_req_id.get().unwrap();
+    let stale = RequestId(run_req.0 + 1);
+    let done = || SessionMessage::Response {
+        request: stale,
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::FinalOutput {
+                    content: vec![ContentBlock::Text { text: "ok".into() }],
+                },
+                usage: Usage::default(),
+                turns: 1,
+                stop_reason: StopReason::EndTurn,
+            }),
+        },
+    };
+    app.handle_agent_message(done());
+    assert!(app.agent_busy, "a stale Done must not end the active run");
+    assert_eq!(
+        app.active_run_req_id.get(),
+        Some(run_req),
+        "a stale Done must not clear the active run's request id"
+    );
+    app.handle_agent_message(SessionMessage::Response {
+        request: run_req,
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::FinalOutput {
+                    content: vec![ContentBlock::Text { text: "ok".into() }],
+                },
+                usage: Usage::default(),
+                turns: 1,
+                stop_reason: StopReason::EndTurn,
+            }),
+        },
+    });
+    assert!(!app.agent_busy, "the matching Done settles the run");
+    assert_eq!(app.active_run_req_id.get(), None);
 }
 
 // Each approval cycle rewrites the start point.

@@ -31,9 +31,12 @@ fn test_child_transcript_fills_folded() {
             },
         ))),
     ];
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames,
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(12),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames,
+        },
     });
     match &app.transcript[0] {
         TranscriptLine::Subagent {
@@ -67,9 +70,12 @@ fn test_child_transcript_empty_unavailable() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: Vec::new(),
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(13),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: Vec::new(),
+        },
     });
     match &app.transcript[0] {
         TranscriptLine::Subagent {
@@ -105,13 +111,16 @@ fn test_child_transcript_preserves_position() {
         color: None,
     });
     app.transcript.push(TranscriptLine::Agent("after".into()));
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text {
-                text: "child reply".into(),
-            }),
-        ))],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(14),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+                ContentChunk::new(ContentBlock::Text {
+                    text: "child reply".into(),
+                }),
+            ))],
+        },
     });
     assert!(
         matches!(app.transcript[0], TranscriptLine::Agent(_)),
@@ -368,8 +377,8 @@ fn test_subagent_folded_survives_rebuild() {
             .raw_output(serde_json::json!({"agentId": "c1", "content": "found auth"})),
     )));
     let mut app = crate::composition::app();
-    app.handle_agent_message(AgentMessage::Frame(call));
-    app.handle_agent_message(AgentMessage::Frame(result));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(call)));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(result)));
     assert!(
         app.transcript
             .iter()
@@ -377,13 +386,16 @@ fn test_subagent_folded_survives_rebuild() {
         "subagent line projected from the agent-tool result"
     );
     // Fill folded_transcript (the on-expand fetch landing).
-    app.handle_agent_message(AgentMessage::ChildTranscriptResult {
-        child_sid: "c1".into(),
-        frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text {
-                text: "child reply".into(),
-            }),
-        ))],
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(15),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: vec![TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+                ContentChunk::new(ContentBlock::Text {
+                    text: "child reply".into(),
+                }),
+            ))],
+        },
     });
     // A parent rebuild re-projects frames; the fetched child rows survive.
     app.rebuild_transcript();
