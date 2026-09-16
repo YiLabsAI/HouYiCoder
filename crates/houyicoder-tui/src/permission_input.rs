@@ -105,8 +105,12 @@ fn add_rule_with_destination(
     };
     let label = crate::command::render::permission_effect_label(spec.effect);
     let action = wire_rule.action.clone();
-    let Some(req_id) = app.next_request_id() else {
+    let Some(s) = app.session.as_ref() else {
         app.system_line("permission: not connected");
+        return;
+    };
+    let Ok(req_id) = s.next_request_id() else {
+        app.system_line("permission: request ids exhausted");
         return;
     };
     // The added confirmation assumes delivery, so it waits for the send to
@@ -124,8 +128,12 @@ fn add_rule_with_destination(
 /// Remove the rule at the given index into the full rules_cache (the server
 /// sees the unfiltered set, not the tab-filtered view).
 pub(crate) fn remove_rule_at(app: &mut App, index: usize) {
-    let Some(req_id) = app.next_request_id() else {
+    let Some(s) = app.session.as_ref() else {
         app.system_line("permission: not connected");
+        return;
+    };
+    let Ok(req_id) = s.next_request_id() else {
+        app.system_line("permission: request ids exhausted");
         return;
     };
     if !app.send_cmd(ClientCommand::PermissionRemoveRuleQuery { req_id, index }) {
@@ -508,8 +516,12 @@ pub(crate) fn submit_permission_input(app: &mut App, text: String) {
 /// (PermissionDirsResult) refreshes dirs_cache. A None req_id (no
 /// session) surfaces a system line instead of panicking.
 fn submit_add_dir(app: &mut App, path: String) {
-    let Some(req_id) = app.next_request_id() else {
+    let Some(s) = app.session.as_ref() else {
         app.system_line("permission: not connected");
+        return;
+    };
+    let Ok(req_id) = s.next_request_id() else {
+        app.system_line("permission: request ids exhausted");
         return;
     };
     if !app.send_cmd(ClientCommand::PermissionAddDirQuery { req_id, path }) {
@@ -527,8 +539,12 @@ fn remove_dir_at(app: &mut App, index: usize) {
         app.system_line("permission: directory no longer present");
         return;
     };
-    let Some(req_id) = app.next_request_id() else {
+    let Some(s) = app.session.as_ref() else {
         app.system_line("permission: not connected");
+        return;
+    };
+    let Ok(req_id) = s.next_request_id() else {
+        app.system_line("permission: request ids exhausted");
         return;
     };
     if !app.send_cmd(ClientCommand::PermissionRemoveDirQuery { req_id, path }) {
@@ -594,4 +610,29 @@ fn yes_no_label(confirm: bool) -> String {
         (" Yes ", "[No]")
     };
     format!("{yes}  {no}")
+}
+
+#[cfg(test)]
+mod tests {
+    use houyicoder_protocol::frontend::FrontendRequest;
+
+    use super::*;
+    use crate::test_harness::{connected_app_events, wait_for_request};
+
+    /// Removing a cached working directory ships a PermissionRemoveWorkingDir
+    /// request naming its path for the server to drop.
+    #[test]
+    fn test_remove_dir_ships() {
+        let (mut app, events) = connected_app_events();
+        app.dirs_cache = vec!["/tmp/extra".into()];
+        remove_dir_at(&mut app, 0);
+        let req = wait_for_request(&events, |p| {
+            matches!(p, FrontendRequest::PermissionRemoveWorkingDir { .. })
+        });
+        assert_eq!(req.req_id.0, 0, "first request on a fresh session");
+        match req.payload {
+            FrontendRequest::PermissionRemoveWorkingDir { path } => assert_eq!(path, "/tmp/extra"),
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
 }

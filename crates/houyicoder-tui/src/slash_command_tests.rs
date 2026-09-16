@@ -2,12 +2,12 @@
 
 #![cfg(test)]
 
-use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
+use houyicoder_protocol::frontend::{FrontendRequest, SlashCommand};
 
 use crate::composition;
 use crate::state::{Pane, Screen, Stage, Verdict};
-use crate::test_harness::render_text;
+use crate::test_harness::{connected_app_events, render_text, wait_for_request};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -402,4 +402,14 @@ fn test_compact_connection_lost() {
         before + 1,
         "only the refusal line is added"
     );
+}
+
+/// The /skills command ships a Skills query carrying a request id.
+#[test]
+fn test_skills_command_ships_query() {
+    let (mut app, events) = connected_app_events();
+    app.run_command(SlashCommand::Skills);
+    let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::Skills));
+    assert_eq!(req.req_id.0, 0, "first request on a fresh session");
+    assert_eq!(app.pane, Pane::Skills);
 }

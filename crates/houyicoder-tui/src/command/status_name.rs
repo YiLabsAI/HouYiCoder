@@ -6,6 +6,7 @@
 //! title via OSC 0/2 on the reply (rather than a rename command).
 
 use crate::input::InputField;
+use crate::run_control::ClientCommand;
 use crate::state::App;
 
 impl App {
@@ -36,7 +37,15 @@ impl App {
             self.system_line("rename: not connected");
             return;
         };
-        if !s.request_rename(self.session_id.clone(), name) {
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("rename: request ids exhausted");
+            return;
+        };
+        if !s.send(ClientCommand::RenameSessionQuery {
+            req_id,
+            session_id: self.session_id.clone(),
+            name,
+        }) {
             self.system_line("rename: connection lost");
         }
     }
@@ -45,6 +54,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_harness::{connected_app_events, wait_for_request};
 
     /// enter opens the editor even without an active session; the session
     /// check lives at commit (a disconnected app can still open the editor;
@@ -75,5 +85,25 @@ mod tests {
         let mut app = crate::composition::app();
         app.commit_status_name_edit();
         assert!(app.status_name_edit.is_none());
+    }
+
+    /// Commit with a typed name ships a RenameSession request under the
+    /// current session id.
+    #[test]
+    fn test_commit_ships_rename() {
+        use houyicoder_protocol::frontend::FrontendRequest;
+        let (mut app, events) = connected_app_events();
+        let mut field = InputField::new();
+        field.set("my session".into());
+        app.status_name_edit = Some(field);
+        app.commit_status_name_edit();
+        let req = wait_for_request(&events, |p| {
+            matches!(p, FrontendRequest::RenameSession { .. })
+        });
+        assert_eq!(req.req_id.0, 0, "first request on a fresh session");
+        match req.payload {
+            FrontendRequest::RenameSession { name, .. } => assert_eq!(name, "my session"),
+            other => panic!("unexpected request: {other:?}"),
+        }
     }
 }

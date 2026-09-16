@@ -44,7 +44,15 @@ impl App {
         if let Some(key) = body.strip_prefix("forget ").map(str::trim) {
             if key.is_empty() {
                 self.system_line("memory: usage /memory forget <key>");
-            } else if let Some(req_id) = self.next_request_id() {
+            } else {
+                let Some(s) = self.session.as_ref() else {
+                    self.system_line("memory: not connected");
+                    return true;
+                };
+                let Ok(req_id) = s.next_request_id() else {
+                    self.system_line("memory: request ids exhausted");
+                    return true;
+                };
                 // The command form has no scope (the user typed a key); route
                 // to the auto root, the original command-form behavior. A
                 // repeat forget of a key already in flight sends nothing.
@@ -60,23 +68,25 @@ impl App {
                     self.memory.take_forget(req_id);
                     self.system_line(format!("couldn't forget {key} — connection lost"));
                 }
-            } else {
-                self.system_line("memory: not connected");
             }
             return true;
         }
-        if let Some(req_id) = self.next_request_id() {
-            let sent = self.send_cmd(ClientCommand::MemoryShowQuery {
-                req_id,
-                key: body.to_string(),
-            });
-            if sent {
-                self.system_line(format!("memory: fetching {body}..."));
-            } else {
-                self.system_line(format!("memory: couldn't fetch {body} — connection lost"));
-            }
-        } else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("memory: not connected");
+            return true;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("memory: request ids exhausted");
+            return true;
+        };
+        let sent = self.send_cmd(ClientCommand::MemoryShowQuery {
+            req_id,
+            key: body.to_string(),
+        });
+        if sent {
+            self.system_line(format!("memory: fetching {body}..."));
+        } else {
+            self.system_line(format!("memory: couldn't fetch {body} — connection lost"));
         }
         true
     }
@@ -87,8 +97,12 @@ impl App {
     /// is already flipping is dropped so fast keypresses cannot race
     /// on→off→on against each other.
     pub(crate) fn toggle_memory_setting(&mut self, which: MemoryToggleWhich) {
-        let Some(req_id) = self.next_request_id() else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("memory: not connected");
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("memory: request ids exhausted");
             return;
         };
         if !self.memory.begin_toggle(req_id, which) {
@@ -128,8 +142,12 @@ impl App {
         };
         let key = memory.topic.clone();
         let scope = memory.scope.clone();
-        let Some(req_id) = self.next_request_id() else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("memory: not connected".to_string());
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("memory: request ids exhausted");
             return;
         };
         if !self.memory.begin_forget(req_id, key.clone()) {
@@ -157,17 +175,21 @@ impl App {
             return;
         };
         let key = memory.topic.clone();
-        if let Some(req_id) = self.next_request_id() {
-            self.memory.request_detail(req_id, key.clone());
-            if !self.send_cmd(ClientCommand::MemoryShowQuery {
-                req_id,
-                key: key.clone(),
-            }) {
-                self.memory.close_detail();
-                self.system_line(format!("couldn't show {key} — connection lost"));
-            }
-        } else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("memory: not connected".to_string());
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("memory: request ids exhausted");
+            return;
+        };
+        self.memory.request_detail(req_id, key.clone());
+        if !self.send_cmd(ClientCommand::MemoryShowQuery {
+            req_id,
+            key: key.clone(),
+        }) {
+            self.memory.close_detail();
+            self.system_line(format!("couldn't show {key} — connection lost"));
         }
     }
 

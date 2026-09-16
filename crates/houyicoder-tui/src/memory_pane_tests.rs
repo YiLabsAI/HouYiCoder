@@ -2,12 +2,12 @@
 
 #![cfg(test)]
 
-use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::memory::ToggleState;
+use houyicoder_protocol::frontend::{FrontendRequest, SlashCommand};
 
 use crate::composition;
 use crate::state::Pane;
-use crate::test_harness::render_text;
+use crate::test_harness::{connected_app_events, render_text, wait_for_request};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -836,5 +836,18 @@ fn test_footer_wraps_when_narrow() {
             narrow.contains(hint),
             "narrow layout keeps {hint}:\n{narrow}"
         );
+    }
+}
+
+/// The /memory <key> show path ships a MemoryShow request naming that key.
+#[test]
+fn test_memory_show_ships_query() {
+    let (mut app, events) = connected_app_events();
+    app.run_tui_local_command("memory setup");
+    let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::MemoryShow { .. }));
+    assert_eq!(req.req_id.0, 0, "first request on a fresh session");
+    match req.payload {
+        FrontendRequest::MemoryShow { key } => assert_eq!(key, "setup"),
+        other => panic!("unexpected request: {other:?}"),
     }
 }

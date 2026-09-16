@@ -102,8 +102,12 @@ impl App {
         // next render, so no system line is pushed -- the footer pill is the
         // single source of mode truth. The server is the authority; it cycles
         // + responds with the new mode, which lands in mode_cache.
-        let Some(req_id) = self.next_request_id() else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("permission: not connected");
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("permission: request ids exhausted");
             return;
         };
         if !self.send_cmd(ClientCommand::PermissionCycleModeQuery { req_id }) {
@@ -115,8 +119,12 @@ impl App {
     /// running (from the cache; a server round-trip refreshes it via
     /// PermissionAskBeforeGitResult).
     fn show_ask_before_git(&mut self) {
-        let Some(req_id) = self.next_request_id() else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("permission: not connected");
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("permission: request ids exhausted");
             return;
         };
         // The refresh must reach the server before the cached state is shown:
@@ -142,8 +150,12 @@ impl App {
     /// before running. The server is the authority; the reply
     /// (PermissionAskBeforeGitResult) refreshes the cache + surfaces the state.
     fn request_ask_before_git(&mut self, enabled: bool) {
-        let Some(req_id) = self.next_request_id() else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("permission: not connected");
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("permission: request ids exhausted");
             return;
         };
         // The server is the authority: the cache only moves when its reply

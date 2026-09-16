@@ -4,7 +4,6 @@
 
 use std::time::{Duration, Instant};
 
-use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::{AskSource, PermissionMode};
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
@@ -12,13 +11,13 @@ use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 use crate::pending_queue::PendingItem;
 use crate::records::{Approval, AskQuestion, TranscriptLine};
+use crate::state::App;
+use crate::state::enums::LiveBlock;
+use crate::transcript::{TranscriptFrame, chunk_text};
 
 const MAX_REBUILD_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;
 const MAX_AGENT_MESSAGES_PER_POLL: usize = 4096;
-use crate::state::App;
-use crate::state::enums::LiveBlock;
-use crate::transcript::{TranscriptFrame, chunk_text};
 
 #[path = "run_control/transcript_rebuild.rs"]
 mod transcript_rebuild;
@@ -26,18 +25,28 @@ mod transcript_rebuild;
 pub use crate::agent_message::{AgentMessage, ClientCommand};
 
 impl App {
-    /// Mint a fresh request id for a wire request. Delegates to the session;
-    /// None when no backend is wired (stub path).
-    pub fn next_request_id(&self) -> Option<RequestId> {
-        self.session.as_ref().map(|s| s.next_request_id())
-    }
-
     /// Ship a command to the driver over the session's command channel.
     /// Returns false when no backend is connected or the driver is gone: the
     /// command was not delivered, so no reply will come and the caller must
-    /// not leave state waiting on one.
+    /// not leave state waiting on one. Request ids are issued by the
+    /// connection before this call.
     pub fn send_cmd(&self, cmd: ClientCommand) -> bool {
         self.session.as_ref().is_some_and(|s| s.send(cmd))
+    }
+
+    /// Record a single request-id exhaustion notice for an auto path. The
+    /// connection refuses further allocations until it ends, so each refresh
+    /// round that observes the failure would otherwise either spam the line or
+    /// lose it silently; the one-shot flag lets the first round announce and
+    /// later rounds stay quiet.
+    pub(crate) fn note_request_id_exhausted(&mut self) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.take_exhaustion_notice())
+        {
+            self.system_line("request ids exhausted");
+        }
     }
 
     /// Start a user turn, steer input to the viewed child, or queue it while
@@ -93,7 +102,11 @@ impl App {
             self.promote_next_pending();
             return true;
         }
-        let Some(req_id) = self.session.as_ref().map(|s| s.next_request_id()) else {
+        let Some(s) = self.session.as_ref() else {
+            return false;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("run: request ids exhausted");
             return false;
         };
         let session_id = self.session_id.clone();
@@ -294,7 +307,12 @@ impl App {
     /// login screen from flashing when a trust prompt is already queued.
     pub fn startup_handshake(&mut self, timeout: Duration) {
         if let Some(session) = self.session.as_ref() {
-            session.request_status();
+            match session.next_request_id() {
+                Ok(req_id) => {
+                    session.send(ClientCommand::StatusQuery { req_id });
+                }
+                Err(_) => self.note_request_id_exhausted(),
+            }
         }
         let startup = self
             .session
@@ -364,10 +382,20 @@ impl App {
         {
             self.last_status_poll = Some(Instant::now());
             if let Some(s) = self.session.as_ref() {
-                s.request_status();
-                // Seed the mode cache once so the status pill renders at startup.
-                if self.mode_cache.is_none() {
-                    s.request_permission_mode();
+                match s.next_request_id() {
+                    Ok(req_id) => {
+                        s.send(ClientCommand::StatusQuery { req_id });
+                        // Seed the mode cache once so the status pill renders at startup.
+                        if self.mode_cache.is_none() {
+                            match s.next_request_id() {
+                                Ok(req_id) => {
+                                    s.send(ClientCommand::PermissionModeQuery { req_id });
+                                }
+                                Err(_) => self.note_request_id_exhausted(),
+                            }
+                        }
+                    }
+                    Err(_) => self.note_request_id_exhausted(),
                 }
             }
         }

@@ -53,8 +53,12 @@ impl App {
     pub(crate) fn set_model_at_cursor(&mut self) {
         // No request, no switch: the tier stays server-authoritative, the
         // pane stays open for retry, and no success line is pushed.
-        let Some(req_id) = self.next_request_id() else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("model: not connected");
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("model: request ids exhausted");
             return;
         };
         let idx = self.model_sel;

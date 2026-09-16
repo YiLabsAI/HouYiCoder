@@ -4,6 +4,8 @@
 
 use super::App;
 use crate::records::{TeammateView, TranscriptLine};
+use crate::run_control::ClientCommand;
+use houyicoder_protocol::frontend::SessionId;
 
 impl App {
     /// Look up a child's live fleet entry by session id. Shared by the
@@ -81,11 +83,16 @@ impl App {
         // the view swaps that source, so bump here or the cache holds the
         // parent rows and the child transcript never renders.
         self.bump_transcript_version();
-        if fire_fetch && let Some(req_id) = self.next_request_id() {
-            self.send_cmd(crate::run_control::ClientCommand::ChildTranscriptQuery {
-                req_id,
-                child_sid: houyicoder_protocol::frontend::SessionId(child_sid.to_string()),
-            });
+        if fire_fetch && let Some(s) = self.session.as_ref() {
+            match s.next_request_id() {
+                Ok(req_id) => {
+                    self.send_cmd(ClientCommand::ChildTranscriptQuery {
+                        req_id,
+                        child_sid: SessionId(child_sid.to_string()),
+                    });
+                }
+                Err(_) => self.note_request_id_exhausted(),
+            }
         }
         true
     }
@@ -120,7 +127,7 @@ impl App {
             .map(|e| e.completed.is_none())
             .unwrap_or(false);
         if running {
-            self.send_cmd(crate::run_control::ClientCommand::CancelChildTurn { child_sid });
+            self.send_cmd(ClientCommand::CancelChildTurn { child_sid });
         } else {
             // Idle: Esc is a no-op on the run, so teach the exit gesture
             // instead of leaving the press silent. The banner advertises

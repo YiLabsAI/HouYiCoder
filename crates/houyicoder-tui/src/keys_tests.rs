@@ -6,9 +6,10 @@ use crate::composition;
 use crate::state::Screen;
 use crate::state::TranscriptLine;
 use crate::state::Verdict;
+use crate::test_harness::{connected_app_events, wait_for_request};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use houyicoder_protocol::frontend::LoginMode;
 use houyicoder_protocol::frontend::model::{ModelCatalog, ModelCatalogEntry};
+use houyicoder_protocol::frontend::{FrontendRequest, LoginMode};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -1583,4 +1584,15 @@ fn test_agents_enter_follows_list() {
         Some("live"),
         "Enter opens the selected fleet child"
     );
+}
+
+/// Opening the @ picker with an empty skill cache fires a Skills fetch so the
+/// picker is not empty on first use.
+#[test]
+fn test_at_picker_fetches_skills() {
+    let (mut app, events) = connected_app_events();
+    handle_working(&mut app, key(KeyCode::Char('@')));
+    assert!(app.skill_picker_open, "@ opens the picker");
+    let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::Skills));
+    assert_eq!(req.req_id.0, 0, "first request on a fresh session");
 }

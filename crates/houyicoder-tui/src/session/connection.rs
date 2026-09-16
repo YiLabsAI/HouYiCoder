@@ -4,6 +4,7 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
+use std::fmt;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -35,11 +36,27 @@ enum Outbound {
     Notification(AcpNotification),
 }
 
+/// The connection's request-identifier sequence is exhausted. Returned once
+/// the counter reaches u64::MAX and refused from then on: the counter does
+/// not advance past the maximum, so allocation fails rather than wrap onto
+/// an identifier already in flight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestIdExhausted;
+
+impl fmt::Display for RequestIdExhausted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("request ID sequence exhausted")
+    }
+}
+
+impl std::error::Error for RequestIdExhausted {}
+
 /// Channels, request identifiers, and driver lifetime for one live connection.
 pub struct SessionConnection {
     cmd_tx: tokio::sync::mpsc::UnboundedSender<ClientCommand>,
     agent_rx: mpsc::Receiver<AgentMessage>,
     next_req_id: Cell<u64>,
+    exhaustion_reported: Cell<bool>,
     _driver: tokio::task::JoinHandle<()>,
 }
 
@@ -57,15 +74,43 @@ impl SessionConnection {
             cmd_tx,
             agent_rx,
             next_req_id: Cell::new(0),
+            exhaustion_reported: Cell::new(false),
             _driver,
         }
     }
 
-    /// Mint a connection-local monotonic request identifier.
-    pub fn next_request_id(&self) -> RequestId {
+    /// Issue a connection-local monotonic request identifier, starting at
+    /// zero and advancing by one per call. When the sequence exhausts the
+    /// u64 range the counter stops advancing and allocation is refused, so a
+    /// fresh connection always starts its own sequence and an exhausted one
+    /// never reuses an identifier in flight.
+    pub fn next_request_id(&self) -> Result<RequestId, RequestIdExhausted> {
         let id = self.next_req_id.get();
-        self.next_req_id.set(id.wrapping_add(1));
-        RequestId(id)
+        let Some(next) = id.checked_add(1) else {
+            return Err(RequestIdExhausted);
+        };
+        self.next_req_id.set(next);
+        Ok(RequestId(id))
+    }
+
+    /// Consume the one-shot exhaustion notice. True only on the first call so
+    /// an auto path that observes the exhausted sequence announces it once
+    /// and later rounds stay quiet instead of repeating the failure. The flag
+    /// is sticky, so the method itself only flips it; the caller decides
+    /// whether to report.
+    pub(crate) fn take_exhaustion_notice(&self) -> bool {
+        if self.exhaustion_reported.get() {
+            return false;
+        }
+        self.exhaustion_reported.set(true);
+        true
+    }
+
+    /// Test-only seam to drive the counter to a boundary (the u64 ceiling is
+    /// unreachable by repeated allocation in a real run).
+    #[cfg(test)]
+    pub(crate) fn set_next_req_id(&self, v: u64) {
+        self.next_req_id.set(v);
     }
 
     /// Queue a command for wire translation. Returns false when the driver
@@ -84,29 +129,6 @@ impl SessionConnection {
     /// Wait for the first bounded startup response before the initial draw.
     pub fn poll_startup(&mut self, timeout: Duration) -> Option<AgentMessage> {
         self.agent_rx.recv_timeout(timeout).ok()
-    }
-
-    /// Ship a status query to refresh the cached status snapshot. Used by the
-    /// status command and the periodic idle poll.
-    pub fn request_status(&self) {
-        let req_id = self.next_request_id();
-        self.send(ClientCommand::StatusQuery { req_id });
-    }
-
-    /// Request the rename for the live session; false means the driver is gone.
-    pub fn request_rename(&self, session_id: FrontendSessionId, name: String) -> bool {
-        let req_id = self.next_request_id();
-        self.send(ClientCommand::RenameSessionQuery {
-            req_id,
-            session_id,
-            name,
-        })
-    }
-
-    /// Seed the permission-mode cache from the server.
-    pub fn request_permission_mode(&self) {
-        let req_id = self.next_request_id();
-        self.send(ClientCommand::PermissionModeQuery { req_id });
     }
 }
 

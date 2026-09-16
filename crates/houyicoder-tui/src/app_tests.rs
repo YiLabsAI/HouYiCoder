@@ -3,8 +3,9 @@
 //! reaches app private items the same way the inline mod tests did.
 use super::*;
 use crate::state::{Pane, Stage, TranscriptLine, ViewportMode};
+use crate::test_harness::{connected_app_events, wait_for_request};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use houyicoder_protocol::frontend::{LoginMode, SlashCommand};
+use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SlashCommand};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -446,4 +447,100 @@ fn test_kill_all_no_running() {
         app.notifications.current().is_none(),
         "K with no running children shows no toast"
     );
+}
+
+/// /clear also ships a SessionReset under the current session id so the server
+/// zeroes the same session the UI just reset locally.
+#[test]
+fn test_clear_ships_session_reset() {
+    let (mut app, events) = connected_app_events();
+    let sid = app.session_id.clone();
+    app.run_command(SlashCommand::Clear);
+    let req = wait_for_request(&events, |p| {
+        matches!(p, FrontendRequest::SessionReset { .. })
+    });
+    assert_eq!(req.req_id.0, 0, "first request on a fresh session");
+    match req.payload {
+        FrontendRequest::SessionReset { session_id } => assert_eq!(session_id, sid),
+        other => panic!("unexpected request: {other:?}"),
+    }
+}
+
+/// When the request-id sequence is exhausted, each user command surfaces its
+/// own precise "request ids exhausted" line (never the shared "not
+/// connected"), and the auto refreshes share one connection-level notice:
+/// the first round announces, later rounds stay quiet. The two states stay
+/// distinct (#68).
+#[test]
+fn test_exhausted_commands_report() {
+    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+    let (mut app, _events) = connected_app_events();
+    app.session
+        .as_ref()
+        .expect("connected session")
+        .set_next_req_id(u64::MAX);
+
+    fn last_system(app: &App) -> &str {
+        match app.transcript.last().expect("a line was pushed") {
+            TranscriptLine::System(t) => t,
+            other => panic!("expected a system line, got {other:?}"),
+        }
+    }
+
+    // User commands surface a per-command line, never the shared "not connected".
+    app.run_command(SlashCommand::Compact);
+    assert_eq!(last_system(&app), "compact: request ids exhausted");
+    app.run_debug("");
+    assert_eq!(last_system(&app), "debug: request ids exhausted");
+    app.run_command(SlashCommand::Undo);
+    assert_eq!(last_system(&app), "undo: request ids exhausted");
+    app.run_memory_subcommand("forget some-key");
+    assert_eq!(last_system(&app), "memory: request ids exhausted");
+    app.set_model_at_cursor();
+    assert_eq!(last_system(&app), "model: request ids exhausted");
+    app.tab_cycle_mode();
+    assert_eq!(last_system(&app), "permission: request ids exhausted");
+    app.toggle_memory_setting(MemoryToggleWhich::Auto);
+    assert_eq!(last_system(&app), "memory: request ids exhausted");
+
+    // Auto refreshes share one connection-level notice: the first round
+    // announces exactly one line, later rounds stay quiet.
+    let before = app.transcript.len();
+    app.run_command(SlashCommand::Agents);
+    assert_eq!(app.transcript.len(), before + 1);
+    assert_eq!(last_system(&app), "request ids exhausted");
+    let after_first = app.transcript.len();
+    app.run_command(SlashCommand::Model);
+    app.run_command(SlashCommand::Context);
+    app.run_command(SlashCommand::Tools);
+    app.run_command(SlashCommand::Skills);
+    app.run_command(SlashCommand::Hooks);
+    app.run_command(SlashCommand::Memory);
+    app.run_command(SlashCommand::Status);
+    assert_eq!(
+        app.transcript.len(),
+        after_first,
+        "later automatic refreshes do not repeat the notice"
+    );
+}
+
+/// A /clear on an exhausted connection archives the session without
+/// repeating the exhaustion notice: the SessionReset refresh is a second auto
+/// path and the one-shot flag is already set.
+#[test]
+fn test_exhausted_clear_no_repeat() {
+    let (mut app, _events) = connected_app_events();
+    app.session
+        .as_ref()
+        .expect("connected session")
+        .set_next_req_id(u64::MAX);
+    app.run_command(SlashCommand::Agents);
+    app.run_command(SlashCommand::Clear);
+    match app.transcript.last().expect("a line was pushed") {
+        TranscriptLine::System(t) => assert!(
+            t.contains("session archived") && !t.contains("request ids exhausted"),
+            "clear archives without repeating the exhaustion notice, got {t}"
+        ),
+        other => panic!("expected the post-clear system line, got {other:?}"),
+    }
 }

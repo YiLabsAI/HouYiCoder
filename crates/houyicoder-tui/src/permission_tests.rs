@@ -611,7 +611,7 @@ fn test_permission_workspace_add_flow() {
 #[test]
 fn test_permission_workspace_remove_flow() {
     // 'd' on a Workspace cursor dir enters RemoveDir (No preselected); Right
-    // moves to Yes; Enter ships the removal. Stub app → mint None → system
+    // moves to Yes; Enter ships the removal. Stub app → no request id → system
     // line; the sub-mode clears. Covers the Remove directory confirm flow.
     use crate::state::{PermissionInput, PermissionTab};
     let mut app = app();

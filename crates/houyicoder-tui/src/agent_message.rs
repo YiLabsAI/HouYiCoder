@@ -386,9 +386,10 @@ pub enum AgentMessage {
 /// protocol Client; the App sends commands over this channel and receives
 /// results back as AgentMessage on the agent channel.
 pub enum ClientCommand {
-    /// Send a MessageSend request (a new user turn). req_id is App-minted.
-    /// disabled_skills carries the session-scoped disabled skill names so the
-    /// server can exclude them from the model listing before the run starts.
+    /// Send a MessageSend request (a new user turn). req_id comes from the
+    /// session connection. disabled_skills carries the session-scoped
+    /// disabled skill names so the server can exclude them from the model
+    /// listing before the run starts.
     SendMessage {
         req_id: RequestId,
         session_id: FrontendSessionId,
@@ -409,8 +410,9 @@ pub enum ClientCommand {
     },
     /// Request a runner status snapshot over the wire (the /status command).
     /// The driver sends the request + ships the reply back as
-    /// AgentMessage::StatusResult. req_id is App-minted; distinct from any
-    /// active run's req_id so the driver routes the reply correctly.
+    /// AgentMessage::StatusResult. req_id comes from the session connection;
+    /// distinct from any active run's req_id so the driver routes the reply
+    /// correctly.
     StatusQuery {
         req_id: RequestId,
     },

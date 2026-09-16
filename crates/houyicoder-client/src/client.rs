@@ -22,9 +22,6 @@ pub struct Client {
     transport: Box<dyn Transport>,
     /// The highest event seq the client has processed, for resume on reconnect.
     resume: ResumeFrom,
-    /// The next req_id to mint. Caller-supplied ids are also accepted; the
-    /// counter is a convenience for callers that do not track their own.
-    next_req_id: u64,
 }
 
 impl Client {
@@ -37,11 +34,7 @@ impl Client {
     /// Build a replacement connection that resumes after a prior client's
     /// highest processed event sequence.
     pub fn with_resume(transport: Box<dyn Transport>, resume: ResumeFrom) -> Self {
-        Self {
-            transport,
-            resume,
-            next_req_id: 1,
-        }
+        Self { transport, resume }
     }
 
     /// Perform the Hello handshake. Both ends send Hello first; the client
@@ -65,15 +58,7 @@ impl Client {
         negotiate(&local, &peer)
     }
 
-    /// Mint the next request id. Monotonic within the client; callers that
-    /// prefer their own id scheme can pass it directly to send_request.
-    pub fn next_request_id(&mut self) -> RequestId {
-        let id = RequestId(self.next_req_id);
-        self.next_req_id += 1;
-        id
-    }
-
-    /// Send a request envelope. The caller mints the req_id; the matching
+    /// Send a request envelope. The caller supplies the req_id; the matching
     /// response returns it. Fire-and-forget on the wire: the reply arrives via
     /// next_frame as a ServerFrame::Response.
     pub async fn send_request(

@@ -9,7 +9,7 @@ use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 /// resolve_trust(true) clears the pending trust ask + its req_id, so the
 /// card disappears and the server is told to proceed. The reverse verdict
-/// is shipped via send_cmd (no-op without a wired session here); the state
+/// is shipped via send (no-op without a wired session here); the state
 /// clear is what the test pins.
 #[test]
 fn test_trust_ask_resets_choice() {

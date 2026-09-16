@@ -8,6 +8,7 @@
 use super::*;
 use crate::composition;
 use crate::state::{Pane, TranscriptLine};
+use crate::test_harness::{connected_app_events, wait_for_request};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_core::SessionId;
@@ -912,8 +913,8 @@ fn test_toggle_repeat_press_dropped() {
     );
 }
 
-/// /permission git on a wired app takes the server-present branch (mint +
-/// ship the query), which the server-less tests skip.
+/// /permission git on a wired app ships the query and reports from the
+/// server-confirmed cache, which the server-less tests skip.
 #[test]
 fn test_git_ops_ships_wired() {
     let provider = Arc::new(FakeProvider::new(vec![]));
@@ -934,18 +935,18 @@ mod compact_tests;
 #[path = "run_control_resume_tests.rs"]
 mod resume_progressive_tests;
 
-/// The idle poll seeds mode_cache on the first tick (mode_cache starts None)
-/// so the status-bar pill renders from session start. Exercises the idle
-/// branch + the request_permission_mode send without asserting on the wire.
+/// The first idle poll seeds the mode cache: it ships StatusQuery then
+/// PermissionModeQuery on consecutive request ids, so the status pill renders
+/// from the persisted mode at session start.
 #[test]
 fn test_idle_seeds_mode_query() {
-    let provider = Arc::new(FakeProvider::new(vec![]));
-    let mut app = app_with_provider(provider, ToolRegistry::new());
-    // Fresh app: idle, no approval, no prior status poll -> the idle branch
-    // fires request_status + request_permission_mode (mode_cache is None).
+    use houyicoder_protocol::frontend::FrontendRequest;
+    let (mut app, events) = connected_app_events();
     app.poll_agent();
-    // The queries ship to the driver; nothing to assert on the wire, but the
-    // idle-poll branch executed without panic and minted request ids.
+    let status = wait_for_request(&events, |p| matches!(p, FrontendRequest::Status));
+    assert_eq!(status.req_id.0, 0, "StatusQuery is the first request");
+    let mode = wait_for_request(&events, |p| matches!(p, FrontendRequest::PermissionMode));
+    assert_eq!(mode.req_id.0, 1, "PermissionModeQuery is the follow-up");
 }
 
 /// The /model pane Enter ships a ModelSwitch { model, effort, effort_toggled }

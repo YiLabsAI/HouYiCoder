@@ -4,7 +4,9 @@
 //! (single responsibility), while this file owns per-pane approve/reject and
 //! the modal edit -> proposed change -> apply orchestration.
 
+use crate::run_control::ClientCommand;
 use crate::state::{App, ArtifactMode, ChangeProposer, Pane, Stage};
+use houyicoder_protocol::frontend::SessionId;
 
 impl App {
     /// Approve the artifact/hunk/finding/proposal for the current pane. Each
@@ -193,12 +195,17 @@ impl App {
         self.pin_transcript_top();
         if expanding
             && needs_fetch
-            && let Some(req_id) = self.next_request_id()
+            && let Some(s) = self.session.as_ref()
         {
-            self.send_cmd(crate::run_control::ClientCommand::ChildTranscriptQuery {
-                req_id,
-                child_sid: houyicoder_protocol::frontend::SessionId(child_sid),
-            });
+            match s.next_request_id() {
+                Ok(req_id) => {
+                    self.send_cmd(ClientCommand::ChildTranscriptQuery {
+                        req_id,
+                        child_sid: SessionId(child_sid),
+                    });
+                }
+                Err(_) => self.note_request_id_exhausted(),
+            }
         }
     }
 

@@ -305,8 +305,8 @@ fn test_orphan_promoted_on_enqueue() {
 /// is orphaned and must be demoted to ParkedMessage. With strict FIFO the
 /// /clear Command sits at the head (ahead of the Message) so it drains first
 /// and orphans the Message behind it. The host state invalidation runs even
-/// when no req_id is minted (no client wired in the test harness) -- it is
-/// decoupled from id-minting. Without demotion the single-copy invariant
+/// when no req_id is issued (no client wired in the test harness) -- it is
+/// decoupled from id generation. Without demotion the single-copy invariant
 /// breaks: a stale-live item the run no longer backs would strand.
 #[test]
 fn test_clear_orphans_pending_mirror() {

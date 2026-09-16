@@ -19,8 +19,12 @@ impl App {
         } else {
             DebugLevel::Debug
         };
-        let Some(req_id) = self.next_request_id() else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("debug: not connected");
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("debug: request ids exhausted");
             return;
         };
         if !self.send_cmd(ClientCommand::DebugSet { req_id, level }) {
@@ -31,27 +35,20 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    /// /debug with no arg sends a Debug-level toggle; /debug off sends an
-    /// Off-level toggle. The behavior under test is which level the command
-    /// carries, not whether a local logger was toggled — the toggle now
-    /// lives at the server, which holds the subscriber handle. The
-    /// end-to-end proof (level change reaches the engine) is in the
-    /// service integration test that drives a real wire round-trip.
-    #[test]
-    fn test_debug_command_mints_request() {
-        let mut app = crate::test_harness::working_app();
-        app.run_debug("");
-        app.run_debug("off");
-    }
-
     /// /debug with no backend wired (stub path, no session) surfaces a
-    /// system line rather than panicking. This is the path a test-only App
-    /// without a runner takes.
+    /// system line rather than panicking, for both argument forms. This is
+    /// the path a test-only App without a runner takes. The level the
+    /// command carries is proven by the frame-level tests over the driver.
     #[test]
     fn test_no_session_not_connected() {
         let mut app = crate::test_harness::working_app();
-        app.session = None;
         app.run_debug("");
+        assert_system_not_connected(&app);
+        app.run_debug("off");
+        assert_system_not_connected(&app);
+    }
+
+    fn assert_system_not_connected(app: &crate::state::App) {
         let last = app.transcript.last().expect("a line was pushed");
         match last {
             crate::records::TranscriptLine::System(text) => {

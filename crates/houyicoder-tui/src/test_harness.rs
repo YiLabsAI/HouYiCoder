@@ -4,11 +4,13 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use houyicoder_async::PFut;
 use houyicoder_client::{Client, Transport};
+use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
+use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::handshake::Hello;
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
@@ -164,7 +166,7 @@ pub(crate) fn working_app() -> App {
     app
 }
 
-enum TransportEvent {
+pub(crate) enum TransportEvent {
     Frame(String),
     Dropped,
 }
@@ -212,6 +214,13 @@ pub(crate) fn connected_app() -> App {
     connected_app_with_events().0
 }
 
+/// Build a connected App plus the transport's outbound frame log: each
+/// frame the session ships arrives as a TransportEvent, so tests can pin
+/// exactly what a command path put on the connection.
+pub(crate) fn connected_app_events() -> (App, Receiver<TransportEvent>) {
+    connected_app_with_events()
+}
+
 fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {
     let runtime = crate::composition::shared_runtime();
     let (events_tx, events_rx) = mpsc::channel();
@@ -222,6 +231,32 @@ fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {
     app.runtime = Some(runtime);
     app.session = Some(session);
     (app, events_rx)
+}
+
+/// Wait for the connected transport to ship a request frame whose payload
+/// matches the predicate, then return its envelope (req_id + payload). Frame
+/// arrival is the synchronization point: recv_timeout blocks until the next transport
+/// event and skips non-matching frames, so no polling sleep is needed. Panics
+/// when the transport drops or no matching request arrives within two seconds.
+pub(crate) fn wait_for_request(
+    events: &Receiver<TransportEvent>,
+    want: impl Fn(&FrontendRequest) -> bool,
+) -> RequestEnvelope {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match events.recv_timeout(remaining) {
+            Ok(TransportEvent::Frame(frame)) => {
+                if let Ok(ClientFrame::Request(env)) = serde_json::from_str::<ClientFrame>(&frame)
+                    && want(&env.payload)
+                {
+                    return env;
+                }
+            }
+            Ok(TransportEvent::Dropped) => panic!("transport dropped before the matching request"),
+            Err(_) => panic!("no matching request frame within 2s"),
+        }
+    }
 }
 
 /// A transport whose handshake fails immediately: the driver exits and drops

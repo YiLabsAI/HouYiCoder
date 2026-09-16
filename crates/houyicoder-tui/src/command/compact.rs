@@ -1,5 +1,6 @@
 //! Starts manual compaction when the session is idle and connected.
 
+use crate::run_control::ClientCommand;
 use crate::state::App;
 
 impl App {
@@ -19,13 +20,17 @@ impl App {
             );
             return;
         }
-        let Some(req_id) = self.next_request_id() else {
+        let Some(s) = self.session.as_ref() else {
             self.system_line("compact: not connected");
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("compact: request ids exhausted");
             return;
         };
         // The in-progress line waits for the send: a dead driver must not
         // leave the user watching a compaction that never started.
-        if !self.send_cmd(crate::run_control::ClientCommand::CompactQuery { req_id }) {
+        if !self.send_cmd(ClientCommand::CompactQuery { req_id }) {
             self.system_line("compact: connection lost");
             return;
         }

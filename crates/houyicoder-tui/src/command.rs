@@ -10,6 +10,7 @@ use houyicoder_protocol::frontend::status::StatusSnapshot;
 
 use crate::composition;
 use crate::pending_queue::{PendingItem, is_state_changing};
+use crate::run_control::ClientCommand;
 use crate::state::{App, ArtifactSession, Pane, Screen, Stage, TranscriptLine, pane_for_stage};
 
 mod debug;
@@ -59,8 +60,13 @@ impl App {
                 self.pane = Pane::Agents;
                 let v = self.transcript_version.get();
                 self.agents.refresh(&self.transcript, v);
-                if let Some(req_id) = self.next_request_id() {
-                    self.send_cmd(crate::run_control::ClientCommand::AgentsQuery { req_id });
+                if let Some(s) = self.session.as_ref() {
+                    match s.next_request_id() {
+                        Ok(req_id) => {
+                            self.send_cmd(ClientCommand::AgentsQuery { req_id });
+                        }
+                        Err(_) => self.note_request_id_exhausted(),
+                    }
                 }
             }
             C::Model => {
@@ -70,8 +76,13 @@ impl App {
                 // between Some(resolved) and None across the two reply
                 // paths, which produced a two-frame cursor slide.
                 self.model_sel = crate::view::model_pane::row_for_tier(self, &self.model_tier);
-                if let Some(req_id) = self.next_request_id() {
-                    self.send_cmd(crate::run_control::ClientCommand::ModelInfoQuery { req_id });
+                if let Some(s) = self.session.as_ref() {
+                    match s.next_request_id() {
+                        Ok(req_id) => {
+                            self.send_cmd(ClientCommand::ModelInfoQuery { req_id });
+                        }
+                        Err(_) => self.note_request_id_exhausted(),
+                    }
                 }
             }
             C::Sandbox => self.system_line(render::render_sandbox(
@@ -98,8 +109,13 @@ impl App {
                         composition::context_view(),
                     ));
                 }
-                if let Some(req_id) = self.next_request_id() {
-                    self.send_cmd(crate::run_control::ClientCommand::ContextQuery { req_id });
+                if let Some(s) = self.session.as_ref() {
+                    match s.next_request_id() {
+                        Ok(req_id) => {
+                            self.send_cmd(ClientCommand::ContextQuery { req_id });
+                        }
+                        Err(_) => self.note_request_id_exhausted(),
+                    }
                 }
             }
             C::Status => {
@@ -110,10 +126,13 @@ impl App {
                 // not a transcript text dump. The stub path renders from
                 // snapshot_or_stub the pane content reads.
                 self.pane = Pane::Status;
-                if self.session.is_some() {
-                    self.pending_status_command = true;
-                    if let Some(s) = self.session.as_ref() {
-                        s.request_status();
+                if let Some(s) = self.session.as_ref() {
+                    match s.next_request_id() {
+                        Ok(req_id) => {
+                            self.pending_status_command = true;
+                            s.send(ClientCommand::StatusQuery { req_id });
+                        }
+                        Err(_) => self.note_request_id_exhausted(),
                     }
                 }
             }
@@ -122,32 +141,55 @@ impl App {
             }
             C::Tools => {
                 self.pane = Pane::Tools;
-                if let Some(req_id) = self.next_request_id() {
-                    self.send_cmd(crate::run_control::ClientCommand::ToolListQuery { req_id });
+                if let Some(s) = self.session.as_ref() {
+                    match s.next_request_id() {
+                        Ok(req_id) => {
+                            self.send_cmd(ClientCommand::ToolListQuery { req_id });
+                        }
+                        Err(_) => self.note_request_id_exhausted(),
+                    }
                 }
             }
             C::Skills => {
                 self.pane = Pane::Skills;
-                if let Some(req_id) = self.next_request_id() {
-                    self.send_cmd(crate::run_control::ClientCommand::SkillsQuery { req_id });
+                if let Some(s) = self.session.as_ref() {
+                    match s.next_request_id() {
+                        Ok(req_id) => {
+                            self.send_cmd(ClientCommand::SkillsQuery { req_id });
+                        }
+                        Err(_) => self.note_request_id_exhausted(),
+                    }
                 }
             }
             C::Hooks => {
                 self.pane = Pane::Hooks;
-                if let Some(req_id) = self.next_request_id() {
-                    self.send_cmd(crate::run_control::ClientCommand::HooksQuery { req_id });
+                if let Some(s) = self.session.as_ref() {
+                    match s.next_request_id() {
+                        Ok(req_id) => {
+                            self.send_cmd(ClientCommand::HooksQuery { req_id });
+                        }
+                        Err(_) => self.note_request_id_exhausted(),
+                    }
                 }
             }
             C::Memory => {
                 self.pane = Pane::Memory;
                 self.memory.close_detail();
-                if let Some(req_id) = self.next_request_id() {
-                    self.send_cmd(crate::run_control::ClientCommand::MemoryListQuery { req_id });
+                if let Some(s) = self.session.as_ref() {
+                    match s.next_request_id() {
+                        Ok(req_id) => {
+                            self.send_cmd(ClientCommand::MemoryListQuery { req_id });
+                        }
+                        Err(_) => self.note_request_id_exhausted(),
+                    }
                 }
-                if let Some(req_id) = self.next_request_id() {
-                    self.send_cmd(crate::run_control::ClientCommand::MemoryToggleStateQuery {
-                        req_id,
-                    });
+                if let Some(s) = self.session.as_ref() {
+                    match s.next_request_id() {
+                        Ok(req_id) => {
+                            self.send_cmd(ClientCommand::MemoryToggleStateQuery { req_id });
+                        }
+                        Err(_) => self.note_request_id_exhausted(),
+                    }
                 }
             }
             C::Rewind => self.rewind(),
@@ -163,11 +205,15 @@ impl App {
             }
             C::Compact => self.run_compact(),
             C::Undo => {
-                let Some(req_id) = self.next_request_id() else {
+                let Some(s) = self.session.as_ref() else {
                     self.system_line("undo: not connected");
                     return;
                 };
-                if !self.send_cmd(crate::run_control::ClientCommand::UndoQuery { req_id }) {
+                let Ok(req_id) = s.next_request_id() else {
+                    self.system_line("undo: request ids exhausted");
+                    return;
+                };
+                if !self.send_cmd(ClientCommand::UndoQuery { req_id }) {
                     self.system_line("undo: connection lost");
                 } else {
                     self.system_line("undo: reverting most recent destructive op...");
@@ -278,13 +324,18 @@ impl App {
         // Reset the server's cumulative usage tally + audit trajectory so
         // /context reflects the new session only. Fire-and-forget over the
         // wire; the host clears its local view in parallel.
-        if let Some(req_id) = self.next_request_id() {
-            let session_id = self.session_id.clone();
-            self.send_cmd(crate::run_control::ClientCommand::SessionReset { req_id, session_id });
+        if let Some(s) = self.session.as_ref() {
+            match s.next_request_id() {
+                Ok(req_id) => {
+                    let session_id = self.session_id.clone();
+                    self.send_cmd(ClientCommand::SessionReset { req_id, session_id });
+                }
+                Err(_) => self.note_request_id_exhausted(),
+            }
         }
         // The reset clears the server buffer regardless of whether a req_id
-        // was minted, so a Message still in the pending copy is now an orphan.
-        // Host state invalidation is decoupled from id-minting.
+        // was issued, so a Message still in the pending copy is now an orphan.
+        // Host state invalidation is decoupled from id generation.
         self.demote_pending_to_parked();
         self.system_line("session archived, new session started");
         self.stage = Stage::Idle;

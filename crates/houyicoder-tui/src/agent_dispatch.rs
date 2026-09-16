@@ -495,11 +495,16 @@ impl App {
                     && view.last_fetched_turn.is_none_or(|t| turn > t)
                 {
                     view.last_fetched_turn = Some(turn);
-                    if let Some(req_id) = self.next_request_id() {
-                        self.send_cmd(ClientCommand::ChildTranscriptQuery {
-                            req_id,
-                            child_sid: FrontendSessionId(agent_id.clone()),
-                        });
+                    if let Some(s) = self.session.as_ref() {
+                        match s.next_request_id() {
+                            Ok(req_id) => {
+                                self.send_cmd(ClientCommand::ChildTranscriptQuery {
+                                    req_id,
+                                    child_sid: FrontendSessionId(agent_id.clone()),
+                                });
+                            }
+                            Err(_) => self.note_request_id_exhausted(),
+                        }
                     }
                 }
             }
@@ -582,9 +587,14 @@ impl App {
         }
         self.system_line(notice);
         if self.pane == Pane::Memory
-            && let Some(req_id) = self.next_request_id()
+            && let Some(s) = self.session.as_ref()
         {
-            self.send_cmd(ClientCommand::MemoryListQuery { req_id });
+            match s.next_request_id() {
+                Ok(req_id) => {
+                    self.send_cmd(ClientCommand::MemoryListQuery { req_id });
+                }
+                Err(_) => self.note_request_id_exhausted(),
+            }
         }
     }
 

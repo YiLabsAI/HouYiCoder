@@ -3,6 +3,8 @@
 //! with the projected transcript.
 use super::*;
 use crate::records::TranscriptLine;
+use crate::test_harness::{connected_app_events, wait_for_request};
+use houyicoder_protocol::frontend::FrontendRequest;
 
 /// A first expand of an unloaded Subagent line fires the fetch over the wire.
 /// For a sid the store has no log for, the server returns an empty frame list
@@ -59,5 +61,21 @@ fn test_expand_fetches_child_wired() {
             );
         }
         other => panic!("subagent line preserved, got {other:?}"),
+    }
+}
+
+/// Entering the teammate view for a fetched-but-unloaded child fires a
+/// ChildTranscript request carrying the target session id.
+#[test]
+fn test_teammate_fetch_ships_query() {
+    let (mut app, events) = connected_app_events();
+    assert!(app.enter_teammate_view_for_sid("c1", true));
+    let req = wait_for_request(&events, |p| {
+        matches!(p, FrontendRequest::ChildTranscript { .. })
+    });
+    assert_eq!(req.req_id.0, 0, "first request on a fresh session");
+    match req.payload {
+        FrontendRequest::ChildTranscript { child_sid } => assert_eq!(child_sid.0.as_str(), "c1"),
+        other => panic!("unexpected request: {other:?}"),
     }
 }

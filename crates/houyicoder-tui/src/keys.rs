@@ -8,6 +8,7 @@ pub use login::{handle_console, handle_login};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::run_control::ClientCommand;
 #[cfg(test)]
 use crate::state::Stage;
 use crate::state::{App, Pane, TrustChoice, ViewportMode};
@@ -116,9 +117,14 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         // If skills haven't been queried yet (the user hasn't opened
         // /skills), fetch them now so the picker isn't empty.
         if app.skill_entries.is_empty()
-            && let Some(req_id) = app.next_request_id()
+            && let Some(s) = app.session.as_ref()
         {
-            app.send_cmd(crate::run_control::ClientCommand::SkillsQuery { req_id });
+            match s.next_request_id() {
+                Ok(req_id) => {
+                    app.send_cmd(ClientCommand::SkillsQuery { req_id });
+                }
+                Err(_) => app.note_request_id_exhausted(),
+            }
         }
     }
     input::handle_input(app, k);

@@ -15,6 +15,7 @@ use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::handshake::Hello;
 
 use super::*;
+use crate::test_harness::connected_app_events;
 
 fn sid() -> houyicoder_protocol::frontend::SessionId {
     houyicoder_protocol::frontend::SessionId::new("s1")
@@ -87,6 +88,66 @@ fn test_kill_child_notif_shape() {
     assert_eq!(n.method, "session/kill_child");
     let p = n.params.expect("params present");
     assert_eq!(p.get("childSid").and_then(|v| v.as_str()), Some("c1"));
+}
+
+// --- request-identifier allocation ---
+
+/// A fresh connection issues its first identifier at zero and counts up by
+/// one per call.
+#[test]
+fn test_request_id_starts_zero() {
+    let (app, _events) = connected_app_events();
+    let session = app.session.as_ref().expect("connected session");
+    assert_eq!(session.next_request_id().unwrap(), RequestId(0));
+    assert_eq!(session.next_request_id().unwrap(), RequestId(1));
+}
+
+/// The u64 boundary refuses allocation rather than wrapping onto zero, and
+/// the refusal is stable: the counter stays at the maximum and every later
+/// call keeps returning Exhausted.
+#[test]
+fn test_request_id_exhaustion_stable() {
+    let (app, _events) = connected_app_events();
+    let session = app.session.as_ref().expect("connected session");
+    session.next_req_id.set(u64::MAX - 1);
+    assert_eq!(
+        session.next_request_id().unwrap(),
+        RequestId(u64::MAX - 1),
+        "the last identifier is issued at the boundary"
+    );
+    assert_eq!(session.next_request_id(), Err(RequestIdExhausted));
+    assert_eq!(session.next_request_id(), Err(RequestIdExhausted));
+    assert_eq!(
+        session.next_req_id.get(),
+        u64::MAX,
+        "the counter never wraps"
+    );
+    assert!(
+        session.take_exhaustion_notice(),
+        "the first exhaustion observation announces once"
+    );
+    assert!(
+        !session.take_exhaustion_notice(),
+        "later observations stay quiet instead of repeating"
+    );
+    assert_eq!(
+        format!("{}", RequestIdExhausted),
+        "request ID sequence exhausted",
+        "the error carries a readable message"
+    );
+}
+
+/// Each connection owns an independent sequence: advancing one leaves a
+/// fresh connection still issuing from zero.
+#[test]
+fn test_request_id_sequence_independent() {
+    let (a, _ea) = connected_app_events();
+    let (b, _eb) = connected_app_events();
+    let first = a.session.as_ref().expect("connected session");
+    let second = b.session.as_ref().expect("connected session");
+    first.next_req_id.set(7);
+    assert_eq!(first.next_request_id().unwrap(), RequestId(7));
+    assert_eq!(second.next_request_id().unwrap(), RequestId(0));
 }
 
 /// A KillChild command drains through the driver as a session/kill_child
@@ -237,7 +298,7 @@ impl FakeEngine {
         self
     }
 
-    /// Queue an event for the client, minting the next event seq.
+    /// Queue an event for the client, issuing the next event seq.
     fn event(&mut self, e: FrontendEvent) {
         self.seq += 1;
         self.load
@@ -247,7 +308,7 @@ impl FakeEngine {
             )))));
     }
 
-    /// Queue a response for the client, minting the next request id.
+    /// Queue a response for the client, issuing the next request id.
     fn response(&mut self, payload: ResponsePayload) {
         self.next_req += 1;
         self.load
