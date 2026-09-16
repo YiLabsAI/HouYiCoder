@@ -1,9 +1,7 @@
-//! UX-wiring PTY journey tests: real user journeys through the fixed surfaces
-//! — /hooks opens a Pane (not a transcript dump), /model opens the model
-//! selector, /resume <file> is reachable via the popup (hint-after-space),
-//! /status shows the Status / Config / Usage sub-tabs, /debug is palette-
-//! discoverable, and the resume picker disambiguates empty sessions. Drives the
-//! real binary so each journey is exercised end-to-end, not just structure.
+//! Slash-command PTY journeys against the real binary: each command opens
+//! or renders the surface it promises (/hooks a pane, /model the selector,
+//! /status its tabs, /debug the palette, /resume the picker), not a
+//! transcript dump.
 
 #![allow(clippy::unwrap_in_result)]
 
@@ -212,9 +210,9 @@ fn test_model_opens_selector_pane() {
         s.output_plain()
     );
     // An empty catalog has no rows to pick from (a Default row would resolve
-    // through the same missing chain); the guide names the settings file, which
-    // has no internal space so ratatui's cell-diff render cannot drop an
-    // inter-word space from the accumulated stream.
+    // through the same missing chain); the guide names the settings file,
+    // which has no internal space so ratatui's cell-diff render cannot drop
+    // an inter-word space from the accumulated stream.
     let out = s.output_plain();
     assert!(
         out.contains("settings.json"),
