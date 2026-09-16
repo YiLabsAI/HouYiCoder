@@ -303,8 +303,8 @@ pub(crate) fn connection_lost_app() -> App {
     let client = Client::new(Box::new(FailedHandshakeTransport));
     let (agent_tx, agent_rx) = mpsc::channel::<AgentMessage>();
     let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
-    // Effect latch: the driver announces its own death; from this point the
-    // send path is deterministically refused.
+    // Synchronization point: the driver announces its own death; from this
+    // point the enqueue path is deterministically refused.
     let death = session
         .poll_startup(Duration::from_secs(5))
         .expect("the failed handshake reports ConnectionLost");

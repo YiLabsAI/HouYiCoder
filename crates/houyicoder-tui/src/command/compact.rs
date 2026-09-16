@@ -30,8 +30,8 @@ impl App {
         };
         // The in-progress line waits for the send: a dead driver must not
         // leave the user watching a compaction that never started.
-        if !self.send_cmd(ClientCommand::CompactQuery { req_id }) {
-            self.system_line("compact: connection lost");
+        if let Err(e) = self.enqueue(ClientCommand::CompactQuery { req_id }) {
+            self.system_line(Self::enqueue_failure_line("compact", e));
             return;
         }
         self.system_line("compact: compacting...".to_string());

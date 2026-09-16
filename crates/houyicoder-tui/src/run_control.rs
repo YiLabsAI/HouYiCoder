@@ -11,6 +11,7 @@ use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 use crate::pending_queue::PendingItem;
 use crate::records::{Approval, AskQuestion, TranscriptLine};
+use crate::session::EnqueueError;
 use crate::state::App;
 use crate::state::enums::LiveBlock;
 use crate::transcript::{TranscriptFrame, chunk_text};
@@ -25,13 +26,42 @@ mod transcript_rebuild;
 pub use crate::agent_message::{AgentMessage, ClientCommand};
 
 impl App {
-    /// Ship a command to the driver over the session's command channel.
-    /// Returns false when no backend is connected or the driver is gone: the
-    /// command was not delivered, so no reply will come and the caller must
-    /// not leave state waiting on one. Request ids are issued by the
-    /// connection before this call.
-    pub fn send_cmd(&self, cmd: ClientCommand) -> bool {
-        self.session.as_ref().is_some_and(|s| s.send(cmd))
+    /// Enqueue a command over the session's command channel. Ok means the
+    /// command entered the local connection queue, not that it reached the
+    /// transport or server. NotConnected when no active session exists; Closed
+    /// when the driver task is gone. In either Err case the command never
+    /// left this process, so no reply will come and the caller must not
+    /// leave state waiting on one. Request ids are issued by the connection
+    /// before this call.
+    pub fn enqueue(&self, cmd: ClientCommand) -> Result<(), EnqueueError> {
+        self.session
+            .as_ref()
+            .ok_or(EnqueueError::NotConnected)
+            .and_then(|s| s.enqueue(cmd))
+    }
+
+    /// The user-facing line for an enqueue failure on a user-initiated action.
+    /// NotConnected and Closed stay distinct so the user sees the real cause
+    /// rather than a generic loss message. Presentation lives on the App
+    /// boundary, not on the connection error type.
+    pub(crate) fn enqueue_failure_line(subject: &str, error: EnqueueError) -> String {
+        match error {
+            EnqueueError::NotConnected => format!("{subject}: not connected"),
+            EnqueueError::Closed => format!("{subject}: connection lost"),
+        }
+    }
+
+    /// Enqueue an auto-refresh query and settle its result without writing a
+    /// transcript line. The driver's ConnectionLost event is the single
+    /// visible connection-failure notice; a second line here would race with
+    /// it. NotConnected means no session exists and there is nothing to
+    /// refresh. Callers with pending flags clear them at the enqueue site on
+    /// the Err path.
+    pub(crate) fn enqueue_refresh(&mut self, command: ClientCommand) {
+        if let Err(_error) = self.enqueue(command) {
+            // Acknowledged, not dropped: the ConnectionLost event announces
+            // the loss and sweeps state on the next poll.
+        }
     }
 
     /// Record a single request-id exhaustion notice for an auto path. The
@@ -51,7 +81,7 @@ impl App {
 
     /// Start a user turn, steer input to the viewed child, or queue it while
     /// another turn is active. New turns render an immediate user echo after
-    /// the send is accepted. Returns false when the send was refused.
+    /// the enqueue is accepted. Returns false when the enqueue was refused.
     pub fn spawn_run(&mut self, input: String) -> bool {
         // A viewed child receives input directly and shows an optimistic echo.
         let steer = self
@@ -76,13 +106,13 @@ impl App {
                 self.system_line("this child has finished — start a new task or /agents to review");
                 return true;
             }
-            // The echo follows the send: a refused injection must not leave a
+            // The echo follows the enqueue: a refused injection must not leave a
             // ghost copy in the child transcript.
-            if !self.send_cmd(ClientCommand::InjectToChild {
+            if let Err(e) = self.enqueue(ClientCommand::InjectToChild {
                 child_sid,
                 text: input.clone(),
             }) {
-                self.system_line("child: connection lost");
+                self.system_line(Self::enqueue_failure_line("child", e));
                 return false;
             }
             if let Some(view) = self.teammate_view.as_mut() {
@@ -116,13 +146,13 @@ impl App {
         let disabled_skills = self.skill_disabled.clone();
         // Send before touching any run state: a dead driver must not leave a
         // fake running turn behind.
-        if !self.send_cmd(ClientCommand::SendMessage {
+        if let Err(e) = self.enqueue(ClientCommand::SendMessage {
             req_id,
             session_id,
             content,
             disabled_skills,
         }) {
-            self.system_line("run: connection lost");
+            self.system_line(Self::enqueue_failure_line("run", e));
             return false;
         }
         // Only errors matching this request terminate the active run.
@@ -142,7 +172,7 @@ impl App {
     /// Consume the pending queue head in first-in, first-out order. Clean
     /// completion may start the next turn; other outcomes leave input parked.
     /// At most one parked message is promoted to the server queue. Returns
-    /// false when no item is available or the send was refused.
+    /// false when no item is available or the enqueue was refused.
     pub fn drain_pending_head(&mut self) -> bool {
         let Some(item) = self.pending.first().cloned() else {
             return false;
@@ -158,11 +188,11 @@ impl App {
                 // refused removal keeps the head queued so the local copy and
                 // the server mirror cannot diverge.
                 let session_id = self.session_id.clone();
-                if !self.send_cmd(ClientCommand::QueueRemove {
+                if let Err(e) = self.enqueue(ClientCommand::QueueRemove {
                     session_id,
                     id: head.id,
                 }) {
-                    self.system_line("queue: connection lost");
+                    self.system_line(Self::enqueue_failure_line("queue", e));
                     return false;
                 }
                 self.pending.remove(0);
@@ -198,10 +228,10 @@ impl App {
         let Some(req_id) = self.pending_permission_req_id.get() else {
             return;
         };
-        // Deliver first: the card and the run-resume state only move once the
+        // Enqueue first: the card and the run-resume state only move once the
         // verdict actually reached the driver.
-        if !self.send_cmd(ClientCommand::Verdict { req_id, decision }) {
-            self.system_line("permission: connection lost");
+        if let Err(e) = self.enqueue(ClientCommand::Verdict { req_id, decision }) {
+            self.system_line(Self::enqueue_failure_line("permission", e));
             return;
         }
         self.pending_permission_req_id.take();
@@ -217,16 +247,16 @@ impl App {
         self.thinking_started_at = None;
     }
 
-    /// Send the startup trust verdict. Rejection also exits the local TUI,
-    /// but only after the verdict was actually delivered.
+    /// Resolve the startup trust verdict. Rejection also exits the local TUI,
+    /// but only after the verdict was actually queued.
     pub fn resolve_trust(&mut self, accept: bool) {
         let Some(req_id) = self.pending_trust_req_id.take() else {
             return;
         };
-        if !self.send_cmd(ClientCommand::TrustVerdict { req_id, accept }) {
+        if let Err(e) = self.enqueue(ClientCommand::TrustVerdict { req_id, accept }) {
             // The host still waits for this verdict: restore the request id.
             self.pending_trust_req_id = Some(req_id);
-            self.system_line("trust: connection lost");
+            self.system_line(Self::enqueue_failure_line("trust", e));
             return;
         }
         self.pending_trust = None;
@@ -309,7 +339,12 @@ impl App {
         if let Some(session) = self.session.as_ref() {
             match session.next_request_id() {
                 Ok(req_id) => {
-                    session.send(ClientCommand::StatusQuery { req_id });
+                    if session
+                        .enqueue(ClientCommand::StatusQuery { req_id })
+                        .is_err()
+                    {
+                        // Closed: the ConnectionLost event announces the loss.
+                    }
                 }
                 Err(_) => self.note_request_id_exhausted(),
             }
@@ -384,14 +419,18 @@ impl App {
             if let Some(s) = self.session.as_ref() {
                 match s.next_request_id() {
                     Ok(req_id) => {
-                        s.send(ClientCommand::StatusQuery { req_id });
-                        // Seed the mode cache once so the status pill renders at startup.
-                        if self.mode_cache.is_none() {
-                            match s.next_request_id() {
-                                Ok(req_id) => {
-                                    s.send(ClientCommand::PermissionModeQuery { req_id });
+                        if s.enqueue(ClientCommand::StatusQuery { req_id }).is_ok() {
+                            // Seed the mode cache once so the status pill renders at
+                            // startup. A refused enqueue stays quiet: the
+                            // ConnectionLost event announces the loss.
+                            if self.mode_cache.is_none() {
+                                match s.next_request_id() {
+                                    Ok(req_id) => {
+                                        let _ = s
+                                            .enqueue(ClientCommand::PermissionModeQuery { req_id });
+                                    }
+                                    Err(_) => self.note_request_id_exhausted(),
                                 }
-                                Err(_) => self.note_request_id_exhausted(),
                             }
                         }
                     }
@@ -427,10 +466,10 @@ impl App {
         // Cancellation becomes visible only after the driver accepted it: a
         // refused abort would otherwise wait forever for a completion that
         // never comes.
-        if !self.send_cmd(ClientCommand::AbortRun {
+        if let Err(e) = self.enqueue(ClientCommand::AbortRun {
             session_id: self.session_id.clone(),
         }) {
-            self.system_line("run: connection lost");
+            self.system_line(Self::enqueue_failure_line("run", e));
             return;
         }
         self.cancelling = true;
@@ -489,10 +528,13 @@ impl App {
             match it {
                 PendingItem::Message(input) => {
                     let session_id = self.session_id.clone();
-                    if self.send_cmd(ClientCommand::QueueRemove {
-                        session_id,
-                        id: input.id,
-                    }) {
+                    if self
+                        .enqueue(ClientCommand::QueueRemove {
+                            session_id,
+                            id: input.id,
+                        })
+                        .is_ok()
+                    {
                         recalled.push(input.text);
                     } else {
                         refused = true;

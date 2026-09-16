@@ -110,8 +110,8 @@ impl App {
             self.system_line("permission: request ids exhausted");
             return;
         };
-        if !self.send_cmd(ClientCommand::PermissionCycleModeQuery { req_id }) {
-            self.system_line("permission: connection lost");
+        if let Err(e) = self.enqueue(ClientCommand::PermissionCycleModeQuery { req_id }) {
+            self.system_line(Self::enqueue_failure_line("permission", e));
         }
     }
 
@@ -134,8 +134,8 @@ impl App {
             req_id,
             enabled: None,
         };
-        if !self.send_cmd(refresh) {
-            self.system_line("permission: connection lost");
+        if let Err(e) = self.enqueue(refresh) {
+            self.system_line(Self::enqueue_failure_line("permission", e));
             return;
         }
         let on = self.ask_before_git_enabled;
@@ -165,8 +165,8 @@ impl App {
             req_id,
             enabled: Some(enabled),
         };
-        if !self.send_cmd(command) {
-            self.system_line("permission: connection lost");
+        if let Err(e) = self.enqueue(command) {
+            self.system_line(Self::enqueue_failure_line("permission", e));
         }
     }
 }

@@ -75,8 +75,8 @@ impl App {
         };
         // Send before touching any local state: a dead driver must not leave
         // the tier moved with no request sent.
-        if !self.send_cmd(command) {
-            self.system_line("model: connection lost");
+        if let Err(e) = self.enqueue(command) {
+            self.system_line(Self::enqueue_failure_line("model", e));
             return;
         }
         self.model_tier = tier.clone();

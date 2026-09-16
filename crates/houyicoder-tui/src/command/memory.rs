@@ -7,6 +7,7 @@ use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 
 use crate::agent_message::ClientCommand;
 use crate::memory_state::toggle_label;
+use crate::session::EnqueueError;
 use crate::state::{App, Pane};
 
 impl App {
@@ -57,11 +58,13 @@ impl App {
                 // to the auto root, the original command-form behavior. A
                 // repeat forget of a key already in flight sends nothing.
                 if self.memory.begin_forget(req_id, key.to_string())
-                    && !self.send_cmd(ClientCommand::MemoryForgetQuery {
-                        req_id,
-                        key: key.to_string(),
-                        scope: "auto".to_string(),
-                    })
+                    && self
+                        .enqueue(ClientCommand::MemoryForgetQuery {
+                            req_id,
+                            key: key.to_string(),
+                            scope: "auto".to_string(),
+                        })
+                        .is_err()
                 {
                     // The driver is gone: the delete was not sent. Roll the
                     // pending mark back so the key is not stuck in flight.
@@ -79,11 +82,13 @@ impl App {
             self.system_line("memory: request ids exhausted");
             return true;
         };
-        let sent = self.send_cmd(ClientCommand::MemoryShowQuery {
-            req_id,
-            key: body.to_string(),
-        });
-        if sent {
+        if self
+            .enqueue(ClientCommand::MemoryShowQuery {
+                req_id,
+                key: body.to_string(),
+            })
+            .is_ok()
+        {
             self.system_line(format!("memory: fetching {body}..."));
         } else {
             self.system_line(format!("memory: couldn't fetch {body} — connection lost"));
@@ -108,7 +113,9 @@ impl App {
         if !self.memory.begin_toggle(req_id, which) {
             return;
         }
-        if !self.send_cmd(ClientCommand::MemoryToggleQuery { req_id, which }) {
+        if let Err(EnqueueError::Closed) =
+            self.enqueue(ClientCommand::MemoryToggleQuery { req_id, which })
+        {
             // The driver is gone: the flip was not sent. Roll the pending
             // mark back — otherwise the switch refuses presses forever.
             self.memory.take_toggle(req_id);
@@ -156,7 +163,7 @@ impl App {
         // Route the delete by the row's scope so forgetting a
         // user/project row deletes the explicit file in that root, not
         // just the auto-scope copy.
-        if !self.send_cmd(ClientCommand::MemoryForgetQuery {
+        if let Err(EnqueueError::Closed) = self.enqueue(ClientCommand::MemoryForgetQuery {
             req_id,
             key: key.clone(),
             scope,
@@ -184,7 +191,7 @@ impl App {
             return;
         };
         self.memory.request_detail(req_id, key.clone());
-        if !self.send_cmd(ClientCommand::MemoryShowQuery {
+        if let Err(EnqueueError::Closed) = self.enqueue(ClientCommand::MemoryShowQuery {
             req_id,
             key: key.clone(),
         }) {

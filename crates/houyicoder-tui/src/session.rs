@@ -4,4 +4,4 @@
 
 mod connection;
 
-pub use connection::{RequestIdExhausted, SessionConnection};
+pub use connection::{EnqueueError, RequestIdExhausted, SessionConnection};

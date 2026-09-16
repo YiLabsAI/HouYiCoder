@@ -113,13 +113,14 @@ fn add_rule_with_destination(
         app.system_line("permission: request ids exhausted");
         return;
     };
-    // The added confirmation assumes delivery, so it waits for the send to
-    // reach the server; the rules cache only moves when the server replies.
-    if !app.send_cmd(ClientCommand::PermissionAddRuleQuery {
+    // The added confirmation assumes the command queued, so it waits for the
+    // enqueue to reach the local queue; the rules cache only moves when the
+    // server replies.
+    if let Err(e) = app.enqueue(ClientCommand::PermissionAddRuleQuery {
         req_id,
         rule: wire_rule,
     }) {
-        app.system_line("permission: connection lost");
+        app.system_line(App::enqueue_failure_line("permission", e));
         return;
     }
     app.system_line(format!("permission: added {action} {label}"));
@@ -136,8 +137,8 @@ pub(crate) fn remove_rule_at(app: &mut App, index: usize) {
         app.system_line("permission: request ids exhausted");
         return;
     };
-    if !app.send_cmd(ClientCommand::PermissionRemoveRuleQuery { req_id, index }) {
-        app.system_line("permission: connection lost");
+    if let Err(e) = app.enqueue(ClientCommand::PermissionRemoveRuleQuery { req_id, index }) {
+        app.system_line(App::enqueue_failure_line("permission", e));
         return;
     }
     app.system_line("permission: removed".to_string());
@@ -524,8 +525,8 @@ fn submit_add_dir(app: &mut App, path: String) {
         app.system_line("permission: request ids exhausted");
         return;
     };
-    if !app.send_cmd(ClientCommand::PermissionAddDirQuery { req_id, path }) {
-        app.system_line("permission: connection lost");
+    if let Err(e) = app.enqueue(ClientCommand::PermissionAddDirQuery { req_id, path }) {
+        app.system_line(App::enqueue_failure_line("permission", e));
         return;
     }
     app.system_line("permission: adding directory".to_string());
@@ -547,8 +548,8 @@ fn remove_dir_at(app: &mut App, index: usize) {
         app.system_line("permission: request ids exhausted");
         return;
     };
-    if !app.send_cmd(ClientCommand::PermissionRemoveDirQuery { req_id, path }) {
-        app.system_line("permission: connection lost");
+    if let Err(e) = app.enqueue(ClientCommand::PermissionRemoveDirQuery { req_id, path }) {
+        app.system_line(App::enqueue_failure_line("permission", e));
         return;
     }
     app.system_line("permission: removing directory".to_string());

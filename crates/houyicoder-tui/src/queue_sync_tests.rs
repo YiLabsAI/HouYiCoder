@@ -22,6 +22,14 @@ fn working() -> crate::state::App {
     app
 }
 
+/// A working app with a live session: the promote path enqueues InjectUser
+/// before swapping a parked slot to Message, so a no-session app refuses the
+/// promotion and the slot stays parked.
+fn working_session() -> crate::state::App {
+    let (app, _events) = crate::test_harness::connected_app_events();
+    app
+}
+
 /// Done does not drain the queue: the drain moved to the event loop's idle
 /// drain so a queued message auto-sends on any idle. Done only clears busy.
 /// The queue stays intact after Done; the head leaves only when
@@ -184,7 +192,7 @@ fn test_drain_command_dispatches_clear() {
 /// copy, and the strip marks the sole live item as next.
 #[test]
 fn test_second_enqueue_parks() {
-    let mut app = working();
+    let mut app = working_session();
     app.agent_busy = true;
     app.spawn_run("task a".into());
     assert_eq!(
@@ -241,7 +249,7 @@ fn test_command_head_blocks() {
 /// command has cleared the way.
 #[test]
 fn test_command_drain_promotes() {
-    let mut app = working();
+    let mut app = working_session();
     app.agent_busy = true;
     app.pending.push(PendingItem::Command("/rewind".into()));
     app.pending.push(PendingItem::ParkedMessage("after".into()));
@@ -264,7 +272,7 @@ fn test_command_drain_promotes() {
 /// silently pass -- pinning the behavior makes the design choice explicit.
 #[test]
 fn test_orphan_promoted_on_enqueue() {
-    let mut app = working();
+    let mut app = working_session();
     // Simulate a prior interrupt that orphaned a queued message.
     app.pending
         .push(PendingItem::ParkedMessage("orphan".into()));
@@ -481,7 +489,7 @@ fn test_commit_clears_parked() {
 /// sends it for mid-turn injection. A second submit appends in queue order.
 #[test]
 fn test_busy_submit_mirrors_queue() {
-    let mut app = working();
+    let mut app = working_session();
     app.agent_busy = true;
     app.spawn_run("first interjection".into());
     assert_eq!(

@@ -82,18 +82,24 @@ pub fn command_first_token_is(raw: &str, token: &str) -> bool {
 
 impl App {
     /// Remove one queued item and transfer the active runner copy to the next
-    /// eligible head. QueueRemove is sent before the successor is injected.
+    /// eligible head. The server-side QueueRemove is sent before the local
+    /// copy is removed so a refused enqueue keeps the item queued and the
+    /// local and server mirrors cannot diverge.
     pub(crate) fn remove_pending_at(&mut self, index: usize) -> Option<PendingItem> {
         if index >= self.pending.len() {
             return None;
         }
-        let item = self.pending.remove(index);
-        if let PendingItem::Message(input) = &item {
-            self.send_cmd(ClientCommand::QueueRemove {
-                session_id: self.session_id.clone(),
-                id: input.id,
-            });
+        // Enqueue the server removal before touching the local copy: a closed
+        // driver leaves the item in place rather than orphaning the mirror.
+        if let PendingItem::Message(input) = &self.pending[index] {
+            let id = input.id;
+            let session_id = self.session_id.clone();
+            if let Err(e) = self.enqueue(ClientCommand::QueueRemove { session_id, id }) {
+                self.system_line(Self::enqueue_failure_line("queue", e));
+                return None;
+            }
         }
+        let item = self.pending.remove(index);
         self.promote_next_pending();
         Some(item)
     }
@@ -101,24 +107,35 @@ impl App {
     /// Promote a parked head into the live-copy slot: swap to Message +
     /// InjectUser. A Message head already holds the copy; a Command head
     /// is a barrier (never promote past it). No-op when idle -- idle_drain
-    /// spawns the head as a fresh run instead. One live copy at a time so
-    /// an explicit recall races at most one server copy.
+    /// spawns the head as a fresh run instead. The InjectUser is enqueued
+    /// before the slot is swapped so a refused enqueue leaves the input
+    /// parked, not falsely marked as holding a server mirror.
     pub(crate) fn promote_next_pending(&mut self) {
         if !self.agent_busy {
             return;
         }
-        let Some(input) = self.pending.first_mut().and_then(|slot| match slot {
-            PendingItem::ParkedMessage(input) => {
-                let input = input.clone();
-                *slot = PendingItem::Message(input.clone());
-                Some(input)
-            }
+        // Clone the parked input without swapping the slot: the slot only
+        // marks itself as a live mirror once the injection is queued.
+        let Some(input) = self.pending.first().and_then(|slot| match slot {
+            PendingItem::ParkedMessage(input) => Some(input.clone()),
             _ => None,
         }) else {
             return;
         };
         let session_id = self.session_id.clone();
-        self.send_cmd(ClientCommand::InjectUser { session_id, input });
+        match self.enqueue(ClientCommand::InjectUser { session_id, input }) {
+            Ok(()) => {
+                if let Some(slot) = self.pending.first_mut()
+                    && let PendingItem::ParkedMessage(input) = slot
+                {
+                    let input = input.clone();
+                    *slot = PendingItem::Message(input);
+                }
+            }
+            Err(e) => {
+                self.system_line(Self::enqueue_failure_line("queue", e));
+            }
+        }
     }
 
     /// Dispatch a slash command's raw text (with the leading slash) without

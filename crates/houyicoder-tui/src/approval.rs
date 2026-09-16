@@ -199,7 +199,7 @@ impl App {
         {
             match s.next_request_id() {
                 Ok(req_id) => {
-                    self.send_cmd(ClientCommand::ChildTranscriptQuery {
+                    self.enqueue_refresh(ClientCommand::ChildTranscriptQuery {
                         req_id,
                         child_sid: SessionId(child_sid),
                     });

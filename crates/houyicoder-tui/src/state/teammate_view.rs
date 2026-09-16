@@ -86,7 +86,7 @@ impl App {
         if fire_fetch && let Some(s) = self.session.as_ref() {
             match s.next_request_id() {
                 Ok(req_id) => {
-                    self.send_cmd(ClientCommand::ChildTranscriptQuery {
+                    self.enqueue_refresh(ClientCommand::ChildTranscriptQuery {
                         req_id,
                         child_sid: SessionId(child_sid.to_string()),
                     });
@@ -127,7 +127,9 @@ impl App {
             .map(|e| e.completed.is_none())
             .unwrap_or(false);
         if running {
-            self.send_cmd(ClientCommand::CancelChildTurn { child_sid });
+            if let Err(e) = self.enqueue(ClientCommand::CancelChildTurn { child_sid }) {
+                self.system_line(Self::enqueue_failure_line("cancel", e));
+            }
         } else {
             // Idle: Esc is a no-op on the run, so teach the exit gesture
             // instead of leaving the press silent. The banner advertises

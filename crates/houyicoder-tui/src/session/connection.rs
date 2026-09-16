@@ -51,6 +51,28 @@ impl fmt::Display for RequestIdExhausted {
 
 impl std::error::Error for RequestIdExhausted {}
 
+/// A command did not enter the connection queue. Both variants mean the
+/// command never left this process: no reply will come, so the caller must
+/// not register state waiting on one. NotConnected is reported when no
+/// active session exists; Closed when the driver task has exited and its
+/// command receiver is dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnqueueError {
+    NotConnected,
+    Closed,
+}
+
+impl fmt::Display for EnqueueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EnqueueError::NotConnected => f.write_str("no active session"),
+            EnqueueError::Closed => f.write_str("connection is closed"),
+        }
+    }
+}
+
+impl std::error::Error for EnqueueError {}
+
 /// Channels, request identifiers, and driver lifetime for one live connection.
 pub struct SessionConnection {
     cmd_tx: tokio::sync::mpsc::UnboundedSender<ClientCommand>,
@@ -113,12 +135,13 @@ impl SessionConnection {
         self.next_req_id.set(v);
     }
 
-    /// Queue a command for wire translation. Returns false when the driver
-    /// is gone (its receiver dropped): the command never left this process,
-    /// so the caller knows no reply will come and must not register state
-    /// waiting on one.
-    pub fn send(&self, cmd: ClientCommand) -> bool {
-        self.cmd_tx.send(cmd).is_ok()
+    /// Enqueue a command for wire translation. Ok means the command entered
+    /// the local connection queue, not that it reached the transport or
+    /// server. Err when the driver task is gone (its receiver dropped): the
+    /// command never left this process, so the caller knows no reply will
+    /// come and must not register state waiting on one.
+    pub fn enqueue(&self, cmd: ClientCommand) -> Result<(), EnqueueError> {
+        self.cmd_tx.send(cmd).map_err(|_| EnqueueError::Closed)
     }
 
     /// Take one pending inbound message without blocking.

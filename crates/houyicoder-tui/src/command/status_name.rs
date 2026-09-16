@@ -41,12 +41,12 @@ impl App {
             self.system_line("rename: request ids exhausted");
             return;
         };
-        if !s.send(ClientCommand::RenameSessionQuery {
+        if let Err(e) = s.enqueue(ClientCommand::RenameSessionQuery {
             req_id,
             session_id: self.session_id.clone(),
             name,
         }) {
-            self.system_line("rename: connection lost");
+            self.system_line(Self::enqueue_failure_line("rename", e));
         }
     }
 }

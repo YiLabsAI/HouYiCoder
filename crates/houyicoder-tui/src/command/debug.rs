@@ -27,8 +27,8 @@ impl App {
             self.system_line("debug: request ids exhausted");
             return;
         };
-        if !self.send_cmd(ClientCommand::DebugSet { req_id, level }) {
-            self.system_line("debug: connection lost");
+        if let Err(e) = self.enqueue(ClientCommand::DebugSet { req_id, level }) {
+            self.system_line(Self::enqueue_failure_line("debug", e));
         }
     }
 }

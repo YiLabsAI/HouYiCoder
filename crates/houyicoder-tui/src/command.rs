@@ -63,7 +63,7 @@ impl App {
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
-                            self.send_cmd(ClientCommand::AgentsQuery { req_id });
+                            self.enqueue_refresh(ClientCommand::AgentsQuery { req_id });
                         }
                         Err(_) => self.note_request_id_exhausted(),
                     }
@@ -79,7 +79,7 @@ impl App {
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
-                            self.send_cmd(ClientCommand::ModelInfoQuery { req_id });
+                            self.enqueue_refresh(ClientCommand::ModelInfoQuery { req_id });
                         }
                         Err(_) => self.note_request_id_exhausted(),
                     }
@@ -112,7 +112,7 @@ impl App {
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
-                            self.send_cmd(ClientCommand::ContextQuery { req_id });
+                            self.enqueue_refresh(ClientCommand::ContextQuery { req_id });
                         }
                         Err(_) => self.note_request_id_exhausted(),
                     }
@@ -129,8 +129,14 @@ impl App {
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
-                            self.pending_status_command = true;
-                            s.send(ClientCommand::StatusQuery { req_id });
+                            // Set the pending flag only after the enqueue accepts
+                            // the command, so a closed driver does not leave a
+                            // flag that waits on a reply that never comes. A
+                            // refused enqueue stays quiet: the ConnectionLost
+                            // event announces the loss.
+                            if s.enqueue(ClientCommand::StatusQuery { req_id }).is_ok() {
+                                self.pending_status_command = true;
+                            }
                         }
                         Err(_) => self.note_request_id_exhausted(),
                     }
@@ -144,7 +150,7 @@ impl App {
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
-                            self.send_cmd(ClientCommand::ToolListQuery { req_id });
+                            self.enqueue_refresh(ClientCommand::ToolListQuery { req_id });
                         }
                         Err(_) => self.note_request_id_exhausted(),
                     }
@@ -155,7 +161,7 @@ impl App {
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
-                            self.send_cmd(ClientCommand::SkillsQuery { req_id });
+                            self.enqueue_refresh(ClientCommand::SkillsQuery { req_id });
                         }
                         Err(_) => self.note_request_id_exhausted(),
                     }
@@ -166,7 +172,7 @@ impl App {
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
-                            self.send_cmd(ClientCommand::HooksQuery { req_id });
+                            self.enqueue_refresh(ClientCommand::HooksQuery { req_id });
                         }
                         Err(_) => self.note_request_id_exhausted(),
                     }
@@ -178,7 +184,7 @@ impl App {
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
-                            self.send_cmd(ClientCommand::MemoryListQuery { req_id });
+                            self.enqueue_refresh(ClientCommand::MemoryListQuery { req_id });
                         }
                         Err(_) => self.note_request_id_exhausted(),
                     }
@@ -186,7 +192,7 @@ impl App {
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
-                            self.send_cmd(ClientCommand::MemoryToggleStateQuery { req_id });
+                            self.enqueue_refresh(ClientCommand::MemoryToggleStateQuery { req_id });
                         }
                         Err(_) => self.note_request_id_exhausted(),
                     }
@@ -213,8 +219,8 @@ impl App {
                     self.system_line("undo: request ids exhausted");
                     return;
                 };
-                if !self.send_cmd(ClientCommand::UndoQuery { req_id }) {
-                    self.system_line("undo: connection lost");
+                if let Err(e) = self.enqueue(ClientCommand::UndoQuery { req_id }) {
+                    self.system_line(Self::enqueue_failure_line("undo", e));
                 } else {
                     self.system_line("undo: reverting most recent destructive op...");
                 }
@@ -322,13 +328,14 @@ impl App {
         self.verdict_log_cache.clear();
         self.todos.clear();
         // Reset the server's cumulative usage tally + audit trajectory so
-        // /context reflects the new session only. Fire-and-forget over the
-        // wire; the host clears its local view in parallel.
+        // /context reflects the new session only. Fire-and-forget: the host
+        // clears its local view in parallel, and a refused enqueue stays
+        // quiet because the ConnectionLost event announces the loss.
         if let Some(s) = self.session.as_ref() {
             match s.next_request_id() {
                 Ok(req_id) => {
                     let session_id = self.session_id.clone();
-                    self.send_cmd(ClientCommand::SessionReset { req_id, session_id });
+                    let _ = s.enqueue(ClientCommand::SessionReset { req_id, session_id });
                 }
                 Err(_) => self.note_request_id_exhausted(),
             }

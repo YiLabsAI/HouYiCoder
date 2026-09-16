@@ -121,7 +121,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         {
             match s.next_request_id() {
                 Ok(req_id) => {
-                    app.send_cmd(ClientCommand::SkillsQuery { req_id });
+                    app.enqueue_refresh(ClientCommand::SkillsQuery { req_id });
                 }
                 Err(_) => app.note_request_id_exhausted(),
             }

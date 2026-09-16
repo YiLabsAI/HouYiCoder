@@ -479,7 +479,9 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
                 .is_some_and(|n| n.key == "kill-agents-confirm");
             if pending {
                 app.notifications.remove("kill-agents-confirm");
-                app.send_cmd(ClientCommand::KillAllChildren);
+                if let Err(e) = app.enqueue(ClientCommand::KillAllChildren) {
+                    app.system_line(App::enqueue_failure_line("kill", e));
+                }
             } else {
                 app.notifications.add(Notification::immediate(
                     "kill-agents-confirm",
@@ -500,9 +502,11 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
             && let Some(i) = app.fleet.selected
             && let Some(e) = app.fleet.entries.get(i).filter(|e| e.completed.is_none())
         {
-            app.send_cmd(ClientCommand::KillChild {
+            if let Err(e) = app.enqueue(ClientCommand::KillChild {
                 child_sid: e.agent_id.clone(),
-            });
+            }) {
+                app.system_line(App::enqueue_failure_line("kill", e));
+            }
             return;
         }
         // No valid running selection: fall through so 'k' types.

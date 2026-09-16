@@ -609,9 +609,9 @@ fn test_dead_driver_toggle_rollback() {
     let client = houyicoder_client::Client::new(Box::new(FailOnConnect));
     let (agent_tx, agent_rx) = std::sync::mpsc::channel::<AgentMessage>();
     let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
-    // Effect latch: the driver drops the command receiver before emitting
-    // ConnectionLost, so once the event is observed the send below fails
-    // deterministically — no sleep involved.
+    // Synchronization point: the driver drops the command receiver before
+    // emitting ConnectionLost, so once the event is observed the enqueue
+    // below fails deterministically — no sleep involved.
     let msg = session
         .poll_startup(Duration::from_secs(5))
         .expect("the dying driver emits ConnectionLost");

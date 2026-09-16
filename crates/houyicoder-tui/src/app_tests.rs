@@ -3,7 +3,7 @@
 //! reaches app private items the same way the inline mod tests did.
 use super::*;
 use crate::state::{Pane, Stage, TranscriptLine, ViewportMode};
-use crate::test_harness::{connected_app_events, wait_for_request};
+use crate::test_harness::{connected_app_events, connection_lost_app, wait_for_request};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SlashCommand};
 
@@ -15,6 +15,14 @@ fn working_app() -> App {
     let mut app = crate::composition::app();
     app.screen = Screen::Working;
     app
+}
+
+/// The text of the newest transcript system line.
+fn last_system(app: &App) -> &str {
+    match app.transcript.last().expect("a line was pushed") {
+        TranscriptLine::System(t) => t,
+        other => panic!("expected a system line, got {other:?}"),
+    }
 }
 
 /// A status-bar drag-select starts a status selection so the chrome text
@@ -480,13 +488,6 @@ fn test_exhausted_commands_report() {
         .expect("connected session")
         .set_next_req_id(u64::MAX);
 
-    fn last_system(app: &App) -> &str {
-        match app.transcript.last().expect("a line was pushed") {
-            TranscriptLine::System(t) => t,
-            other => panic!("expected a system line, got {other:?}"),
-        }
-    }
-
     // User commands surface a per-command line, never the shared "not connected".
     app.run_command(SlashCommand::Compact);
     assert_eq!(last_system(&app), "compact: request ids exhausted");
@@ -536,11 +537,204 @@ fn test_exhausted_clear_no_repeat() {
         .set_next_req_id(u64::MAX);
     app.run_command(SlashCommand::Agents);
     app.run_command(SlashCommand::Clear);
+    // Clear archives the transcript, so check the whole post-clear transcript:
+    // no exhaustion notice may appear anywhere, and the post-clear line is
+    // the session-archived one.
+    assert!(
+        !app.transcript.iter().any(|line| matches!(
+            line,
+            TranscriptLine::System(t) if t.contains("request ids exhausted")
+        )),
+        "clear must not repeat the exhaustion notice"
+    );
     match app.transcript.last().expect("a line was pushed") {
         TranscriptLine::System(t) => assert!(
-            t.contains("session archived") && !t.contains("request ids exhausted"),
-            "clear archives without repeating the exhaustion notice, got {t}"
+            t.contains("session archived"),
+            "the post-clear line archives the session, got {t}"
         ),
         other => panic!("expected the post-clear system line, got {other:?}"),
     }
+}
+
+/// App::enqueue returns NotConnected when no active session exists, so a
+/// caller distinguishes a missing session from a stopped driver.
+#[test]
+fn test_enqueue_not_connected() {
+    use crate::run_control::ClientCommand;
+    use crate::session::EnqueueError;
+    use houyicoder_protocol::frontend::SessionId;
+    let app = working_app();
+    let err = app
+        .enqueue(ClientCommand::AbortRun {
+            session_id: SessionId::new("s"),
+        })
+        .unwrap_err();
+    assert_eq!(err, EnqueueError::NotConnected);
+}
+
+/// App::enqueue returns Closed when the connection object still exists but
+/// its command receiver has closed: the command never left this process.
+#[test]
+fn test_enqueue_closed() {
+    use crate::run_control::ClientCommand;
+    use crate::session::EnqueueError;
+    use crate::test_harness::connection_lost_app;
+    use houyicoder_protocol::envelope::RequestId;
+    let app = connection_lost_app();
+    let err = app
+        .enqueue(ClientCommand::StatusQuery {
+            req_id: RequestId(0),
+        })
+        .unwrap_err();
+    assert_eq!(err, EnqueueError::Closed);
+}
+
+/// Enqueue Ok proves only local queue acceptance. The test does not infer
+/// transport delivery or server execution from that result.
+#[test]
+fn test_enqueue_ok_local_queue() {
+    use crate::run_control::ClientCommand;
+    use crate::test_harness::connected_app_events;
+    use houyicoder_protocol::envelope::RequestId;
+    let (app, _events) = connected_app_events();
+    assert!(
+        app.enqueue(ClientCommand::StatusQuery {
+            req_id: RequestId(0)
+        })
+        .is_ok(),
+        "a live connection accepts the command into its local queue"
+    );
+}
+
+/// The failure line maps each variant to the precise user-facing cause so
+/// the not-connected and connection-lost states never fold together.
+#[test]
+fn test_enqueue_failure_line() {
+    use crate::session::EnqueueError;
+    use crate::state::App;
+    assert_eq!(
+        App::enqueue_failure_line("run", EnqueueError::NotConnected),
+        "run: not connected"
+    );
+    assert_eq!(
+        App::enqueue_failure_line("run", EnqueueError::Closed),
+        "run: connection lost"
+    );
+}
+
+/// When the driver is gone, user commands each surface their own
+/// connection-lost line, while auto refreshes stay silent: the
+/// ConnectionLost event is the single visible notice. Every enqueue
+/// failure is settled at its call site (#68).
+#[test]
+fn test_closed_commands_report_loss() {
+    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+    let mut app = connection_lost_app();
+
+    // User commands surface a per-command line, never a silent drop.
+    app.run_command(SlashCommand::Compact);
+    assert_eq!(last_system(&app), "compact: connection lost");
+    app.run_debug("");
+    assert_eq!(last_system(&app), "debug: connection lost");
+    app.run_command(SlashCommand::Undo);
+    assert_eq!(last_system(&app), "undo: connection lost");
+    app.run_memory_subcommand("forget some-key");
+    assert_eq!(
+        last_system(&app),
+        "couldn't forget some-key — connection lost"
+    );
+    app.set_model_at_cursor();
+    assert_eq!(last_system(&app), "model: connection lost");
+    app.tab_cycle_mode();
+    assert_eq!(last_system(&app), "permission: connection lost");
+    app.toggle_memory_setting(MemoryToggleWhich::Auto);
+    assert_eq!(
+        last_system(&app),
+        "couldn't toggle auto-memory — connection lost"
+    );
+
+    // Auto refreshes never write a loss line: the driver's ConnectionLost
+    // event is the single visible notice. The transcript stays unchanged
+    // across every auto refresh even though each enqueue returns Closed.
+    let before = app.transcript.len();
+    app.run_command(SlashCommand::Agents);
+    app.run_command(SlashCommand::Model);
+    app.run_command(SlashCommand::Context);
+    app.run_command(SlashCommand::Tools);
+    app.run_command(SlashCommand::Skills);
+    app.run_command(SlashCommand::Hooks);
+    app.run_command(SlashCommand::Memory);
+    app.run_command(SlashCommand::Status);
+    assert_eq!(
+        app.transcript.len(),
+        before,
+        "auto refreshes never write a connection-loss line"
+    );
+}
+
+/// A /clear on a closed connection archives the session without repeating
+/// the loss notice: auto paths never write a loss line, so the SessionReset
+/// refresh adds nothing to the transcript.
+#[test]
+fn test_closed_clear_no_repeat() {
+    let mut app = connection_lost_app();
+    app.run_command(SlashCommand::Agents);
+    app.run_command(SlashCommand::Clear);
+    // Auto paths never write a loss line (the ConnectionLost event is the
+    // sole notice), so the whole post-clear transcript holds no loss line.
+    assert!(
+        !app.transcript.iter().any(|line| matches!(
+            line,
+            TranscriptLine::System(t) if t.contains("connection lost")
+        )),
+        "clear must not add a loss line"
+    );
+    match app.transcript.last().expect("a line was pushed") {
+        TranscriptLine::System(t) => assert!(
+            t.contains("session archived"),
+            "the post-clear line archives the session, got {t}"
+        ),
+        other => panic!("expected the post-clear system line, got {other:?}"),
+    }
+}
+
+/// Auto refreshes never compete with the ConnectionLost event for the single
+/// connection-loss notice: before the event is processed they write nothing,
+/// the event itself writes the one notice, and later auto refreshes add no
+/// second line.
+#[test]
+fn test_auto_refresh_silent() {
+    use crate::agent_message::AgentMessage;
+    let mut app = connection_lost_app();
+    let before = app.transcript.len();
+    // Before the event is processed: the enqueue returns Closed but no
+    // transcript line is written.
+    app.run_command(SlashCommand::Agents);
+    assert_eq!(
+        app.transcript.len(),
+        before,
+        "an auto refresh before the event writes nothing"
+    );
+    // The ConnectionLost event writes exactly one loss notice.
+    app.handle_agent_message(AgentMessage::ConnectionLost {
+        message: "connection lost".into(),
+    });
+    let after_loss = app.transcript.len();
+    assert_eq!(
+        after_loss,
+        before + 1,
+        "the ConnectionLost event writes exactly one loss notice"
+    );
+    assert_eq!(
+        last_system(&app),
+        "agent error: connection lost",
+        "the notice is the run-completion error line"
+    );
+    // After the event: a later auto refresh still adds no second line.
+    app.run_command(SlashCommand::Model);
+    assert_eq!(
+        app.transcript.len(),
+        after_loss,
+        "an auto refresh after the event writes no second line"
+    );
 }

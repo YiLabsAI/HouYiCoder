@@ -16,6 +16,14 @@ fn working() -> crate::state::App {
     app
 }
 
+/// A working app with a live session so enqueue accepts commands into the
+/// local queue (recall + promote path enqueues before mutating the local
+/// copy, so a no-session app refuses the removal).
+fn working_session() -> crate::state::App {
+    let (app, _events) = crate::test_harness::connected_app_events();
+    app
+}
+
 fn render(app: &crate::state::App) -> String {
     render_text(app, 100, 28)
 }
@@ -217,7 +225,7 @@ fn test_queue_strip_in_focus() {
 /// removed from the queue, loaded to the input.
 #[test]
 fn test_click_footer_recalls_item() {
-    let mut app = working();
+    let mut app = working_session();
     app.pending.push(PendingItem::Message("first task".into()));
     app.pending.push(PendingItem::Message("second task".into()));
     // Render so queue_view.strip_rect is stashed.
@@ -244,7 +252,7 @@ fn test_click_footer_recalls_item() {
 /// n>2 path where row 1 is the "+N more" summary.
 #[test]
 fn test_click_second_row_recalls() {
-    let mut app = working();
+    let mut app = working_session();
     app.pending.push(PendingItem::Message("first task".into()));
     app.pending.push(PendingItem::Message("second task".into()));
     render_buffer(&app, 100, 28);
@@ -398,7 +406,7 @@ fn mouse_at(x: u16, y: u16) -> MouseEvent {
 /// Enter in the queue pane recalls only the selected item, not all.
 #[test]
 fn test_pane_enter_recalls_one() {
-    let mut app = working();
+    let mut app = working_session();
     app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("alpha".into()));
     app.pending.push(PendingItem::Message("beta".into()));
@@ -438,7 +446,7 @@ fn test_pane_r_recalls_all() {
 /// d in the queue pane deletes the selected item without recalling it.
 #[test]
 fn test_pane_d_deletes_one() {
-    let mut app = working();
+    let mut app = working_session();
     app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("alpha".into()));
     app.pending.push(PendingItem::Message("beta".into()));
@@ -458,7 +466,7 @@ fn test_pane_d_deletes_one() {
 
 #[test]
 fn test_pane_recall_promotes_next() {
-    let mut app = working();
+    let mut app = working_session();
     app.agent_busy = true;
     app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("first".into()));
@@ -472,7 +480,7 @@ fn test_pane_recall_promotes_next() {
 
 #[test]
 fn test_pane_delete_promotes_next() {
-    let mut app = working();
+    let mut app = working_session();
     app.agent_busy = true;
     app.pane = Pane::Queue;
     app.pending.push(PendingItem::Message("first".into()));
@@ -489,7 +497,7 @@ fn test_pane_delete_promotes_next() {
 
 #[test]
 fn test_strip_recall_promotes_next() {
-    let mut app = working();
+    let mut app = working_session();
     app.agent_busy = true;
     app.pending.push(PendingItem::Message("first".into()));
     app.pending
