@@ -427,6 +427,34 @@ async fn test_spawn_rejected_when_saturated() {
     );
 }
 
+/// A spawn stopped while it waits for a concurrency slot gives the queue
+/// slot back. The dispatcher drops the spawn call on a stop, and the gate
+/// lives as long as the parent, so a wait that kept its slot would fill the
+/// queue a few stops at a time and refuse every later spawn.
+#[tokio::test]
+async fn test_dropped_spawn_returns_slot() {
+    let gate = Arc::new(ConcurrencyGate::new(0, 1));
+    let (runtime, _store, parent_sid) = runtime_with_text_child("child answer");
+    let runtime = runtime.with_gate(Arc::clone(&gate));
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let args = SpawnArgs::new("explore", "task", "task");
+    let call = tokio::spawn(async move { runtime.spawn(&ctx, args).await });
+    for _ in 0..200 {
+        if gate.queued_count() == 1 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(gate.queued_count(), 1, "the spawn waits for a slot");
+    call.abort();
+    drop(call.await);
+    assert_eq!(
+        gate.queued_count(),
+        0,
+        "a stopped spawn leaves no queue slot behind"
+    );
+}
+
 /// A saturated gate rejects a background spawn without waiting.
 #[tokio::test]
 async fn test_background_spawn_rejects_saturation() {
