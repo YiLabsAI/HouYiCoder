@@ -648,17 +648,21 @@ impl Runner {
                         // Tools may finish normally after cancellation and still yield RunAgain.
                         // Reconcile their durable results before ending the run.
                         if token.is_cancelled() {
-                            self.reconcile_tool_results(session).await?;
-                            return Ok(RunResult {
-                                outcome: RunOutcome::Interrupted("interrupted by user".to_string()),
-                                turns: turn,
-                                usage,
-                            });
+                            return self.interrupted_at_boundary(session, turn, usage).await;
                         }
                         append::emit_turn_progress(&self.events, &response, turn, &usage);
                     }
                 }
                 NextStep::FinalOutput(text) => {
+                    // A cancel observed while this turn was rendering its
+                    // answer still ends the run: the stream-ending work that
+                    // folds usage + parses the answer never reads the token,
+                    // so without this the run reports a finished turn the
+                    // user already stopped. An abort outranks a verify
+                    // verdict from the same turn.
+                    if token.is_cancelled() {
+                        return self.interrupted_at_boundary(session, turn, usage).await;
+                    }
                     // If a verify gate is installed, run it before
                     // surfacing FinalOutput. A failed verify becomes
                     // RunOutcome::VerifyFailed so the caller can

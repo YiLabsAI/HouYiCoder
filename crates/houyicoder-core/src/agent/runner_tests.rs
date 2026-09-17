@@ -27,6 +27,9 @@ mod isolate;
 mod compress;
 
 #[cfg(test)]
+mod abort_boundary;
+
+#[cfg(test)]
 mod overflow;
 
 // length is pub(super): turn_usage_emit_tests (a sibling in agent) reuses

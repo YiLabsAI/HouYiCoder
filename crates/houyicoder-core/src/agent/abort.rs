@@ -85,6 +85,25 @@ impl Runner {
         self.aborted.swap(false, Ordering::AcqRel)
     }
 
+    /// The interrupted result for a cancel the drive loop observes while it is
+    /// live: reconcile orphan tool results so every ToolCall keeps a
+    /// ToolResult, then report Interrupted. Called where the loop is about to
+    /// report a successful outcome — after tool dispatch, and before an
+    /// answer — because the turn's own tail work does not read the token.
+    pub(crate) async fn interrupted_at_boundary(
+        &self,
+        session: houyicoder_context::SessionId,
+        turn: u32,
+        usage: houyicoder_protocol::llm::Usage,
+    ) -> Result<crate::agent::RunResult, RunError> {
+        self.reconcile_tool_results(session).await?;
+        Ok(crate::agent::RunResult {
+            outcome: crate::agent::RunOutcome::Interrupted("interrupted by user".to_string()),
+            turns: turn,
+            usage,
+        })
+    }
+
     /// The resume() entry short-circuit: clear the paused flag (this resume is
     /// consuming the pause — either it short-circuits on abort or enters
     /// drive_loop, neither paused), then if the durable abort flag is set (a
