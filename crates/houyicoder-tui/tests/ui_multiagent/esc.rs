@@ -183,3 +183,48 @@ fn test_esc_interrupt_clears_busy() {
         s.output()
     );
 }
+
+/// Esc while a foreground child runs ends the child too, so its pill row
+/// reaches a terminal state and the grace window then clears it: a stopped
+/// delegation stops reporting itself as running. The stub delay holds the
+/// child's model call open so the Esc lands inside it.
+#[test]
+#[ignore]
+fn test_esc_clears_child_pill() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = common::pty_session_slow_scripted(3000, script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("explore:", RENDER_TIMEOUT * 2),
+        "the child should render its running pill row:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for_compact("Interrupted", RENDER_TIMEOUT * 2),
+        "Esc should interrupt the run:\n{}",
+        s.output()
+    );
+    // The child ends interrupted, so its row turns terminal before the grace
+    // window clears it.
+    assert!(
+        s.wait_for_compact("explore·done", RENDER_TIMEOUT * 2),
+        "the stopped child should render a terminal pill row:\n{}",
+        s.output()
+    );
+    std::thread::sleep(FLEET_GRACE + Duration::from_secs(2));
+    s.clear_output();
+    s.send_str(" ");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !s.output_compact().contains("explore·done"),
+        "the stopped child's pill row should clear after the grace window:\n{}",
+        s.output()
+    );
+}

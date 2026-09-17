@@ -18,13 +18,15 @@ use houyicoder_core::agent::{ApprovalDecision, ApprovalRequest, RunError, RunOut
 /// parent responds on the per-request response topic, and resume(decisions)
 /// continues the run. A child with no bus takes the headless path: the
 /// Interruption result is returned as-is so the caller surfaces it as
-/// interrupted (the parentless child has no host). Returns None when the run
-/// is canceled mid-run or mid-ask.
+/// interrupted (the parentless child has no host). A cancel ends the child at
+/// a terminal status rather than dropping it mid-run, so the caller gets a
+/// result to report as long as the run can observe the stop: a run blocked in
+/// work that never reads the token stays held until that work returns.
 ///
 /// The parent's serve-loop perm_rx is scoped to its inner run block; sync-only
 /// spawn keeps that safe (no child publishes while the parent's own
 /// Interruption breaks the block), but a background-spawn path must make
-/// perm_rx long-lived across the whole serve loop or in-flight child asks are
+/// perm_rx long-lived across the whole serve loop or running child asks are
 /// lost to broadcast lag.
 pub(super) async fn drive_child_to_terminal(
     runner: Arc<Runner>,
@@ -34,48 +36,57 @@ pub(super) async fn drive_child_to_terminal(
     bus: Option<Arc<AgentBus>>,
     child_id: &str,
     agent_type: &str,
-) -> Option<Result<RunResult, RunError>> {
-    let mut result = {
-        let abort_runner = Arc::clone(&runner);
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => {
-                abort_runner.abort();
-                return None;
-            }
-            res = runner.run(session, task) => res,
+) -> Result<RunResult, RunError> {
+    let mut run = Box::pin(runner.run(session, task));
+    // A stop aborts the run and then lets it finish: the run reconciles the
+    // tool results its turn already dispatched and reports Interrupted, which
+    // is a terminal status the fleet clears the child's row on. The run arm
+    // comes first so a run that has not been polled yet still starts — its
+    // cancel token is minted on the first poll, and abort cannot reach it
+    // before then.
+    let mut result = tokio::select! {
+        biased;
+        res = &mut run => res,
+        _ = cancel.cancelled() => {
+            runner.abort();
+            run.await
         }
     };
     loop {
         let approvals = match &result {
             Ok(r) => match &r.outcome {
                 RunOutcome::Interruption(a) => a.clone(),
-                _ => return Some(result),
+                _ => return result,
             },
-            Err(_) => return Some(result),
+            Err(_) => return result,
         };
         // No bus: headless. The Interruption result reaches the caller's
         // terminal_summary, which maps it to "interrupted".
         let Some(bus) = bus.as_ref() else {
-            return Some(result);
+            return result;
         };
         let decisions =
             match route_approvals_via_bus(bus, child_id, agent_type, approvals, &cancel).await {
                 Some(d) => d,
+                // The ask was cancelled: the run is parked on a decision that
+                // will not arrive, so abort it and resume with no decisions.
+                // The resume short-circuits on the abort and reports
+                // Interrupted — the terminal status the fleet clears the row on
+                // — rather than leaving the child parked on the ask.
                 None => {
                     runner.abort();
-                    return None;
+                    return runner.resume(session, &[]).await;
                 }
             };
         result = {
-            let abort_runner = Arc::clone(&runner);
+            let mut run = Box::pin(runner.resume(session, &decisions));
             tokio::select! {
                 biased;
+                res = &mut run => res,
                 _ = cancel.cancelled() => {
-                    abort_runner.abort();
-                    return None;
+                    runner.abort();
+                    run.await
                 }
-                res = runner.resume(session, &decisions) => res,
             }
         };
     }
@@ -84,9 +95,10 @@ pub(super) async fn drive_child_to_terminal(
 /// Route a batch of approval requests through the bus: for each, subscribe to
 /// the per-request response topic (before publish, so no broadcast lag can
 /// drop the decision), emit a PermissionRequest, and await the matching
-/// PermissionResponse. Cancelable: returns None if the child is aborted
-/// mid-ask, so the caller surfaces interrupted rather than hanging on a
-/// response the parent will not send.
+/// PermissionResponse. Cancelable: None when the ask is cancelled or the
+/// response topic fails (closed, or a frame that is not a response), so the
+/// caller aborts the run and resumes it to a terminal status instead of
+/// hanging on a decision the parent will not send.
 pub(super) async fn route_approvals_via_bus(
     bus: &Arc<AgentBus>,
     child_id: &str,

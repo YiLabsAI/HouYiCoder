@@ -412,10 +412,12 @@ async fn run_foreground_spawn(
     };
     // Concurrency cap: a resolved (valid type, known isolation) spawn
     // acquires a running slot before any side effect. Saturation rejects with
-    // backpressure so the model re-queues next turn; a queued spawn blocks
-    // here until a slot frees and is never dropped. The slot is held for the
-    // child run and releases on any return path in this scope.
-    let _slot = match this.gate.acquire().await {
+    // backpressure so the model re-queues next turn; a queued spawn waits here
+    // for a slot rather than refusing the user's request. The driver below
+    // carries the slot, so it releases when the child ends rather than when
+    // this call returns — a stop releases the slot when the child finishes
+    // winding down.
+    let slot = match this.gate.acquire().await {
         AcquireResult::Acquired(p) => p,
         AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
     };
@@ -449,56 +451,71 @@ async fn run_foreground_spawn(
         parent_cancel: cancel,
         bus: this.bus.clone(),
     };
-    let handle = spawn_child(req).await.map_err(map_spawn_err)?;
-    let child_sid = handle.session;
-    let child_str = child_sid.to_string();
-    // Register the live runner for a per-turn abort (moot for sync — the
-    // parent blocks on the tool call + cannot be viewing the child mid-run —
-    // but the registry is shared so the async path's contract holds uniformly).
-    this.register_child(&child_str, &handle.runner);
-    announce_spawn(
-        this.bus.as_ref(),
-        ChildDescriptor {
-            agent_id: child_str.clone(),
-            agent_type: args.subagent_type.clone(),
-            run_mode: ChildRunMode::Foreground,
-        },
-    );
-    // SubagentStart fires at the durable spawn boundary (child session exists,
-    // SubagentSpawn recorded, run not started); pairs with the later
-    // SubagentStop across the SubagentSpawn-to-Return span.
-    fire_subagent_start(
-        hook_fire.as_ref(),
-        parent_sid,
-        &child_str,
-        &args.subagent_type,
-    )
-    .await;
-    let task = args.prompt.clone();
-    let (status, summary, usage) = spawn_exec::finalize_child(
-        handle,
-        this.store.clone(),
-        this.bus.clone(),
-        this.worktree_controller.clone(),
-        parent_sid,
-        child_sid,
-        child_str.clone(),
-        args.subagent_type.clone(),
-        hook_fire,
-        task,
-    )
-    .await;
-    // Stamp SpawnedBy provenance after the child's first durable append has
-    // fired the materialize hook (which writes Fresh). update_descriptor edits the
-    // now-materialized sidecar so the resume picker can filter it out.
-    stamp_spawned_by(
-        &this.descriptor_store,
-        child_sid,
-        parent_sid,
-        &args.subagent_type,
-        &child_str,
-    );
-    Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
+    // The child runs on a driver task this call awaits but does not own: the
+    // dispatcher races the call against the run token and drops it on a stop,
+    // and a child abandoned between its durable spawn boundary and its
+    // terminal status leaves the fleet a row that never clears and the parent
+    // log a spawn boundary nothing closes. The driver owns the running slot
+    // and the child's bookkeeping, so a stop reaches the child as an
+    // interrupt it can finish from rather than as a dropped future. A child
+    // parked in work that never reads its cancel token holds the slot and the
+    // row until that work returns.
+    let subagent_type = req.subagent_type.clone();
+    let task = req.prompt.clone();
+    let driver = tokio::spawn(async move {
+        let _slot = slot;
+        let handle = spawn_child(req).await.map_err(map_spawn_err)?;
+        let child_sid = handle.session;
+        let child_str = child_sid.to_string();
+        // Register the live runner for a per-turn abort (moot for sync — the
+        // parent blocks on the tool call + cannot be viewing the child mid-run
+        // — but the registry is shared so the async path's contract holds
+        // uniformly).
+        this.register_child(&child_str, &handle.runner);
+        announce_spawn(
+            this.bus.as_ref(),
+            ChildDescriptor {
+                agent_id: child_str.clone(),
+                agent_type: subagent_type.clone(),
+                run_mode: ChildRunMode::Foreground,
+            },
+        );
+        // SubagentStart fires at the durable spawn boundary (child session
+        // exists, SubagentSpawn recorded, run not started); pairs with the
+        // later SubagentStop across the SubagentSpawn-to-Return span.
+        fire_subagent_start(hook_fire.as_ref(), parent_sid, &child_str, &subagent_type).await;
+        let (status, summary, usage) = spawn_exec::finalize_child(
+            handle,
+            this.store.clone(),
+            this.bus.clone(),
+            this.worktree_controller.clone(),
+            parent_sid,
+            child_sid,
+            child_str.clone(),
+            subagent_type.clone(),
+            hook_fire,
+            task,
+        )
+        .await;
+        // Stamp SpawnedBy provenance after the child's first durable append
+        // has fired the materialize hook (which writes Fresh). update_descriptor
+        // edits the now-materialized sidecar so the resume picker can filter
+        // it out.
+        stamp_spawned_by(
+            &this.descriptor_store,
+            child_sid,
+            parent_sid,
+            &subagent_type,
+            &child_str,
+        );
+        Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
+    });
+    match driver.await {
+        Ok(outcome) => outcome,
+        // A panic inside the driver would otherwise reach the model as an
+        // ordinary refusal, so surface it as the panic it is.
+        Err(join) => std::panic::resume_unwind(join.into_panic()),
+    }
 }
 
 fn map_registry_err(error: AgentError) -> SpawnFailure {

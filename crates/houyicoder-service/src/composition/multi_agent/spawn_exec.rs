@@ -50,8 +50,8 @@ pub(super) async fn finalize_child(
     super::close_child_inbox(bus.as_ref(), &child_str);
     let child_log = store.trajectory_snapshot(child_sid);
     let (status, summary, usage) = match result {
-        Some(Ok(r)) => super::terminal_summary(r, &child_log),
-        Some(Err(e)) => {
+        Ok(r) => super::terminal_summary(r, &child_log),
+        Err(e) => {
             let partial = super::extract_last_assistant(&child_log);
             let summary = match partial {
                 Some(p) => format!("run failed: {e}\n\nPartial output:\n{p}"),
@@ -59,11 +59,6 @@ pub(super) async fn finalize_child(
             };
             ("failed".to_string(), summary, Usage::default())
         }
-        None => (
-            "interrupted".to_string(),
-            super::extract_last_assistant(&child_log).unwrap_or_default(),
-            Usage::default(),
-        ),
     };
     super::fire_subagent_stop(
         hook_fire.as_ref(),

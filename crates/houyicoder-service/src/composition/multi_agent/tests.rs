@@ -1,26 +1,50 @@
 use super::*;
+use houyicoder_api::tool::Tool;
+use houyicoder_async::CancellationToken;
+use houyicoder_async::bus::MessageBus;
 use houyicoder_context::{SessionEvent, SessionId};
+use houyicoder_core::agent::multi_agent::bus_types::{
+    BusMessage, ChildStatus, global_completed_topic, permission_request_topic,
+    permission_response_topic,
+};
 use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
 use houyicoder_core::agent::multi_agent::registry::built_in_all;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
+use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::llm::{LlmEvent, ModelCapabilities, OutputItem};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
+use serde_json::Value;
+use std::time::Duration;
 
 fn runtime_with_text_child(text: &str) -> (MultiAgentRuntime, Arc<SessionStore>, SessionId) {
+    runtime_with(
+        Arc::new(FakeProvider::text(text)),
+        None,
+        ToolRegistry::new(),
+    )
+}
+
+/// Build a runtime over a chosen provider, bus, and tool set, returning the
+/// shared store so a test can read the parent log.
+fn runtime_with(
+    provider: Arc<dyn ModelProvider>,
+    bus: Option<Arc<AgentBus>>,
+    tools: ToolRegistry,
+) -> (MultiAgentRuntime, Arc<SessionStore>, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text(text));
     let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
     let config = RunnerConfig::default();
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
         registry,
         store: store.clone(),
         provider,
-        tools: ToolRegistry::new(),
+        tools,
         config,
         worktree_controller: None,
         workspace: Some(std::path::PathBuf::from("/tmp")),
-        bus: None,
+        bus,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
     let parent_sid = SessionId::new();
@@ -872,4 +896,393 @@ fn test_kill_all_children_registry() {
     drop(r2);
     let none = runtime.kill_all_children();
     assert_eq!(none, 0, "dropped children are skipped, not counted");
+}
+
+/// A provider that never answers: its stream signals the test on first poll
+/// and then waits forever, so a child sits inside its model call until a
+/// cancel reaches it, and the test knows exactly where the stop landed.
+struct StallForeverProvider {
+    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl StallForeverProvider {
+    fn new() -> (Arc<Self>, tokio::sync::oneshot::Receiver<()>) {
+        let (entered, rx) = tokio::sync::oneshot::channel();
+        (
+            Arc::new(Self {
+                entered: std::sync::Mutex::new(Some(entered)),
+            }),
+            rx,
+        )
+    }
+}
+
+impl ModelProvider for StallForeverProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        Box::pin(std::future::pending())
+    }
+
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        let entered = self.entered.lock().expect("entered lock").take();
+        Box::pin(futures::stream::once(async move {
+            if let Some(entered) = entered {
+                let _ = entered.send(());
+            }
+            std::future::pending::<Result<LlmEvent, ProviderError>>().await
+        }))
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// Answers the first model call from a script and stalls on every call after
+/// it, signalling when the second one starts: that signal is the boundary
+/// between "the child resumed after its approval" and "the resumed run is
+/// inside its model call", which is the window a stop has to reach.
+struct StallAfterFirstProvider {
+    first: FakeProvider,
+    calls: std::sync::atomic::AtomicU32,
+    resumed: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl StallAfterFirstProvider {
+    fn new(outputs: Vec<Vec<OutputItem>>) -> (Arc<Self>, tokio::sync::oneshot::Receiver<()>) {
+        let (resumed, rx) = tokio::sync::oneshot::channel();
+        (
+            Arc::new(Self {
+                first: FakeProvider::from_outputs(outputs),
+                calls: std::sync::atomic::AtomicU32::new(0),
+                resumed: std::sync::Mutex::new(Some(resumed)),
+            }),
+            rx,
+        )
+    }
+}
+
+impl ModelProvider for StallAfterFirstProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        Box::pin(std::future::pending())
+    }
+
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            return self.first.stream(req);
+        }
+        let resumed = self.resumed.lock().expect("resumed lock").take();
+        Box::pin(futures::stream::once(async move {
+            if let Some(resumed) = resumed {
+                let _ = resumed.send(());
+            }
+            std::future::pending::<Result<LlmEvent, ProviderError>>().await
+        }))
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// A guarded tool these tests never let run: the pause on its ask is the
+/// point, and an execution would mean the ask was skipped.
+struct GuardedTool;
+
+impl Tool for GuardedTool {
+    fn name(&self) -> &str {
+        "guarded_write"
+    }
+
+    fn description(&self) -> &str {
+        "writes notes, gated behind an approval ask"
+    }
+
+    fn input_schema(&self) -> Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        Box::pin(async { Ok(serde_json::json!({"written": true})) })
+    }
+
+    fn requires_approval(&self) -> bool {
+        true
+    }
+}
+
+/// A stop that lands before the driver has polled the run must still reach
+/// the child: the run installs its cancel token at the top of run(), so
+/// polling the run before the cancel branch is what makes that token exist
+/// when the stop arrives. The child then interrupts instead of running on to
+/// a completion nobody asked for.
+#[tokio::test]
+async fn test_cancel_before_poll_publishes() {
+    let bus = Arc::new(AgentBus::new());
+    let (provider, _entered) = StallForeverProvider::new();
+    let (runtime, store, parent_sid) =
+        runtime_with(provider, Some(Arc::clone(&bus)), ToolRegistry::new());
+    let token = CancellationToken::new();
+    let ctx = ToolCtx::new("c1")
+        .with_session(parent_sid)
+        .with_cancel(token.clone());
+    let mut completed = bus.subscribe(global_completed_topic());
+    token.cancel();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        runtime.spawn(&ctx, SpawnArgs::new("explore", "find auth", "find auth")),
+    )
+    .await
+    .expect("a stop before the driver's first poll still ends the child")
+    .expect("the spawn reports a terminal outcome");
+    assert_eq!(
+        outcome.status.as_deref(),
+        Some("interrupted"),
+        "the stop reached the child instead of letting it run on"
+    );
+    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+        .await
+        .expect("a child stopped before its first poll publishes its terminal status")
+        .expect("the bus stays open");
+    assert!(
+        matches!(
+            message,
+            BusMessage::Completed {
+                status: ChildStatus::Killed,
+                ..
+            }
+        ),
+        "the stop reaches the fleet as a kill: {message:?}"
+    );
+    assert!(
+        store
+            .trajectory_snapshot(parent_sid)
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
+        "the parent log records the return boundary for the stopped child"
+    );
+}
+
+/// A cancel landing while a foreground child is mid-model-call must not
+/// abandon it: the child runs on the parent's cancel token, so it ends
+/// interrupted, and the fleet still learns that it ended. The parent's
+/// dispatch races the call against the run token and drops the call future,
+/// which is what this test does to the spawn future.
+#[tokio::test]
+async fn test_cancel_mid_call_publishes() {
+    let bus = Arc::new(AgentBus::new());
+    let (provider, entered) = StallForeverProvider::new();
+    let (runtime, store, parent_sid) =
+        runtime_with(provider, Some(Arc::clone(&bus)), ToolRegistry::new());
+    let token = CancellationToken::new();
+    let ctx = ToolCtx::new("c1")
+        .with_session(parent_sid)
+        .with_cancel(token.clone());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let mut call = runtime.spawn(&ctx, SpawnArgs::new("explore", "find auth", "find auth"));
+    tokio::select! {
+        _ = entered => {}
+        result = &mut call => panic!("the call returned before the child called the model: {result:?}"),
+    }
+    token.cancel();
+    drop(call);
+    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+        .await
+        .expect("a cancelled child publishes its terminal status")
+        .expect("the bus stays open");
+    assert!(
+        matches!(
+            message,
+            BusMessage::Completed {
+                status: ChildStatus::Killed,
+                ..
+            }
+        ),
+        "the cancel reaches the fleet as a kill: {message:?}"
+    );
+    assert!(
+        store
+            .trajectory_snapshot(parent_sid)
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
+        "the parent log records the return boundary for the cancelled child"
+    );
+}
+
+/// A cancel landing while a foreground child waits on an approval ask still
+/// ends the child: the ask's route returns nothing on the cancel, and the
+/// child resumes only to reach its interrupted terminal. Without that resume
+/// the run stays parked on a decision nobody will send, and the fleet row
+/// never clears.
+#[tokio::test]
+async fn test_cancel_mid_ask_publishes() {
+    let bus = Arc::new(AgentBus::new());
+    let provider = Arc::new(FakeProvider::from_outputs(vec![vec![
+        OutputItem::ToolCall {
+            id: "tc1".into(),
+            name: "guarded_write".into(),
+            input: serde_json::json!({"path": "notes.md"}),
+        },
+    ]]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(GuardedTool));
+    let (runtime, store, parent_sid) = runtime_with(provider, Some(Arc::clone(&bus)), tools);
+    let token = CancellationToken::new();
+    let ctx = ToolCtx::new("c1")
+        .with_session(parent_sid)
+        .with_cancel(token.clone());
+    let mut asked = bus.subscribe(permission_request_topic());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let mut call = runtime.spawn(
+        &ctx,
+        SpawnArgs::new("explore", "edit the notes", "edit notes"),
+    );
+    tokio::select! {
+        message = asked.recv() => assert!(
+            matches!(message, Ok(BusMessage::PermissionRequest { .. })),
+            "the child's ask reaches the parent: {message:?}"
+        ),
+        result = &mut call => panic!("the call returned before the child asked: {result:?}"),
+    }
+    token.cancel();
+    drop(call);
+    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+        .await
+        .expect("a child cancelled on its ask publishes its terminal status")
+        .expect("the bus stays open");
+    assert!(
+        matches!(
+            message,
+            BusMessage::Completed {
+                status: ChildStatus::Killed,
+                ..
+            }
+        ),
+        "the cancel reaches the fleet as a kill: {message:?}"
+    );
+    assert!(
+        store
+            .trajectory_snapshot(parent_sid)
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
+        "the parent log records the return boundary for the cancelled child"
+    );
+}
+
+/// Killing a background child leaves its driver to run the child down to a
+/// terminal state, so the fleet gets the kill even though the caller that
+/// started the child is long gone. The foreground path takes the same shape:
+/// the driver owns the child's bookkeeping and outlives the caller.
+/// A cancel landing while a resumed child is inside its model call must end
+/// it too: the approval decision put the run back on a fresh cancel token,
+/// and the driver's cancel branch has to abort that resumed run, not just the
+/// one it started. Without it the child keeps working after the parent
+/// stopped, and the fleet row never clears.
+#[tokio::test]
+async fn test_cancel_mid_resume_publishes() {
+    let bus = Arc::new(AgentBus::new());
+    let (provider, resumed) = StallAfterFirstProvider::new(vec![vec![OutputItem::ToolCall {
+        id: "tc1".into(),
+        name: "guarded_write".into(),
+        input: serde_json::json!({"path": "notes.md"}),
+    }]]);
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(GuardedTool));
+    let (runtime, store, parent_sid) = runtime_with(provider, Some(Arc::clone(&bus)), tools);
+    let token = CancellationToken::new();
+    let ctx = ToolCtx::new("c1")
+        .with_session(parent_sid)
+        .with_cancel(token.clone());
+    let mut asked = bus.subscribe(permission_request_topic());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let mut call = runtime.spawn(
+        &ctx,
+        SpawnArgs::new("explore", "edit the notes", "edit notes"),
+    );
+    let request = tokio::select! {
+        message = asked.recv() => message.expect("the ask reaches the parent"),
+        result = &mut call => panic!("the call returned before the child asked: {result:?}"),
+    };
+    let BusMessage::PermissionRequest {
+        child_id, call_id, ..
+    } = request
+    else {
+        panic!("expected a PermissionRequest, got {request:?}")
+    };
+    bus.publish(
+        &permission_response_topic(&child_id, &call_id),
+        BusMessage::PermissionResponse {
+            call_id,
+            approved: true,
+            updated_input: None,
+            scope: "once".to_string(),
+        },
+    );
+    tokio::select! {
+        _ = resumed => {}
+        result = &mut call => panic!("the call returned before the resumed run called the model: {result:?}"),
+    }
+    token.cancel();
+    drop(call);
+    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+        .await
+        .expect("a child cancelled after its resume publishes its terminal status")
+        .expect("the bus stays open");
+    assert!(
+        matches!(
+            message,
+            BusMessage::Completed {
+                status: ChildStatus::Killed,
+                ..
+            }
+        ),
+        "the cancel reaches the fleet as a kill: {message:?}"
+    );
+    assert!(
+        store
+            .trajectory_snapshot(parent_sid)
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
+        "the parent log records the return boundary for the cancelled child"
+    );
+}
+
+#[tokio::test]
+async fn test_background_kill_publishes() {
+    let bus = Arc::new(AgentBus::new());
+    let (provider, entered) = StallForeverProvider::new();
+    let (runtime, _store, parent_sid) =
+        runtime_with(provider, Some(Arc::clone(&bus)), ToolRegistry::new());
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let mut args = SpawnArgs::new("explore", "find auth", "find auth");
+    args.run_in_background = true;
+    let outcome = runtime
+        .spawn(&ctx, args)
+        .await
+        .expect("the background child launches");
+    let mut completed = bus.subscribe(global_completed_topic());
+    entered.await.expect("the child called the model");
+    assert!(
+        runtime.kill_child(&outcome.child_session_id),
+        "the running child is killed"
+    );
+    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+        .await
+        .expect("a killed child publishes its terminal status")
+        .expect("the bus stays open");
+    assert!(
+        matches!(
+            message,
+            BusMessage::Completed {
+                status: ChildStatus::Killed,
+                ..
+            }
+        ),
+        "the kill reaches the fleet: {message:?}"
+    );
 }
