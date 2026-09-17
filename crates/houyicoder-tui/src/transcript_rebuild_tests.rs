@@ -478,3 +478,41 @@ fn test_prepend_survives_rebuild() {
             .any(|line| matches!(line, TranscriptLine::User(text) if text.contains("old 1")))
     );
 }
+
+/// A queued non-slash User echo (a plain message typed while idle) is
+/// pushed to the transcript. It does NOT start with /, so is_tui_only
+/// returns false — the rebuild treats it as a frame-derived line and
+/// tries to align it against event_lines. When the next agent frame
+/// arrives and the turn boundary changes (full rebuild), the echo gets
+/// replaced by the wrong event line, producing the misorder the user
+/// reported. This test pins the expected order: the echo stays where it
+/// was pushed, and the response lands after it.
+#[test]
+fn test_queued_echo_order() {
+    let mut app = fresh_app();
+    pump(&mut app, user_msg("first question"));
+    pump(&mut app, agent_msg("first answer"));
+    // A non-slash echo pushed while idle (the user typed a follow-up).
+    app.push_transcript_line(TranscriptLine::User("go on".into()));
+    // The queued message gets submitted as a new user frame — full rebuild.
+    pump(&mut app, user_msg("go on"));
+    pump(&mut app, agent_msg("second answer"));
+    let echo_at = app
+        .transcript
+        .iter()
+        .position(|l| matches!(l, TranscriptLine::User(t) if t == "go on"))
+        .expect("queued echo present");
+    let second_at = app
+        .transcript
+        .iter()
+        .position(|l| matches!(l, TranscriptLine::Agent(t) if t == "second answer"))
+        .expect("second answer present");
+    assert!(
+        echo_at < second_at,
+        "queued echo must precede the response that follows it: {:?}",
+        app.transcript
+            .iter()
+            .map(|l| format!("{l:?}"))
+            .collect::<Vec<_>>()
+    );
+}

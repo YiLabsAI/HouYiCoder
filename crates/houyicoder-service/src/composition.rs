@@ -445,10 +445,12 @@ pub(crate) fn assemble(
     // Explicit; fallback → Default), so the runner seeds the real selection
     // rather than one guessed from id equality.
     let model_choice = model_selection.choice;
+    let (runner_settings, runner_settings_warnings) =
+        houyicoder_config::load_runner_settings(workspace.as_deref());
     let config = RunnerConfig {
         model,
         instructions: String::new(),
-        max_turns: 200,
+        max_turns: runner_settings.max_turns,
         max_output_tokens,
         ..RunnerConfig::default()
     };
@@ -605,13 +607,19 @@ pub(crate) fn assemble(
         &effort_warnings,
         &provider_cfg_warnings,
     );
+    startup.extend(
+        runner_settings_warnings
+            .iter()
+            .map(|w| format!("{}: {}", w.field, w.reason)),
+    );
     // The sandbox fence status is a one-time construction event the user
     // must know: an unfenced workspace is a security-relevant gap. Check
     // once here rather than per-operation (the per-operation audit lines
     // stay in the tracing sink as diagnostics). Suppressed in test/PTY
-    // environments via HOUYICODER_QUIET_FENCE so the notice does not occupy a
+    // environments via HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE so the notice does not occupy a
     // transcript line that PTY assertions must account for.
-    if std::env::var("HOUYICODER_QUIET_FENCE").map_or(true, |v| v != "1")
+    if std::env::var(houyicoder_config::ENV_HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE)
+        .map_or(true, |v| v != "1")
         && let Some(session) = &sandbox_session
         && let Some(notice) = session.fence_status().unfenced_notice()
     {
@@ -660,7 +668,7 @@ fn provider_or_stub(
     // same ToolCall every call and loops to max_turns). Falls through to the
     // normal stub path on any parse failure. Honest test knob, not a feature
     // — the stub providers exist for dev/test.
-    if let Ok(raw) = std::env::var("HOUYICODER_STUB_SCRIPT")
+    if let Ok(raw) = std::env::var(houyicoder_config::ENV_HOUYICODER_TEST_STUB_RESPONSE_SCRIPT)
         && let Ok(per_call) =
             serde_json::from_str::<Vec<Vec<houyicoder_protocol::llm::OutputItem>>>(&raw)
         && !per_call.is_empty()

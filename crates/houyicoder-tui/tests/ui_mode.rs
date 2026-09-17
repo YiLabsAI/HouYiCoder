@@ -63,7 +63,7 @@ fn test_shift_tab_cycles_mode() {
 /// DYNAMIC mode switch: Shift+Tab cycles the mode WHILE a run is in flight
 /// (agent_busy). Mid-run cycling is allowed; a gate on
 /// agent_busy would block BackTab + the pill would not flip. The stub
-/// streams with an inter-chunk delay (HOUYI_STUB_DELAY_MS) so the run stays
+/// streams with an inter-chunk delay (HOUYICODER_TEST_STUB_DELAY_MS) so the run stays
 /// in-flight long enough for the mid-run Shift+Tab to land. If the cycle is
 /// blocked while busy, the pill stays on auto and this test fails — the
 /// regression guard for the dynamic-switch alignment.

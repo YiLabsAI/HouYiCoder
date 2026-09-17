@@ -191,26 +191,41 @@ impl PtySession {
         }
         cmd.env("HOME", &home);
         // Override both home inputs so ambient config cannot enter the fixture.
-        cmd.env("HOUYICODER_CONFIG_HOME", home.join(".houyicoder"));
+        cmd.env(
+            houyicoder_config::ENV_HOUYICODER_CONFIG_HOME,
+            home.join(".houyicoder"),
+        );
         let settings = home.join(".houyicoder").join("settings.json");
         if options.pretrust {
             houyicoder_config::persist_project_trust(&settings, &cwd)
                 .expect("pre-trust cwd in temp settings");
         }
         // Keep durable session output inside the per-launch fixture.
-        cmd.env("HOUYICODER_SESSIONS_DIR", &sessions_dir);
+        cmd.env(
+            houyicoder_config::ENV_HOUYICODER_SESSIONS_DIR,
+            &sessions_dir,
+        );
         // Empty every supported key so tests deterministically select the stub
         // provider and never inherit network credentials.
         cmd.env("DASHSCOPE_API_KEY", "");
         cmd.env("OPENAI_API_KEY", "");
-        cmd.env("HOUYICODER_API_KEY", "");
+        cmd.env(houyicoder_config::ENV_HOUYICODER_API_KEY, "");
         // Keep unrelated fence diagnostics out of transcript assertions.
-        cmd.env("HOUYICODER_QUIET_FENCE", "1");
+        cmd.env(
+            houyicoder_config::ENV_HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE,
+            "1",
+        );
         if let Some(s) = script {
-            cmd.env("HOUYICODER_STUB_SCRIPT", s);
+            cmd.env(
+                houyicoder_config::ENV_HOUYICODER_TEST_STUB_RESPONSE_SCRIPT,
+                s,
+            );
         }
         if let Some(ms) = delay {
-            cmd.env("HOUYICODER_STUB_DELAY_MS", ms.to_string());
+            cmd.env(
+                houyicoder_config::ENV_HOUYICODER_TEST_STUB_DELAY_MS,
+                ms.to_string(),
+            );
         }
 
         let pty_system = portable_pty::native_pty_system();
@@ -715,7 +730,7 @@ pub fn pty_session_isolated(home: PathBuf) -> PtySession {
 }
 
 /// Like pty_session, but the stub emits a scripted response sequence
-/// (HOUYICODER_STUB_SCRIPT) so the run drives real tool calls. Used by the
+/// (HOUYICODER_TEST_STUB_RESPONSE_SCRIPT) so the run drives real tool calls. Used by the
 /// tool-call + permission-flow tests.
 pub fn pty_session_scripted(script_json: &str) -> PtySession {
     pty_session_inner(PtySession::launch_with_stub_script(script_json))

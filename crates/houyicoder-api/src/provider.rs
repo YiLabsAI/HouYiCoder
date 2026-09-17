@@ -52,11 +52,12 @@ pub fn stream_from_response(
     let usage = resp.usage;
     // Test affordance: an inter-chunk delay so the stub run stays in-flight
     // long enough for PTY UI tests to drive mid-run keys (e.g. a Shift+Tab
-    // mode cycle while agent_busy). Only active when HOUYICODER_STUB_DELAY_MS
-    // is set; zero/absent = the default back-to-back stream. The stub exists
+    // mode cycle while agent_busy). Only active when the stub delay env is
+    // set; zero/absent = the default back-to-back stream. The stub exists
     // for dev/test, so a delay knob is an honest test affordance, not a
-    // feature. Prefixed HOUYICODER_ to match the other env knobs.
-    let delay_ms = std::env::var("HOUYICODER_STUB_DELAY_MS")
+    // feature. The const lives in the config crate; the api crate cannot
+    // depend on it (dep-graph), so the literal mirrors the canonical name.
+    let delay_ms = std::env::var("HOUYICODER_TEST_STUB_DELAY_MS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|ms| *ms > 0);

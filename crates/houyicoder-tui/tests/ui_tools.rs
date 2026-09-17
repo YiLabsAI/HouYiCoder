@@ -1,7 +1,7 @@
 //! Real-binary PTY tests for tool-call driving + tool-result rendering. The
 //! stub normally returns only plain text, so PTY could never reach the
 //! interaction layer (permission cards, tool-result rendering, transcript
-//! fold). These tests use HOUYICODER_STUB_SCRIPT to emit a scripted ToolCall
+//! fold). These tests use HOUYICODER_TEST_STUB_RESPONSE_SCRIPT to emit a scripted ToolCall
 //! then plain text, so the real binary executes a real tool (read / glob /
 //! edit) and the transcript renders the real result — the foundation for the
 //! permission-flow + rendering-fidelity suites.

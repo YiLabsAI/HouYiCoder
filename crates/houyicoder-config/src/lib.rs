@@ -19,6 +19,7 @@
 //! env-reading wrappers over those helpers.
 
 pub mod retention;
+pub mod runner_settings;
 pub mod sandbox_network;
 pub mod settings_store;
 
@@ -35,6 +36,7 @@ pub use served_models::{ServedModels, cache_path, cached_ids, load_ids_at, serve
 mod api_key;
 pub use api_key::ApiKeySource;
 pub mod settings_merge;
+pub use runner_settings::{RunnerSettings, load_runner_settings, load_runner_settings_from};
 pub use settings_merge::{merge_json, read_settings_value};
 pub mod hook_spec;
 pub use hook_spec::{
@@ -80,6 +82,40 @@ pub const ENV_HOUYICODER_MCP_SERVERS: &str = "HOUYICODER_MCP_SERVERS";
 /// unset value means no command hook is wired. Example:
 /// HOUYICODER_HOOKS='[{"name":"lint","events":["PreToolUse"],"program":"sh","args":["-c","..."]}]'
 pub const ENV_HOUYICODER_HOOKS: &str = "HOUYICODER_HOOKS";
+
+/// Env var for the max_turns cap (the per-user-turn tool-loop ceiling). The
+/// settings file key wins; this env is the fallback for tests and CI so they
+/// can exercise the ceiling without a multi-hundred-turn run. 0 is rejected.
+pub const ENV_HOUYICODER_MAX_TURNS: &str = "HOUYICODER_MAX_TURNS";
+
+/// Env var that overrides the config-home directory (where settings.json
+/// lives). Defaults to a dot-directory under $HOME; a user or CI can point
+/// it at a custom config root.
+pub const ENV_HOUYICODER_CONFIG_HOME: &str = "HOUYICODER_CONFIG_HOME";
+
+// ---- test / operational env vars -----------------------------------------
+// Not user config. Kept here so every env name has one home; TEST_ marks
+// pure test affordances vs operational overrides.
+
+/// Test-only: a JSON array of per-call OutputItem lists the stub provider
+/// replays, so PTY UI tests can drive tool calls through the real binary.
+pub const ENV_HOUYICODER_TEST_STUB_RESPONSE_SCRIPT: &str = "HOUYICODER_TEST_STUB_RESPONSE_SCRIPT";
+
+/// Test-only: inter-chunk delay (ms) for the stub provider's streaming, so
+/// PTY tests can act during a live run instead of receiving it whole.
+pub const ENV_HOUYICODER_TEST_STUB_DELAY_MS: &str = "HOUYICODER_TEST_STUB_DELAY_MS";
+
+/// Test-only: suppresses the sandbox fence-status notice in the startup
+/// transcript so PTY assertions do not have to account for the line.
+pub const ENV_HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE: &str = "HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE";
+
+/// Operational: overrides the sessions-root directory. PTY tests point it at
+/// a temp dir; a deployment or CI can relocate session storage with it.
+pub const ENV_HOUYICODER_SESSIONS_DIR: &str = "HOUYICODER_SESSIONS_DIR";
+
+/// Operational: overrides the project root when cwd auto-detection fails
+/// (the --project flag is the primary path; this is the env fallback).
+pub const ENV_HOUYICODER_PROJECT: &str = "HOUYICODER_PROJECT";
 
 // ---- types ----------------------------------------------------------------
 
@@ -304,7 +340,7 @@ fn parse_mcp_servers(raw: Option<&str>) -> Result<Vec<McpServerConfig>, String> 
 /// the config dir from the developer's real home without env races on
 /// HOME itself).
 pub fn config_home() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("HOUYICODER_CONFIG_HOME") {
+    if let Ok(dir) = std::env::var(ENV_HOUYICODER_CONFIG_HOME) {
         return std::path::PathBuf::from(dir);
     }
     let base = std::env::var("HOME")

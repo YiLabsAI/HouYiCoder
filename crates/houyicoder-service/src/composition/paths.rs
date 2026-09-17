@@ -16,7 +16,7 @@ pub fn resolve_project_workspace(project: Option<String>) -> Option<std::path::P
         let pb = PathBuf::from(p);
         return Some(pb.canonicalize().unwrap_or(pb));
     }
-    const ENV_PROJECT: &str = "HOUYICODER_PROJECT";
+    const ENV_PROJECT: &str = houyicoder_config::ENV_HOUYICODER_PROJECT;
     if let Ok(p) = std::env::var(ENV_PROJECT)
         && !p.is_empty()
     {
@@ -79,7 +79,7 @@ pub fn workspace_cwd(project: Option<String>) -> String {
 /// log in an isolated temp dir, never the developer real home). Public so
 /// the CLI resume path builds a file backend at the same root.
 pub fn session_log_root() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("HOUYICODER_SESSIONS_DIR")
+    if let Ok(p) = std::env::var(houyicoder_config::ENV_HOUYICODER_SESSIONS_DIR)
         && !p.is_empty()
     {
         return std::path::PathBuf::from(p);
