@@ -7,7 +7,7 @@
 //! default-zero wire type.
 
 use super::runner_tests::length::ScriptRawProvider;
-use super::runner_tests::{HangingProvider, runner_with};
+use super::runner_tests::{GuardedTool, HangingProvider, runner_with};
 use super::*;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_context::SessionEvent;
@@ -357,4 +357,76 @@ async fn test_omitted_usage_estimate_fallback() {
         "status snapshot last_input_tokens must read the estimate fallback, got {}",
         snap.last_input_tokens
     );
+}
+
+/// A turn asking for a call the user must approve, then a turn that answers.
+fn guarded_then_answer() -> Vec<CompletionResponse> {
+    vec![
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "c1".into(),
+                name: "guarded".into(),
+                input: serde_json::json!({}),
+            }],
+            usage: Usage::default(),
+            model: "stub-model".into(),
+        },
+        usage_response(),
+    ]
+}
+
+/// A call released by an approval decision lands in the tool tally behind
+/// /context: the resume that releases it folds the outcome through the same
+/// count the dispatching turn uses. Left unfolded, every approved call is
+/// invisible to the tally, which then reports fewer calls than the run made.
+#[tokio::test]
+async fn test_approved_call_counts() {
+    let p = std::sync::Arc::new(FakeProvider::new(guarded_then_answer()));
+    let mut tools = ToolRegistry::new();
+    tools.register(std::sync::Arc::new(GuardedTool::new()));
+    let runner = runner_with(p, tools);
+    let session = SessionId::new();
+    let paused = runner.run(session, "go".into()).await.expect("run ok");
+    let approvals = match paused.outcome {
+        RunOutcome::Interruption(a) => a,
+        other => panic!("expected the call to await approval, got {other:?}"),
+    };
+    assert_eq!(approvals.len(), 1);
+    let before = runner.status_snapshot();
+    assert_eq!(
+        before.tool_calls, 0,
+        "a call still waiting on a decision has not run"
+    );
+    let decisions = vec![ApprovalDecision::approve(&approvals[0].call_id)];
+    runner.resume(session, &decisions).await.expect("resume ok");
+    let after = runner.status_snapshot();
+    assert_eq!(after.tool_calls, 1, "the released call counts as one call");
+    assert_eq!(after.tool_success, 1, "an approved call that ran counts ok");
+    assert_eq!(after.tool_errors, 0, "and not as an error");
+}
+
+/// A rejected call counts too, as an error outcome: the model was told the
+/// call failed, so the tally must not report the run as having fewer calls
+/// than the model emitted, nor as a success.
+#[tokio::test]
+async fn test_rejected_call_counts_error() {
+    let p = std::sync::Arc::new(FakeProvider::new(guarded_then_answer()));
+    let mut tools = ToolRegistry::new();
+    tools.register(std::sync::Arc::new(GuardedTool::new()));
+    let runner = runner_with(p, tools);
+    let session = SessionId::new();
+    let paused = runner.run(session, "go".into()).await.expect("run ok");
+    let approvals = match paused.outcome {
+        RunOutcome::Interruption(a) => a,
+        other => panic!("expected the call to await approval, got {other:?}"),
+    };
+    let decisions = vec![ApprovalDecision::reject(&approvals[0].call_id)];
+    runner.resume(session, &decisions).await.expect("resume ok");
+    let after = runner.status_snapshot();
+    assert_eq!(
+        after.tool_calls, 1,
+        "a rejected call still counts as a call"
+    );
+    assert_eq!(after.tool_errors, 1, "the model saw an error result");
+    assert_eq!(after.tool_success, 0, "nothing ran, so nothing succeeded");
 }

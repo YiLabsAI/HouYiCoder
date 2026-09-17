@@ -114,6 +114,166 @@ async fn test_abort_in_tool_dispatch() {
     );
 }
 
+/// A tool that pauses on approval and, once approved, signals that it started
+/// and then never returns. Proves the approval path races the call against the
+/// run token: without that race a stop issued while an approved command runs
+/// waits for the command to finish, so a long script ignores the key.
+struct GuardedHangingTool {
+    started: Arc<tokio::sync::Notify>,
+}
+impl GuardedHangingTool {
+    fn new(started: Arc<tokio::sync::Notify>) -> Self {
+        Self { started }
+    }
+}
+impl Tool for GuardedHangingTool {
+    fn name(&self) -> &str {
+        "guarded_hanging"
+    }
+    fn description(&self) -> &str {
+        "a guarded tool that signals its start, then never returns"
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn execute(
+        &self,
+        _ctx: ToolCtx,
+        _input: serde_json::Value,
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
+        let started = Arc::clone(&self.started);
+        Box::pin(async move {
+            started.notify_one();
+            std::future::pending::<()>().await;
+            Ok(serde_json::json!({"unreachable": true}))
+        })
+    }
+    fn requires_approval(&self) -> bool {
+        true
+    }
+    fn is_destructive(&self) -> bool {
+        true
+    }
+}
+
+/// A guarded call that records whether it ran. The call behind a stopped one
+/// must never reach it.
+struct GuardedProbeTool {
+    ran: Arc<std::sync::atomic::AtomicBool>,
+}
+impl Tool for GuardedProbeTool {
+    fn name(&self) -> &str {
+        "guarded_probe"
+    }
+    fn description(&self) -> &str {
+        "a guarded tool that records being run"
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn execute(
+        &self,
+        _ctx: ToolCtx,
+        _input: serde_json::Value,
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
+        self.ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(serde_json::json!({"ok": true})) })
+    }
+    fn requires_approval(&self) -> bool {
+        true
+    }
+    fn is_destructive(&self) -> bool {
+        true
+    }
+}
+
+/// A stop issued while an APPROVED call runs must resolve the resume. The
+/// approved call executes through the same dispatcher as any other, which
+/// races it against the run token and drops the tool future on a stop; a bare
+/// await on this pending future would keep the run alive until the command
+/// finished. Without that race this test hangs to its timeout. The call
+/// behind it must not start either — an approved batch stops whole.
+#[tokio::test]
+async fn test_abort_stops_approved_batch() {
+    let resp = CompletionResponse {
+        output: vec![
+            OutputItem::ToolCall {
+                id: "c1".into(),
+                name: "guarded_hanging".into(),
+                input: serde_json::json!({}),
+            },
+            OutputItem::ToolCall {
+                id: "c2".into(),
+                name: "guarded_probe".into(),
+                input: serde_json::json!({}),
+            },
+        ],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let p = Arc::new(FakeProvider::new(vec![resp]));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(GuardedHangingTool::new(started.clone())));
+    tools.register(Arc::new(GuardedProbeTool { ran: ran.clone() }));
+    let runner = Arc::new(runner_with(p, tools));
+    let session = SessionId::new();
+    let paused = runner.run(session, "run it".into()).await.expect("run");
+    let approvals = match paused.outcome {
+        RunOutcome::Interruption(a) => a,
+        other => panic!("expected the guarded calls to pause for approval, got {other:?}"),
+    };
+    assert_eq!(approvals.len(), 2, "both guarded calls await a decision");
+    let decisions: Vec<ApprovalDecision> = approvals
+        .iter()
+        .map(|a| ApprovalDecision::approve(&a.call_id))
+        .collect();
+    let r = runner.clone();
+    let task = tokio::spawn(async move { r.resume(session, &decisions).await });
+    // Wait for the approved call to be executing, then stop: the outcome is
+    // read off the interrupted result, not off a fixed sleep.
+    started.notified().await;
+    runner.abort();
+    let resumed = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .expect("resume resolved after the stop")
+        .expect("resume task")
+        .expect("resume ok");
+    assert!(
+        matches!(resumed.outcome, RunOutcome::Interrupted(_)),
+        "expected Interrupted, got {:?}",
+        resumed.outcome
+    );
+    let events = runner.store().replay(session).await.expect("replay");
+    let result_for = |want: &str| {
+        events
+            .iter()
+            .find_map(|e| match &e.event {
+                SessionEvent::ToolResult {
+                    call_id, output, ..
+                } if call_id == want => Some(output.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{want} landed a result"))
+    };
+    // The killed command's own output never becomes the result: the stop is
+    // reported as an interruption.
+    assert_eq!(
+        result_for("c1"),
+        serde_json::json!({"error": "interrupted by user"})
+    );
+    assert_eq!(
+        result_for("c2"),
+        serde_json::json!({"error": "interrupted by user"}),
+        "the call behind the stopped one is reported interrupted"
+    );
+    assert!(
+        !ran.load(std::sync::atomic::Ordering::SeqCst),
+        "the call behind the stopped one must not run"
+    );
+}
+
 /// A concurrency-safe tool that completes at once. Exercises the
 /// per-completion arm of the parallel exec batch (the group.next() -> Some
 /// path), which HangingTool never reaches because its execute future never

@@ -5,13 +5,13 @@
 
 use houyicoder_api::skill::GrantSubject;
 use houyicoder_api::skill::grant::SkillGrantStore;
-use houyicoder_api::tool::ToolCtx;
 use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use tokio_util::sync::CancellationToken;
 
-use super::fallback::{FallbackToolOutcome, tool_error_json};
+use super::fallback::FallbackToolOutcome;
 use super::{ApprovalDecision, ApprovalRequest, RunError, Runner};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 impl Runner {
     /// Apply decisions to pending tool calls and return requests that still
@@ -24,9 +24,27 @@ impl Runner {
         &self,
         session: SessionId,
         decisions: &[ApprovalDecision],
+        token: &CancellationToken,
     ) -> Result<Vec<ApprovalRequest>, RunError> {
         let mut remaining = Vec::new();
+        // Every released call's outcome, folded into the session tallies at
+        // the end so a call that ran here counts like one the loop dispatched.
+        let mut results: Vec<(String, serde_json::Value)> = Vec::new();
+        let mut call_names: HashMap<String, String> = HashMap::new();
+        let mut stopped = false;
         for req in self.pending_approvals(session).await? {
+            call_names.insert(req.call_id.clone(), req.tool_name.clone());
+            if stopped {
+                // The stop landed while an approved call was running: the
+                // calls behind it do not start. Each is recorded interrupted
+                // so the session stays lossless and a later resume cannot run
+                // a batch the user already stopped.
+                let output = self
+                    .record_interrupted(session, &req.call_id, &req.tool_name, &req.input)
+                    .await?;
+                results.push((req.call_id, output));
+                continue;
+            }
             let Some(decision) = decisions.iter().find(|d| d.call_id == req.call_id) else {
                 // No decision for this call: leave it pending so a later
                 // resume can decide it. Re-surface it to the caller.
@@ -35,8 +53,9 @@ impl Runner {
             };
             if decision.approved {
                 // Entitlement approval: write services to the grant store
-                // instead of executing a tool. The services were discovered
-                // by the deny-log scan after a failed bash command.
+                // instead of executing a tool. Nothing runs, so it is not a
+                // tool outcome and does not enter the tally. The services were
+                // discovered by the deny-log scan after a failed bash command.
                 if req.tool_name == ENTITLEMENT_TOOL {
                     let output = self.apply_entitlement_grant(&req.input);
                     self.append_tool_result(
@@ -50,54 +69,45 @@ impl Runner {
                     continue;
                 }
                 if let Some(tool) = self.tools.get(&req.tool_name).cloned() {
-                    // execute_authorized honors a Yes (guarded tools proceed past
-                    // Ask) and still blocks a tightened Deny at enforcement. A
-                    // decision may carry an updated input (AskUserQuestion
-                    // answers collected by the UI); use it so they reach the tool.
+                    // A decision may carry an updated input (the answers
+                    // AskUserQuestion collected in the UI); use it so they
+                    // reach the tool.
                     let input = decision.updated_input.clone().unwrap_or(req.input.clone());
-                    let result = tool
-                        .execute_authorized(
-                            ToolCtx::new(req.call_id.as_str()).with_session(session),
-                            input,
-                        )
-                        .await;
-                    let output = match result {
-                        Ok(v) => v,
-                        Err(e) => tool_error_json(&e),
-                    };
-                    self.append_tool_result(
-                        session,
-                        req.call_id.clone(),
-                        &req.tool_name,
-                        output,
-                        0,
-                    )
-                    .await?;
+                    let output = self
+                        .execute_approved_call(session, req.call_id.as_str(), &tool, input, token)
+                        .await?;
+                    results.push((req.call_id.clone(), output));
+                    stopped = token.is_cancelled();
                 } else {
+                    let output = FallbackToolOutcome::UnknownTool {
+                        name: req.tool_name.clone(),
+                        on_resume: true,
+                    }
+                    .to_json();
                     self.append_tool_result(
                         session,
                         req.call_id.clone(),
                         &req.tool_name,
-                        FallbackToolOutcome::UnknownTool {
-                            name: req.tool_name.clone(),
-                            on_resume: true,
-                        }
-                        .to_json(),
+                        output.clone(),
                         0,
                     )
                     .await?;
+                    results.push((req.call_id, output));
                 }
             } else {
+                let output = FallbackToolOutcome::Rejected.to_json();
                 self.append_tool_result(
                     session,
                     req.call_id.clone(),
                     &req.tool_name,
-                    FallbackToolOutcome::Rejected.to_json(),
+                    output.clone(),
                     0,
                 )
                 .await?;
+                results.push((req.call_id, output));
             }
         }
+        self.fold_tool_outcomes(&results, &call_names);
         Ok(remaining)
     }
 

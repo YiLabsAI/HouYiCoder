@@ -18,11 +18,13 @@
 //! blocking verdict is present (the core advantage over a single-verdict
 //! return). Trigger async-fire machinery lands with the trigger-dispatch cut.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use futures::stream::{FuturesUnordered, StreamExt};
 use houyicoder_api::agent_event::{EventHandler, ToolExecutionEvent};
-use houyicoder_api::tool::Tool;
 use houyicoder_api::tool::progress::ToolProgressReporter;
+use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_context::SessionId;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -31,7 +33,9 @@ use super::{
     HookContext, HookEvent, HookOutcome, HookPayload, HookRegistry, HookVerdict, ToolResult,
     combine_verdicts,
 };
-use crate::agent::Runner;
+use crate::agent::fallback::{FallbackToolOutcome, tool_error_json};
+use crate::agent::resolve::ToolCallPlan;
+use crate::agent::{RunError, Runner};
 
 /// Forwards progress from one tool call to the tool-execution event handler.
 /// The call identity lets the host route each update to the correct tool.
@@ -80,29 +84,28 @@ impl Runner {
         outcomes
     }
 
-    /// Fire PreToolUse for every tool about to execute, combine_verdicts the
-    /// verdicts, and partition the exec queue: Allow / Observe / Trigger /
-    /// Inject keep the call (Inject TODO rewrites input); Deny / Feedback /
-    /// Ask remove it + return a blocked result so the model sees
-    /// the reason. Mutates the exec queue in place; returns the blocked
-    /// results.
+    /// Fire PreToolUse for every tool about to execute, merge the verdicts,
+    /// and partition the queue: Allow / Observe / Trigger / Inject keep
+    /// the call (Inject TODO rewrites input); Deny / Feedback / Ask remove
+    /// it + return a blocked result so the model sees the reason. Mutates
+    /// the queue in place; returns the blocked results.
     pub(crate) async fn run_pre_tool_use_gate(
         &self,
         session: SessionId,
-        exec: &mut Vec<(String, Arc<dyn Tool>, Value, bool)>,
+        plans: &mut Vec<ToolCallPlan>,
     ) -> Vec<(String, Value)> {
         let Some(reg) = self.hooks.as_ref() else {
             return Vec::new();
         };
         let mut blocked: Vec<(String, Value)> = Vec::new();
-        let mut kept: Vec<(String, Arc<dyn Tool>, Value, bool)> = Vec::with_capacity(exec.len());
-        for (id, tool, input, safe) in exec.drain(..) {
-            let tool_name = tool.name().to_string();
+        let mut kept: Vec<ToolCallPlan> = Vec::with_capacity(plans.len());
+        for plan in plans.drain(..) {
+            let tool_name = plan.tool.name().to_string();
             let ctx = HookContext {
                 event: HookEvent::PreToolUse,
                 payload: HookPayload::PreToolUse {
                     tool_name: tool_name.clone(),
-                    input: input.clone(),
+                    input: plan.input.clone(),
                     backfilled_input: None,
                 },
                 session,
@@ -132,11 +135,11 @@ impl Runner {
                     if let Some(memory) = self.memory.provider() {
                         memory.record_gate_violation(&reason);
                     }
-                    blocked.push((id.clone(), hook_blocked_json(&reason)));
+                    blocked.push((plan.id.clone(), hook_blocked_json(&reason)));
                     false
                 }
                 HookVerdict::Feedback(reason) => {
-                    blocked.push((id.clone(), hook_feedback_json(&reason)));
+                    blocked.push((plan.id.clone(), hook_feedback_json(&reason)));
                     false
                 }
                 HookVerdict::Ask(question) => {
@@ -144,54 +147,54 @@ impl Runner {
                     // (the same machinery as tool approval). For now block +
                     // surface the question so the model can answer it.
                     blocked.push((
-                        id.clone(),
+                        plan.id.clone(),
                         hook_blocked_json(&format!("hook asks: {question}")),
                     ));
                     false
                 }
             };
             if allow {
-                kept.push((id, tool, input, safe));
+                kept.push(plan);
             }
         }
-        *exec = kept;
+        *plans = kept;
         blocked
     }
 
-    /// Execute the (PreToolUse-filtered) tool calls in partition-by-safety
-    /// batches: a maximal run of concurrency-safe calls runs concurrently
-    /// via FuturesUnordered (results land in completion order, not input
-    /// order); a non-safe call runs alone, serially, so a mutating tool
-    /// never overlaps another. PostToolUse / PostToolUseFailure fires after
-    /// each call. Correct transcript pairing relies on call_id uniqueness
-    /// (established at the provider boundary), not on result ordering.
-    #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
+    /// Execute the calls that survived PreToolUse arbitration, in
+    /// partition-by-safety batches: a maximal run of concurrency-safe calls
+    /// runs together through FuturesUnordered, so their results land in
+    /// completion order rather than call order, and a non-safe call runs
+    /// alone so a mutating tool never overlaps another. The transcript
+    /// pairs each result with its tool_use by call_id (unique from the
+    /// provider boundary), which is what makes that ordering safe.
     pub(crate) async fn execute_partitioned(
         &self,
         session: SessionId,
-        exec: &[(String, Arc<dyn Tool>, Value, bool)],
+        plans: &[ToolCallPlan],
         token: &CancellationToken,
-    ) -> Result<Vec<(String, Value)>, super::super::RunError> {
-        use crate::agent::fallback::{FallbackToolOutcome, tool_error_json};
-        use futures::stream::{FuturesUnordered, StreamExt};
-        use houyicoder_api::tool::ToolCtx;
-        use std::collections::HashSet;
-        let mut results: Vec<(String, Value)> = Vec::with_capacity(exec.len());
+    ) -> Result<Vec<(String, Value)>, RunError> {
+        let mut results: Vec<(String, Value)> = Vec::with_capacity(plans.len());
         let mut i = 0;
-        while i < exec.len() {
-            if exec[i].3 {
+        while i < plans.len() {
+            if plans[i].concurrency_safe {
                 // Parallel batch: the maximal run of safe calls from i. Each
                 // result is appended + fired as it completes, so the live
                 // delta shows per-tool progress (a streaming render), not a
                 // single batch dump when the slowest call returns.
                 let mut j = i;
-                while j < exec.len() && exec[j].3 {
+                while j < plans.len() && plans[j].concurrency_safe {
                     j += 1;
                 }
-                let batch: Vec<(String, String, Arc<dyn Tool>, Value)> = exec[i..j]
+                let batch: Vec<(String, String, Arc<dyn Tool>, Value)> = plans[i..j]
                     .iter()
-                    .map(|(id, t, input, _)| {
-                        (id.clone(), t.name().to_string(), t.clone(), input.clone())
+                    .map(|plan| {
+                        (
+                            plan.id.clone(),
+                            plan.tool.name().to_string(),
+                            plan.tool.clone(),
+                            plan.input.clone(),
+                        )
                     })
                     .collect();
                 // Snapshot (id, name, input) for the cancel path: the group
@@ -202,11 +205,9 @@ impl Runner {
                     .iter()
                     .map(|(id, name, _, input)| (id.clone(), name.clone(), input.clone()))
                     .collect();
-                let events = self.events.clone();
                 let mut group: FuturesUnordered<_> = batch
                     .into_iter()
                     .map(move |(id, name, t, input)| {
-                        let events = events.clone();
                         async move {
                             let input_for_hook = input.clone();
                             // Measure the wall-clock length of this one tool call so
@@ -215,26 +216,11 @@ impl Runner {
                             // start is captured inside the per-call future so each
                             // result carries its OWN duration, not the batch's.
                             let start = std::time::Instant::now();
-                            // Propagate the run's CancellationToken into ToolCtx so
-                            // a tool that honors ctx.cancel (Grep/Glob) observes
-                            // the abort mid-walk and returns promptly. Attach the
-                            // tool execution reporter so a long-running tool (bash)
-                            // can tick elapsed back to the host's chip.
-                            let mut ctx = ToolCtx::new(id.as_str())
-                                .with_cancel(token.clone())
-                                .with_session(session)
-                                .with_denied_agents(self.denied_agents.clone())
-                                .with_progress(Arc::new(ToolExecutionReporter::new(
-                                    id.clone(),
-                                    events.tool_execution_handler(),
-                                )))
-                                .with_agent_identity(self.agent_identity().clone());
-                            if let Some(h) = self.spawn_handle() {
-                                ctx = ctx.with_spawn_handle(h.clone());
-                            }
-                            if let Some(hf) = super::fire::build_hook_fire(self) {
-                                ctx = ctx.with_hook_fire(hf);
-                            }
+                            // The ctx carries the run token, so a tool
+                            // honoring cancellation (Grep/Glob) returns
+                            // promptly on a stop; the batch select below drops
+                            // whatever is still running in the group.
+                            let ctx = self.tool_ctx(id.as_str(), session, token);
                             let r = t.execute(ctx, input).await;
                             let duration_ms = start.elapsed().as_millis() as u64;
                             let o = match r {
@@ -258,28 +244,19 @@ impl Runner {
                                 if completed.contains(id) {
                                     continue;
                                 }
-                                let o = FallbackToolOutcome::Interrupted.to_json();
-                                let is_error = crate::observability::tool_failure_reason(&o).is_some();
-                                self.fire_post_tool_use(session, id, name, input, &o, is_error)
-                                    .await;
-                                self.record_redundancy(name, input, is_error);
-                                self.append_tool_result(session, id.clone(), name, o.clone(), 0)
-                                    .await?;
-                                results.push((id.clone(), o));
+                                let output =
+                                    self.record_interrupted(session, id, name, input).await?;
+                                results.push((id.clone(), output));
                                 completed.insert(id.clone());
                             }
-                            // Drop the in-flight futures so a blocking tool
+                            // Drop the running futures so a blocking tool
                             // future does not keep the run alive past Esc.
                             group.clear();
                             break;
                         }
                         out = group.next() => {
                             let Some((id, name, input, o, duration_ms)) = out else { break; };
-                            let is_error = crate::observability::tool_failure_reason(&o).is_some();
-                            self.fire_post_tool_use(session, &id, &name, &input, &o, is_error)
-                                .await;
-                            self.record_redundancy(&name, &input, is_error);
-                            self.append_tool_result(session, id.clone(), &name, o.clone(), duration_ms)
+                            self.record_result(session, &id, &name, &input, &o, duration_ms)
                                 .await?;
                             completed.insert(id.clone());
                             results.push((id, o));
@@ -289,53 +266,152 @@ impl Runner {
                 i = j;
             } else {
                 // Serial: a non-safe call runs alone.
-                let (id, t, input, _) = &exec[i];
-                let id = id.clone();
-                let name = t.name().to_string();
-                let input = input.clone();
-                let mut ctx = ToolCtx::new(id.as_str())
-                    .with_cancel(token.clone())
-                    .with_session(session)
-                    .with_denied_agents(self.denied_agents.clone())
-                    .with_progress(Arc::new(ToolExecutionReporter::new(
-                        id.clone(),
-                        self.events.tool_execution_handler(),
-                    )))
-                    .with_agent_identity(self.agent_identity().clone());
-                if let Some(h) = self.spawn_handle() {
-                    ctx = ctx.with_spawn_handle(h.clone());
-                }
-                if let Some(hf) = super::fire::build_hook_fire(self) {
-                    ctx = ctx.with_hook_fire(hf);
-                }
-                let exec_fut = t.execute(ctx, input.clone());
-                let start = std::time::Instant::now();
-                let (r, cancelled) = tokio::select! {
-                    _ = token.cancelled() => (Ok(FallbackToolOutcome::Interrupted.to_json()), true),
-                    r = exec_fut => (r, false),
-                };
-                // No duration on the cancel path: the call was interrupted, so
-                // no real execution completed to time.
-                let duration_ms = if cancelled {
-                    0
-                } else {
-                    start.elapsed().as_millis() as u64
-                };
-                let o = match r {
-                    Ok(v) => v,
-                    Err(e) => tool_error_json(&e),
-                };
-                let is_error = crate::observability::tool_failure_reason(&o).is_some();
-                self.fire_post_tool_use(session, &id, &name, &input, &o, is_error)
-                    .await;
-                self.record_redundancy(&name, &input, is_error);
-                self.append_tool_result(session, id.clone(), &name, o.clone(), duration_ms)
+                let plan = &plans[i];
+                let o = self
+                    .execute_call(session, &plan.id, &plan.tool, plan.input.clone(), token)
                     .await?;
-                results.push((id, o));
+                results.push((plan.id.clone(), o));
                 i += 1;
             }
         }
         Ok(results)
+    }
+
+    /// Run one tool call alone through the tool's own approval gate,
+    /// recording PostToolUse, the redundancy observation, and the durable
+    /// result.
+    pub(crate) async fn execute_call(
+        &self,
+        session: SessionId,
+        id: &str,
+        tool: &Arc<dyn Tool>,
+        input: Value,
+        token: &CancellationToken,
+    ) -> Result<Value, RunError> {
+        self.dispatch_call(session, id, tool, input, token, false)
+            .await
+    }
+
+    /// The resume path's entry: the call was approved, so it runs the tool's
+    /// authorized entry point — an answered ask is not raised again — under
+    /// the same capabilities and cancellation race as a call the loop
+    /// dispatched.
+    pub(crate) async fn execute_approved_call(
+        &self,
+        session: SessionId,
+        id: &str,
+        tool: &Arc<dyn Tool>,
+        input: Value,
+        token: &CancellationToken,
+    ) -> Result<Value, RunError> {
+        self.dispatch_call(session, id, tool, input, token, true)
+            .await
+    }
+
+    /// Dispatch one call: attach the per-call capability set, race it against
+    /// the run token so an abort drops the tool future (the sandbox guards
+    /// inside it kill the process), then record PostToolUse or
+    /// PostToolUseFailure, the redundancy observation, and the durable
+    /// ToolResult.
+    async fn dispatch_call(
+        &self,
+        session: SessionId,
+        id: &str,
+        tool: &Arc<dyn Tool>,
+        input: Value,
+        token: &CancellationToken,
+        approved: bool,
+    ) -> Result<Value, RunError> {
+        let name = tool.name().to_string();
+        let ctx = self.tool_ctx(id, session, token);
+        let exec_fut = if approved {
+            tool.execute_authorized(ctx, input.clone())
+        } else {
+            tool.execute(ctx, input.clone())
+        };
+        let start = std::time::Instant::now();
+        let (r, cancelled) = tokio::select! {
+            _ = token.cancelled() => (Ok(FallbackToolOutcome::Interrupted.to_json()), true),
+            r = exec_fut => (r, false),
+        };
+        // No duration on the cancel path: the call was interrupted, so no
+        // real execution completed to time.
+        let duration_ms = if cancelled {
+            0
+        } else {
+            start.elapsed().as_millis() as u64
+        };
+        let output = match r {
+            Ok(v) => v,
+            Err(e) => tool_error_json(&e),
+        };
+        self.record_result(session, id, &name, &input, &output, duration_ms)
+            .await?;
+        Ok(output)
+    }
+
+    /// Record one finished call: fire PostToolUse or PostToolUseFailure, note
+    /// the redundancy observation, and append the durable result. Every path
+    /// that finishes a call lands here, so a call dispatched by the loop, a
+    /// call inside a parallel batch, and a call released by an approval
+    /// decision cannot record different things.
+    async fn record_result(
+        &self,
+        session: SessionId,
+        id: &str,
+        name: &str,
+        input: &Value,
+        output: &Value,
+        duration_ms: u64,
+    ) -> Result<(), RunError> {
+        let is_error = crate::observability::tool_failure_reason(output).is_some();
+        self.fire_post_tool_use(session, id, name, input, output, is_error)
+            .await;
+        self.record_redundancy(name, input, is_error);
+        self.append_tool_result(session, id.to_string(), name, output.clone(), duration_ms)
+            .await
+    }
+
+    /// Record a call the run stopped before it could produce a result, through
+    /// the same path a finished call takes: hooks and the redundancy observer
+    /// see the interrupted outcome, and the session keeps a result for its
+    /// tool_use. Returns the payload it recorded so the caller folds the same
+    /// outcome into the session tallies.
+    pub(crate) async fn record_interrupted(
+        &self,
+        session: SessionId,
+        id: &str,
+        name: &str,
+        input: &Value,
+    ) -> Result<Value, RunError> {
+        let output = FallbackToolOutcome::Interrupted.to_json();
+        self.record_result(session, id, name, input, &output, 0)
+            .await?;
+        Ok(output)
+    }
+
+    /// The capability set one tool call executes with: the run token a tool
+    /// honoring cancellation returns on, the session, the denied agent set,
+    /// the progress forwarder, the agent identity, and the spawn / hook-fire
+    /// seams when wired. One builder, so a dispatched call and an approved
+    /// call cannot drift apart.
+    fn tool_ctx(&self, call_id: &str, session: SessionId, token: &CancellationToken) -> ToolCtx {
+        let mut ctx = ToolCtx::new(call_id)
+            .with_cancel(token.clone())
+            .with_session(session)
+            .with_denied_agents(self.denied_agents.clone())
+            .with_progress(Arc::new(ToolExecutionReporter::new(
+                call_id.to_string(),
+                self.events.tool_execution_handler(),
+            )))
+            .with_agent_identity(self.agent_identity().clone());
+        if let Some(h) = self.spawn_handle() {
+            ctx = ctx.with_spawn_handle(h.clone());
+        }
+        if let Some(hf) = super::fire::build_hook_fire(self) {
+            ctx = ctx.with_hook_fire(hf);
+        }
+        ctx
     }
 
     /// Fire PostToolUse (success) or PostToolUseFailure (error) after a tool

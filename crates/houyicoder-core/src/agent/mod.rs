@@ -777,6 +777,8 @@ mod ask_question_tests;
 mod budget_pressure_gate_tests;
 #[cfg(test)]
 mod denied_agents_tests;
+#[cfg(test)]
+mod hook_gate_tests;
 mod outcome_counts;
 #[cfg(test)]
 mod runner_tests;

@@ -1,6 +1,8 @@
 //! Dispatch-threading tests for the per-call ToolCtx: the denied-agent set,
-//! the spawn port, and the agent identity the composition root threads onto
-//! the runner all reach the tool at dispatch time.
+//! the spawn port, the agent identity, the cancellation token, the progress
+//! sink, and the session the composition root threads onto the runner all
+//! reach the tool at dispatch time — on the loop's own dispatch and on the
+//! call released by an approval decision alike.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -13,7 +15,7 @@ use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
 use crate::agent::runner_tests::runner_with;
-use crate::agent::{RunOutcome, ToolRegistry};
+use crate::agent::{ApprovalDecision, RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 
 /// A tool that captures the per-call context it saw, then returns a plain
@@ -23,6 +25,7 @@ use crate::provider::test_support::FakeProvider;
 struct DenyCaptureTool {
     seen: Arc<Mutex<Option<CapturedCtx>>>,
     concurrency_safe: bool,
+    requires_approval: bool,
 }
 
 #[derive(Clone)]
@@ -30,6 +33,9 @@ struct CapturedCtx {
     denied: HashSet<String>,
     spawn_handle_present: bool,
     identity_depth: u32,
+    cancel_present: bool,
+    progress_present: bool,
+    session_bound: bool,
 }
 
 impl Tool for DenyCaptureTool {
@@ -53,6 +59,9 @@ impl Tool for DenyCaptureTool {
                 denied: ctx.denied_agents.as_ref().clone(),
                 spawn_handle_present: ctx.spawn_handle.is_some(),
                 identity_depth: ctx.agent_identity.as_ref().map(|i| i.depth).unwrap_or(0),
+                cancel_present: ctx.cancel.is_some(),
+                progress_present: ctx.progress.is_some(),
+                session_bound: ctx.session_id.is_some(),
             });
             Ok(serde_json::json!({"ok": true}))
         })
@@ -65,6 +74,9 @@ impl Tool for DenyCaptureTool {
     }
     fn is_destructive(&self) -> bool {
         false
+    }
+    fn requires_approval(&self) -> bool {
+        self.requires_approval
     }
 }
 
@@ -108,6 +120,7 @@ async fn test_dispatch_threads_denied_agents() {
     tools.register(Arc::new(DenyCaptureTool {
         seen: seen.clone(),
         concurrency_safe: true,
+        requires_approval: false,
     }));
     let denied: Arc<HashSet<String>> = Arc::new(["explore".to_string()].into_iter().collect());
     let runner = runner_with(two_response_script(), tools).with_denied_agents(denied);
@@ -127,6 +140,7 @@ async fn test_dispatch_threads_spawn_identity() {
     tools.register(Arc::new(DenyCaptureTool {
         seen: seen.clone(),
         concurrency_safe: true,
+        requires_approval: false,
     }));
     let identity = AgentIdentity {
         subagent_type: Some("explore".into()),
@@ -151,6 +165,7 @@ async fn test_dispatch_default_denied_empty() {
     tools.register(Arc::new(DenyCaptureTool {
         seen: seen.clone(),
         concurrency_safe: true,
+        requires_approval: false,
     }));
     let runner = runner_with(two_response_script(), tools);
     let session = SessionId::new();
@@ -170,6 +185,7 @@ async fn test_dispatch_serial_spawn() {
     tools.register(Arc::new(DenyCaptureTool {
         seen: seen.clone(),
         concurrency_safe: false,
+        requires_approval: false,
     }));
     let runner = runner_with(two_response_script(), tools)
         .with_spawn_handle(Arc::new(NoSpawn) as Arc<dyn SpawnHandle>);
@@ -181,6 +197,57 @@ async fn test_dispatch_serial_spawn() {
         got.spawn_handle_present,
         "spawn handle must reach the tool on the serial path",
     );
+}
+
+#[tokio::test]
+async fn test_approval_dispatch_threads_capabilities() {
+    // A guarded call is not dispatched by the loop: it pauses for approval and
+    // runs later on the resume path. That path must hand the tool the same
+    // capability set — the denied-agent rule included, since a delegation it
+    // releases must not spawn a blocked agent type.
+    let seen = Arc::new(Mutex::new(None));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(DenyCaptureTool {
+        seen: seen.clone(),
+        concurrency_safe: true,
+        requires_approval: true,
+    }));
+    let denied: Arc<HashSet<String>> = Arc::new(["explore".to_string()].into_iter().collect());
+    let identity = AgentIdentity {
+        subagent_type: Some("explore".into()),
+        depth: 2,
+        parent_session_id: None,
+    };
+    let runner = runner_with(two_response_script(), tools)
+        .with_denied_agents(denied)
+        .with_spawn_handle(Arc::new(NoSpawn) as Arc<dyn SpawnHandle>)
+        .with_agent_identity(identity);
+    let session = SessionId::new();
+    let paused = runner.run(session, "go".into()).await.expect("run");
+    let approvals = match paused.outcome {
+        RunOutcome::Interruption(a) => a,
+        other => panic!("expected the guarded call to pause for approval, got {other:?}"),
+    };
+    assert!(
+        seen.lock().unwrap().is_none(),
+        "a guarded call must not run before the decision"
+    );
+    let decisions = vec![ApprovalDecision::approve(&approvals[0].call_id)];
+    let resumed = runner.resume(session, &decisions).await.expect("resume");
+    assert!(matches!(resumed.outcome, RunOutcome::FinalOutput(_)));
+    let got = seen.lock().unwrap().clone().expect("the approved call ran");
+    assert!(got.denied.contains("explore"), "got {:?}", got.denied);
+    assert!(got.spawn_handle_present, "spawn handle must reach the tool");
+    assert_eq!(got.identity_depth, 2, "agent identity depth must thread");
+    assert!(
+        got.cancel_present,
+        "the approved call must carry the run token a stop cancels"
+    );
+    assert!(
+        got.progress_present,
+        "the progress sink must reach the tool"
+    );
+    assert!(got.session_bound, "the dispatch must stay session-bound");
 }
 
 #[test]

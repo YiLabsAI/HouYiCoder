@@ -222,7 +222,7 @@ impl Runner {
         }
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
-        let remaining = self.apply_decisions(session, decisions).await?;
+        let remaining = self.apply_decisions(session, decisions, &token).await?;
         if !remaining.is_empty() {
             self.mark_paused();
             return Ok(RunResult {
