@@ -18,6 +18,11 @@ fn user_msg(text: &str) -> TranscriptFrame {
         ContentBlock::Text { text: text.into() },
     )))
 }
+fn agent_msg(text: &str) -> TranscriptFrame {
+    TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+        ContentBlock::Text { text: text.into() },
+    )))
+}
 fn tool_call(id: &str, tool: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::ToolCall(
         ToolCall::new(id, tool)
@@ -108,7 +113,51 @@ fn test_pair_keeps_order() {
     );
 }
 
-/// Rewind rebuilds the changed tail without retaining removed lines.
+/// A TUI-only system line pushed before a run keeps its position above the
+/// frame-derived turn throughout a rebuild. TUI-only lines must not float
+/// above or below wire content when the frame log changes.
+#[test]
+fn test_system_above_wire_turn() {
+    let mut app = fresh_app();
+    app.system_line("debug: logging to /tmp/houyi.log");
+    pump(&mut app, user_msg("analyze this dir"));
+    pump(&mut app, agent_msg("ok"));
+    let sys_at = app
+        .transcript
+        .iter()
+        .position(|l| matches!(l, TranscriptLine::System(_)))
+        .expect("system line present");
+    let user_at = app
+        .transcript
+        .iter()
+        .position(|l| matches!(l, TranscriptLine::User(_)))
+        .expect("user line present");
+    assert!(
+        sys_at < user_at,
+        "system line precedes the wire turn: {:?}",
+        app.transcript
+    );
+}
+/// A TUI-only slash-command echo survives a rebuild exactly once. The echo is
+/// never in the frame log, so the rebuild preserves the one copy rather than
+/// letting a wire turn add a second.
+#[test]
+fn test_slash_echo_survives_rebuild() {
+    let mut app = fresh_app();
+    app.push_transcript_line(TranscriptLine::User("/model".into()));
+    pump(&mut app, user_msg("analyze this dir"));
+    pump(&mut app, agent_msg("ok"));
+    let echoes = app
+        .transcript
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::User(t) if t == "/model"))
+        .count();
+    assert_eq!(
+        echoes, 1,
+        "the command echo keeps one copy through rebuild: {:?}",
+        app.transcript
+    );
+}
 #[test]
 fn test_rewind_rebuilds_tail() {
     let mut app = fresh_app();
