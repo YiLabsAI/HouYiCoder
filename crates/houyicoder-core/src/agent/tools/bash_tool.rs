@@ -160,10 +160,9 @@ impl Tool for BashTool {
             let exec = session.exec_streaming(cmd, std::sync::Arc::clone(&lines_counter));
             // Cancel arm: an Esc aborts the run and must not wait out a
             // long command. Dropping the exec future triggers the sandbox's
-            // RAII tree-kill (process group killpg), so the command tree
-            // dies with the run; the tool reports an interrupted outcome so
-            // the model log stays lossless. Tests without a token run the
-            // plain path (the guard is inert when cancel is None).
+            // RAII kill (process-group killpg on macOS; kill_on_drop on
+            // Linux/Windows kills the direct child). The tool reports an
+            // interrupted outcome so the model log stays lossless.
             let cancel = ctx.cancel.clone();
             let result = if progress.is_some() {
                 tokio::select! {
@@ -489,7 +488,7 @@ mod bash_cancel_tests {
             _cfg: ExecConfig,
         ) -> PFut<'_, Result<ExecResult, SandboxError>> {
             Box::pin(async {
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
                 Ok(ExecResult {
                     stdout: "done".to_string(),
                     stderr: String::new(),
@@ -514,7 +513,7 @@ mod bash_cancel_tests {
             tool.execute(ctx, serde_json::json!({"command": "sleep 10"}))
                 .await
         });
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
         let start = Instant::now();
         token.cancel();
         let out = handle.await.expect("join").expect("bash result");
@@ -524,7 +523,7 @@ mod bash_cancel_tests {
             "cancelled bash reports interrupted, got {out}"
         );
         assert!(
-            elapsed < Duration::from_secs(2),
+            elapsed < Duration::from_millis(500),
             "cancel must return fast, took {elapsed:?}"
         );
     }
