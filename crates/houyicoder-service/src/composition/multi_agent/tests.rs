@@ -216,6 +216,87 @@ async fn test_background_spawn_records_return() {
     );
 }
 
+/// A HookFire whose SubagentStart dispatch waits for the test to release it,
+/// so the test can drop a spawn call while the hook is still pending.
+struct BlockingStartHook {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+impl HookFire for BlockingStartHook {
+    fn fire(&self, event: HookEventKind, _payload: HookFirePayload) -> PFut<'_, ()> {
+        Box::pin(async move {
+            if event == HookEventKind::SubagentStart {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+        })
+    }
+}
+
+/// A background spawn whose caller is dropped while the Start hook waits
+/// still reaches a terminal. The child is announced and registered before
+/// the caller returns, so nothing may depend on the caller staying alive:
+/// dropping the spawn call used to take the driver with it, leaving the
+/// fleet row on running and the parent log without a return boundary.
+#[tokio::test]
+async fn test_dropped_spawn_reaches_terminal() {
+    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+
+    let bus = Arc::new(AgentBus::new());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let (runtime, store, parent_sid) = runtime_with(
+        Arc::new(FakeProvider::text("done")),
+        Some(bus.clone()),
+        ToolRegistry::new(),
+    );
+    let hook = Arc::new(BlockingStartHook {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let ctx = ToolCtx::new("c1")
+        .with_session(parent_sid)
+        .with_hook_fire(hook.clone() as Arc<dyn HookFire>);
+    let mut args = SpawnArgs::new("explore", "task", "task");
+    args.run_in_background = true;
+    let call = tokio::spawn(async move { runtime.spawn(&ctx, args).await });
+    let entered = tokio::time::timeout(Duration::from_secs(1), hook.entered.notified()).await;
+    assert!(entered.is_ok(), "the spawn dispatches SubagentStart");
+    call.abort();
+    // The abort lands wherever the call happens to be — awaiting the hook if
+    // the call owns the driver, already returned if the driver does. Nothing
+    // below depends on which, so the join result is dropped either way.
+    drop(call.await);
+    hook.release.notify_one();
+    let mut terminal = None;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+        if let Ok(message) = completed.try_recv() {
+            terminal = Some(message);
+            break;
+        }
+    }
+    match terminal.expect("a child whose caller was dropped still reaches a terminal") {
+        BusMessage::Completed {
+            status, summary, ..
+        } => {
+            assert_eq!(status, ChildStatus::Completed);
+            assert!(
+                summary.contains("done"),
+                "the terminal carries the child's output: {summary}"
+            );
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(
+        store
+            .trajectory_snapshot(parent_sid)
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
+        "the dropped caller still leaves a return boundary in the parent log"
+    );
+}
+
 /// An background spawn of an unknown agent type rejects with UnknownAgent
 /// before any detached task starts — the resolve gates both paths.
 #[tokio::test]

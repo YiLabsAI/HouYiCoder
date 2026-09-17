@@ -16,11 +16,11 @@ use houyicoder_async::PFut;
 use houyicoder_context::{HookEventKind, HookFirePayload};
 
 /// Fire a reserved lifecycle hook from a service-layer boundary (a subagent
-/// spawn or return in run_sync_spawn, a worktree enter or exit in the
-/// worktree controller). The implementor dispatches the configured hooks for
-/// the event and appends a per-hook HookSignal to the session log so the fire
-/// is replayable. The default impl is a no-op so a stub dispatch or a test
-/// with no registry wired pays nothing.
+/// spawn or return in a foreground or background spawn, a worktree enter or
+/// exit in the worktree controller). The implementor dispatches the configured
+/// hooks for the event and appends a per-hook HookSignal to the session log, so
+/// the fire is replayable. The default impl is a no-op so a stub dispatch or a
+/// test with no registry wired pays nothing.
 pub trait HookFire: Send + Sync {
     fn fire(&self, event: HookEventKind, payload: HookFirePayload) -> PFut<'_, ()> {
         drop((event, payload));

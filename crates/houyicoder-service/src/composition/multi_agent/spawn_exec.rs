@@ -181,7 +181,9 @@ fn report_failed_terminal(
 }
 
 /// Spawn a background child and return after it starts. Capacity remains held
-/// until the detached driver finishes cleanup and publishes completion.
+/// until the detached driver finishes cleanup and publishes completion. The
+/// caller's whole share is creating and announcing the child: the Start hook
+/// and the driver belong to the detached task that owns the child's cleanup.
 pub(super) async fn run_background_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
@@ -246,18 +248,11 @@ pub(super) async fn run_background_spawn(
     // Esc path) can reach its turn-cancel token while the async driver runs.
     this.register_child(&child_str, &handle.runner);
     super::announce_spawn(this.bus.as_ref(), child.clone());
-    super::fire_subagent_start(
-        hook_fire.as_ref(),
-        parent_sid,
-        &child_str,
-        &child.agent_type,
-    )
-    .await;
     let task = args.prompt.clone();
     let store = this.store.clone();
     let bus = this.bus.clone();
     let worktree_controller = this.worktree_controller.clone();
-    let hook_fire_f = hook_fire.clone();
+    let hook_fire_f = hook_fire;
     let parent_sid_f = parent_sid;
     let child_str_stamp = child_str.clone();
     let descriptor_store_f = this.descriptor_store.clone();
@@ -268,6 +263,17 @@ pub(super) async fn run_background_spawn(
         // result reaches the parent via the bus completed publish; the return
         // is dropped (cleanup, Stop, Return boundary ran in finalize_child).
         let _permit = permit;
+        // The Start hook dispatch can wait on a command hook. It runs in the
+        // driver, not in the caller, because a caller dropped at that wait
+        // (Esc mid-turn) would leave the child announced and registered with
+        // nothing driving it to a terminal.
+        super::fire_subagent_start(
+            hook_fire_f.as_ref(),
+            parent_sid_f,
+            &child_str_stamp,
+            &subagent_type_f,
+        )
+        .await;
         let _outcome = finalize_child(
             handle,
             store,
