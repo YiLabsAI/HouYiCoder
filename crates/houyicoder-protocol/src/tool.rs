@@ -25,6 +25,7 @@ pub fn tool_invocation(tool: &str, input: &Value) -> String {
         "bash" => "command",
         "read" | "write" | "edit" | "multiedit" => "path",
         "grep" | "glob" => "pattern",
+        "save_memory" | "delete_memory" => "key",
         _ => return canonical_json(input),
     };
     match input.get(field).and_then(|v| v.as_str()) {

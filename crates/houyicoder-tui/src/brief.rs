@@ -37,7 +37,8 @@ pub(crate) fn value_brief(v: &Value) -> String {
 /// the path, not the entire input JSON (which embeds the file content).
 pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
     match tool {
-        "bash" | "read" | "write" | "edit" | "multiedit" | "grep" | "glob" => {
+        "bash" | "read" | "write" | "edit" | "multiedit" | "grep" | "glob" | "save_memory"
+        | "delete_memory" => {
             truncate_call_arg(&houyicoder_protocol::tool::tool_invocation(tool, input))
         }
         "agent" => {
@@ -251,6 +252,29 @@ pub(crate) fn result_summary(tool: &str, output: &Value) -> Option<String> {
             let path = output.get("path").and_then(|v| v.as_str()).unwrap_or("");
             lines.map(|n| format!("Wrote {} lines to {}", n, path))
         }
+        // Memory writes report a machine-readable "saved" / "deleted" key.
+        // The transcript collapses to a human label that names the topic;
+        // the raw JSON is not a readable result body.
+        "save_memory" => output
+            .get("saved")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|key| {
+                if output
+                    .get("unchanged")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    format!("unchanged {key}")
+                } else {
+                    format!("stored {key}")
+                }
+            }),
+        "delete_memory" => output
+            .get("deleted")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|key| format!("deleted {key}")),
         "bash" => output
             .get("stdout")
             .and_then(|v| v.as_str())
@@ -295,6 +319,28 @@ pub(crate) fn result_summary(tool: &str, output: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_memory_result_labels() {
+        // The three memory write labels: a fresh store, a no-op refresh, and a
+        // delete. The unchanged case must not claim a write happened.
+        assert_eq!(
+            result_summary("save_memory", &serde_json::json!({"saved": "k"})).as_deref(),
+            Some("stored k")
+        );
+        assert_eq!(
+            result_summary(
+                "save_memory",
+                &serde_json::json!({"saved": "k", "unchanged": true})
+            )
+            .as_deref(),
+            Some("unchanged k")
+        );
+        assert_eq!(
+            result_summary("delete_memory", &serde_json::json!({"deleted": "k"})).as_deref(),
+            Some("deleted k")
+        );
+    }
 
     #[test]
     fn test_write_brief_is_path() {

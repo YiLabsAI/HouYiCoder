@@ -186,6 +186,50 @@ fn test_non_todo_orphan_renders() {
 }
 
 #[test]
+fn test_save_memory_label() {
+    // save_memory collapses to a human label: the chip shows the key (never
+    // the content field), and the result body is "stored <key>" — the raw
+    // {"saved":...} JSON and the passed content both stay out of the
+    // readable transcript.
+    let frames = vec![
+        tool_call(
+            "c1",
+            "save_memory",
+            serde_json::json!({
+                "key": "proj-status",
+                "description": "build state",
+                "source": "project",
+                "content": "secret content must not leak"
+            }),
+        ),
+        tool_result("c1", serde_json::json!({"saved": "proj-status"})),
+    ];
+    let lines = transcript_from_frames(&frames);
+    assert_eq!(lines.len(), 2, "one chip + one result, got {lines:?}");
+    assert!(
+        matches!(
+            &lines[0],
+            TranscriptLine::Tool { name, invocation, .. }
+                if name == "save_memory" && invocation == "proj-status"
+        ),
+        "chip must show the key only, got {:?}",
+        lines[0]
+    );
+    assert!(
+        matches!(
+            &lines[1],
+            TranscriptLine::Tool { name, body, .. }
+                if name == "result" && body == "stored proj-status"
+        ),
+        "result must be the stored label, got {:?}",
+        lines[1]
+    );
+    let joined = format!("{lines:?}");
+    assert!(!joined.contains("secret content"), "content must not leak");
+    assert!(!joined.contains("\"saved\""), "raw JSON must not leak");
+}
+
+#[test]
 fn test_reused_id_keeps_body() {
     // Eager tool callers (qwen-class) sometimes reuse one call_id across
     // two distinct tool calls. Each result row must carry its OWN output —
