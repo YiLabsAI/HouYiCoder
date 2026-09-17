@@ -45,42 +45,66 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_768;
 /// short-circuits the effort resolution chain (I8); it never adds a warning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffortDialect {
-    /// qwen3 family: enable_thinking + thinking_budget.
+    /// enable_thinking + thinking_budget.
     Qwen3,
-    /// o1/o3/gpt-5 family: reasoning_effort.
+    /// reasoning_effort.
     OpenaiReasoning,
-    /// Neither family matched: no effort parameters sent.
+    /// reasoning_effort.
+    Glm,
+    /// No effort parameter.
     NotSupported,
 }
 
-/// Probe the model id for its effort dialect. qwen3 wins over the OpenAI
-/// reasoning family (a hypothetical qwen3-reasoning id is qwen3 first). The
-/// OpenAI reasoning arm matches o1, o3, and gpt-5 substrings case-insensitive.
-/// Matches the provider's own probe so the agent loop (which cannot depend on
-/// the provider crate) and the request body agree on a model's dialect.
+/// Probe the model id for its effort dialect. qwen3 wins over other families
+/// (a hypothetical qwen3-reasoning id is qwen3 first). Keep in lockstep with
+/// the provider's own probe so the resolved dialect and the emitted fields
+/// cannot drift.
 pub fn effort_dialect(model: &str) -> EffortDialect {
     let m = model.to_lowercase();
     if m.contains("qwen3") {
         EffortDialect::Qwen3
-    } else if m.contains("o1") || m.contains("o3") || m.contains("gpt-5") {
+    } else if m.contains("o1")
+        || m.contains("o3")
+        || m.contains("gpt-5")
+        || m.contains("deepseek-v4")
+    {
         EffortDialect::OpenaiReasoning
+    } else if m.contains("glm-5.2") || m.contains("glm-5.3") {
+        EffortDialect::Glm
     } else {
         EffortDialect::NotSupported
     }
 }
 
-/// The effort levels a dialect offers. Each dialect exposes only the levels
-/// with verified wire values: the qwen3 budget ladder maps low/medium/high
-/// to enable_thinking + thinking_budget; the OpenAI reasoning dialect takes
-/// the same three into reasoning_effort. The upper rungs (xhigh, max) stay
-/// out of every dialect until their wire values are verified against each
-/// API, so the resolver clamps a stale upper pick to the dialect's top
-/// rather than sending an unverified value.
-pub fn dialect_effort_levels(dialect: EffortDialect) -> &'static [EffortLevel] {
-    match dialect {
+/// The effort levels a model's dialect offers. Version-aware only where a
+/// family splits its ladder: glm-5.3 dropped medium (low/high/max, glm-5.2
+/// keeps low/medium/high/max); deepseek-v4 follows DeepSeek's
+/// reasoning_effort set low/high/max. Xhigh stays out of every dialect, so a
+/// stale upper pick clamps to the dialect's top rather than sending an
+/// unverified value. glm-5 / glm-5.1 predate reasoning-effort and serve no
+/// ladder.
+pub fn dialect_effort_levels(model: &str) -> &'static [EffortLevel] {
+    let m = model.to_lowercase();
+    match effort_dialect(model) {
         EffortDialect::Qwen3 => &[EffortLevel::Low, EffortLevel::Medium, EffortLevel::High],
         EffortDialect::OpenaiReasoning => {
-            &[EffortLevel::Low, EffortLevel::Medium, EffortLevel::High]
+            if m.contains("deepseek-v4") {
+                &[EffortLevel::Low, EffortLevel::High, EffortLevel::Max]
+            } else {
+                &[EffortLevel::Low, EffortLevel::Medium, EffortLevel::High]
+            }
+        }
+        EffortDialect::Glm => {
+            if m.contains("glm-5.3") {
+                &[EffortLevel::Low, EffortLevel::High, EffortLevel::Max]
+            } else {
+                &[
+                    EffortLevel::Low,
+                    EffortLevel::Medium,
+                    EffortLevel::High,
+                    EffortLevel::Max,
+                ]
+            }
         }
         EffortDialect::NotSupported => &[],
     }
@@ -473,11 +497,32 @@ mod tests {
     }
 
     #[test]
-    fn test_openai_reasoning_family() {
-        // o1/o3 entries removed from the catalog (simplified). These models
-        // are not served by DashScope; an unknown family falls to the default.
-        assert_eq!(resolve_context_window("o1-mini"), DEFAULT_CONTEXT_WINDOW);
-        assert_eq!(resolve_context_window("o3"), DEFAULT_CONTEXT_WINDOW);
+    fn test_deepseek_effort_dialect() {
+        // deepseek-v4 maps to the reasoning branch; the legacy chat name does not.
+        assert_eq!(
+            effort_dialect("deepseek-v4-pro"),
+            EffortDialect::OpenaiReasoning
+        );
+        assert_eq!(
+            effort_dialect("deepseek-v4-pro-0813"),
+            EffortDialect::OpenaiReasoning
+        );
+        assert_eq!(
+            effort_dialect("deepseek-v4-flash"),
+            EffortDialect::OpenaiReasoning
+        );
+        assert_eq!(
+            dialect_effort_levels("deepseek-v4-pro").to_vec(),
+            vec![EffortLevel::Low, EffortLevel::High, EffortLevel::Max]
+        );
+        assert_eq!(effort_dialect("deepseek-chat"), EffortDialect::NotSupported);
+    }
+
+    #[test]
+    fn test_reasoning_family_unlisted_window() {
+        // No OpenAI reasoning model carries a window entry; an effort-recognized
+        // id with no catalog row falls to the conservative default.
+        assert_eq!(resolve_context_window("gpt-5"), DEFAULT_CONTEXT_WINDOW);
     }
 
     #[test]

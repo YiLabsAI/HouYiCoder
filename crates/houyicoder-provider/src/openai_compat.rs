@@ -503,23 +503,31 @@ fn finalize_tool_calls(acc: Vec<ToolCallAccum>) -> Vec<LlmEvent> {
 /// not-supported copy; it never adds a warning badge to the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffortDialect {
-    /// qwen3 family: enable_thinking + thinking_budget.
+    /// enable_thinking + thinking_budget.
     Qwen3,
-    /// o1/o3/gpt-5 family: reasoning_effort.
+    /// reasoning_effort.
     OpenaiReasoning,
-    /// Neither family matched: no effort parameters sent.
+    /// reasoning_effort.
+    Glm,
+    /// No effort parameter.
     NotSupported,
 }
 
-/// Probe the model id for its effort dialect. qwen3 wins over the OpenAI
-/// reasoning family (a hypothetical qwen3-reasoning id is qwen3 first). The
-/// OpenAI reasoning arm matches o1, o3, and gpt-5 substrings case-insensitive.
+/// Probe the model id for its effort dialect. qwen3 wins over other families.
+/// Keep in lockstep with the agent loop's copy (core cannot depend on this
+/// crate) so the resolved dialect and the emitted fields cannot drift.
 pub fn effort_dialect(model: &str) -> EffortDialect {
     let m = model.to_lowercase();
     if m.contains("qwen3") {
         EffortDialect::Qwen3
-    } else if m.contains("o1") || m.contains("o3") || m.contains("gpt-5") {
+    } else if m.contains("o1")
+        || m.contains("o3")
+        || m.contains("gpt-5")
+        || m.contains("deepseek-v4")
+    {
         EffortDialect::OpenaiReasoning
+    } else if m.contains("glm-5.2") || m.contains("glm-5.3") {
+        EffortDialect::Glm
     } else {
         EffortDialect::NotSupported
     }
@@ -627,7 +635,7 @@ fn build_request_body(req: &CompletionRequest) -> Value {
                 body["thinking_budget"] = json!(clamped);
             }
         }
-        EffortDialect::OpenaiReasoning => {
+        EffortDialect::OpenaiReasoning | EffortDialect::Glm => {
             if let Some(effort) = req.settings.reasoning_effort {
                 body["reasoning_effort"] = json!(effort_str(effort));
             }

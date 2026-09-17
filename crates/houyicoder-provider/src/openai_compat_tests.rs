@@ -697,18 +697,26 @@ fn req_with(model: &str, settings: ModelSettings) -> CompletionRequest {
 fn test_effort_dialect_paths() {
     assert_eq!(effort_dialect("qwen3.7-max"), EffortDialect::Qwen3);
     assert_eq!(effort_dialect("QWEN3-CODER"), EffortDialect::Qwen3);
-    assert_eq!(effort_dialect("o3-mini"), EffortDialect::OpenaiReasoning);
-    assert_eq!(effort_dialect("o1"), EffortDialect::OpenaiReasoning);
     assert_eq!(effort_dialect("gpt-5"), EffortDialect::OpenaiReasoning);
     assert_eq!(effort_dialect("deepseek-chat"), EffortDialect::NotSupported);
-    assert_eq!(effort_dialect("glm-5.2"), EffortDialect::NotSupported);
+    assert_eq!(
+        effort_dialect("deepseek-v4-pro"),
+        EffortDialect::OpenaiReasoning
+    );
+    assert_eq!(
+        effort_dialect("deepseek-v4-pro-0813"),
+        EffortDialect::OpenaiReasoning
+    );
+    assert_eq!(effort_dialect("glm-5.2"), EffortDialect::Glm);
+    assert_eq!(effort_dialect("glm-5.3"), EffortDialect::Glm);
+    assert_eq!(effort_dialect("glm-5.1"), EffortDialect::NotSupported);
     assert_eq!(effort_dialect("qwen3-reasoning"), EffortDialect::Qwen3);
 }
 
 #[test]
 fn test_body_emits_reasoning() {
     let r = req_with(
-        "o3-mini",
+        "gpt-5.6",
         ModelSettings {
             reasoning_effort: Some(EffortLevel::Medium),
             max_output_tokens: Some(8000),
@@ -719,11 +727,33 @@ fn test_body_emits_reasoning() {
     assert_eq!(body["reasoning_effort"], json!("medium"));
     assert!(
         body.get("enable_thinking").is_none(),
-        "no thinking flag on reasoning arm"
+        "no thinking flag on the reasoning branch"
     );
     assert!(
         body.get("thinking_budget").is_none(),
-        "no thinking budget on reasoning arm"
+        "no thinking budget on the reasoning branch"
+    );
+}
+
+#[test]
+fn test_body_emits_deepseek_reasoning() {
+    let r = req_with(
+        "deepseek-v4-pro",
+        ModelSettings {
+            reasoning_effort: Some(EffortLevel::Max),
+            max_output_tokens: Some(8000),
+            ..Default::default()
+        },
+    );
+    let body = build_request_body(&r);
+    assert_eq!(body["reasoning_effort"], json!("max"));
+    assert!(
+        body.get("enable_thinking").is_none(),
+        "no thinking flag on the deepseek reasoning branch"
+    );
+    assert!(
+        body.get("thinking_budget").is_none(),
+        "no thinking budget on the deepseek reasoning branch"
     );
 }
 
@@ -743,7 +773,7 @@ fn test_body_emits_qwen() {
     assert_eq!(body["thinking_budget"], json!(8192));
     assert!(
         body.get("reasoning_effort").is_none(),
-        "no reasoning_effort on qwen arm"
+        "no reasoning_effort on the qwen branch"
     );
 }
 

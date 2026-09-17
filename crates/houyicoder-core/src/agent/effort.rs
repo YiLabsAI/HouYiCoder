@@ -81,7 +81,7 @@ pub fn effort_levels_for(
     model: &str,
     resolver: Option<&dyn ModelCatalogResolver>,
 ) -> Vec<EffortLevel> {
-    let dialect_levels = dialect_effort_levels(effort_dialect(model)).to_vec();
+    let dialect_levels = dialect_effort_levels(model).to_vec();
     match resolver.and_then(|r| r.catalog_effort_levels(model)) {
         Some(listed) => dialect_levels
             .into_iter()
@@ -123,7 +123,7 @@ pub fn resolve_applied_effort(
 /// Fill a ModelSettings with the effort-derived fields the request body
 /// emits, by dialect + resolved effort level (the effort-to-params table): qwen3 gets
 /// enable_thinking + thinking_budget (Low turns thinking off and ships no
-/// budget — a contradictory request); the OpenAI reasoning arm gets
+/// budget — a contradictory request); the reasoning branch gets
 /// reasoning_effort; an unsupported model gets nothing. The caller fills
 /// max_output_tokens separately (it shares a source with the pre-flight
 /// reservation, the shared-source task). Leaves any caller-set field untouched when the
@@ -149,7 +149,7 @@ pub fn apply_effort_settings(
             // ladder until their budgets are verified.
             _ => {}
         },
-        EffortDialect::OpenaiReasoning => {
+        EffortDialect::OpenaiReasoning | EffortDialect::Glm => {
             if let Some(e) = effort {
                 settings.reasoning_effort = Some(e);
             }
@@ -190,10 +190,10 @@ mod tests {
             resolve_applied_effort("gpt-5.6", Some(EffortLevel::XHigh), None),
             Some(EffortLevel::High)
         );
-        let resolved = resolve_applied_effort("o3", Some(EffortLevel::Max), None);
+        let resolved = resolve_applied_effort("gpt-5.6", Some(EffortLevel::Max), None);
         assert_eq!(resolved, Some(EffortLevel::High));
         let mut s = ModelSettings::default();
-        apply_effort_settings(&mut s, "o3", resolved);
+        apply_effort_settings(&mut s, "gpt-5.6", resolved);
         assert_eq!(
             s.reasoning_effort,
             Some(EffortLevel::High),
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn test_apply_reasoning_fills_string() {
         let mut s = ModelSettings::default();
-        apply_effort_settings(&mut s, "o3-mini", Some(EffortLevel::Low));
+        apply_effort_settings(&mut s, "gpt-5.6", Some(EffortLevel::Low));
         assert_eq!(s.reasoning_effort, Some(EffortLevel::Low));
         assert!(s.enable_thinking.is_none());
         assert!(s.thinking_budget.is_none());
@@ -364,6 +364,26 @@ mod tests {
         let mut s = ModelSettings::default();
         apply_effort_settings(&mut s, "deepseek-chat", Some(EffortLevel::High));
         assert!(s.reasoning_effort.is_none());
+        assert!(s.enable_thinking.is_none());
+        assert!(s.thinking_budget.is_none());
+    }
+
+    /// deepseek-v4 resolves through the reasoning branch: a pick emits
+    /// reasoning_effort (max included — DeepSeek's ladder is low/high/max),
+    /// never the qwen thinking fields.
+    #[test]
+    fn test_deepseek_reasoning_effort() {
+        assert_eq!(
+            resolve_applied_effort("deepseek-v4-pro", Some(EffortLevel::High), None),
+            Some(EffortLevel::High)
+        );
+        assert_eq!(
+            resolve_applied_effort("deepseek-v4-pro", Some(EffortLevel::Max), None),
+            Some(EffortLevel::Max)
+        );
+        let mut s = ModelSettings::default();
+        apply_effort_settings(&mut s, "deepseek-v4-pro", Some(EffortLevel::Max));
+        assert_eq!(s.reasoning_effort, Some(EffortLevel::Max));
         assert!(s.enable_thinking.is_none());
         assert!(s.thinking_budget.is_none());
     }
