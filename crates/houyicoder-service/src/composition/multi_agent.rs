@@ -467,19 +467,17 @@ async fn run_foreground_spawn(
         let handle = spawn_child(req).await.map_err(map_spawn_err)?;
         let child_sid = handle.session;
         let child_str = child_sid.to_string();
+        let child = ChildDescriptor::new(
+            child_str.clone(),
+            subagent_type.clone(),
+            ChildRunMode::Foreground,
+        );
         // Register the live runner for a per-turn abort (moot for sync — the
         // parent blocks on the tool call + cannot be viewing the child mid-run
         // — but the registry is shared so the async path's contract holds
         // uniformly).
         this.register_child(&child_str, &handle.runner);
-        announce_spawn(
-            this.bus.as_ref(),
-            ChildDescriptor {
-                agent_id: child_str.clone(),
-                agent_type: subagent_type.clone(),
-                run_mode: ChildRunMode::Foreground,
-            },
-        );
+        announce_spawn(this.bus.as_ref(), child.clone());
         // SubagentStart fires at the durable spawn boundary (child session
         // exists, SubagentSpawn recorded, run not started); pairs with the
         // later SubagentStop across the SubagentSpawn-to-Return span.
@@ -491,8 +489,7 @@ async fn run_foreground_spawn(
             this.worktree_controller.clone(),
             parent_sid,
             child_sid,
-            child_str.clone(),
-            subagent_type.clone(),
+            child,
             hook_fire,
             task,
         )

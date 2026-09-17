@@ -764,6 +764,7 @@ async fn test_background_failure_notifies_parent() {
     use houyicoder_core::agent::{Runner, ToolRegistry};
 
     let bus = Arc::new(AgentBus::new());
+    let mut completed = bus.subscribe(global_completed_topic());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let child_provider: Arc<dyn ModelProvider> =
         Arc::new(FailingProvider::new(ProviderError::Auth));
@@ -828,6 +829,19 @@ async fn test_background_failure_notifies_parent() {
         found,
         "a failed background child reaches the parent notification queue",
     );
+    // The run's own terminal already cleared the row, so the report adds none:
+    // a drive-origin failure reaching this arm must not double-report.
+    let msg = completed
+        .try_recv()
+        .expect("the failed child reports its own terminal");
+    match msg {
+        BusMessage::Completed { status, .. } => assert_eq!(status, ChildStatus::Failed),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(
+        completed.try_recv().is_err(),
+        "one terminal per child: a reported terminal is not repeated",
+    );
     // The durable return records the background child's terminal status.
     let events = store.trajectory_snapshot(parent_sid);
     let ret_status = events.iter().find_map(|e| match &e.event {
@@ -838,6 +852,285 @@ async fn test_background_failure_notifies_parent() {
         ret_status.as_deref(),
         Some("failed"),
         "the async failed child records SubagentReturn with status=failed",
+    );
+}
+
+/// A child whose run fails before its loop writes anything still reaches a
+/// terminal: the run publishes none of its own, and without one the fleet row
+/// would sit on running for the rest of the session.
+#[tokio::test]
+async fn test_failed_write_reaches_terminal() {
+    use houyicoder_async::PFut;
+    use houyicoder_context::{
+        CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionLogEntry,
+    };
+    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+
+    /// Writes for any session but the parent's fail, the way an unwritable
+    /// store does. The parent's own log still lands, so the test can read the
+    /// return boundary the tail wrote.
+    struct FailingChildStore {
+        inner: InMemoryBackend,
+        parent: SessionId,
+    }
+
+    impl ContextBackend for FailingChildStore {
+        fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
+            if event.session != self.parent {
+                return Box::pin(async { Err(ContextError::Io) });
+            }
+            self.inner.append(event)
+        }
+        fn read_range(
+            &self,
+            session: SessionId,
+            from: Option<EventId>,
+            to: Option<EventId>,
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+            self.inner.read_range(session, from, to)
+        }
+        fn replay(
+            &self,
+            session: SessionId,
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+            self.inner.replay(session)
+        }
+        fn write_checkpoint(
+            &self,
+            manifest: CheckpointManifest,
+        ) -> PFut<'_, Result<CheckpointId, ContextError>> {
+            self.inner.write_checkpoint(manifest)
+        }
+        fn read_checkpoint(
+            &self,
+            id: CheckpointId,
+        ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
+            self.inner.read_checkpoint(id)
+        }
+        fn list_checkpoints(
+            &self,
+            session: SessionId,
+        ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
+            self.inner.list_checkpoints(session)
+        }
+    }
+
+    let bus = Arc::new(AgentBus::new());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let parent_sid = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(FailingChildStore {
+        inner: InMemoryBackend::new(),
+        parent: parent_sid,
+    })));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("child answer"));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store: store.clone(),
+        provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(std::path::PathBuf::from("/tmp")),
+        bus: Some(bus.clone()),
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+    });
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let args = SpawnArgs::new("explore", "find the auth module", "find auth");
+    let outcome = runtime.spawn(&ctx, args).await.expect("spawn resolves");
+    assert_eq!(
+        outcome.status.as_deref(),
+        Some("failed"),
+        "a run that cannot write its own log fails",
+    );
+    let msg = completed
+        .try_recv()
+        .expect("a child whose run never published a terminal still reaches the bus");
+    match msg {
+        BusMessage::Completed { status, .. } => assert_eq!(status, ChildStatus::Failed),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(
+        completed.try_recv().is_err(),
+        "one terminal per child: the report must not add a second",
+    );
+    // The tail ran: the parent's return boundary closes the spawn the parent
+    // log opened, with the failed status.
+    let events = store.trajectory_snapshot(parent_sid);
+    let ret_status = events.iter().find_map(|e| match &e.event {
+        SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        ret_status.as_deref(),
+        Some("failed"),
+        "the return boundary records the failed status",
+    );
+}
+
+/// A provider whose stream panics on first poll: the unwind crosses the run
+/// loop and the drive, the way a provider or tool bug would.
+struct PanicProvider;
+
+impl ModelProvider for PanicProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
+        Box::pin(async move { panic!("provider stream panicked") })
+    }
+    fn stream(
+        &self,
+        _req: CompletionRequest,
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
+        Box::pin(futures::stream::once(async move {
+            panic!("provider stream panicked")
+        }))
+    }
+    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
+        houyicoder_protocol::llm::ModelCapabilities::default()
+    }
+}
+
+/// A panic inside a foreground child's run still brings the child to a
+/// terminal the fleet clears and the parent log closes, and still reaches the
+/// caller as a panic. Before finalize_child caught the drive, the unwind left
+/// the child finalized by nobody: no terminal on the bus (the row stays
+/// running forever), no SubagentReturn (the log keeps a spawn boundary
+/// nothing closes), no worktree cleanup, no inbox close.
+#[tokio::test]
+async fn test_foreground_panic_reaches_terminal() {
+    use houyicoder_async::bus::MessageBus;
+    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+
+    let bus = Arc::new(AgentBus::new());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let (runtime, store, parent_sid) = runtime_with(
+        Arc::new(PanicProvider),
+        Some(bus.clone()),
+        ToolRegistry::new(),
+    );
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let args = SpawnArgs::new("explore", "task", "task");
+    let call = tokio::spawn(async move { runtime.spawn(&ctx, args).await });
+    let join = call
+        .await
+        .expect_err("the child's panic reaches the caller");
+    assert!(
+        join.is_panic(),
+        "a panicking run surfaces as the panic it is, not as a refusal"
+    );
+    let msg = completed
+        .try_recv()
+        .expect("a panicked child still reaches a terminal on the bus");
+    match msg {
+        BusMessage::Completed {
+            status, summary, ..
+        } => {
+            assert_eq!(status, ChildStatus::Failed);
+            assert!(
+                summary.contains("provider stream panicked"),
+                "the terminal carries the panic reason, not an empty summary"
+            );
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    let ret_status = store
+        .trajectory_snapshot(parent_sid)
+        .iter()
+        .find_map(|e| match &e.event {
+            SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
+            _ => None,
+        });
+    assert_eq!(
+        ret_status.as_deref(),
+        Some("failed"),
+        "the parent log closes the spawn boundary a panicked child left open"
+    );
+}
+
+/// A panic inside a background child's run reaches the parent the same way a
+/// run that fails on its own does: the completion notification lands, so the
+/// footer pill clears instead of sitting on running forever.
+#[tokio::test]
+async fn test_background_panic_notifies_parent() {
+    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+    use houyicoder_core::agent::{Runner, ToolRegistry};
+
+    let bus = Arc::new(AgentBus::new());
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    // The parent runner is the notification sink; it never runs a turn here,
+    // so its provider is a placeholder.
+    let parent_runner = Arc::new(Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("ok")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    ));
+    super::super::notification_drain::spawn(
+        Some(bus.clone()),
+        Arc::clone(&parent_runner),
+        tokio::runtime::Handle::current(),
+    );
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store: store.clone(),
+        provider: Arc::new(PanicProvider),
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(std::path::PathBuf::from("/tmp")),
+        bus: Some(bus.clone()),
+        descriptor_store: None,
+    });
+    let parent_sid = SessionId::new();
+    let mut args = SpawnArgs::new("explore", "task", "task");
+    args.run_in_background = true;
+    let outcome = runtime
+        .spawn_system(parent_sid, "review_gate", args)
+        .await
+        .expect("background spawn launches");
+    assert!(
+        outcome.status.is_none(),
+        "background spawn returns no terminal status",
+    );
+    let mut found = false;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+        let snap = parent_runner.queued_notifications_snapshot();
+        if !snap.is_empty() {
+            assert!(
+                snap[0].contains("explore"),
+                "the notification carries the subagent type",
+            );
+            assert!(
+                snap[0].contains("failed"),
+                "the notification carries the failed status",
+            );
+            assert!(
+                snap[0].contains("provider stream panicked"),
+                "the notification carries the panic reason, not just the status label",
+            );
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "a panicked background child reaches the parent notification queue",
+    );
+    let ret_status = store
+        .trajectory_snapshot(parent_sid)
+        .iter()
+        .find_map(|e| match &e.event {
+            SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
+            _ => None,
+        });
+    assert_eq!(
+        ret_status.as_deref(),
+        Some("failed"),
+        "the async panicked child records SubagentReturn with status=failed",
     );
 }
 
