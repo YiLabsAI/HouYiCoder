@@ -228,7 +228,7 @@ mod tests {
     fn runner() -> Runner {
         let store: Arc<dyn houyicoder_api::session::SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-        Runner::with_shared_store(
+        Runner::new(
             store,
             Arc::new(crate::provider::test_support::FakeProvider::text("done")),
             crate::agent::ToolRegistry::new(),

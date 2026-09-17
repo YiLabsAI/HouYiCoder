@@ -220,7 +220,7 @@ async fn test_cycle_during_run() {
     let wire_session_id = houyicoder_protocol::frontend::SessionId(session.to_string());
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let gate_assert = gate.clone();
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         ToolRegistry::new(),
@@ -293,7 +293,7 @@ async fn test_cycle_during_resume() {
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,
@@ -380,7 +380,7 @@ async fn test_non_mode_request_dropped() {
     let session = houyicoder_context::SessionId::new();
     let wire_session_id = houyicoder_protocol::frontend::SessionId(session.to_string());
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         ToolRegistry::new(),
@@ -442,7 +442,7 @@ async fn test_active_run_drops_compact() {
     let session = houyicoder_context::SessionId::new();
     let wire_session_id = houyicoder_protocol::frontend::SessionId(session.to_string());
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         ToolRegistry::new(),

@@ -56,7 +56,7 @@ pub(crate) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolReg
     );
     let session = SessionId::new();
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         tools,

@@ -591,7 +591,7 @@ async fn test_runner_fires_extractor_final() {
             ..RunnerConfig::default()
         },
     ));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         main_store.clone(),
         Arc::clone(&provider) as Arc<dyn ModelProvider>,
         ToolRegistry::new(),

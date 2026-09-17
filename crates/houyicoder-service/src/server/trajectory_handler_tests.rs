@@ -15,7 +15,7 @@ fn stub_runner() -> std::sync::Arc<houyicoder_core::agent::Runner> {
     let store = Arc::new(SessionStore::new(Box::new(
         houyicoder_memory::InMemoryBackend::new(),
     )));
-    Arc::new(houyicoder_core::agent::Runner::with_shared_store(
+    Arc::new(houyicoder_core::agent::Runner::new(
         store,
         Arc::new(houyicoder_provider::FakeProvider::text("x")),
         houyicoder_core::agent::ToolRegistry::new(),
@@ -38,7 +38,7 @@ fn delayed_runner(delay_ms: u64) -> std::sync::Arc<houyicoder_core::agent::Runne
         usage: houyicoder_protocol::llm::Usage::default(),
         model: "test".into(),
     };
-    Arc::new(houyicoder_core::agent::Runner::with_shared_store(
+    Arc::new(houyicoder_core::agent::Runner::new(
         store,
         Arc::new(houyicoder_provider::FakeProvider::new_with_delay(
             vec![resp],

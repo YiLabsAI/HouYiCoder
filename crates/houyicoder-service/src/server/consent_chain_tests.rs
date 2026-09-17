@@ -40,7 +40,7 @@ fn chain_runner(
 ) -> Arc<Runner> {
     let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Arc::new(
-        Runner::with_shared_store(
+        Runner::new(
             sess_store,
             provider,
             tools,

@@ -46,7 +46,7 @@ fn test_degrade_reports_absence() {
 fn minimal_runner() -> Runner {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
-    Runner::with_shared_store(
+    Runner::new(
         store,
         provider,
         ToolRegistry::new(),

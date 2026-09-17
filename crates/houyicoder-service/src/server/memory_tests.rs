@@ -54,7 +54,7 @@ fn stub_runner_with_memory() -> Arc<Runner> {
         None,
     );
     Arc::new(
-        Runner::with_shared_store(
+        Runner::new(
             store,
             Arc::new(houyicoder_provider::FakeProvider::text("x")),
             ToolRegistry::new(),

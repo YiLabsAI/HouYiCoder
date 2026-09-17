@@ -84,7 +84,7 @@ fn tool_call_response(id: &str, name: &str) -> CompletionResponse {
 fn runner_with(provider: FakeProvider, tools: ToolRegistry) -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(provider);
-    Arc::new(Runner::with_shared_store(
+    Arc::new(Runner::new(
         store,
         provider,
         tools,

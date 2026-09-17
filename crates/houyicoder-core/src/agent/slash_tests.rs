@@ -136,7 +136,7 @@ impl SkillRegistry for SlashStubRegistry {
 
 fn runner_with_slash() -> Runner {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    Runner::with_shared_store(
+    Runner::new(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
         crate::agent::ToolRegistry::new(),
@@ -194,7 +194,7 @@ async fn test_missing_origin_fails_closed() {
     }
 
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
         crate::agent::ToolRegistry::new(),
@@ -255,7 +255,7 @@ async fn test_resolve_plain_text() {
 #[tokio::test]
 async fn test_resolve_noop_without_registry() {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
         crate::agent::ToolRegistry::new(),
@@ -414,7 +414,7 @@ async fn test_invoke_registers_hook_timing() {
     let launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
     let registrar = Arc::new(SkillHookRegistrar::new(hook_reg.clone(), trust, launcher));
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
         crate::agent::ToolRegistry::new(),
@@ -497,7 +497,7 @@ fn paths_descriptor(name: &str) -> SkillDescriptor {
 
 fn runner_with_paths(activator: Arc<dyn crate::agent::ConditionalSkillActivator>) -> Runner {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    Runner::with_shared_store(
+    Runner::new(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
         crate::agent::ToolRegistry::new(),
@@ -600,7 +600,7 @@ async fn test_slash_load_error_refusal() {
         refused: AtomicU64::new(0),
     });
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
         crate::agent::ToolRegistry::new(),
@@ -664,7 +664,7 @@ async fn test_session_context_injection() {
 
     let reg: Arc<dyn SkillRegistry> = Arc::new(TemplateRegistry);
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         Arc::new(crate::provider::test_support::FakeProvider::text("done")),
         crate::agent::ToolRegistry::new(),

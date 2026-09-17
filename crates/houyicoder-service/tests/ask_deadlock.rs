@@ -137,7 +137,7 @@ async fn test_reverse_request_permission_flow() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         tools,
@@ -263,7 +263,7 @@ async fn test_mid_ask_survives_status() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         tools,
@@ -396,7 +396,7 @@ async fn test_mid_ask_cancel_exits() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         tools,
@@ -529,7 +529,7 @@ async fn test_mid_cancel_multi_approval() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         tools,
@@ -666,7 +666,7 @@ async fn test_idle_cancel_skips_abort() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,

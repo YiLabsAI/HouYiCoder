@@ -122,7 +122,7 @@ fn runner_with_tool() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ListedTool));
-    Arc::new(Runner::with_shared_store(
+    Arc::new(Runner::new(
         store,
         Arc::new(houyicoder_provider::FakeProvider::text("x")),
         tools,

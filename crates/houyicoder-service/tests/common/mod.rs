@@ -34,7 +34,7 @@ pub fn stub_runner() -> (Arc<Runner>, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         ToolRegistry::new(),

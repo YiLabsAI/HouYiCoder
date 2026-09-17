@@ -454,7 +454,7 @@ mod compact_summary_tests {
     fn runner_with_store() -> (Runner, SessionId) {
         let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
         let session = SessionId::new();
-        let runner = Runner::with_shared_store(
+        let runner = Runner::new(
             store,
             Arc::new(crate::provider::test_support::FakeProvider::new(vec![])),
             crate::agent::ToolRegistry::new(),
@@ -620,7 +620,7 @@ mod compact_summary_tests {
         let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
         let mut runtime = MemoryRuntime::new(store.clone());
         runtime.install_provider(memory);
-        let runner = Runner::with_shared_store(
+        let runner = Runner::new(
             store,
             Arc::new(crate::provider::test_support::FakeProvider::new(vec![])),
             crate::agent::ToolRegistry::new(),

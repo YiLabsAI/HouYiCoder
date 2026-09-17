@@ -250,8 +250,7 @@ fn build_harness(
         tok.clone(),
     ));
     let parent_dyn: Arc<dyn ModelProvider> = parent.clone();
-    let mut builder =
-        Runner::with_shared_store(store.clone(), parent_dyn, tools.clone(), config.clone());
+    let mut builder = Runner::new(store.clone(), parent_dyn, tools.clone(), config.clone());
     if spawn {
         let child = Arc::new(RecordingProvider::new(
             Arc::new(FakeProvider::new(child_responses)),

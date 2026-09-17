@@ -39,7 +39,7 @@ async fn main() {
     eprintln!("session_id={session}");
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("hello from stub"));
     let tools = ToolRegistry::new();
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,

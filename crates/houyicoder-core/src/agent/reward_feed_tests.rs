@@ -46,7 +46,7 @@ fn runner_with_empty_dream() -> Runner {
         None,
         Some(dream),
     );
-    Runner::with_shared_store(
+    Runner::new(
         store,
         provider,
         crate::agent::ToolRegistry::new(),
@@ -90,7 +90,7 @@ async fn test_join_dreams_no_inflight() {
     )));
     let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
         Arc::new(crate::provider::test_support::FakeProvider::text("x"));
-    let runner_no_dream = Runner::with_shared_store(
+    let runner_no_dream = Runner::new(
         store,
         provider,
         crate::agent::ToolRegistry::new(),

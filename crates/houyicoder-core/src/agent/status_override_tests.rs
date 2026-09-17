@@ -8,7 +8,7 @@ use houyicoder_protocol::llm::EffortLevel;
 use std::sync::{Arc, Mutex};
 
 fn stub_runner(config_max: u32) -> Runner {
-    Runner::with_shared_store(
+    Runner::new(
         Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),

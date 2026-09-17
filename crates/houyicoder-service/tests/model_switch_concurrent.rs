@@ -173,7 +173,7 @@ async fn test_switch_uses_next_request() {
     let provider = Arc::new(RecordingProvider::new(started.clone(), release.clone()));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(PingTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider.clone(),
         tools,

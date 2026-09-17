@@ -20,7 +20,7 @@ impl Runner {
     /// Construct a runner that shares an already-Arced store. The caller keeps
     /// its own clone so it can replay events (e.g. a TUI rendering the live
     /// transcript) while the runner appends to the same log.
-    pub fn with_shared_store(
+    pub fn new(
         store: Arc<dyn houyicoder_api::session::SessionLog>,
         provider: Arc<dyn ModelProvider>,
         tools: ToolRegistry,

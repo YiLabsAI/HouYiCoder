@@ -118,7 +118,7 @@ mod tests {
         )));
         let provider: Arc<dyn ModelProvider> =
             Arc::new(houyicoder_provider::FakeProvider::text("test"));
-        let runner = houyicoder_core::agent::Runner::with_shared_store(
+        let runner = houyicoder_core::agent::Runner::new(
             sess_store,
             provider,
             houyicoder_core::agent::ToolRegistry::new(),

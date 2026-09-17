@@ -30,7 +30,7 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     let session = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("hello from stub"));
     let tools = ToolRegistry::new();
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         tools,
@@ -203,7 +203,7 @@ async fn test_cancel_during_run_cancelled() {
     let session = SessionId::new();
     let session_str = session.to_string();
     let tools = ToolRegistry::new();
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,

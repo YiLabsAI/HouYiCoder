@@ -207,7 +207,7 @@ fn test_live_provider_returns_text() {
     let model = houyicoder_config::resolve_model();
     let provider: Arc<dyn ModelProvider> = Arc::new(OpenAiCompatibleProvider::new(base, key));
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         ToolRegistry::new(),

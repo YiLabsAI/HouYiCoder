@@ -529,7 +529,7 @@ pub(crate) fn assemble(
     // the global root - reader and writer must never disagree), and an
     // in-memory backend yields None so the notice scans nothing.
     let store_log_root = store.session_log_root();
-    let mut runner = Runner::with_shared_store(store, provider, tools, config)
+    let mut runner = Runner::new(store, provider, tools, config)
         .with_recall_meter(recall_meter)
         .with_breaker(breaker)
         .with_summarizer(summarizer)

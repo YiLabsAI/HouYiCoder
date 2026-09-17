@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 fn stub_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    Arc::new(Runner::with_shared_store(
+    Arc::new(Runner::new(
         store,
         Arc::new(houyicoder_provider::FakeProvider::text("x")),
         ToolRegistry::new(),

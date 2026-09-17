@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 fn stub_runner() -> Arc<houyicoder_core::agent::Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    Arc::new(houyicoder_core::agent::Runner::with_shared_store(
+    Arc::new(houyicoder_core::agent::Runner::new(
         store,
         Arc::new(houyicoder_provider::FakeProvider::text("x")),
         houyicoder_core::agent::ToolRegistry::new(),

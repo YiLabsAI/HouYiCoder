@@ -273,7 +273,7 @@ async fn spawn_server_with(
     let session = SessionId::new();
     let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
         Arc::new(FakeProvider::new(responses));
-    let mut runner = Runner::with_shared_store(
+    let mut runner = Runner::new(
         store,
         provider,
         tools,

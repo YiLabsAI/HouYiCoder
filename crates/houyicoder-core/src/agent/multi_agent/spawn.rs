@@ -174,15 +174,14 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         run_mode: req.run_mode,
     };
 
-    let mut runner =
-        Runner::with_shared_store(req.parent_store, req.provider, req.tools, req.config)
-            .with_agent_identity(houyicoder_api::spawn::AgentIdentity {
-                subagent_type: Some(req.subagent_type.clone()),
-                // The child dispatches carry the child's own identity, so a
-                // nested agent call reports depth + 1 to the recursion guard.
-                depth: req.depth + 1,
-                parent_session_id: Some(req.parent_sid.to_string()),
-            });
+    let mut runner = Runner::new(req.parent_store, req.provider, req.tools, req.config)
+        .with_agent_identity(houyicoder_api::spawn::AgentIdentity {
+            subagent_type: Some(req.subagent_type.clone()),
+            // The child dispatches carry the child's own identity, so a
+            // nested agent call reports depth + 1 to the recursion guard.
+            depth: req.depth + 1,
+            parent_session_id: Some(req.parent_sid.to_string()),
+        });
     if let Some(bus) = bus {
         use houyicoder_async::bus::MessageBus;
         let mut events = AgentEventHandlers::default();

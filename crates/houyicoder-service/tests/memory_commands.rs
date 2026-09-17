@@ -24,7 +24,7 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("hello"));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         ToolRegistry::new(),
@@ -61,7 +61,7 @@ fn runner_with_memory(key: &str, body: &str) -> (Arc<Runner>, SessionId, std::pa
         None,
         None,
     );
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         ToolRegistry::new(),

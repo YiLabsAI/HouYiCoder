@@ -798,7 +798,7 @@ async fn test_background_failure_notifies_parent() {
 fn test_cancel_child_turn_registry() {
     use houyicoder_core::agent::Runner;
     let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         runtime.store.clone(),
         Arc::new(FakeProvider::text("ok")),
         ToolRegistry::new(),
@@ -825,7 +825,7 @@ fn test_cancel_child_turn_registry() {
 fn test_kill_child_registry() {
     use houyicoder_core::agent::Runner;
     let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         runtime.store.clone(),
         Arc::new(FakeProvider::text("ok")),
         ToolRegistry::new(),
@@ -853,7 +853,7 @@ fn test_kill_child_registry() {
 fn test_kill_all_children_registry() {
     use houyicoder_core::agent::Runner;
     let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
-    let r1 = Arc::new(Runner::with_shared_store(
+    let r1 = Arc::new(Runner::new(
         runtime.store.clone(),
         Arc::new(FakeProvider::text("ok")),
         ToolRegistry::new(),

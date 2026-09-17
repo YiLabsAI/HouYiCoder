@@ -81,7 +81,7 @@ fn test_reconstruct_skill_script() {
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
     let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         sess_store,
         provider,
         ToolRegistry::new(),
@@ -158,7 +158,7 @@ fn test_augment_skips_non_shell() {
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
     let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         sess_store,
         provider,
         ToolRegistry::new(),
@@ -220,7 +220,7 @@ async fn test_consent_reaches_both_layers() {
         Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
     let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         sess_store,
         provider,
         ToolRegistry::new(),
@@ -315,7 +315,7 @@ fn test_consent_grants_by_location() {
         Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
     let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         sess_store,
         provider,
         ToolRegistry::new(),
@@ -418,7 +418,7 @@ fn test_safety_skips_rule() {
     let gate = Arc::new(DefaultModeGate::new().with_store(store.clone()));
     let sandbox: Arc<dyn SandboxSession> =
         Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         Arc::new(FakeProvider::text("test")),
         ToolRegistry::new(),
@@ -469,7 +469,7 @@ fn test_none_reason_no_rule() {
         Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
     let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         sess_store,
         provider,
         ToolRegistry::new(),
@@ -514,7 +514,7 @@ fn test_none_reason_no_rule() {
 fn ask_wait_server() -> Server {
     let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         sess_store,
         provider,
         ToolRegistry::new(),

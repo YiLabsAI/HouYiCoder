@@ -87,7 +87,7 @@ async fn test_disconnect_orphan_repaired() {
         Arc::new(FakeProvider::new(vec![tool_call("c1"), final_text]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(BlockingTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store.clone(),
         provider,
         tools,

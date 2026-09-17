@@ -49,7 +49,7 @@ async fn test_run_slash_real_body() {
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
     let store: Arc<dyn houyicoder_api::session::SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store.clone(),
         Arc::new(FakeProvider::text("done")),
         ToolRegistry::new(),
@@ -135,7 +135,7 @@ async fn test_run_model_skill_tool() {
     ]);
     let store: Arc<dyn houyicoder_api::session::SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store.clone(),
         Arc::new(provider),
         tools,
@@ -211,7 +211,7 @@ async fn test_run_large_body_compacts() {
     ]);
     let store: Arc<dyn houyicoder_api::session::SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store.clone(),
         Arc::new(provider),
         tools,
@@ -278,7 +278,7 @@ async fn test_compact_reinjects_listing() {
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
     let store: Arc<dyn houyicoder_api::session::SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store.clone(),
         Arc::new(FakeProvider::text("ok")),
         ToolRegistry::new(),

@@ -27,7 +27,7 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     let session = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("wire reply"));
     let tools = ToolRegistry::new();
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         tools,

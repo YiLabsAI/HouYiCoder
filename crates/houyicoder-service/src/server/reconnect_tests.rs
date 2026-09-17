@@ -185,7 +185,7 @@ async fn test_reconnect_projects_queued_input() {
     let (client_tx2, server_rx2) = mpsc::channel::<String>(64);
     let (server_tx2, client_rx2) = mpsc::channel::<String>(64);
     let event_sequencer = EventSequencer::new();
-    let mut runner = Runner::with_shared_store(
+    let mut runner = Runner::new(
         store,
         provider,
         tools,
@@ -371,7 +371,7 @@ async fn test_reconnect_resumes_interruption() {
     ]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,
@@ -542,7 +542,7 @@ async fn test_deny_verdict_completes_run() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,
@@ -1013,7 +1013,7 @@ fn parked_host(
     );
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(responses));
     let event_sequencer = EventSequencer::new();
-    let mut runner = Runner::with_shared_store(
+    let mut runner = Runner::new(
         store,
         provider,
         tools,

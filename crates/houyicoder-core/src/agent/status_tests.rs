@@ -73,7 +73,7 @@ fn test_record_tool_batch_sums() {
 /// redundant-section data source.
 #[test]
 fn test_redundancy_snapshot_empty() {
-    let runner = crate::agent::Runner::with_shared_store(
+    let runner = crate::agent::Runner::new(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),
@@ -104,7 +104,7 @@ fn test_snapshot_reports_breaker() {
         exceeded_budget: false,
     });
     // Build a runner carrying the breaker + a primed accumulator.
-    let runner = crate::agent::Runner::with_shared_store(
+    let runner = crate::agent::Runner::new(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),
@@ -141,7 +141,7 @@ fn test_snapshot_reports_breaker() {
 
 #[test]
 fn test_snapshot_omits_absent_breaker() {
-    let runner = crate::agent::Runner::with_shared_store(
+    let runner = crate::agent::Runner::new(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),
@@ -161,7 +161,7 @@ fn test_snapshot_reflects_model_switch() {
     // the window that model resolves to, not the static config.model and
     // provider-caps values a pre-switch read would see. A switch to a
     // catalog model with a different window must surface both fields.
-    let runner = crate::agent::Runner::with_shared_store(
+    let runner = crate::agent::Runner::new(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),
@@ -200,7 +200,7 @@ fn test_snapshot_reflects_model_switch() {
 #[test]
 fn test_set_effort_swaps_pick() {
     use houyicoder_protocol::llm::EffortLevel;
-    let runner = crate::agent::Runner::with_shared_store(
+    let runner = crate::agent::Runner::new(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),
@@ -225,7 +225,7 @@ fn test_set_effort_swaps_pick() {
 /// common case for tests + stub runners).
 #[test]
 fn test_hooks_list_without_registry() {
-    let runner = crate::agent::Runner::with_shared_store(
+    let runner = crate::agent::Runner::new(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),
@@ -241,7 +241,7 @@ fn test_hooks_list_without_registry() {
 /// an empty list rather than panicking on the None.
 #[test]
 fn test_skills_snapshot_without_registry() {
-    let runner = crate::agent::Runner::with_shared_store(
+    let runner = crate::agent::Runner::new(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),
@@ -310,7 +310,7 @@ fn test_skills_snapshot_lists_registry() {
             Err(houyicoder_api::skill::SkillError::NotFound(String::new()))
         }
     }
-    let runner = crate::agent::Runner::with_shared_store(
+    let runner = crate::agent::Runner::new(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),
@@ -362,7 +362,7 @@ fn test_memory_forget_routes_scope() {
     // Exercise the required trait methods so the mock has no dead code.
     drop(provider.recall("", 0, &HashSet::new()));
     drop(provider.add(MemoryEntry::new("k", "c", MemorySource::Project)));
-    let mut runner = crate::agent::Runner::with_shared_store(
+    let mut runner = crate::agent::Runner::new(
         std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         ))),

@@ -95,7 +95,7 @@ async fn test_inject_cancel_run_clear() {
     ));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(NoopTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,

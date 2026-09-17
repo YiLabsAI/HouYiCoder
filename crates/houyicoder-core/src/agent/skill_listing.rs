@@ -460,7 +460,7 @@ mod tests {
         use houyicoder_context::SessionId;
         let store: Arc<dyn houyicoder_api::session::SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-        let runner = Runner::with_shared_store(
+        let runner = Runner::new(
             store,
             Arc::new(StubProvider),
             crate::agent::ToolRegistry::new(),
@@ -483,7 +483,7 @@ mod tests {
         use houyicoder_context::SessionId;
         let store: Arc<dyn houyicoder_api::session::SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-        let runner = Runner::with_shared_store(
+        let runner = Runner::new(
             store,
             Arc::new(StubProvider),
             crate::agent::ToolRegistry::new(),
@@ -616,7 +616,7 @@ mod tests {
         let store: Arc<dyn houyicoder_api::session::SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
         // No with_skill_registry: skill_registry is None.
-        let runner = Runner::with_shared_store(
+        let runner = Runner::new(
             store.clone(),
             Arc::new(StubProvider),
             crate::agent::ToolRegistry::new(),
@@ -699,7 +699,7 @@ mod tests {
         );
         let store: Arc<dyn houyicoder_api::session::SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-        let runner = Runner::with_shared_store(
+        let runner = Runner::new(
             store.clone(),
             Arc::new(StubProvider),
             crate::agent::ToolRegistry::new(),

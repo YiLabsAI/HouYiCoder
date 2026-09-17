@@ -30,7 +30,7 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     let session = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("hello from stub"));
     let tools = ToolRegistry::new();
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         tools,
@@ -461,7 +461,7 @@ async fn test_undo_entry_returns_description() {
 
     let session_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         session_store,
         Arc::new(FakeProvider::text("hi")) as Arc<dyn ModelProvider>,
         ToolRegistry::new(),

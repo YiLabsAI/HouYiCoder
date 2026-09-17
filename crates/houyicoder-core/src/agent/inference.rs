@@ -61,7 +61,7 @@ mod tests {
         let store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
             houyicoder_memory::InMemoryBackend::new(),
         )));
-        Runner::with_shared_store(
+        Runner::new(
             store,
             Arc::new(crate::provider::test_support::FakeProvider::text("x")),
             crate::agent::ToolRegistry::new(),

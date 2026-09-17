@@ -23,7 +23,7 @@ use std::sync::Arc;
 fn stub_runner_with_checkpoint() -> (Arc<Runner>, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store.clone(),
         Arc::new(FakeProvider::text("x")),
         houyicoder_core::agent::ToolRegistry::new(),

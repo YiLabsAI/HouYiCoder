@@ -176,7 +176,7 @@ async fn test_switch_shrunk_window_compacts() {
     let session = SessionId::new();
     append_history(&store, session).await;
 
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store.clone(),
         Arc::new(WindowlessProvider),
         ToolRegistry::new(),

@@ -152,7 +152,7 @@ impl ContextBackend for FailingCheckpoint {
 
 fn stub_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    Arc::new(Runner::with_shared_store(
+    Arc::new(Runner::new(
         store,
         Arc::new(houyicoder_provider::FakeProvider::text("x")),
         ToolRegistry::new(),
@@ -162,7 +162,7 @@ fn stub_runner() -> Arc<Runner> {
 
 fn failing_checkpoint_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(FailingCheckpoint)));
-    Arc::new(Runner::with_shared_store(
+    Arc::new(Runner::new(
         store,
         Arc::new(houyicoder_provider::FakeProvider::text("x")),
         ToolRegistry::new(),

@@ -119,7 +119,7 @@ pub fn runner_and_host() -> (Arc<Runner>, SessionId, Arc<SessionHost>) {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,
@@ -389,7 +389,7 @@ async fn test_reconnect_batch_preserves_decided() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ApprovableTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,
@@ -582,7 +582,7 @@ fn runner_with_noop() -> (Arc<Runner>, SessionId, Arc<SessionHost>) {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(NoopTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,
@@ -733,7 +733,7 @@ async fn test_during_run_inject_caught() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(SleepNoopTool));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         provider,
         tools,

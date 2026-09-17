@@ -35,7 +35,7 @@ use tokio::sync::{Notify, oneshot};
 
 fn stub_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    Arc::new(Runner::with_shared_store(
+    Arc::new(Runner::new(
         store,
         Arc::new(houyicoder_provider::FakeProvider::text("x")),
         ToolRegistry::new(),
@@ -248,7 +248,7 @@ async fn test_client_closed_during_resume() {
         release,
     }));
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let runner = Arc::new(Runner::with_shared_store(
+    let runner = Arc::new(Runner::new(
         store,
         Arc::new(houyicoder_provider::FakeProvider::new(responses)),
         tools,

@@ -23,7 +23,6 @@ mod diff;
 mod durable_scan;
 mod economy;
 mod effort;
-mod entry;
 mod exports;
 pub mod extract;
 pub mod extractor;
@@ -44,6 +43,7 @@ mod redundancy;
 mod resolve;
 mod retention;
 pub(crate) mod reward_snapshot;
+mod run_lifecycle;
 mod selection;
 mod skill_body;
 mod skill_hooks;
@@ -318,18 +318,6 @@ impl Runner {
     /// handle back for side-channel replay reads. No breaker is attached;
     /// /sandbox + /status report None for breaker state. Use with_breaker at
     /// the composition root to share the sandbox's breaker for status.
-    /// Construct a runner owning its store. Tests use this; the composition
-    /// root uses with_shared_store (same body) so a host can replay while the
-    /// runner appends. Delegates so the two entry points share one body.
-    pub fn new(
-        store: Arc<dyn houyicoder_api::session::SessionLog>,
-        provider: Arc<dyn ModelProvider>,
-        tools: ToolRegistry,
-        config: RunnerConfig,
-    ) -> Self {
-        Self::with_shared_store(store, provider, tools, config)
-    }
-
     /// A shared handle to the session store. Clone it to replay events from a
     /// side channel (the TUI host does this after each run to refresh the
     /// transcript view from real SessionLogEntries).

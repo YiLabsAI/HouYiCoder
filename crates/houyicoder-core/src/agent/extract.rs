@@ -349,7 +349,7 @@ mod tests {
         });
         let mut runtime = MemoryRuntime::new(store.clone());
         runtime.install_provider(Arc::clone(&memory) as Arc<dyn MemoryProvider>);
-        let runner = Runner::with_shared_store(
+        let runner = Runner::new(
             store,
             provider,
             ToolRegistry::new(),

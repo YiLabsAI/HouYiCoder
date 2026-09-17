@@ -29,7 +29,7 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     // The checklist tool needs no sandbox, so it registers in a plain
     // server-contract test without a seatbelt.
     tools.register(Arc::new(TodoWriteTool::new()));
-    let runner = Runner::with_shared_store(
+    let runner = Runner::new(
         store,
         provider,
         tools,
