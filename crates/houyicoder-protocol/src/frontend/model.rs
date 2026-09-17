@@ -92,8 +92,16 @@ pub enum EffortCapability {
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum FastModeAvailability {
     Available,
-    Unavailable { reason: String },
-    Cooldown { reason: String, reset_at_ms: u64 },
+    /// The catalog declares no fast tier for this model at all (the common
+    /// default). The pane hides the setting rather than printing noise.
+    NotConfigured,
+    Unavailable {
+        reason: String,
+    },
+    Cooldown {
+        reason: String,
+        reset_at_ms: u64,
+    },
 }
 
 impl FastModeAvailability {
@@ -105,7 +113,7 @@ impl FastModeAvailability {
     /// The reason to show when the setting cannot take focus.
     pub fn reason(&self) -> Option<&str> {
         match self {
-            FastModeAvailability::Available => None,
+            FastModeAvailability::Available | FastModeAvailability::NotConfigured => None,
             FastModeAvailability::Unavailable { reason }
             | FastModeAvailability::Cooldown { reason, .. } => Some(reason.as_str()),
         }
@@ -131,9 +139,7 @@ impl Default for ModelDisplayCapabilities {
             context_window: None,
             max_output_tokens: None,
             effort: EffortCapability::Unsupported,
-            fast: FastModeAvailability::Unavailable {
-                reason: "no fast tier".into(),
-            },
+            fast: FastModeAvailability::NotConfigured,
         }
     }
 }

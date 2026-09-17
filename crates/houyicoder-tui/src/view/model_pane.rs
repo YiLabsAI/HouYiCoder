@@ -19,7 +19,9 @@ use unicode_width::UnicodeWidthStr;
 use crate::state::{App, ModelPickerState, ModelSettingFocus};
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
-use houyicoder_protocol::frontend::model::{ContextWindow, ContextWindowSource, ModelChoice};
+use houyicoder_protocol::frontend::model::{
+    ContextWindow, ContextWindowSource, FastModeAvailability, ModelChoice,
+};
 
 /// Default height /model asks for: a title, the list, the focus detail on the
 /// narrow layout, the two settings, and a footer. Capped at half the main
@@ -50,30 +52,25 @@ const APPLIED_MARK: &str = " \u{2714}";
 pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     let picker = &app.model_picker;
     let wide = inner.width >= WIDE_INNER_WIDTH;
-    let chunks = if wide {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Min(0),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .split(inner)
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Min(0),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .split(inner)
-    };
+    // A model with no fast tier declared drops the Fast Mode row entirely
+    // rather than printing an unavailable line the user never configured.
+    let fast_shown = !matches!(
+        picker.focused_capabilities().fast,
+        FastModeAvailability::NotConfigured
+    );
+    let mut constraints = vec![Constraint::Length(1), Constraint::Min(0)];
+    if !wide {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Length(1));
+    if fast_shown {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Length(1));
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             "Select a model",
@@ -82,14 +79,22 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         chunks[0],
     );
     draw_list(f, chunks[1], picker, wide);
-    let base = if wide { 2 } else { 3 };
+    let mut idx = 2;
     if !wide {
-        let detail = focused_detail(picker, chunks[2].width as usize);
-        f.render_widget(Paragraph::new(detail), chunks[2]);
+        let detail = focused_detail(picker, chunks[idx].width as usize);
+        f.render_widget(Paragraph::new(detail), chunks[idx]);
+        idx += 1;
     }
-    f.render_widget(Paragraph::new(effort_line(picker)), chunks[base]);
-    f.render_widget(Paragraph::new(fast_line(picker)), chunks[base + 1]);
-    f.render_widget(Paragraph::new(footer_line(picker, wide)), chunks[base + 2]);
+    f.render_widget(Paragraph::new(effort_line(picker)), chunks[idx]);
+    idx += 1;
+    if fast_shown {
+        f.render_widget(Paragraph::new(fast_line(picker)), chunks[idx]);
+        idx += 1;
+    }
+    f.render_widget(
+        Paragraph::new(footer_line(picker, wide, fast_shown)),
+        chunks[idx],
+    );
 }
 
 /// The model list, scrolled by the list state so the title, the detail and
@@ -280,16 +285,17 @@ fn effort_line(picker: &ModelPickerState) -> Line<'static> {
     let value = if !picker.effort_supported() {
         "unavailable".to_string()
     } else {
+        // The marker keys on the value the chain resolves for this row, not on
+        // whether the user has touched effort: cycling away and back to the
+        // chain's value re-collects it rather than losing the marker for good.
+        let marker = if picker.draft.effort == picker.chain_effort(picker.draft.row) {
+            " (default)"
+        } else {
+            ""
+        };
         match picker.draft.effort {
-            Some(level) => {
-                let marker = if picker.draft.effort_touched {
-                    ""
-                } else {
-                    " (default)"
-                };
-                format!("{}{marker}", level.label())
-            }
-            None => "auto".to_string(),
+            Some(level) => format!("{}{marker}", level.label()),
+            None => format!("auto{marker}"),
         }
     };
     Line::from(vec![
@@ -338,7 +344,7 @@ fn setting_label(name: &'static str, focused: bool) -> Span<'static> {
 /// save is in flight instead of promising keys that do nothing. On a narrow
 /// pane only the commit and cancel hints survive the width; those two must
 /// never be the ones truncated away.
-fn footer_line(picker: &ModelPickerState, wide: bool) -> Line<'static> {
+fn footer_line(picker: &ModelPickerState, wide: bool, fast_shown: bool) -> Line<'static> {
     if picker.is_pending() {
         return Line::from(Span::styled(
             "saving\u{2026}",
@@ -356,13 +362,24 @@ fn footer_line(picker: &ModelPickerState, wide: bool) -> Line<'static> {
         return line;
     }
     if wide {
-        key_hint(&[
-            ("Tab", "setting"),
-            ("Left/Right", "adjust"),
-            ("Up/Down", "select"),
-            ("Enter", "save"),
-            ("Esc", "cancel"),
-        ])
+        // The Tab hint is only honest while a second adjustable setting is on
+        // screen; with Fast Mode hidden, the arrows on effort need no hop.
+        if fast_shown {
+            key_hint(&[
+                ("Tab", "setting"),
+                ("Left/Right", "adjust"),
+                ("Up/Down", "select"),
+                ("Enter", "save"),
+                ("Esc", "cancel"),
+            ])
+        } else {
+            key_hint(&[
+                ("Left/Right", "adjust"),
+                ("Up/Down", "select"),
+                ("Enter", "save"),
+                ("Esc", "cancel"),
+            ])
+        }
     } else {
         key_hint(&[("Enter", "save"), ("Esc", "cancel")])
     }
@@ -632,6 +649,42 @@ mod tests {
         assert!(
             !out.lines().any(|l| l.contains("Enter to save")),
             "held keys are not promised while pending: {out}"
+        );
+    }
+
+    /// Auto is the chain's value when nothing is persisted: the level reads as
+    /// the default rather than as an adjustment already made.
+    #[test]
+    fn test_picker_auto_default_marker() {
+        let mut app = model_app(model_snapshot(vec![model_entry(
+            "model-one",
+            "One",
+            model_caps(true, true),
+        )]));
+        app.pane = Pane::Model;
+        let out = render_text(&app, 84, 24);
+        assert!(
+            out.contains("auto (default)"),
+            "an unpersisted effort reads auto, marked the default: {out}"
+        );
+    }
+
+    /// A model the catalog declares no fast tier for drops the Fast Mode row
+    /// and the Tab hint entirely rather than printing an unavailable line.
+    #[test]
+    fn test_picker_hides_fast_unconfigured() {
+        let mut caps = model_caps(true, true);
+        caps.fast = FastModeAvailability::NotConfigured;
+        let mut app = model_app(model_snapshot(vec![model_entry("model-one", "One", caps)]));
+        app.pane = Pane::Model;
+        let wide = render_text(&app, WIDE_INNER_WIDTH + 4, 24);
+        assert!(
+            !wide.contains("Fast Mode"),
+            "an unconfigured tier renders no Fast Mode row: {wide}"
+        );
+        assert!(
+            !wide.lines().any(|l| l.contains("Tab to setting")),
+            "an unconfigured tier drops the Tab hint: {wide}"
         );
     }
 }

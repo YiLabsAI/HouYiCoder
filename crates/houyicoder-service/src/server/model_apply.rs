@@ -216,8 +216,10 @@ impl Server {
         // A session model that is not a catalog row - a --model flag, or a
         // resumed sidecar - still needs a row to sit on, or the pane has no
         // place to show the check and the cursor. Appending keeps the written
-        // order untouched.
-        if !entries.iter().any(|entry| entry.id == applied_id) {
+        // order untouched. The resolved default already occupies the Default
+        // sentinel row, so an applied model equal to it needs no append: the
+        // sentinel covers it, and a second bare row would duplicate it.
+        if applied_id != default_id && !entries.iter().any(|entry| entry.id == applied_id) {
             entries.push(ModelCatalogEntry {
                 capabilities: runner.display_capabilities(&applied_id),
                 id: applied_id.clone(),

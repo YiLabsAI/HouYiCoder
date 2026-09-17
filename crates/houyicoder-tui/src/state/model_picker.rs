@@ -298,19 +298,27 @@ impl ModelPickerState {
                 if levels.is_empty() {
                     return;
                 }
-                // The current level, or the middle of the served set for a
-                // draft that follows the chain: one press lands either side.
-                let idx = self
-                    .draft
-                    .effort
-                    .and_then(|current| levels.iter().position(|level| *level == current))
-                    .unwrap_or(levels.len() / 2);
-                let next = if forward {
-                    (idx + 1) % levels.len()
-                } else {
-                    (idx + levels.len() - 1) % levels.len()
+                // The cycle walks auto (no effort parameter) plus the served
+                // levels in order, so auto is a real stop rather than a state
+                // the user can never reach again after the first adjustment.
+                let len = levels.len() + 1;
+                let idx = match self.draft.effort {
+                    None => 0,
+                    Some(current) => levels
+                        .iter()
+                        .position(|level| *level == current)
+                        .map_or(0, |i| i + 1),
                 };
-                self.draft.effort = Some(levels[next]);
+                let next = if forward {
+                    (idx + 1) % len
+                } else {
+                    (idx + len - 1) % len
+                };
+                self.draft.effort = if next == 0 {
+                    None
+                } else {
+                    Some(levels[next - 1])
+                };
                 self.draft.effort_touched = true;
                 self.draft.dirty = true;
             }
@@ -349,5 +357,84 @@ impl ModelPickerState {
         } else {
             None
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use houyicoder_protocol::frontend::model::FastModeAvailability;
+
+    fn picker_with(levels: Vec<EffortLevel>) -> ModelPickerState {
+        let mut state = ModelPickerState::default();
+        state.snapshot.entries = vec![ModelCatalogEntry {
+            id: "qwen3-coder".into(),
+            display_name: None,
+            description: None,
+            effort: None,
+            capabilities: ModelDisplayCapabilities {
+                context_window: None,
+                max_output_tokens: None,
+                effort: EffortCapability::Supported { levels },
+                fast: FastModeAvailability::NotConfigured,
+            },
+        }];
+        state.draft.row = 1;
+        state.draft.focus = ModelSettingFocus::Effort;
+        state.draft.effort = None;
+        state
+    }
+
+    #[test]
+    fn test_effort_forward_cycles_auto() {
+        let mut state = picker_with(vec![
+            EffortLevel::Low,
+            EffortLevel::Medium,
+            EffortLevel::High,
+        ]);
+        state.adjust_setting(true);
+        assert_eq!(state.draft.effort, Some(EffortLevel::Low));
+        state.adjust_setting(true);
+        assert_eq!(state.draft.effort, Some(EffortLevel::Medium));
+        state.adjust_setting(true);
+        assert_eq!(state.draft.effort, Some(EffortLevel::High));
+        state.adjust_setting(true);
+        assert_eq!(state.draft.effort, None);
+    }
+
+    #[test]
+    fn test_effort_backward_cycles_auto() {
+        let mut state = picker_with(vec![
+            EffortLevel::Low,
+            EffortLevel::Medium,
+            EffortLevel::High,
+        ]);
+        state.adjust_setting(false);
+        assert_eq!(state.draft.effort, Some(EffortLevel::High));
+        state.adjust_setting(false);
+        assert_eq!(state.draft.effort, Some(EffortLevel::Medium));
+        state.adjust_setting(false);
+        assert_eq!(state.draft.effort, Some(EffortLevel::Low));
+        state.adjust_setting(false);
+        assert_eq!(state.draft.effort, None);
+    }
+
+    #[test]
+    fn test_adjust_effort_marks_dirty() {
+        let mut state = picker_with(vec![EffortLevel::Low, EffortLevel::High]);
+        assert!(!state.draft.effort_touched);
+        assert!(!state.draft.dirty);
+        state.adjust_setting(true);
+        assert!(state.draft.effort_touched);
+        assert!(state.draft.dirty);
+    }
+
+    #[test]
+    fn test_adjust_effort_unsupported_noop() {
+        let mut state = picker_with(vec![]);
+        state.draft.dirty = false;
+        state.adjust_setting(true);
+        assert_eq!(state.draft.effort, None);
+        assert!(!state.draft.dirty);
     }
 }

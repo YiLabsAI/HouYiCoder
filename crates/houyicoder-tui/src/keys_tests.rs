@@ -139,6 +139,33 @@ fn test_model_pane_adjusts_effort() {
     assert!(app.model_picker.draft.dirty, "the draft is modified");
 }
 
+/// Auto is a real stop in the cycle, reachable from both directions, so a
+/// user who leaves the chain value can always get back to it.
+#[test]
+fn test_model_pane_cycles_auto() {
+    let mut app = catalog_app(&[("qwen3.7-max", true, true)]);
+    app.pane = Pane::Model;
+    assert_eq!(
+        app.model_picker.draft.effort,
+        Some(EffortLevel::Medium),
+        "the draft opens on the chain's medium"
+    );
+    handle_input(&mut app, key(KeyCode::Right));
+    assert_eq!(app.model_picker.draft.effort, Some(EffortLevel::High));
+    handle_input(&mut app, key(KeyCode::Right));
+    assert_eq!(
+        app.model_picker.draft.effort, None,
+        "Right past high wraps to auto"
+    );
+    handle_input(&mut app, key(KeyCode::Right));
+    assert_eq!(app.model_picker.draft.effort, Some(EffortLevel::Low));
+    handle_input(&mut app, key(KeyCode::Left));
+    assert_eq!(
+        app.model_picker.draft.effort, None,
+        "Left past low wraps back to auto"
+    );
+}
+
 /// Left/Right is a no-op on a model that speaks no effort dialect, and Tab
 /// cannot move the setting focus onto a setting the model does not support.
 #[test]
@@ -187,6 +214,26 @@ fn test_model_pane_tab_focus() {
     );
 }
 
+/// Opening /model via a typed slash input echoes the command exactly once, and
+/// Esc-cancel (no change) must not add a second echo.
+#[test]
+fn test_model_open_echoes_once() {
+    fn echoes(app: &App) -> usize {
+        app.transcript
+            .iter()
+            .filter(|l| matches!(l, TranscriptLine::User(s) if s == "/model"))
+            .count()
+    }
+    let mut app = catalog_app(&[("qwen3.7-max", true, true), ("other", true, true)]);
+    app.input.set("/model".to_string());
+    app.submit_input();
+    assert_eq!(app.pane, Pane::Model, "the command opens the pane");
+    assert_eq!(echoes(&app), 1, "one /model echo on open");
+    handle_input(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.pane, Pane::Transcript, "Esc closes the pane");
+    assert_eq!(echoes(&app), 1, "Esc adds no second echo");
+}
+
 /// The /model pane Esc key discards the draft and closes back to the
 /// transcript: nothing the user adjusted reaches the applied state.
 #[test]
@@ -220,12 +267,15 @@ fn test_model_pane_esc_closes() {
 #[test]
 fn test_picker_fast_inline() {
     let (mut app, events) = connected_app_with_events();
-    app.model_picker
-        .refresh_snapshot(model_snapshot(vec![model_entry(
-            "glm-5.2",
-            "Fable",
-            model_caps(true, true),
-        )]));
+    let mut catalog = model_snapshot(vec![model_entry(
+        "glm-5.2",
+        "Fable",
+        model_caps(true, true),
+    )]);
+    // The chain resolves to a level so the draft opens on it, matching the
+    // catalog fixtures: one Right takes focus Medium -> High.
+    catalog.effort_level = Some(EffortLevel::Medium);
+    app.model_picker.refresh_snapshot(catalog);
     app.pane = Pane::Model;
     // The level is adjusted while the arrows are on Effort, so the commit has
     // all three dimensions to carry.

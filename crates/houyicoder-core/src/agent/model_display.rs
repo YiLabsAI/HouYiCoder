@@ -70,8 +70,13 @@ impl Runner {
     /// window chain.
     pub fn display_capabilities(&self, model: &str) -> ModelDisplayCapabilities {
         let (window, source) = self.resolve_window_info_for(model);
+        // A Fallback source means the id is unknown to every layer (no
+        // learned limit, no opt-in, no config, no family table, no provider
+        // window). Show nothing rather than a made-up number: the conservative
+        // 200K default still gates the request, but the pane must not present
+        // a guess as the model's real window.
         ModelDisplayCapabilities {
-            context_window: Some(ContextWindow {
+            context_window: (source != ContextWindowSource::Fallback).then_some(ContextWindow {
                 tokens: window,
                 source,
             }),
@@ -118,9 +123,7 @@ impl Runner {
             Some(false) => FastModeAvailability::Unavailable {
                 reason: "disabled in the model catalog".into(),
             },
-            None => FastModeAvailability::Unavailable {
-                reason: "no fast tier configured".into(),
-            },
+            None => FastModeAvailability::NotConfigured,
         }
     }
 }

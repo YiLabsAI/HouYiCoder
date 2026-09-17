@@ -507,8 +507,9 @@ fn test_model_enter_persists_pick() {
     // The draft re-seeds onto the session's model, which here is the built-in
     // default: Down moves onto the catalog row.
     s.send_key(&Key::Down);
-    // Left adjusts the level off the cycle base; the default marker drops.
-    s.send_key(&Key::Left);
+    // Right steps the effort off the auto base up to low; the default marker
+    // drops because the draft no longer follows the chain.
+    s.send_key(&Key::Right);
     assert!(
         wait_for_text(&mut s, "Reasoning Effort: low"),
         "Left adjusts the level on a qwen3 row: {}",
