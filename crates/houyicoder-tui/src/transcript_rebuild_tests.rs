@@ -548,3 +548,53 @@ fn test_echo_survives_result() {
         app.transcript
     );
 }
+
+/// A log that outgrew the window rebuilds from the frames still covered. A
+/// TUI-only line whose neighbouring frames left the window must not land among
+/// the rows that remain: between two rows of a live turn it reads as a notice
+/// belonging to that turn.
+#[test]
+fn test_slide_keeps_notice_out() {
+    let mut app = fresh_app();
+    app.screen = crate::state::Screen::Working;
+    for i in 0..10 {
+        app.frames.push(user_msg(&format!("msg {i}")));
+    }
+    app.rebuild_transcript();
+    app.push_transcript_line(TranscriptLine::Interrupted);
+    for i in 10..710 {
+        app.frames.push(user_msg(&format!("msg {i}")));
+    }
+    app.rebuild_transcript();
+    let texts: Vec<&str> = app
+        .transcript
+        .iter()
+        .filter_map(|l| match l {
+            TranscriptLine::User(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts.contains(&"msg 210"),
+        "the window renders its oldest covered frame: {:?}",
+        &texts[..3]
+    );
+    assert!(
+        !texts.contains(&"msg 209"),
+        "a frame the window no longer covers is not rendered"
+    );
+    let notice_at = app
+        .transcript
+        .iter()
+        .position(|l| matches!(l, TranscriptLine::Interrupted))
+        .expect("the notice survives the rebuild");
+    let first_row = app
+        .transcript
+        .iter()
+        .position(|l| !l.is_tui_only())
+        .expect("the window renders rows");
+    assert!(
+        notice_at < first_row,
+        "the notice sits inside the remaining rows at {notice_at} (first row {first_row})"
+    );
+}

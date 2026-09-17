@@ -649,3 +649,55 @@ fn test_batch_delivers_via_drain() {
         app.pending
     );
 }
+
+/// A lone Interrupted notice is cleared by the next submission. A turn with
+/// real output gets no restore line, so the notice cannot be dropped as a
+/// trailing pair: left in place it survives every rebuild and reads as a fresh
+/// interruption at each later run's start.
+#[test]
+fn test_submit_clears_lone_interrupt() {
+    let mut app = composition::app();
+    crate::test_harness::attach_connection(&mut app);
+    app.screen = crate::state::Screen::Working;
+    // A run with real output, interrupted: a lone notice, no restore pair.
+    app.spawn_run("first".into());
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("first"))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
+        "partial reply",
+    ))));
+    let req = app.active_run_req_id().expect("run active");
+    app.handle_agent_message(SessionMessage::Response {
+        request: req,
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::Interrupted {
+                    reason: "user".into(),
+                },
+                turns: 1,
+                usage: Usage::default(),
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+            }),
+        },
+    });
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::Interrupted)),
+        "the interrupted run lands its notice"
+    );
+    assert!(
+        !app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s == "input restored")),
+        "real output means no restore line, so the notice stands alone"
+    );
+    // The next submission answers the notice.
+    app.spawn_run("second".into());
+    assert!(
+        !app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::Interrupted)),
+        "an answered notice must not ride into the next turn: {:?}",
+        app.transcript
+    );
+}

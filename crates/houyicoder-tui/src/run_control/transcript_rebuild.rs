@@ -32,12 +32,16 @@ impl App {
             for line in &self.transcript {
                 if line.is_tui_only() {
                     merged.push(line.clone());
-                } else if event_idx < event_lines.len() {
+                } else if event_idx < event_lines.len() && same_frame(line, &event_lines[event_idx])
+                {
                     merged.push(merge_subagent(line, event_lines[event_idx].clone()));
                     event_idx += 1;
                 }
+                // A row that does not pair here belongs to a frame outside the
+                // window: it is dropped without consuming the fresh line, so
+                // the next row pairs with its own rendering.
             }
-            merged.extend(event_lines[event_idx..].iter().cloned());
+            merged.extend_from_slice(&event_lines[event_idx..]);
             self.transcript = merged;
             self.current_turn_boundary.frame_index = turn_start;
             // Map the stable frame prefix to its transcript boundary while
@@ -67,16 +71,12 @@ impl App {
             let tail = transcript_from_frames(&self.frames[turn_start..]);
             let mut merged: Vec<TranscriptLine> =
                 Vec::with_capacity(self.current_turn_boundary.line_index + tail.len());
-            merged.extend(
-                self.transcript[..self.current_turn_boundary.line_index]
-                    .iter()
-                    .cloned(),
-            );
+            merged.extend_from_slice(&self.transcript[..self.current_turn_boundary.line_index]);
             let mut tail_idx = 0;
             for line in &self.transcript[self.current_turn_boundary.line_index..] {
                 if line.is_tui_only() {
                     merged.push(line.clone());
-                } else if tail_idx < tail.len() && aligns_with(line, &tail[tail_idx]) {
+                } else if tail_idx < tail.len() && same_frame(line, &tail[tail_idx]) {
                     merged.push(merge_subagent(line, tail[tail_idx].clone()));
                     tail_idx += 1;
                 } else if tail_idx < tail.len() && matches!(line, TranscriptLine::User(_)) {
@@ -87,7 +87,7 @@ impl App {
                     merged.push(line.clone());
                 }
             }
-            merged.extend(tail[tail_idx..].iter().cloned());
+            merged.extend_from_slice(&tail[tail_idx..]);
             self.transcript = merged;
         }
         // Re-derive view caches incrementally from their frame cursors.
@@ -141,9 +141,9 @@ impl App {
             split = i + 1;
         }
         let mut merged = Vec::with_capacity(new_lines.len() + self.transcript.len());
-        merged.extend(self.transcript[..split].iter().cloned());
+        merged.extend_from_slice(&self.transcript[..split]);
         merged.extend(new_lines);
-        merged.extend(self.transcript[split..].iter().cloned());
+        merged.extend_from_slice(&self.transcript[split..]);
         self.transcript = merged;
         self.loaded_from_frame.set(batch_start);
         // Older lines extend the stable prefix and must survive the next tail
@@ -255,11 +255,11 @@ enum LineRole {
     Notice,
 }
 
-/// Whether the rebuild merge may align a visible line with a fresh event
-/// line: both must render the same conversational role. TUI-only lines
-/// interspersed between frames shift the positional pairing, so without this
-/// check an echo can be consumed by an unrelated event.
-fn aligns_with(visible: &TranscriptLine, fresh: &TranscriptLine) -> bool {
+/// Whether both lines render the same frame: same role, and a row that belongs
+/// to a frame names the same source — its tool call, its text, its child
+/// session. Role alone mispairs once a TUI-only line or a slid window shifts
+/// the positions, which leaves a notice inside a newer turn.
+fn same_frame(visible: &TranscriptLine, fresh: &TranscriptLine) -> bool {
     use TranscriptLine::*;
     let role = |l: &TranscriptLine| match l {
         User(_) => LineRole::User,
@@ -268,7 +268,24 @@ fn aligns_with(visible: &TranscriptLine, fresh: &TranscriptLine) -> bool {
         Thinking { .. } => LineRole::Thinking,
         _ => LineRole::Notice,
     };
-    role(visible) == role(fresh)
+    match (visible, fresh) {
+        (
+            Tool {
+                name: a_name,
+                call_id: a_id,
+                ..
+            },
+            Tool {
+                name: b_name,
+                call_id: b_id,
+                ..
+            },
+        ) => (a_name == "result") == (b_name == "result") && a_id == b_id,
+        (User(a), User(b)) | (Agent(a), Agent(b)) => a == b,
+        (Thinking { text: a }, Thinking { text: b }) => a == b,
+        (Subagent { child_sid: a, .. }, Subagent { child_sid: b, .. }) => a == b,
+        _ => role(visible) == role(fresh),
+    }
 }
 
 /// Preserve fetched child rows when rebuilding the same delegation. A new
