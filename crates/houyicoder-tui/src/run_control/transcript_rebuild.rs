@@ -76,9 +76,15 @@ impl App {
             for line in &self.transcript[self.current_turn_boundary.line_index..] {
                 if line.is_tui_only() {
                     merged.push(line.clone());
-                } else if tail_idx < tail.len() {
+                } else if tail_idx < tail.len() && aligns_with(line, &tail[tail_idx]) {
                     merged.push(merge_subagent(line, tail[tail_idx].clone()));
                     tail_idx += 1;
+                } else if tail_idx < tail.len() && matches!(line, TranscriptLine::User(_)) {
+                    // A local User echo whose own frame has not arrived in
+                    // this tail: keep it at its position rather than treating
+                    // the next event as its rendering. The echo reaches its
+                    // own frame later and is paired then.
+                    merged.push(line.clone());
                 }
             }
             merged.extend(tail[tail_idx..].iter().cloned());
@@ -236,6 +242,33 @@ impl App {
         self.verdict_cursor = self.frames.len();
         self.todos.update(&self.frames, self.agent_busy());
     }
+}
+
+/// The conversational role a transcript line renders in, used to align the
+/// visible history with a freshly rebuilt event line.
+#[derive(PartialEq)]
+enum LineRole {
+    User,
+    Agent,
+    Tool,
+    Thinking,
+    Notice,
+}
+
+/// Whether the rebuild merge may align a visible line with a fresh event
+/// line: both must render the same conversational role. TUI-only lines
+/// interspersed between frames shift the positional pairing, so without this
+/// check an echo can be consumed by an unrelated event.
+fn aligns_with(visible: &TranscriptLine, fresh: &TranscriptLine) -> bool {
+    use TranscriptLine::*;
+    let role = |l: &TranscriptLine| match l {
+        User(_) => LineRole::User,
+        Agent(_) => LineRole::Agent,
+        Tool { .. } => LineRole::Tool,
+        Thinking { .. } => LineRole::Thinking,
+        _ => LineRole::Notice,
+    };
+    role(visible) == role(fresh)
 }
 
 /// Preserve fetched child rows when rebuilding the same delegation. A new

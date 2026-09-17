@@ -479,12 +479,9 @@ fn test_prepend_survives_rebuild() {
     );
 }
 
-/// Known ordering bug: a non-slash User echo pushed during a run is
-/// consumed by the rebuild merge (treated as frame-derived, replaced by
-/// the wrong event line). Marked ignored until the fix lands; the test
-/// reproduces the bug and will be un-ignored when the merge logic
-/// protects non-slash echoes.
-#[ignore]
+/// A queued echo that does not start with a slash is not a TUI-only line,
+/// so the tail rebuild must not consume it as frame-derived: it stays after
+/// the slash echoes and before the answer.
 #[test]
 fn test_echo_slash_order() {
     let mut app = fresh_app();
@@ -517,5 +514,37 @@ fn test_echo_slash_order() {
             .iter()
             .map(|l| format!("{l:?}"))
             .collect::<Vec<_>>()
+    );
+}
+
+/// An echo pushed while the newest tool call has no result yet. That result
+/// frame follows the echo, so the merge must not render the echo as it:
+/// both the echoed text and the result survive with one copy each.
+#[test]
+fn test_echo_survives_result() {
+    let mut app = fresh_app();
+    pump(&mut app, user_msg("run bash"));
+    pump(&mut app, tool_call("c1", "bash"));
+    app.push_transcript_line(TranscriptLine::User("go on".into()));
+    pump(&mut app, tool_result("c1"));
+    let echoes = app
+        .transcript
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::User(t) if t == "go on"))
+        .count();
+    let results = app
+        .transcript
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::Tool { name, call_id, .. } if name == "result" && call_id == "c1"))
+        .count();
+    assert_eq!(
+        echoes, 1,
+        "the echo keeps one copy instead of being rendered as the event: {:?}",
+        app.transcript
+    );
+    assert_eq!(
+        results, 1,
+        "the result keeps one copy: {:?}",
+        app.transcript
     );
 }
