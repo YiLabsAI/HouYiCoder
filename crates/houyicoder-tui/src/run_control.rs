@@ -170,6 +170,9 @@ impl App {
         self.run_state.start(req_id, Instant::now());
         // Preserve the submitted input in case interruption restores the turn.
         self.last_run_input = Some(input.clone());
+        // A fresh submission supersedes the previous turn's restore markers, so
+        // they must not rise into this turn's transcript.
+        strip_restore_markers(&mut self.transcript);
         self.push_transcript_line(TranscriptLine::User(input));
         self.last_delta_at = None;
         self.displayed_tokens.set(0);
@@ -619,6 +622,27 @@ impl App {
         };
         self.frames.truncate(start);
         self.rebuild_transcript();
+    }
+}
+
+/// Drop trailing restore markers — a system "input restored" notice paired
+/// with the Interrupted marker that follows it. The pair annotates a retracted
+/// turn; a fresh submission supersedes it, so leaving it would stack a second
+/// pair on the next interrupt and leak a stale notice into later turns. A lone
+/// trailing Interrupted (a preserved turn's notice) is durable history and stays.
+fn strip_restore_markers(transcript: &mut Vec<TranscriptLine>) {
+    loop {
+        let paired = transcript.len() >= 2
+            && matches!(transcript.last(), Some(TranscriptLine::Interrupted))
+            && matches!(
+                transcript.get(transcript.len() - 2),
+                Some(TranscriptLine::System(s)) if s == "input restored"
+            );
+        if !paired {
+            return;
+        }
+        transcript.pop();
+        transcript.pop();
     }
 }
 

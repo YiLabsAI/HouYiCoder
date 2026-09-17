@@ -411,6 +411,74 @@ fn test_interrupted_renders_child_gutter() {
     assert_eq!(rendered, crate::records::INTERRUPTED_NOTICE);
 }
 
+/// A second interrupted turn must not stack a second Interrupted row: the
+/// resubmit of a restored input strips the prior restore pair, so each
+/// interrupt leaves exactly one marker and one restore notice.
+#[test]
+fn test_resubmit_avoids_duplicate_interrupt() {
+    let interrupted_done = |req: RequestId| SessionMessage::Response {
+        request: req,
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::Interrupted {
+                    reason: "user".into(),
+                },
+                turns: 0,
+                usage: Usage::default(),
+                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+            }),
+        },
+    };
+    let interrupts = |app: &App| {
+        app.transcript
+            .iter()
+            .filter(|l| matches!(l, TranscriptLine::Interrupted))
+            .count()
+    };
+    let restore_notices = |app: &App| {
+        app.transcript
+            .iter()
+            .filter(|l| matches!(l, TranscriptLine::System(s) if s == "input restored"))
+            .count()
+    };
+
+    let mut app = composition::app();
+    crate::test_harness::attach_connection(&mut app);
+    app.screen = crate::state::Screen::Working;
+
+    // Turn 1: submit, then interrupt before output -> restore for editing.
+    app.spawn_run("analysis".into());
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
+        "analysis",
+    ))));
+    let turn1 = app.active_run_req_id().expect("turn 1 running");
+    app.handle_agent_message(interrupted_done(turn1));
+    assert_eq!(app.input.value(), "analysis", "turn 1 restored");
+    assert_eq!(interrupts(&app), 1, "one Interrupted after turn 1");
+
+    // Resubmit the restored input, then interrupt again.
+    drop(app.input.take());
+    app.spawn_run("analysis".into());
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
+        "analysis",
+    ))));
+    let turn2 = app.active_run_req_id().expect("turn 2 running");
+    app.handle_agent_message(interrupted_done(turn2));
+
+    assert_eq!(
+        interrupts(&app),
+        1,
+        "the resubmit stripped the prior pair; one Interrupted remains: {:?}",
+        app.transcript
+    );
+    assert_eq!(
+        restore_notices(&app),
+        1,
+        "only the new restore notice remains: {:?}",
+        app.transcript
+    );
+}
+
 #[test]
 fn test_max_turns_records_hint() {
     // MaxTurnsReached is a graceful Ok outcome (not an Err payload): the
