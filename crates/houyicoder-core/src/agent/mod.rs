@@ -187,7 +187,9 @@ pub struct Runner {
     /// Optional post-run verification gate. When set, after a run reaches
     /// FinalOutput the runner calls verify before returning. A failed verify
     /// surfaces RunOutcome::VerifyFailed instead of FinalOutput so the caller
-    /// can re-prompt the model. None means no gate, FinalOutput passes through.
+    /// can re-prompt the model; a stop read before or during the gate ends the
+    /// run as interrupted instead, outranking the verdict. None means no gate,
+    /// FinalOutput passes through.
     verify_gate: Option<Arc<dyn VerifyGate>>,
     /// The undo stack + snapshot store for recoverable destructive ops.
     /// Shared with the BashTool (which pushes); undo_last pops + restores.
@@ -654,31 +656,23 @@ impl Runner {
                     }
                 }
                 NextStep::FinalOutput(text) => {
-                    // A cancel observed while this turn was rendering its
-                    // answer still ends the run: the stream-ending work that
-                    // folds usage + parses the answer never reads the token,
-                    // so without this the run reports a finished turn the
-                    // user already stopped. An abort outranks a verify
-                    // verdict from the same turn.
-                    if token.is_cancelled() {
-                        return self.interrupted_at_boundary(session, turn, usage).await;
-                    }
-                    // If a verify gate is installed, run it before
-                    // surfacing FinalOutput. A failed verify becomes
-                    // RunOutcome::VerifyFailed so the caller can
-                    // re-prompt the model to fix its own work. No gate
-                    // means FinalOutput passes through unchanged.
-                    if let Some(gate) = self.verify_gate.as_ref()
-                        && let Err(failure) = gate.verify(session, &*self.store).await
+                    // A cancel observed while this turn rendered its answer,
+                    // or while the verify gate below ran, still ends the run:
+                    // the stream-ending work that folds usage + parses the
+                    // answer never reads the token, so without this the run
+                    // reports a finished turn the user already stopped. A
+                    // failed verify becomes RunOutcome::VerifyFailed so the
+                    // caller can re-prompt the model to fix its own work; no
+                    // gate installed passes the answer through unchanged.
+                    if let Some(ended) = self
+                        .verify_at_answer(session, turn, usage.clone(), token)
+                        .await?
                     {
-                        return Ok(RunResult {
-                            outcome: RunOutcome::VerifyFailed(failure),
-                            turns: turn,
-                            usage,
-                        });
+                        return Ok(ended);
                     }
                     // Background memory at query-loop end: extractor + dream,
-                    // both fire-and-forget; never fails the run.
+                    // both fire-and-forget and neither reads the run token, so
+                    // the stop is read again after them.
                     self.memory
                         .fire_background(session, || {
                             reward_snapshot::capture_reward_snapshot(
@@ -687,6 +681,9 @@ impl Runner {
                             )
                         })
                         .await;
+                    if token.is_cancelled() {
+                        return self.interrupted_at_boundary(session, turn, usage).await;
+                    }
                     return Ok(RunResult {
                         outcome: RunOutcome::FinalOutput(text),
                         turns: turn,

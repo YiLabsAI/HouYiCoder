@@ -18,12 +18,18 @@ use houyicoder_api::launcher::{
 use houyicoder_api::session::SessionLog;
 use houyicoder_async::PFut;
 use houyicoder_context::SessionId;
+use houyicoder_protocol::llm::Usage;
+use tokio_util::sync::CancellationToken;
+
+use super::{RunError, RunOutcome, RunResult, Runner};
 
 /// A post-run verification checkpoint. The runner calls verify after a run
 /// reaches FinalOutput. Ok(()) means the output passes; Err means the model
 /// work failed verification and the caller should re-prompt it to fix the
 /// findings. The gate runs at the harness level (not as a tool call) so it
-/// cannot be skipped by the model.
+/// cannot be skipped by the model. The runner reads the stop again once verify
+/// returns, so a gate that blocks the calling thread holds a stopped run open
+/// until it returns.
 ///
 /// Object-safe via PFut so the runner holds Arc<dyn VerifyGate>, mirroring the
 /// Tool and ModelProvider seams.
@@ -36,6 +42,45 @@ pub trait VerifyGate: Send + Sync {
         session: SessionId,
         store: &dyn SessionLog,
     ) -> PFut<'_, Result<(), VerifyFailure>>;
+}
+
+impl Runner {
+    /// Verify the answer's turn and report its verdict: Ok(None) means the
+    /// answer may be reported as the finished turn; Ok(Some(result)) means the
+    /// run ends here instead. A stop observed before the gate or while it ran
+    /// outranks the verdict — the run the user stopped is reported
+    /// interrupted, neither failed nor finished — and no gate installed passes
+    /// the answer through unchanged.
+    pub(crate) async fn verify_at_answer(
+        &self,
+        session: SessionId,
+        turn: u32,
+        usage: Usage,
+        token: &CancellationToken,
+    ) -> Result<Option<RunResult>, RunError> {
+        if token.is_cancelled() {
+            return Ok(Some(
+                self.interrupted_at_boundary(session, turn, usage).await?,
+            ));
+        }
+        let Some(gate) = self.verify_gate.as_ref() else {
+            return Ok(None);
+        };
+        let verdict = gate.verify(session, &*self.store).await;
+        if token.is_cancelled() {
+            return Ok(Some(
+                self.interrupted_at_boundary(session, turn, usage).await?,
+            ));
+        }
+        match verdict {
+            Err(failure) => Ok(Some(RunResult {
+                outcome: RunOutcome::VerifyFailed(failure),
+                turns: turn,
+                usage,
+            })),
+            Ok(()) => Ok(None),
+        }
+    }
 }
 
 /// A verification failure. checks names the failing verification steps with a
