@@ -39,17 +39,26 @@ from cov_lcov import (  # noqa: E402
     stale_mapping_evidence,
 )
 from cov_lcov import lcov_path as worktree_lcov_path  # noqa: E402
+from rules.paths import is_test_file  # noqa: E402
 
 THRESHOLD = int(os.environ.get("COV_DIFF_THRESHOLD", "85"))
 BASE = os.environ.get("COV_BASE", "HEAD")
-# Colon-separated substrings; a diff file whose path contains any is ignored
-# (it is a test, not production code to cover, or a stub/exempt crate). Add
-# your own via COV_IGNORE="foo:bar"; the defaults are appended.
+# Colon-separated substrings for the stub/exempt crates; a diff file whose
+# path contains any is ignored. Add your own via COV_IGNORE="foo:bar"; the
+# defaults are appended. Test files are exempt through is_test_file, the one
+# predicate every detector shares, so a new test-naming convention cannot
+# leave this gate charging coverage for test code.
 IGNORE = os.environ.get(
     "COV_IGNORE",
-    "_tests.rs:/tests/:houyicoder-cli:houyicoder-graph:houyicoder-wasm:frame_timing.rs",
+    "houyicoder-cli:houyicoder-graph:houyicoder-wasm:frame_timing.rs",
 ).split(":")
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def is_ignored(path: str) -> bool:
+    """Whether a diff path is out of the measured set: test code, or a stub
+    or exempt crate."""
+    return is_test_file(path) or any(x in path for x in IGNORE)
 
 
 def run(cmd, **kw):
@@ -193,9 +202,9 @@ def parse_added_lines(diff: str, renames: dict[str, str]) -> dict[str, set[int]]
         if line.startswith("+++ b/"):
             flush()
             f = normalize(line[6:])
-            # Skip files that match an IGNORE substring (test files, stub or
-            # exempt crates) -- they are not production code to cover.
-            cur_file = None if any(x in f for x in IGNORE) else f
+            # Skip test files and the stub/exempt crates -- they are not
+            # production code to cover.
+            cur_file = None if is_ignored(f) else f
             continue
         if line.startswith("--- "):
             continue
@@ -242,7 +251,7 @@ def untracked_sources(listing: str) -> list[str]:
         if not rel.endswith(".rs"):
             continue
         f = normalize(rel)
-        if any(x in f for x in IGNORE):
+        if is_ignored(f):
             continue
         out.append(f)
     return out

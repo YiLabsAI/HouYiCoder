@@ -43,6 +43,14 @@ def test_split_test_no_error():
     assert r["excess"] == 0
 
 
+def test_dir_form_is_test():
+    # The directory form: X_tests/ holds the submodules of its X_tests.rs
+    # root, so a file under it carries the test thresholds as well.
+    r = evaluate([("crates/x/src/foo_tests/helper.rs", 850)])
+    assert not r["errs"], "a file under X_tests/ must take the test limits"
+    assert r["excess"] == 0
+
+
 def test_threshold_no_cliff():
     # THE core case: crossing the 700 threshold adds +0 to excess.
     # A count ratchet would +1 here -- recreating the cliff at 700.

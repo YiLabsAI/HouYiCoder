@@ -46,7 +46,9 @@ def is_test_file(rel_path: str) -> bool:
         return True
     if name.endswith("_tests.rs") or name.endswith("_test.rs"):
         return True
-    return False
+    # The directory form: X_tests/ holds the submodules of its X_tests.rs
+    # root, so a file under it is test code as well.
+    return any(seg.endswith("_tests") for seg in p.split("/")[:-1])
 
 
 # jscpd --ignore globs — the glob form of is_test_file. Keep in sync with
@@ -57,4 +59,5 @@ TEST_IGNORE_GLOBS = ",".join([
     "**/*_tests.rs",
     "**/*_test.rs",
     "**/test_support.rs",
+    "**/*_tests/**",
 ])

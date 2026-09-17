@@ -18,7 +18,7 @@ Covered logics:
     not count
   - the trailing #[cfg(test)] mod cutoff, and that a #[cfg(test)] on a
     non-mod item does not blank the rest of the file
-  - path exemptions (tests/, examples/, benches/, *_tests.rs)
+  - path exemptions (test code by the shared predicate, examples/, benches/)
   - all three check verdicts: exact match passes, over-count fires,
     under-count fires
   - the two tables sum for one file, so a mixed file is allowed exactly
@@ -119,7 +119,9 @@ def main() -> int:
         )
 
     # 4. Path exemptions, each against a positive control in the same tree:
-    # the src file must be the ONLY reported path.
+    # the src file must be the ONLY reported path. The submodule beside a
+    # test root and a tests.rs module root are exempt as well, since the
+    # shared predicate is what draws the test/production line here.
     body = 'fn f() { eprintln!("x"); }\n'
     root = _make_tree({
         "c/src/real.rs": body,
@@ -127,6 +129,8 @@ def main() -> int:
         "c/examples/demo.rs": body,
         "c/benches/b.rs": body,
         "c/src/thing_tests.rs": body,
+        "c/src/thing_tests/helper.rs": body,
+        "c/src/module/tests.rs": body,
     })
     found = scan(root)
     if set(found) != {"crates/c/src/real.rs"}:

@@ -52,9 +52,10 @@ than a silent pass.
 
 Test and example targets are exempt by structure, not by listing: their
 output IS the product (a skip notice, a benchmark number, a rendered-screen
-dump read by a human running the test). The exemption covers tests/ and
-examples/ trees, *_tests.rs peer files, and the conventional trailing
-#[cfg(test)] mod in a source file.
+dump read by a human running the test). Whole test targets are recognized by
+the shared test-file predicate, so every test-code shape is exempt; a
+production file is still exempt for the conventional trailing #[cfg(test)]
+mod, which is a reading of the source rather than of the path.
 
 Run: python3 scripts/check_stderr.py  (wired into make check as stderr).
 Exit 1 on a violation, 0 otherwise.
@@ -62,6 +63,9 @@ Exit 1 on a violation, 0 otherwise.
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rules.paths import is_test_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = ROOT / "crates"
@@ -110,12 +114,14 @@ _MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s")
 
 
 def _is_exempt_path(rel: str) -> bool:
-    """True for targets whose console output is the product: integration
-    test binaries, example binaries, and peer-test module files."""
+    """True for targets whose console output is the product: test code and
+    the example and bench binaries."""
     parts = rel.split("/")
-    if "tests" in parts or "examples" in parts or "benches" in parts:
+    if "examples" in parts or "benches" in parts:
         return True
-    return parts[-1].endswith("_tests.rs")
+    # The test-code shapes come from the shared predicate rather than a
+    # local list, so a convention one gate knows cannot go unnoticed here.
+    return is_test_file(rel)
 
 
 def _test_mod_cutoff(lines: list[str]) -> int:

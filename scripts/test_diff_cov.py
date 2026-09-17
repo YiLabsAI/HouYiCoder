@@ -154,9 +154,13 @@ def main() -> int:
         failures.append(f"parse_added_lines: no renames means nothing exempt, got {got}")
 
     # 10. the IGNORE filter survives the rewrite: a test file is dropped, a
-    # production file in the same diff is kept.
+    # production file in the same diff is kept. Both test-file shapes count:
+    # the flat X_tests.rs and a submodule under the X_tests/ directory.
     diff = (
         "+++ b/crates/a/src/dispatch_tests.rs\n"
+        "@@ -1,0 +1,1 @@\n"
+        "+    assert!(true);\n"
+        "+++ b/crates/a/src/dispatch_tests/helper.rs\n"
         "@@ -1,0 +1,1 @@\n"
         "+    assert!(true);\n"
         "+++ b/crates/a/src/dispatch.rs\n"
