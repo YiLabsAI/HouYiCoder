@@ -57,6 +57,7 @@ impl Runner {
             aborted: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             turn_cancel: Mutex::new(None),
+            user_turn: Mutex::new(0),
             verify_gate: None,
             undo_stack: None,
             snapshot_store: None,
@@ -93,6 +94,25 @@ impl Runner {
         };
         runner.wire_cache_liveness_policy();
         runner
+    }
+
+    /// Advance the current user turn's model-call counter and return it. The
+    /// drive loop caps on it so max_turns bounds one user turn's tool loop,
+    /// not the session's accumulated turns.
+    pub(super) fn bump_user_turn(&self) -> u32 {
+        let mut count = self.user_turn.lock().expect("user_turn lock");
+        *count += 1;
+        *count
+    }
+
+    /// Read the current user turn's model-call count.
+    pub(super) fn user_turn(&self) -> u32 {
+        *self.user_turn.lock().expect("user_turn lock")
+    }
+
+    /// Start a fresh max_turns budget for a new user turn.
+    pub(super) fn reset_user_turn(&self) {
+        *self.user_turn.lock().expect("user_turn lock") = 0;
     }
 
     /// Run the agent on a user input. Appends the user event, then drives the
@@ -143,6 +163,9 @@ impl Runner {
         }
         self.memory.recall(session).await?;
         self.inject_skill_listing_and_body(session).await?;
+        // A new user turn gets a fresh max_turns budget: the cap bounds one
+        // turn's tool loop, not the session's accumulated turns.
+        self.reset_user_turn();
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
         self.emit_run_result(&result);
         // Best-effort fact persistence: failures are logged, not fatal.
@@ -175,6 +198,8 @@ impl Runner {
                 .await?;
         }
         self.append_user_input(session, user_input).await?;
+        // A forked run is a fresh turn: reset the max_turns budget.
+        self.reset_user_turn();
         self.drive_loop(session, 0, Usage::default(), &token).await
     }
 
@@ -199,17 +224,18 @@ impl Runner {
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
         let remaining = self.apply_decisions(session, decisions).await?;
         if !remaining.is_empty() {
-            let prior_turns = self.count_turns(session).await?;
             self.mark_paused();
             return Ok(RunResult {
                 outcome: RunOutcome::Interruption(remaining),
-                turns: prior_turns,
+                turns: self.user_turn(),
                 usage: Usage::default(),
             });
         }
-        let prior_turns = self.count_turns(session).await?;
+        // Resume the same user turn from its current per-turn count, so the
+        // cap, the reported turns, and the convergence reminder all share the
+        // per-turn budget rather than the session's accumulated turns.
         let result = self
-            .drive_loop(session, prior_turns, Usage::default(), &token)
+            .drive_loop(session, self.user_turn(), Usage::default(), &token)
             .await;
         self.emit_run_result(&result);
         result

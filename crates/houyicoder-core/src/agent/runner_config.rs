@@ -26,10 +26,11 @@ pub struct RunnerConfig {
     /// Static system instructions resolved before each call. Dynamic
     /// instructions (functions of context) land when prompt management does.
     pub instructions: String,
-    /// Max model calls per run before MaxTurnsReached (50 for the TUI; the
-    /// default 10 is for lightweight test configs). A convergence reminder is
-    /// injected a few turns before the cap so the model synthesizes and answers
-    /// rather than looping until the hard limit.
+    /// Max model calls per user turn before MaxTurnsReached (a turn spans any
+    /// run + resume continuation; the default 10 is for lightweight test
+    /// configs). A convergence reminder is injected a few turns before the cap
+    /// so the model synthesizes and answers rather than looping until the
+    /// hard limit.
     pub max_turns: u32,
     /// Output-token cap sent as max_tokens to the provider. A coding agent
     /// routinely emits long multi-file replies, so the old 8k default cut the

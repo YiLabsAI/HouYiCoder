@@ -183,6 +183,7 @@ pub struct Runner {
     /// the cancel field (the lifecycle token, terminal). Guarded by a std
     /// Mutex.
     turn_cancel: Mutex<Option<CancellationToken>>,
+    user_turn: Mutex<u32>,
     /// Optional post-run verification gate. When set, after a run reaches
     /// FinalOutput the runner calls verify before returning. A failed verify
     /// surfaces RunOutcome::VerifyFailed instead of FinalOutput so the caller
@@ -592,7 +593,7 @@ impl Runner {
             match next_step {
                 NextStep::RunAgain => {
                     turn += 1;
-                    if turn > self.config.max_turns {
+                    if self.bump_user_turn() > self.config.max_turns {
                         // Graceful max-turns result (not a crash): the run
                         // is resumable and carries the turns + usage so
                         // the caller can surface cost statistics.

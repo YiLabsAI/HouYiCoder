@@ -14,8 +14,6 @@
 
 use std::sync::atomic::Ordering;
 
-use houyicoder_context::{SessionEvent, SessionId};
-
 use crate::agent::{RunError, Runner};
 
 impl Runner {
@@ -109,21 +107,9 @@ impl Runner {
         self.reconcile_tool_results(session).await?;
         Ok(Some(crate::agent::RunResult {
             outcome: crate::agent::RunOutcome::Interrupted("interrupted by user".to_string()),
-            turns: self.count_turns(session).await?,
+            turns: self.user_turn(),
             usage: houyicoder_protocol::llm::Usage::default(),
         }))
-    }
-
-    /// Count completed model calls by counting AssistantMessage events (each
-    /// model call appends one) so an interrupted run reports how many turns
-    /// completed before the abort (resume carries the max_turns cap over).
-    pub(super) async fn count_turns(&self, session: SessionId) -> Result<u32, RunError> {
-        let events = self.store.replay(session).await?;
-        let n = events
-            .iter()
-            .filter(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }))
-            .count() as u32;
-        Ok(n)
     }
 }
 

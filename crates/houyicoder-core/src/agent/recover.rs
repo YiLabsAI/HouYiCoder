@@ -33,6 +33,9 @@ impl Runner {
                 },
             ))
             .await?;
+        // A recovery attempt is a fresh turn: reset the max_turns budget so a
+        // session retried after a crash is not permanently capped.
+        self.reset_user_turn();
         self.drive_loop(session, 0, Usage::default(), &token).await
     }
 }

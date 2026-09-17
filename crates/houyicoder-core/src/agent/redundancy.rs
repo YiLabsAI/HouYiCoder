@@ -20,8 +20,8 @@
 //! the block is downstream and does not erase the cognitive signal.
 //!
 //! Identity: the tracker mints a monotonic seq per EXECUTED call (record),
-//! not per turn (turn is not threaded into the tool path and count_turns is
-//! an O(n) replay). "the Nth tool call since the last same-input call" is
+//! not per turn (turn is not threaded into the tool path, and replaying the
+//! session log to count a turn is O(n)). "the Nth tool call since the last same-input call" is
 //! more actionable than turn distance anyway. check_batch reads self.seq
 //! (no mutation); record increments it.
 

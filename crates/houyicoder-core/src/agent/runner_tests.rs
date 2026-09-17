@@ -40,7 +40,7 @@ mod memory_gates;
 
 pub(crate) fn runner_with(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> Runner {
     Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         tools,
         RunnerConfig {
@@ -170,11 +170,11 @@ async fn test_empty_turn_runs_again() {
 }
 
 #[tokio::test]
-async fn test_resume_cumulative_max_turns() {
+async fn test_resume_preserves_turn_budget() {
     // An approval-requiring tool forces an Interruption every turn. With
-    // max_turns=1, run() does 1 turn → Interruption; resume() must carry
-    // the turn count (1) so the next iteration hits 2 > 1 → MaxTurnsReached.
-    // If resume reset the counter to 0, the cap would not be cumulative.
+    // max_turns=1, a user turn spans run() + its resumes, so resume() must
+    // carry the per-turn budget (1) into the next iteration to hit the cap;
+    // a fresh budget on resume would let the turn escape its bound.
     let resp = CompletionResponse {
         output: vec![OutputItem::ToolCall {
             id: "c1".into(),
@@ -188,7 +188,7 @@ async fn test_resume_cumulative_max_turns() {
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(GuardedTool::new()));
     let runner = Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         p,
         tools,
         RunnerConfig {
@@ -213,6 +213,114 @@ async fn test_resume_cumulative_max_turns() {
         RunOutcome::MaxTurnsReached { turns } if turns == 1
     ));
     assert_eq!(result.turns, 1);
+}
+
+#[tokio::test]
+async fn test_max_turns_resets() {
+    // A user turn that crossed the cap (run + approval resume) must not
+    // permanently cap the session: the next run() starts a fresh per-turn
+    // budget, so a long-lived session stays usable after any one turn burns
+    // its max. The approval tool forces an Interruption each turn; the
+    // provider repeats the tool call so every turn asks again.
+    let resp = CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "c1".into(),
+            name: "guarded".into(),
+            input: serde_json::json!({}),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let p = Arc::new(FakeProvider::new(vec![resp]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(GuardedTool::new()));
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        p,
+        tools,
+        RunnerConfig {
+            max_turns: 1,
+            ..runner_with_cfg0()
+        },
+    );
+    let session = SessionId::new();
+    let first = runner.run(session, "first".into()).await.unwrap();
+    let approvals = match first.outcome {
+        RunOutcome::Interruption(a) => a,
+        other => panic!("expected interruption, got {other:?}"),
+    };
+    let decisions: Vec<ApprovalDecision> = approvals
+        .iter()
+        .map(|a| ApprovalDecision::approve(&a.call_id))
+        .collect();
+    let capped = runner.resume(session, &decisions).await.unwrap();
+    assert!(
+        matches!(capped.outcome, RunOutcome::MaxTurnsReached { .. }),
+        "resume after the cap crosses max_turns, got {:?}",
+        capped.outcome
+    );
+    // A new user turn re-enters run(): the budget resets, so the first turn
+    // is allowed again instead of being instantly capped.
+    let retry = runner.run(session, "second".into()).await.unwrap();
+    assert!(
+        matches!(retry.outcome, RunOutcome::Interruption(_)),
+        "a fresh run after max_turns gets a new budget, got {:?}",
+        retry.outcome
+    );
+}
+
+#[tokio::test]
+async fn test_max_turns_scope() {
+    // The max_turns message must report the CURRENT user turn's count, not
+    // the session's accumulated total. A prior completed turn leaves the
+    // session at one TurnStarted; the next turn capped at max_turns=1 must
+    // report 1, not drift to 2.
+    let text = CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let tool = CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "c1".into(),
+            name: "guarded".into(),
+            input: serde_json::json!({}),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let p = Arc::new(FakeProvider::new(vec![text, tool]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(GuardedTool::new()));
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        p,
+        tools,
+        RunnerConfig {
+            max_turns: 1,
+            ..runner_with_cfg0()
+        },
+    );
+    let session = SessionId::new();
+    let first = runner.run(session, "first".into()).await.unwrap();
+    assert!(matches!(first.outcome, RunOutcome::FinalOutput(_)));
+    let second = runner.run(session, "second".into()).await.unwrap();
+    let approvals = match second.outcome {
+        RunOutcome::Interruption(a) => a,
+        other => panic!("expected interruption, got {other:?}"),
+    };
+    let decisions: Vec<ApprovalDecision> = approvals
+        .iter()
+        .map(|a| ApprovalDecision::approve(&a.call_id))
+        .collect();
+    let capped = runner.resume(session, &decisions).await.unwrap();
+    assert!(
+        matches!(capped.outcome, RunOutcome::MaxTurnsReached { turns } if turns == 1),
+        "max_turns must report the current turn's count, got {:?}",
+        capped.outcome
+    );
 }
 
 #[tokio::test]
@@ -277,7 +385,7 @@ async fn test_stream_persists_deltas() {
     // only the authoritative assistant message, and projection produces one
     // assistant input item without duplicating transport-only deltas.
     let p = Arc::new(FakeProvider::text("hello world"));
-    let store = std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     let collected: Arc<Mutex<Vec<ResponseStreamEvent>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
