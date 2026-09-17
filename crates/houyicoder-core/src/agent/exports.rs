@@ -17,8 +17,8 @@ pub use super::hook::command::parse_event;
 pub use super::hook::fire::build_hook_fire;
 pub use super::hook::registry::{HookEntry, HookId, HookRegistry};
 pub use super::hook::{
-    ArbitratedVerdict, Hook, HookContext, HookEvent, HookPayload, HookPolicy, HookSource,
-    HookVerdict, ToolResult, arbitrate,
+    CombinedVerdict, Hook, HookContext, HookEvent, HookPayload, HookPolicy, HookSource,
+    HookVerdict, ToolResult, combine_verdicts,
 };
 pub use super::manifest::{
     CompressPolicy, HeuristicSummarizer, SummarizeError, Summarizer, build_manifest,

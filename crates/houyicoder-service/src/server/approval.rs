@@ -36,7 +36,7 @@ impl Server {
         let is_entitlement = approval.tool_name == houyicoder_protocol::extension::ENTITLEMENT_TOOL;
         let mut reason = if is_entitlement {
             // The entitlement ask is not a gate decision — reconstructing a
-            // ladder reason for a synthetic tool would mislead the card.
+            // ladder reason for a host-generated tool would mislead the card.
             // The deny-log scan is the reason.
             None
         } else {
@@ -152,7 +152,7 @@ impl Server {
         if decision.approved && !is_entitlement {
             // Entitlement consent skips the rule/directory paths: the
             // grant-store write in the engine's apply path IS the
-            // persistence. Persisting a rule for the synthetic tool would
+            // persistence. Persisting a rule for the host-generated tool would
             // pollute the store with a rule nothing reads.
             self.install_approved_consent(approval, &decision, reason.as_ref(), &directory_grants)?;
         }

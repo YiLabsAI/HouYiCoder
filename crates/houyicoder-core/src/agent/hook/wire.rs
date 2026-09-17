@@ -18,7 +18,7 @@ pub struct HookOutcome {
 }
 
 /// The fail-closed policy: a hook that fails to produce a verdict is treated
-/// as a denial. Single source of truth — arbitrate drives control flow from
+/// as a denial. Single source of truth — combine_verdicts drives control flow from
 /// this, and the HookSignal recorder writes the same value as the effective
 /// verdict, so the durable record can never disagree with what actually
 /// happened. If this ever becomes configurable (fail-open), the change lands

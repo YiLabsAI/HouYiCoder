@@ -355,7 +355,7 @@ async fn drive_connection(
                     // Lifecycle kill of one child (the 'k' on a selected
                     // pill). The server cancels the child's lifecycle token
                     // so its drive loop returns terminal; the completion
-                    // publishes + retires the pill row. No reply.
+                    // publishes + drops the pill row. No reply.
                     outbound.push_back(Outbound::Notification(
                         kill_child_notification(&child_sid),
                     ));
@@ -363,7 +363,7 @@ async fn drive_connection(
                 Some(ClientCommand::KillAllChildren) => {
                     // The fleet kill-all path ('K' two-press). The server
                     // kills every live background child; each completion
-                    // publishes and retires its pill row. No reply.
+                    // publishes and drops its pill row. No reply.
                     outbound.push_back(Outbound::Notification(kill_all_notification()));
                 }
                 Some(ClientCommand::QueueRemove { session_id, id }) => {

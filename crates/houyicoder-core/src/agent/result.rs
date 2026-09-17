@@ -20,7 +20,7 @@ pub enum RunOutcome {
     Handoff(AgentId),
     /// An external abort cancelled an in-flight run. The partial assistant
     /// text was flushed to the log and any tool calls left without a result
-    /// received a synthetic interrupted-by-user error result, so the session
+    /// received an interrupted-by-user error result, so the session
     /// stays lossless and resumable. The string carries the reason.
     Interrupted(String),
     /// A run reached FinalOutput but the verify gate rejected it — the run

@@ -20,7 +20,9 @@ use houyicoder_context::{
 };
 
 use super::backbone::{derive_backbone, merge_summary};
-use super::hook::{CompactTrigger, HookContext, HookEvent, HookPayload, HookVerdict, arbitrate};
+use super::hook::{
+    CompactTrigger, HookContext, HookEvent, HookPayload, HookVerdict, combine_verdicts,
+};
 use super::manifest::{CompressPolicy, build_manifest, estimate_transcript_tokens};
 use super::selection;
 use super::{RunError, Runner};
@@ -288,7 +290,7 @@ impl Runner {
         let outcomes = self.dispatch_hooks(reg, &ctx);
         self.append_hook_signals(session, HookEvent::PreCompact, None, &outcomes)
             .await;
-        let _verdict = arbitrate(outcomes.iter().map(|o| o.result.clone()));
+        let _verdict = combine_verdicts(outcomes.iter().map(|o| o.result.clone()));
         let injects: Vec<String> = outcomes
             .iter()
             .filter_map(|o| match &o.result {
@@ -333,7 +335,7 @@ impl Runner {
         let outcomes = self.dispatch_hooks(reg, &ctx);
         self.append_hook_signals(session, HookEvent::PostCompact, None, &outcomes)
             .await;
-        let _verdict = arbitrate(outcomes.into_iter().map(|o| o.result));
+        let _verdict = combine_verdicts(outcomes.into_iter().map(|o| o.result));
     }
 }
 

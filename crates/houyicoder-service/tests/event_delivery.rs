@@ -540,7 +540,7 @@ async fn test_input_commit() {
     drop(handle.await);
 }
 
-/// A committed input is projected and retired before the next model delta.
+/// A committed input is projected and cleared before the next model delta.
 #[tokio::test]
 async fn test_input_order() {
     let blocked = Arc::new(Notify::new());

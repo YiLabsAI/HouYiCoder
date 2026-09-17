@@ -2,7 +2,7 @@
 //!
 //! The main execute_partitioned path (parallel-safe batch + serial-unsafe)
 //! measures each call's wall-clock length and writes it to
-//! ToolResult.duration_ms. Synthetic results (interrupted / unknown tool)
+//! ToolResult.duration_ms. Fallback results (interrupted / unknown tool)
 //! carry 0 since no real execution ran. These pin both contracts so the
 //! trajectory's latency dimension stays honest on resume + export.
 
@@ -157,9 +157,9 @@ async fn test_serial_unsafe_call_records() {
 
 #[tokio::test]
 async fn test_unknown_tool_zero_duration() {
-    // A call to a tool not in the registry lands a synthetic unknown-tool
-    // result with no execution => duration_ms stays 0. Pins the synthetic
-    // contract so a future regression that wires timing into the synthetic
+    // A call to a tool not in the registry lands a fallback unknown-tool
+    // result with no execution => duration_ms stays 0. Pins the fallback
+    // contract so a future regression that wires timing into the fallback
     // branch does not silently inflate interrupted/blocked latencies.
     let p = Arc::new(FakeProvider::new(vec![
         tool_call_response("no_such_tool"),
@@ -169,5 +169,5 @@ async fn test_unknown_tool_zero_duration() {
     let session = SessionId::new();
     runner.run(session, "hi".into()).await.unwrap();
     let d = duration_for(&runner, session, "c1").await;
-    assert_eq!(d, 0, "synthetic result must carry 0 duration, got {d}ms");
+    assert_eq!(d, 0, "fallback result must carry 0 duration, got {d}ms");
 }

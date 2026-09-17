@@ -70,10 +70,10 @@ pub fn run_with_runner(
         // Idle frames render only on state changes. Busy frames keep the
         // spinner live without toggling terminal cursor visibility.
         app.idle_drain(resume_builder.as_deref(), &mut dirty);
-        // Completed child rows retire after their grace period. The child
+        // Completed child rows drop after their grace period. The child
         // currently open in teammate view remains pinned.
         let retain_viewed = app.teammate_view.as_ref().map(|v| v.child_sid.as_str());
-        if app.fleet.retire_completed(retain_viewed) {
+        if app.fleet.drop_completed(retain_viewed) {
             dirty = true;
         }
         let now = Instant::now();

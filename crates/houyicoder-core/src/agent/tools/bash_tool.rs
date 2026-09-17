@@ -15,7 +15,7 @@ use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::extension::ToolError;
 
 use super::bash_snapshot;
-use crate::agent::synthetic::SyntheticToolOutcome;
+use crate::agent::fallback::FallbackToolOutcome;
 
 /// After a failed sandboxed command, scan the session's deny log for
 /// authorizable mach-service candidates so the caller can surface or
@@ -172,7 +172,7 @@ impl Tool for BashTool {
                             t.cancelled().await;
                         }
                     }, if cancel.is_some() => {
-                        return Ok(SyntheticToolOutcome::Interrupted.to_json());
+                        return Ok(FallbackToolOutcome::Interrupted.to_json());
                     }
                     _ = async {
                         let start = std::time::Instant::now();
@@ -198,7 +198,7 @@ impl Tool for BashTool {
                             t.cancelled().await;
                         }
                     }, if cancel.is_some() => {
-                        return Ok(SyntheticToolOutcome::Interrupted.to_json());
+                        return Ok(FallbackToolOutcome::Interrupted.to_json());
                     }
                 }
             }

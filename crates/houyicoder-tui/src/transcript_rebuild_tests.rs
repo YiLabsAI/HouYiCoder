@@ -294,10 +294,10 @@ fn test_resumed_batches_paused() {
 }
 
 /// A rewind replays the truncated transcript as restored history: the
-/// all-completed list retires with its stamps instead of re-entering the
+/// all-completed list clears with its stamps instead of re-entering the
 /// completion visibility window.
 #[test]
-fn test_rewind_retires_completed() {
+fn test_rewind_clears_completed() {
     let mut app = fresh_app();
     pump(&mut app, user_msg("go"));
     pump(

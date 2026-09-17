@@ -109,7 +109,7 @@ fn test_streamed_tail_survives_done() {
     );
 }
 
-/// The durable assistant frame retires its live preview immediately, before
+/// The durable assistant frame clears its live preview immediately, before
 /// the run ends, so one paragraph cannot render both at its event position and
 /// again at the live transcript tail while a following tool remains active.
 #[test]

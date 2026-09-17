@@ -4,8 +4,8 @@ use super::*;
 /// completed child's transcript, the footer pill renders alongside (the
 /// row the user is reading), and the view stays on normal completion — the
 /// user exits with Esc, not an auto-dismiss. The pill-pin past the grace
-/// window (the row does not retire while the child is being viewed) is
-/// pinned at the unit level (test_retire_pins_viewed_child); this journey
+/// window (the row does not drop while the child is being viewed) is
+/// pinned at the unit level (test_grace_pins_viewed_child); this journey
 /// covers the end-to-end rendering + the stay-on-complete contract. Slow,
 /// ignored by default.
 #[test]

@@ -15,9 +15,9 @@ use std::time::Duration;
 /// summary from full content.
 const LONG_CHILD: &str = "This is a long child analysis that exceeds the one-line fold summary limit so the collapsed head truncates it with an ellipsis while the expanded view shows the full text including this trailing sentinel.";
 
-/// The grace window after which a completed pill row retires when the user
+/// The grace window after which a completed pill row drops when the user
 /// is not viewing it. Tests wait past this to prove the pin holds + the
-/// post-exit retire fires. Mirrors the FLEET_GRACE constant in agent_message.
+/// post-exit drop fires. Mirrors the FLEET_GRACE constant in agent_message.
 const FLEET_GRACE: Duration = Duration::from_secs(5);
 
 #[path = "ui_multiagent/background.rs"]

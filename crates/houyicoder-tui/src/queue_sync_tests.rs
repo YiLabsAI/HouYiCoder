@@ -471,7 +471,7 @@ fn test_commit_identity() {
 }
 
 /// A run can settle before the UI dispatches its preceding commit event. Run
-/// completion parks the mirror, but the stable commit still retires that item
+/// completion parks the mirror, but the stable commit still clears that item
 /// so it cannot be recalled and submitted a second time.
 #[test]
 fn test_commit_clears_parked() {
@@ -485,7 +485,7 @@ fn test_commit_clears_parked() {
         inputs: vec![committed],
     }));
 
-    assert!(app.pending.is_empty(), "committed parked mirror retires");
+    assert!(app.pending.is_empty(), "committed parked mirror clears");
     assert!(
         app.last_run_input.is_none(),
         "commit closes the original rollback window"

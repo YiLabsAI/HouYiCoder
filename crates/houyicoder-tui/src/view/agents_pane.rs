@@ -56,7 +56,7 @@ pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(List::new(items).style(Style::new().fg(Color::White)), area);
         return;
     }
-    // Returned delegations outlive the footer strip: the strip retires a
+    // Returned delegations outlive the footer strip: the strip drops a
     // completed child after its grace window, but the pane is the record of
     // what ran this session, selectable and enterable.
     if !app.agents.rows.is_empty() {

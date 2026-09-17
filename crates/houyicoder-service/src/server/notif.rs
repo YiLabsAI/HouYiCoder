@@ -199,7 +199,7 @@ impl Server {
             }
             "session/kill_all" => {
                 // Kill every live background child: the fleet kill-all path.
-                // Each killed child's completion publishes and retires the
+                // Each killed child's completion publishes and drops the
                 // pill row; a no-op when no runtime or no live children.
                 self.runner.kill_all_children();
             }

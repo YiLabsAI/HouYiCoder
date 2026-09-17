@@ -104,7 +104,7 @@ fn window_start_idx(selected: Option<usize>, len: usize, visible: usize) -> usiz
 /// line. Such a line is misleading in a sliding window — the hidden count is
 /// constant, but once the user scrolls the hidden rows sit above the window,
 /// so "+N more" reads as "below" when the tail is already in view. The user
-/// discovers more rows by scrolling; completed entries retire in the grace
+/// discovers more rows by scrolling; completed entries drop in the grace
 /// window, so a hidden completed row is ephemeral.
 fn visible_rows(len: usize, granted: usize) -> usize {
     granted.min(len)
@@ -406,11 +406,11 @@ mod tests {
         );
     }
 
-    /// retire_completed drops a finished entry once its grace window elapsed.
+    /// drop_completed drops a finished entry once its grace window elapsed.
     /// A completed_at six seconds ago is past the five-second grace, so the
     /// entry leaves the footer (the result stays in the transcript fold).
     #[test]
-    fn test_retire_drops_expired() {
+    fn test_grace_drops_expired() {
         use crate::agent_message::FleetState;
         use std::time::{Duration, Instant};
         let mut fleet = FleetState::default();
@@ -425,15 +425,15 @@ mod tests {
             completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
             started_at: None,
         });
-        assert!(fleet.retire_completed(None), "expired entry retired");
-        assert!(fleet.entries.is_empty(), "footer emptied after retire");
+        assert!(fleet.drop_completed(None), "expired entry dropped");
+        assert!(fleet.entries.is_empty(), "footer emptied after drop");
     }
 
-    /// retire_completed keeps a running child (no completed_at) and a
+    /// drop_completed keeps a running child (no completed_at) and a
     /// recently completed one (inside the grace window). The pill only
     /// leaves once the grace window elapses.
     #[test]
-    fn test_retire_keeps_recent() {
+    fn test_grace_keeps_recent() {
         use crate::agent_message::FleetState;
         use std::time::Instant;
         let mut fleet = FleetState::default();
@@ -449,17 +449,14 @@ mod tests {
             completed_at: Some(Instant::now()),
             started_at: None,
         });
-        assert!(
-            !fleet.retire_completed(None),
-            "nothing retired inside grace"
-        );
+        assert!(!fleet.drop_completed(None), "nothing dropped inside grace");
         assert_eq!(fleet.entries.len(), 2, "running + recent both kept");
     }
 
-    /// A selection pointing at a retired row clamps back into bounds rather
+    /// A selection pointing at a dropped row clamps back into bounds rather
     /// than indexing past the end of the surviving entries.
     #[test]
-    fn test_retire_clamps_selected() {
+    fn test_drop_clamps_selected() {
         use crate::agent_message::FleetState;
         use std::time::{Duration, Instant};
         let mut fleet = FleetState::default();
@@ -476,16 +473,16 @@ mod tests {
         });
         fleet.entries.push(entry("c2", "plan", 1, 10, "read"));
         fleet.selected = Some(0);
-        assert!(fleet.retire_completed(None), "first entry retired");
+        assert!(fleet.drop_completed(None), "first entry dropped");
         assert_eq!(fleet.selected, Some(0), "selection clamped to the survivor");
     }
 
     /// retain_viewed pins the child the user is drilled into: even past the
     /// grace window, the viewed child's row stays in the footer so it does
     /// not vanish while the user reads its transcript. A second completed
-    /// child the user is not viewing still retires on schedule.
+    /// child the user is not viewing still drops on schedule.
     #[test]
-    fn test_retire_pins_viewed_child() {
+    fn test_grace_pins_viewed_child() {
         use crate::agent_message::FleetState;
         use std::time::{Duration, Instant};
         let mut fleet = FleetState::default();
@@ -512,8 +509,8 @@ mod tests {
             started_at: None,
         });
         assert!(
-            fleet.retire_completed(Some("c1")),
-            "non-viewed child retired, viewed kept"
+            fleet.drop_completed(Some("c1")),
+            "non-viewed child dropped, viewed kept"
         );
         assert_eq!(fleet.entries.len(), 1, "viewed child stays past grace");
         assert_eq!(fleet.entries[0].agent_id, "c1");

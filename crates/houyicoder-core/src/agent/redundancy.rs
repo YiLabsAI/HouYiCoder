@@ -10,16 +10,16 @@
 //! steer the model.
 //!
 //! Wiring is independent of the user-configurable hook registry: the hook
-//! fire points (arbitrate_pre_tool_use, fire_post_tool_use) early-return when
+//! fire points (run_pre_tool_use_gate, fire_post_tool_use) early-return when
 //! no hooks are registered, so a tracker hung off them would silently never
 //! run in most sessions. Instead the runner calls check_batch / record
-//! directly at the same lifecycle points (resolve_turn before arbitrate;
+//! directly at the same lifecycle points (resolve_turn before the gate;
 //! execute_partitioned next to fire_post_tool_use). See the plan's
-//! "intentional choice" note: check runs BEFORE arbitrate, so Deny/Feedback/
+//! "intentional choice" note: check runs BEFORE the gate, so Deny/Feedback/
 //! Ask-removed calls are still checked — the model DID emit a duplicate;
 //! the block is downstream and does not erase the cognitive signal.
 //!
-//! Identity: the tracker mints a monotonic seq per EXECUTED call (record),
+//! Identity: the tracker assigns a monotonic seq per EXECUTED call (record),
 //! not per turn (turn is not threaded into the tool path, and replaying the
 //! session log to count a turn is O(n)). "the Nth tool call since the last same-input call" is
 //! more actionable than turn distance anyway. check_batch reads self.seq
@@ -189,8 +189,8 @@ impl RedundancyTracker {
 
     /// Record one EXECUTED call's outcome into the ledger + bump the write
     /// seq if it was a write-tool. Called after the tool returns (next to
-    /// fire_post_tool_use). is_error=true (including the synthetic
-    /// Interrupted {"error":"interrupted by user"}) records as Error, so a
+    /// fire_post_tool_use). is_error=true (including the Interrupted
+    /// fallback result) records as Error, so a
     /// later same-input retry is not flagged — Esc-then-retry is legit.
     pub fn record(&mut self, tool_name: &str, input: &Value, is_error: bool) {
         self.seq += 1;
@@ -321,15 +321,15 @@ mod tests {
         assert!(t.records().is_empty(), "retry-after-error is not redundant");
     }
 
-    /// Esc-interrupt then retry: the synthetic Interrupted result carries
+    /// Esc-interrupt then retry: the fallback Interrupted result carries
     /// {"error":"interrupted by user"} so record sees is_error=true →
     /// outcome=Error → the retry is not flagged. Pins the tracker side of the
     /// dependency; the call-site side (is_error = o.get("error").is_some() at
-    /// pipeline.rs) keeps the synthetic json honest.
+    /// pipeline.rs) keeps that json honest.
     #[test]
     fn test_retry_after_interrupt() {
         let mut t = RedundancyTracker::new();
-        // The Interrupted synthetic is is_error=true at the call site, so the
+        // The Interrupted fallback is is_error=true at the call site, so the
         // tracker records outcome=Error — same shape as test_retry_after_error.
         t.record("read", &json!({"file_path": "a.rs"}), true);
         t.check_batch(calls(&[("read", json!({"file_path": "a.rs"}))]));

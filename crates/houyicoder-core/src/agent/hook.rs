@@ -59,7 +59,7 @@ impl CompactTrigger {
 }
 
 // HookOutcome + the core→wire mappings live in the wire submodule (split for
-// file-size); verdict_on_hook_error is re-used here by arbitrate.
+// file-size); verdict_on_hook_error is re-used here by combine_verdicts.
 use self::wire::verdict_on_hook_error;
 
 // Supporting types (stubs: defined here until their owning crates land).
@@ -480,7 +480,7 @@ pub enum HookVerdict {
     Ask(String),
     /// Fire a downstream event (for example, a large PostToolUse output
     /// triggers a compress). Asynchronous; does not block the current
-    /// arbitration.
+    /// verdict combination.
     Trigger(HookEvent),
 }
 
@@ -513,7 +513,7 @@ pub enum HookError {
     ProcessError { hook_name: String, reason: String },
 }
 
-// ArbitratedVerdict — composite of blocking + non-blocking signals.
+// CombinedVerdict — composite of blocking + non-blocking signals.
 
 // HookOutcome, verdict_on_hook_error, and the core→wire enum mappings live
 // in the wire submodule (split for file-size). Re-exported so callers can
@@ -521,7 +521,7 @@ pub enum HookError {
 pub(crate) mod wire;
 pub use wire::HookOutcome;
 
-/// Composite verdict produced by arbitrate. The primary field carries the
+/// Composite verdict produced by combine_verdicts. The primary field carries the
 /// blocking verdict (the one the host acts on first). Observations and
 /// triggers are non-blocking side signals collected from ALL hooks in the
 /// batch — they are never dropped even when a blocking verdict is present.
@@ -529,7 +529,7 @@ pub use wire::HookOutcome;
 /// short-circuit on Deny while still recording observations and firing
 /// triggers that accompanied the deny.
 #[derive(Debug, Clone)]
-pub struct ArbitratedVerdict {
+pub struct CombinedVerdict {
     /// The effective blocking verdict, by priority: Deny, Ask, Feedback,
     /// Inject, Trigger (first), Observe (joined), Allow. The host matches
     /// on this for flow control.
@@ -542,7 +542,7 @@ pub struct ArbitratedVerdict {
     /// wiring gap.
     pub observations: Vec<String>,
     /// All trigger events collected from the batch. The host fires these
-    /// asynchronously after arbitration. When triggers are the sole signal,
+    /// asynchronously once the batch is combined. When triggers are the sole signal,
     /// the primary also carries the first trigger for backward compatibility.
     pub triggers: Vec<HookEvent>,
 }
@@ -613,9 +613,9 @@ pub trait HookExecutor: Send + Sync {
 // HookRegistry — register, dispatch, collect verdicts.
 
 /// Registry of loaded hooks, multi-level merged and priority-sorted. The
-/// host queries hooks by event; hooks return verdicts; the host arbitrates.
-/// The registry only collects verdicts; arbitration lives in the host (via
-/// the arbitrate helper below) so the registry has a single responsibility.
+/// host queries hooks by event; hooks return verdicts; the host combines
+/// them. The registry only collects verdicts; combining lives in the host
+/// (see combine_verdicts below) so the registry has a single responsibility.
 /// Trust filtering is centralized here at dispatch: when the project trust
 /// state is Untrusted, Project and Local source hooks are skipped before
 /// evaluation — all hooks gated by one check at entry, not per-hook
@@ -688,18 +688,18 @@ where
     }
 }
 
-// arbitrate — deny-wins composite arbitration (host-side).
+// combine_verdicts — deny-wins composite verdict (host-side).
 
-/// Arbitrate a batch of hook results into a composite verdict. The primary
+/// Combine a batch of hook results into one verdict. The primary
 /// field carries the blocking verdict by priority: Deny, Ask, Feedback,
 /// Inject, Trigger (first), Observe (joined), Allow. Observations and
 /// triggers are ALWAYS collected from every hook regardless of whether a
 /// blocking verdict is present — the host short-circuits on Deny while
 /// still recording observations + firing triggers that accompanied it.
 /// Errors are fail-closed via verdict_on_hook_error (single source).
-pub fn arbitrate(
+pub fn combine_verdicts(
     results: impl IntoIterator<Item = Result<HookVerdict, HookError>>,
-) -> ArbitratedVerdict {
+) -> CombinedVerdict {
     let mut deny: Option<String> = None;
     let mut ask: Option<String> = None;
     let mut feedback: Vec<String> = Vec::new();
@@ -756,7 +756,7 @@ pub fn arbitrate(
         HookVerdict::Allow
     };
 
-    ArbitratedVerdict {
+    CombinedVerdict {
         primary,
         observations,
         triggers,

@@ -121,7 +121,7 @@ fn test_completed_list_timestamped() {
         "in-progress item not timestamped"
     );
     // Completing the whole list timestamps every item for one shared
-    // retirement.
+    // clearing.
     app.start_run_for_test(1);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("old work", "completed"),
@@ -133,11 +133,11 @@ fn test_completed_list_timestamped() {
 }
 
 /// Replaying a session whose latest task list is all-completed, what a
-/// resume does, retires the list on the spot: no items install, no
+/// resume does, clears the list on the spot: no items install, no
 /// timestamps record, and the rendered terminal never shows the historic
 /// tasks. Every repeat attach behaves the same way.
 #[test]
-fn test_replayed_done_retires() {
+fn test_replayed_done_clears() {
     for _ in 0..3 {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
@@ -158,7 +158,7 @@ fn test_replayed_done_retires() {
 }
 
 /// The other half of the resume matrix: a replayed list with open work
-/// still renders, so retirement targets finished history only.
+/// still renders, so clearing targets finished history only.
 #[test]
 fn test_replayed_open_renders() {
     let mut app = crate::composition::app();

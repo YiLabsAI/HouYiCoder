@@ -76,7 +76,7 @@ architecture diagram MUST be updated when layering changes.
 ### 10. Bug-Driven Testing
 Bug fixes follow red-green-refactor: write a failing test that reproduces the
 bug, then fix. Before changing UI, record the existing layout, styling, keys,
-focus, scrolling, retirement, and resume contract. Visual fixes assert rendered
+focus, scrolling, dismissal, and resume contract. Visual fixes assert rendered
 cells; terminal cursor or key-order fixes require PTY coverage. An unrelated UX
 change discovered only by dogfooding is a missing regression test.
 
@@ -98,11 +98,11 @@ change discovered only by dogfooding is a missing regression test.
   | Surface | Question | Properties |
   |---------|----------|------------|
   | transcript | what happened, and what is the current state of the work | permanent, scrolls, grows |
-  | footer | what is happening right now that I may act on this second | pinned, budgeted, self-retires |
+  | footer | what is happening right now that I may act on this second | pinned, budgeted, self-clearing |
   | pane | what exists / what are my options | on demand, Esc closes |
 
   Live is not the test for the footer — the todo list is live and belongs in
-  the transcript. All three must hold: it retires on its own, a key acts on
+  the transcript. All three must hold: it clears on its own, a key acts on
   it now, and losing it from view costs the user an action. Queued input and
   running delegations pass; a todo list fails the first two (it stays
   relevant for the whole task and is not keyed), so it renders as transcript

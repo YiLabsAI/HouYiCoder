@@ -280,7 +280,7 @@ fn apply_tier(
         }
         RetentionDecision::Evict => {
             // The pointer alone, typed evicted so the model can distinguish
-            // "retired by policy" from "backend cannot retrieve." No
+            // "removed by policy" from "backend cannot retrieve." No
             // retrieval; the model is told to re-invoke if it needs the
             // content.
             serde_json::json!({

@@ -1,6 +1,6 @@
 //! Tool-result JSON baseline — the model-visible strings the agent loop emits
 //! at the seven construction points in the dispatch path. This file locks the
-//! current behavior so the ToolError reshape and the synthetic-outcome
+//! current behavior so the ToolError reshape and the fallback-outcome
 //! concentration cannot drift the strings the model sees.
 //!
 //! Six points are exercised here; the seventh (unknown-tool-on-resume, fired
@@ -24,7 +24,7 @@ use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::extension::ToolError;
 
 /// The seven canonical model-visible tool-result payloads, in dispatch-path
-/// order. The ToolError reshape and the SyntheticToolOutcome enum must produce
+/// order. The ToolError reshape and the FallbackToolOutcome enum must produce
 /// these byte-for-byte.
 const TOOL_ERROR_PREFIX: &str = "tool error: ";
 const MSG_UNKNOWN_TOOL: &str = "unknown tool: no_such_tool";
@@ -88,7 +88,7 @@ impl Tool for ErroringTool {
 #[tokio::test]
 async fn test_unknown_tool_error_object() {
     // Dispatch a tool call whose name is not in the registry. The loop emits
-    // the unknown-tool synthetic result (dispatch-path unknown-tool branch).
+    // the unknown-tool fallback result (dispatch-path unknown-tool branch).
     let resp = CompletionResponse {
         output: vec![OutputItem::ToolCall {
             id: "c1".into(),
@@ -113,7 +113,7 @@ async fn test_unknown_tool_error_object() {
     assert_eq!(
         output,
         expected_error_object(MSG_UNKNOWN_TOOL),
-        "unknown tool must produce the exact synthetic string, no prefix"
+        "unknown tool must produce the exact fallback string, no prefix"
     );
 }
 
@@ -155,7 +155,7 @@ async fn test_baseline_error_carries_prefix() {
 #[tokio::test]
 async fn test_baseline_rejected_approval() {
     // An approval-requiring tool whose decision is reject must surface the
-    // rejected-by-user synthetic result (the reject branch of apply_decisions).
+    // rejected-by-user fallback result (the reject branch of apply_decisions).
     let responses = vec![
         CompletionResponse {
             output: vec![OutputItem::ToolCall {
@@ -191,7 +191,7 @@ async fn test_baseline_rejected_approval() {
     assert_eq!(
         output,
         expected_error_object(MSG_REJECTED),
-        "rejected approval must produce the exact synthetic string, no prefix"
+        "rejected approval must produce the exact fallback string, no prefix"
     );
 }
 
@@ -221,14 +221,14 @@ async fn test_baseline_interrupted_orphan() {
     assert_eq!(
         output,
         expected_error_object(MSG_INTERRUPTED),
-        "interrupted orphan must produce the exact synthetic string, no prefix"
+        "interrupted orphan must produce the exact fallback string, no prefix"
     );
 }
 
 #[test]
 fn test_all_seven_strings_documented() {
     // The seventh point (unknown-tool-on-resume) is not driven above; it is
-    // pinned here so the synthetic-outcome centralization has the constant to
+    // pinned here so the fallback-outcome centralization has the constant to
     // match. The cross-layer E2E exercises it end-to-end.
     assert_eq!(MSG_UNKNOWN_TOOL, "unknown tool: no_such_tool");
     assert_eq!(MSG_TOOL_FAILURE, "baseline tool failure");
@@ -236,7 +236,7 @@ fn test_all_seven_strings_documented() {
     assert_eq!(MSG_INTERRUPTED, "interrupted by user");
     assert_eq!(MSG_UNKNOWN_TOOL_ON_RESUME, "unknown tool on resume");
     assert_eq!(TOOL_ERROR_PREFIX, "tool error: ");
-    // Tool-error JSON shape = prefix + message; synthetic JSON shape = bare.
+    // Tool-error JSON shape = prefix + message; fallback JSON shape = bare.
     assert_eq!(
         expected_error_object(&format!("{TOOL_ERROR_PREFIX}{MSG_TOOL_FAILURE}")),
         serde_json::json!({"error": "tool error: baseline tool failure"})

@@ -133,7 +133,7 @@ fn test_tool_records_while_running() {
             lines: Some(14)
         })
     );
-    // Result lands: retire_tool clears the entry.
+    // Result lands: finish_tool clears the entry.
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_done_frame(
         "call_1",
     ))));

@@ -382,7 +382,7 @@ pub struct App {
     /// the running stdout line count (None when the backend does not stream
     /// stdout). The runner ticks ToolProgress every ~1s; the chip renders
     /// (Ns) after 2s, or (Ns · M lines) when lines is Some. Cleared when
-    /// the tool result lands (retire_tool) + on Done.
+    /// the tool result lands (finish_tool) + on Done.
     pub bash_progress: HashMap<String, BashProgress>,
     /// The original run input while it remains eligible for no-output rollback.
     /// A committed mid-turn input or visible output closes this window.

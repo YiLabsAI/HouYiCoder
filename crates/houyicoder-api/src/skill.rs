@@ -168,7 +168,7 @@ fn valid_skill_name(name: &str) -> bool {
 }
 
 impl GrantSubject {
-    /// Encode the subject for a host-generated synthetic approval payload.
+    /// Encode the subject for a host-generated approval payload.
     pub fn to_json(&self) -> serde_json::Value {
         let (kind, identity) = match &self.scope {
             GrantScope::Managed => ("managed", None),
@@ -183,7 +183,7 @@ impl GrantSubject {
         })
     }
 
-    /// Decode and validate a subject carried by a synthetic approval payload.
+    /// Decode and validate a subject carried by a host-generated approval payload.
     pub fn from_json(value: &serde_json::Value) -> Option<Self> {
         let skill = value.get("skill")?.as_str()?;
         if !valid_skill_name(skill) {

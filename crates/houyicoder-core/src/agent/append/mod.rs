@@ -333,7 +333,7 @@ impl Runner {
 
     /// Append a tool-result event for the given call id. duration_ms is the
     /// wall-clock length of the tool call this result answers (0 when the
-    /// host did not time it — synthetic / interrupted / blocked results carry
+    /// host did not time it — fallback, interrupted, and blocked results carry
     /// 0 since no real execution ran).
     ///
     /// isolate stage (PostToolUse): when the serialized output exceeds
@@ -342,7 +342,7 @@ impl Runner {
     /// raw content. The raw stays in the CAS for on-demand materialize; the
     /// assembled context carries a small pointer. Fail-closed: on no backend or
     /// block_put failure, append the raw output (no content loss).
-    /// Append a synthetic tool-call event: one minted by the loop rather
+    /// Append a tool-call event the runner raises itself rather
     /// than carried by a model response (the entitlement ask raised after
     /// a failed command). Pending-approval scans read it, and the model
     /// sees a coherent ToolCall + ToolResult pair in the transcript.
@@ -662,7 +662,7 @@ impl Runner {
     /// bare Allow — it is derivable from absence (no HookSignal ⟹ every
     /// configured hook allowed). For a hook error the effective verdict comes
     /// from verdict_on_hook_error (the single fail-closed source), so the
-    /// durable record can never disagree with what arbitrate actually did.
+    /// durable record can never disagree with what combine_verdicts actually did.
     /// turn/call_in_turn come from the in-memory OL; tool_name is None for
     /// non-tool events. Best-effort: a store error is logged, not fatal
     /// (hook audit must not crash the run).

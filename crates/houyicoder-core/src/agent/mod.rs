@@ -27,6 +27,7 @@ mod exports;
 pub mod extract;
 pub mod extractor;
 mod fact;
+mod fallback;
 pub mod git_discard;
 pub(crate) mod hook;
 pub mod inference;
@@ -52,7 +53,6 @@ mod skill_reload;
 mod skill_slash;
 mod status;
 mod step;
-mod synthetic;
 mod thinking;
 mod tool;
 mod tools;
@@ -68,21 +68,21 @@ pub use effort::{
     ModelCatalogResolver, apply_effort_settings, effort_default_for, resolve_applied_effort,
 };
 pub use exports::{
-    ApprovalDecision, ApprovalRequest, ArbitratedVerdict, AskUserQuestionTool, AssembledContext,
-    BackboneDerivation, BashTool, CategoryBreakdown, CommandHook, CompactBackbone,
-    CompactionOutcome, CompressPolicy, ConditionalActivation, ConditionalSkillActivator,
-    ConflictRate, ContextBreakdown, ContextBuilder, ContextMeasurement, ConversationSearchTool,
-    DelegationTool, EditTool, EnterWorktreeTool, ExitWorktreeTool, GitWorkspaceProbe, GlobTool,
-    GrepTool, GridCell, HeuristicSummarizer, Hook, HookContext, HookEntry, HookError, HookEvent,
-    HookId, HookPayload, HookPolicy, HookRegistry, HookSource, HookVerdict, HotPathReducer,
-    LlmSummarizer, MakeCheckGate, MemoryAddTool, MemoryGateState, MemoryGates, MemoryRuntime,
-    MultiEditTool, NextStep, ReadTool, RecordedCompaction, ReduceCtx, ReducedOutput, Section,
-    SectionKind, SkillHookRegistrar, SkillReloadGuard, SkillTool, StatusSnapshot, StubTool,
-    StubWorkspaceProbe, SummarizeError, Summarizer, SystemPrompt, TodoItem, TodoStatus,
-    TodoWriteTool, Tokenizer, ToolOutputReducer, ToolRegistry, ToolResult, TrustLevel, TurnOutcome,
-    UsageAccumulator, VerifyFailure, VerifyGate, WebFetchTool, WorkspaceProbe, WorktreeController,
-    WriteTool, apply_manifest, arbitrate, assemble_model_input, build_grid, build_hook_fire,
-    build_manifest, derive_backbone, extraction_prompt, merge_summary, never_worse, parse_event,
+    ApprovalDecision, ApprovalRequest, AskUserQuestionTool, AssembledContext, BackboneDerivation,
+    BashTool, CategoryBreakdown, CombinedVerdict, CommandHook, CompactBackbone, CompactionOutcome,
+    CompressPolicy, ConditionalActivation, ConditionalSkillActivator, ConflictRate,
+    ContextBreakdown, ContextBuilder, ContextMeasurement, ConversationSearchTool, DelegationTool,
+    EditTool, EnterWorktreeTool, ExitWorktreeTool, GitWorkspaceProbe, GlobTool, GrepTool, GridCell,
+    HeuristicSummarizer, Hook, HookContext, HookEntry, HookError, HookEvent, HookId, HookPayload,
+    HookPolicy, HookRegistry, HookSource, HookVerdict, HotPathReducer, LlmSummarizer,
+    MakeCheckGate, MemoryAddTool, MemoryGateState, MemoryGates, MemoryRuntime, MultiEditTool,
+    NextStep, ReadTool, RecordedCompaction, ReduceCtx, ReducedOutput, Section, SectionKind,
+    SkillHookRegistrar, SkillReloadGuard, SkillTool, StatusSnapshot, StubTool, StubWorkspaceProbe,
+    SummarizeError, Summarizer, SystemPrompt, TodoItem, TodoStatus, TodoWriteTool, Tokenizer,
+    ToolOutputReducer, ToolRegistry, ToolResult, TrustLevel, TurnOutcome, UsageAccumulator,
+    VerifyFailure, VerifyGate, WebFetchTool, WorkspaceProbe, WorktreeController, WriteTool,
+    apply_manifest, assemble_model_input, build_grid, build_hook_fire, build_manifest,
+    combine_verdicts, derive_backbone, extraction_prompt, merge_summary, never_worse, parse_event,
     render_backbone_block, stub_breakdown, thinking_brief, turn_reasoning, turn_tool_summary,
     unified_diff,
 };
@@ -106,8 +106,8 @@ use status::SharedUsage;
 
 use append::new_event;
 use call::accumulate_usage;
+use fallback::FallbackToolOutcome;
 use multi_agent::bus_types::BusMessage;
-use synthetic::SyntheticToolOutcome;
 
 pub mod runner_config;
 use runner_config::RunnerConfig;
@@ -224,7 +224,7 @@ pub struct Runner {
     active_skill: Arc<Mutex<Option<String>>>,
     /// Optional hook registry. When configured, the runner fires PreToolUse
     /// before each tool execution and PostToolUse / PostToolUseFailure
-    /// after, arbitrating verdicts (Deny blocks, Feedback surfaces a
+    /// after, combining the verdicts (Deny blocks, Feedback surfaces a
     /// self-correction signal, Observe logs, Trigger fires downstream, Allow
     /// proceeds). None means no hooks fire at runtime. See hook_pipeline.rs.
     hooks: Option<Arc<HookRegistry>>,
@@ -299,7 +299,7 @@ pub struct Runner {
     queued_notifications: Mutex<VecDeque<(String, String)>>,
     /// Redundant-call detector — a harness self-evolution observer,
     /// independent of the user hook registry (which early-returns when no
-    /// hooks are configured). check_batch runs before arbitrate_pre_tool_use
+    /// hooks are configured). check_batch runs before run_pre_tool_use_gate
     /// (resolve_turn); record runs next to fire_post_tool_use. Held behind a
     /// std Mutex, brief pure compute, no await in the lock.
     redundancy: Mutex<redundancy::RedundancyTracker>,

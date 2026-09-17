@@ -1,11 +1,11 @@
-//! Hook arbitration and lifecycle events around tool execution.
+//! Hook verdict combination and lifecycle events around tool execution.
 //!
 //! Verdict handling (full, per the hook design):
 //! - Allow / Observe / Trigger / Inject keep the tool in the exec queue.
 //!   Inject rewrites the tool input (the design's updatedInput); the
 //!   rewrite lands with the input-projection cut -- for now the input is
 //!   kept unchanged and the inject content is recorded as an observation.
-//! - Deny / Feedback / Ask remove the tool + return a synthetic blocked
+//! - Deny / Feedback / Ask remove the tool + return a blocked
 //!   result so the model sees the reason losslessly. Deny is terminal (no
 //!   retry); Feedback surfaces a self-correction signal the model can act
 //!   on with adjusted input; Ask escalates to the user -- the deeper
@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     HookContext, HookEvent, HookOutcome, HookPayload, HookRegistry, HookVerdict, ToolResult,
-    arbitrate,
+    combine_verdicts,
 };
 use crate::agent::Runner;
 
@@ -80,13 +80,13 @@ impl Runner {
         outcomes
     }
 
-    /// Fire PreToolUse for every tool about to execute, arbitrate the
+    /// Fire PreToolUse for every tool about to execute, combine_verdicts the
     /// verdicts, and partition the exec queue: Allow / Observe / Trigger /
     /// Inject keep the call (Inject TODO rewrites input); Deny / Feedback /
-    /// Ask remove it + return a synthetic blocked result so the model sees
+    /// Ask remove it + return a blocked result so the model sees
     /// the reason. Mutates the exec queue in place; returns the blocked
     /// results.
-    pub(crate) async fn arbitrate_pre_tool_use(
+    pub(crate) async fn run_pre_tool_use_gate(
         &self,
         session: SessionId,
         exec: &mut Vec<(String, Arc<dyn Tool>, Value, bool)>,
@@ -110,13 +110,13 @@ impl Runner {
             let outcomes = self.dispatch_hooks(reg, &ctx);
             self.append_hook_signals(session, HookEvent::PreToolUse, Some(&tool_name), &outcomes)
                 .await;
-            let verdict = arbitrate(outcomes.into_iter().map(|o| o.result));
+            let verdict = combine_verdicts(outcomes.into_iter().map(|o| o.result));
             let allow = match verdict.primary {
                 HookVerdict::Allow => true,
                 HookVerdict::Inject(_) => {
                     // TODO: rewrite the tool input (updatedInput). For now
                     // keep the input; the inject content is already recorded
-                    // as an observation by the arbitrate pass above.
+                    // as an observation by the combine_verdicts pass above.
                     true
                 }
                 HookVerdict::Observe(_) | HookVerdict::Trigger(_) => true,
@@ -172,7 +172,7 @@ impl Runner {
         exec: &[(String, Arc<dyn Tool>, Value, bool)],
         token: &CancellationToken,
     ) -> Result<Vec<(String, Value)>, super::super::RunError> {
-        use crate::agent::synthetic::{SyntheticToolOutcome, tool_error_json};
+        use crate::agent::fallback::{FallbackToolOutcome, tool_error_json};
         use futures::stream::{FuturesUnordered, StreamExt};
         use houyicoder_api::tool::ToolCtx;
         use std::collections::HashSet;
@@ -258,7 +258,7 @@ impl Runner {
                                 if completed.contains(id) {
                                     continue;
                                 }
-                                let o = SyntheticToolOutcome::Interrupted.to_json();
+                                let o = FallbackToolOutcome::Interrupted.to_json();
                                 let is_error = crate::observability::tool_failure_reason(&o).is_some();
                                 self.fire_post_tool_use(session, id, name, input, &o, is_error)
                                     .await;
@@ -311,7 +311,7 @@ impl Runner {
                 let exec_fut = t.execute(ctx, input.clone());
                 let start = std::time::Instant::now();
                 let (r, cancelled) = tokio::select! {
-                    _ = token.cancelled() => (Ok(SyntheticToolOutcome::Interrupted.to_json()), true),
+                    _ = token.cancelled() => (Ok(FallbackToolOutcome::Interrupted.to_json()), true),
                     r = exec_fut => (r, false),
                 };
                 // No duration on the cancel path: the call was interrupted, so
@@ -382,11 +382,11 @@ impl Runner {
         let outcomes = self.dispatch_hooks(reg, &ctx);
         self.append_hook_signals(session, event, Some(tool_name), &outcomes)
             .await;
-        // PostToolUse is non-blocking: arbitrate collects triggers for the
+        // PostToolUse is non-blocking: combine_verdicts collects triggers for the
         // (future) async trigger-dispatch seam; the primary verdict is not
         // acted on here, so it is not bound. Per-hook signals are already
         // recorded above.
-        let _verdict = arbitrate(outcomes.into_iter().map(|o| o.result));
+        let _verdict = combine_verdicts(outcomes.into_iter().map(|o| o.result));
     }
 
     /// Record one executed tool call's outcome into the redundant-call

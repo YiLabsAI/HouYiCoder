@@ -99,9 +99,9 @@ fn test_empty_checklist_no_block() {
 }
 
 /// Once every task's completion window expires, the entire transcript block
-/// retires instead of leaving a permanent gray completed-count summary.
+/// clears instead of leaving a permanent gray completed-count summary.
 #[test]
-fn test_done_tasks_retire() {
+fn test_done_tasks_clear() {
     let mut app = working_app();
     app.todos.items = seeded_todos(&[
         ("first", TodoStatus::Completed),
@@ -117,11 +117,11 @@ fn test_done_tasks_retire() {
 
     assert!(
         !out.contains("tasks ("),
-        "completed block must retire:\n{out}"
+        "completed block must clear:\n{out}"
     );
     assert!(
         !out.contains("completed"),
-        "gray summary must retire:\n{out}"
+        "gray summary must clear:\n{out}"
     );
 }
 

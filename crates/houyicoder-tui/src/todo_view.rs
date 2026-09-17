@@ -10,7 +10,7 @@
 //! advances an append-only frame cursor; unrelated user boundaries retain the
 //! last checklist instead of clearing it. A cold projection, idle replay or
 //! rewind, is restored history rather than a live event: it records no
-//! completion timestamps, and an all-completed list retires on the spot
+//! completion timestamps, and an all-completed list clears on the spot
 //! instead of installing.
 
 use std::collections::{HashMap, HashSet};
@@ -20,7 +20,7 @@ use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
 use crate::transcript::TranscriptFrame;
 
-/// Time a completed task remains visible before retiring from the transcript.
+/// Time a completed task remains visible before clearing from the transcript.
 pub(crate) const RECENT_COMPLETION_TTL: Duration = Duration::from_secs(30);
 const COMPLETED_LIST_TTL: Duration = Duration::from_secs(5);
 
@@ -107,7 +107,7 @@ impl TodoState {
                 .iter()
                 .all(|item| item.status == TodoStatus::Completed)
         {
-            // A restored all-completed list is finished history; retire it
+            // A restored all-completed list is finished history; clear it
             // on the spot instead of installing items for the next prune.
             return;
         }
@@ -152,7 +152,7 @@ impl TodoState {
 
     /// Hide the whole checklist after every item has remained completed for
     /// the completion visibility window. An untimestamped completed list also
-    /// retires as a defensive fallback; cold projections normally retire in
+    /// clears as a defensive fallback; cold projections normally clear in
     /// update before installing any items.
     pub(crate) fn prune(&mut self, now: Instant) -> bool {
         if self.items.is_empty()
@@ -363,11 +363,11 @@ mod tests {
         assert_eq!(state.items.len(), 1);
     }
 
-    /// A cold replay of an all-completed list retires on the spot: the view
+    /// A cold replay of an all-completed list clears on the spot: the view
     /// installs nothing and records no timestamps, and every fresh
     /// accumulator (each resume) behaves the same.
     #[test]
-    fn test_cold_replay_retires() {
+    fn test_cold_replay_clears() {
         let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
             "todos": [{"content": "done", "status": "completed"}]
         })));
@@ -431,7 +431,7 @@ mod tests {
     }
 
     /// A live run completing the last open item after a restored mixed list
-    /// records timestamps for the whole list (one shared retirement window);
+    /// records timestamps for the whole list (one shared grace window);
     /// the restore itself recorded none.
     #[test]
     fn test_live_completion_after_restore() {

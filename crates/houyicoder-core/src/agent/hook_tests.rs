@@ -1,5 +1,5 @@
 //! Tests for the hook system: verdicts, events, payloads, registry dispatch,
-//! and deny-wins arbitration.
+//! and deny-wins combination.
 
 use super::registry::HookRegistry;
 use super::*;
@@ -792,8 +792,8 @@ fn test_panic_returns_guest_panic() {
     }
 }
 
-#[path = "hook_arbitrate_tests.rs"]
-mod arbitrate_tests;
+#[path = "hook_verdict_tests.rs"]
+mod verdict_tests;
 
 // ========================================================================
 // HookError: every variant constructs.

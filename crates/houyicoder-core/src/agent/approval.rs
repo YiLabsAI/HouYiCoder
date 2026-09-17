@@ -9,7 +9,7 @@ use houyicoder_api::tool::ToolCtx;
 use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
-use super::synthetic::{SyntheticToolOutcome, tool_error_json};
+use super::fallback::{FallbackToolOutcome, tool_error_json};
 use super::{ApprovalDecision, ApprovalRequest, RunError, Runner};
 use std::collections::HashSet;
 
@@ -78,7 +78,7 @@ impl Runner {
                         session,
                         req.call_id.clone(),
                         &req.tool_name,
-                        SyntheticToolOutcome::UnknownTool {
+                        FallbackToolOutcome::UnknownTool {
                             name: req.tool_name.clone(),
                             on_resume: true,
                         }
@@ -92,7 +92,7 @@ impl Runner {
                     session,
                     req.call_id.clone(),
                     &req.tool_name,
-                    SyntheticToolOutcome::Rejected.to_json(),
+                    FallbackToolOutcome::Rejected.to_json(),
                     0,
                 )
                 .await?;
@@ -116,7 +116,7 @@ impl Runner {
                 session,
                 req.call_id.clone(),
                 &req.tool_name,
-                SyntheticToolOutcome::Interrupted.to_json(),
+                FallbackToolOutcome::Interrupted.to_json(),
                 0,
             )
             .await?;

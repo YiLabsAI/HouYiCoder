@@ -2,8 +2,8 @@
 //!
 //! Extracted from the runner module so the runner file stays under the size
 //! gate and turn resolution is its own concern: collect executable +
-//! approval-requiring calls, observe redundant calls, arbitrate PreToolUse
-//! hooks, execute the partitioned batches, record outcomes, and decide
+//! approval-requiring calls, observe redundant calls, run the PreToolUse hook
+//! gate, execute the partitioned batches, record outcomes, and decide
 //! RunAgain / FinalOutput / Interruption. The runner's drive loop calls this
 //! once per model response.
 
@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::outcome_counts;
 use super::step::{NextStep, extract_final_text};
-use super::{ApprovalRequest, RunError, Runner, SyntheticToolOutcome, obs_wire};
+use super::{ApprovalRequest, FallbackToolOutcome, RunError, Runner, obs_wire};
 
 impl Runner {
     /// Resolve one turn: dispatch non-approval tools in partition-by-safety
@@ -50,7 +50,7 @@ impl Runner {
                     session,
                     id.clone(),
                     name,
-                    SyntheticToolOutcome::UnknownTool {
+                    FallbackToolOutcome::UnknownTool {
                         name: name.clone(),
                         on_resume: false,
                     }
@@ -76,7 +76,7 @@ impl Runner {
             ));
         }
         // Redundant-call observe + dedup reminder (harness self-evolution
-        // observer): runs BEFORE arbitrate_pre_tool_use so Deny/Feedback/
+        // observer): runs BEFORE run_pre_tool_use_gate so Deny/Feedback/
         // Ask-removed calls are still checked — the model DID emit a
         // duplicate; the block is downstream. Independent of the hook
         // registry (which early-returns when no user hooks are configured);
@@ -89,17 +89,17 @@ impl Runner {
             .map(|(_, t, input, _)| (t.name(), input))
             .collect();
         self.observe_redundancy(session, &calls).await;
-        // Hook fire point: PreToolUse. Arbitrate per tool before any execute;
-        // Deny / Feedback / Ask remove the call + return a synthetic blocked
+        // Hook fire point: PreToolUse. Run the gate per tool before any execute;
+        // Deny / Feedback / Ask remove the call + return a blocked
         // result the model sees losslessly, Allow / Observe / Trigger / Inject
         // keep it. Inject's input rewrite lands with the input-projection cut.
-        let blocked = self.arbitrate_pre_tool_use(session, &mut exec).await;
+        let blocked = self.run_pre_tool_use_gate(session, &mut exec).await;
         // Execute in partition-by-safety batches (concurrency-safe runs
         // concurrent, non-safe serial), PostToolUse firing after each call.
         // Each executed result is appended to the log as the call completes,
         // so the live delta renders per-tool progress, not a batch dump when
         // the slowest parallel call returns. Blocked results (Deny/Feedback/
-        // Ask) are synthetic and have no execution, so they append after.
+        // Ask) had no execution, so they append after.
         let mut results = self.execute_partitioned(session, &exec, token).await?;
         for (id, output) in &blocked {
             self.append_tool_result(session, id.clone(), "", output.clone(), 0)
@@ -126,7 +126,7 @@ impl Runner {
                 scan_for_authorizable(&results, &call_names, &subject, &origin, &exec)
             })
         {
-            // Append the synthetic ToolCall so the pending-approval scan on
+            // Append the raised ToolCall so the pending-approval scan on
             // resume finds it (the decision routes by log call_id) and the
             // model sees a coherent ToolCall + ToolResult pair.
             self.append_tool_call(session, &req.call_id, &req.tool_name, req.input.clone())

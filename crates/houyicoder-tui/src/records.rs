@@ -94,7 +94,7 @@ pub enum TranscriptLine {
         /// alongside the user-facing name so fold-bucketing (accumulate_brief)
         /// matches on the stable raw title, not the display name ("Update"
         /// would otherwise mis-bucket as "other"). None-equivalent is the
-        /// empty string for the synthetic "result" row.
+        /// empty string for the result row.
         tool: String,
         status: String,
         /// The untruncated call-line argument (command / path / pattern, or
@@ -103,7 +103,7 @@ pub enum TranscriptLine {
         /// read, so index-equals-render is structural: a search hit is always
         /// on text the verbose view shows. The chip uses the truncated status;
         /// the verbose view and search use this verbatim. Empty for the
-        /// synthetic result row (a result has no invocation).
+        /// result row (a result has no invocation).
         invocation: String,
         outcome: ToolOutcome,
         call_id: String,

@@ -26,7 +26,7 @@ pub struct FleetEntry {
     pub completed: Option<String>,
     /// When the child reached a terminal state (the completed string landed).
     /// Drives the footer auto-background: a completed row stays terse for a
-    /// short grace window so the user sees the result landed, then retires
+    /// short grace window so the user sees the result landed, then drops
     /// from the footer so the input box rises back under the transcript. The
     /// result stays in the transcript fold-group; only the footer pill leaves.
     pub completed_at: Option<Instant>,
@@ -52,7 +52,7 @@ pub struct DelegationRow {
 /// The /agents pane's list of this session's returned delegations, plus its
 /// cursor. Rebuilt from the transcript when the transcript version moves; a
 /// returned delegation is durable history, so the list survives the footer
-/// strip's grace-window retirement (the strip is the present tense, this is
+/// strip's grace window (the strip is the present tense, this is
 /// the record).
 #[derive(Debug, Default)]
 pub struct PaneAgents {
@@ -136,38 +136,38 @@ impl FleetState {
     }
 }
 
-/// How long a completed child stays in the footer before retiring. The
+/// How long a completed child stays in the footer before dropping. The
 /// grace window lets the user see the result landed (a terse done row),
 /// then the pill leaves so the input box rises back under the transcript.
 /// The result itself stays in the transcript fold-group; only the footer
-/// pill retires.
+/// pill drops.
 pub const FLEET_GRACE: Duration = Duration::from_secs(5);
 
 impl FleetState {
-    /// Retire completed entries whose grace window has elapsed. Running
+    /// Drop completed entries whose grace window has elapsed. Running
     /// children (no completed_at) always stay. Returns true when at least
-    /// one entry retired so the caller marks the view dirty. The selection
-    /// index is clamped back into the new bounds (a retired selected row
+    /// one entry dropped so the caller marks the view dirty. The selection
+    /// index is clamped back into the new bounds (a dropped selected row
     /// clears selection rather than pointing past the end).
     ///
     /// retain_viewed pins the child the user is drilled into (teammate
     /// view): its pill stays past the grace window so the footer does not
     /// drop the row the user is reading. The result lives in the transcript
-    /// fold-group regardless; this only holds the terse done row. Retires
+    /// fold-group regardless; this only holds the terse done row. Drops
     /// once the user exits the view (caller passes None).
-    pub fn retire_completed(&mut self, retain_viewed: Option<&str>) -> bool {
+    pub fn drop_completed(&mut self, retain_viewed: Option<&str>) -> bool {
         let before = self.entries.len();
         self.entries.retain(|e| {
             e.completed_at.is_none_or(|t| t.elapsed() < FLEET_GRACE)
                 || e.agent_id == retain_viewed.unwrap_or("")
         });
-        let retired = self.entries.len() != before;
+        let dropped = self.entries.len() != before;
         let len = self.entries.len();
         match self.selected {
             Some(s) if s >= len => self.selected = (len > 0).then(|| len - 1),
             _ => {}
         }
-        retired
+        dropped
     }
 
     /// Tick the live elapsed counters: return true when the pill should
@@ -658,7 +658,7 @@ pub enum ClientCommand {
         child_sid: String,
     },
     /// Kill every live background child at once (the 'K' two-press fleet
-    /// kill-all path). Each killed child's completion publishes and retires
+    /// kill-all path). Each killed child's completion publishes and drops
     /// its pill row. Fire-and-forget; a no-op when no children are live.
     KillAllChildren,
     /// Kill a single selected child (the 'k' on a selected pill path).

@@ -454,7 +454,7 @@ mod tests {
     /// The hint follows what the strip can honor: rows visible -> per-row
     /// keys; summary -> the pane; strip dropped -> the pane, tersely. Empty
     /// fleet -> no hint at all, so nothing lingers after the grace window
-    /// retires the entries.
+    /// drops the entries.
     #[test]
     fn test_agents_hint_ladder() {
         assert_eq!(agents_hint(&fleet_app(0, 0)), None);

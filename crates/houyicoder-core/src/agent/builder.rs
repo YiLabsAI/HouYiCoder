@@ -115,7 +115,7 @@ impl Runner {
 
     /// Install the hook registry. When set, the runner fires PreToolUse before
     /// each tool execution and PostToolUse / PostToolUseFailure after, then
-    /// arbitrates the verdicts to drive flow control (Deny blocks the call,
+    /// combines the verdicts to drive flow control (Deny blocks the call,
     /// Feedback surfaces a self-correction signal to the model, Observe is
     /// logged, Trigger fires a downstream event, Allow proceeds). None (the
     /// default) means no hooks fire at runtime. Consumes and returns self

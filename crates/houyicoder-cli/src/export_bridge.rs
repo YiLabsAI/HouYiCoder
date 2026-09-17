@@ -29,7 +29,7 @@ use crate::trajectory_bridge::SessionLogTrajectory;
 /// wall-clock latency. Failures are ToolResults whose output carries an
 /// error key (the bridge's existing success heuristic). Latency comes from
 /// the inline duration_ms on ToolResult (0 when the host did not time the
-/// call — synthetic or interrupted results).
+/// call — fallback or interrupted results).
 #[derive(Debug, serde::Serialize)]
 pub struct ToolStat {
     pub tool: String,

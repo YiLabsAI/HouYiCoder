@@ -209,7 +209,7 @@ fn test_foreground_parent_after_fold() {
     );
 }
 /// The /agents pane lists this session's returned delegations once the
-/// footer strip has retired them: a returned delegation is durable history,
+/// footer strip has dropped them: a returned delegation is durable history,
 /// so the pane (the record surface) keeps it after the strip (the present
 /// tense) drops it. Selectable, Enter opens the delegation's view.
 #[test]
@@ -250,7 +250,7 @@ fn test_agents_pane_lists_returned() {
         "the loaded fold is copied into the view"
     );
 }
-/// Arrows walk the returned-delegation list when the fleet is retired, and
+/// Arrows walk the returned-delegation list when the fleet is empty, and
 /// the cursor clamps at the bounds.
 #[test]
 fn test_agents_pane_cursor_walks() {

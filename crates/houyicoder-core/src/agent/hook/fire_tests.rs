@@ -79,7 +79,7 @@ impl Hook for DenyRecordableHook {
 
 /// A hook that observes (non-blocking) on PreToolUse + PostToolUse, never
 /// blocks. The tool executes; the observations are recorded. Covers the
-/// Allow/Observe keep-path through arbitrate + the full PostToolUse payload +
+/// Allow/Observe keep-path through combine_verdicts + the full PostToolUse payload +
 /// dispatch + record_hook_observations branches.
 struct ObserveRecordableHook;
 impl Hook for ObserveRecordableHook {
@@ -147,7 +147,7 @@ async fn test_pre_tool_use_deny() {
     };
     assert_eq!(text, "done");
     // The tool never executed: PreToolUse Deny removed it from the exec queue
-    // + appended a synthetic blocked result before execute could run.
+    // + appended a blocked result before execute could run.
     assert_eq!(
         ran.load(Ordering::SeqCst),
         0,
@@ -169,7 +169,7 @@ async fn test_pre_tool_use_deny() {
 async fn test_hook_deny_records_signal() {
     // The Deny lands a durable HookSignal attributed to the hook (with its
     // name + reason) so the audit trail + ExPeL see WHO blocked WHAT + why —
-    // not just the model-visible synthetic result. The model sees the block
+    // not just the model-visible blocked result. The model sees the block
     // losslessly; the trajectory sees the verdict + the hook that issued it.
     let (runner, session, _ran) = deny_runner();
     runner.run(session, "go".into()).await.expect("run");

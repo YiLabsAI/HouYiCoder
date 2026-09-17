@@ -18,7 +18,7 @@ use houyicoder_context::{ContextBackend, Disposition, EventId, SessionEvent, Ses
 ///   externalized already carries a block_ref marker; it rides in the group
 ///   verbatim, and the turn-group assembler materializes it on demand.
 /// - Summarized: event is dropped. The manifest's summary text is injected
-///   once as a synthetic UserInput at the position of the first Summarized
+///   once as a UserInput at the position of the first Summarized
 ///   event, so the model sees a summary of the folded span, not the raw
 ///   events (no full re-send of Summarized content).
 /// - Referenced: not a Compress disposition (the Isolate stage, PostToolUse,

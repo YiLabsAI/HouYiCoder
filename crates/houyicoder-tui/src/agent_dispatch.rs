@@ -195,7 +195,7 @@ impl App {
                 // count when the backend streams). The chip render reads
                 // this map + running_tools to append (Ns) / (Ns · M lines)
                 // after 2s. Only meaningful while the call is in flight;
-                // retire_tool clears it when the result lands.
+                // finish_tool clears it when the result lands.
                 if self.running_tools.contains(&call_id) {
                     self.bash_progress.insert(
                         call_id,
@@ -628,9 +628,9 @@ impl App {
 
     /// Maintain the running-tools set from a live frame: a ToolCall frame
     /// marks its call id running; a ToolCallUpdate with a terminal status
-    /// (completed or failed) retires it. Non-tool frames are ignored. The set
+    /// (completed or failed) finishes it. Non-tool frames are ignored. The set
     /// drives the spinner's tool-use pulse and the stall-gradient exemption.
-    /// Retiring a tool also resets the stall clock: last_delta_at is stale
+    /// Finishing a tool also resets the stall clock: last_delta_at is stale
     /// from before the tool ran, and without a fresh grace period the spinner
     /// would snap red the moment the exemption lifts.
     fn track_running_tool(&mut self, frame: &TranscriptFrame) {
@@ -640,7 +640,7 @@ impl App {
         match update {
             SessionUpdate::ToolCall(call) => match call.status {
                 ToolCallStatus::Completed | ToolCallStatus::Failed => {
-                    self.retire_tool(&call.tool_call_id.0);
+                    self.finish_tool(&call.tool_call_id.0);
                 }
                 _ => {
                     self.running_tools.insert(call.tool_call_id.0.clone());
@@ -656,17 +656,17 @@ impl App {
                     Some(ToolCallStatus::Completed | ToolCallStatus::Failed)
                 ) =>
             {
-                self.retire_tool(&upd.tool_call_id.0);
+                self.finish_tool(&upd.tool_call_id.0);
             }
             _ => {}
         }
     }
 
-    /// Retire a tool call from the running set. On an actual removal the
+    /// Remove a finished tool call from the running set. On an actual removal the
     /// stall clock resets: last_delta_at is stale from before the tool ran,
     /// and without a fresh grace period the spinner would snap red the moment
     /// the tool-runtime stall exemption lifts.
-    fn retire_tool(&mut self, call_id: &str) {
+    fn finish_tool(&mut self, call_id: &str) {
         if self.running_tools.remove(call_id) {
             self.last_delta_at = Some(Instant::now());
         }

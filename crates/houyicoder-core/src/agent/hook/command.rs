@@ -287,7 +287,7 @@ impl Hook for CommandHook {
             } else {
                 // The attempt never produced a verdict, so it did not
                 // consume the one shot. Release the gate for the next
-                // event rather than silently retiring a hook the user
+                // event rather than silently dropping a hook the user
                 // asked to run once and which has not yet run.
                 self.fired.store(false, Ordering::Release);
             }

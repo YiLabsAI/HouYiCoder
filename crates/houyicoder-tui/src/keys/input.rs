@@ -199,7 +199,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Down if app.pane == Pane::Agents && !app.fleet.entries.is_empty() => {
             app.fleet.move_selection(1);
         }
-        // Fleet retired: the pane lists this session's returned delegations,
+        // Fleet dropped: the pane lists this session's returned delegations,
         // and the same arrows walk them.
         KeyCode::Up if app.pane == Pane::Agents => app.agents.move_selection(-1),
         KeyCode::Down if app.pane == Pane::Agents => app.agents.move_selection(1),

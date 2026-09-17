@@ -14,7 +14,7 @@ use crate::provider::test_support::FakeProvider;
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn test_append_signals_cover_verdicts() {
-    // Drive append_hook_signals directly with synthetic outcomes so every
+    // Drive append_hook_signals directly with hand-built outcomes so every
     // verdict arm (Allow/Trigger + the 5 string verdicts + Err) is covered
     // + the per-arm mapping (reason, triggered_event, error_kind) is pinned.
     // Allow is skipped (no HookSignal); the rest each land one signal.
