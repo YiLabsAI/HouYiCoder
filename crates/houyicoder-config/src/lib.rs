@@ -126,7 +126,7 @@ fn extract_bool_field(
             warnings.push(ConfigWarning {
                 field: field.to_string(),
                 reason: format!(
-                    "expected a boolean, got {}; using the default (true)",
+                    "expected a boolean, got {} — using the default (true)",
                     json_type_name(other)
                 ),
             });
@@ -372,7 +372,7 @@ pub fn load_toggles_from(path: &std::path::Path) -> (MemoryToggles, Vec<ConfigWa
                 MemoryToggles::default(),
                 vec![ConfigWarning {
                     field: "<file>".into(),
-                    reason: "settings.json is not valid JSON; using defaults".into(),
+                    reason: "settings.json is not valid JSON — using defaults".into(),
                 }],
             );
         }

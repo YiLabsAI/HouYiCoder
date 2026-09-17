@@ -106,7 +106,7 @@ pub fn load_model_section_from(path: &std::path::Path) -> (ModelSection, Vec<Con
                 default_section_with_catalog(),
                 vec![ConfigWarning {
                     field: "<file>".into(),
-                    reason: "settings.json is not valid JSON; using defaults".into(),
+                    reason: "settings.json is not valid JSON — using defaults".into(),
                 }],
             );
         }
@@ -121,7 +121,7 @@ pub fn load_model_section_from(path: &std::path::Path) -> (ModelSection, Vec<Con
                 vec![ConfigWarning {
                     field: "model".into(),
                     reason: format!(
-                        "expected an object, got {}; using defaults",
+                        "expected an object, got {} — using defaults",
                         json_type_name(v)
                     ),
                 }],
@@ -184,7 +184,7 @@ fn extract_field<T: serde::de::DeserializeOwned>(
             Err(e) => {
                 warnings.push(ConfigWarning {
                     field: label.to_string(),
-                    reason: format!("{} malformed ({}); using the default", label, e),
+                    reason: format!("{} malformed ({}) — using the default", label, e),
                 });
                 None
             }
@@ -211,7 +211,7 @@ fn extract_catalog(
             warnings.push(ConfigWarning {
                 field: "model.catalog".into(),
                 reason: format!(
-                    "expected an array, got {}; using the default",
+                    "expected an array, got {} — using the default",
                     json_type_name(other)
                 ),
             });
@@ -233,7 +233,7 @@ fn parse_catalog_entry(
         warnings.push(ConfigWarning {
             field: format!("model.catalog[{index}]"),
             reason: format!(
-                "expected an object, got {}; entry dropped",
+                "expected an object, got {} — entry dropped",
                 json_type_name(value)
             ),
         });
@@ -246,7 +246,7 @@ fn parse_catalog_entry(
             warnings.push(ConfigWarning {
                 field: format!("model.catalog[{index}].id"),
                 reason: format!(
-                    "expected a string, got {}; entry dropped",
+                    "expected a string, got {} — entry dropped",
                     json_type_name(other)
                 ),
             });
@@ -309,7 +309,7 @@ fn validate_catalog(section: &mut ModelSection, served: &[String]) -> Vec<Config
             warnings.push(ConfigWarning {
                 field: "model.catalog".into(),
                 reason: format!(
-                    "duplicate catalog id {} dropped; keeping the first occurrence",
+                    "duplicate catalog id {} dropped — keeping the first occurrence",
                     entry.id
                 ),
             });
@@ -328,7 +328,7 @@ fn validate_catalog(section: &mut ModelSection, served: &[String]) -> Vec<Config
             warnings.push(ConfigWarning {
                 field: "model.id".into(),
                 reason: format!(
-                    "active model id {} is not in the catalog; the pick may be a typo",
+                    "active model id {} is not in the catalog — the pick may be a typo",
                     trimmed
                 ),
             });
@@ -348,7 +348,7 @@ fn validate_catalog(section: &mut ModelSection, served: &[String]) -> Vec<Config
                 warnings.push(ConfigWarning {
                     field: "model.catalog".into(),
                     reason: format!(
-                        "{} is not in the provider's served-model list; it may be a typo or the provider no longer offers it",
+                        "{} is not in the provider's served-model list — it may be a typo or the provider no longer offers it",
                         entry.id
                     ),
                 });

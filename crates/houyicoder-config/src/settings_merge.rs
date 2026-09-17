@@ -87,8 +87,8 @@ pub fn load_provider_settings_from(
             if project_value.get(field).is_some() || local_value.get(field).is_some() {
                 warnings.push(crate::ConfigWarning {
                     field: (*field).into(),
-                    reason: "a project settings file tried to supply your API key; \
-                             ignored - put the key in user settings or an \
+                    reason: "a project settings file tried to supply your API key — \
+                             this is ignored. Put the key in user settings or an \
                              environment variable"
                         .into(),
                 });
@@ -110,7 +110,7 @@ pub fn load_provider_settings_from(
             warnings.push(crate::ConfigWarning {
                 field: "provider.base_url".into(),
                 reason: format!(
-                    "this repo redirects model traffic to {host}; verify it is a gateway you trust"
+                    "this repo redirects model traffic to {host} — verify that it is a gateway you trust"
                 ),
             });
         }

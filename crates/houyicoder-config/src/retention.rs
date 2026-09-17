@@ -66,7 +66,7 @@ pub fn load_retention_from(path: &std::path::Path) -> (RetentionConfig, Vec<Conf
                 RetentionConfig::default(),
                 vec![ConfigWarning {
                     field: "<file>".into(),
-                    reason: "settings.json is not valid JSON; using defaults".into(),
+                    reason: "settings.json is not valid JSON — using defaults".into(),
                 }],
             );
         }
@@ -117,7 +117,7 @@ fn warn_near_miss_keys(value: &serde_json::Value, warnings: &mut Vec<ConfigWarni
         if value.get(alias).is_some() {
             warnings.push(ConfigWarning {
                 field: alias.to_string(),
-                reason: format!("the key is {canonical}; this spelling is ignored"),
+                reason: format!("the key is {canonical} — this spelling is ignored"),
             });
         }
     }
@@ -141,7 +141,7 @@ fn extract_u32_field(
                 warnings.push(ConfigWarning {
                     field: field.to_string(),
                     reason: format!(
-                        "expected a non-negative integer, got {n}; using the default ({default})"
+                        "expected a non-negative integer, got {n} — using the default ({default})"
                     ),
                 });
                 default
@@ -150,7 +150,7 @@ fn extract_u32_field(
             warnings.push(ConfigWarning {
                 field: field.to_string(),
                 reason: format!(
-                    "expected a number, got {}; using the default ({default})",
+                    "expected a number, got {} — using the default ({default})",
                     json_type_name(other)
                 ),
             });

@@ -465,14 +465,14 @@ pub fn store_backlog_notice(
     if count > cap {
         return Some(format!(
             "session store holds {count} sessions, over the retention count \
-             of {cap}; run houyi cleanup to review"
+             of {cap} — run houyi cleanup to review"
         ));
     }
     if count > threshold && count <= cap.min(GAP_PRECISE_MAX_DIRS) {
         let plan = plan_prune(sessions_root, policy);
         if plan.len() >= threshold {
             return Some(
-                "sessions are past their retention window; run houyi cleanup to review".into(),
+                "sessions are past their retention window — run houyi cleanup to review".into(),
             );
         }
     }
