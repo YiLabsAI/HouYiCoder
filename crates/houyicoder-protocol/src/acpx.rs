@@ -8,9 +8,9 @@
 //! The method string travels on the wire (the base protocol's ext_*
 //! mechanism is string-keyed by design); the typed AcpxMethod enum lives
 //! here so the string never leaks past the adapter boundary — every consumer
-//! matches the typed enum, and a typo or a new method surfaces at compile
-//! time. The adapter (service layer) maps the wire string to the enum on the
-//! way in and back on the way out.
+//! matches the typed enum, so a method this build does not know decodes as
+//! Unknown instead of failing the read. The adapter (service layer) maps the
+//! wire string to the enum on the way in and back on the way out.
 //!
 //! LlmEvent (token-level provider stream) projects onto acpx/llm/* as an
 //! independent notification stream — it does NOT ride the base session/update
@@ -25,8 +25,9 @@ use serde_json::Value;
 /// The typed acpx/* method namespace. Wire-serializes to the string key the
 /// base protocol ext_* mechanism carries (e.g. LlmTextDelta serializes as
 /// "acpx/llm/text_delta"). non_exhaustive so a new extension method lands
-/// without reworking every match; unknown methods decode to None at the
-/// adapter boundary (a standard client ignores them).
+/// without reworking every match; a method this build does not know decodes
+/// as Unknown, so a newer peer's addition costs one skipped notification
+/// instead of the connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AcpxMethod {
@@ -107,6 +108,15 @@ pub enum AcpxMethod {
     // req_id), unlike the notification methods above which have no req_id.
     #[serde(rename = "acpx/session/takeControl")]
     SessionTakeControl,
+
+    /// A method this build does not know: a newer peer's addition, or a name
+    /// this build writes wrong (a rename that drifted from its serde name).
+    /// Either way it arrives here rather than failing the read that carried
+    /// it. The name is not retained; a consumer reporting what arrived reads
+    /// the params. This variant serializes as the literal Unknown, which no
+    /// peer defines as a method.
+    #[serde(other)]
+    Unknown,
 }
 
 /// One acpx extension notification. The shape matches a base-protocol
@@ -116,6 +126,10 @@ pub enum AcpxMethod {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcpxNotification {
     pub method: AcpxMethod,
+    /// The method's own fields. JSON-RPC 2.0 lets a notification omit params,
+    /// so an absent one reads as null here: the method still decodes, and a
+    /// reader that looks a field up gets null rather than a failed read.
+    #[serde(default)]
     pub params: Value,
 }
 
@@ -233,6 +247,118 @@ mod tests {
         assert_eq!(json, r#""acpx/session/takeControl""#);
         let back: AcpxMethod = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, AcpxMethod::SessionTakeControl));
+    }
+
+    #[test]
+    fn test_unknown_method_decodes() {
+        // A method a newer peer added must not fail the read: the namespace
+        // grows, and a build that cannot name a method still reads the
+        // notification carrying it. The payload survives for a consumer to
+        // report.
+        let json = r#"{"method":"acpx/context/run_completed","params":{"secs":12}}"#;
+        let back: AcpxNotification = serde_json::from_str(json).unwrap();
+        assert!(matches!(back.method, AcpxMethod::Unknown));
+        assert_eq!(back.params["secs"], 12);
+    }
+
+    /// The name each variant carries on the wire. The match is wildcard-free
+    /// on purpose: a variant added to the enum fails this build until its
+    /// name is written here, because after the decode tolerance a name that
+    /// is missing or spelled wrong turns that whole method category into a
+    /// silent drop rather than an error. Unknown is pinned to the literal
+    /// serde gives it, which no peer defines as a method.
+    fn pinned_name(method: &AcpxMethod) -> &'static str {
+        match method {
+            AcpxMethod::LlmStepStart => "acpx/llm/step_start",
+            AcpxMethod::LlmStepFinish => "acpx/llm/step_finish",
+            AcpxMethod::LlmTextStart => "acpx/llm/text_start",
+            AcpxMethod::LlmTextDelta => "acpx/llm/text_delta",
+            AcpxMethod::LlmTextEnd => "acpx/llm/text_end",
+            AcpxMethod::LlmReasoningStart => "acpx/llm/reasoning_start",
+            AcpxMethod::LlmReasoningDelta => "acpx/llm/reasoning_delta",
+            AcpxMethod::LlmReasoningEnd => "acpx/llm/reasoning_end",
+            AcpxMethod::LlmToolInputStart => "acpx/llm/tool_input_start",
+            AcpxMethod::LlmToolInputDelta => "acpx/llm/tool_input_delta",
+            AcpxMethod::LlmToolInputEnd => "acpx/llm/tool_input_end",
+            AcpxMethod::LlmToolCall => "acpx/llm/tool_call",
+            AcpxMethod::LlmToolResult => "acpx/llm/tool_result",
+            AcpxMethod::LlmToolError => "acpx/llm/tool_error",
+            AcpxMethod::LlmFinish => "acpx/llm/finish",
+            AcpxMethod::LlmProviderError => "acpx/llm/provider_error",
+            AcpxMethod::MaxTurns => "acpx/max_turns",
+            AcpxMethod::ToolProgress => "acpx/tool/progress",
+            AcpxMethod::ContextCompactionBoundary => "acpx/context/compaction_boundary",
+            AcpxMethod::ContextSummary => "acpx/context/summary",
+            AcpxMethod::ContextMetaUser => "acpx/context/meta_user",
+            AcpxMethod::ContextPermissionDecision => "acpx/context/permission_decision",
+            AcpxMethod::A2aHandoff => "acpx/a2a/handoff",
+            AcpxMethod::TrajectorySnapshot => "acpx/trajectory/snapshot",
+            AcpxMethod::CasBlockRef => "acpx/cas/block_ref",
+            AcpxMethod::SessionTakeControl => "acpx/session/takeControl",
+            AcpxMethod::Unknown => "Unknown",
+        }
+    }
+
+    #[test]
+    fn test_method_names_round_trip() {
+        // Every named method is pinned both ways. A rename written wrong on
+        // one side makes this build emit a name it cannot read back, and the
+        // decode tolerance turns that into a silent drop, so this test is
+        // what keeps a wrong name loud.
+        let named = [
+            AcpxMethod::LlmStepStart,
+            AcpxMethod::LlmStepFinish,
+            AcpxMethod::LlmTextStart,
+            AcpxMethod::LlmTextDelta,
+            AcpxMethod::LlmTextEnd,
+            AcpxMethod::LlmReasoningStart,
+            AcpxMethod::LlmReasoningDelta,
+            AcpxMethod::LlmReasoningEnd,
+            AcpxMethod::LlmToolInputStart,
+            AcpxMethod::LlmToolInputDelta,
+            AcpxMethod::LlmToolInputEnd,
+            AcpxMethod::LlmToolCall,
+            AcpxMethod::LlmToolResult,
+            AcpxMethod::LlmToolError,
+            AcpxMethod::LlmFinish,
+            AcpxMethod::LlmProviderError,
+            AcpxMethod::MaxTurns,
+            AcpxMethod::ToolProgress,
+            AcpxMethod::ContextCompactionBoundary,
+            AcpxMethod::ContextSummary,
+            AcpxMethod::ContextMetaUser,
+            AcpxMethod::ContextPermissionDecision,
+            AcpxMethod::A2aHandoff,
+            AcpxMethod::TrajectorySnapshot,
+            AcpxMethod::CasBlockRef,
+            AcpxMethod::SessionTakeControl,
+        ];
+        let mut seen = Vec::new();
+        for method in named {
+            let name = pinned_name(&method);
+            let encoded = serde_json::to_string(&method).unwrap();
+            assert_eq!(encoded, format!("\"{name}\""), "serialize {method:?}");
+            let back: AcpxMethod = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(back, method, "read back {encoded}");
+            seen.push(name);
+        }
+        // Two variants sharing a name would make one of them unreachable on
+        // the wire while this test still passed row by row.
+        let mut distinct = seen.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), seen.len(), "names are distinct: {seen:?}");
+    }
+
+    #[test]
+    fn test_notification_without_params_decodes() {
+        // JSON-RPC 2.0 lets a notification omit params; the method still
+        // decodes and the fields read as null, so a peer that sends the bare
+        // method does not end the read.
+        let json = r#"{"method":"acpx/context/summary"}"#;
+        let back: AcpxNotification = serde_json::from_str(json).unwrap();
+        assert_eq!(back.method, AcpxMethod::ContextSummary);
+        assert!(back.params.get("text").is_none());
     }
 
     #[test]

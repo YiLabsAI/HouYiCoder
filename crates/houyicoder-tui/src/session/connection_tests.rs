@@ -270,6 +270,42 @@ async fn test_drive_translates_agent_status() {
     }
 }
 
+/// An acpx method this build cannot name does not end the session: the read
+/// lands on the unrecognized method, the driver drops it, and the events
+/// behind it still arrive.
+#[tokio::test]
+async fn test_drive_survives_unknown_method() {
+    let mut engine = FakeEngine::new();
+    engine.unknown_acpx_method("acpx/context/run_completed");
+    engine.event(FrontendEvent::SystemLine {
+        text: "after".into(),
+    });
+    engine.close();
+    let run = engine.drive(Vec::new()).await;
+    // The unknown notification becomes no frame: a frame nothing can draw
+    // would still occupy a slot in the rebuild window.
+    assert!(
+        !run.msgs
+            .iter()
+            .any(|m| matches!(m, SessionMessage::Event(ServerEvent::Frame(_)))),
+        "no frame for the unknown notification: {run:?}"
+    );
+    // And the event behind it still arrives: the read did not end on it.
+    let lines: Vec<&str> = run
+        .msgs
+        .iter()
+        .filter_map(|m| match m {
+            SessionMessage::Event(ServerEvent::SystemLine { text }) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        ["after"],
+        "the event after the unknown one is translated: {run:?}"
+    );
+}
+
 // --- driver dispatch and translation contracts ---
 
 /// A fake engine at the other end of the connection. It speaks the full
@@ -314,6 +350,26 @@ impl FakeEngine {
                 EventSeq(self.seq),
                 e,
             )))));
+    }
+
+    /// Queue a frame naming an acpx method this build does not model, as a
+    /// newer session would send it. Written from a literal because the typed
+    /// notification cannot name a method this build does not have.
+    fn unknown_acpx_method(&mut self, method: &str) {
+        self.seq += 1;
+        let frame = serde_json::json!({
+            "role": "event",
+            "data": {
+                "seq": self.seq,
+                "payload": {
+                    "Acpx": {
+                        "notification": { "method": method, "params": { "secs": 12 } }
+                    }
+                }
+            }
+        })
+        .to_string();
+        self.load.push_back(Ok(frame));
     }
 
     /// Queue a response for the client, issuing the next request id.

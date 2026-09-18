@@ -19,6 +19,30 @@ use crate::agent_message::{
 };
 use crate::transcript::TranscriptFrame;
 
+/// How many unknown-method notices one connection writes to the diagnostic
+/// log. The notification is dropped either way; the bound keeps a peer that
+/// renamed a token-level method from turning the log into a token-rate
+/// stream. It is per connection and shared across methods, so a chatty
+/// unknown method spends the budget for a rarer one.
+struct UnknownReportBudget(u32);
+
+impl UnknownReportBudget {
+    const LIMIT: u32 = 3;
+
+    fn new() -> Self {
+        Self(0)
+    }
+
+    /// Takes one notice from the budget; false once the bound is spent.
+    fn grant(&mut self) -> bool {
+        if self.0 >= Self::LIMIT {
+            return false;
+        }
+        self.0 += 1;
+        true
+    }
+}
+
 /// A queued outbound frame. Sending between select rounds avoids aliasing the
 /// client borrowed by the receive future.
 enum Outbound {
@@ -99,6 +123,7 @@ async fn drive_connection(
     // confirmed handshake rather than inferring it from the object existing.
     let _send = agent_tx.send(SessionMessage::Connection(ConnectionEvent::Ready));
     let mut outbound: VecDeque<Outbound> = VecDeque::new();
+    let mut unknown_reports = UnknownReportBudget::new();
     loop {
         while let Some(out) = outbound.pop_front() {
             let res = match out {
@@ -450,6 +475,22 @@ async fn drive_connection(
                                     ));
                                 }
                             }
+                            AcpxMethod::Unknown => {
+                                // A method this build does not know: a newer
+                                // session's extension, or a name this build
+                                // writes wrong. Nothing here can draw it, and
+                                // meeting one is not a failure — the read
+                                // continues, and the diagnostic log records
+                                // the payload keys.
+                                if unknown_reports.grant() {
+                                    let keys: Vec<&str> = notification
+                                        .params
+                                        .as_object()
+                                        .map(|o| o.keys().map(String::as_str).collect())
+                                        .unwrap_or_default();
+                                    tracing::warn!("unknown acpx method dropped: {keys:?}");
+                                }
+                            }
                             _ => {
                                 let _send = agent_tx.send(SessionMessage::Event(
                                     ServerEvent::Frame(TranscriptFrame::Acpx(notification)),
@@ -685,4 +726,20 @@ pub(crate) fn kill_child_notification(child_sid: &str) -> AcpNotification {
         "session/kill_child",
         serde_json::json!({ "childSid": child_sid }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UnknownReportBudget;
+
+    #[test]
+    fn test_unknown_report_budget_spends() {
+        // The bound's false branch has no other observable: the driver's
+        // only report for a dropped notification is a diagnostic line.
+        let mut budget = UnknownReportBudget::new();
+        for _ in 0..UnknownReportBudget::LIMIT {
+            assert!(budget.grant());
+        }
+        assert!(!budget.grant());
+    }
 }
