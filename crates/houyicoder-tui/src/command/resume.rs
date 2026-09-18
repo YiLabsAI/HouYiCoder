@@ -97,7 +97,7 @@ fn is_export_file_path(arg: &str) -> bool {
 }
 
 /// The one-time message a resume set-point sends when it queues a target.
-/// Busy-aware: a run in flight defers the swap (try_swap_session takes the
+/// Busy-aware: a run in flight defers the swap (try_switch_session takes the
 /// target when the run resolves), so the user is told the switch will happen
 /// on completion, not that it is happening now. Fires once per user action
 /// (run_resume / picker Enter); the convergence point stays silent.

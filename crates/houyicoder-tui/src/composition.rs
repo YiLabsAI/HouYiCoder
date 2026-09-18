@@ -37,6 +37,10 @@ use houyicoder_permission::DefaultModeGate;
 use ratatui::layout::Rect;
 #[cfg(test)]
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 
 /// The wired protocol bundle the composition root (the CLI bin, or the test
@@ -170,7 +174,7 @@ pub fn build_app(bundle: RunnerBundle) -> App {
 pub type ResumeBuilderRef = dyn Fn(&str) -> Result<RunnerBundle, Box<dyn std::error::Error>>;
 
 impl App {
-    pub fn try_swap_session(
+    pub fn try_switch_session(
         &mut self,
         resume_builder: Option<&ResumeBuilderRef>,
         dirty: &mut bool,
@@ -181,7 +185,7 @@ impl App {
         // The caller (the event loop's idle guard) already gates on
         // !agent_busy && !reverse_request_in_flight, so a target that
         // survives to here is ready to swap. The old busy put-back branch
-        // is gone -- it was a workaround for try_swap_session being called
+        // is gone -- it was a workaround for try_switch_session being called
         // every frame (even mid-run); polling a continuous state (agent_busy)
         // + putting the target back each frame forced the "no system_line or
         // it floods" hack. The drain now binds to the consume action, not the
@@ -189,7 +193,7 @@ impl App {
         if let Some(builder) = resume_builder {
             match builder(&target) {
                 Ok(new_bundle) => {
-                    self.swap_session(new_bundle);
+                    self.switch_session(new_bundle);
                     *dirty = true;
                 }
                 Err(e) => {
@@ -207,7 +211,7 @@ impl App {
     /// idempotency. !agent_busy holds every frame; no flood because drain/take
     /// CONSUMES the item, so the next frame has nothing to do. Side effects
     /// here MUST bind to the consume action, not the idle condition (binding
-    /// to the condition floods -- that was the old try_swap_session busy
+    /// to the condition floods -- that was the old try_switch_session busy
     /// branch's flaw). A queued item auto-sends ONLY when the prior run ended
     /// FinalOutput (a clean end) -- the user got their answer, so drain FIFO.
     /// An interrupt/error does NOT auto-send: the queued item stays parked for
@@ -216,14 +220,14 @@ impl App {
     /// queue strip or pane action.
     pub fn idle_drain(&mut self, resume_builder: Option<&ResumeBuilderRef>, dirty: &mut bool) {
         if !self.agent_busy() && !self.reverse_request_in_flight() {
-            self.try_swap_session(resume_builder, dirty);
+            self.try_switch_session(resume_builder, dirty);
             if self.status.last_run_final && self.drain_pending_head() {
                 *dirty = true;
             }
         }
     }
 
-    pub fn swap_session(&mut self, bundle: RunnerBundle) {
+    pub fn switch_session(&mut self, bundle: RunnerBundle) {
         // Reverse-default: a swap is "fresh App + new bundle" -- rebuild from
         // build_app (the launch-time equivalent), which resets every
         // session-local field via app()'s defaults and applies only the bundle.
@@ -324,7 +328,7 @@ pub fn build_app_for_test(project: Option<String>) -> App {
     let bundle = houyicoder_service::composition::build_runner(options);
     let wire_session = houyicoder_protocol::frontend::SessionId(bundle.session.to_string());
     let (tx, rx) = mpsc::channel::<SessionMessage>();
-    let (runner, client, startup_warnings) = pair_inproc_server(
+    let (runner, client, startup_warnings) = start_local_server(
         bundle.runner,
         bundle.session,
         bundle.gate,
@@ -359,7 +363,7 @@ pub fn build_app_for_test(project: Option<String>) -> App {
 /// installs one event sequencer before sharing the runner and gives the same
 /// sequencer to the server, matching the CLI composition root.
 #[cfg(test)]
-pub fn pair_inproc_server(
+pub fn start_local_server(
     runner: Runner,
     session: SessionId,
     gate: Arc<DefaultModeGate>,
@@ -367,17 +371,17 @@ pub fn pair_inproc_server(
     bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 ) -> (Arc<Runner>, Client, Vec<String>) {
     let (runner, client, _serve, warnings) =
-        pair_inproc_server_tracked(runner, session, gate, append_notify, bus);
+        start_local_server_tracked(runner, session, gate, append_notify, bus);
     (runner, client, warnings)
 }
 
-/// Same as pair_inproc_server but returns the server task's JoinHandle so a
+/// Same as start_local_server but returns the server task's JoinHandle so a
 /// test can assert the serve loop exited (e.g. after a swap drops the old
 /// session: cmd_tx drop -> driver exits -> client drop -> c2s_tx drop ->
 /// server next_frame None -> serve returns). The handle is detached in the
 /// non-tracked variant; tests that need to verify teardown use this one.
 #[cfg(test)]
-pub fn pair_inproc_server_tracked(
+pub fn start_local_server_tracked(
     mut runner: Runner,
     session: SessionId,
     gate: Arc<DefaultModeGate>,
@@ -412,8 +416,14 @@ pub fn pair_inproc_server_tracked(
         session,
         gate_dyn,
         event_sequencer,
-    )
-    .with_append_notify(append_notify);
+    );
+    // Test isolation: the server's settings path defaults to the real config
+    // file, so a model pick persisted the test's id into the developer's real
+    // settings on every check run. Redirect to a unique temp path under
+    // cfg(test); the production binary keeps the real path.
+    #[cfg(test)]
+    let server = server.with_settings_path(local_test_settings_path());
+    let server = server.with_append_notify(append_notify);
     let runtime = shared_runtime();
     let serve_handle = runtime.spawn(async move {
         let _serve = server.serve(server_io).await;
@@ -421,6 +431,15 @@ pub fn pair_inproc_server_tracked(
     let transport = houyicoder_client::InProcTransport::from_halves(c2s_tx, s2c_rx);
     let client = Client::new(Box::new(transport));
     (runner, client, serve_handle, startup_warnings)
+}
+
+/// A unique temp settings path for one in-process test server, so a /model
+/// persist writes the temp file instead of the developer's real config.
+#[cfg(test)]
+fn local_test_settings_path() -> std::path::PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("houyi-settings-{}-{}.json", std::process::id(), n))
 }
 
 fn transcript() -> Vec<TranscriptLine> {
@@ -730,4 +749,4 @@ pub fn suggestions_for(
 }
 
 #[cfg(test)]
-mod swap_tests;
+mod session_switch_tests;

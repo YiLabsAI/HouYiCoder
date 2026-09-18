@@ -33,7 +33,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // Clear a lingering name editor when focus leaves the Status pane (an
     // approval/Focus takeover or a /command that switches pane would otherwise
     // leave an invisible Some, so the next 'e' inserts into the stale buffer
-    // instead of opening fresh. swap_session rebuilds via build_app so
+    // instead of opening fresh. switch_session rebuilds via build_app so
     // it clears too, but this covers the in-session pane switches.
     if app.pane != Pane::Status {
         app.status_name_edit = None;

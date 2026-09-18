@@ -15,7 +15,7 @@ fn test_bundle() -> RunnerBundle {
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let (runner, client, startup_warnings) =
-        pair_inproc_server(runner, session, gate, append_notify, None);
+        start_local_server(runner, session, gate, append_notify, None);
     drop(runner);
     RunnerBundle {
         client,
@@ -46,7 +46,7 @@ fn test_bundle_tracked() -> (RunnerBundle, tokio::task::JoinHandle<()>) {
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let (runner, client, serve, startup_warnings) =
-        pair_inproc_server_tracked(runner, session, gate, append_notify, None);
+        start_local_server_tracked(runner, session, gate, append_notify, None);
     drop(runner);
     (
         RunnerBundle {
@@ -84,7 +84,7 @@ fn test_switch_session_resets_view() {
     let new_bundle = test_bundle();
     let new_sid = new_bundle.session.0.clone();
     let new_warning_count = new_bundle.startup_warnings.len();
-    app.swap_session(new_bundle);
+    app.switch_session(new_bundle);
     // swap clears the old transcript; the new bundle's startup warnings
     // (e.g. a sandbox-fence notice) land as initial system lines, so the
     // transcript has exactly that many lines, not the old content.
@@ -111,7 +111,7 @@ fn test_switch_session_resets_view() {
 fn test_swap_bumps_transcript_version() {
     let mut app = build_app(test_bundle());
     let v_before = app.transcript_version.get();
-    app.swap_session(test_bundle());
+    app.switch_session(test_bundle());
     assert_ne!(
         app.transcript_version.get(),
         v_before,
@@ -156,15 +156,15 @@ fn test_build_app_surfaces_warnings() {
 fn test_try_noop_without_target() {
     let mut app = build_app(test_bundle());
     let mut dirty = false;
-    app.try_swap_session(None, &mut dirty);
+    app.try_switch_session(None, &mut dirty);
     assert!(!dirty, "no target = no-op");
     assert!(!app.quit, "no target = no-op");
 }
 
 /// The old busy put-back branch is gone: the event loop's idle guard
-/// (!agent_busy && !reverse_request_in_flight) now gates try_swap_session,
+/// (!agent_busy && !reverse_request_in_flight) now gates try_switch_session,
 /// so it only runs when idle. A test that set agent_busy=true + called
-/// try_swap_session directly would exercise a path the caller no longer
+/// try_switch_session directly would exercise a path the caller no longer
 /// reaches; the idle-guarded swap is covered by try_swap_swaps_when_idle
 /// + the PTY journeys (resume_sid_reopens_history, resume_picker_swaps).
 
@@ -173,7 +173,7 @@ fn test_try_no_builder_quits() {
     let mut app = build_app(test_bundle());
     app.pending_resume_target = Some("some-sid".to_string());
     let mut dirty = false;
-    app.try_swap_session(None, &mut dirty);
+    app.try_switch_session(None, &mut dirty);
     assert!(!dirty, "no builder = no swap");
     assert!(app.quit, "no builder = fallback quit");
     assert_eq!(
@@ -194,7 +194,7 @@ fn test_resume_err_keeps_session() {
     app.pending_resume_target = Some("bad-sid".to_string());
     let mut dirty = false;
     let builder: Box<ResumeBuilderRef> = Box::new(|_| Err("sid not on disk".into()));
-    app.try_swap_session(Some(&*builder), &mut dirty);
+    app.try_switch_session(Some(&*builder), &mut dirty);
     assert!(dirty, "the error system line flags dirty");
     assert!(
         !app.quit,
@@ -284,7 +284,7 @@ fn test_clean_end_drains_parked() {
 }
 
 /// A deferred resume target with a queued message: idle_drain acts on the
-/// resume target first (try_swap_session runs before drain_pending_head in
+/// resume target first (try_switch_session runs before drain_pending_head in
 /// idle_drain), so the swap happens before the message drains. The swap
 /// carries the pending queue across (demoting Messages to ParkedMessage --
 /// the new runner's server queue is empty), then the head drains in the new
@@ -308,7 +308,7 @@ fn test_resume_precedes_queued_message() {
     );
 }
 
-/// swap_session must clear session-local state: the old session's todo
+/// switch_session must clear session-local state: the old session's todo
 /// list, token/step counts, pending approval, text selection, and the
 /// row caches for selection/copy. None of those survive a swap -- the
 /// new session must render as if it were fresh, not layered over the old
@@ -339,7 +339,7 @@ fn test_clears_session_local_state() {
     assert!(!app.todos.items.is_empty());
     assert!(app.selection.anchor.is_some());
 
-    app.swap_session(test_bundle());
+    app.switch_session(test_bundle());
 
     assert!(app.todos.items.is_empty(), "todos cleared");
     assert_eq!(app.cumulative_tokens, 0, "cumulative_tokens cleared");
@@ -359,7 +359,7 @@ fn test_clears_session_local_state() {
     );
 }
 
-/// swap_session carries the pending queue across the swap, demoting Messages
+/// switch_session carries the pending queue across the swap, demoting Messages
 /// to ParkedMessage (the new runner's server queue is empty, so a live server copy
 /// is lost). A command ahead of messages stays ahead; the queue order is
 /// preserved. The carried items auto-drain in the new session on the next
@@ -372,7 +372,7 @@ fn test_swap_carries_pending_across() {
         .push(PendingItem::Command("/resume sid-b".into()));
     app.pending.push(PendingItem::Message("task c".into()));
 
-    app.swap_session(test_bundle());
+    app.switch_session(test_bundle());
 
     assert_eq!(
         app.pending,
@@ -411,7 +411,7 @@ fn test_tears_down_old_server() {
     // Swap: build_app resets self, dropping the old connection. The driver
     // JoinHandle is detached (the task is not aborted), but the driver exits
     // when its command channel returns None.
-    app.swap_session(test_bundle());
+    app.switch_session(test_bundle());
     // The teardown chain is async on the shared runtime; poll for completion.
     let mut tries = 0;
     while !old_serve.is_finished() && tries < 200 {
@@ -464,7 +464,7 @@ fn test_drops_non_resume_commands() {
     app.pending.push(PendingItem::Command("/rewind".into()));
     app.pending.push(PendingItem::Message("kept msg 2".into()));
 
-    app.swap_session(test_bundle());
+    app.switch_session(test_bundle());
 
     // Messages + /resume stay; /clear + /rewind dropped.
     assert_eq!(
@@ -603,7 +603,7 @@ fn test_swap_restores_open_keys() {
         first_sid, second_sid,
         "the two bundles are distinct sessions"
     );
-    app.swap_session(second);
+    app.switch_session(second);
     assert!(
         app.expanded_results.is_empty()
             && app.expanded_fold_groups.is_empty()
@@ -627,7 +627,7 @@ fn test_swap_restores_open_keys() {
 
     let mut back = test_bundle();
     back.session = first_sid;
-    app.swap_session(back);
+    app.switch_session(back);
     app.transcript = folded_transcript();
     assert_eq!(
         app.expanded_results.len(),

@@ -240,8 +240,8 @@ pub struct App {
     /// A pending resume request set when the user picks a session in the
     /// picker (or /resume <id|name|file>). Carries a session id OR an export
     /// file path (the resume builder dispatches on which). The event loop's
-    /// try_swap_session consumes it: with a resume_builder wired (the normal
-    /// path), it builds the new bundle and swap_session swaps in place — no
+    /// try_switch_session consumes it: with a resume_builder wired (the normal
+    /// path), it builds the new bundle and switch_session swaps in place — no
     /// quit, no restart. Only when no builder is wired does it put the target
     /// back + set quit, letting the caller fall back to a fresh re-enter.
     pub pending_resume_target: Option<String>,

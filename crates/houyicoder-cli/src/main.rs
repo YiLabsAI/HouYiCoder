@@ -628,7 +628,7 @@ pub(crate) fn assemble_bundle(
         Some(trajectory);
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
     let (tx, rx) = channel::<SessionMessage>();
-    let (_runner, client, startup_warnings) = pair_inproc_server(
+    let (_runner, client, startup_warnings) = start_local_server(
         runner,
         session,
         gate,
@@ -666,7 +666,7 @@ pub(crate) fn assemble_bundle(
 /// becomes the sole ordering authority for durable projections, model deltas,
 /// and fleet status. The server is the only carrier writer.
 #[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
-fn pair_inproc_server(
+fn start_local_server(
     mut runner: Runner,
     session: SessionId,
     gate: Arc<houyicoder_permission::DefaultModeGate>,

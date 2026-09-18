@@ -266,7 +266,7 @@ fn test_pair_completes_handshake() {
     let bundle = houyicoder_service::composition::build_runner(
         houyicoder_service::composition::BuildRunnerOptions::default(),
     );
-    let (runner_arc, mut client, _startup_warnings) = pair_inproc_server(
+    let (runner_arc, mut client, _startup_warnings) = start_local_server(
         bundle.runner,
         bundle.session,
         bundle.gate,

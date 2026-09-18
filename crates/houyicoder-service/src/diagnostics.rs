@@ -160,7 +160,7 @@ pub fn install(path: &Path) -> Result<DiagnosticsHandle, InstallError> {
     tracing::subscriber::set_global_default(subscriber)
         .map_err(|_| InstallError::AlreadyInstalled)?;
     // Store the handle for callers that did not receive it directly (the
-    // composition root's pair_inproc_server reads it via handle()). set
+    // composition root's start_local_server reads it via handle()). set
     // returns Err if already set; a second install is already an error
     // above, so the Err here is impossible in practice and dropped.
     if HANDLE.set(Some(handle.clone())).is_err() {

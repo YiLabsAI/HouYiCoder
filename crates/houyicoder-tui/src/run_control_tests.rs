@@ -70,7 +70,7 @@ pub(crate) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolReg
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let gate = Arc::new(houyicoder_permission::DefaultModeGate::new());
     let (runner, client, startup_warnings) =
-        composition::pair_inproc_server(runner, session, gate, append_notify, None);
+        composition::start_local_server(runner, session, gate, append_notify, None);
     drop(runner); // server owns the runner; the TUI holds no engine handle.
     composition::build_app(composition::RunnerBundle {
         client,
@@ -970,7 +970,7 @@ fn test_idle_seeds_mode_query() {
 /// and the inbound ModelResult->SessionMessage mapping, which the --lib lcov
 /// gate sees (the integration model_wire test covers the server side only).
 #[test]
-fn test_model_switch_ships_wired() {
+fn test_model_switch_applies() {
     use crate::state::Pane;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());

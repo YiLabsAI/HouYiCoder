@@ -70,7 +70,7 @@ pub fn is_state_changing(stripped: &str) -> bool {
 /// Whether a slash command's raw text (with the leading slash) has the given
 /// first token (e.g. "resume" for "/resume sid"). Compares the first
 /// whitespace-separated token after the slash, so "/resume" + "/resume sid"
-/// match but "/resumefoo" does not. Used by swap_session to keep /resume
+/// match but "/resumefoo" does not. Used by switch_session to keep /resume
 /// Commands (a switch intent valid in the new session) while dropping other
 /// state-changing Commands typed in the OLD session.
 pub fn command_first_token_is(raw: &str, token: &str) -> bool {
