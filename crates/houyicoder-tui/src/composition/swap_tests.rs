@@ -1,5 +1,7 @@
 use super::*;
+use crate::fold::DisplaySlot;
 use crate::pending_queue::PendingItem;
+use crate::records::ToolOutcome;
 use crate::state::TranscriptLine;
 
 fn test_bundle() -> RunnerBundle {
@@ -536,5 +538,123 @@ fn test_batch_stops_at_command() {
         ],
         "m2 InjectUser'd (stays for QueuedInputCommitted); /clear + m3 untouched \
          (batch stops at the Command)"
+    );
+}
+
+/// One foldable call + its result, the smallest transcript that folds into a
+/// group (key call-1#0).
+fn folded_transcript() -> Vec<TranscriptLine> {
+    let line = |name: &str| TranscriptLine::Tool {
+        name: name.to_string(),
+        tool: name.to_string(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: ToolOutcome::Success,
+        call_id: "call-1".to_string(),
+        body: String::new(),
+        is_diff: false,
+    };
+    vec![
+        TranscriptLine::User("kept".into()),
+        line("bash"),
+        line("result"),
+    ]
+}
+
+/// Whether the fold group call-1#0 renders its body rows. An expanded group
+/// renders a summary header plus its lines; a collapsed one renders the
+/// summary alone.
+fn group_body_visible(app: &App) -> bool {
+    crate::fold::display_slots(
+        &app.transcript,
+        app.agent_busy(),
+        &app.expanded_fold_groups,
+        false,
+    )
+    .iter()
+    .any(|slot| matches!(slot, DisplaySlot::Line(_, Some(key)) if key == "call-1#0"))
+}
+
+/// A switch parks the open expansion sets with the session that owns them and
+/// restores the entry for the session being entered, so leaving a session and
+/// coming back keeps what the user had open. Keys never cross: a key open in
+/// one session stays closed in another, including a key string both sessions
+/// use (call-1#0), and a key the other session added (second-only) must not
+/// appear after the return. The thinking set is the exception: its key is a
+/// turn counter the rebuilt session mints afresh, so it is not parked.
+#[test]
+fn test_swap_restores_open_keys() {
+    let first = test_bundle();
+    let first_sid = first.session.clone();
+    let mut app = build_app(first);
+    app.transcript = folded_transcript();
+    app.expanded_results.insert("call-1".into());
+    app.expanded_fold_groups.insert("call-1#0".into());
+    app.expanded_thinking.insert("1".into());
+    app.expanded_subagents.insert("child-1".into());
+    assert!(
+        group_body_visible(&app),
+        "the open group draws its body rows before the switch"
+    );
+
+    let second = test_bundle();
+    let second_sid = second.session.clone();
+    assert_ne!(
+        first_sid, second_sid,
+        "the two bundles are distinct sessions"
+    );
+    app.swap_session(second);
+    assert!(
+        app.expanded_results.is_empty()
+            && app.expanded_fold_groups.is_empty()
+            && app.expanded_thinking.is_empty()
+            && app.expanded_subagents.is_empty(),
+        "the session entered starts with nothing open: {:?} {:?} {:?} {:?}",
+        app.expanded_results,
+        app.expanded_fold_groups,
+        app.expanded_thinking,
+        app.expanded_subagents
+    );
+    // The second session opens the same group key plus a key of its own.
+    app.transcript = folded_transcript();
+    assert!(
+        !group_body_visible(&app),
+        "the entered session starts collapsed, so the check below tells the sets apart"
+    );
+    app.expanded_fold_groups.insert("call-1#0".into());
+    app.expanded_results.insert("second-only".into());
+    assert!(group_body_visible(&app));
+
+    let mut back = test_bundle();
+    back.session = first_sid;
+    app.swap_session(back);
+    app.transcript = folded_transcript();
+    assert_eq!(
+        app.expanded_results.len(),
+        1,
+        "the first session's own keys come back: {:?}",
+        app.expanded_results
+    );
+    assert!(app.expanded_results.contains("call-1"));
+    assert!(
+        !app.expanded_results.contains("second-only"),
+        "the second session's keys stay with it: {:?}",
+        app.expanded_results
+    );
+    assert!(
+        app.expanded_fold_groups.contains("call-1#0"),
+        "the group the user had open comes back: {:?}",
+        app.expanded_fold_groups
+    );
+    assert!(
+        app.expanded_thinking.is_empty(),
+        "a thinking key does not come back: its counter restarts with the \
+         session, so the restored key would open a new turn instead: {:?}",
+        app.expanded_thinking
+    );
+    assert!(app.expanded_subagents.contains("child-1"));
+    assert!(
+        group_body_visible(&app),
+        "the returned session draws the group the user had open"
     );
 }

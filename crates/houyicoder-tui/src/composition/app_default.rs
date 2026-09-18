@@ -20,7 +20,8 @@ use crate::run_state::RunState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
 use crate::state::{
-    CurrentTurnBoundary, LiveBlock, ModelPickerState, QueueViewState, StatusTab, TrustChoice,
+    CurrentTurnBoundary, LiveBlock, ModelPickerState, ParkedKeys, QueueViewState, StatusTab,
+    TrustChoice,
 };
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
@@ -154,6 +155,7 @@ pub fn app() -> App {
         expanded_fold_groups: HashSet::new(),
         expanded_thinking: HashSet::new(),
         expanded_subagents: HashSet::new(),
+        parked_keys: ParkedKeys::default(),
         teammate_view: None,
         fleet: Default::default(),
         verbose: false,

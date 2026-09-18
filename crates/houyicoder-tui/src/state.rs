@@ -12,6 +12,7 @@ use std::time::Instant;
 pub(crate) mod app_methods;
 pub(crate) mod counts;
 pub(crate) mod enums;
+mod expanded_keys;
 mod model_picker;
 mod scroll;
 mod search_view;
@@ -48,6 +49,7 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::hooks::HookEntry;
 
+pub(crate) use crate::state::expanded_keys::ParkedKeys;
 pub use crate::state::model_picker::{
     DEFAULT_LABEL, ModelDraft, ModelPickerState, ModelSettingFocus, PendingCommit,
 };
@@ -470,11 +472,13 @@ pub struct App {
     /// Keyed by the group's first tool call_id so the choice survives rebuilds.
     /// Active-turn groups are always expanded and never enter this set.
     pub expanded_fold_groups: HashSet<String>,
-    /// Per-ThoughtFor-line expansion state, keyed by reasoning text (stable
-    /// across rebuilds) so Ctrl+O expands that turn's reasoning inline. Empty
-    /// = collapsed.
+    /// Per-ThoughtFor-line expansion state, keyed by that line's turn_id.
+    /// Empty = collapsed.
     pub expanded_thinking: HashSet<String>,
     pub expanded_subagents: HashSet<String>,
+    /// Expansion sets parked by the session that owns them, so a switch away
+    /// and back restores what the user had open.
+    pub(crate) parked_keys: ParkedKeys,
     /// Drilled-in teammate transcript; when Some, active_transcript swaps to
     /// the child's turns with a banner. Enter opens, Esc closes.
     pub teammate_view: Option<TeammateView>,

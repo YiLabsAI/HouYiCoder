@@ -230,8 +230,8 @@ impl App {
         // This terminates the whitelist-clear approach that kept leaking fields
         // (todos, bash_progress, selection, run-domain req ids, ...) across
         // swaps: a new session-local field added to App cannot leak, because
-        // nothing is carried over from the old self except what build_app
-        // explicitly sets. Bump transcript_version to invalidate the slots
+        // only the items named below cross the rebuild. Bump
+        // transcript_version to invalidate the slots
         // cache (build_app leaves it at the default 0; the bump is explicit
         // so a stale cached render does not ride into the new session).
         //
@@ -247,6 +247,14 @@ impl App {
         // still valid); Messages stay (user content). Dropping old-session
         // Commands prevents a stale /clear firing in B.
         let mut pending = std::mem::take(&mut self.pending);
+        // The open expansion sets belong to the session that owns them: park
+        // them under the session being left and install the entry for the
+        // session being entered, so a switch away and back keeps what the
+        // user had open. The parked map is taken here too -- build_app
+        // rebuilds the whole App.
+        let leaving = self.session_id.clone();
+        let open_keys = self.take_expanded_keys();
+        let mut parked_keys = std::mem::take(&mut self.parked_keys);
         // Drop session-scoped Commands (/clear /rewind /undo) the user typed
         // in the OLD session: they operate on the current session, so
         // carrying them to the NEW session + auto-draining would apply the
@@ -282,6 +290,11 @@ impl App {
         self.screen = crate::state::Screen::Working;
         self.bump_transcript_version();
         self.pending = pending;
+        parked_keys.park(leaving, open_keys);
+        if let Some(keys) = parked_keys.take_parked(&self.session_id) {
+            self.set_expanded_keys(keys);
+        }
+        self.parked_keys = parked_keys;
         // A swap is a clean transition (the prior run ended FinalOutput, the
         // /resume Command drained at idle, then the swap ran). Carried items
         // auto-drain in the new session (a queued message from A sends in B
