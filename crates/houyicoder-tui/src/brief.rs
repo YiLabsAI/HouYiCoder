@@ -38,7 +38,7 @@ pub(crate) fn value_brief(v: &Value) -> String {
 pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
     match tool {
         "bash" | "read" | "write" | "edit" | "multiedit" | "grep" | "glob" | "save_memory"
-        | "delete_memory" => {
+        | "delete_memory" | "promote_memory" | "demote_memory" | "show_memory" => {
             truncate_call_arg(&houyicoder_protocol::tool::tool_invocation(tool, input))
         }
         "agent" => {
@@ -198,7 +198,37 @@ pub(crate) fn edit_diff_summary(added: u32, removed: u32) -> String {
     parts.join(", ")
 }
 
-/// One-line collapsed-row summary for a tool result. Per-mode
+/// Human label for a memory-tool result: names the topic the call touched so
+/// the transcript shows one readable line instead of the raw JSON. An empty
+/// or missing key returns None so the caller falls back to the raw body
+/// rather than emitting a misleading label. show_memory carries the full
+/// entry body in its JSON; the label names the key only, mirroring the Read
+/// tool (content reaches the model via the tool result, not the transcript).
+fn memory_result_label(tool: &str, output: &Value) -> Option<String> {
+    let (field, verb) = match tool {
+        "save_memory" => ("saved", "stored"),
+        "delete_memory" => ("deleted", "deleted"),
+        "promote_memory" => ("promoted", "promoted"),
+        "demote_memory" => ("demoted", "demoted"),
+        "show_memory" => ("key", "showed"),
+        _ => return None,
+    };
+    let key = output
+        .get(field)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?;
+    if tool == "save_memory"
+        && output
+            .get("unchanged")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
+        Some(format!("unchanged {key}"))
+    } else {
+        Some(format!("{verb} {key}"))
+    }
+}
+
 /// summaries (not raw content): "Read N lines" / "Wrote N lines to
 /// {path}" / grep mode-aware / AskUserQuestion TUI label. None when the body
 /// IS the display (Edit/MultiEdit diff) -- those keep their raw body; the
@@ -252,29 +282,13 @@ pub(crate) fn result_summary(tool: &str, output: &Value) -> Option<String> {
             let path = output.get("path").and_then(|v| v.as_str()).unwrap_or("");
             lines.map(|n| format!("Wrote {} lines to {}", n, path))
         }
-        // Memory writes report a machine-readable "saved" / "deleted" key.
-        // The transcript collapses to a human label that names the topic;
-        // the raw JSON is not a readable result body.
-        "save_memory" => output
-            .get("saved")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|key| {
-                if output
-                    .get("unchanged")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    format!("unchanged {key}")
-                } else {
-                    format!("stored {key}")
-                }
-            }),
-        "delete_memory" => output
-            .get("deleted")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|key| format!("deleted {key}")),
+        // Memory tools report a machine-readable key (and for show_memory,
+        // the full entry body). The transcript collapses to a human label
+        // naming the topic; the raw JSON is not a readable result body, so
+        // it stays out of the transcript.
+        "save_memory" | "delete_memory" | "promote_memory" | "demote_memory" | "show_memory" => {
+            memory_result_label(tool, output)
+        }
         "bash" => output
             .get("stdout")
             .and_then(|v| v.as_str())
@@ -339,6 +353,36 @@ mod tests {
         assert_eq!(
             result_summary("delete_memory", &serde_json::json!({"deleted": "k"})).as_deref(),
             Some("deleted k")
+        );
+    }
+
+    #[test]
+    fn test_memory_scope_flow_labels() {
+        // The scope-flow and read tools collapse to a human label naming the
+        // topic; the raw JSON (promoted/demoted/key) stays out of the
+        // transcript body, mirroring save/delete. An empty key must not emit
+        // a misleading label — it falls back to None so the caller keeps the
+        // raw body.
+        assert_eq!(
+            result_summary("promote_memory", &serde_json::json!({"promoted": "rule-x"})).as_deref(),
+            Some("promoted rule-x")
+        );
+        assert_eq!(
+            result_summary("demote_memory", &serde_json::json!({"demoted": "rule-y"})).as_deref(),
+            Some("demoted rule-y")
+        );
+        assert_eq!(
+            result_summary(
+                "show_memory",
+                &serde_json::json!({"key": "rule-z", "content": "body..."})
+            )
+            .as_deref(),
+            Some("showed rule-z")
+        );
+        assert_eq!(
+            result_summary("promote_memory", &serde_json::json!({"promoted": ""})).as_deref(),
+            None,
+            "an empty key must not produce a label"
         );
     }
 

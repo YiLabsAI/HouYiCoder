@@ -173,11 +173,17 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
             } else {
                 raw
             }
-        } else if tool_name == "save_memory" || tool_name == "delete_memory" {
-            // The result is a machine-readable JSON naming the memory key.
-            // The readable body is the single human label (stored/deleted
-            // key); the raw JSON is the tool's wire value, not a result
-            // body, so it stays out of the transcript.
+        } else if tool_name == "save_memory"
+            || tool_name == "delete_memory"
+            || tool_name == "promote_memory"
+            || tool_name == "demote_memory"
+            || tool_name == "show_memory"
+        {
+            // The result is a machine-readable JSON naming the memory key
+            // (and for show_memory, the full entry body). The readable body
+            // is the single human label (stored/deleted/promoted/demoted/
+            // showed key); the raw JSON is not a readable result body, so
+            // it stays out of the transcript.
             result_summary(tool_name, output).unwrap_or(raw)
         } else if tool_name == "write" {
             // "Wrote N lines to {path}" chip + the full written content.
