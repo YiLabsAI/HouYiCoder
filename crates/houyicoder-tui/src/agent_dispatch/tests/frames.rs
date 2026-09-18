@@ -338,25 +338,32 @@ fn test_notice_shows_memory_changes() {
     let out = crate::test_harness::render_text(&app, 100, 24);
     assert!(out.contains("auto-dream"), "origin should render: {out}");
     assert!(
-        out.contains("promoted alpha"),
-        "promotion should render: {out}"
-    );
-    assert!(
-        out.contains("deleted beta"),
-        "deletion should render: {out}"
-    );
-    assert!(
         out.contains("Memory auto-dream: 2 changes · /memory"),
-        "the summary must not inline every key: {out}"
+        "the summary still names the count: {out}"
     );
     assert!(
-        out.contains("⎿  promoted alpha") && out.contains("⎿  deleted beta"),
-        "each exact change remains visible on a child row: {out}"
+        !out.contains("⎿  promoted alpha") && !out.contains("⎿  deleted beta"),
+        "several changes stay summarized; /memory lists the keys: {out}"
+    );
+    // A single change keeps its one inline row so the fact reads directly.
+    let single = vec![MemoryChange {
+        key: "gamma".into(),
+        operation: MemoryOperation::Stored,
+    }];
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
+        id: MemoryChangeId("change-2".into()),
+        origin: MemoryChangeOrigin::PrimaryAgent,
+        changes: single,
+    }));
+    let out = crate::test_harness::render_text(&app, 100, 24);
+    assert!(
+        out.contains("⎿  stored gamma"),
+        "a single change keeps its inline row: {out}"
     );
 }
 
 #[test]
-fn test_notice_wraps_long_keys() {
+fn test_notice_summarizes_many_changes() {
     use houyicoder_protocol::frontend::memory::{
         MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
     };
@@ -376,11 +383,38 @@ fn test_notice_wraps_long_keys() {
     let out = crate::test_harness::render_text(&app, 54, 36);
     assert!(
         out.contains("Memory auto-memory: 4 changes · /memory"),
-        "summary remains visible after wrapping: {out}"
+        "the summary names the count: {out}"
     );
     assert_eq!(
         out.matches('⎿').count(),
-        4,
-        "every change keeps its own visible child row after wrapping: {out}"
+        0,
+        "several changes stay summarized without echoing each key: {out}"
+    );
+}
+
+#[test]
+fn test_notice_single_change_wraps() {
+    use houyicoder_protocol::frontend::memory::{
+        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    };
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    let changes = vec![MemoryChange {
+        key: "a-single-memory-with-a-long-key-for-a-narrow-notice".into(),
+        operation: MemoryOperation::Stored,
+    }];
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
+        id: MemoryChangeId("change-wrap".into()),
+        origin: MemoryChangeOrigin::PrimaryAgent,
+        changes,
+    }));
+    let out = crate::test_harness::render_text(&app, 24, 40);
+    assert!(
+        out.contains("primary agent") && out.contains("1 change · /memory"),
+        "the single change still renders its summary: {out}"
+    );
+    assert!(
+        out.contains("for-a-narrow-notice"),
+        "a single-change key that outgrows the row wraps instead of clipping: {out}"
     );
 }

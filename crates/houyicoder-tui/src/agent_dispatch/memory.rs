@@ -70,6 +70,11 @@ impl App {
     /// Render a memory-change broadcast and refresh the open pane. The change
     /// id dedupes replays: a broadcast already registered is dropped rather
     /// than shown twice.
+    ///
+    /// A broadcast that changes several memories renders as one summary line:
+    /// the per-key rows would echo the same keys the /memory pane now lists,
+    /// so multiple changes stay summarized rather than re-listed here. A
+    /// single change keeps its one inline row so the one fact reads directly.
     pub(super) fn show_memory_changes(
         &mut self,
         id: &MemoryChangeId,
@@ -87,7 +92,7 @@ impl App {
         let count = changes.len();
         let noun = if count == 1 { "change" } else { "changes" };
         let mut notice = format!("Memory {source}: {count} {noun} · /memory");
-        for change in changes {
+        if let Some(change) = changes.first().filter(|_| count == 1) {
             let operation = match change.operation {
                 MemoryOperation::Stored => "stored",
                 MemoryOperation::Deleted => "deleted",
