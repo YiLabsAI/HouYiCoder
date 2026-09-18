@@ -148,7 +148,7 @@ fn test_todo_pair_dropped() {
             serde_json::json!({"todos": [], "old_todos": [], "total": 0}),
         ),
     ];
-    let lines = transcript_from_frames(&frames);
+    let lines = fold_turn_thoughts(transcript_from_frames(&frames));
     assert!(lines.is_empty(), "todo pair renders nothing, got {lines:?}");
 }
 
@@ -450,4 +450,30 @@ fn test_turn_summary_follows_user() {
 fn test_turn_summary_no_tools() {
     let frames = vec![user_msg("go"), agent_msg("ok")];
     assert!(turn_tool_summary(&frames).is_none());
+}
+
+/// Regress: resume/reattach rebuilds the transcript from frames. The frames
+/// carry each turn's reasoning (AgentThoughtChunk -> Thinking) but the rebuild
+/// must also surface it as a foldable ThoughtFor row (the "Thought for Ns
+/// (ctrl+o to expand)" line a live run mints at Done); otherwise a resumed
+/// session loses every thought entry.
+#[test]
+fn test_resume_folds_thoughts() {
+    let frames = vec![
+        user_msg("go"),
+        thought("pondering the plan"),
+        tool_call("c1", "bash", serde_json::json!({})),
+        agent_msg("here is the answer"),
+    ];
+    let lines = fold_turn_thoughts(transcript_from_frames(&frames));
+    assert!(
+        lines.iter().any(|l| matches!(
+            l,
+            TranscriptLine::ThoughtFor {
+                reasoning: Some(r),
+                ..
+            } if r.contains("pondering the plan")
+        )),
+        "the rebuilt transcript must fold each turn's reasoning into a ThoughtFor: {lines:?}"
+    );
 }

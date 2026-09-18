@@ -7,13 +7,18 @@
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::records::TranscriptLine;
 use crate::state::App;
-use crate::transcript::{TranscriptFrame, transcript_from_frames};
+use crate::transcript::{TranscriptFrame, fold_turn_thoughts, transcript_from_frames};
 
 impl App {
     /// Rebuild the transcript while preserving TUI-only lines at their current
     /// positions. The stable prefix is reused within a turn; a user boundary or
     /// rewind rebuilds the bounded visible history.
     pub(crate) fn rebuild_transcript(&mut self) {
+        // A blank transcript before the rebuild is a fresh fill (session start
+        // or a resumed session): the frame-derived lines have no preserved
+        // ThoughtFor to carry, so fold the per-turn expand rows from the
+        // rebuilt thinking. Mid-session rebuilds already preserve them.
+        let fresh_fill = self.transcript.is_empty();
         let turn_start = self.current_turn_start();
         // A changed turn boundary or truncated frame log invalidates the stable
         // prefix. Later frames in the same turn reuse it.
@@ -43,6 +48,10 @@ impl App {
             }
             merged.extend_from_slice(&event_lines[event_idx..]);
             self.transcript = merged;
+            if fresh_fill {
+                let t = std::mem::take(&mut self.transcript);
+                self.transcript = fold_turn_thoughts(t);
+            }
             self.current_turn_boundary.frame_index = turn_start;
             // Map the stable frame prefix to its transcript boundary while
             // retaining any interleaved TUI-only lines. Using transcript.len()
@@ -89,6 +98,10 @@ impl App {
             }
             merged.extend_from_slice(&tail[tail_idx..]);
             self.transcript = merged;
+            if fresh_fill {
+                let t = std::mem::take(&mut self.transcript);
+                self.transcript = fold_turn_thoughts(t);
+            }
         }
         // Re-derive view caches incrementally from their frame cursors.
         self.accumulate_wire_state();
