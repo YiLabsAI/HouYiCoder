@@ -11,7 +11,7 @@
 //! below core; core stays free of config I/O). So the catalog read crosses
 //! the boundary through the ModelCatalogResolver port: the agent loop holds
 //! the trait, the composition root supplies an impl backed by the loaded
-//! ModelSection. None in the resolver means no catalog is wired (the stub
+//! ModelSection. None in the resolver means no catalog is configured (the stub
 //! path) and the chain stops at the in-session pick + the built-in default.
 
 use houyicoder_protocol::llm::{EffortLevel, ModelSettings};
@@ -27,7 +27,7 @@ pub const QWEN_THINKING_BUDGET_HIGH: u32 = 16_384;
 /// model.effort_level) for a model. The impl lives at the composition root
 /// (backed by the loaded ModelSection); the agent loop calls it only when the
 /// in-session pick is None. None from the resolver means the catalog has no
-/// effort for this model (or no catalog is wired), and the chain falls to the
+/// effort for this model (or no catalog is configured), and the chain falls to the
 /// per-model default.
 pub trait ModelCatalogResolver: Send + Sync {
     fn catalog_effort(&self, model: &str) -> Option<EffortLevel>;
@@ -65,13 +65,23 @@ pub trait ModelCatalogResolver: Send + Sync {
     }
 }
 
-/// The built-in per-model effort default. The fallback is undefined for
-/// unlisted models — no effort parameter is sent, the API applies its own
-/// default. No per-model overrides ship yet; the slot is here so a future
-/// row lands without reshaping the chain. Returns None for every model
-/// today.
-pub fn effort_default_for(_model: &str) -> Option<EffortLevel> {
-    None
+/// The built-in per-model effort default: the level an "auto" pick (no
+/// in-session pick, no catalog entry) resolves to. Reasoning dialects get
+/// their ladder's middle (Medium where offered, else the middle rung); an
+/// unsupported model gets None — no effort parameter, the API applies its
+/// own default.
+pub fn effort_default_for(model: &str) -> Option<EffortLevel> {
+    // The level an "auto" pick resolves to when no per-model effort is pinned
+    // (catalog effort is null). Prefer Medium (the recommended middle); for a
+    // dialect whose ladder has no Medium, take the ladder's middle level. The
+    // result is a level the dialect offers — a catalog filter may still narrow
+    // it to the nearest level the catalog allows.
+    let levels = dialect_effort_levels(model);
+    levels
+        .iter()
+        .find(|l| **l == EffortLevel::Medium)
+        .copied()
+        .or_else(|| levels.get(levels.len() / 2).copied())
 }
 
 /// The effort levels available for a model: the dialect's set, minus any
@@ -262,21 +272,29 @@ mod tests {
     }
 
     #[test]
-    fn test_falls_to_none() {
-        // No active, no catalog, no default (effort_default_for is None
-        // today): the chain yields None — no effort parameter sent.
+    fn test_auto_falls_to_default() {
+        // No active pick, no catalog entry: the chain falls to the built-in
+        // default, which for a reasoning dialect is the ladder's middle
+        // level (Medium for qwen3) — auto no longer means "no reasoning".
         let r = FixedCatalog(None);
-        assert_eq!(resolve_applied_effort("qwen3.7-max", None, Some(&r)), None);
+        assert_eq!(
+            resolve_applied_effort("qwen3.7-max", None, Some(&r)),
+            Some(EffortLevel::Medium)
+        );
     }
 
     #[test]
     fn test_no_resolver_falls_default() {
-        // Stub path (no catalog wired): active pick → built-in default → None.
+        // No catalog configured: an active pick is returned; auto falls to the
+        // built-in default (Medium for qwen3).
         assert_eq!(
             resolve_applied_effort("qwen3.7-max", Some(EffortLevel::Low), None),
             Some(EffortLevel::Low)
         );
-        assert_eq!(resolve_applied_effort("qwen3.7-max", None, None), None);
+        assert_eq!(
+            resolve_applied_effort("qwen3.7-max", None, None),
+            Some(EffortLevel::Medium)
+        );
     }
 
     #[test]

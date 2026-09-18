@@ -148,7 +148,7 @@ fn test_todo_pair_dropped() {
             serde_json::json!({"todos": [], "old_todos": [], "total": 0}),
         ),
     ];
-    let lines = fold_turn_thoughts(transcript_from_frames(&frames));
+    let lines = transcript_from_frames(&frames);
     assert!(lines.is_empty(), "todo pair renders nothing, got {lines:?}");
 }
 
@@ -169,20 +169,16 @@ fn test_todo_result_orphan_dropped() {
 }
 
 #[test]
-fn test_non_todo_orphan_renders() {
-    // The orphan shape guard targets todo_write only; an orphan result for
-    // any other tool still surfaces its output.
+fn test_non_todo_orphan_dropped() {
+    // A non-todo orphan (its call frame compacted out of the window) is
+    // dropped, not stranded at the tail. The body stays in the frame log for
+    // search; the transcript only renders a result beside its call.
     let frames = vec![tool_result("c1", serde_json::json!({"stdout": "hello"}))];
     let lines = transcript_from_frames(&frames);
-    assert_eq!(
-        lines.len(),
-        1,
-        "non-todo orphan still renders, got {lines:?}"
+    assert!(
+        lines.is_empty(),
+        "a non-todo orphan must not strand at the tail: {lines:?}"
     );
-    assert!(matches!(
-        &lines[0],
-        TranscriptLine::Tool { name, body, .. } if name == "result" && body == "hello"
-    ));
 }
 
 #[test]
@@ -387,6 +383,7 @@ fn test_output_has_diff_detects() {
 fn test_diff_result_marked_diff() {
     // An Edit result (carries a diff) -> is_diff true; a Bash result -> false.
     let frames = vec![
+        tool_call("c1", "edit", serde_json::json!({"path": "a.rs"})),
         tool_result(
             "c1",
             serde_json::json!({
@@ -396,17 +393,26 @@ fn test_diff_result_marked_diff() {
                 "bytes": 4,
             }),
         ),
+        tool_call("c2", "bash", serde_json::json!({"command": "echo hi"})),
         tool_result("c2", serde_json::json!({"stdout": "hi"})),
     ];
     let lines = transcript_from_frames(&frames);
-    let edit = &lines[0];
-    assert!(matches!(edit, TranscriptLine::Tool { is_diff: true, .. }));
-    let (body, is_diff) = edit.result_body();
-    assert!(is_diff);
-    assert!(body.starts_with("Added 1 line, removed 1 line"));
-    let bash = &lines[1];
-    let (_, is_diff_bash) = bash.result_body();
-    assert!(!is_diff_bash);
+    let edit_result = lines
+        .iter()
+        .find(|l| matches!(l, TranscriptLine::Tool { name, call_id, .. } if name == "result" && call_id == "c1"))
+        .expect("edit result row");
+    let (body, is_diff) = edit_result.result_body();
+    assert!(is_diff, "edit result is a diff");
+    assert!(
+        body.starts_with("Added 1 line, removed 1 line"),
+        "edit result body: {body}"
+    );
+    let bash_result = lines
+        .iter()
+        .find(|l| matches!(l, TranscriptLine::Tool { name, call_id, .. } if name == "result" && call_id == "c2"))
+        .expect("bash result row");
+    let (_, is_diff_bash) = bash_result.result_body();
+    assert!(!is_diff_bash, "bash result is not a diff");
 }
 
 #[test]
@@ -450,30 +456,4 @@ fn test_turn_summary_follows_user() {
 fn test_turn_summary_no_tools() {
     let frames = vec![user_msg("go"), agent_msg("ok")];
     assert!(turn_tool_summary(&frames).is_none());
-}
-
-/// Regress: resume/reattach rebuilds the transcript from frames. The frames
-/// carry each turn's reasoning (AgentThoughtChunk -> Thinking) but the rebuild
-/// must also surface it as a foldable ThoughtFor row (the "Thought for Ns
-/// (ctrl+o to expand)" line a live run mints at Done); otherwise a resumed
-/// session loses every thought entry.
-#[test]
-fn test_resume_folds_thoughts() {
-    let frames = vec![
-        user_msg("go"),
-        thought("pondering the plan"),
-        tool_call("c1", "bash", serde_json::json!({})),
-        agent_msg("here is the answer"),
-    ];
-    let lines = fold_turn_thoughts(transcript_from_frames(&frames));
-    assert!(
-        lines.iter().any(|l| matches!(
-            l,
-            TranscriptLine::ThoughtFor {
-                reasoning: Some(r),
-                ..
-            } if r.contains("pondering the plan")
-        )),
-        "the rebuilt transcript must fold each turn's reasoning into a ThoughtFor: {lines:?}"
-    );
 }

@@ -372,10 +372,10 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
                 break;
             }
         }
-        let row = result_line(&id, &tool_name, &output, None);
-        match insert_at {
-            Some(pos) => out.insert(pos, row),
-            None => out.push(row),
+        // No matching call row in the window: the call compacted out, so the
+        // result has no place — drop it rather than stranding it at the tail.
+        if let Some(pos) = insert_at {
+            out.insert(pos, result_line(&id, &tool_name, &output, None));
         }
     }
     out
@@ -452,44 +452,3 @@ mod silent_tests;
 #[cfg(test)]
 #[path = "transcript_acpx_tests.rs"]
 mod acpx_tests;
-
-/// After a fresh rebuild (resume or session start) fold each turn's reasoning into a
-/// ThoughtFor row per turn that emitted reasoning. A live run records these at
-/// Done, but the frame-only rebuilds that fill a blank transcript do not, so
-/// a resumed session would otherwise lose every "Thought for Ns (ctrl+o to
-/// expand)" entry and its expandable thinking. The thinking stays alongside
-/// (hidden rows, kept for /search); the ThoughtFor is the visible expand
-/// handle, with reasoning = the turn's concatenated thinking.
-pub(crate) fn fold_turn_thoughts(mut lines: Vec<TranscriptLine>) -> Vec<TranscriptLine> {
-    let mut out: Vec<TranscriptLine> = Vec::with_capacity(lines.len() + 4);
-    let mut reasoning = String::new();
-    let mut seq = 0usize;
-    for line in lines.drain(..) {
-        match &line {
-            TranscriptLine::Thinking { text } => {
-                reasoning.push_str(text);
-                out.push(line);
-            }
-            TranscriptLine::User(_) => {
-                emit_turn_fold(&mut out, &mut reasoning, &mut seq);
-                out.push(line);
-            }
-            _ => out.push(line),
-        }
-    }
-    emit_turn_fold(&mut out, &mut reasoning, &mut seq);
-    out
-}
-
-fn emit_turn_fold(out: &mut Vec<TranscriptLine>, reasoning: &mut String, seq: &mut usize) {
-    if reasoning.is_empty() {
-        return;
-    }
-    *seq += 1;
-    out.push(TranscriptLine::ThoughtFor {
-        secs: 0,
-        reasoning: Some(std::mem::take(reasoning)),
-        tool_summary: None,
-        turn_id: format!("r{seq}"),
-    });
-}

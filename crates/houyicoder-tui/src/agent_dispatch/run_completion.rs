@@ -27,7 +27,13 @@ impl super::App {
             .unwrap_or(0);
         self.live_active = false;
         self.live_assistant_text.clear();
-        self.live_reasoning_text.clear();
+        // Capture the live reasoning stream before clearing: the authoritative
+        // Reasoning event is persisted and forwarded as an AgentThoughtChunk
+        // frame, but that frame may land after the run-completion message, so
+        // turn_reasoning(&frames) can return None at Done. The live stream
+        // holds this turn's reasoning (the spinner showed Thinking), so it
+        // backs the ThoughtFor row when the frame has not arrived yet.
+        let live_reasoning = std::mem::take(&mut self.live_reasoning_text);
         self.live_block = LiveBlock::None;
         self.thinking_started_at = None;
         self.running_tools.clear();
@@ -47,16 +53,24 @@ impl super::App {
                         if self.session_started_at.is_none() {
                             self.session_started_at = self.run_started();
                         }
-                        let reasoning: Option<String> = turn_reasoning(&self.frames);
+                        let reasoning: Option<String> = turn_reasoning(&self.frames)
+                            .or_else(|| (!live_reasoning.is_empty()).then_some(live_reasoning));
                         let tool_summary: Option<String> = turn_tool_summary(&self.frames);
-                        self.turn_seq = self.turn_seq.saturating_add(1);
-                        let turn_id = self.turn_seq.to_string();
-                        self.mint_thought_or_repair(
-                            turn_id,
-                            elapsed_secs as u32,
-                            reasoning,
-                            tool_summary,
-                        );
+                        // A turn with neither reasoning nor a tool call is a
+                        // plain text reply — a ThoughtFor row there renders
+                        // "Thought for Ns" with no expandable content, which
+                        // reads as a broken affordance. Skip it unless this
+                        // turn carried reasoning or a tool summary.
+                        if reasoning.is_some() || tool_summary.is_some() {
+                            self.turn_seq = self.turn_seq.saturating_add(1);
+                            let turn_id = self.turn_seq.to_string();
+                            self.push_transcript_line(TranscriptLine::ThoughtFor {
+                                secs: elapsed_secs as u32,
+                                reasoning,
+                                tool_summary,
+                                turn_id,
+                            });
+                        }
                     }
                     RunOutcome::Handoff { agent } => {
                         self.system_line(format!("handoff to {}", agent));
@@ -115,108 +129,73 @@ impl super::App {
             self.demote_pending_to_parked();
         }
     }
-
-    /// Record the just-completed turn's thought row. A resumed session's
-    /// fresh fold leaves an 'r'-prefixed ThoughtFor for the in-progress turn
-    /// (no later user closed it), so this turns it into a live row with the
-    /// real seconds and this run's turn id rather than pushing a second row
-    /// for the same turn. A normal live turn has no such row and pushes.
-    fn mint_thought_or_repair(
-        &mut self,
-        turn_id: String,
-        secs: u32,
-        reasoning: Option<String>,
-        tool_summary: Option<String>,
-    ) {
-        let last_user = self
-            .transcript
-            .iter()
-            .rposition(|l| matches!(l, TranscriptLine::User(_)));
-        let seg_start = last_user.map(|i| i + 1).unwrap_or(0);
-        let found = self.transcript[seg_start..].iter().rposition(
-            |l| matches!(l, TranscriptLine::ThoughtFor { turn_id: t, .. } if t.starts_with('r')),
-        );
-        if let Some(rel) = found {
-            let idx = seg_start + rel;
-            if let TranscriptLine::ThoughtFor {
-                secs: s,
-                turn_id: t,
-                reasoning: r,
-                tool_summary: ts,
-                ..
-            } = &mut self.transcript[idx]
-            {
-                *s = secs;
-                *t = turn_id;
-                *r = reasoning;
-                *ts = tool_summary;
-                self.bump_transcript_version();
-            }
-            return;
-        }
-        self.push_transcript_line(TranscriptLine::ThoughtFor {
-            secs,
-            reasoning,
-            tool_summary,
-            turn_id,
-        });
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::records::TranscriptLine;
+    use super::*;
 
-    /// A resumed session's fresh fold leaves the in-progress turn's 'r'
-    /// ThoughtFor with no later user; completing that run repairs it in place
-    /// (real seconds + this run's turn id) instead of pushing a second row.
+    /// A turn that produced neither reasoning nor a tool call is a plain
+    /// text reply; it must not push a ThoughtFor row, whose "Thought for Ns"
+    /// with no expandable content reads as a broken affordance.
     #[test]
-    fn test_mint_repairs_resumed_turn() {
+    fn test_plain_reply_skips_thought() {
+        use houyicoder_protocol::frontend::run::{RunOutcome, RunResult, StopReason};
+        use houyicoder_protocol::llm::Usage;
         let mut app = crate::composition::app();
-        app.transcript.push(TranscriptLine::User("go".into()));
-        app.transcript.push(TranscriptLine::ThoughtFor {
-            secs: 0,
-            reasoning: Some("folded".into()),
-            tool_summary: None,
-            turn_id: "r1".into(),
-        });
-        app.mint_thought_or_repair(
-            "3".into(),
-            12,
-            Some("live".into()),
-            Some("ran 1 tool".into()),
-        );
-        let thoughts: Vec<String> = app
+        app.handle_run_completion(Ok(RunResult {
+            outcome: RunOutcome::FinalOutput {
+                content: vec![houyicoder_protocol::frontend::run::ContentBlock::Text {
+                    text: "hi".into(),
+                }],
+            },
+            usage: Usage::default(),
+            turns: 1,
+            stop_reason: StopReason::EndTurn,
+        }));
+        let has_thought = app
             .transcript
             .iter()
-            .filter_map(|l| match l {
-                TranscriptLine::ThoughtFor {
-                    secs,
-                    turn_id,
-                    reasoning,
-                    ..
-                } => Some(format!("{secs}:{turn_id}:") + &reasoning.clone().unwrap_or_default()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            thoughts,
-            vec!["12:3:live".to_string()],
-            "the resumed turn is repaired in place: {thoughts:?}"
-        );
+            .any(|l| matches!(l, TranscriptLine::ThoughtFor { .. }));
+        assert!(!has_thought, "a plain reply must not push a ThoughtFor row");
     }
 
-    /// A normal live turn has no 'r' row to repair: push a fresh ThoughtFor.
+    /// A turn whose frames carry reasoning pushes a ThoughtFor row carrying
+    /// that reasoning, so the row is expandable.
     #[test]
-    fn test_mint_pushes_fresh_turn() {
+    fn test_reasoning_turn_pushes_thought() {
+        use crate::transcript::TranscriptFrame;
+        use houyicoder_protocol::frontend::ContentBlock;
+        use houyicoder_protocol::frontend::run::{RunOutcome, RunResult, StopReason};
+        use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
+        use houyicoder_protocol::llm::Usage;
         let mut app = crate::composition::app();
-        app.transcript.push(TranscriptLine::User("go".into()));
-        app.mint_thought_or_repair("1".into(), 5, None, None);
-        let thoughts = app
-            .transcript
-            .iter()
-            .filter(|l| matches!(l, TranscriptLine::ThoughtFor { .. }))
-            .count();
-        assert_eq!(thoughts, 1, "a fresh live turn pushes one row");
+        app.frames
+            .push(TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(
+                ContentChunk::new(ContentBlock::Text {
+                    text: "weighing the options".into(),
+                }),
+            )));
+        app.handle_run_completion(Ok(RunResult {
+            outcome: RunOutcome::FinalOutput {
+                content: vec![ContentBlock::Text {
+                    text: "answer".into(),
+                }],
+            },
+            usage: Usage::default(),
+            turns: 1,
+            stop_reason: StopReason::EndTurn,
+        }));
+        let has_thought = app.transcript.iter().any(|l| {
+            matches!(
+                l,
+                TranscriptLine::ThoughtFor { reasoning: Some(r), .. }
+                    if r.contains("weighing the options")
+            )
+        });
+        assert!(
+            has_thought,
+            "a turn with reasoning must push an expandable ThoughtFor row"
+        );
     }
 }

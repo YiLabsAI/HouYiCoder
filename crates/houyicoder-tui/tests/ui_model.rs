@@ -149,7 +149,7 @@ fn test_model_default_applies_default() {
     s.send_key(&Key::Up);
     s.send_key(&Key::Enter);
     assert!(
-        wait_for_text(&mut s, "Model set to Default (qwen3.7-max)"),
+        wait_for_text(&mut s, "Model set to Default (qwen3.7-max) · medium effort"),
         "the receipt names the resolved default: {}",
         s.output_plain()
     );
@@ -259,7 +259,7 @@ fn test_picker_esc_discards_draft() {
 /// implying the running request changed.
 #[test]
 #[ignore]
-fn test_switch_during_run_defers() {
+fn test_switch_during_run() {
     let home = fresh_temp_dir("model-active-run-home");
     seed_settings(
         &home,
@@ -289,7 +289,7 @@ fn test_switch_during_run_defers() {
     assert!(
         wait_for_text(
             &mut s,
-            "Model set to Fable (glm-5.2) · applies to the next model request"
+            "Model set to Fable (glm-5.2) · medium effort · applies to the next model request"
         ),
         "the receipt names the boundary: {}",
         s.output_plain()
@@ -316,7 +316,7 @@ fn test_receipt_names_default() {
     s.send_key(&Key::Up);
     s.send_key(&Key::Enter);
     assert!(
-        wait_for_text(&mut s, "Model set to Default (qwen3.7-max)"),
+        wait_for_text(&mut s, "Model set to Default (qwen3.7-max) · medium effort"),
         "the Default receipt names the model: {}",
         s.output_plain()
     );
@@ -517,7 +517,10 @@ fn test_model_enter_persists_pick() {
     );
     s.send_key(&Key::Enter);
     assert!(
-        wait_for_text(&mut s, "Model set to qwen3-coder (qwen3-coder)"),
+        wait_for_text(
+            &mut s,
+            "Model set to qwen3-coder (qwen3-coder) · low effort"
+        ),
         "the receipt names the picked model and its id: {}",
         s.output_plain()
     );

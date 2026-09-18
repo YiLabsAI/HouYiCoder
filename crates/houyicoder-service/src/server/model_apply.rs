@@ -89,10 +89,14 @@ impl Server {
         // Apply choice, model, effort and speed together under one write. The
         // selection intent is stored, not derived from id equality later, so
         // an explicit pick that resolves to the default id stays Explicit.
+        // An auto pick (effort None) stays None in storage — the pane keeps
+        // showing "auto", and each request resolves the default at call time
+        // so a later default change still leads the session. A concrete pick
+        // stores the resolved (ladder-narrowed) level so saved == what runs.
         self.runner.apply_inference(InferenceConfig {
             choice: selected.clone(),
             model: resolved.clone(),
-            effort: effective_effort,
+            effort: selection.effort.and(effective_effort),
             speed,
         });
 

@@ -288,7 +288,12 @@ fn effort_line(picker: &ModelPickerState) -> Line<'static> {
         // The marker keys on the value the chain resolves for this row, not on
         // whether the user has touched effort: cycling away and back to the
         // chain's value re-collects it rather than losing the marker for good.
-        let marker = if picker.draft.effort == picker.chain_effort(picker.draft.row) {
+        // An auto pick (None) is the default state by definition — no pin
+        // means follow the chain — so it carries the marker regardless of
+        // which concrete level the chain resolves to.
+        let marker = if picker.draft.effort.is_none()
+            || picker.draft.effort == picker.chain_effort(picker.draft.row)
+        {
             " (default)"
         } else {
             ""
