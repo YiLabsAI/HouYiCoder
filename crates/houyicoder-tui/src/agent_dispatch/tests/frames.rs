@@ -442,3 +442,113 @@ fn test_notice_single_change_wraps() {
         "a single-change key that outgrows the row wraps instead of clipping: {out}"
     );
 }
+
+/// Regression: a memory-change notice must toggle open by the fold-click path
+/// (a row whose tag routes click to toggle_fold_at_row), not fall through to
+/// the subagent branch. Before the fix the notice carried a fold key but the
+/// system tag, so a click went nowhere even though the row advertised
+/// ctrl+o.
+#[test]
+fn test_notice_click_toggles_fold() {
+    use crate::state::Screen;
+    use houyicoder_protocol::frontend::memory::{
+        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    };
+    let mut app = crate::composition::app();
+    app.screen = Screen::Working;
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
+        id: MemoryChangeId("click-1".into()),
+        origin: MemoryChangeOrigin::AutoMemory,
+        changes: vec![MemoryChange {
+            key: "alpha".into(),
+            operation: MemoryOperation::Stored,
+        }],
+    }));
+    // Render to publish last_row_fold_keys, what a click resolves against.
+    let _rendered = crate::test_harness::render_text(&app, 100, 24);
+    let ri = app
+        .last_row_fold_keys
+        .borrow()
+        .iter()
+        .position(|k| k.as_deref() == Some("mg#0"))
+        .expect("the notice row carries its fold key");
+    assert!(
+        !app.expanded_fold_groups.contains("mg#0"),
+        "the notice starts collapsed"
+    );
+    app.toggle_fold_at_row(ri);
+    assert!(
+        app.expanded_fold_groups.contains("mg#0"),
+        "a click routes the notice to the fold toggle"
+    );
+    let out = crate::test_harness::render_text(&app, 100, 24);
+    assert!(
+        out.contains("⎿  stored alpha"),
+        "the opened notice shows its key: {out}"
+    );
+}
+
+/// Regression: a reasoning-bearing thought keeps its ctrl+o affordance and
+/// still toggles by the thought-click path.
+#[test]
+fn test_thought_keep_affordance() {
+    use crate::state::Screen;
+    let mut app = crate::composition::app();
+    app.screen = Screen::Working;
+    app.transcript
+        .push(crate::records::TranscriptLine::ThoughtFor {
+            secs: 42,
+            reasoning: Some("a train of thought that expands inline".into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        });
+    let out = crate::test_harness::render_text(&app, 100, 24);
+    assert!(
+        out.contains("Thought for 42s") && out.contains("(ctrl+o to expand)"),
+        "a reasoning thought advertises its expand affordance: {out}"
+    );
+    let _rendered = crate::test_harness::render_text(&app, 100, 24);
+    let ri = app
+        .last_row_turn_ids
+        .borrow()
+        .iter()
+        .position(|t| t.as_deref() == Some("t1"))
+        .expect("the thought row publishes its turn id");
+    app.toggle_thinking_expand_at_row(ri);
+    assert!(
+        app.expanded_thinking.contains("t1"),
+        "the thought still toggles open on the thought-click path"
+    );
+}
+
+/// Regression: Ctrl+O with no cursor still opens and closes the newest
+/// memory-change notice (the no-cursor fallback), so a notice is usable the
+/// way a tool group is from the keyboard without a mouse anchor.
+#[test]
+fn test_notice_ctrl_o_latest() {
+    use crate::state::Screen;
+    use houyicoder_protocol::frontend::memory::{
+        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    };
+    let mut app = crate::composition::app();
+    app.screen = Screen::Working;
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
+        id: MemoryChangeId("k1".into()),
+        origin: MemoryChangeOrigin::AutoMemory,
+        changes: vec![MemoryChange {
+            key: "alpha".into(),
+            operation: MemoryOperation::Stored,
+        }],
+    }));
+    assert!(app.selection.anchor.is_none(), "no cursor");
+    crate::keys::handle_ctrl_o(&mut app);
+    assert!(
+        app.expanded_fold_groups.contains("mg#0"),
+        "no-cursor Ctrl+O opens the notice"
+    );
+    crate::keys::handle_ctrl_o(&mut app);
+    assert!(
+        !app.expanded_fold_groups.contains("mg#0"),
+        "the same key closes it again"
+    );
+}

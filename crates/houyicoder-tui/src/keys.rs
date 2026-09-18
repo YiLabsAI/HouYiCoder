@@ -165,6 +165,9 @@ pub(crate) fn handle_ctrl_o(app: &mut App) {
     if app.toggle_tail_expand() {
         return;
     }
+    if app.toggle_latest_memory_notice() {
+        return;
+    }
     if !app.todos.items.is_empty() {
         app.todos.expanded = !app.todos.expanded;
         return;

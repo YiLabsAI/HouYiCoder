@@ -40,7 +40,7 @@ pub(super) fn push_notice_rows(
             is_summary = false;
             for row in crate::view::line_wrap::wrap_line(&logical, width as usize) {
                 sink.push(
-                    Row::new(crate::selection::TAG_SYSTEM, row)
+                    Row::new(crate::selection::TAG_FOLD, row)
                         .fold_key(Some(key.to_string()))
                         .group(Some(key.to_string())),
                 );
@@ -50,7 +50,7 @@ pub(super) fn push_notice_rows(
         let first = text.split('\n').next().unwrap_or("");
         sink.push(
             Row::new(
-                crate::selection::TAG_SYSTEM,
+                crate::selection::TAG_FOLD,
                 format!("✻ {first} (ctrl+o to expand)"),
             )
             .fold_key(Some(key.to_string()))

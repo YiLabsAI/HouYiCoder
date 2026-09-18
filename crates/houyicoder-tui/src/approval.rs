@@ -152,6 +152,28 @@ impl App {
         self.toggle_thinking_expand()
     }
 
+    /// Toggle the newest memory-change notice, used as the no-cursor Ctrl+O
+    /// fallback so a notice folds like a tool group even without a mouse
+    /// anchor. Keys are the same mg#N occurrence ids display_slots assigns,
+    /// so the expansion state survives across renders.
+    pub(crate) fn toggle_latest_memory_notice(&mut self) -> bool {
+        let mut ordinal = 0usize;
+        let mut latest: Option<String> = None;
+        for line in self.transcript.iter() {
+            if crate::fold::is_memory_notice(line) {
+                latest = Some(format!("mg#{ordinal}"));
+                ordinal += 1;
+            }
+        }
+        let Some(key) = latest else {
+            return false;
+        };
+        if !self.expanded_fold_groups.remove(&key) {
+            self.expanded_fold_groups.insert(key);
+        }
+        true
+    }
+
     /// Toggle a Subagent delegation's inline expansion by visible row index
     /// (the click handler). The row's fold key carries the child session id,
     /// so a click on the head row resolves the target delegation directly —
