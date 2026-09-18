@@ -386,6 +386,31 @@ mod tests {
         assert!(s.thinking_budget.is_none());
     }
 
+    /// Auto effort (no pick, no catalog entry) resolves to the dialect's
+    /// middle level so a reasoning model thinks under auto — deepseek-v4 has
+    /// no Medium, so its middle is High. End-to-end verified: a complex query
+    /// produces a ThoughtFor row. Locks the chain (default → resolve → apply
+    /// → reasoning_effort) against regressing the default back to None.
+    #[test]
+    fn test_deepseek_auto_reasons() {
+        assert_eq!(
+            resolve_applied_effort("deepseek-v4-pro-0813", None, None),
+            Some(EffortLevel::High),
+            "auto deepseek resolves to High (the ladder middle)"
+        );
+        let mut s = ModelSettings::default();
+        apply_effort_settings(&mut s, "deepseek-v4-pro-0813", Some(EffortLevel::High));
+        assert_eq!(
+            s.reasoning_effort,
+            Some(EffortLevel::High),
+            "auto deepseek sends reasoning_effort=high"
+        );
+        assert!(
+            s.enable_thinking.is_none(),
+            "deepseek uses reasoning_effort, not enable_thinking"
+        );
+    }
+
     /// deepseek-v4 resolves through the reasoning branch: a pick emits
     /// reasoning_effort (max included — DeepSeek's ladder is low/high/max),
     /// never the qwen thinking fields.

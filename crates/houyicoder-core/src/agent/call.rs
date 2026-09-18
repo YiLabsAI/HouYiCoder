@@ -288,6 +288,16 @@ impl Runner {
                 self.catalog_resolver.as_deref(),
             );
             super::apply_effort_settings(&mut settings, &active_model, applied_effort);
+            // Observability at the effort inflection point: /debug raises the
+            // level to surface this. Trajectory (durable log) does not collect
+            // tracing — this is the runtime-only view of what the request sends.
+            tracing::debug!(
+                model = %active_model,
+                applied_effort = ?applied_effort,
+                reasoning_effort = ?settings.reasoning_effort,
+                enable_thinking = ?settings.enable_thinking,
+                "effort resolved for request"
+            );
             // Fast lowers to the provider's fast service tier on models that
             // declare one. The apply path clamps an unsupported Fast to
             // Standard, so a Fast snapshot value means the model accepts it.
