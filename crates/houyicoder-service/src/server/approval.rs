@@ -183,11 +183,14 @@ impl Server {
         tool_name: &str,
         input: &serde_json::Value,
     ) -> Option<houyicoder_permission::AskReason> {
-        // is_destructive / is_read_only are unused by the ladder (no validator
-        // reads them); native_requires_approval is set true so a mode-default
-        // ToolNative ask reproduces. A rule, safety, or detection ask fires
-        // before the mode default regardless of the flag, so every Ask path
-        // reconstructs.
+        // is_destructive is unused by the ladder; is_read_only is hardcoded
+        // false so a surfaced ask reproduces as the write-guarded case it
+        // was (a read-only call passes the protected-path stage, so no
+        // protected-path ask surfaces here; a rule, detection, or mode ask
+        // still can). native_requires_approval is set true so a
+        // mode-default ToolNative ask reproduces. A rule, safety, or
+        // detection ask fires before the mode default regardless of the
+        // flag, so every Ask path reconstructs.
         let req = ToolRequest {
             tool_name,
             input: Some(input),

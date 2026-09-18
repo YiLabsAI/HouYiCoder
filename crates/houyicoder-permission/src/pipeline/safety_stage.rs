@@ -12,6 +12,10 @@
 //! matches the resolved path. The file tools have no such backstop: they
 //! write from the host process, which the fence does not cover, so this stage
 //! is the only thing standing between the agent and the file.
+//!
+//! The stage is write-only: a call that declares itself read-only passes
+//! through untouched, because a read cannot damage a protected path. A call
+//! that does not declare itself read-only stays guarded.
 
 use std::sync::Arc;
 
@@ -89,6 +93,13 @@ impl Validator for ProtectedPathValidator {
         false
     }
     fn check(&self, req: &ToolRequest<'_>, _ctx: &GateCtx<'_>) -> Option<Decision> {
+        // The stage guards writes: a read-only call on a protected path
+        // cannot damage the files the markers protect. A tool that does not
+        // declare itself read-only stays guarded (an unknown read claim is
+        // treated as a write, fail-closed).
+        if req.is_read_only {
+            return None;
+        }
         let hit = safety_check(req.tool_name, req.input).is_some()
             || self.resolved_path(req).is_some_and(|p| marker_hit(&p));
         if !hit {

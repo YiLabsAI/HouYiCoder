@@ -135,12 +135,12 @@ fn test_no_fence_still_asks() {
     );
 }
 
-/// A read-only tool touching a protected path must Ask (fail-closed), and
-/// the detail must be operation-neutral ("accessing", not "writing") so a
-/// read is not presented as a write to the user.
+/// A read-only tool touching a protected path must pass: the stage guards
+/// only writes, and a read cannot damage a protected file. The write form
+/// stays guarded; a read-only call over the same protected pattern is the
+/// discriminating case — before this gate it Ask'd as if it were a write.
 #[test]
-fn test_read_only_protected_asks() {
-    use crate::Decision;
+fn test_read_only_protected_passes() {
     let v: &'static Value = Box::leak(serde_json::json!({ "pattern": ".git/" }).into());
     let req = ToolRequest {
         tool_name: "glob",
@@ -150,20 +150,45 @@ fn test_read_only_protected_asks() {
         native_requires_approval: false,
     };
     let d = DefaultModeGate::with_mode(PermissionMode::Auto).decide(&req);
-    assert_eq!(d.outcome(), Outcome::Ask);
-    match d {
-        Decision::Ask(reason) => {
-            assert!(
-                reason.detail.contains("accessing"),
-                "detail should be operation-neutral: {}",
-                reason.detail
-            );
-            assert!(
-                !reason.detail.contains("writing"),
-                "read-only ask must not say writing: {}",
-                reason.detail
-            );
-        }
-        other => panic!("expected Ask, got {other:?}"),
-    }
+    assert!(
+        !matches!(d.outcome(), Outcome::Ask),
+        "a read-only call on a protected path must not Ask: {d:?}"
+    );
+    // A tool that does not declare itself read-only still Ask: the gate
+    // falls back to guarded for an unknown read claim (fail-closed).
+    let unclaimed = ToolRequest {
+        tool_name: "glob",
+        input: Some(v),
+        is_destructive: false,
+        is_read_only: false,
+        native_requires_approval: false,
+    };
+    let d = DefaultModeGate::with_mode(PermissionMode::Auto).decide(&unclaimed);
+    assert_eq!(
+        d.outcome(),
+        Outcome::Ask,
+        "a tool that does not claim read-only stays guarded"
+    );
+}
+
+/// A shell command that writes a protected path stays guarded: bash never
+/// declares itself read-only, so the write-only gate does not apply and the
+/// command Ask's as before.
+#[test]
+fn test_shell_write_asks() {
+    let v: &'static Value =
+        Box::leak(serde_json::json!({ "command": "echo x >> ~/.bashrc" }).into());
+    let req = ToolRequest {
+        tool_name: "bash",
+        input: Some(v),
+        is_destructive: false,
+        is_read_only: false,
+        native_requires_approval: false,
+    };
+    let d = DefaultModeGate::with_mode(PermissionMode::Auto).decide(&req);
+    assert_eq!(
+        d.outcome(),
+        Outcome::Ask,
+        "a shell write to a protected path must Ask"
+    );
 }

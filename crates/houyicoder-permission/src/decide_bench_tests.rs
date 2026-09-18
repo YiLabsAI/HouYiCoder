@@ -76,12 +76,13 @@ fn test_decide_p99_stays_microsecond() {
         is_read_only: false,
         native_requires_approval: true,
     };
-    // A glob of a protected path: safety validator escalates.
+    // A call to a protected path that does not declare itself read-only:
+    // the write-guarded safety validator escalates.
     let glob = ToolRequest {
         tool_name: "glob",
         input: Some(&serde_json::json!({"pattern": ".git/config"})),
         is_destructive: false,
-        is_read_only: true,
+        is_read_only: false,
         native_requires_approval: false,
     };
 

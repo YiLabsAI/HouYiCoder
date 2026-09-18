@@ -244,13 +244,14 @@ mod tests {
         assert!(tool.is_destructive());
     }
 
-    /// A read-only tool whose input touches a protected path (a glob of
-    /// .git/) must escalate to Ask at the INPUT-AWARE pre-check — the
-    /// input-blind requires_approval misses it (safety_check sees no content
-    /// with input=None), so the runner would inline-execute and fail-closed.
-    /// This is the pre-check / re-check asymmetry fix.
+    /// The protected-path pre-check is write-only, so the two capability
+    /// claims split: a read-only tool whose input touches a protected path (a
+    /// glob of .git/) passes, while a write tool over the same path escalates
+    /// to Ask. The input-aware pre-check still reaches the marker that the
+    /// input-blind check misses (safety_check sees no content with
+    /// input=None), so the write side stays guarded end to end.
     #[test]
-    fn test_precheck_catches_protected_path() {
+    fn test_precheck_split_by_write() {
         struct GlobTool;
         impl Tool for GlobTool {
             fn name(&self) -> &str {
@@ -277,19 +278,52 @@ mod tests {
         // Input-blind pre-check: no content -> safety misses -> Auto allows
         // a read-only tool -> false (would inline-execute).
         assert!(!tool.requires_approval());
-        // Input-aware pre-check: the pattern hits .git/ -> safety Ask ->
-        // true (routes to the approval flow, not inline execute).
-        let input = serde_json::json!({"pattern": ".git/config"});
+        // Input-aware pre-check over the same protected pattern: a read-only
+        // call must pass (the stage guards writes only).
         assert!(
-            tool.requires_approval_for(&input),
-            "glob of a protected path must escalate to Ask at the pre-check"
+            !tool.requires_approval_for(&serde_json::json!({"pattern": ".git/config"})),
+            "a read-only glob of a protected path must not escalate"
         );
-        // Exercise the trait surface the gate reads so no GlobTool method
-        // is left as an uncovered stub.
+        // The write claim over a protected path still escalates.
+        struct WriteTool;
+        impl Tool for WriteTool {
+            fn name(&self) -> &str {
+                "write"
+            }
+            fn description(&self) -> &str {
+                ""
+            }
+            fn input_schema(&self) -> Value {
+                Value::Object(serde_json::Map::new())
+            }
+            fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+                Box::pin(async { Ok(Value::Null) })
+            }
+            fn is_read_only(&self) -> bool {
+                false
+            }
+            fn is_destructive(&self) -> bool {
+                true
+            }
+        }
+        let write_tool: Arc<dyn Tool> = Arc::new(GuardedTool::new(
+            Arc::new(WriteTool),
+            Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto)),
+        ));
+        assert!(
+            write_tool.requires_approval_for(&serde_json::json!({"path": ".git/config"})),
+            "a write to a protected path must escalate at the pre-check"
+        );
+        // Exercise the trait surface the gate reads so no stub method is left
+        // uncovered, and name/description stay correct on the wrapper.
         assert_eq!(tool.name(), "glob");
         assert_eq!(tool.description(), "");
+        assert_eq!(write_tool.name(), "write");
+        assert_eq!(write_tool.description(), "");
         let _schema = tool.input_schema();
+        let _wschema = write_tool.input_schema();
         let _exec = block_on(tool.execute(ToolCtx::new("t"), Value::Null));
+        let _wexec = block_on(write_tool.execute(ToolCtx::new("w"), Value::Null));
     }
 
     /// A tool whose own per-input approval gate returns true for a specific
