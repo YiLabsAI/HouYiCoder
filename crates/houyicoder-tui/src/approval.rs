@@ -243,6 +243,10 @@ impl App {
                         )
                     }
                     DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, None, false),
+                    DisplaySlot::NoticeCollapsed { idx, .. } => (1, Some(*idx), false),
+                    DisplaySlot::NoticeExpanded { idx, .. } => {
+                        (self.line_display_rows(&transcript[*idx]), Some(*idx), false)
+                    }
                 };
                 if !first && !is_interrupted {
                     row += 1;

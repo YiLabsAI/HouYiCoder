@@ -71,10 +71,11 @@ impl App {
     /// id dedupes replays: a broadcast already registered is dropped rather
     /// than shown twice.
     ///
-    /// A broadcast that changes several memories renders as one summary line:
-    /// the per-key rows would echo the same keys the /memory pane now lists,
-    /// so multiple changes stay summarized rather than re-listed here. A
-    /// single change keeps its one inline row so the one fact reads directly.
+    /// The notice carries its summary as the first line and each changed key
+    /// on a child row; the fold layer collapses it to the summary by default
+    /// and Ctrl+O or a click reveals the keys. Keep the keys in the notice so
+    /// the detail is reachable in the transcript, matching how a tool-call
+    /// group hides its calls behind a summary.
     pub(super) fn show_memory_changes(
         &mut self,
         id: &MemoryChangeId,
@@ -92,7 +93,7 @@ impl App {
         let count = changes.len();
         let noun = if count == 1 { "change" } else { "changes" };
         let mut notice = format!("Memory {source}: {count} {noun} · /memory");
-        if let Some(change) = changes.first().filter(|_| count == 1) {
+        for change in changes {
             let operation = match change.operation {
                 MemoryOperation::Stored => "stored",
                 MemoryOperation::Deleted => "deleted",

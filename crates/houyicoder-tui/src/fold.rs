@@ -471,6 +471,26 @@ pub(crate) enum DisplaySlot {
     Line(usize, Option<String>),
     /// A collapsed non-active group's one-row summary (replaces the lines).
     Summary(FoldGroup),
+    /// A collapsed memory-change notice: one row, the summary line. Ctrl+O or
+    /// a click expands it to NoticeExpanded, mirroring a group's handle.
+    NoticeCollapsed { key: String, idx: usize },
+    /// An expanded memory-change notice: the summary row then each change.
+    NoticeExpanded { key: String, idx: usize },
+}
+
+/// Whether a transcript line is a memory-change notice: a System line whose
+/// first logical row is the memory summary ("Memory <source>: N change(s) ·
+/// /memory"). The fold layer treats it as a fold group so several changes
+/// collapse to the summary instead of flooding the transcript. Other System
+/// feedback (forgot, no-such-key, a toggle, an entry body) never matches.
+pub(crate) fn is_memory_notice(line: &TranscriptLine) -> bool {
+    let TranscriptLine::System(text) = line else {
+        return false;
+    };
+    let Some(first) = text.split('\n').next() else {
+        return false;
+    };
+    first.starts_with("Memory ") && first.ends_with(" · /memory")
 }
 
 /// Build the visible slot list from the transcript, fold groups, and the
@@ -490,6 +510,7 @@ pub(crate) fn display_slots(
     let mut slots = Vec::new();
     let mut gi = 0;
     let mut i = 0;
+    let mut notice_ordinal: usize = 0;
     while i < transcript.len() {
         while gi < groups.len() && groups[gi].end <= i {
             gi += 1;
@@ -525,6 +546,19 @@ pub(crate) fn display_slots(
             }
             i = g.end;
             gi += 1;
+        } else if is_memory_notice(&transcript[i]) {
+            // A memory-change notice folds like a group: collapsed to the
+            // summary by default, expanded (Ctrl+O / click) reveals the
+            // per-key rows. Keyed by occurrence so a given notice's expansion
+            // state stays with it as the transcript appends later lines.
+            let key = format!("mg#{notice_ordinal}");
+            notice_ordinal += 1;
+            if expanded.contains(&key) || verbose {
+                slots.push(DisplaySlot::NoticeExpanded { key, idx: i });
+            } else {
+                slots.push(DisplaySlot::NoticeCollapsed { key, idx: i });
+            }
+            i += 1;
         } else {
             slots.push(DisplaySlot::Line(i, None));
             i += 1;
@@ -598,6 +632,10 @@ impl crate::state::App {
                     (true, self.line_display_rows_mode(&transcript[*i], full))
                 }
                 DisplaySlot::Summary(g) => (true, 1 + g.hint.is_some() as usize),
+                DisplaySlot::NoticeCollapsed { .. } => (true, 1),
+                DisplaySlot::NoticeExpanded { idx, .. } => {
+                    (true, self.line_display_rows_mode(&transcript[*idx], true))
+                }
             };
             if !first && needs_spacer {
                 total += 1;
@@ -606,6 +644,8 @@ impl crate::state::App {
                 let found = match slot {
                     DisplaySlot::Line(i, _) => *i == t,
                     DisplaySlot::Summary(g) => t >= g.start && t < g.end,
+                    DisplaySlot::NoticeCollapsed { idx, .. }
+                    | DisplaySlot::NoticeExpanded { idx, .. } => *idx == t,
                 };
                 if found {
                     return total;

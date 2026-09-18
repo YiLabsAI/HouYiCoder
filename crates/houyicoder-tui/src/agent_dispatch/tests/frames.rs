@@ -343,9 +343,10 @@ fn test_notice_shows_memory_changes() {
     );
     assert!(
         !out.contains("⎿  promoted alpha") && !out.contains("⎿  deleted beta"),
-        "several changes stay summarized; /memory lists the keys: {out}"
+        "several changes collapse to the summary, the keys open on expand: {out}"
     );
-    // A single change keeps its one inline row so the fact reads directly.
+    // A second, single-change notice: its key is also collapsed by default,
+    // and reveals when the notice is expanded (mg#1 = the second notice).
     let single = vec![MemoryChange {
         key: "gamma".into(),
         operation: MemoryOperation::Stored,
@@ -357,8 +358,14 @@ fn test_notice_shows_memory_changes() {
     }));
     let out = crate::test_harness::render_text(&app, 100, 24);
     assert!(
+        !out.contains("⎿  stored gamma"),
+        "a second single-change notice is collapsed too: {out}"
+    );
+    app.expanded_fold_groups.insert("mg#1".into());
+    let out = crate::test_harness::render_text(&app, 100, 24);
+    assert!(
         out.contains("⎿  stored gamma"),
-        "a single change keeps its inline row: {out}"
+        "expanding the notice reveals its key: {out}"
     );
 }
 
@@ -388,7 +395,16 @@ fn test_notice_summarizes_many_changes() {
     assert_eq!(
         out.matches('⎿').count(),
         0,
-        "several changes stay summarized without echoing each key: {out}"
+        "several changes collapse to the summary, no key echoed: {out}"
+    );
+    // Expanding the notice reveals each change as its own ⎿ row (the long keys
+    // hard-break across rows, so the per-key rows are the stable assertion).
+    app.expanded_fold_groups.insert("mg#0".into());
+    let out = crate::test_harness::render_text(&app, 54, 36);
+    assert_eq!(
+        out.matches('⎿').count(),
+        4,
+        "each change is a ⎿ row when the notice is expanded: {out}"
     );
 }
 
@@ -408,11 +424,19 @@ fn test_notice_single_change_wraps() {
         origin: MemoryChangeOrigin::PrimaryAgent,
         changes,
     }));
+    // Collapsed by default: the summary shows, the key stays behind the fold.
     let out = crate::test_harness::render_text(&app, 24, 40);
     assert!(
-        out.contains("primary agent") && out.contains("1 change · /memory"),
-        "the single change still renders its summary: {out}"
+        out.contains("primary agent"),
+        "the single change still renders its summary origin: {out}"
     );
+    assert!(
+        !out.contains("for-a-narrow-notice"),
+        "the collapsed notice hides its key until expanded: {out}"
+    );
+    // Expanded (Ctrl+O on the summary), a long key wraps rather than clips.
+    app.expanded_fold_groups.insert("mg#0".into());
+    let out = crate::test_harness::render_text(&app, 24, 40);
     assert!(
         out.contains("for-a-narrow-notice"),
         "a single-change key that outgrows the row wraps instead of clipping: {out}"

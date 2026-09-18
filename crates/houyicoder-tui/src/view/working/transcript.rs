@@ -754,6 +754,12 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
                     );
                 }
             }
+            crate::fold::DisplaySlot::NoticeCollapsed { key, idx } => {
+                super::notice_rows::push_notice_rows(app, *idx, key, false, area.width, &mut sink);
+            }
+            crate::fold::DisplaySlot::NoticeExpanded { key, idx } => {
+                super::notice_rows::push_notice_rows(app, *idx, key, true, area.width, &mut sink);
+            }
             crate::fold::DisplaySlot::Line(i, grp) => {
                 let line = &app.active_transcript()[*i];
                 push_line_rows(line, grp.as_deref(), area.width, app, &mut sink);

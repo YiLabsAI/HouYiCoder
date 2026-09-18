@@ -606,3 +606,52 @@ fn test_slots_active_multi_call() {
     let slots2 = display_slots(&t, true, &exp, false);
     assert_eq!(slots2.len(), 7);
 }
+
+#[test]
+fn test_memory_notice_slots() {
+    let notice = TranscriptLine::System(
+        "Memory auto-memory: 2 changes · /memory\n  ⎿  stored alpha\n  ⎿  stored beta".to_string(),
+    );
+    let t = vec![notice.clone()];
+    // Collapsed by default: one NoticeCollapsed slot, keyed by occurrence.
+    let slots = display_slots(&t, false, &HashSet::new(), false);
+    assert_eq!(slots.len(), 1);
+    assert!(matches!(
+        slots[0],
+        DisplaySlot::NoticeCollapsed { ref key, idx: 0 } if key == "mg#0"
+    ));
+    // A non-notice System line is a plain Line, not a fold slot.
+    let t2 = vec![TranscriptLine::System("forgot alpha".to_string())];
+    let slots = display_slots(&t2, false, &HashSet::new(), false);
+    assert!(matches!(slots[0], DisplaySlot::Line(0, None)));
+    // Expanding the key reveals the notice detail as a Line slot.
+    let mut expanded = HashSet::new();
+    expanded.insert("mg#0".to_string());
+    let slots = display_slots(&t, false, &expanded, false);
+    assert!(matches!(
+        slots[0],
+        DisplaySlot::NoticeExpanded { ref key, idx: 0 } if key == "mg#0"
+    ));
+}
+
+#[test]
+fn test_notice_shape_matches() {
+    assert!(is_memory_notice(&TranscriptLine::System(
+        "Memory auto-memory: 2 changes · /memory".to_string()
+    )));
+    assert!(is_memory_notice(&TranscriptLine::System(
+        "Memory primary agent: 1 change · /memory\n  ⎿  stored alpha".to_string()
+    )));
+    assert!(!is_memory_notice(&TranscriptLine::System(
+        "forgot alpha".to_string()
+    )));
+    assert!(!is_memory_notice(&TranscriptLine::System(
+        "memory: no such key".to_string()
+    )));
+    assert!(!is_memory_notice(&TranscriptLine::System(
+        "a toggle line".to_string()
+    )));
+    assert!(!is_memory_notice(&TranscriptLine::Agent(
+        "Memory files".to_string()
+    )));
+}
