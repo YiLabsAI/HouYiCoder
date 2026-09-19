@@ -467,6 +467,17 @@ async fn run_foreground_spawn(
         let handle = spawn_child(req).await.map_err(map_spawn_err)?;
         let child_sid = handle.session;
         let child_str = child_sid.to_string();
+        // The child's provenance lands at the boundary, before its run: the
+        // delegation record it opens with is its first durable append, so
+        // nothing that counts or lists the user's sessions can read a running
+        // child as one of theirs.
+        stamp_spawned_by(
+            &this.descriptor_store,
+            child_sid,
+            parent_sid,
+            &subagent_type,
+            &child_str,
+        );
         let child = ChildDescriptor::new(
             child_str.clone(),
             subagent_type.clone(),
@@ -494,17 +505,6 @@ async fn run_foreground_spawn(
             task,
         )
         .await;
-        // Stamp SpawnedBy provenance after the child's first durable append
-        // has fired the materialize hook (which writes Fresh). update_descriptor
-        // edits the now-materialized sidecar so the resume picker can filter
-        // it out.
-        stamp_spawned_by(
-            &this.descriptor_store,
-            child_sid,
-            parent_sid,
-            &subagent_type,
-            &child_str,
-        );
         Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
     });
     match driver.await {
@@ -527,13 +527,16 @@ fn map_spawn_err(e: SpawnError) -> SpawnFailure {
         SpawnError::BudgetExceeded => SpawnFailure::BudgetExceeded,
         SpawnError::CapabilityDenied => SpawnFailure::CapabilityDenied,
         SpawnError::SpawnRecursive => SpawnFailure::Recursive,
+        SpawnError::BoundaryWriteFailed => SpawnFailure::BoundaryWriteFailed,
         SpawnError::WorktreeFenceNarrowFail => SpawnFailure::FenceFail,
     }
 }
 
-/// Stamp SpawnedBy provenance on a child session's sidecar. Called after
-/// finalize_child so the materialize hook has already written Fresh; this
-/// edits the existing sidecar via update_descriptor rather than overwriting it.
+/// Stamp SpawnedBy provenance on a child session's sidecar. Called at the
+/// spawn boundary, before the child runs, so a live child is never read as one
+/// of the user's own sessions. The delegation record the child opens with is
+/// its first durable append, which materializes the sidecar on a store that
+/// materializes one, so the update normally edits a file already there.
 /// Best-effort: a stamp failure logs and continues (the child still ran).
 fn stamp_spawned_by(
     descriptor_store: &Option<Arc<dyn SessionDescriptorStore>>,
@@ -552,8 +555,10 @@ fn stamp_spawned_by(
         let outcome = store.update_descriptor(child_sid, &mut |descriptor| {
             descriptor.provenance = prov.clone();
         });
-        // A child can finish before its first durable append materializes the
-        // descriptor, so create it when there is nothing to update.
+        // Written means there was a sidecar to edit; anything else -- a
+        // store that materializes none on a first append, or an update that
+        // failed -- leaves the provenance unrecorded, so create a sidecar
+        // here.
         if !matches!(outcome, Ok(DescriptorUpdate::Written)) {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

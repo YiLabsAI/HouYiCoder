@@ -104,6 +104,12 @@ pub enum SpawnError {
     BudgetExceeded,
     CapabilityDenied,
     SpawnRecursive,
+    /// A durable delegation boundary could not be written: the child's own
+    /// record, the parent's spawn record, or the parent's return record. The
+    /// first two refuse the spawn rather than recording a delegation nothing
+    /// can follow to its child; a return record that fails is logged, since
+    /// the child has already run to its terminal.
+    BoundaryWriteFailed,
     WorktreeFenceNarrowFail,
 }
 
@@ -202,6 +208,22 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     // the child model might default to.
     runner.set_effort(resolve_child_effort());
 
+    // The child's own log opens with the delegation it came from: the parent
+    // the boundary names, written first so a failure here leaves no spawn in
+    // the parent log, and durable from the child's first record so the
+    // lineage does not depend on the sidecar.
+    let delegation = new_event(
+        child_sid,
+        SessionEvent::ChildDelegated {
+            parent_session_id: parent_sid.to_string(),
+            subagent_type: subagent_type.clone(),
+        },
+    );
+    store_for_boundary
+        .append(delegation)
+        .await
+        .map_err(|_| SpawnError::BoundaryWriteFailed)?;
+
     let spawn_event = new_event(
         parent_sid,
         SessionEvent::SubagentSpawn {
@@ -216,7 +238,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     store_for_boundary
         .append(spawn_event)
         .await
-        .map_err(|_| SpawnError::WorktreeFenceNarrowFail)?;
+        .map_err(|_| SpawnError::BoundaryWriteFailed)?;
 
     Ok(ChildHandle {
         session: child_sid,
@@ -257,7 +279,7 @@ pub async fn record_subagent_return(
         .append(event)
         .await
         .map(|_| ())
-        .map_err(|_| SpawnError::WorktreeFenceNarrowFail)
+        .map_err(|_| SpawnError::BoundaryWriteFailed)
 }
 
 #[cfg(test)]

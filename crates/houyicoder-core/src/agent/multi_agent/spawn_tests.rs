@@ -98,6 +98,30 @@ async fn test_spawn_creates_boundary() {
     );
 }
 
+/// The child's own log opens with the delegation it came from: the parent the
+/// boundary names. Written at the boundary rather than after the run, so a
+/// child whose sidecar never landed still says whose it is, and a reader can
+/// name its parent without the sidecar.
+#[tokio::test]
+async fn test_delegation_opens_child_log() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let req = req_at_depth(parent_sid, store.clone(), provider, 0);
+    let handle = spawn_child(req).await.expect("spawn should succeed");
+    let events = store.trajectory_snapshot(handle.session);
+    match &events.first().expect("child log is not empty").event {
+        SessionEvent::ChildDelegated {
+            parent_session_id,
+            subagent_type,
+        } => {
+            assert_eq!(parent_session_id, &parent_sid.to_string());
+            assert_eq!(subagent_type, "explore");
+        }
+        other => panic!("the child log must open with its delegation, got {other:?}"),
+    }
+}
+
 /// A system-triggered spawn records its origin on the durable boundary.
 #[tokio::test]
 async fn test_spawn_records_system_trigger() {

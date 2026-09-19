@@ -194,6 +194,7 @@ fn event_byte_len(event: &SessionLogEntry) -> usize {
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::ChildDelegated { .. }
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::NotificationInjected { .. } => 0,
     }

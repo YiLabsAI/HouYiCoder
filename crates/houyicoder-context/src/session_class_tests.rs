@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::NameSource;
+use crate::{EventId, NameSource};
 
 /// Stamp a log's mtime to N seconds ago. Last-active reads the log mtime, so
 /// a store built inside one second leaves every session equally recent and no
@@ -29,7 +29,7 @@ fn temp_root(tag: &str) -> PathBuf {
         std::process::id(),
         nanos
     ));
-    std::fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&root).unwrap();
     root
 }
 
@@ -70,31 +70,87 @@ fn write_session_named(
     provenance: Option<SessionProvenance>,
 ) -> PathBuf {
     let dir = root.join(name);
-    std::fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(&dir).unwrap();
     if log {
-        std::fs::write(dir.join("log.jsonl"), "{}\n").unwrap();
+        fs::write(dir.join("log.jsonl"), "{}\n").unwrap();
     }
     if let Some(provenance) = provenance {
         let bytes = serde_json::to_vec(&sidecar(provenance)).unwrap();
-        std::fs::write(dir.join("session.json"), bytes).unwrap();
+        fs::write(dir.join("session.json"), bytes).unwrap();
     }
     dir
 }
 
+/// Rewrite a directory's log so its first record is the delegation a child
+/// writes at the boundary that mints it. The record is serialized from the
+/// type production writes, so a change to that shape reaches this test.
+fn write_delegated_head(dir: &Path, parent: &str) {
+    let entry = SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::ChildDelegated {
+            parent_session_id: parent.to_string(),
+            subagent_type: "explore".to_string(),
+        },
+    };
+    let line = serde_json::to_string(&entry).unwrap();
+    fs::write(dir.join(LOG_FILE), format!("{line}\n")).unwrap();
+}
+
+fn parent_link(parent: &str) -> ParentLink {
+    ParentLink {
+        parent_session_id: parent.to_string(),
+        subagent_type: "explore".to_string(),
+    }
+}
+
 #[test]
 fn test_classify_user_needs_sidecar() {
-    assert_eq!(classify(true, None), SessionClass::LogOnly);
+    assert_eq!(classify(true, None, None), SessionClass::LogOnly);
     assert_eq!(
-        classify(true, Some(&SessionProvenance::Fresh)),
+        classify(true, Some(&SessionProvenance::Fresh), None),
         SessionClass::User
     );
-    assert_eq!(classify(true, Some(&spawned_by())), SessionClass::SubAgent);
+    assert_eq!(
+        classify(true, Some(&spawned_by()), None),
+        SessionClass::SubAgent
+    );
     assert_eq!(
         classify(
             true,
             Some(&SessionProvenance::ResumedFromExport {
                 source_session_id: "exported".to_string(),
-            })
+            }),
+            None
+        ),
+        SessionClass::User
+    );
+}
+
+/// A child whose sidecar never landed is still a child: the delegation its
+/// log opens with names the parent, so it is not counted or listed among the
+/// user's own sessions. A log that names no parent stays unowned.
+#[test]
+fn test_classify_log_parent_child() {
+    assert_eq!(
+        classify(true, None, Some(&parent_link("p"))),
+        SessionClass::SubAgent
+    );
+    assert_eq!(classify(true, None, None), SessionClass::LogOnly);
+}
+
+/// The sidecar decides when it is there, and it cannot contradict the log: a
+/// delegation reaches both at one boundary, from the same facts. The rule is
+/// stated for the pair anyway, so a reader need not know that to read it.
+#[test]
+fn test_classify_sidecar_outranks_log() {
+    assert_eq!(
+        classify(
+            true,
+            Some(&SessionProvenance::Fresh),
+            Some(&parent_link("p"))
         ),
         SessionClass::User
     );
@@ -102,12 +158,20 @@ fn test_classify_user_needs_sidecar() {
 
 #[test]
 fn test_classify_no_log_shell() {
-    assert_eq!(classify(false, None), SessionClass::Shell);
+    assert_eq!(classify(false, None, None), SessionClass::Shell);
     assert_eq!(
-        classify(false, Some(&SessionProvenance::Fresh)),
+        classify(false, Some(&SessionProvenance::Fresh), None),
         SessionClass::Shell
     );
-    assert_eq!(classify(false, Some(&spawned_by())), SessionClass::Shell);
+    assert_eq!(
+        classify(false, Some(&spawned_by()), None),
+        SessionClass::Shell
+    );
+    assert_eq!(
+        classify(false, None, Some(&parent_link("p"))),
+        SessionClass::Shell,
+        "a delegation in a log that is not there is not a session"
+    );
 }
 
 #[test]
@@ -120,6 +184,9 @@ fn test_scan_classifies_every_dir() {
         Some(SessionProvenance::Fresh),
     );
     let child = write_session(&root, SessionId::new(), true, Some(spawned_by()));
+    // The same delegation the sidecar already names, written into the log too:
+    // a reader that opens every log would carry it twice.
+    write_delegated_head(&child, "parent");
     let left = write_session(&root, SessionId::new(), true, None);
     let shell = write_session(&root, SessionId::new(), false, None);
     let shell_with_sidecar = write_session(
@@ -128,18 +195,26 @@ fn test_scan_classifies_every_dir() {
         false,
         Some(SessionProvenance::Fresh),
     );
+    // A child whose sidecar never landed: its own log names the parent.
+    let delegated = write_session(&root, SessionId::new(), true, None);
+    write_delegated_head(&delegated, "parent");
     let store = root.join(".cas");
-    std::fs::create_dir_all(&store).unwrap();
-    std::fs::write(store.join("ab.bin"), b"x").unwrap();
-    std::fs::create_dir_all(root.join("index")).unwrap();
+    fs::create_dir_all(&store).unwrap();
+    fs::write(store.join("ab.bin"), b"x").unwrap();
+    fs::create_dir_all(root.join("index")).unwrap();
 
     let entries = scan_sessions(&root);
     let class_of = |dir: &Path| entries.iter().find(|e| e.path == dir).map(|e| e.class);
-    assert_eq!(entries.len(), 5, "non-session directories must be skipped");
+    assert_eq!(entries.len(), 6, "non-session directories must be skipped");
     assert_eq!(class_of(&user), Some(SessionClass::User));
     assert_eq!(class_of(&child), Some(SessionClass::SubAgent));
     assert_eq!(class_of(&left), Some(SessionClass::LogOnly));
     assert_eq!(class_of(&shell), Some(SessionClass::Shell));
+    assert_eq!(
+        class_of(&delegated),
+        Some(SessionClass::SubAgent),
+        "a child with no sidecar reads the parent from its log"
+    );
     assert_eq!(
         class_of(&shell_with_sidecar),
         Some(SessionClass::Shell),
@@ -153,9 +228,29 @@ fn test_scan_classifies_every_dir() {
         shell_with_sidecar.descriptor.is_none(),
         "a shell's sidecar is not read: the class does not depend on it"
     );
+    let child = entries.iter().find(|e| e.path == child).unwrap();
+    assert!(
+        child.parent.is_none(),
+        "a sidecar that answers the lineage leaves the log unread"
+    );
+    let delegated = entries.iter().find(|e| e.path == delegated).unwrap();
+    assert_eq!(
+        delegated.parent,
+        Some(parent_link("parent")),
+        "the parent the class was judged from is carried"
+    );
+    assert!(
+        entries
+            .iter()
+            .find(|e| e.path == left)
+            .unwrap()
+            .parent
+            .is_none(),
+        "a log that names no parent carries none"
+    );
     assert_eq!(entries.iter().filter(|e| e.is_user_session()).count(), 1);
     assert!(entries.iter().all(|e| e.last_active > 0));
-    std::fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// A directory named in the legacy spelling is one the id cannot rebuild: the
@@ -181,7 +276,7 @@ fn test_entry_carries_scanned_path() {
         entry.descriptor.is_some(),
         "the sidecar read while classifying is carried"
     );
-    std::fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// The id's other spelling is its exact inverse, so a reader can name the
@@ -229,7 +324,7 @@ fn test_session_dir_resolves_spelling() {
         root.join(absent.to_string()),
         "with nothing on disk the display form is the target for a write"
     );
-    std::fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// The bounded listing is the top of the full scan's order rather than a
@@ -251,6 +346,9 @@ fn test_recent_matches_scan_order() {
     }
     let child = write_session(&root, SessionId::new(), true, Some(spawned_by()));
     age(&child.join(LOG_FILE), 1);
+    let delegated = write_session(&root, SessionId::new(), true, None);
+    write_delegated_head(&delegated, "parent");
+    age(&delegated.join(LOG_FILE), 1);
     write_session(&root, SessionId::new(), true, None);
     write_session(&root, SessionId::new(), false, None);
 
@@ -261,7 +359,11 @@ fn test_recent_matches_scan_order() {
     full.sort_by_key(|entry| std::cmp::Reverse(entry.last_active));
 
     let bounded = recent_user_sessions(&root, full.len());
-    assert_eq!(bounded.len(), 3, "a child, a log-only dir and a shell");
+    assert_eq!(
+        bounded.len(),
+        3,
+        "two children, a log-only dir and a shell are not rows"
+    );
     assert_eq!(
         bounded.iter().map(|e| e.sid).collect::<Vec<_>>(),
         full.iter().map(|e| e.sid).collect::<Vec<_>>(),
@@ -271,7 +373,7 @@ fn test_recent_matches_scan_order() {
         bounded[0].last_active, bounded[2].last_active,
         "the order assertion is about the newest session, not a tie"
     );
-    std::fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// The limit bounds the result, and it is applied after the class: a store
@@ -295,7 +397,7 @@ fn test_recent_stops_at_limit() {
         recent_user_sessions(&root, 0).is_empty(),
         "a limit of zero is an upper bound like any other"
     );
-    std::fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// One session can hold both spellings on disk at once: each directory is a
@@ -316,5 +418,5 @@ fn test_scan_reports_both_spellings() {
         entries.iter().all(|entry| entry.sid == sid),
         "both entries are the same session"
     );
-    std::fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
 }

@@ -244,6 +244,7 @@ fn event_search_text(event: &SessionLogEntry) -> Option<String> {
         | SessionEvent::WorktreeExit { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::ChildDelegated { .. }
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::NotificationInjected { .. } => return None,
     };

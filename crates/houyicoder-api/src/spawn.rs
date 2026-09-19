@@ -125,6 +125,9 @@ pub enum SpawnFailure {
     CapabilityDenied,
     Recursive,
     FenceFail,
+    /// A durable delegation boundary could not be written, so the spawn was
+    /// refused instead of leaving a delegation the store cannot follow.
+    BoundaryWriteFailed,
     /// The type is not registered when the runtime materializes the child.
     /// The tool surfaces it the same way as its own NotFound path.
     UnknownAgent,

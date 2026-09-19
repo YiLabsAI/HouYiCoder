@@ -31,6 +31,7 @@ pub fn event_name(kind: &SessionEvent) -> &'static str {
         SessionEvent::RewardObservation { .. } => "reward",
         SessionEvent::SubagentSpawn { .. } => "spawn",
         SessionEvent::SubagentReturn { .. } => "return",
+        SessionEvent::ChildDelegated { .. } => "delegated",
         SessionEvent::NotificationInjected { .. } => "notify",
         SessionEvent::Unknown => "unknown",
     }
@@ -90,6 +91,14 @@ mod tests {
                 reasoning_tokens: 0,
             }),
             "return"
+        );
+        assert_eq!(
+            event_name(&SessionEvent::ChildDelegated {
+                parent_session_id: String::new(),
+                subagent_type: String::new(),
+            }),
+            "delegated",
+            "the child's own record of the delegation is an audit row"
         );
         assert_eq!(
             event_name(&SessionEvent::NotificationInjected {

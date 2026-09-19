@@ -208,6 +208,7 @@ pub fn assemble_model_input_with(
             | SessionEvent::TurnStarted { .. }
             | SessionEvent::SubagentSpawn { .. }
             | SessionEvent::SubagentReturn { .. }
+            | SessionEvent::ChildDelegated { .. }
             | SessionEvent::RunCompleted { .. } => {
                 i += 1;
             }

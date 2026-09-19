@@ -239,6 +239,16 @@ pub(super) async fn run_background_spawn(
     let handle = spawn_child(req).await.map_err(super::map_spawn_err)?;
     let child_sid = handle.session;
     let child_str = child_sid.to_string();
+    // Same boundary as the foreground path: the child's delegation record
+    // lands here, so the provenance is written before the detached driver ever
+    // runs the child.
+    super::stamp_spawned_by(
+        &this.descriptor_store,
+        child_sid,
+        parent_sid,
+        &args.subagent_type,
+        &child_str,
+    );
     let child = ChildDescriptor::new(
         child_str.clone(),
         args.subagent_type.clone(),
@@ -255,7 +265,6 @@ pub(super) async fn run_background_spawn(
     let hook_fire_f = hook_fire;
     let parent_sid_f = parent_sid;
     let child_str_stamp = child_str.clone();
-    let descriptor_store_f = this.descriptor_store.clone();
     let subagent_type_f = args.subagent_type.clone();
     tokio::spawn(async move {
         // The permit releases here (end of the driver) so the slot frees when
@@ -286,13 +295,6 @@ pub(super) async fn run_background_spawn(
             task,
         )
         .await;
-        super::stamp_spawned_by(
-            &descriptor_store_f,
-            child_sid,
-            parent_sid_f,
-            &subagent_type_f,
-            &child_str_stamp,
-        );
     });
     Ok(SpawnOutcome::background_started(child_str))
 }

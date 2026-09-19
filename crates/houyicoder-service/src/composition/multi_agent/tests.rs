@@ -1,11 +1,15 @@
 use super::*;
 use houyicoder_api::tool::Tool;
 use houyicoder_async::CancellationToken;
+use houyicoder_async::PFut;
 use houyicoder_async::bus::MessageBus;
-use houyicoder_context::{SessionEvent, SessionId};
+use houyicoder_context::{
+    CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionEvent,
+    SessionId, SessionLogEntry,
+};
 use houyicoder_core::agent::multi_agent::bus_types::{
     BusMessage, ChildStatus, global_completed_topic, permission_request_topic,
-    permission_response_topic,
+    permission_response_topic, spawned_topic,
 };
 use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
 use houyicoder_core::agent::multi_agent::registry::built_in_all;
@@ -16,6 +20,7 @@ use houyicoder_protocol::llm::{LlmEvent, ModelCapabilities, OutputItem};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use serde_json::Value;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 fn runtime_with_text_child(text: &str) -> (MultiAgentRuntime, Arc<SessionStore>, SessionId) {
@@ -74,6 +79,118 @@ async fn test_foreground_spawn_reaches_terminal() {
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "parent log must record the SubagentReturn boundary",
     );
+}
+
+/// The child's provenance is written at the delegation boundary, before its
+/// run: a child parked inside its first model call already reads as a
+/// sub-agent, so nothing counting or listing the user's sessions can take a
+/// running child for one of theirs.
+#[tokio::test]
+async fn test_provenance_precedes_child_run() {
+    let bus = Arc::new(AgentBus::new());
+    let (provider, entered) = StallForeverProvider::new();
+    let descriptors = Arc::new(InMemoryDescriptorStore::new());
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store,
+        provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(std::path::PathBuf::from("/tmp")),
+        bus: Some(Arc::clone(&bus)),
+        descriptor_store: Some(descriptors.clone()),
+    });
+    let parent_sid = SessionId::new();
+    let token = CancellationToken::new();
+    let ctx = ToolCtx::new("c1")
+        .with_session(parent_sid)
+        .with_cancel(token.clone());
+    let mut announced = bus.subscribe(spawned_topic());
+    let mut call = runtime.spawn(&ctx, SpawnArgs::new("explore", "find auth", "find auth"));
+    // The announcement carries the child id, and the provider's latch says the
+    // run has started. Both are latches, so the read below lands while the
+    // child sits inside its first model call rather than on a timer.
+    let child = tokio::select! {
+        message = announced.recv() => match message {
+            Ok(BusMessage::Spawned { child }) => child,
+            other => panic!("the boundary must announce the child: {other:?}"),
+        },
+        result = &mut call => panic!("the call returned before the boundary: {result:?}"),
+    };
+    entered
+        .await
+        .expect("the child entered its first model call");
+    let child_sid = SessionId::from_display_string(&child.agent_id).expect("child sid parses");
+    let provenance = descriptors.read_descriptor(child_sid).map(|d| d.provenance);
+    let names_parent = matches!(
+        &provenance,
+        Some(SessionProvenance::SpawnedBy { parent_session_id, .. })
+            if parent_session_id == &parent_sid.to_string()
+    );
+    assert!(
+        names_parent,
+        "the sidecar must name the parent before the child's run: {provenance:?}"
+    );
+    token.cancel();
+    drop(call);
+}
+
+/// The background path lands the same boundary: the caller writes the child's
+/// provenance before the detached driver is spawned, so the child already
+/// reads as a sub-agent when the spawn call returns. A reader that counts or
+/// lists the user's sessions therefore never waits on that child's run to
+/// learn whose it is.
+#[tokio::test]
+async fn test_background_boundary_writes_provenance() {
+    let (provider, mut entered) = StallForeverProvider::new();
+    let descriptors = Arc::new(InMemoryDescriptorStore::new());
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store,
+        provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(std::path::PathBuf::from("/tmp")),
+        bus: None,
+        descriptor_store: Some(descriptors.clone()),
+    });
+    let parent_sid = SessionId::new();
+    let token = CancellationToken::new();
+    let ctx = ToolCtx::new("c1")
+        .with_session(parent_sid)
+        .with_cancel(token.clone());
+    let mut args = SpawnArgs::new("explore", "find auth", "find auth");
+    args.run_in_background = true;
+    let outcome = runtime
+        .spawn(&ctx, args)
+        .await
+        .expect("a background spawn launches");
+    let child_sid =
+        SessionId::from_display_string(&outcome.child_session_id).expect("child sid parses");
+    // The read has to land before the child runs, said out loud rather than
+    // resting on the runtime not having polled the detached driver yet: the
+    // latch is quiet exactly while the child has not reached its model call.
+    assert!(
+        entered.try_recv().is_err(),
+        "the child reached its model call before the provenance was read"
+    );
+    let provenance = descriptors.read_descriptor(child_sid).map(|d| d.provenance);
+    let names_parent = matches!(
+        &provenance,
+        Some(SessionProvenance::SpawnedBy { parent_session_id, .. })
+            if parent_session_id == &parent_sid.to_string()
+    );
+    assert!(
+        names_parent,
+        "the detached path writes the same provenance at the boundary: {provenance:?}"
+    );
+    token.cancel();
 }
 
 /// The child's recorded conversation holds the task and nothing the host
@@ -936,73 +1053,84 @@ async fn test_background_failure_notifies_parent() {
     );
 }
 
+/// A store whose writes for any session but the parent's fail, the way an
+/// unwritable store does. The parent's own log still lands, so a caller can
+/// read the return boundary the tail wrote. The allowance bounds how many
+/// writes a child gets: one for the delegation boundary alone, which leaves
+/// the run to fail on its own first write, and none, which refuses the spawn
+/// at the boundary.
+struct ChildLogWriteFails {
+    inner: InMemoryBackend,
+    parent: SessionId,
+    allowed: u32,
+    used: AtomicU32,
+}
+
+impl ChildLogWriteFails {
+    fn new(parent: SessionId, allowed: u32) -> Self {
+        Self {
+            inner: InMemoryBackend::new(),
+            parent,
+            allowed,
+            used: AtomicU32::new(0),
+        }
+    }
+}
+
+impl ContextBackend for ChildLogWriteFails {
+    fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
+        if event.session != self.parent {
+            let used = self.used.fetch_add(1, Ordering::SeqCst);
+            if used >= self.allowed {
+                return Box::pin(async { Err(ContextError::Io) });
+            }
+        }
+        self.inner.append(event)
+    }
+    fn read_range(
+        &self,
+        session: SessionId,
+        from: Option<EventId>,
+        to: Option<EventId>,
+    ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+        self.inner.read_range(session, from, to)
+    }
+    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+        self.inner.replay(session)
+    }
+    fn write_checkpoint(
+        &self,
+        manifest: CheckpointManifest,
+    ) -> PFut<'_, Result<CheckpointId, ContextError>> {
+        self.inner.write_checkpoint(manifest)
+    }
+    fn read_checkpoint(
+        &self,
+        id: CheckpointId,
+    ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
+        self.inner.read_checkpoint(id)
+    }
+    fn list_checkpoints(
+        &self,
+        session: SessionId,
+    ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
+        self.inner.list_checkpoints(session)
+    }
+}
+
 /// A child whose run fails before its loop writes anything still reaches a
 /// terminal: the run publishes none of its own, and without one the fleet row
 /// would sit on running for the rest of the session.
 #[tokio::test]
 async fn test_failed_write_reaches_terminal() {
-    use houyicoder_async::PFut;
-    use houyicoder_context::{
-        CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionLogEntry,
-    };
-    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-
-    /// Writes for any session but the parent's fail, the way an unwritable
-    /// store does. The parent's own log still lands, so the test can read the
-    /// return boundary the tail wrote.
-    struct FailingChildStore {
-        inner: InMemoryBackend,
-        parent: SessionId,
-    }
-
-    impl ContextBackend for FailingChildStore {
-        fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
-            if event.session != self.parent {
-                return Box::pin(async { Err(ContextError::Io) });
-            }
-            self.inner.append(event)
-        }
-        fn read_range(
-            &self,
-            session: SessionId,
-            from: Option<EventId>,
-            to: Option<EventId>,
-        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
-            self.inner.read_range(session, from, to)
-        }
-        fn replay(
-            &self,
-            session: SessionId,
-        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
-            self.inner.replay(session)
-        }
-        fn write_checkpoint(
-            &self,
-            manifest: CheckpointManifest,
-        ) -> PFut<'_, Result<CheckpointId, ContextError>> {
-            self.inner.write_checkpoint(manifest)
-        }
-        fn read_checkpoint(
-            &self,
-            id: CheckpointId,
-        ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
-            self.inner.read_checkpoint(id)
-        }
-        fn list_checkpoints(
-            &self,
-            session: SessionId,
-        ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
-            self.inner.list_checkpoints(session)
-        }
-    }
-
     let bus = Arc::new(AgentBus::new());
     let mut completed = bus.subscribe(global_completed_topic());
     let parent_sid = SessionId::new();
-    let store = Arc::new(SessionStore::new(Box::new(FailingChildStore {
-        inner: InMemoryBackend::new(),
-        parent: parent_sid,
-    })));
+    // The child's delegation lands so the run starts; every write the run
+    // itself makes fails.
+    let store = Arc::new(SessionStore::new(Box::new(ChildLogWriteFails::new(
+        parent_sid, 1,
+    ))));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("child answer"));
     let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
@@ -1046,6 +1174,47 @@ async fn test_failed_write_reaches_terminal() {
         ret_status.as_deref(),
         Some("failed"),
         "the return boundary records the failed status",
+    );
+}
+
+/// A store that cannot write even the child's delegation refuses the spawn:
+/// the child would have no durable record of itself, so running it would leave
+/// a delegation the store cannot follow to its child. The refusal is the
+/// truthful one, and the parent log gets no spawn record to dangle.
+#[tokio::test]
+async fn test_unwritable_boundary_refuses_spawn() {
+    let parent_sid = SessionId::new();
+    // No allowance: the child's delegation itself is the write that fails.
+    let store = Arc::new(SessionStore::new(Box::new(ChildLogWriteFails::new(
+        parent_sid, 0,
+    ))));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("child answer"));
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store: store.clone(),
+        provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(std::path::PathBuf::from("/tmp")),
+        bus: None,
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+    });
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let args = SpawnArgs::new("explore", "find the auth module", "find auth");
+    let failure = runtime
+        .spawn(&ctx, args)
+        .await
+        .expect_err("an unwritable boundary must refuse the spawn");
+    assert_eq!(
+        failure,
+        SpawnFailure::BoundaryWriteFailed,
+        "the refusal names the boundary, not the worktree fence"
+    );
+    assert!(
+        store.trajectory_snapshot(parent_sid).is_empty(),
+        "a refused spawn leaves no dangling record in the parent log"
     );
 }
 

@@ -466,6 +466,15 @@ pub enum SessionEvent {
         #[serde(default)]
         reasoning_tokens: u64,
     },
+    /// This session was delegated to by the named parent: the child side of
+    /// the delegation boundary, written as the child session's first durable
+    /// record. The parent records the same act as SubagentSpawn; the child
+    /// carries it in its own log so its lineage outlives a missing sidecar.
+    #[serde(rename = "ChildDelegated")]
+    ChildDelegated {
+        parent_session_id: String,
+        subagent_type: String,
+    },
     /// A sub-agent notification injected into the parent's context at a turn
     /// boundary. child_session_id pins which child finished; summary is the
     /// text the parent model reads (subagent type + terminal status + the

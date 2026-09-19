@@ -420,6 +420,7 @@ fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &super::context::To
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::ChildDelegated { .. }
         | SessionEvent::RunCompleted { .. } => 0,
     }
 }

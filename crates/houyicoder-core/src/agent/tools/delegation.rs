@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use houyicoder_api::spawn::SpawnFailure;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_protocol::extension::ToolError;
@@ -179,26 +180,25 @@ fn resolve_err_msg(e: AgentError) -> String {
 }
 
 /// Map a spawn rejection to a message. A budget or capability denial is
-/// policy; recursion or fence failure is a wiring/depth issue; unknown agent
-/// is a rare registry race the model can retry.
-fn spawn_failure_msg(f: houyicoder_api::spawn::SpawnFailure) -> String {
+/// policy; recursion or fence failure is a wiring/depth issue; a boundary the
+/// store refused is an unwritable session directory; unknown agent is a rare
+/// registry race the model can retry.
+fn spawn_failure_msg(f: SpawnFailure) -> String {
     match f {
-        houyicoder_api::spawn::SpawnFailure::BudgetExceeded => {
-            "agent: spawn rejected: token budget exceeded".into()
-        }
-        houyicoder_api::spawn::SpawnFailure::CapabilityDenied => {
+        SpawnFailure::BudgetExceeded => "agent: spawn rejected: token budget exceeded".into(),
+        SpawnFailure::CapabilityDenied => {
             "agent: spawn rejected: capability denied (or background spawn unsupported)".into()
         }
-        houyicoder_api::spawn::SpawnFailure::Recursive => {
-            "agent: spawn rejected: recursion depth cap reached".into()
+        SpawnFailure::Recursive => "agent: spawn rejected: recursion depth cap reached".into(),
+        SpawnFailure::FenceFail => "agent: spawn rejected: worktree fence failed".into(),
+        // The boundary that can fail holds three records: the child's own, the
+        // parent's spawn, and the parent's return. Naming one of them would
+        // name a file rather than the cause, and all three have the same fix.
+        SpawnFailure::BoundaryWriteFailed => {
+            "agent: spawn rejected: the delegation could not be recorded".into()
         }
-        houyicoder_api::spawn::SpawnFailure::FenceFail => {
-            "agent: spawn rejected: worktree fence failed".into()
-        }
-        houyicoder_api::spawn::SpawnFailure::UnknownAgent => {
-            "agent: spawn rejected: type no longer registered".into()
-        }
-        houyicoder_api::spawn::SpawnFailure::ConcurrencySaturated => {
+        SpawnFailure::UnknownAgent => "agent: spawn rejected: type no longer registered".into(),
+        SpawnFailure::ConcurrencySaturated => {
             "agent: spawn rejected: concurrent-spawn cap saturated, retry next turn".into()
         }
     }
@@ -510,7 +510,7 @@ mod tests {
                 '_,
                 Result<houyicoder_api::spawn::SpawnOutcome, houyicoder_api::spawn::SpawnFailure>,
             > {
-                Box::pin(async { Err(houyicoder_api::spawn::SpawnFailure::Recursive) })
+                Box::pin(async { Err(SpawnFailure::Recursive) })
             }
         }
         let handle: Arc<dyn houyicoder_api::spawn::SpawnHandle> = Arc::new(NoSpawn);
@@ -525,5 +525,21 @@ mod tests {
         assert_eq!(ctx.agent_identity.as_ref().unwrap().depth, 0);
         assert!(ctx.spawn_handle.is_some());
         let _sid = SessionId::new();
+    }
+
+    /// A boundary the store could not write reaches the model as that, not as
+    /// a worktree failure: the two have different fixes, and a false cause
+    /// sends the model to retry with isolation off, which fails the same way.
+    #[test]
+    fn test_boundary_failure_message() {
+        let msg = spawn_failure_msg(SpawnFailure::BoundaryWriteFailed);
+        assert!(
+            msg.contains("delegation could not be recorded"),
+            "the refusal names what could not be recorded: {msg}"
+        );
+        assert!(
+            !msg.contains("worktree"),
+            "a boundary write failure is not a worktree failure: {msg}"
+        );
     }
 }
