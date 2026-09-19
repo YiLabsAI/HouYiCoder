@@ -90,7 +90,8 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Mutex;
 
-    use crate::agent::RunOutcome;
+    use crate::agent::{MemoryRuntime, RunOutcome};
+    use crate::provider::test_support::FakeProvider;
 
     /// A memory provider that records every add so the test can assert the
     /// forked agent wrote through the shared provider.
@@ -339,11 +340,9 @@ mod tests {
     /// install_memory registers the structured save_memory tool.
     #[test]
     fn test_install_memory_registers_tool() {
-        use crate::agent::MemoryRuntime;
         let store: Arc<dyn SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-        let provider: Arc<dyn ModelProvider> =
-            Arc::new(crate::provider::test_support::FakeProvider::text("ok"));
+        let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
         let memory = Arc::new(RecordingMemory {
             written: Mutex::new(Vec::new()),
         });
@@ -363,6 +362,39 @@ mod tests {
         assert!(
             memory.written_entries().is_empty(),
             "no write until the agent emits a save_memory call"
+        );
+    }
+
+    /// The forked extraction runner's save_memory tool exposes no scope
+    /// field: where an extraction write lands is the host's decision.
+    #[test]
+    fn test_extract_tool_hides_scope() {
+        let store: Arc<dyn SessionLog> =
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+        let memory = Arc::new(RecordingMemory {
+            written: Mutex::new(Vec::new()),
+        });
+        let runner = build_forked_extract_runner(
+            store,
+            provider,
+            Arc::clone(&memory) as Arc<dyn MemoryProvider>,
+            Path::new("."),
+            config(),
+            Arc::new(MutationLog::new()),
+        );
+        let tool = runner
+            .tools()
+            .get("save_memory")
+            .expect("extraction registers save_memory");
+        let schema = tool.input_schema();
+        let props = schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("properties object");
+        assert!(
+            !props.contains_key("scope"),
+            "the extraction schema must not offer a scope choice"
         );
     }
 }

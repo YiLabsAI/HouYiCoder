@@ -93,16 +93,16 @@ impl Runner {
     }
 
     /// Install memory writes and mutation tracking for an extraction run.
+    /// The tool is the pinned construction: extractor origin, auto root.
     pub(crate) fn install_extraction_memory(
         mut self,
         provider: Arc<dyn houyicoder_api::memory::MemoryProvider>,
         recorder: Arc<MutationLog>,
     ) -> Self {
-        self.tools.register(Arc::new(
-            MemoryAddTool::new(provider.clone())
-                .with_recorder(recorder)
-                .with_origin(houyicoder_context::MemoryOrigin::Extractor),
-        ));
+        self.tools.register(Arc::new(MemoryAddTool::new_extraction(
+            provider.clone(),
+            recorder,
+        )));
         self.memory.install_provider(provider);
         self
     }

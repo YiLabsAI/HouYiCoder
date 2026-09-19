@@ -1,11 +1,11 @@
-//! The structured memory-write tool the forked extraction sub-agent uses to
+//! The structured memory-write tool the memory-writing seams share to
 //! land new memories. The agent emits a structured call with key, description,
 //! source, and content fields; the tool routes it through the memory
 //! provider add method, which owns the atomic two-step (topic file plus
 //! derived-index pointer) and the in-process write lock. The tool holds no
 //! path logic of its own — the provider owns every path — so there is no
 //! path-escape surface for the agent to probe. This is the structurally-safe
-//! recorderpart to a raw sandboxed Write: the capability is save a memory
+//! alternative to a raw sandboxed Write: the capability is save a memory
 //! entry, not write an arbitrary file under the memory dir.
 //!
 //! Auto-approve by construction: the approval gate stays off and the tool
@@ -14,9 +14,9 @@
 //! autonomously — a per-call approval gate would starve memory (the agent
 //! would queue approvals no one answers) — so the gate is off here and
 //! safety comes from the structured capability plus the what-not-to-save
-//! guidance in the extraction prompt. A user-facing explicit remember path
-//! still routes through the same provider, so this tool is the forked
-//! agent write seam only, not the main loop write seam.
+//! guidance in the extraction prompt. Each seam registers its own
+//! construction: origin is host-stamped per seam, and the extraction one
+//! pins the storage root so its writes cannot leave the auto store.
 //!
 //! The provider is shared with the runner that owns it, so a forked
 //! extraction run in the same process lands writes under the same write lock
@@ -50,6 +50,10 @@ pub struct MemoryAddTool {
     /// construction (the LLM never provides origin) so a dream cannot
     /// self-promote. Unknown for a bare tool (tests).
     origin: MemoryOrigin,
+    /// Storage root pinned by the host. Some on the forked-extraction seam,
+    /// where the model is offered no scope field and every write lands in the
+    /// auto root; None where the model picks the root per call.
+    scope: Option<MemoryScope>,
 }
 
 impl MemoryAddTool {
@@ -60,6 +64,23 @@ impl MemoryAddTool {
             provider,
             recorder: None,
             origin: MemoryOrigin::Unknown,
+            scope: None,
+        }
+    }
+
+    /// The forked-extraction seam in one step: recorder, extractor origin,
+    /// and the auto-root pin. A scope choice offered to the extraction model
+    /// gets taken, and the write then lands outside the isolated auto root —
+    /// the pinned tool exposes no scope field at all.
+    pub(crate) fn new_extraction(
+        provider: Arc<dyn MemoryProvider>,
+        recorder: Arc<MutationLog>,
+    ) -> Self {
+        Self {
+            provider,
+            recorder: Some(recorder),
+            origin: MemoryOrigin::Extractor,
+            scope: Some(MemoryScope::Auto),
         }
     }
 
@@ -95,7 +116,7 @@ impl Tool for MemoryAddTool {
          rule or fact followed by Why and How-to-apply lines."
     }
     fn input_schema(&self) -> Value {
-        json!({
+        let mut schema = json!({
             "type": "object",
             "properties": {
                 "key": {
@@ -114,16 +135,27 @@ impl Tool for MemoryAddTool {
                 "content": {
                     "type": "string",
                     "description": "The memory body. For feedback/project, lead with the rule or fact then add Why and How-to-apply lines."
-                },
-                "scope": {
-                    "type": "string",
-                    "enum": ["auto", "project"],
-                    "description": "Storage scope. auto (default) lands the entry in the auto-extracted scope, recall-on-demand. project lands the entry in the project scope so the entry lives in the checked-in project memory dir — use this when refreshing a project-scope entry the dream promoted, so the refresh does not write a competing auto-scope copy that would shadow the explicit version."
                 }
             },
             "required": ["key", "description", "source", "content"],
             "additionalProperties": false
-        })
+        });
+        if self.scope.is_none() {
+            // Only an unpinned tool offers the choice; the enum lists every
+            // root the parser accepts, so schema and parser cannot disagree.
+            let props = schema["properties"]
+                .as_object_mut()
+                .expect("properties object built above");
+            props.insert(
+                "scope".to_string(),
+                json!({
+                    "type": "string",
+                    "enum": ["user", "auto", "project"],
+                    "description": "Storage root. auto (default) lands the entry in the auto-extracted store, recall-on-demand; user lands it in the cross-project user store; project lands it in the checked-in project memory dir — use project when refreshing an entry the dream promoted, so the refresh does not write a competing auto copy that would shadow it."
+                }),
+            );
+        }
+        schema
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let provider = Arc::clone(&self.provider);
@@ -133,7 +165,9 @@ impl Tool for MemoryAddTool {
             let description = parse_string(&input, "description")?;
             let source = parse_source(&input)?;
             let content = parse_string(&input, "content")?;
-            let scope = parse_scope(&input);
+            // A host-pinned tool ignores any scope in the input: the pin is
+            // the answer, whatever the caller sent.
+            let scope = self.scope.unwrap_or_else(|| parse_scope(&input));
             // Stamp the entry with the current time so a backend that does
             // not restat on recall still sees a fresh mtime; backends that
             // restat (the markdown store) overwrite this with the file stat,
@@ -199,8 +233,8 @@ fn parse_string(input: &Value, field: &str) -> Result<String, ToolError> {
         })
 }
 
-/// Parse the source enum from the wire label. Rejects unknown labels with the
-/// accepted set so the model can self-correct.
+/// Parse the source enum from the label the model sent. Rejects unknown
+/// labels with the accepted set so the model can self-correct.
 fn parse_source(input: &Value) -> Result<MemorySource, ToolError> {
     let label = input
         .get("source")
@@ -219,10 +253,10 @@ fn parse_source(input: &Value) -> Result<MemorySource, ToolError> {
 }
 
 /// Parse the optional scope field. Defaults to Auto (the documented default
-/// scope — writes land in the auto-extracted root). Accepts project so the
-/// dream or a user can refresh a project-scope entry in place without
-/// shadowing it with a competing auto copy. An unknown value is rejected so
-/// the model can self-correct rather than silently falling back to auto.
+/// scope — writes land in the auto-extracted root). Accepts user and project
+/// so the main agent or the dream can pick a root per call. An unknown value
+/// falls back to auto rather than rejecting: the field is advisory and the
+/// call's intent was to save, so a typo must not starve the write.
 fn parse_scope(input: &Value) -> MemoryScope {
     let Some(label) = input.get("scope").and_then(|v| v.as_str()) else {
         return MemoryScope::Auto;
@@ -504,6 +538,85 @@ mod tests {
             ],
             "exactly the five structured fields"
         );
+        // The enum lists every root the parser accepts, so a label the
+        // schema hides cannot be a label the parser would have taken.
+        let scope_enum = props["scope"]["enum"].as_array().expect("scope enum");
+        assert_eq!(
+            scope_enum,
+            &vec![json!("user"), json!("auto"), json!("project")],
+            "schema enum and parser agree on the roots"
+        );
+    }
+
+    /// The pinned construction hides the scope field: four properties, none
+    /// named scope, so the extraction model is never offered a root choice.
+    #[test]
+    fn test_extraction_schema_hides_scope() {
+        let p = provider();
+        let tool = MemoryAddTool::new_extraction(
+            Arc::clone(&p) as Arc<dyn MemoryProvider>,
+            Arc::new(MutationLog::new()),
+        );
+        let schema = tool.input_schema();
+        let props = schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("properties object");
+        assert!(
+            !props.contains_key("scope"),
+            "a pinned tool exposes no scope field"
+        );
+        let mut keys: Vec<&String> = props.keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                &"content".to_string(),
+                &"description".to_string(),
+                &"key".to_string(),
+                &"source".to_string(),
+            ],
+            "the four structured fields remain"
+        );
+    }
+
+    /// The pin answers whatever the input claims: a scope label in the call
+    /// is ignored and the write still lands in the auto root, stamped with
+    /// the extractor origin and recorded for the pass notice.
+    #[tokio::test]
+    async fn test_extraction_pin_ignores_input() {
+        let p = provider();
+        let recorder = Arc::new(MutationLog::new());
+        let tool = MemoryAddTool::new_extraction(
+            Arc::clone(&p) as Arc<dyn MemoryProvider>,
+            Arc::clone(&recorder),
+        );
+        let out = run(
+            &tool,
+            json!({
+                "key": "k",
+                "description": "d",
+                "source": "feedback",
+                "content": "c",
+                "scope": "project"
+            }),
+        )
+        .await
+        .expect("pinned save succeeds");
+        assert_eq!(out, json!({"saved": "k"}));
+        let scopes = p.scopes.lock().expect("scopes").clone();
+        assert_eq!(
+            scopes,
+            vec![MemoryScope::Auto],
+            "the pin overrides the input label"
+        );
+        let writes = p.writes.lock().expect("writes").clone();
+        assert_eq!(
+            writes[0].origin,
+            MemoryOrigin::Extractor,
+            "the seam stamps the writer"
+        );
+        assert_eq!(recorder.take().len(), 1, "the save notifies once");
     }
 
     /// The scope field defaults to auto when omitted, and a project value
