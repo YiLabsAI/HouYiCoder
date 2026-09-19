@@ -222,12 +222,12 @@ pub(crate) fn render_permission_view(
 }
 
 /// /status: identity block first (version / session name / session id / cwd
-/// from the sidecar), then the runtime block (model / mode / sandbox /
+/// from the descriptor), then the runtime block (model / mode / sandbox /
 /// breaker) the host's own gate completes. The Session section matches the
 /// cost-tracker layout (duration / usage / tasks); fields not tracked yet
 /// (USD cost, API duration, code-change lines, per-model split) are deferred
-/// to the tabbed-panel track, not faked. When the sidecar is absent (the
-/// stub and test path, before the wire returns a sidecar), the identity
+/// to the tabbed-panel track, not faked. When the descriptor is absent (the
+/// stub and test path, before the wire returns a descriptor), the identity
 /// lines drop and only the runtime block renders so the command never shows
 /// blank fields.
 pub(crate) fn field(label: &str, value: &str) -> String {
@@ -268,7 +268,12 @@ pub(crate) fn render_status(
         .unwrap_or("(unnamed)");
     s.push_str(&field("Session name", name));
     s.push_str(&field("Session ID", &session.to_string()));
-    if let Some(descriptor) = snap.descriptor.as_ref() {
+    // A child's descriptor carries no cwd (nothing knows it where the child
+    // is written), so an empty one drops the line instead of rendering it
+    // blank.
+    if let Some(descriptor) = snap.descriptor.as_ref()
+        && !descriptor.cwd.is_empty()
+    {
         s.push_str(&field("cwd", &descriptor.cwd));
     }
     s.push_str(&field(
@@ -448,22 +453,47 @@ mod status_tests {
     }
 
     #[test]
-    fn test_status_without_sidecar_unnamed() {
+    fn test_status_without_descriptor_unnamed() {
         let s = render_status(
             &snap("glm-5.1"),
             &houyicoder_protocol::frontend::SessionId::new("sess-123"),
             "mac-seatbelt",
             &[],
         );
-        // No sidecar: Session name still renders (an unnamed session shows a
+        // No descriptor: Session name still renders (an unnamed session shows a
         // placeholder, never blank), falling to "(unnamed)". Version is the
         // running build (top-level on the snapshot, set by the server) so it
-        // always renders; cwd and provenance come from the sidecar and drop.
+        // always renders; cwd and provenance come from the descriptor and drop.
         assert!(s.contains("(unnamed)") && s.contains("Session name:"));
         assert!(s.contains("Version:"));
         assert!(!s.contains("cwd:"));
         assert!(!s.contains("provenance:"));
         assert!(s.contains("sess-123") && s.contains("Session ID:"));
+    }
+
+    /// A child's descriptor carries no cwd; the status drops the line rather
+    /// than rendering it blank, and still renders the provenance -- the fact
+    /// the descriptor does hold.
+    #[test]
+    fn test_child_status_drops_cwd() {
+        let mut s = snap_with_descriptor("glm-5.1");
+        s.descriptor = s.descriptor.map(|mut m| {
+            m.cwd = String::new();
+            m.provenance = SessionProvenance::SpawnedBy {
+                parent_session_id: "parent-1".into(),
+                subagent_type: "explore".into(),
+                task_id: "task-7".into(),
+            };
+            m
+        });
+        let out = render_status(
+            &s,
+            &houyicoder_protocol::frontend::SessionId::new("sess-123"),
+            "mac-seatbelt",
+            &[],
+        );
+        assert!(!out.contains("cwd:"), "an empty cwd drops the line: {out}");
+        assert!(out.contains("provenance:"), "provenance renders: {out}");
     }
 
     #[test]

@@ -37,7 +37,7 @@ impl SessionLister for SessionListerBridge {
             .into_iter()
             .filter(|entry| entry.sid != current)
             .filter_map(|entry| {
-                // A user session always has its sidecar, and the entry carries
+                // A user session always has its descriptor, and the entry carries
                 // both it and the directory it was scanned from, so a row costs
                 // no second read.
                 let descriptor = entry.descriptor?;
@@ -71,7 +71,7 @@ impl SessionLister for SessionListerBridge {
         // dropped every non-user session; only the current session is removed
         // above, and a removal preserves order -- so no re-sort is needed.
         // Dedup by the cheap title: when multiple sessions share the same
-        // sidecar name (the common "re-running + naming alike" case), keep
+        // descriptor name (the common "re-running + naming alike" case), keep
         // only the most recently active one. The sort put the newest first,
         // so the first occurrence of each title wins. Placeholder titles are
         // unique (short sid suffix), so unnamed sessions never dedup here --
@@ -86,10 +86,10 @@ impl SessionLister for SessionListerBridge {
         let Some(sid) = SessionId::from_display_string(&row.sid_str) else {
             return;
         };
-        // Re-read the sidecar to decide the title unambiguously: a user-set
+        // Re-read the descriptor to decide the title unambiguously: a user-set
         // name wins (even if it happens to start with "(session)", which the
         // old starts_with heuristic would have mistaken for a placeholder).
-        // Only when there is no sidecar name do we pay the log-head read +
+        // Only when there is no descriptor name do we pay the log-head read +
         // serde parse for the first-prompt slug. last_active is already the
         // log mtime the listing carried, so no re-stat here.
         let has_name = self
@@ -193,9 +193,9 @@ mod tests {
         }
     }
 
-    /// Write a sidecar for a session at the root (real disk, one truth
+    /// Write a descriptor for a session at the root (real disk, one truth
     /// source with the bridge's sessions_root).
-    fn write_sidecar(root: &std::path::Path, sid: SessionId, m: &SessionDescriptor) {
+    fn write_descriptor(root: &std::path::Path, sid: SessionId, m: &SessionDescriptor) {
         let store = FileDescriptorStore::new(root.to_path_buf());
         store.write_descriptor(sid, m).unwrap();
     }
@@ -204,7 +204,7 @@ mod tests {
     /// deterministic. The listing resolves mtime at whole-second
     /// granularity, so two sessions written in the same second tie and the
     /// sort falls back to readdir order (non-deterministic); ageing each to
-    /// a distinct second pins the order the tests assert on. The sidecar's
+    /// a distinct second pins the order the tests assert on. The descriptor's
     /// created_at field does NOT participate in the sort -- only this mtime
     /// does -- so age() is the single ordering signal in these tests.
     ///
@@ -244,13 +244,13 @@ mod tests {
         let cur = SessionId::new();
         let older = SessionId::new();
         let newer = SessionId::new();
-        write_sidecar(&root, older, &descriptor(None, "/repo/a", 1));
-        write_sidecar(
+        write_descriptor(&root, older, &descriptor(None, "/repo/a", 1));
+        write_descriptor(
             &root,
             newer,
             &descriptor(Some("named session"), "/repo/b", 1),
         );
-        write_sidecar(&root, cur, &descriptor(None, "/repo/c", 1));
+        write_descriptor(&root, cur, &descriptor(None, "/repo/c", 1));
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         append_log(&store, older, "hello world prompt").await;
         append_log(&store, newer, "named session prompt").await;
@@ -280,7 +280,7 @@ mod tests {
         );
         assert_eq!(
             rows[1].title, "named session",
-            "sidecar name is the cheap title (no log read)"
+            "descriptor name is the cheap title (no log read)"
         );
         assert_eq!(rows[1].cwd_basename, "b");
         bridge.resolve_detail(&mut rows[0]);
@@ -291,7 +291,7 @@ mod tests {
         bridge.resolve_detail(&mut rows[1]);
         assert_eq!(
             rows[1].title, "named session",
-            "resolve_detail leaves a sidecar name untouched"
+            "resolve_detail leaves a descriptor name untouched"
         );
         let _r = std::fs::remove_dir_all(&root);
     }
@@ -303,7 +303,7 @@ mod tests {
     async fn test_long_prompt_slug_ellipsis() {
         let root = temp_root();
         let sid = SessionId::new();
-        write_sidecar(&root, sid, &descriptor(None, "/repo", 1));
+        write_descriptor(&root, sid, &descriptor(None, "/repo", 1));
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         append_log(
             &store,
@@ -338,7 +338,7 @@ mod tests {
     async fn test_bridge_placeholder_no_prompt() {
         let root = temp_root();
         let sid = SessionId::new();
-        write_sidecar(&root, sid, &descriptor(None, "/repo", 1));
+        write_descriptor(&root, sid, &descriptor(None, "/repo", 1));
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         // Append an empty UserInput so the session has a log (resumable +
         // listed) but slugifies to nothing -- the title stays the sid
@@ -373,9 +373,9 @@ mod tests {
         let a = SessionId::new();
         let b = SessionId::new();
         let c = SessionId::new();
-        write_sidecar(&root, a, &descriptor(Some("shared"), "/repo", 1));
-        write_sidecar(&root, b, &descriptor(Some("shared"), "/repo", 1));
-        write_sidecar(&root, c, &descriptor(Some("unique"), "/repo", 1));
+        write_descriptor(&root, a, &descriptor(Some("shared"), "/repo", 1));
+        write_descriptor(&root, b, &descriptor(Some("shared"), "/repo", 1));
+        write_descriptor(&root, c, &descriptor(Some("unique"), "/repo", 1));
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         append_log(&store, a, "a prompt").await;
         append_log(&store, b, "b prompt").await;
@@ -408,7 +408,7 @@ mod tests {
     /// A directory named in the legacy id spelling is reachable: the sid prints
     /// as a UUID, so a reader that rebuilds the directory from the id finds
     /// nothing and the row disappears. The listing carries the scanned
-    /// directory and the sidecar, so the row renders either way.
+    /// directory and the descriptor, so the row renders either way.
     #[tokio::test]
     async fn test_bridge_reads_legacy_name() {
         const LEGACY: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";

@@ -100,8 +100,8 @@ async fn test_spawn_creates_boundary() {
 
 /// The child's own log opens with the delegation it came from: the parent the
 /// boundary names. Written at the boundary rather than after the run, so a
-/// child whose sidecar never landed still says whose it is, and a reader can
-/// name its parent without the sidecar.
+/// child whose descriptor never landed still says whose it is, and a reader can
+/// name its parent without the descriptor.
 #[tokio::test]
 async fn test_delegation_opens_child_log() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));

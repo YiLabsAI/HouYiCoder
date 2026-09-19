@@ -2,7 +2,7 @@
 //! slash-palette shape (open + sel + query + filtered + prev/next +
 //! push/pop) so the picker renders in the same inline cell the palette
 //! uses, but over a dynamic session list. The list itself is loaded by the
-//! CLI bridge (SessionLister), which reads the sidecar store + each
+//! CLI bridge (SessionLister), which reads the descriptor store + each
 //! session log head; the TUI stays a presentation layer and never names
 //! the storage traits directly (the dep-graph layering).
 
@@ -39,19 +39,19 @@ pub struct SessionPickerState {
     /// Titles already shown (newest-first resolution order). When
     /// resolve_detail fills a row's real title and it matches a title in
     /// this set, the row is an older duplicate -> hidden. Seeded at open
-    /// from the cheap titles (sidecar names + unique placeholders) so a
+    /// from the cheap titles (descriptor names + unique placeholders) so a
     /// named session also suppresses same-slug unnamed ones.
     pub seen_titles: std::collections::HashSet<String>,
 }
 
 /// The storage-facing trait the CLI bridge implements: list the resumable
 /// sessions (with a derived title each) excluding the current one. The TUI
-/// names this trait, the CLI provides it over the sidecar store + the
+/// names this trait, the CLI provides it over the descriptor store + the
 /// SessionLog, so the TUI never imports the storage traits (dep-graph
 /// layering). Returns rows newest-updated first.
 ///
 /// Two-phase progressive loading: list_sessions walks the store once and
-/// reads a sidecar only where a row could take a visible slot, so the picker
+/// reads a descriptor only where a row could take a visible slot, so the picker
 /// opens after that one walk and never per frame; rows arrive sorted by real
 /// last activity. resolve_detail fills in the expensive field (title from a
 /// log-head read + serde parse) lazily for visible rows, a few per frame.
@@ -129,7 +129,7 @@ impl SessionPickerState {
         self.resolved.clear();
         self.seen_titles.clear();
         // Seed the dedup set from the cheap titles already on the rows
-        // (sidecar names + unique placeholders). list_sessions already
+        // (descriptor names + unique placeholders). list_sessions already
         // deduped by these, so each is unique here; seeding lets the lazy
         // slug-dedup suppress unnamed rows whose resolved slug collides
         // with a named session too.

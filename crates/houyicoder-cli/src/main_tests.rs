@@ -61,7 +61,7 @@ fn test_parse_model_with_project() {
 
 #[test]
 fn test_parse_model_resume_rejected() {
-    // A resumed session restores its own model (sidecar > --model in the
+    // A resumed session restores its own model (descriptor > --model in the
     // resolution chain), so --model + --resume would silently mislead.
     let err = parse_args(vec![
         "--resume".into(),

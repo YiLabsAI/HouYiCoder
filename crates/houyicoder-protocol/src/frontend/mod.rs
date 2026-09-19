@@ -576,7 +576,7 @@ pub enum FrontendRequest {
         speed: Option<crate::frontend::model::SpeedMode>,
     },
     /// Rename the current session: persist the display name to the session
-    /// sidecar (name + name_source=User). An empty name clears back to Auto
+    /// descriptor (name + name_source=User). An empty name clears back to Auto
     /// (name=None; the display derives the first-prompt slug at render). The
     /// server replies with the applied StatusSnapshot so the host re-renders
     /// /status + the picker reflects the new name on the next list.

@@ -213,7 +213,7 @@ mod tests {
     /// lands in that directory: the log path resolves through the store's
     /// spelling rule, so a writer joins the log a reader would read instead of
     /// opening a second directory for one session. Joining the id string
-    /// unexamined writes a log no scan pairs with its sidecar.
+    /// unexamined writes a log no scan pairs with its descriptor.
     #[test]
     fn test_append_lands_legacy_dir() {
         let root = temp_root();

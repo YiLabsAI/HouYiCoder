@@ -521,7 +521,7 @@ fn build_bundle(
         houyicoder_service::composition::build_runner(production_runner(project, provider));
     // --model overrides the settings-seeded active model for a fresh session
     // (resolution chain: --model flag > settings.json > DEFAULT). A resumed
-    // session restores its own model from the sidecar (higher priority), so
+    // session restores its own model from the descriptor (higher priority), so
     // --model is fresh-only (parse_args rejects --model + --resume).
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
@@ -599,7 +599,7 @@ pub(crate) fn assemble_bundle(
     // picker reads other sessions' log heads to derive their titles.
     let session_log = runner.store();
     let bridge_session_id = session;
-    // The sidecar reader for the session picker (lists sessions + reads each
+    // The descriptor reader for the session picker (lists sessions + reads each
     // name/cwd/model). Built at the same sid-keyed sessions root the file
     // backend uses.
     let descriptor_store: std::sync::Arc<dyn houyicoder_context::SessionDescriptorStore> =
@@ -735,7 +735,7 @@ fn start_local_server(
     if let Ok(cwd) = std::env::current_dir() {
         server = server.with_project_path(cwd);
     }
-    // Attach the sidecar so /status renders the identity fields (version /
+    // Attach the descriptor so /status renders the identity fields (version /
     // name / cwd / provenance). None on paths without a store (tests).
     if let Some(store) = descriptor_store {
         server = server.with_descriptor_store(store);

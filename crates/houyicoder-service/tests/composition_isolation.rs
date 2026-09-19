@@ -22,7 +22,7 @@ fn test_default_build_off_disk() {
     let bundle = houyicoder_service::composition::build_runner(
         houyicoder_service::composition::BuildRunnerOptions::default(),
     );
-    // The sidecar write happens synchronously inside build_runner; dropping
+    // The descriptor write happens synchronously inside build_runner; dropping
     // the bundle flushes nothing further.
     let sid = bundle.session.to_string();
     drop(bundle);
@@ -35,7 +35,7 @@ fn test_default_build_off_disk() {
 
 /// The mirror direction: the disk opt-in must actually persist. Builds a
 /// runner with the disk preset at an owned temp root, appends one durable
-/// event, and asserts both the build-time sidecar and the event log are on
+/// event, and asserts both the build-time descriptor and the event log are on
 /// disk. Wires the wrong store at the disk preset (an in-memory one) and
 /// this turns red, so the production entries' persistence is guarded by
 /// behavior, not by reading the call sites.
@@ -53,7 +53,7 @@ async fn test_disk_options_write_durable() {
     );
     let sid_dir = root.join(bundle.session.to_string());
     // Lazy materialization: a build that has not run a turn leaves no dir,
-    // no sidecar. The 45k empty-session pollution was the sidecar written
+    // no descriptor. The 45k empty-session pollution was the descriptor written
     // eagerly at build time; deferring to the first durable append removes
     // the orphan at the source.
     assert!(
@@ -74,11 +74,11 @@ async fn test_disk_options_write_durable() {
         })
         .await
         .expect("append");
-    // The first durable append materializes the sidecar (the deferred build
+    // The first durable append materializes the descriptor (the deferred build
     // descriptor) alongside the event log the backend writes.
     assert!(
         sid_dir.join("session.json").is_file(),
-        "first durable append must materialize the sidecar under {}",
+        "first durable append must materialize the descriptor under {}",
         root.display()
     );
     let body = std::fs::read_to_string(sid_dir.join("log.jsonl")).unwrap_or_default();

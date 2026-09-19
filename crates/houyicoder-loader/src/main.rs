@@ -5,7 +5,7 @@
 //! Reads a transcript jsonl (typed records chained by parentUuid)
 //! and writes a session directory: log.jsonl with a fresh SHA-256
 //! prev_hash chain that the runtime can resume, plus a session.json
-//! sidecar carrying the model + cwd. This lets the runtime resume
+//! descriptor carrying the model + cwd. This lets the runtime resume
 //! sessions from existing transcripts — an interop affordance
 //! (transcripts may not resume across version changes; the readable
 //! transcript is taken forward here).
@@ -88,7 +88,9 @@ fn run(cfg: &Cfg) -> Result<(), Box<dyn std::error::Error>> {
     }
     writer.flush()?;
 
-    write_sidecar(cfg, sid, model, cwd, created_at_ms)?;
+    // The source records milliseconds and the descriptor stores seconds, so
+    // the conversion happens once, here.
+    write_descriptor(cfg, sid, model, cwd, created_at_ms / 1000)?;
     Ok(())
 }
 
@@ -138,15 +140,15 @@ fn write_event(
     Ok(Some(PrevHash(h)))
 }
 
-/// Write the session.json sidecar with the captured model + cwd so resume
+/// Write the session.json descriptor with the captured model + cwd so resume
 /// restores them. The cwd falls back to the current dir when the source
 /// carried none; the model falls back to a marker string.
-fn write_sidecar(
+fn write_descriptor(
     cfg: &Cfg,
     sid: SessionId,
     model: Option<String>,
     cwd: Option<String>,
-    created_at: u64,
+    created_at_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_dir = Path::new(&cfg.out_dir).join(sid.to_string());
     let descriptor = SessionDescriptor {
@@ -162,7 +164,7 @@ fn write_sidecar(
             .unwrap_or_else(|| "imported".to_string()),
         provenance: SessionProvenance::Fresh,
         version: "houyi-load".to_string(),
-        created_at,
+        created_at: created_at_secs,
         child_session_ids: Vec::new(),
     };
     let json = serde_json::to_string_pretty(&descriptor)?;
@@ -197,16 +199,16 @@ mod tests {
         };
         run(&cfg).unwrap();
 
-        // Output log + sidecar exist.
+        // Output log + descriptor exist.
         let sid = "11111111-1111-1111-1111-111111111111";
         let log = out.join(sid).join("log.jsonl");
-        let sidecar = out.join(sid).join("session.json");
+        let descriptor = out.join(sid).join("session.json");
         assert!(log.exists(), "log.jsonl written");
-        assert!(sidecar.exists(), "session.json written");
+        assert!(descriptor.exists(), "session.json written");
 
-        // Sidecar carries the model + cwd.
+        // Descriptor carries the model + cwd.
         let sc: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(&descriptor).unwrap()).unwrap();
         assert_eq!(sc["model"], "glm-5.2");
         assert_eq!(sc["cwd"], "/repo");
 

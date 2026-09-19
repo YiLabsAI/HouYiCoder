@@ -61,8 +61,8 @@ pub struct StatusSnapshot {
     #[serde(default)]
     pub setting_sources: String,
     /// The running build version, set by the server (env CARGO_PKG_VERSION).
-    /// Always known, so /status shows Version even before the sidecar is
-    /// materialized. Distinct from the sidecar's creation-version field,
+    /// Always known, so /status shows Version even before the descriptor is
+    /// materialized. Distinct from the descriptor's creation-version field,
     /// which carries the build that created the session.
     #[serde(default)]
     pub version: String,
@@ -106,8 +106,8 @@ fn default_true() -> bool {
 }
 
 /// The session-identity fields the /status command renders, wire form.
-/// Mirrors the sidecar descriptor the composition root writes at session
-/// creation. The TUI renders this directly; it never sees the sidecar
+/// Mirrors the descriptor the composition root writes at session
+/// creation. The TUI renders this directly; it never sees the descriptor
 /// store trait. Provenance carries the session lineage (fresh / forked /
 /// resumed-from-export) so the host surfaces where the session came from.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

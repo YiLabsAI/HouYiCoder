@@ -1,5 +1,5 @@
 //! Terminal tab title via OSC 0/2 (ESC ] 0 ; <title> BEL). The title tracks
-//! the session name: the default app name at launch (no sidecar yet) + when
+//! the session name: the default app name at launch (no descriptor yet) + when
 //! swapped to an unnamed session, the session name once set, and the new name
 //! on rename. It is written only on CHANGE -- the idle poll fires a
 //! StatusResult every second, so an unconditional write would spam stdout
@@ -15,7 +15,7 @@ use std::io::Write;
 pub(crate) const DEFAULT_TITLE: &str = "houyicoder";
 
 /// The longest title sent. Names beyond this are truncated so a pathological
-/// sidecar value cannot dump megabytes of OSC into the stream.
+/// descriptor value cannot dump megabytes of OSC into the stream.
 const MAX_TITLE_LEN: usize = 128;
 
 /// Compute the title for a status snapshot. A missing or unnamed descriptor
@@ -69,7 +69,7 @@ pub(crate) fn set_title(title: &str) {
 }
 
 /// Strip C0 + C1 control characters (ESC, BEL, LF, CR, TAB, ...) + truncate.
-/// The title is not just keyboard-sourced: it comes from the disk sidecar,
+/// The title is not just keyboard-sourced: it comes from the disk descriptor,
 /// which may hold a value written by an older version, hand-edited, or
 /// produced by another tool. A name containing ESC or BEL would truncate the
 /// OSC early + feed the rest to the terminal as commands (escape injection).
@@ -125,7 +125,7 @@ mod tests {
     }
 
     /// An empty/whitespace name falls back to the default title (not blank,
-    /// not None -- the sidecar exists, the name just is not set).
+    /// not None -- the descriptor exists, the name just is not set).
     #[test]
     fn test_empty_name_uses_default() {
         use houyicoder_protocol::frontend::status::SessionDescriptorSummary;

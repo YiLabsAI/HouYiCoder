@@ -27,5 +27,6 @@ pub mod protocol_adapter;
 pub mod sandbox_policy;
 pub mod server;
 pub mod session_prune;
+pub mod session_repair;
 #[cfg(unix)]
 pub mod uds;

@@ -40,11 +40,11 @@ fn test_turn_writes_durable_log() {
 
     // The sessions root holds one sid dir; that dir holds log.jsonl (the
     // durable events from the turn just driven) plus the session.json
-    // sidecar the lazy-materialize hook writes on the first durable append.
+    // descriptor the lazy-materialize hook writes on the first durable append.
     // Poll for the whole shape rather than checking once: the reply renders
     // without waiting for the durable append to complete, so at the moment
     // the reply text is on screen the sid dir may not exist yet and the
-    // sidecar's write-tmp-then-rename publish may still be in flight. A
+    // descriptor's write-tmp-then-rename publish may still be in flight. A
     // one-shot check can land inside that window and see a stray tmp with no
     // session.json. Polling is the correct wait, not a sleep.
     let root = s.sessions_dir();
@@ -267,7 +267,7 @@ fn test_resume_export_persists_history() {
 /// error-to-stderr path. (The success path --resume <existing-sid> reuses
 /// the same assemble + wire_bundle path the file branch verifies, so it is
 /// covered by resume_from_export_persists_history; the novel sid-branch code
-/// is the existence check + sidecar model restore, exercised here.)
+/// is the existence check + descriptor model restore, exercised here.)
 #[test]
 #[ignore]
 fn test_resume_missing_reports_error() {
@@ -293,7 +293,7 @@ fn test_resume_missing_reports_error() {
 /// Write a session on disk (log.jsonl + session.json) so a subsequent
 /// --resume <sid> or the /resume picker can re-open it. The log carries one
 /// UserInput event (a genesis line with prev_hash null, so the chain
-/// verifies); the sidecar carries the model the resume path should restore.
+/// verifies); the descriptor carries the model the resume path should restore.
 fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prompt: &str) {
     let sid = SessionId::from_display_string(sid_str).expect("sid parses");
     let event = SessionLogEntry {
@@ -322,7 +322,7 @@ fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prom
         dir.join("session.json"),
         serde_json::to_string_pretty(&descriptor).expect("serialize descriptor"),
     )
-    .expect("write sidecar");
+    .expect("write descriptor");
 }
 
 /// /resume picker in-process swap e2e: seed a session A on disk, launch the
@@ -615,13 +615,13 @@ fn test_resume_export_live_session() {
 
 /// User journey: /status in a real binary renders the session identity
 /// block (Version / Session name / Session ID / cwd / Model / provenance)
-/// from the sidecar the server attaches to the wire snapshot. The unit
+/// from the descriptor the server attaches to the wire snapshot. The unit
 /// tier asserts the render function with a synthetic snapshot; this drives
-/// the full wire path end-to-end (server reads the sidecar -> projects to
+/// the full wire path end-to-end (server reads the descriptor -> projects to
 /// the wire summary -> TUI renders) so a wiring break between the server
-/// Before the first turn, no durable append has fired and no sidecar is on
+/// Before the first turn, no durable append has fired and no descriptor is on
 /// disk. Version is the running build (top-level on the snapshot, set by the
-/// server) so it renders; cwd and provenance come from the sidecar and drop
+/// server) so it renders; cwd and provenance come from the descriptor and drop
 /// honestly. This assertion encodes the post-deferral contract: a fresh
 /// session shows Version, not a fabricated cwd or provenance.
 #[test]
@@ -637,11 +637,11 @@ fn test_status_version_before_turn() {
     let out = s.output_plain();
     assert!(
         !out.contains("cwd:"),
-        "cwd must drop before the sidecar lands:\n{out}"
+        "cwd must drop before the descriptor lands:\n{out}"
     );
     assert!(
         !out.contains("provenance:"),
-        "provenance must drop before the sidecar lands:\n{out}"
+        "provenance must drop before the descriptor lands:\n{out}"
     );
 }
 

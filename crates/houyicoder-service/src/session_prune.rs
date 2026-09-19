@@ -4,7 +4,7 @@
 //! counts the user's own sessions (not bytes) and last-active is the log's
 //! mtime, else the directory's. A shell - a directory a process created and
 //! appended nothing to - is idle since that same mtime and pruned sooner via
-//! empty_ttl_secs; a log whose sidecar never landed is not a shell, so it is
+//! empty_ttl_secs; a log whose descriptor never landed is not a shell, so it is
 //! bounded by the full ttl.
 //!
 //! Two phases, not prune(dry_run): plan_prune is read-only (it decides what

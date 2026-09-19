@@ -210,7 +210,7 @@ pub enum EffectiveFrom {
     NextRequest,
 }
 
-/// Whether the pick reached disk. A settings or sidecar write failure must
+/// Whether the pick reached disk. A settings or descriptor write failure must
 /// not masquerade as a complete success: the session did switch, but a
 /// restart would lose it. Each destination reports its own failure, so the
 /// guest can name the loss rather than parse a merged string. The field is

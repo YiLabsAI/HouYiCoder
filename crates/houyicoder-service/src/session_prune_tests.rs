@@ -7,11 +7,16 @@
 
 use super::*;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use crate::session_repair::repair_child_descriptors;
+
 use houyicoder_context::session_class::recent_user_sessions;
-use houyicoder_context::{NameSource, SessionDescriptor, SessionId, SessionProvenance};
+use houyicoder_context::{
+    EventId, NameSource, SessionDescriptor, SessionEvent, SessionId, SessionLogEntry,
+    SessionProvenance,
+};
 
 fn temp_root() -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -57,7 +62,7 @@ fn session(root: &Path, sid: &str, with_log: bool) -> PathBuf {
     write_session(root, sid, with_log, SessionProvenance::Fresh)
 }
 
-/// A sub-agent session: a real session with a log, whose sidecar records the
+/// A sub-agent session: a real session with a log, whose descriptor records the
 /// parent that started it.
 fn child_session(root: &Path, sid: &str) -> PathBuf {
     write_session(
@@ -72,7 +77,7 @@ fn child_session(root: &Path, sid: &str) -> PathBuf {
     )
 }
 
-fn sidecar_json(provenance: SessionProvenance) -> String {
+fn descriptor_json(provenance: SessionProvenance) -> String {
     let descriptor = SessionDescriptor {
         name: None,
         name_source: NameSource::Auto,
@@ -83,20 +88,20 @@ fn sidecar_json(provenance: SessionProvenance) -> String {
         created_at: 1_700_000_000,
         child_session_ids: Vec::new(),
     };
-    serde_json::to_string(&descriptor).expect("serialize sidecar")
+    serde_json::to_string(&descriptor).expect("serialize descriptor")
 }
 
 fn write_session(root: &Path, sid: &str, with_log: bool, provenance: SessionProvenance) -> PathBuf {
     let d = root.join(sid);
     fs::create_dir_all(&d).expect("mkdir sid");
-    fs::write(d.join("session.json"), sidecar_json(provenance)).expect("sidecar");
+    fs::write(d.join("session.json"), descriptor_json(provenance)).expect("descriptor");
     if with_log {
         fs::write(d.join("log.jsonl"), "[]").expect("log");
     }
     d
 }
 
-/// A session whose sidecar never landed: the log is there, so it holds the
+/// A session whose descriptor never landed: the log is there, so it holds the
 /// user's work, but nothing says whether a parent started it.
 fn log_only_session(root: &Path, sid: &str) -> PathBuf {
     let d = root.join(sid);
@@ -491,7 +496,7 @@ fn test_list_recent_newest_first() {
 
 /// The listing the picker and --continue share: a child never takes a slot,
 /// even when it is the most recently active directory in the store. Each row
-/// also carries the directory it was scanned from and its sidecar, so the
+/// also carries the directory it was scanned from and its descriptor, so the
 /// picker builds a row without a second read and a legacy-named directory is
 /// still reachable -- rebuilding the path from the id would miss it.
 #[test]
@@ -513,7 +518,7 @@ fn test_list_recent_skips_child() {
     assert_eq!(got[0].path, user, "the row carries the scanned directory");
     assert!(
         got[0].descriptor.is_some(),
-        "the row carries the sidecar the class came from"
+        "the row carries the descriptor the class came from"
     );
     let _r = fs::remove_dir_all(&root);
 }
@@ -562,7 +567,7 @@ fn test_child_expires_by_ttl() {
     let _r = fs::remove_dir_all(&root);
 }
 
-/// A directory holding a log and no sidecar is someone's work in progress, so
+/// A directory holding a log and no descriptor is someone's work in progress, so
 /// the cap must not drop it to make room for a count it does not belong to.
 #[test]
 fn test_log_only_skips_cap() {
@@ -591,7 +596,7 @@ fn test_log_only_skips_cap() {
 }
 
 /// The window empty_ttl covers is a directory with nothing in it: a log with
-/// no sidecar yet is aged by the full ttl, so a session being written is not
+/// no descriptor yet is aged by the full ttl, so a session being written is not
 /// reaped on the shorter rule.
 #[test]
 fn test_log_only_ttl_window() {
@@ -629,6 +634,63 @@ fn test_plan_cap_excludes_logless() {
     assert!(
         plan.entries.is_empty(),
         "no-log session does not count toward cap; 2 logged <= cap 2"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
+
+/// A child whose descriptor never landed: the log opens with the delegation its
+/// boundary writes, so the log alone names the parent.
+fn child_log_only(root: &Path, sid: &str) -> PathBuf {
+    let d = root.join(sid);
+    fs::create_dir_all(&d).expect("mkdir sid");
+    let entry = SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::from_display_string(sid).expect("sid parses"),
+        // Milliseconds, the unit the log records.
+        ts: 1_700_000_042_123,
+        prev_hash: None,
+        event: SessionEvent::ChildDelegated {
+            parent_session_id: "parent".to_string(),
+            subagent_type: "explore".to_string(),
+        },
+    };
+    let line = serde_json::to_string(&entry).expect("serialize record");
+    fs::write(d.join("log.jsonl"), format!("{line}\n")).expect("log");
+    d
+}
+
+/// The repair pass does not move the plan. A delegated child is not one of
+/// the user's sessions, so the count cap never sees it; a descriptor that
+/// classed it as one of theirs would push a session out of the cap and the
+/// sweep would remove a session the user still has. The fixture holds the
+/// child inside its TTL and the cap exactly full, where that shows.
+#[test]
+fn test_plan_ignores_repaired_descriptor() {
+    let root = temp_root();
+    let sid = fresh_sid();
+    child_log_only(&root, &sid);
+    for _ in 0..2 {
+        let user = fresh_sid();
+        session(&root, &user, true);
+    }
+    let policy = PrunePolicy {
+        max_count: 2,
+        ..default_policy()
+    };
+    let before = plan_prune(&root, &policy);
+    assert_eq!(before.kept, 2, "the cap is full before the pass runs");
+    let repair = repair_child_descriptors(&root);
+    assert_eq!(
+        repair.written, 1,
+        "the pass writes the descriptor the log implies"
+    );
+    let after = plan_prune(&root, &policy);
+    assert_eq!(after.kept, 2, "the child is not counted against the cap");
+    assert_eq!(before.len(), after.len(), "the same entries are planned");
+    assert_eq!(before.len(), 0, "nothing was over the cap or its ttl");
+    assert!(
+        entry_for(&after, &sid).is_none(),
+        "the child is not planned"
     );
     let _r = fs::remove_dir_all(&root);
 }

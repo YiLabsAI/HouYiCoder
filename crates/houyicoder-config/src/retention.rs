@@ -53,6 +53,16 @@ pub fn load_retention() -> (RetentionConfig, Vec<ConfigWarning>) {
     load_retention_from(&settings_path())
 }
 
+/// The settings file name inside a config home. One source for the name:
+/// the resolved-home path and every home a caller names read the same file.
+pub(crate) const SETTINGS_FILE: &str = "settings.json";
+
+/// Retention under a config home the caller names; load_retention is this
+/// at the resolved home.
+pub fn load_retention_in(home: &std::path::Path) -> (RetentionConfig, Vec<ConfigWarning>) {
+    load_retention_from(&home.join(SETTINGS_FILE))
+}
+
 /// Pure loader against an explicit path; testable without env mutation.
 pub fn load_retention_from(path: &std::path::Path) -> (RetentionConfig, Vec<ConfigWarning>) {
     let text = match std::fs::read_to_string(path) {

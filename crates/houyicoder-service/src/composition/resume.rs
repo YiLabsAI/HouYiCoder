@@ -22,7 +22,7 @@ use std::path::Path;
 pub fn latest_session_sid(sessions_root: &Path) -> Option<SessionId> {
     let cwd = workspace_cwd(None);
     // Take the 200 most recently active of the user's sessions, then walk them
-    // for the cwd match. The window bounds both the walk and the sidecar reads
+    // for the cwd match. The window bounds both the walk and the descriptor reads
     // behind it: the listing stops reading once it holds that many sessions, so
     // a store with thousands of sub-agent directories is not parsed for rows
     // this window would drop.
@@ -65,7 +65,7 @@ struct ResumePayload {
 /// log, so resume forks a new session: a fresh session id is minted, the
 /// export's durable events are seeded into the new session's log + the
 /// trajectory mirror (delta events dropped, the hash chain rebuilt on the
-/// durable subset), and the sidecar records the lineage (provenance =
+/// durable subset), and the descriptor records the lineage (provenance =
 /// ResumedFromExport). The model from the export is restored (the runner
 /// runs with the model the export ran with). Returns the 6-tuple the TUI
 /// wiring expects (runner, session, model, gate, sandbox, notify).
@@ -115,7 +115,7 @@ pub fn build_runner_for_resume_export(
             "no durable events after seeding (all deltas?)".into(),
         ));
     }
-    // Write the sidecar with the resume lineage so /status can show it +
+    // Write the descriptor with the resume lineage so /status can show it +
     // a later resume can carry it forward. Best-effort (see write_initial).
     let descriptor_store: Arc<dyn SessionDescriptorStore> =
         Arc::new(FileDescriptorStore::new(sessions_root.to_path_buf()));
@@ -149,8 +149,8 @@ pub fn build_runner_for_resume_export(
 /// root; this re-opens them (the engine reads the history via backend replay
 /// on the next run, and last_hashes self-recovers via the cold reverse-read
 /// of the last disk line so new appends chain correctly). No seed -- the log
-/// is already there. The model is restored from the session.json sidecar
-/// (fallback to the current config when the sidecar is missing or its model
+/// is already there. The model is restored from the session.json descriptor
+/// (fallback to the current config when the descriptor is missing or its model
 /// is empty). Returns the 6-tuple the TUI wiring expects.
 pub fn build_runner_for_resume_sid(
     sid: SessionId,
@@ -202,8 +202,8 @@ pub fn build_runner_for_resume_sid(
              pre-render (the run still works)"
         );
     }
-    // Restore the model from the sidecar; fall back to the current config so
-    // a session whose sidecar is missing (created before the sidecar landed)
+    // Restore the model from the descriptor; fall back to the current config so
+    // a session whose descriptor is missing (created before the descriptor landed)
     // still resumes -- /status will show the resolved model instead.
     let descriptor_store: Arc<dyn SessionDescriptorStore> =
         Arc::new(FileDescriptorStore::new(sessions_root.to_path_buf()));
@@ -240,7 +240,7 @@ pub fn build_runner_for_resume_sid(
 /// source is untouched), and records ForkedFrom provenance so /status can show
 /// the lineage. The new sid is unique, so no other process holds it; the
 /// source's lock is not acquired. The model is restored from the source's
-/// sidecar (fallback to the current config when missing or empty).
+/// descriptor (fallback to the current config when missing or empty).
 pub fn build_runner_for_fork(
     source_sid: SessionId,
     sessions_root: &Path,

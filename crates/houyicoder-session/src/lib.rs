@@ -67,11 +67,11 @@ pub struct SessionStore {
     append_notify: Option<Arc<Notify>>,
     /// One-shot hook fired the first time a DURABLE event lands for a
     /// session (deltas do not trigger it). The composition root installs it
-    /// so a fresh session's sidecar - which carries the model/cwd/provenance
+    /// so a fresh session's descriptor - which carries the model/cwd/provenance
     /// a resume needs - is written only once the session has real content,
-    /// not at build time. A build that never runs a turn leaves no sidecar,
+    /// not at build time. A build that never runs a turn leaves no descriptor,
     /// no directory, no orphan. Resume/fork paths do not install it: their
-    /// sidecar already exists on disk, so they write it directly.
+    /// descriptor already exists on disk, so they write it directly.
     first_durable: Option<Arc<dyn Fn(SessionId) + Send + Sync>>,
     /// Sessions whose first-durable hook has already fired. Guards the
     /// one-shot contract across appends to the same store.
@@ -134,7 +134,7 @@ impl SessionStore {
     }
 
     /// Install a one-shot hook fired on the first durable append for a
-    /// session. Used to materialize a fresh session's sidecar only once it
+    /// session. Used to materialize a fresh session's descriptor only once it
     /// has real content, so a build that never runs a turn leaves nothing
     /// on disk. The hook receives the session the durable event is for.
     pub fn with_first_durable(mut self, hook: Arc<dyn Fn(SessionId) + Send + Sync>) -> Self {
@@ -185,10 +185,10 @@ impl SessionStore {
         let finalized = event.clone();
         let new_hash = Self::hash_event(&event)?;
         let id = self.backend.append(event).await?;
-        // First durable event for a session materializes its sidecar. Fired
+        // First durable event for a session materializes its descriptor. Fired
         // here, after the backend accepted the event, so the session dir the
-        // sidecar lands in already exists on a disk backend. Best-effort by
-        // contract (the hook swallows write errors): a missing sidecar
+        // descriptor lands in already exists on a disk backend. Best-effort by
+        // contract (the hook swallows write errors): a missing descriptor
         // degrades resume, not the running turn.
         if let Some(hook) = &self.first_durable {
             let mut fired = self.first_durable_fired.lock().expect("first-durable set");

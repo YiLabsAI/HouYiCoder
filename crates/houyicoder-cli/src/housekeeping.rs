@@ -34,6 +34,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use houyicoder_config::{config_home, retention};
 use houyicoder_context::SessionId;
 use houyicoder_service::session_prune::{self, PrunePlan, PrunePolicy, PruneReport, PruneTargets};
+use houyicoder_service::session_repair::repair_child_descriptors;
 // PruneKind is read only by the flock-guarded apply path, which exists on
 // unix alone. Importing it unconditionally is an unused import everywhere
 // else, and unused imports are denied.
@@ -58,11 +59,13 @@ pub fn start_background_housekeeping(
     debug_log: Option<PathBuf>,
     current_session: SessionId,
 ) {
-    let shell_snapshots = config_home().join("shell-snapshots");
+    let home = config_home();
+    let shell_snapshots = home.join("shell-snapshots");
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(DELAY_SECS)).await;
         tokio::task::spawn_blocking(move || {
             run_once(
+                &home,
                 &sessions_root,
                 &shell_snapshots,
                 debug_log.as_deref(),
@@ -74,13 +77,17 @@ pub fn start_background_housekeeping(
     });
 }
 
+/// One sweep over one store. The config home is a parameter, not a lookup:
+/// the lock, the marker, and the retention settings all live under it, and a
+/// caller that names the home names all three.
 fn run_once(
+    home: &Path,
     sessions_root: &Path,
     shell_snapshots: &Path,
     debug_log: Option<&Path>,
     current_session: &SessionId,
 ) {
-    let _lock = match acquire_prune_lock() {
+    let _lock = match acquire_prune_lock(home) {
         Some(l) => l,
         None => {
             tracing::debug!("housekeeping: .prune.lock held by another process, skipping");
@@ -88,10 +95,24 @@ fn run_once(
         }
     };
 
-    let marker_path = config_home().join(".prune-marker");
+    let marker_path = home.join(".prune-marker");
     if marker_throttled(&marker_path) {
         tracing::debug!("housekeeping: marker < 24h, skipping");
         return;
+    }
+
+    // Before the plan: a child whose descriptor never landed is classed right
+    // only by reading its log, and every other reader of the store expects
+    // the descriptor there. It runs inside the sweep's own lock, so two
+    // sweeps over one store are serialized -- unless a store root is
+    // redirected away from the config home that holds that lock.
+    let repaired = repair_child_descriptors(sessions_root);
+    if repaired.written > 0 || repaired.failed > 0 {
+        tracing::info!(
+            "housekeeping: repaired {} child descriptors, {} failed",
+            repaired.written,
+            repaired.failed
+        );
     }
 
     let (policy, targets, threshold_raw) = build_prune_context(
@@ -99,6 +120,7 @@ fn run_once(
         shell_snapshots,
         debug_log,
         Some(*current_session),
+        home,
     );
 
     let plan = session_prune::plan_all(&targets, &policy);
@@ -142,8 +164,8 @@ fn run_once(
 /// Drop releases. Unix-only (flock is a unix primitive); a non-unix build
 /// has no cross-process lock (best-effort, single-process).
 #[cfg(unix)]
-fn acquire_prune_lock() -> Option<Flock<std::fs::File>> {
-    let path = config_home().join(".prune.lock");
+fn acquire_prune_lock(home: &Path) -> Option<Flock<std::fs::File>> {
+    let path = home.join(".prune.lock");
     if let Some(parent) = path.parent() {
         let _r = std::fs::create_dir_all(parent);
     }
@@ -161,7 +183,7 @@ fn acquire_prune_lock() -> Option<Flock<std::fs::File>> {
 }
 
 #[cfg(not(unix))]
-fn acquire_prune_lock() -> Option<()> {
+fn acquire_prune_lock(_home: &Path) -> Option<()> {
     Some(())
 }
 
@@ -315,8 +337,9 @@ pub(crate) fn build_prune_context(
     shell_snapshots: &Path,
     debug_log: Option<&Path>,
     current_session: Option<SessionId>,
+    home: &Path,
 ) -> (PrunePolicy, PruneTargets, u32) {
-    let (cfg, warnings) = retention::load_retention();
+    let (cfg, warnings) = retention::load_retention_in(home);
     for w in &warnings {
         tracing::warn!("retention config: {}: {}", w.field, w.reason);
     }
@@ -344,15 +367,16 @@ pub(crate) fn build_prune_context(
 /// guard (held until the caller drops it, so apply_prune runs under the
 /// lock) or None if held by another process. Dry-run planning does not
 /// need the lock. This is a thin pub(crate) wrapper around the private
-/// acquire_prune_lock so main.rs does not name the Flock type directly.
+/// acquire_prune_lock so the cleanup subcommand does not name the Flock
+/// type directly.
 #[cfg(unix)]
-pub(crate) fn try_prune_lock() -> Option<Flock<std::fs::File>> {
-    acquire_prune_lock()
+pub(crate) fn try_prune_lock(home: &Path) -> Option<Flock<std::fs::File>> {
+    acquire_prune_lock(home)
 }
 
 #[cfg(not(unix))]
 #[allow(dead_code)]
-pub(crate) fn try_prune_lock() -> Option<()> {
+pub(crate) fn try_prune_lock(_home: &Path) -> Option<()> {
     Some(())
 }
 
@@ -422,6 +446,10 @@ pub(crate) fn apply_prune_locked(plan: &PrunePlan) -> (PruneReport, usize) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use houyicoder_context::session_class::{DESCRIPTOR_FILE, LOG_FILE};
+    use houyicoder_context::{
+        EventId, SessionDescriptor, SessionEvent, SessionLogEntry, SessionProvenance,
+    };
     use houyicoder_service::session_prune::{PruneAction, PruneEntry, PruneReason};
     use std::path::PathBuf;
 
@@ -529,5 +557,57 @@ mod tests {
             "the lock must not outlive the delete it guards"
         );
         let _r = std::fs::remove_dir_all(&root);
+    }
+
+    /// The sweep calls the descriptor repair over the store it sweeps: a
+    /// log-only child holds its descriptor when the sweep returns. The pass
+    /// itself is tested where it lives; this covers the call site, which no
+    /// unit test of the pass can see.
+    #[test]
+    fn test_sweep_repairs_child_descriptor() {
+        let home = temp_root();
+        let sessions = temp_root();
+        let sid = SessionId::new();
+        let dir = sessions.join(sid.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let head = SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: 1_700_000_042_123,
+            prev_hash: None,
+            event: SessionEvent::ChildDelegated {
+                parent_session_id: "parent-1".to_string(),
+                subagent_type: "explore".to_string(),
+            },
+        };
+        let line = serde_json::to_string(&head).unwrap();
+        std::fs::write(dir.join(LOG_FILE), format!("{line}\n")).unwrap();
+
+        run_once(
+            &home,
+            &sessions,
+            &home.join("shell-snapshots"),
+            None,
+            &SessionId::new(),
+        );
+
+        let body = std::fs::read(dir.join(DESCRIPTOR_FILE))
+            .expect("the sweep wrote the descriptor the child's log implies");
+        let descriptor: SessionDescriptor = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            descriptor.provenance,
+            SessionProvenance::SpawnedBy {
+                parent_session_id: "parent-1".to_string(),
+                subagent_type: "explore".to_string(),
+                task_id: sid.to_string(),
+            },
+            "the descriptor names the delegation the log opens with"
+        );
+        assert_eq!(
+            descriptor.created_at, 1_700_000_042,
+            "created at the second the delegation was recorded"
+        );
+        let _r = std::fs::remove_dir_all(&home);
+        let _r = std::fs::remove_dir_all(&sessions);
     }
 }

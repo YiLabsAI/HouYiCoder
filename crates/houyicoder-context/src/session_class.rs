@@ -15,12 +15,12 @@ use crate::{SessionDescriptor, SessionEvent, SessionId, SessionLogEntry, Session
 
 /// The event log a session's directory holds.
 pub const LOG_FILE: &str = "log.jsonl";
-/// The sidecar a session's directory holds.
-pub const SIDECAR_FILE: &str = "session.json";
+/// The descriptor a session's directory holds.
+pub const DESCRIPTOR_FILE: &str = "session.json";
 /// How much of a log's head is read to find the delegation a child wrote
-/// there. A delegation record holds two ids and a type name, so this bound
-/// is generous for what it looks for and small enough to read per
-/// sidecar-less directory.
+/// there. A delegation record holds two ids, a type name, and its own
+/// second, so this bound is generous for what it looks for and small enough
+/// to read per descriptor-less directory.
 const HEAD_BYTES: u64 = 4096;
 
 /// The directory a session's files live in, under the store root.
@@ -46,25 +46,30 @@ pub fn session_dir(root: &Path, sid: SessionId) -> PathBuf {
 /// What a directory in the sessions root is, judged from files on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionClass {
-    /// Resumable: a log plus a sidecar recording no parent.
+    /// Resumable: a log plus a descriptor recording no parent.
     User,
-    /// A sub-agent session: its sidecar, or the delegation its own log
+    /// A sub-agent session: its descriptor, or the delegation its own log
     /// opens with, names the parent that started it.
     SubAgent,
-    /// A log with no sidecar and no parent named in it: a leftover from a
+    /// A log with no descriptor and no parent named in it: a leftover from a
     /// test run, or a session whose lineage was never written.
     LogOnly,
-    /// Neither log nor sidecar: the directory a process leaves when it takes
+    /// Neither log nor descriptor: the directory a process leaves when it takes
     /// the lock and appends nothing.
     Shell,
 }
 
 /// The delegation a session's own log opens with: the parent it was
-/// delegated from, and the agent type it ran as.
+/// delegated from, the agent type it ran as, and when the session was
+/// created -- the second that record carries, since the delegation is that
+/// session's first record. The log holds milliseconds and the descriptor
+/// holds seconds, so the record's unit is converted where the record is
+/// read and no reader carries the difference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParentLink {
     pub parent_session_id: String,
     pub subagent_type: String,
+    pub created_at_secs: u64,
 }
 
 /// A classified directory: its id, class, and last-active second.
@@ -79,12 +84,12 @@ pub struct SessionEntry {
     /// reads it through session_dir.
     pub path: PathBuf,
     pub class: SessionClass,
-    /// The sidecar the class was judged from, carried so the caller does not
+    /// The descriptor the class was judged from, carried so the caller does not
     /// read it again. None for a shell: a directory with no log is a shell
-    /// whatever its sidecar says, so that sidecar is never read.
+    /// whatever its descriptor says, so that descriptor is never read.
     pub descriptor: Option<SessionDescriptor>,
-    /// The parent this session's log names, read only where the sidecar left
-    /// the question open. Carried for the same reason as the sidecar: whoever
+    /// The parent this session's log names, read only where the descriptor left
+    /// the question open. Carried for the same reason as the descriptor: whoever
     /// needs this session's lineage reads it here rather than opening the log
     /// again.
     pub parent: Option<ParentLink>,
@@ -98,7 +103,7 @@ impl SessionEntry {
     /// retention cap, and the resume picker all ask, so no two of them can
     /// disagree. A sub-agent session is excluded because it is not the user's
     /// to resume; a shell because it has nothing to resume; a log with no
-    /// sidecar and no parent because nothing says whose it is, and a
+    /// descriptor and no parent because nothing says whose it is, and a
     /// directory the user cannot tell apart from a sub-agent's should not be
     /// counted or listed as one of theirs.
     pub fn is_user_session(&self) -> bool {
@@ -107,12 +112,12 @@ impl SessionEntry {
 }
 
 /// The rule, over the three facts that decide it: whether a log is there,
-/// what the sidecar says, and the parent the log names.
+/// what the descriptor says, and the parent the log names.
 ///
-/// The sidecar decides when it is there. The two lineage sources cannot
-/// disagree: a delegation is written to the child's log and to its sidecar
+/// The descriptor decides when it is there. The two lineage sources cannot
+/// disagree: a delegation is written to the child's log and to its descriptor
 /// at the same boundary, from the same facts, so the log only answers where
-/// the sidecar is missing.
+/// the descriptor is missing.
 pub fn classify(
     has_log: bool,
     provenance: Option<&SessionProvenance>,
@@ -136,20 +141,20 @@ struct Candidate {
 }
 
 impl Candidate {
-    /// The classified entry: reads this directory's sidecar and judges the class.
+    /// The classified entry: reads this directory's descriptor and judges the class.
     fn classified(self) -> SessionEntry {
         let log = self.path.join(LOG_FILE);
         let has_log = log.is_file();
-        // A shell is a shell whatever its sidecar says, so a directory with no
+        // A shell is a shell whatever its descriptor says, so a directory with no
         // log is not parsed. Shells are the class that accumulates fastest, and
         // parsing one per launch would tax every scan.
         let descriptor = if has_log {
-            read_sidecar(&self.path)
+            read_descriptor(&self.path)
         } else {
             None
         };
-        // The log is opened only where the sidecar left the lineage open, so
-        // a store whose sessions all have sidecars pays nothing here.
+        // The log is opened only where the descriptor left the lineage open, so
+        // a store whose sessions all have descriptors pays nothing here.
         let parent = if has_log && descriptor.is_none() {
             read_parent_link(&log)
         } else {
@@ -207,7 +212,7 @@ fn candidates(root: &Path) -> Vec<Candidate> {
 
 /// Classify every session directory under root in one pass.
 ///
-/// An unreadable sidecar leaves the lineage unknown rather than failing the
+/// An unreadable descriptor leaves the lineage unknown rather than failing the
 /// scan, and a lock is never consulted: it says someone is writing, not that a
 /// session exists.
 pub fn scan_sessions(root: &Path) -> Vec<SessionEntry> {
@@ -220,8 +225,8 @@ pub fn scan_sessions(root: &Path) -> Vec<SessionEntry> {
 /// The user's own sessions, newest-active first, at most limit of them.
 ///
 /// The class comes from the rule the full scan applies; what is bounded is the
-/// sidecar reads. Directories are ranked on the cheap fact first and their
-/// sidecars are read in that order, so a store holding thousands of sub-agent
+/// descriptor reads. Directories are ranked on the cheap fact first and their
+/// descriptors are read in that order, so a store holding thousands of sub-agent
 /// directories pays no parse for a row the limit would drop. The limit decides
 /// the ranking, so the result is the top of the same order rather than a list
 /// cut to size, and only a caller whose own output is bounded by the same limit
@@ -242,17 +247,18 @@ pub fn recent_user_sessions(root: &Path, limit: usize) -> Vec<SessionEntry> {
     out
 }
 
-/// Read and parse one session's sidecar. None when absent or unreadable.
-fn read_sidecar(dir: &Path) -> Option<SessionDescriptor> {
-    let bytes = fs::read(sidecar_path(dir)).ok()?;
+/// Read and parse one session's descriptor. None when absent or unreadable.
+fn read_descriptor(dir: &Path) -> Option<SessionDescriptor> {
+    let bytes = fs::read(descriptor_path(dir)).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
 /// The delegation a session's log opens with. A child writes it as its first
 /// durable record, at the boundary that mints the session, so the head is
-/// where it lands. Any other first record, an unreadable log, or a line past
-/// the head bound means no delegation is recorded: the class then rests on
-/// the sidecar alone.
+/// where it lands and the moment it carries is the session's creation
+/// second. Any other first record, an unreadable log, or a line past the
+/// head bound means no delegation is recorded: the class then rests on the
+/// descriptor alone.
 fn read_parent_link(log: &Path) -> Option<ParentLink> {
     let file = fs::File::open(log).ok()?;
     let mut head = String::new();
@@ -268,13 +274,14 @@ fn read_parent_link(log: &Path) -> Option<ParentLink> {
         } => Some(ParentLink {
             parent_session_id,
             subagent_type,
+            created_at_secs: entry.ts / 1000,
         }),
         _ => None,
     }
 }
 
-fn sidecar_path(dir: &Path) -> PathBuf {
-    dir.join(SIDECAR_FILE)
+fn descriptor_path(dir: &Path) -> PathBuf {
+    dir.join(DESCRIPTOR_FILE)
 }
 
 fn file_secs(path: &Path) -> Option<u64> {

@@ -136,9 +136,9 @@ pub(crate) fn map_status_snapshot(
         tool_calls: s.tool_calls,
         tool_success: s.tool_success,
         tool_errors: s.tool_errors,
-        // Sidecar + env-config (descriptor, auth, base_url, setting_sources)
-        // attach server-side; the engine snapshot has none. ..Default fills
-        // them.
+        // Session record + env-config (descriptor, auth, base_url,
+        // setting_sources) attach server-side; the engine snapshot has none.
+        // ..Default fills them.
         ..Default::default()
     }
 }

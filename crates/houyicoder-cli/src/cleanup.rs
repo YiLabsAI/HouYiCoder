@@ -8,6 +8,20 @@
 //! screen, where the per-entry list would flood it.
 
 use houyicoder_service::session_prune::{PruneEntry, PruneKind, PrunePlan, PruneReason};
+use houyicoder_service::session_repair::{DescriptorRepair, repair_child_descriptors};
+
+/// What the apply path says about the repair it ran: nothing when the store
+/// needed none, the count when some were written, and the failures alongside
+/// so a store that keeps failing is not silent.
+fn repair_summary(repair: DescriptorRepair) -> Option<String> {
+    match (repair.written, repair.failed) {
+        (0, 0) => None,
+        (written, 0) => Some(format!("Repaired {written} child descriptors.")),
+        (written, failed) => Some(format!(
+            "Repaired {written} child descriptors, {failed} failed."
+        )),
+    }
+}
 
 /// One-word kind label shared by the summary and the per-entry list so the two
 /// views never drift apart. Matches the file-system object being reclaimed.
@@ -55,6 +69,7 @@ pub(crate) fn run_cleanup(
         &shell_snapshots,
         Some(&debug_log),
         None,
+        &houyicoder_config::config_home(),
     );
     let plan = houyicoder_service::session_prune::plan_all(&targets, &policy);
     if plan.entries.is_empty() {
@@ -79,7 +94,7 @@ pub(crate) fn run_cleanup(
     // paths never delete concurrently. A held lock is not an error here --
     // the user re-runs when the sweep is done. The guard lives until the
     // end of this scope, so apply_prune runs under the lock.
-    let _guard = match crate::housekeeping::try_prune_lock() {
+    let _guard = match crate::housekeeping::try_prune_lock(&houyicoder_config::config_home()) {
         Some(g) => g,
         None => {
             println!(
@@ -88,6 +103,16 @@ pub(crate) fn run_cleanup(
             return Ok(());
         }
     };
+    // The repair is not bounded by the plan -- it heals the store -- but it
+    // is the apply path's second act, so a store with nothing to prune keeps
+    // its residue until the background sweep runs. It writes, so it stays
+    // under the prune lock and behind the confirmation. It cannot move the
+    // plan: a child is bounded by the same TTL whether its class came from
+    // the descriptor or from its log.
+    let repaired = repair_child_descriptors(&sessions_root);
+    if let Some(line) = repair_summary(repaired) {
+        println!("{line}");
+    }
     // Each session is deleted while this process holds that session's lock,
     // so a session resumed between the plan above and the delete below is
     // held out instead of deleted underneath the resume.
@@ -190,6 +215,29 @@ pub(crate) fn confirm_granted(answer: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The apply path says what the repair did only when it did something,
+    /// and never hides a failure behind a zero count.
+    #[test]
+    fn test_repair_summary_reads() {
+        assert_eq!(repair_summary(DescriptorRepair::default()), None);
+        assert_eq!(
+            repair_summary(DescriptorRepair {
+                written: 3,
+                failed: 0
+            })
+            .as_deref(),
+            Some("Repaired 3 child descriptors.")
+        );
+        assert_eq!(
+            repair_summary(DescriptorRepair {
+                written: 3,
+                failed: 2
+            })
+            .as_deref(),
+            Some("Repaired 3 child descriptors, 2 failed.")
+        );
+    }
 
     #[test]
     fn test_confirm_granted_yes() {

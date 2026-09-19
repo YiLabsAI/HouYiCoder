@@ -41,7 +41,7 @@ fn spawned_by() -> SessionProvenance {
     }
 }
 
-fn sidecar(provenance: SessionProvenance) -> SessionDescriptor {
+fn descriptor(provenance: SessionProvenance) -> SessionDescriptor {
     SessionDescriptor {
         name: None,
         name_source: NameSource::Auto,
@@ -75,7 +75,7 @@ fn write_session_named(
         fs::write(dir.join("log.jsonl"), "{}\n").unwrap();
     }
     if let Some(provenance) = provenance {
-        let bytes = serde_json::to_vec(&sidecar(provenance)).unwrap();
+        let bytes = serde_json::to_vec(&descriptor(provenance)).unwrap();
         fs::write(dir.join("session.json"), bytes).unwrap();
     }
     dir
@@ -83,12 +83,13 @@ fn write_session_named(
 
 /// Rewrite a directory's log so its first record is the delegation a child
 /// writes at the boundary that mints it. The record is serialized from the
-/// type production writes, so a change to that shape reaches this test.
-fn write_delegated_head(dir: &Path, parent: &str) {
+/// type production writes, so a change to that shape reaches this test. The
+/// timestamp is in the unit the log records, milliseconds.
+fn write_delegated_head(dir: &Path, parent: &str, ts_ms: u64) {
     let entry = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
-        ts: 0,
+        ts: ts_ms,
         prev_hash: None,
         event: SessionEvent::ChildDelegated {
             parent_session_id: parent.to_string(),
@@ -99,15 +100,16 @@ fn write_delegated_head(dir: &Path, parent: &str) {
     fs::write(dir.join(LOG_FILE), format!("{line}\n")).unwrap();
 }
 
-fn parent_link(parent: &str) -> ParentLink {
+fn parent_link(parent: &str, created_at_secs: u64) -> ParentLink {
     ParentLink {
         parent_session_id: parent.to_string(),
         subagent_type: "explore".to_string(),
+        created_at_secs,
     }
 }
 
 #[test]
-fn test_classify_user_needs_sidecar() {
+fn test_classify_user_needs_descriptor() {
     assert_eq!(classify(true, None, None), SessionClass::LogOnly);
     assert_eq!(
         classify(true, Some(&SessionProvenance::Fresh), None),
@@ -129,28 +131,28 @@ fn test_classify_user_needs_sidecar() {
     );
 }
 
-/// A child whose sidecar never landed is still a child: the delegation its
+/// A child whose descriptor never landed is still a child: the delegation its
 /// log opens with names the parent, so it is not counted or listed among the
 /// user's own sessions. A log that names no parent stays unowned.
 #[test]
 fn test_classify_log_parent_child() {
     assert_eq!(
-        classify(true, None, Some(&parent_link("p"))),
+        classify(true, None, Some(&parent_link("p", 0))),
         SessionClass::SubAgent
     );
     assert_eq!(classify(true, None, None), SessionClass::LogOnly);
 }
 
-/// The sidecar decides when it is there, and it cannot contradict the log: a
+/// The descriptor decides when it is there, and it cannot contradict the log: a
 /// delegation reaches both at one boundary, from the same facts. The rule is
 /// stated for the pair anyway, so a reader need not know that to read it.
 #[test]
-fn test_classify_sidecar_outranks_log() {
+fn test_classify_descriptor_outranks_log() {
     assert_eq!(
         classify(
             true,
             Some(&SessionProvenance::Fresh),
-            Some(&parent_link("p"))
+            Some(&parent_link("p", 0))
         ),
         SessionClass::User
     );
@@ -168,7 +170,7 @@ fn test_classify_no_log_shell() {
         SessionClass::Shell
     );
     assert_eq!(
-        classify(false, None, Some(&parent_link("p"))),
+        classify(false, None, Some(&parent_link("p", 0))),
         SessionClass::Shell,
         "a delegation in a log that is not there is not a session"
     );
@@ -184,20 +186,22 @@ fn test_scan_classifies_every_dir() {
         Some(SessionProvenance::Fresh),
     );
     let child = write_session(&root, SessionId::new(), true, Some(spawned_by()));
-    // The same delegation the sidecar already names, written into the log too:
+    // The same delegation the descriptor already names, written into the log too:
     // a reader that opens every log would carry it twice.
-    write_delegated_head(&child, "parent");
+    write_delegated_head(&child, "parent", 0);
     let left = write_session(&root, SessionId::new(), true, None);
     let shell = write_session(&root, SessionId::new(), false, None);
-    let shell_with_sidecar = write_session(
+    let shell_with_descriptor = write_session(
         &root,
         SessionId::new(),
         false,
         Some(SessionProvenance::Fresh),
     );
-    // A child whose sidecar never landed: its own log names the parent.
+    // A child whose descriptor never landed: its own log names the parent, and
+    // the second that record carries is the one a repair writes as the
+    // child's creation second.
     let delegated = write_session(&root, SessionId::new(), true, None);
-    write_delegated_head(&delegated, "parent");
+    write_delegated_head(&delegated, "parent", 1_700_000_042_123);
     let store = root.join(".cas");
     fs::create_dir_all(&store).unwrap();
     fs::write(store.join("ab.bin"), b"x").unwrap();
@@ -213,31 +217,31 @@ fn test_scan_classifies_every_dir() {
     assert_eq!(
         class_of(&delegated),
         Some(SessionClass::SubAgent),
-        "a child with no sidecar reads the parent from its log"
+        "a child with no descriptor reads the parent from its log"
     );
     assert_eq!(
-        class_of(&shell_with_sidecar),
+        class_of(&shell_with_descriptor),
         Some(SessionClass::Shell),
-        "a sidecar with no log is a shell"
+        "a descriptor with no log is a shell"
     );
-    let shell_with_sidecar = entries
+    let shell_with_descriptor = entries
         .iter()
-        .find(|e| e.path == shell_with_sidecar)
+        .find(|e| e.path == shell_with_descriptor)
         .unwrap();
     assert!(
-        shell_with_sidecar.descriptor.is_none(),
-        "a shell's sidecar is not read: the class does not depend on it"
+        shell_with_descriptor.descriptor.is_none(),
+        "a shell's descriptor is not read: the class does not depend on it"
     );
     let child = entries.iter().find(|e| e.path == child).unwrap();
     assert!(
         child.parent.is_none(),
-        "a sidecar that answers the lineage leaves the log unread"
+        "a descriptor that answers the lineage leaves the log unread"
     );
     let delegated = entries.iter().find(|e| e.path == delegated).unwrap();
     assert_eq!(
         delegated.parent,
-        Some(parent_link("parent")),
-        "the parent the class was judged from is carried"
+        Some(parent_link("parent", 1_700_000_042)),
+        "the parent is carried with the record's second, not its millisecond"
     );
     assert!(
         entries
@@ -255,7 +259,7 @@ fn test_scan_classifies_every_dir() {
 
 /// A directory named in the legacy spelling is one the id cannot rebuild: the
 /// sid prints as a UUID, so a caller holding only the sid looks in a directory
-/// that is not there. The entry carries the scanned path and the sidecar for
+/// that is not there. The entry carries the scanned path and the descriptor for
 /// that reason, and a legacy store still yields resumable rows.
 #[test]
 fn test_entry_carries_scanned_path() {
@@ -274,7 +278,7 @@ fn test_entry_carries_scanned_path() {
     );
     assert!(
         entry.descriptor.is_some(),
-        "the sidecar read while classifying is carried"
+        "the descriptor read while classifying is carried"
     );
     fs::remove_dir_all(&root).unwrap();
 }
@@ -347,7 +351,7 @@ fn test_recent_matches_scan_order() {
     let child = write_session(&root, SessionId::new(), true, Some(spawned_by()));
     age(&child.join(LOG_FILE), 1);
     let delegated = write_session(&root, SessionId::new(), true, None);
-    write_delegated_head(&delegated, "parent");
+    write_delegated_head(&delegated, "parent", 0);
     age(&delegated.join(LOG_FILE), 1);
     write_session(&root, SessionId::new(), true, None);
     write_session(&root, SessionId::new(), false, None);

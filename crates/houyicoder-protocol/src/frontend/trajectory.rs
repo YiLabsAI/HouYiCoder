@@ -43,7 +43,8 @@ pub struct TrajectoryEntry {
     /// The event kind label (user / assistant / tool_call / verdict / ...),
     /// fixed-width at the render boundary, not here.
     pub kind: String,
-    /// The wall-clock ts (epoch seconds, matches the engine SessionLogEntry.ts).
+    /// The wall-clock ts in epoch milliseconds, the unit the engine log
+    /// records it in.
     pub ts: u64,
     /// The event id (string form of the engine EventId).
     pub event_id: String,

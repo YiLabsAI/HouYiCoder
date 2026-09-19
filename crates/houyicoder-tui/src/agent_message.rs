@@ -611,7 +611,7 @@ pub enum ClientCommand {
         speed: Option<SpeedMode>,
     },
     /// Rename the current session (the /status Status tab inline edit). The
-    /// server writes the sidecar name + name_source=User (or clears to Auto
+    /// server writes the descriptor name + name_source=User (or clears to Auto
     /// on an empty name) and replies with a fresh StatusSnapshot, which the
     /// host routes to a Status response so the pane + the terminal tab title
     /// refresh together.

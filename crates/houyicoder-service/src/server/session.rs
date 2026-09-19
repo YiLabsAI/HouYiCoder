@@ -73,14 +73,14 @@ impl Server {
         self
     }
 
-    /// Write the session sidecar's model field so a later --resume restores
+    /// Write the session descriptor's model field so a later --resume restores
     /// this session's model. A missing store means the session was built
-    /// without sidecar persistence (the stub path), which is nothing to
+    /// without descriptor persistence (the stub path), which is nothing to
     /// record rather than a failure; a store that rejects the write is
     /// reported so the transcript can say the switch will not survive resume.
     /// Takes its parts by value so the write can run on the blocking pool
     /// instead of stalling the serve loop.
-    pub(super) fn write_sidecar_model(
+    pub(super) fn write_descriptor_model(
         store: Option<Arc<dyn SessionDescriptorStore>>,
         session: SessionId,
         model: &str,

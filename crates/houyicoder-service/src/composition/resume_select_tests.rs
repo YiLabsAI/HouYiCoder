@@ -7,7 +7,7 @@ use super::super::{build_runner_for_resume_sid, latest_session_sid};
 use super::*;
 use crate::composition::workspace_cwd;
 
-/// Write a session directly on disk: a log with one event plus a sidecar whose
+/// Write a session directly on disk: a log with one event plus a descriptor whose
 /// cwd is the current workspace, under the given directory name. Returns the
 /// directory. Used where the directory name is the point of the test.
 fn write_session_at(
@@ -73,7 +73,7 @@ fn test_latest_skips_child() {
 
 /// A directory named in the legacy id spelling is reachable: the sid prints as
 /// a UUID, so a reader that rebuilds the directory from the id finds nothing.
-/// The scan carries both the path and the sidecar, so the pick does not depend
+/// The scan carries both the path and the descriptor, so the pick does not depend
 /// on the name being the id's display form.
 #[test]
 fn test_latest_reads_legacy_name() {

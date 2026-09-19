@@ -32,7 +32,7 @@ fn test_descriptor_carries_children() {
 }
 
 #[test]
-fn test_old_sidecar_defaults_children() {
+fn test_old_descriptor_defaults_children() {
     let wire = r#"{
         "name": null,
         "name_source": "auto",
@@ -43,6 +43,6 @@ fn test_old_sidecar_defaults_children() {
         "created_at": 0
     }"#;
     let descriptor: SessionDescriptor =
-        serde_json::from_str(wire).expect("deserialize old sidecar");
+        serde_json::from_str(wire).expect("deserialize old descriptor");
     assert!(descriptor.child_session_ids.is_empty());
 }

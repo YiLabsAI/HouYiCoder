@@ -119,11 +119,11 @@ async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
 #[allow(unused_imports)]
 use ResponsePayload as _Resp;
 
-/// A fresh session (no turn run, so no durable append and no sidecar on
+/// A fresh session (no turn run, so no durable append and no descriptor on
 /// disk) still carries the running build version in the StatusSnapshot
 /// response. Version is a compile-time constant the server sets on the
-/// snapshot itself, not a sidecar-sourced field, so it is present before the
-/// sidecar lands. Asserting the concrete value (not just the label) guards
+/// snapshot itself, not a descriptor-sourced field, so it is present before the
+/// descriptor lands. Asserting the concrete value (not just the label) guards
 /// the server-side set: deleting the assignment leaves the field empty in the
 /// response, and this goes red.
 #[tokio::test]

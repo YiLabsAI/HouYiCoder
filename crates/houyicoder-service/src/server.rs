@@ -45,7 +45,7 @@ mod dispatch;
 /// The /debug request handler.
 mod debug_dispatch;
 
-/// Status-snapshot sidecar attachers: env/config display fields + per-model
+/// Status-snapshot descriptor attachers: env/config display fields + per-model
 /// usage projection.
 mod status_projection;
 

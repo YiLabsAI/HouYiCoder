@@ -1,13 +1,13 @@
-//! Session descriptor sidecar written alongside the event log at
+//! Session descriptor written alongside the event log at
 //! <sid>/session.json. The hash chain spans SessionLogEntries only, so mutable
-//! session-level fields live in a separate sidecar while immutable events stay
+//! session-level fields live in a separate descriptor while immutable events stay
 //! in the chain.
 //!
 //! The store trait is in the interface layer so composition and resume paths
 //! can name it without depending on a concrete disk implementation. The disk
 //! implementation lives in the memory layer alongside the file backend; an
 //! in-memory implementation serves tests. The trait is synchronous because the
-//! sidecar is always a tiny local file and a cloud-backed descriptor store is
+//! descriptor is always a tiny local file and a cloud-backed descriptor store is
 //! not a design target.
 
 use crate::SessionId;
@@ -73,20 +73,46 @@ pub struct SessionDescriptor {
     /// Unix-epoch seconds at creation.
     pub created_at: u64,
     /// The child sessions this session spawned, in spawn order. Empty until a
-    /// spawn lands. serde default keeps sidecars written before this field
-    /// readable because an old sidecar simply has no children.
+    /// spawn lands. serde default keeps descriptors written before this field
+    /// readable because an old descriptor simply has no children.
     #[serde(default)]
     pub child_session_ids: Vec<String>,
 }
 
-/// Read and write the per-session descriptor sidecar. The trait is in the
+impl SessionDescriptor {
+    /// The descriptor a delegated child is recorded with: the delegation that
+    /// started it, and the second it was created. Nothing else about a child
+    /// is known where it is written -- its working directory and model stay
+    /// empty -- because no listing path offers one: the picker, the continue
+    /// fallback, and the counts all filter to user sessions. An explicit
+    /// resume by id still opens a child's log, with these fields empty. Both
+    /// writers of a child's descriptor come through here, the boundary that
+    /// starts it and the pass that repairs one whose write was lost, so the
+    /// two agree on the shape; what they know differs, since the boundary
+    /// reads its own clock and the pass reads the record the child opens
+    /// with.
+    pub fn delegated_child(provenance: SessionProvenance, created_at_secs: u64) -> Self {
+        Self {
+            name: None,
+            name_source: NameSource::Auto,
+            cwd: String::new(),
+            model: String::new(),
+            provenance,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            created_at: created_at_secs,
+            child_session_ids: Vec::new(),
+        }
+    }
+}
+
+/// Read and write the per-session descriptor. The trait is in the
 /// interface layer so composition, resume, and TUI rename paths share one
 /// store without depending on the concrete disk implementation.
 pub trait SessionDescriptorStore: Send + Sync {
-    /// Read the sidecar for a session. None when no sidecar exists.
+    /// Read the descriptor for a session. None when no descriptor exists.
     fn read_descriptor(&self, session: SessionId) -> Option<SessionDescriptor>;
 
-    /// Write or overwrite a sidecar atomically so a crash cannot leave a
+    /// Write or overwrite a descriptor atomically so a crash cannot leave a
     /// partial descriptor.
     fn write_descriptor(
         &self,
@@ -94,12 +120,27 @@ pub trait SessionDescriptorStore: Send + Sync {
         descriptor: &SessionDescriptor,
     ) -> Result<(), SessionDescriptorError>;
 
-    /// Read, edit, and write the sidecar as one indivisible step, returning
-    /// whether there was a sidecar to edit.
+    /// Write the descriptor only when the session has none, as one indivisible
+    /// step, and report whether this call wrote it. A writer that must not
+    /// overwrite a record someone else landed uses this rather than
+    /// read_descriptor followed by write_descriptor: those two calls leave a
+    /// window for exactly the record the caller set out to keep. Like
+    /// update_descriptor, the serialization covers one store instance in one
+    /// process; a second process, or a second store over the same root,
+    /// remains unguarded, and what this closes is the window between the two
+    /// calls.
+    fn write_descriptor_if_absent(
+        &self,
+        session: SessionId,
+        descriptor: &SessionDescriptor,
+    ) -> Result<bool, SessionDescriptorError>;
+
+    /// Read, edit, and write the descriptor as one indivisible step, returning
+    /// whether there was a descriptor to edit.
     ///
     /// Every caller that changes one field must use this rather than
     /// read_descriptor followed by write_descriptor. Those calls each write a
-    /// whole sidecar derived from the state they read, so interleaving callers
+    /// whole descriptor derived from the state they read, so interleaving callers
     /// can silently revert each other's fields. Implementations serialize the
     /// read and write against their own concurrent calls. The guarantee covers
     /// one store instance in one process; a second process remains
@@ -113,21 +154,21 @@ pub trait SessionDescriptorStore: Send + Sync {
         edit: &mut dyn FnMut(&mut SessionDescriptor),
     ) -> Result<DescriptorUpdate, SessionDescriptorError>;
 
-    /// Delete the sidecar. A missing sidecar is not an error.
+    /// Delete the descriptor. A missing descriptor is not an error.
     fn delete_descriptor(&self, session: SessionId);
 }
 
-/// Whether an update_descriptor call found a sidecar to edit. Absent is not
+/// Whether an update_descriptor call found a descriptor to edit. Absent is not
 /// an error because a descriptor materializes on the first durable append.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DescriptorUpdate {
-    /// The sidecar existed; the edit was applied and written back.
+    /// The descriptor existed; the edit was applied and written back.
     Written,
-    /// No sidecar for the session; nothing was edited or written.
+    /// No descriptor for the session; nothing was edited or written.
     Absent,
 }
 
-/// A descriptor sidecar read or write failure, distinct from event-log errors.
+/// A descriptor read or write failure, distinct from event-log errors.
 #[derive(Debug)]
 pub struct SessionDescriptorError(pub String);
 

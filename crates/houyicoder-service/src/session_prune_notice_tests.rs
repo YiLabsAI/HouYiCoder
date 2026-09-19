@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// The count bounds the user's own sessions: a child has a log and a sidecar
+/// The count bounds the user's own sessions: a child has a log and a descriptor
 /// like any other session, but reporting it would name a store size the user
 /// cannot reconcile with the rows they see.
 #[test]

@@ -1,12 +1,12 @@
 //! On-disk session seeding helpers for the PTY tests: write the session log
-//! and sidecar (and a checkpoint manifest for the post-compact journey) into
+//! and descriptor (and a checkpoint manifest for the post-compact journey) into
 //! a temp sessions dir the binary will read on --resume. Split from mod.rs on
 //! the file-size gate. Each helper is self-contained (external-crate imports
 //! only); the read path in LocalFileBackend scans the same layout these write,
 //! so the binary's resume + /context see the seeded state.
 
 /// Seed a session on disk (a sid log file with one UserInput event + a
-/// session.json sidecar carrying the model) so a subsequent --resume <sid>
+/// session.json descriptor carrying the model) so a subsequent --resume <sid>
 /// or the /resume picker can re-open it. Shared by the sid-resume + lock
 /// PTY tests.
 pub fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prompt: &str) {
@@ -21,7 +21,7 @@ pub fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, 
 /// no-session empty case. Returns the seeded event's id so a caller that
 /// also writes a checkpoint manifest (seed_session_with_checkpoint) can
 /// reference it as last_event + the Summarized turn without re-deriving or
-/// duplicating the log+sidecar write.
+/// duplicating the log+descriptor write.
 pub fn seed_session_with_cwd(
     root: &std::path::Path,
     sid_str: &str,
@@ -57,14 +57,14 @@ pub fn seed_session_with_cwd(
         dir.join("session.json"),
         serde_json::to_string_pretty(&meta).expect("serialize meta"),
     )
-    .expect("write sidecar");
+    .expect("write descriptor");
     event.id
 }
 
 /// Seed a session on disk WITH a checkpoint manifest — a post-compact state —
 /// so a launched --resume <sid> followed by /context shows the folded
 /// summary + the Compact buffer category. Writes the log (one UserInput
-/// event), the session.json sidecar, and a CheckpointManifest via the real
+/// event), the session.json descriptor, and a CheckpointManifest via the real
 /// LocalFileBackend (not hand-rolled JSON: the manifest schema can drift, and
 /// the backend's read path would fail to deserialize a hand-written file).
 /// The event is the manifest's last_event + the single Summarized turn, so
@@ -85,9 +85,9 @@ pub fn seed_session_with_checkpoint(
     use houyicoder_context::{
         CheckpointId, CheckpointManifest, ContextBackend, Disposition, SessionId, TurnGroup,
     };
-    // Reuse seed_session_with_cwd for the log + sidecar write + the event id,
+    // Reuse seed_session_with_cwd for the log + descriptor write + the event id,
     // so the two seed paths share one source of truth (a schema change to the
-    // event or sidecar shape only has to be fixed once, not in two copies).
+    // event or descriptor shape only has to be fixed once, not in two copies).
     let cwd = houyicoder_service::composition::workspace_cwd(None);
     let event_id = seed_session_with_cwd(root, sid_str, model, prompt, &cwd);
     let sid = SessionId::from_display_string(sid_str).expect("sid parses");

@@ -96,7 +96,7 @@ impl Server {
                         )
                         .await;
                 }
-                // The sidecar store is None on the single-shot test path; the
+                // The descriptor store is None on the single-shot test path; the
                 // TUI's stub mode never sends this request, but fail closed
                 // with a clear error if it does. Internal (not InvalidRequest):
                 // the client request is fine, the server lacks the store.
@@ -131,7 +131,7 @@ impl Server {
                 let detail = match outcome {
                     Ok(houyicoder_context::DescriptorUpdate::Written) => None,
                     Ok(houyicoder_context::DescriptorUpdate::Absent) => {
-                        Some("rename: no session sidecar to rename".to_string())
+                        Some("rename: no session descriptor to rename".to_string())
                     }
                     Err(e) => Some(format!("rename: write failed: {e}")),
                 };
@@ -597,7 +597,7 @@ impl Server {
             }
             snapshot.descriptor = Some(pa::map_session_descriptor(&descriptor));
         }
-        // Running build version; always known, not sidecar-gated.
+        // Running build version; always known, not descriptor-gated.
         snapshot.version = env!("CARGO_PKG_VERSION").to_string();
         // Attach the env-config display fields (auth token source, base URL,
         // setting sources) so the TUI renders them without importing the

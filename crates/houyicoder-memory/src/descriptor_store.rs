@@ -14,14 +14,14 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use houyicoder_context::{
     DescriptorUpdate, SessionDescriptor, SessionDescriptorError, SessionDescriptorStore, SessionId,
     SessionProvenance,
-    session_class::{SIDECAR_FILE, session_dir},
+    session_class::{DESCRIPTOR_FILE, session_dir},
 };
 
 /// Disk-backed descriptor store rooted beside the session event logs.
 pub struct FileDescriptorStore {
     root: PathBuf,
     /// One lock per session, guarding a whole write or read-modify-write so
-    /// two callers touching the same sidecar serialize instead of each
+    /// two callers touching the same descriptor serialize instead of each
     /// publishing a copy derived from the state it read. Per session, not
     /// one lock for the store: the write ends in an fsync, and one session's
     /// slow flush must not stall an unrelated session's write. Entries are
@@ -55,7 +55,7 @@ impl FileDescriptorStore {
     }
 
     fn descriptor_path(&self, session: SessionId) -> PathBuf {
-        session_dir(&self.root, session).join(SIDECAR_FILE)
+        session_dir(&self.root, session).join(DESCRIPTOR_FILE)
     }
 
     fn ensure_dir(path: &Path) -> Result<(), SessionDescriptorError> {
@@ -117,7 +117,7 @@ impl FileDescriptorStore {
     fn read_sync(&self, session: SessionId) -> Option<SessionDescriptor> {
         let path = self.descriptor_path(session);
         let body = fs::read_to_string(&path).ok()?;
-        // A truncated/corrupt sidecar is tolerated as absent rather than
+        // A truncated/corrupt descriptor is tolerated as absent rather than
         // fatal: the resume path falls back to deriving cwd/model from the
         // current config, which is safer than refusing to start.
         serde_json::from_str(&body).ok()
@@ -139,6 +139,24 @@ impl SessionDescriptorStore for FileDescriptorStore {
         self.write_sync(session, descriptor)
     }
 
+    fn write_descriptor_if_absent(
+        &self,
+        session: SessionId,
+        descriptor: &SessionDescriptor,
+    ) -> Result<bool, SessionDescriptorError> {
+        // Check and write are one step under this store's session lock, so
+        // callers of this same store cannot interleave. The lock is
+        // in-process: another process, or a second store over the same root,
+        // still races -- the window is one acquisition wide, not zero.
+        let lock = self.session_lock(session);
+        let _guard = lock.lock().expect("descriptor session lock poisoned");
+        if self.read_sync(session).is_some() {
+            return Ok(false);
+        }
+        self.write_sync(session, descriptor)?;
+        Ok(true)
+    }
+
     fn update_descriptor(
         &self,
         session: SessionId,
@@ -146,7 +164,7 @@ impl SessionDescriptorStore for FileDescriptorStore {
     ) -> Result<DescriptorUpdate, SessionDescriptorError> {
         // The read and the write are inside one lock: that is the whole
         // point of the method. Taking it around the write alone would still
-        // let a second caller read the pre-edit sidecar and write it back.
+        // let a second caller read the pre-edit descriptor and write it back.
         let lock = self.session_lock(session);
         let _guard = lock.lock().expect("descriptor session lock poisoned");
         let Some(mut descriptor) = self.read_sync(session) else {
@@ -160,7 +178,7 @@ impl SessionDescriptorStore for FileDescriptorStore {
     fn delete_descriptor(&self, session: SessionId) {
         // Under the same lock as the writes: a delete landing between an
         // update's read and its write would otherwise be undone by that
-        // write, resurrecting the sidecar of a torn-down session.
+        // write, resurrecting the descriptor of a torn-down session.
         let lock = self.session_lock(session);
         let _guard = lock.lock().expect("descriptor session lock poisoned");
         let dir = session_dir(&self.root, session);
@@ -207,6 +225,21 @@ impl SessionDescriptorStore for InMemoryDescriptorStore {
             .expect("descriptor mutex poisoned")
             .insert(session, descriptor.clone());
         Ok(())
+    }
+
+    fn write_descriptor_if_absent(
+        &self,
+        session: SessionId,
+        descriptor: &SessionDescriptor,
+    ) -> Result<bool, SessionDescriptorError> {
+        // One lock acquisition spans the lookup and the insert, so nothing can
+        // land an entry between them.
+        let mut descriptors = self.descriptors.lock().expect("descriptor mutex poisoned");
+        if descriptors.contains_key(&session) {
+            return Ok(false);
+        }
+        descriptors.insert(session, descriptor.clone());
+        Ok(true)
     }
 
     fn update_descriptor(
@@ -277,7 +310,54 @@ mod tests {
         drop(fs::remove_dir_all(&root));
     }
 
-    /// Concurrent edits to one sidecar all survive. Each update appends a
+    /// The second writer of a session's descriptor loses: the first record is
+    /// the one that stays, and the second call reports that it wrote nothing.
+    /// Both stores are checked, since a caller relies on the answer either way.
+    #[test]
+    fn test_absent_write_keeps_first() {
+        let root = temp_root();
+        let sid = SessionId::new();
+        let file_store = FileDescriptorStore::new(root.clone());
+        assert!(
+            file_store
+                .write_descriptor_if_absent(sid, &sample_descriptor(Some("first"), 1))
+                .expect("first write"),
+            "an absent descriptor is written"
+        );
+        assert!(
+            !file_store
+                .write_descriptor_if_absent(sid, &sample_descriptor(Some("second"), 2))
+                .expect("second write"),
+            "a descriptor already there is not written over"
+        );
+
+        let memory_store = InMemoryDescriptorStore::new();
+        assert!(
+            memory_store
+                .write_descriptor_if_absent(sid, &sample_descriptor(Some("first"), 1))
+                .expect("first write"),
+            "an absent descriptor is written"
+        );
+        assert!(
+            !memory_store
+                .write_descriptor_if_absent(sid, &sample_descriptor(Some("second"), 2))
+                .expect("second write"),
+            "a descriptor already there is not written over"
+        );
+        assert_eq!(
+            memory_store.read_descriptor(sid),
+            Some(sample_descriptor(Some("first"), 1)),
+            "the first record is the one both stores keep"
+        );
+        assert_eq!(
+            file_store.read_descriptor(sid),
+            Some(sample_descriptor(Some("first"), 1)),
+            "the first record is the one both stores keep"
+        );
+        drop(fs::remove_dir_all(&root));
+    }
+
+    /// Concurrent edits to one descriptor all survive. Each update appends a
     /// char, so the final length counts the edits that landed: a
     /// read-modify-write that is not serialized loses whichever edits were
     /// derived from a snapshot another writer had already replaced, and the
@@ -316,10 +396,10 @@ mod tests {
         drop(fs::remove_dir_all(&root));
     }
 
-    /// An update against a session with no sidecar reports Absent rather
-    /// than creating one. A sidecar materializes on the first durable
+    /// An update against a session with no descriptor reports Absent rather
+    /// than creating one. A descriptor materializes on the first durable
     /// append; an update is an edit to an existing descriptor, so a rename
-    /// before that point must not mint a sidecar with default fields.
+    /// before that point must not mint a descriptor with default fields.
     #[test]
     fn test_update_absent_writes_nothing() {
         let root = temp_root();
@@ -328,12 +408,12 @@ mod tests {
         let mut ran = false;
         let outcome = store
             .update_descriptor(sid, &mut |_| ran = true)
-            .expect("update should not error on a missing sidecar");
-        assert_eq!(outcome, DescriptorUpdate::Absent, "no sidecar -> Absent");
-        assert!(!ran, "the edit closure should not run without a sidecar");
+            .expect("update should not error on a missing descriptor");
+        assert_eq!(outcome, DescriptorUpdate::Absent, "no descriptor -> Absent");
+        assert!(!ran, "the edit closure should not run without a descriptor");
         assert!(
             store.read_descriptor(sid).is_none(),
-            "no sidecar was created"
+            "no descriptor was created"
         );
         drop(fs::remove_dir_all(&root));
     }
@@ -357,7 +437,10 @@ mod tests {
         let root = temp_root();
         let store = FileDescriptorStore::new(root.clone());
         let sid = SessionId::new();
-        assert!(store.read_descriptor(sid).is_none(), "no sidecar -> None");
+        assert!(
+            store.read_descriptor(sid).is_none(),
+            "no descriptor -> None"
+        );
         drop(fs::remove_dir_all(&root));
     }
 
@@ -396,10 +479,10 @@ mod tests {
         );
     }
 
-    /// A sidecar write resolves the session's directory the same way a read
+    /// A descriptor write resolves the session's directory the same way a read
     /// does, so a session whose directory is named in the other spelling is
     /// updated in place. Joining the id string unexamined would seal a second
-    /// sidecar beside no log, and the session would read as unnamed again.
+    /// descriptor beside no log, and the session would read as unnamed again.
     #[test]
     fn test_write_resolves_legacy_dir() {
         let root = temp_root();
@@ -412,7 +495,7 @@ mod tests {
             .expect("seed");
         assert!(
             legacy.join("session.json").is_file(),
-            "the sidecar lands in the directory the store holds"
+            "the descriptor lands in the directory the store holds"
         );
 
         store

@@ -132,7 +132,7 @@ async fn test_provenance_precedes_child_run() {
     );
     assert!(
         names_parent,
-        "the sidecar must name the parent before the child's run: {provenance:?}"
+        "the descriptor must name the parent before the child's run: {provenance:?}"
     );
     token.cancel();
     drop(call);

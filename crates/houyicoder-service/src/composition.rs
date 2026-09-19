@@ -111,7 +111,7 @@ pub struct AssembledRunner {
 }
 
 /// An assembled runner plus the model restored from a resumed session's
-/// sidecar. The fresh path (build_runner) does not return a model — the
+/// descriptor. The fresh path (build_runner) does not return a model — the
 /// caller resolves it from the config layer; the resume path must return
 /// the model the session was using, which may differ from the current
 /// config default.

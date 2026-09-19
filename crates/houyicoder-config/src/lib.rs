@@ -232,7 +232,7 @@ pub fn resolve_base_url() -> String {
 /// settings.json model.id → DEFAULT_MODEL. Reads no process env so a stray
 /// env var cannot shadow a persisted pick (the test-knob-as-authority bug);
 /// the test harness injects a temp settings path instead. The per-session
-/// sidecar override sits above this layer at the composition root (resume
+/// descriptor override sits above this layer at the composition root (resume
 /// reads session meta.model, then falls back here). Never fails.
 pub fn resolve_model() -> String {
     resolve_model_from(&settings_path())
@@ -351,7 +351,7 @@ pub fn config_home() -> std::path::PathBuf {
 
 /// The settings file path inside the config-home directory.
 pub fn settings_path() -> std::path::PathBuf {
-    config_home().join("settings.json")
+    config_home().join(retention::SETTINGS_FILE)
 }
 
 /// User-tunable memory feature switches, persisted across sessions in the

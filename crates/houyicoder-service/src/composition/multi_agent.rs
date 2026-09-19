@@ -14,8 +14,8 @@ use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::PFut;
 use houyicoder_context::{
-    DescriptorUpdate, HookEventKind, HookFirePayload, NameSource, SessionDescriptor,
-    SessionDescriptorStore, SessionId, SessionProvenance,
+    DescriptorUpdate, HookEventKind, HookFirePayload, SessionDescriptor, SessionDescriptorStore,
+    SessionId, SessionProvenance,
 };
 use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, ChildDescriptor, ChildRunMode};
 use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
@@ -78,7 +78,7 @@ pub struct MultiAgentRuntime {
     /// task; a Weak upgrades only while the child is still running). Stale
     /// entries (child completed + dropped) are pruned on a failed upgrade.
     children: Arc<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<Runner>>>>,
-    /// Sidecar store for stamping SpawnedBy provenance on child sessions.
+    /// Descriptor store for stamping SpawnedBy provenance on child sessions.
     descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
 }
 
@@ -532,10 +532,10 @@ fn map_spawn_err(e: SpawnError) -> SpawnFailure {
     }
 }
 
-/// Stamp SpawnedBy provenance on a child session's sidecar. Called at the
+/// Stamp SpawnedBy provenance on a child session's descriptor. Called at the
 /// spawn boundary, before the child runs, so a live child is never read as one
 /// of the user's own sessions. The delegation record the child opens with is
-/// its first durable append, which materializes the sidecar on a store that
+/// its first durable append, which materializes the descriptor on a store that
 /// materializes one, so the update normally edits a file already there.
 /// Best-effort: a stamp failure logs and continues (the child still ran).
 fn stamp_spawned_by(
@@ -555,28 +555,18 @@ fn stamp_spawned_by(
         let outcome = store.update_descriptor(child_sid, &mut |descriptor| {
             descriptor.provenance = prov.clone();
         });
-        // Written means there was a sidecar to edit; anything else -- a
+        // Written means there was a descriptor to edit; anything else -- a
         // store that materializes none on a first append, or an update that
-        // failed -- leaves the provenance unrecorded, so create a sidecar
-        // here.
+        // failed -- leaves the provenance unrecorded, so create a descriptor
+        // here, in the same shape the repair pass writes for a child whose
+        // boundary write was lost.
         if !matches!(outcome, Ok(DescriptorUpdate::Written)) {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            if let Err(e) = store.write_descriptor(
-                child_sid,
-                &SessionDescriptor {
-                    name: None,
-                    name_source: NameSource::Auto,
-                    cwd: String::new(),
-                    model: String::new(),
-                    provenance: prov,
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                    created_at: now,
-                    child_session_ids: Vec::new(),
-                },
-            ) {
+            let descriptor = SessionDescriptor::delegated_child(prov, now);
+            if let Err(e) = store.write_descriptor(child_sid, &descriptor) {
                 tracing::warn!("child provenance write failed: {e}");
             }
         }

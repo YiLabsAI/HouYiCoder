@@ -98,11 +98,11 @@ fn test_resume_export_seeds_log() {
     std::fs::remove_dir_all(&sessions).ok();
 }
 
-/// After an export-resume, the new session's sidecar carries
+/// After an export-resume, the new session's descriptor carries
 /// provenance=ResumedFromExport pointing back at the source session id
 /// The resumed descriptor preserves its export provenance for status views.
 #[test]
-fn test_resume_export_sidecar_provenance() {
+fn test_resume_export_descriptor_provenance() {
     let sessions = temp_root();
     let export_path = sessions.join("export.json");
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA";
@@ -118,23 +118,25 @@ fn test_resume_export_sidecar_provenance() {
     .expect("resume export seeds");
     let new_sid = resumed.assembled.session;
 
-    let sidecar = std::fs::read_to_string(sessions.join(new_sid.to_string()).join("session.json"))
-        .expect("sidecar exists after resume");
-    let descriptor: serde_json::Value = serde_json::from_str(&sidecar).expect("sidecar is json");
+    let descriptor =
+        std::fs::read_to_string(sessions.join(new_sid.to_string()).join("session.json"))
+            .expect("descriptor exists after resume");
+    let descriptor: serde_json::Value =
+        serde_json::from_str(&descriptor).expect("descriptor is json");
     let prov = descriptor
         .get("provenance")
-        .expect("sidecar has provenance")
+        .expect("descriptor has provenance")
         .as_object()
         .expect("provenance is an object");
     assert_eq!(
         prov.get("kind").and_then(|v| v.as_str()),
         Some("resumed_from_export"),
-        "provenance kind should be resumed_from_export:\n{sidecar}"
+        "provenance kind should be resumed_from_export:\n{descriptor}"
     );
     assert_eq!(
         prov.get("source_session_id").and_then(|v| v.as_str()),
         Some(legacy_sid),
-        "provenance should point back at the source sid:\n{sidecar}"
+        "provenance should point back at the source sid:\n{descriptor}"
     );
     std::fs::remove_dir_all(&sessions).ok();
 }
@@ -203,7 +205,7 @@ fn test_fork_chain_propagates_history() {
 }
 
 /// build_runner_for_resume_sid re-opens an existing session: the log stays,
-/// the model is restored from the sidecar, and a missing sid errors.
+/// the model is restored from the descriptor, and a missing sid errors.
 #[test]
 fn test_resume_sid_reopens_errors() {
     let sessions = temp_root();
@@ -227,7 +229,7 @@ fn test_resume_sid_reopens_errors() {
     .expect("seed via export");
     let existing_sid = resumed.assembled.session;
 
-    // Re-open by sid: the same log + model restored from the sidecar.
+    // Re-open by sid: the same log + model restored from the descriptor.
     let resumed = super::build_runner_for_resume_sid(
         existing_sid,
         &sessions,
@@ -241,7 +243,7 @@ fn test_resume_sid_reopens_errors() {
     let model = resumed.model;
 
     assert_eq!(sid, existing_sid, "sid resume reuses the same sid");
-    assert_eq!(model, "sid-resume-model", "model restored from sidecar");
+    assert_eq!(model, "sid-resume-model", "model restored from descriptor");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -311,13 +313,13 @@ fn test_resume_sid_warns_unverified() {
     std::fs::remove_dir_all(&sessions).ok();
 }
 
-/// A session whose sidecar is missing (e.g. created before the sidecar
+/// A session whose descriptor is missing (e.g. created before the descriptor
 /// landed, or the file was deleted) still resumes: the model falls back
 /// to the current config resolve_model, so /status shows the resolved
 /// model instead of the original. The log is the source of truth; the
-/// sidecar is advisory.
+/// descriptor is advisory.
 #[test]
-fn test_resume_sid_missing_sidecar() {
+fn test_resume_sid_missing_descriptor() {
     let sessions = temp_root();
     let export_path = sessions.join("export.json");
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA";
@@ -325,7 +327,7 @@ fn test_resume_sid_missing_sidecar() {
     write_export(
         &export_path,
         legacy_sid,
-        "sidecar-model",
+        "descriptor-model",
         &two_events(src_sid),
     );
     let resumed = super::build_runner_for_resume_export(
@@ -338,10 +340,10 @@ fn test_resume_sid_missing_sidecar() {
     .expect("seed via export");
     let existing_sid = resumed.assembled.session;
 
-    // Remove the sidecar so the sid-resume path cannot restore the model.
-    let sidecar = sessions.join(existing_sid.to_string()).join("session.json");
-    assert!(sidecar.exists(), "sidecar should exist after seed");
-    std::fs::remove_file(&sidecar).expect("remove sidecar");
+    // Remove the descriptor so the sid-resume path cannot restore the model.
+    let descriptor = sessions.join(existing_sid.to_string()).join("session.json");
+    assert!(descriptor.exists(), "descriptor should exist after seed");
+    std::fs::remove_file(&descriptor).expect("remove descriptor");
     // Resume still succeeds; the model falls back to resolve_model.
     let resumed = super::build_runner_for_resume_sid(
         existing_sid,
@@ -350,7 +352,7 @@ fn test_resume_sid_missing_sidecar() {
         None,
         ResolvedProvider::stub(),
     )
-    .expect("resume succeeds without sidecar");
+    .expect("resume succeeds without descriptor");
     let sid = resumed.assembled.session;
     let model = resumed.model;
 
@@ -358,7 +360,7 @@ fn test_resume_sid_missing_sidecar() {
     assert_eq!(
         model,
         houyicoder_config::resolve_model(),
-        "model falls back to the current config without the sidecar"
+        "model falls back to the current config without the descriptor"
     );
     std::fs::remove_dir_all(&sessions).ok();
 }
@@ -469,7 +471,7 @@ fn test_resume_export_garbage_errors() {
 
 /// build_runner_for_fork mints a new sid seeded from the source's durable
 /// events: the new sid differs from the source, the new log carries the
-/// source's history, the source's log is untouched, and the sidecar records
+/// source's history, the source's log is untouched, and the descriptor records
 /// ForkedFrom provenance pointing back at the source. Guards the
 /// non-destructive fork the --fork-session flag promises.
 #[test]
@@ -515,22 +517,23 @@ fn test_fork_keeps_source_untouched() {
         source_log,
         "fork must not touch the source log"
     );
-    // The forked sidecar records ForkedFrom provenance.
-    let sidecar =
+    // The forked descriptor records ForkedFrom provenance.
+    let descriptor =
         std::fs::read_to_string(sessions.join(forked_sid.to_string()).join("session.json"))
             .unwrap();
-    let descriptor: serde_json::Value = serde_json::from_str(&sidecar).expect("sidecar is json");
+    let descriptor: serde_json::Value =
+        serde_json::from_str(&descriptor).expect("descriptor is json");
     let prov = descriptor.get("provenance").and_then(|v| v.as_object());
     assert_eq!(
         prov.and_then(|o| o.get("kind")).and_then(|v| v.as_str()),
         Some("forked_from"),
-        "fork provenance kind:\n{sidecar}"
+        "fork provenance kind:\n{descriptor}"
     );
     assert_eq!(
         prov.and_then(|o| o.get("from_sid"))
             .and_then(|v| v.as_str()),
         Some(source_sid.to_string().as_str()),
-        "fork provenance points back at the source:\n{sidecar}"
+        "fork provenance points back at the source:\n{descriptor}"
     );
     // The runner's store replays the seeded events.
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -614,7 +617,7 @@ fn test_latest_picks_active_cwd() {
     assert!(super::latest_session_sid(&sessions).is_none());
 
     // A: an active session in the test workspace (seeded via export -> has a
-    // log + sidecar, cwd = workspace_cwd(None) the same way --continue sees).
+    // log + descriptor, cwd = workspace_cwd(None) the same way --continue sees).
     let export_a = sessions.join("a.json");
     let sid_a = SessionId::new();
     write_export(&export_a, &sid_a.to_string(), "ma", &two_events(sid_a));
@@ -628,7 +631,7 @@ fn test_latest_picks_active_cwd() {
     .unwrap();
     let minted_a = resumed.assembled.session;
 
-    // B: a sidecar-only session in the SAME workspace but with no durable log
+    // B: a descriptor-only session in the SAME workspace but with no durable log
     // (zero turns -- e.g. a session opened + immediately quit). --continue
     // must exclude it: "continue" presupposes something to continue.
     let sid_b = SessionId::new();

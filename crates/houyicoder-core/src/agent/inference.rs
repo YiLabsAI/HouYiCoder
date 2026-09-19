@@ -7,7 +7,7 @@ use houyicoder_protocol::llm::EffortLevel;
 /// id, effort and speed tier move together at a request boundary; a switch
 /// swaps the whole config so a request never reads a half-applied mix. The
 /// selection intent is stored, not derived from id equality — but a resume
-/// rebuilds it from the sidecar model as an explicit pick.
+/// rebuilds it from the descriptor model as an explicit pick.
 #[derive(Clone, Debug, Default)]
 pub struct InferenceConfig {
     pub choice: ModelChoice,

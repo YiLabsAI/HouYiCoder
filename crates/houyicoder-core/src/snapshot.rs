@@ -241,8 +241,8 @@ impl SnapshotStore {
     /// back to the workspace root). Snapshots that carried additional writable
     /// roots (an __extra subtree) are skipped: the original extra_roots
     /// mapping is not on disk, so a restore could not remap the extra
-    /// subtrees back to their roots. Restoring those needs the sidecar (a
-    /// future refinement); today they are left on disk, unrecoverable via
+    /// subtrees back to their roots. Restoring those needs that mapping on disk
+    /// (a future refinement); today they are left on disk, unrecoverable via
     /// /undo after a restart, the same as before this re-link.
     pub fn relink_undo_entries(&self) -> Vec<UndoEntry> {
         let mut ids: Vec<u64> = Vec::new();

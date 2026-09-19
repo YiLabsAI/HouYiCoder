@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 /// Resume a session already on disk (--resume <sid>). Re-opens the existing
-/// log + sidecar; the engine reads the history via backend replay on the
+/// log + descriptor; the engine reads the history via backend replay on the
 /// next run. Wires the same TUI bundle the fresh path uses, with the model
-/// restored from the sidecar.
+/// restored from the descriptor.
 pub(super) fn build_bundle_for_resume_sid(
     sid: houyicoder_context::SessionId,
     project: Option<String>,

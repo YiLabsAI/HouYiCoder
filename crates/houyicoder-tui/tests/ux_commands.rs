@@ -281,7 +281,7 @@ fn test_debug_palette_visible_runs() {
 }
 
 /// The resume picker disambiguates unnamed sessions: several sessions with
-/// no sidecar name + an empty first prompt render distinguishable titles
+/// no descriptor name + an empty first prompt render distinguishable titles
 /// (a short sid suffix), not a single undifferentiated "(session)". The
 /// seeds carry a log (an empty UserInput) so each row is resumable -- the
 /// picker must not list sessions resume_sid would refuse. The user journey:

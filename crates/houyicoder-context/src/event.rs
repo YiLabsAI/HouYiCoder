@@ -210,7 +210,8 @@ pub enum SessionEvent {
         call_id: String,
         output: serde_json::Value,
         /// Wall-clock duration of the tool call this result answers, in ms.
-        /// Inline (not a sidecar) so /trajectory's latency dimension survives
+        /// Inline, not in a separate file, so /trajectory's latency dimension
+        /// survives
         /// resume + export + the self-evolution loop's re-reads; old logs
         /// deserialize to 0. Zero when the host did not time the call.
         #[serde(default)]
@@ -469,7 +470,7 @@ pub enum SessionEvent {
     /// This session was delegated to by the named parent: the child side of
     /// the delegation boundary, written as the child session's first durable
     /// record. The parent records the same act as SubagentSpawn; the child
-    /// carries it in its own log so its lineage outlives a missing sidecar.
+    /// carries it in its own log so its lineage outlives a missing descriptor.
     #[serde(rename = "ChildDelegated")]
     ChildDelegated {
         parent_session_id: String,

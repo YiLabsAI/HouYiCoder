@@ -47,9 +47,9 @@ const ANALYSIS: &str = "## auth audit — findings\n\
     1. auth.rs:42 verify() short-circuits on the first byte mismatch — a \
     timing leak. an attacker times responses to walk the token byte by byte. \
     fix: compare with a constant-time eq + add a timing harness test.\n\
-    2. session.rs:118 the session token is stored in clear in the sidecar \
+    2. session.rs:118 the session token is stored in clear in the descriptor \
     JSON. a backup or snapshot leaks every live token. fix: encrypt the \
-    sidecar at rest with the OS keystore, behind a per-platform cfg.\n\
+    descriptor at rest with the OS keystore, behind a per-platform cfg.\n\
     3. login.rs:67 the password endpoint has no rate limit; a stuffing run \
     lands every attempt. fix: a token-bucket limiter keyed by ip + account, \
     backed by redis so a scale-out keeps the limit.\n\
@@ -59,7 +59,7 @@ const ANALYSIS: &str = "## auth audit — findings\n\
     rotate to 3072, dual-sign during the migration, retire the old after TTL.\n\
     6. auth.rs:90 issue() mints a 30-day token with no rotation. fix: 1h TTL \
     + a refresh token + a revoke-on-logout denylist.\n\
-    7. session.rs:200 logout does not invalidate the sidecar. fix: write a \
+    7. session.rs:200 logout does not invalidate the descriptor. fix: write a \
     revoked-at timestamp + short-circuit verify on it.\n\
     8. middleware.rs:130 the auth header is parsed by a hand-rolled split \
     that panics on a malformed value. fix: use a typed header + add a fuzz \
@@ -79,7 +79,7 @@ const CHILD_SUMMARY: &str = "auth audit done: 5 findings (timing leak, cleartext
 /// The large pre-context the parent accumulates before the sub-task (the
 /// realistic case: the parent already has context when it delegates).
 const PRE_CONTEXT: &str = "project: a Rust auth service. modules: auth.rs (verify, issue), \
-    session.rs (sidecar), login.rs (handler), middleware.rs (cors), keys.rs (rsa). \
+    session.rs (descriptor), login.rs (handler), middleware.rs (cors), keys.rs (rsa). \
     stack: axum, tokio, rsa, subtle. ci: github actions, ubuntu + windows. \
     the service is deployed behind an nginx reverse proxy with a 10s timeout. \
     logs ship to loki. the on-call rotation is 3 engineers. the last incident \

@@ -11,7 +11,7 @@ use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command}
 use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 /// --resume <sid> re-opens an existing session: the sid is REUSED (not a
-/// fork), the model is restored from the sidecar, the seeded history stays,
+/// fork), the model is restored from the descriptor, the seeded history stays,
 /// and a continued turn appends to the SAME sid's log. The success path the
 /// missing-sid error test does not cover; the file-branch test covers a fork
 /// (new sid), this covers the reuse invariant.
@@ -35,7 +35,7 @@ fn test_resume_sid_reopens_history() {
     );
     assert!(
         s.output().contains("sid-reopen-model"),
-        "model should be restored from the sidecar:\n{}",
+        "model should be restored from the descriptor:\n{}",
         s.output()
     );
     // The seeded history must render in the transcript, not just persist to
@@ -112,7 +112,7 @@ fn test_resume_lock_released_exit() {
 }
 
 /// /status shows provenance=resumed after a --resume <file> launch (the
-/// sidecar carries ResumedFromExport, projected to the wire + rendered).
+/// descriptor carries ResumedFromExport, projected to the wire + rendered).
 #[test]
 #[ignore]
 fn test_status_shows_resumed_provenance() {
@@ -232,8 +232,8 @@ fn test_continue_rejects_cwd_session() {
 }
 
 /// Resuming a session whose recorded cwd no longer exists does not crash:
-/// the binary runs in its launch cwd, the sidecar cwd is informational,
-/// /status shows the stale recorded path. Guards the stale-sidecar-cwd
+/// the binary runs in its launch cwd, the descriptor cwd is informational,
+/// /status shows the stale recorded path. Guards the stale-descriptor-cwd
 /// boundary.
 #[test]
 #[ignore]
@@ -338,15 +338,15 @@ fn test_status_rename_emits_title() {
         "OSC 0/2 tab title bytes should be in the stream:\n{}",
         s.output()
     );
-    let sidecar = std::fs::read_to_string(sessions_dir.join(sid).join("session.json"))
+    let descriptor = std::fs::read_to_string(sessions_dir.join(sid).join("session.json"))
         .unwrap_or_else(|_| String::new());
     assert!(
-        sidecar.contains("\"name\": \"shiny-new-name\""),
-        "sidecar should persist the renamed name:\n{sidecar}"
+        descriptor.contains("\"name\": \"shiny-new-name\""),
+        "descriptor should persist the renamed name:\n{descriptor}"
     );
     assert!(
-        sidecar.contains("\"user\""),
-        "sidecar should mark name_source=user:\n{sidecar}"
+        descriptor.contains("\"user\""),
+        "descriptor should mark name_source=user:\n{descriptor}"
     );
 }
 

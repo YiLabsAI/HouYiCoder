@@ -35,7 +35,7 @@ pub use sandbox_types::{DirEntry, ExecConfig, ExecResult, SandboxError};
 mod backend;
 pub use backend::{ContextBackend, ContextError, LenientRead, LogRangeRead, ReverseRead};
 
-/// The session descriptor sidecar written alongside the event log.
+/// The session descriptor written alongside the event log.
 mod descriptor;
 pub use descriptor::{
     DescriptorUpdate, NameSource, SessionDescriptor, SessionDescriptorError,

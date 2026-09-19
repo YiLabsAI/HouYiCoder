@@ -115,7 +115,7 @@ impl Server {
         }
     }
 
-    /// Persist the pick to settings.json and the session sidecar, reporting
+    /// Persist the pick to settings.json and the session descriptor, reporting
     /// the outcome per destination. The session has already switched when
     /// this runs, so a write failure is a partial result, not a failed pick.
     /// Both writes run on the blocking pool so they do not block a Tokio
@@ -146,13 +146,13 @@ impl Server {
                 speed,
             )
             .map_err(|e| e.to_string());
-            let sidecar = Server::write_sidecar_model(store, session, &resolved);
-            (settings, sidecar)
+            let descriptor = Server::write_descriptor_model(store, session, &resolved);
+            (settings, descriptor)
         })
         .await;
         // A panic in the write task leaves the outcomes unknown: report the
         // loss rather than guessing either way.
-        let (settings, sidecar) = match writes {
+        let (settings, descriptor) = match writes {
             Ok(pair) => pair,
             Err(e) => {
                 return PersistenceOutcome::Partial {
@@ -161,15 +161,15 @@ impl Server {
                 };
             }
         };
-        if settings.is_ok() && sidecar.is_ok() {
+        if settings.is_ok() && descriptor.is_ok() {
             return PersistenceOutcome::Saved;
         }
         // Each destination names its own loss: a settings failure costs new
-        // sessions the default, a sidecar failure costs this session its
+        // sessions the default, a descriptor failure costs this session its
         // resume.
         PersistenceOutcome::Partial {
             settings: settings.err(),
-            session_record: sidecar.err(),
+            session_record: descriptor.err(),
         }
     }
 
@@ -199,7 +199,7 @@ impl Server {
     /// selection, the applied model and the Fast tier come from the runner.
     /// Settings never supply the selection: expressing what the session runs
     /// against the Default sentinel keeps the pane honest after a resume,
-    /// when the sidecar model and the settings id can differ.
+    /// when the descriptor model and the settings id can differ.
     fn catalog_from_section(runner: &Runner, section: ModelSection) -> ModelCatalog {
         let applied_id = runner.active_model();
         let default_id = houyicoder_config::resolve_default_model();
@@ -218,7 +218,7 @@ impl Server {
             })
             .collect();
         // A session model that is not a catalog row - a --model flag, or a
-        // resumed sidecar - still needs a row to sit on, or the pane has no
+        // resumed descriptor - still needs a row to sit on, or the pane has no
         // place to show the check and the cursor. Appending keeps the written
         // order untouched. The resolved default already occupies the Default
         // sentinel row, so an applied model equal to it needs no append: the

@@ -211,7 +211,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     // The child's own log opens with the delegation it came from: the parent
     // the boundary names, written first so a failure here leaves no spawn in
     // the parent log, and durable from the child's first record so the
-    // lineage does not depend on the sidecar.
+    // lineage does not depend on the descriptor.
     let delegation = new_event(
         child_sid,
         SessionEvent::ChildDelegated {

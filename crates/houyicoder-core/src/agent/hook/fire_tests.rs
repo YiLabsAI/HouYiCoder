@@ -601,7 +601,7 @@ async fn test_deny_records_gate_violation() {
     use std::sync::Mutex;
 
     /// A recording memory that captures every record_gate_violation call
-    /// so the test asserts the deny fed signal B without a real sidecar.
+    /// so the test asserts the deny fed signal B without a real descriptor.
     struct ViolationMemory {
         violations: Mutex<Vec<String>>,
     }

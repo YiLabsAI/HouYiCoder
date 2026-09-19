@@ -54,7 +54,7 @@ pub fn walk_to_workspace_root(start: &std::path::Path) -> Option<std::path::Path
     workspace_root.or(any_root)
 }
 
-/// The canonical workspace path a session's sidecar cwd should record + the
+/// The canonical workspace path a session's descriptor cwd should record + the
 /// value --continue converges on. resolve_project_workspace when a manifest
 /// is found (already canonicalized), else the canonicalized current dir -- the
 /// fallback must canonicalize too so a non-project dir's sessions match across

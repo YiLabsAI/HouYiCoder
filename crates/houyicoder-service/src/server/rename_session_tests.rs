@@ -103,7 +103,9 @@ async fn test_rename_sets_user_name() {
         },
         other => panic!("expected response, got {other:?}"),
     }
-    let after = store.read_descriptor(session).expect("sidecar persisted");
+    let after = store
+        .read_descriptor(session)
+        .expect("descriptor persisted");
     assert_eq!(after.name.as_deref(), Some("fix-login"));
     assert_eq!(after.name_source, NameSource::User, "marked User source");
     handle.abort();
@@ -143,7 +145,9 @@ async fn test_empty_clears_to_auto() {
         resp,
         ServerFrame::Response(r) if matches!(r.payload, houyicoder_protocol::envelope::ResponsePayload::Status(_))
     ));
-    let after = store.read_descriptor(session).expect("sidecar persisted");
+    let after = store
+        .read_descriptor(session)
+        .expect("descriptor persisted");
     assert!(after.name.is_none(), "empty name clears to None");
     assert_eq!(after.name_source, NameSource::Auto, "marked Auto source");
     handle.abort();
@@ -238,9 +242,9 @@ async fn test_no_descriptor_store_errors() {
     handle.abort();
 }
 
-/// A wired store with no sidecar for the session errors Internal.
+/// A wired store with no descriptor for the session errors Internal.
 #[tokio::test]
-async fn test_rename_no_sidecar_errors() {
+async fn test_rename_no_descriptor_errors() {
     use houyicoder_protocol::error::ErrorCategory;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
@@ -274,7 +278,7 @@ async fn test_rename_no_sidecar_errors() {
                 assert_eq!(
                     e.category,
                     ErrorCategory::Internal,
-                    "no-sidecar errors (server has no sidecar)"
+                    "no-descriptor errors (server has no descriptor)"
                 );
             }
             other => panic!("expected Error, got {other:?}"),
@@ -305,6 +309,17 @@ impl SessionDescriptorStore for FailingDescriptorStore {
         _edit: &mut dyn FnMut(&mut SessionDescriptor),
     ) -> Result<houyicoder_context::DescriptorUpdate, houyicoder_context::SessionDescriptorError>
     {
+        // Fails like the two writers above, so a caller sees one store that
+        // refuses every write rather than one that refuses some.
+        Err(houyicoder_context::SessionDescriptorError(
+            "simulated write failure".into(),
+        ))
+    }
+    fn write_descriptor_if_absent(
+        &self,
+        _session: houyicoder_context::SessionId,
+        _descriptor: &SessionDescriptor,
+    ) -> Result<bool, houyicoder_context::SessionDescriptorError> {
         // Fails like write_descriptor: the edit is never applied, so the rename
         // path still sees a write failure rather than a silent success.
         Err(houyicoder_context::SessionDescriptorError(
@@ -316,7 +331,7 @@ impl SessionDescriptorStore for FailingDescriptorStore {
     }
 }
 
-/// A sidecar write failure surfaces as an Internal error.
+/// A descriptor write failure surfaces as an Internal error.
 #[tokio::test]
 async fn test_rename_write_failure_errors() {
     use houyicoder_protocol::error::ErrorCategory;
