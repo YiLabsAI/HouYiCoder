@@ -42,6 +42,13 @@ pub use descriptor::{
     SessionDescriptorStore, SessionProvenance,
 };
 
+/// What a directory in the sessions root is and where a session's files live,
+/// answered once for every reader of the store. Public as a namespace rather
+/// than re-exported into the crate root: it is one domain subject with its own
+/// name, not a mechanical file split, and a reader reaching for it should read
+/// the module that holds the rule.
+pub mod session_class;
+
 /// The compaction plan types (Disposition, TurnGroup, CheckpointManifest,
 /// ContextSnapshot).
 mod plan;

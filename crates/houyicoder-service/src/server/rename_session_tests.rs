@@ -314,9 +314,6 @@ impl SessionDescriptorStore for FailingDescriptorStore {
     fn delete_descriptor(&self, session: houyicoder_context::SessionId) {
         self.0.delete_descriptor(session);
     }
-    fn list_descriptors(&self) -> Vec<(houyicoder_context::SessionId, SessionDescriptor)> {
-        self.0.list_descriptors()
-    }
 }
 
 /// A sidecar write failure surfaces as an Internal error.

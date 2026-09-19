@@ -48,6 +48,14 @@ impl SessionId {
             .ok()
             .map(|u| SessionId(Uuid::from_u128(u.into())))
     }
+
+    /// This id's 128 bits in the ULID spelling, which is what a store written
+    /// before the uuid format used as the directory segment. The exact inverse
+    /// of from_display_string, so a reader can name such a directory from the id
+    /// alone instead of searching the store for it.
+    pub fn ulid_name(&self) -> String {
+        Ulid::from(self.0.as_u128()).to_string()
+    }
 }
 
 impl<'de> Deserialize<'de> for SessionId {

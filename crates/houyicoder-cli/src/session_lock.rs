@@ -16,6 +16,8 @@
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
+use houyicoder_context::SessionId;
+use houyicoder_context::session_class::session_dir;
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
 
@@ -53,8 +55,16 @@ impl SessionLock {
     /// OR fails with EWOULDBLOCK when another process holds it (the
     /// non-blocking variant is used so a contended resume fails fast with a
     /// message, not a hang).
+    ///
+    /// A sid that parses resolves through the store's own spelling rule, so a
+    /// session whose directory is named in the other spelling locks beside its
+    /// log; joining the string unexamined would create a second directory for
+    /// one session, holding a lock over files no reader looks at.
     pub fn acquire(sid_str: &str, sessions_root: &Path) -> Result<Self, LockError> {
-        let dir: PathBuf = sessions_root.join(sid_str);
+        let dir: PathBuf = match SessionId::from_display_string(sid_str) {
+            Some(sid) => session_dir(sessions_root, sid),
+            None => sessions_root.join(sid_str),
+        };
         std::fs::DirBuilder::new()
             .recursive(true)
             .create(&dir)
@@ -81,7 +91,6 @@ impl SessionLock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_context::SessionId;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_root() -> PathBuf {
@@ -118,6 +127,29 @@ mod tests {
         let a = SessionLock::acquire(&SessionId::new().to_string(), &root).expect("acquire a");
         let _b = SessionLock::acquire(&SessionId::new().to_string(), &root).expect("acquire b");
         drop(a);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A session whose directory is named in the ULID spelling locks beside
+    /// its log: joining the sid string would make a second directory for one
+    /// session, holding a lock over files no reader opens.
+    #[test]
+    fn test_acquire_resolves_legacy_dir() {
+        let root = temp_root();
+        let sid = SessionId::new();
+        let legacy = root.join(sid.ulid_name());
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("log.jsonl"), "[]").unwrap();
+
+        let _lock = SessionLock::acquire(&sid.to_string(), &root).expect("acquire");
+        assert!(
+            legacy.join("session.lock").is_file(),
+            "the lock lands beside the log"
+        );
+        assert!(
+            !root.join(sid.to_string()).exists(),
+            "one session does not get a second directory"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -1,7 +1,7 @@
 //! Progressive resume-resolution tests for poll_agent: the per-frame
 //! resolver fills in picker row titles + last-active lazily, a few rows per
-//! frame, so /resume opens instantly even with hundreds of sessions. Split
-//! out of run_control_tests.rs on size grounds.
+//! frame, so opening /resume never waits on the expensive per-row reads.
+//! Split out of run_control_tests.rs on size grounds.
 use crate::composition;
 use crate::resume_picker::{SessionLister, SessionRow};
 use crate::state::Pane;
@@ -28,9 +28,10 @@ impl SessionLister for ResolvingLister {
 }
 
 /// Progressive resume resolution: poll_agent resolves at most 3 unresolved
-/// picker rows per frame (so the picker opens instantly and fills in real
-/// titles + last-active top-to-bottom over a few frames). The picker must be
-/// open for the branch to fire; a closed picker resolves nothing.
+/// picker rows per frame (so opening the picker does not wait on the
+/// expensive reads and fills in real titles + last-active top-to-bottom over
+/// a few frames). The picker must be open for the branch to fire; a closed
+/// picker resolves nothing.
 #[test]
 fn test_poll_resolves_rows_progressively() {
     let mut app = composition::app();

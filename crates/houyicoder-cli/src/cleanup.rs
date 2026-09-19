@@ -104,7 +104,11 @@ pub(crate) fn run_cleanup(
 /// empty-ttl, or a TTL wave, or cap overflow) -- and three oldest entries
 /// as concrete samples. The per-entry list is --verbose.
 fn print_prune_summary(plan: &PrunePlan) {
-    println!("{} entries prunable ({} kept).", plan.len(), plan.kept);
+    println!(
+        "{} entries prunable ({} user sessions kept).",
+        plan.len(),
+        plan.kept
+    );
     for kind in [PruneKind::Session, PruneKind::Snapshot, PruneKind::DebugLog] {
         for reason in [
             PruneReason::Ttl,

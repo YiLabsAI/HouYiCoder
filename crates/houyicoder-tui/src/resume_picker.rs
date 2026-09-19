@@ -50,10 +50,10 @@ pub struct SessionPickerState {
 /// SessionLog, so the TUI never imports the storage traits (dep-graph
 /// layering). Returns rows newest-updated first.
 ///
-/// Two-phase progressive loading: list_sessions is cheap (sidecar read +
-/// one log mtime stat per session — no log-head read/parse) so the picker
-/// opens instantly even with hundreds of sessions, sorted by real last
-/// activity. resolve_detail fills in the expensive field (title from a
+/// Two-phase progressive loading: list_sessions walks the store once and
+/// reads a sidecar only where a row could take a visible slot, so the picker
+/// opens after that one walk and never per frame; rows arrive sorted by real
+/// last activity. resolve_detail fills in the expensive field (title from a
 /// log-head read + serde parse) lazily for visible rows, a few per frame.
 pub trait SessionLister: Send + Sync {
     fn list_sessions(&self, current_sid: &str) -> Vec<SessionRow>;

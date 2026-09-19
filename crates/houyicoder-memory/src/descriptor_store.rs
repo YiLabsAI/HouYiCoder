@@ -14,6 +14,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use houyicoder_context::{
     DescriptorUpdate, SessionDescriptor, SessionDescriptorError, SessionDescriptorStore, SessionId,
     SessionProvenance,
+    session_class::{SIDECAR_FILE, session_dir},
 };
 
 /// Disk-backed descriptor store rooted beside the session event logs.
@@ -53,12 +54,8 @@ impl FileDescriptorStore {
         )
     }
 
-    fn session_dir(&self, session: SessionId) -> PathBuf {
-        self.root.join(format!("{session}"))
-    }
-
     fn descriptor_path(&self, session: SessionId) -> PathBuf {
-        self.session_dir(session).join("session.json")
+        session_dir(&self.root, session).join(SIDECAR_FILE)
     }
 
     fn ensure_dir(path: &Path) -> Result<(), SessionDescriptorError> {
@@ -82,7 +79,7 @@ impl FileDescriptorStore {
         session: SessionId,
         descriptor: &SessionDescriptor,
     ) -> Result<(), SessionDescriptorError> {
-        let dir = self.session_dir(session);
+        let dir = session_dir(&self.root, session);
         Self::ensure_dir(&dir)?;
         let path = self.descriptor_path(session);
         let body = serde_json::to_vec_pretty(descriptor)
@@ -125,24 +122,6 @@ impl FileDescriptorStore {
         // current config, which is safer than refusing to start.
         serde_json::from_str(&body).ok()
     }
-
-    fn list_sync(&self) -> Vec<(SessionId, SessionDescriptor)> {
-        let Ok(entries) = fs::read_dir(&self.root) else {
-            return Vec::new();
-        };
-        let out: Vec<(SessionId, SessionDescriptor)> = entries
-            .filter_map(Result::ok)
-            .filter_map(|e| {
-                let sid_str = e.file_name().to_string_lossy().into_owned();
-                let sid = SessionId::from_display_string(&sid_str)?;
-                let descriptor = self.read_sync(sid)?;
-                Some((sid, descriptor))
-            })
-            .collect();
-        // Unsorted: callers order by log.jsonl mtime (last activity), not the
-        // sidecar's updated_at (a creation-time proxy that never bumps).
-        out
-    }
 }
 
 impl SessionDescriptorStore for FileDescriptorStore {
@@ -184,13 +163,9 @@ impl SessionDescriptorStore for FileDescriptorStore {
         // write, resurrecting the sidecar of a torn-down session.
         let lock = self.session_lock(session);
         let _guard = lock.lock().expect("descriptor session lock poisoned");
-        let dir = self.session_dir(session);
+        let dir = session_dir(&self.root, session);
         // Best-effort: a missing dir is not an error (idempotent teardown).
         drop(fs::remove_dir_all(&dir));
-    }
-
-    fn list_descriptors(&self) -> Vec<(SessionId, SessionDescriptor)> {
-        self.list_sync()
     }
 }
 
@@ -255,17 +230,6 @@ impl SessionDescriptorStore for InMemoryDescriptorStore {
             .expect("descriptor mutex poisoned")
             .remove(&session);
     }
-
-    fn list_descriptors(&self) -> Vec<(SessionId, SessionDescriptor)> {
-        let out: Vec<(SessionId, SessionDescriptor)> = self
-            .descriptors
-            .lock()
-            .expect("descriptor mutex poisoned")
-            .iter()
-            .map(|(s, m)| (*s, m.clone()))
-            .collect();
-        out
-    }
 }
 
 /// Re-export the provenance variant constructors the composition root uses
@@ -310,9 +274,6 @@ mod tests {
         store.write_descriptor(sid, &descriptor).expect("write");
         let back = store.read_descriptor(sid).expect("read");
         assert_eq!(back, descriptor, "descriptor round-trips through disk");
-        let listed = store.list_descriptors();
-        assert_eq!(listed.len(), 1, "one session listed");
-        assert_eq!(listed[0].1.name.as_deref(), Some("my session"));
         drop(fs::remove_dir_all(&root));
     }
 
@@ -378,30 +339,6 @@ mod tests {
     }
 
     #[test]
-    fn test_file_lists_all_sessions() {
-        let root = temp_root();
-        let store = FileDescriptorStore::new(root.clone());
-        let older = SessionId::new();
-        let newer = SessionId::new();
-        store
-            .write_descriptor(older, &sample_descriptor(None, 100))
-            .expect("write older");
-        store
-            .write_descriptor(newer, &sample_descriptor(None, 200))
-            .expect("write newer");
-        let listed = store.list_descriptors();
-        assert_eq!(listed.len(), 2, "two sessions listed");
-        // list_descriptors is unsorted (callers order by log.jsonl mtime, not the
-        // sidecar's created_at); assert presence, not order.
-        let sids: Vec<_> = listed.iter().map(|(s, _)| *s).collect();
-        assert!(
-            sids.contains(&older) && sids.contains(&newer),
-            "both listed: {sids:?}"
-        );
-        drop(fs::remove_dir_all(&root));
-    }
-
-    #[test]
     fn test_file_store_delete_idempotent() {
         let root = temp_root();
         let store = FileDescriptorStore::new(root.clone());
@@ -459,6 +396,40 @@ mod tests {
         );
     }
 
+    /// A sidecar write resolves the session's directory the same way a read
+    /// does, so a session whose directory is named in the other spelling is
+    /// updated in place. Joining the id string unexamined would seal a second
+    /// sidecar beside no log, and the session would read as unnamed again.
+    #[test]
+    fn test_write_resolves_legacy_dir() {
+        let root = temp_root();
+        let store = FileDescriptorStore::new(root.clone());
+        let sid = SessionId::new();
+        let legacy = root.join(sid.ulid_name());
+        fs::create_dir_all(&legacy).expect("create legacy dir");
+        store
+            .write_descriptor(sid, &sample_descriptor(Some("first"), 1))
+            .expect("seed");
+        assert!(
+            legacy.join("session.json").is_file(),
+            "the sidecar lands in the directory the store holds"
+        );
+
+        store
+            .write_descriptor(sid, &sample_descriptor(Some("second"), 2))
+            .expect("update");
+        assert_eq!(
+            store.read_descriptor(sid).and_then(|d| d.name).as_deref(),
+            Some("second"),
+            "the update is visible through the same path"
+        );
+        assert!(
+            !root.join(sid.to_string()).exists(),
+            "one session does not get a second directory"
+        );
+        drop(fs::remove_dir_all(&root));
+    }
+
     #[test]
     fn test_in_memory_round_trips() {
         let store = InMemoryDescriptorStore::new();
@@ -466,7 +437,6 @@ mod tests {
         let descriptor = sample_descriptor(Some("x"), 5);
         store.write_descriptor(sid, &descriptor).expect("write");
         assert_eq!(store.read_descriptor(sid), Some(descriptor));
-        assert_eq!(store.list_descriptors().len(), 1);
         store.delete_descriptor(sid);
         assert!(store.read_descriptor(sid).is_none());
     }

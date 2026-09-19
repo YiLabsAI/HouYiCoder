@@ -5,7 +5,10 @@
 //! instead of silently starting a blank session the user thinks is their old one.
 
 use super::ResolvedProvider;
-use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{
+    EventId, NameSource, SessionDescriptor, SessionEvent, SessionId, SessionLogEntry,
+    SessionProvenance,
+};
 
 /// Serialize a minimal export slice (session_id + model + trajectory) so the
 /// resume path can deserialize it. serde ignores the derived-stats fields a
@@ -678,3 +681,6 @@ fn test_latest_picks_active_cwd() {
     std::fs::remove_dir_all(&sessions).ok();
     std::fs::remove_dir_all(&other_ws).ok();
 }
+
+#[path = "resume_select_tests.rs"]
+mod select;

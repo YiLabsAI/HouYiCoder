@@ -1,16 +1,17 @@
 //! Peer tests for the session retention plan + apply: the TTL rule for
 //! logged sessions, the sooner empty-session net, the count cap dropping
 //! the oldest survivors, the protected-set sparing, snapshot + debug-log
-//! rotation, and the stat-first recency listing the picker and --continue
-//! rely on. Plan tests assert on the plan's content (plan_prune is
-//! read-only); apply tests assert on the filesystem + the report.
+//! rotation, and the recency listing the picker and --continue rely on.
+//! Plan tests assert on the plan's content (plan_prune is read-only); apply
+//! tests assert on the filesystem + the report.
 
 use super::*;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use houyicoder_context::SessionId;
+use houyicoder_context::session_class::recent_user_sessions;
+use houyicoder_context::{NameSource, SessionDescriptor, SessionId, SessionProvenance};
 
 fn temp_root() -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,12 +54,54 @@ fn age(path: &Path, secs_ago: u64) {
 }
 
 fn session(root: &Path, sid: &str, with_log: bool) -> PathBuf {
+    write_session(root, sid, with_log, SessionProvenance::Fresh)
+}
+
+/// A sub-agent session: a real session with a log, whose sidecar records the
+/// parent that started it.
+fn child_session(root: &Path, sid: &str) -> PathBuf {
+    write_session(
+        root,
+        sid,
+        true,
+        SessionProvenance::SpawnedBy {
+            parent_session_id: "parent".to_string(),
+            subagent_type: "explore".to_string(),
+            task_id: "task".to_string(),
+        },
+    )
+}
+
+fn sidecar_json(provenance: SessionProvenance) -> String {
+    let descriptor = SessionDescriptor {
+        name: None,
+        name_source: NameSource::Auto,
+        cwd: "/tmp".to_string(),
+        model: "test-model".to_string(),
+        provenance,
+        version: "0.0.0".to_string(),
+        created_at: 1_700_000_000,
+        child_session_ids: Vec::new(),
+    };
+    serde_json::to_string(&descriptor).expect("serialize sidecar")
+}
+
+fn write_session(root: &Path, sid: &str, with_log: bool, provenance: SessionProvenance) -> PathBuf {
     let d = root.join(sid);
     fs::create_dir_all(&d).expect("mkdir sid");
-    fs::write(d.join("session.json"), "{}").expect("sidecar");
+    fs::write(d.join("session.json"), sidecar_json(provenance)).expect("sidecar");
     if with_log {
         fs::write(d.join("log.jsonl"), "[]").expect("log");
     }
+    d
+}
+
+/// A session whose sidecar never landed: the log is there, so it holds the
+/// user's work, but nothing says whether a parent started it.
+fn log_only_session(root: &Path, sid: &str) -> PathBuf {
+    let d = root.join(sid);
+    fs::create_dir_all(&d).expect("mkdir sid");
+    fs::write(d.join("log.jsonl"), "[]").expect("log");
     d
 }
 
@@ -421,15 +464,15 @@ fn test_list_recent_skips_logless() {
     age(&d1.join("log.jsonl"), 3600);
     let d2 = session(&root, &no_log, false);
     age(&d2, 1800);
-    let got = list_recent_sessions(&root, 100);
+    let got = recent_user_sessions(&root, 100);
     assert_eq!(got.len(), 1, "no-log session skipped");
-    assert_eq!(got[0].0.to_string(), with_log);
+    assert_eq!(got[0].sid.to_string(), with_log);
     let _r = fs::remove_dir_all(&root);
 }
 
-/// Sorted newest-first and truncated to the limit: the caller relies on
-/// the order (newest at [0]) and the limit (only the visible N pay the
-/// sidecar parse).
+/// Sorted newest-first and truncated to the limit: the caller relies on the
+/// order (newest at [0]) and the limit (only the visible N become rows; the
+/// scan behind it still reads the whole store).
 #[test]
 fn test_list_recent_newest_first() {
     let root = temp_root();
@@ -439,149 +482,127 @@ fn test_list_recent_newest_first() {
         // i=0 newest (1h ago), i=2 oldest (3h ago).
         age(&d.join("log.jsonl"), (i as u64 + 1) * 3600);
     }
-    let got = list_recent_sessions(&root, 2);
+    let got = recent_user_sessions(&root, 2);
     assert_eq!(got.len(), 2, "limit applied");
-    assert_eq!(got[0].0.to_string(), sids[0], "newest first");
-    assert_eq!(got[1].0.to_string(), sids[1], "second-newest second");
+    assert_eq!(got[0].sid.to_string(), sids[0], "newest first");
+    assert_eq!(got[1].sid.to_string(), sids[1], "second-newest second");
     let _r = fs::remove_dir_all(&root);
 }
 
+/// The listing the picker and --continue share: a child never takes a slot,
+/// even when it is the most recently active directory in the store. Each row
+/// also carries the directory it was scanned from and its sidecar, so the
+/// picker builds a row without a second read and a legacy-named directory is
+/// still reachable -- rebuilding the path from the id would miss it.
 #[test]
-fn test_backlog_notice_over_cap() {
+fn test_list_recent_skips_child() {
     let root = temp_root();
-    for i in 0..3 {
-        session(
-            &root,
-            &format!("00000000-0000-0000-0000-00000000000{i}"),
-            true,
-        );
-    }
-    // Over the count cap: the count route names the store size. threshold is
-    // irrelevant on this route (count > cap wins first).
-    let notice = store_backlog_notice(&root, 2, 100, &default_policy()).expect("3 dirs over cap 2");
-    assert!(
-        notice.contains("3 sessions") && notice.contains("over the retention count"),
-        "count route states the size and the rule: {notice}"
-    );
-    assert!(
-        notice.contains("houyi cleanup"),
-        "notice points at the review path: {notice}"
-    );
-    let _r = fs::remove_dir_all(&root);
-}
+    let sid = fresh_sid();
+    let user = session(&root, &sid, true);
+    age(&user.join("log.jsonl"), 3600);
+    let child = child_session(&root, &fresh_sid());
+    age(&child.join("log.jsonl"), 60);
 
-#[test]
-fn test_backlog_notice_under_cap() {
-    let root = temp_root();
-    session(&root, &fresh_sid(), true);
+    let got = recent_user_sessions(&root, 100);
+    assert_eq!(got.len(), 1, "a child is not a resumable row");
+    assert_eq!(
+        got[0].sid.to_string(),
+        sid,
+        "the user session is the only row"
+    );
+    assert_eq!(got[0].path, user, "the row carries the scanned directory");
     assert!(
-        store_backlog_notice(&root, 2, 100, &default_policy()).is_none(),
-        "1 dir under cap 2 and under threshold 100 is no backlog"
+        got[0].descriptor.is_some(),
+        "the row carries the sidecar the class came from"
     );
     let _r = fs::remove_dir_all(&root);
 }
 
+/// The cap drops the oldest user session, never a child: removing a child to
+/// make room would delete work its parent still points at.
 #[test]
-fn test_backlog_cap_zero() {
+fn test_cap_never_prunes_child() {
     let root = temp_root();
-    for i in 0..3 {
-        session(
-            &root,
-            &format!("00000000-0000-0000-0000-00000000000{i}"),
-            true,
-        );
-    }
+    let old = session(&root, &fresh_sid(), true);
+    age(&old.join("log.jsonl"), 7 * 24 * 3600);
+    let child = child_session(&root, &fresh_sid());
+    age(&child.join("log.jsonl"), 7200);
+    let mid = session(&root, &fresh_sid(), true);
+    age(&mid.join("log.jsonl"), 3600);
+    let newer = session(&root, &fresh_sid(), true);
+    age(&newer.join("log.jsonl"), 60);
+
+    let policy = PrunePolicy {
+        max_count: 2,
+        ..default_policy()
+    };
+    let plan = plan_prune(&root, &policy);
+    let pruned: Vec<&PathBuf> = plan.entries.iter().map(|e| &e.path).collect();
+    assert_eq!(pruned, vec![&old], "the oldest user session goes");
+    assert_eq!(plan.kept, 2, "the child is outside the cap count");
+    let _r = fs::remove_dir_all(&root);
+}
+
+/// A child is still bounded by the TTL window, not spared by its class: the
+/// parent's own removal cascades separately, and until then an expired child
+/// is just as prunable as an expired session.
+#[test]
+fn test_child_expires_by_ttl() {
+    let root = temp_root();
+    let child = child_session(&root, &fresh_sid());
+    age(&child.join("log.jsonl"), 31 * 24 * 3600);
+    let user = session(&root, &fresh_sid(), true);
+    age(&user.join("log.jsonl"), 3600);
+
+    let plan = plan_prune(&root, &default_policy());
+    assert_eq!(plan.entries.len(), 1);
+    assert_eq!(plan.entries[0].reason, PruneReason::Ttl);
+    assert_eq!(plan.entries[0].path, child);
+    assert_eq!(plan.kept, 1, "the live user session survives");
+    let _r = fs::remove_dir_all(&root);
+}
+
+/// A directory holding a log and no sidecar is someone's work in progress, so
+/// the cap must not drop it to make room for a count it does not belong to.
+#[test]
+fn test_log_only_skips_cap() {
+    let root = temp_root();
+    let only = log_only_session(&root, &fresh_sid());
+    age(&only.join("log.jsonl"), 7200);
+    let user = session(&root, &fresh_sid(), true);
+    age(&user.join("log.jsonl"), 60);
+
+    let plan = plan_prune(
+        &root,
+        &PrunePolicy {
+            max_count: 1,
+            ..default_policy()
+        },
+    );
     assert!(
-        store_backlog_notice(&root, 0, 100, &default_policy()).is_none(),
-        "cap 0 opts out of the count rule, so out of the notice"
+        plan.entries.is_empty(),
+        "one user session fills the cap; the orphan is not a candidate the cap counts"
+    );
+    assert_eq!(
+        plan.kept, 1,
+        "the user session is the one kept under the cap"
     );
     let _r = fs::remove_dir_all(&root);
 }
 
-/// The gap range (above threshold, at or under cap): a TTL-expired backlog
-/// the count route misses (under cap) is caught by a precise plan. The notice
-/// carries no number - the gap policy is approximate (no lock-held scan), so
-/// a prunable count here could disagree with cleanup's authoritative plan.
+/// The window empty_ttl covers is a directory with nothing in it: a log with
+/// no sidecar yet is aged by the full ttl, so a session being written is not
+/// reaped on the shorter rule.
 #[test]
-fn test_backlog_gap_ttl_backlog() {
+fn test_log_only_ttl_window() {
     let root = temp_root();
-    // 150 sessions, all past the 30d TTL, store under the 1000 cap.
-    for i in 0..150 {
-        let d = session(&root, &format!("00000000-0000-0000-0000-{i:012x}"), true);
-        age(&d.join("log.jsonl"), 31 * 24 * 3600);
-    }
-    let notice = store_backlog_notice(&root, 1000, 100, &default_policy())
-        .expect("150 TTL-expired sessions in the gap range fire the notice");
-    assert!(
-        notice.contains("retention window") && notice.contains("houyi cleanup"),
-        "gap notice routes without a number: {notice}"
-    );
-    assert!(
-        !notice.contains("150"),
-        "no prunable count in the gap notice (would drift with cleanup): {notice}"
-    );
-    let _r = fs::remove_dir_all(&root);
-}
+    let only = log_only_session(&root, &fresh_sid());
+    age(&only.join("log.jsonl"), 48 * 3600);
 
-/// Above the GAP_PRECISE_MAX_DIRS ceiling the precise plan is skipped even
-/// under the cap: a high cap must not turn every launch into a full stat.
-/// The store is large enough that the count route will take over once it
-/// grows past the cap; until then this range is silent.
-#[test]
-fn test_backlog_gap_above_ceiling() {
-    let root = temp_root();
-    // Just past the ceiling; names are SessionId-shaped and each carries a
-    // log.jsonl so count_session_dirs counts them (a no-log dir is not a
-    // resumable session and is excluded from the count).
-    for i in 0..(crate::session_prune::GAP_PRECISE_MAX_DIRS + 1) as u64 {
-        let d = root.join(format!("00000000-0000-0000-0000-{i:012x}"));
-        fs::create_dir_all(&d).unwrap();
-        fs::write(d.join("log.jsonl"), "[]").unwrap();
-    }
-    let cap = crate::session_prune::GAP_PRECISE_MAX_DIRS * 2; // cap above the ceiling
+    let plan = plan_prune(&root, &default_policy());
     assert!(
-        store_backlog_notice(&root, cap, 100, &default_policy()).is_none(),
-        "above the precise-plan ceiling + under cap => silent, no full stat"
-    );
-    let _r = fs::remove_dir_all(&root);
-}
-
-/// A non-session subdirectory (index/, a stray) is not counted: the size the
-/// count route names must be honest, or the notice overstates the store.
-#[test]
-fn test_backlog_skips_non_session() {
-    let root = temp_root();
-    fs::create_dir_all(root.join("index")).unwrap(); // not a SessionId
-    for i in 0..3 {
-        session(
-            &root,
-            &format!("00000000-0000-0000-0000-00000000000{i}"),
-            true,
-        );
-    }
-    let notice = store_backlog_notice(&root, 2, 100, &default_policy()).unwrap();
-    assert!(
-        notice.contains("3 sessions"),
-        "non-session dirs excluded from the count: {notice}"
-    );
-    let _r = fs::remove_dir_all(&root);
-}
-
-/// A no-log session is a crash orphan, not a resumable session. It must not
-/// inflate the count the startup notice names — otherwise the notice fires
-/// over the cap while the resume picker (which requires a log) shows far
-/// fewer, and the two disagree.
-#[test]
-fn test_backlog_excludes_logless() {
-    let root = temp_root();
-    session(&root, &fresh_sid(), true);
-    session(&root, &fresh_sid(), true);
-    let d_empty = session(&root, &fresh_sid(), false); // no log
-    age(&d_empty, 1800); // recent, within empty_ttl
-    // 2 logged sessions, 1 logless; cap=2. The logless one does not count.
-    assert!(
-        store_backlog_notice(&root, 2, 100, &default_policy()).is_none(),
-        "no-log session must not inflate the count past the cap"
+        plan.entries.is_empty(),
+        "48h is past empty_ttl and far short of ttl, so a log-only dir survives"
     );
     let _r = fs::remove_dir_all(&root);
 }
@@ -611,3 +632,6 @@ fn test_plan_cap_excludes_logless() {
     );
     let _r = fs::remove_dir_all(&root);
 }
+
+#[path = "session_prune_notice_tests.rs"]
+mod notice;

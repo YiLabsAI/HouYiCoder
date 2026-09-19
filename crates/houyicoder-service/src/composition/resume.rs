@@ -4,65 +4,48 @@ use super::*;
 use houyicoder_context::SessionLogEntry;
 use houyicoder_context::{
     NameSource, SessionDescriptor, SessionDescriptorStore, SessionProvenance,
+    session_class::{LOG_FILE, recent_user_sessions, scan_sessions, session_dir},
 };
 use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
 use houyicoder_session::{SessionStore, SourceChain};
 use std::path::Path;
 
 /// The most-recently-active session id in the current workspace, or None when
-/// no session with a durable log matches. Drives --continue: the session is
-/// picked by log.jsonl mtime (last append = last activity), the only signal
-/// that reflects real usage. Sessions without a log (zero durable events) are
-/// excluded -- "continue" presupposes something to continue, and resuming an
-/// empty session is a no-op. Converges strictly to the current workspace
-/// (descriptor.cwd match); no cross-workspace fallback -- a silent jump into another
-/// repo's session is the hazard cwd convergence exists to prevent.
+/// no session of the user's matches. Drives --continue: the session is picked
+/// by log.jsonl mtime (last append = last activity), the only signal that
+/// reflects real usage. Only the user's own sessions are candidates -- a
+/// sub-agent session is a sidechain of a parent and a shell has nothing to
+/// continue, so landing in one is not a continuation. Converges strictly to
+/// the current workspace (descriptor.cwd match); no cross-workspace fallback
+/// -- a silent jump into another repo's session is the hazard cwd convergence
+/// exists to prevent.
 pub fn latest_session_sid(sessions_root: &Path) -> Option<SessionId> {
     let cwd = workspace_cwd(None);
-    let descriptor_store: Arc<dyn SessionDescriptorStore> =
-        Arc::new(FileDescriptorStore::new(sessions_root.to_path_buf()));
-    // Stat-first: take the 200 most recently active sessions WITH a log
-    // (stat only, no sidecar parse), then parse only those for cwd match.
-    // On a 50k backlog this replaces 50k JSON parses with 200. A session
-    // without a log is skipped at the stat phase -- --continue needs
-    // something to continue, and resume_sid hard-errors on a missing log.
-    let recent = crate::session_prune::list_recent_sessions(sessions_root, 200);
+    // Take the 200 most recently active of the user's sessions, then walk them
+    // for the cwd match. The window bounds both the walk and the sidecar reads
+    // behind it: the listing stops reading once it holds that many sessions, so
+    // a store with thousands of sub-agent directories is not parsed for rows
+    // this window would drop.
+    let recent = recent_user_sessions(sessions_root, 200);
     let found = recent
         .iter()
-        .filter_map(|(sid, _)| {
-            let descriptor = descriptor_store.read_descriptor(*sid)?;
-            (descriptor.cwd == cwd).then_some((sid, ()))
-        })
-        .map(|(sid, _)| *sid)
-        .next();
+        .find(|session| session.descriptor.as_ref().is_some_and(|d| d.cwd == cwd))
+        .map(|session| session.sid);
     if found.is_some() {
         return found;
     }
     // Fallback: the cwd's session is outside the top 200 (old but still
     // the only one in this cwd). Do the full scan — rare, and the 200
     // window can be raised if it fires often enough to matter.
-    descriptor_store
-        .list_descriptors()
+    scan_sessions(sessions_root)
         .into_iter()
-        .filter(|(_, m)| m.cwd == cwd)
-        .filter_map(|(sid, _)| log_last_active_secs(sessions_root, &sid).map(|secs| (sid, secs)))
-        .max_by_key(|(_, secs)| *secs)
+        .filter(|session| session.is_user_session())
+        .filter_map(|session| {
+            let descriptor = session.descriptor.as_ref()?;
+            (descriptor.cwd == cwd).then_some((session.sid, session.last_active))
+        })
+        .max_by_key(|(_, last_active)| *last_active)
         .map(|(sid, _)| sid)
-}
-
-/// The last-append time of a session's durable log as Unix-epoch seconds, or
-/// None when the session has no log.jsonl (never appended -- zero durable
-/// events). One metadata() call gives both existence and mtime; missing log
-/// means "never appended" (the same convention log_size documents).
-pub fn log_last_active_secs(sessions_root: &Path, sid: &SessionId) -> Option<u64> {
-    let path = sessions_root.join(sid.to_string()).join("log.jsonl");
-    std::fs::metadata(&path)
-        .ok()?
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_secs())
 }
 
 /// The minimal slice of an export document the resume path consumes. The
@@ -176,7 +159,7 @@ pub fn build_runner_for_resume_sid(
     rule_store: Option<Arc<dyn RuleStore>>,
     resolved: ResolvedProvider,
 ) -> Result<ResumedRunner, ResumeError> {
-    let log_path = sessions_root.join(format!("{sid}")).join("log.jsonl");
+    let log_path = session_dir(sessions_root, sid).join(LOG_FILE);
     if !log_path.exists() {
         return Err(ResumeError::Read(format!(
             "no session log at {} (is the sid a session id?)",
@@ -272,9 +255,7 @@ pub fn build_runner_for_fork(
     let new_session = SessionId::new();
     // Existence precheck: a sid with no log on disk gets a friendly error
     // (mirrors resume_sid), not a cryptic "source replay" / Empty later.
-    let log_path = sessions_root
-        .join(format!("{source_sid}"))
-        .join("log.jsonl");
+    let log_path = session_dir(sessions_root, source_sid).join(LOG_FILE);
     if !log_path.exists() {
         return Err(ResumeError::Read(format!(
             "no session log at {} (is the sid a session id?)",

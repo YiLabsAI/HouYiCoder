@@ -115,9 +115,6 @@ pub trait SessionDescriptorStore: Send + Sync {
 
     /// Delete the sidecar. A missing sidecar is not an error.
     fn delete_descriptor(&self, session: SessionId);
-
-    /// List all sessions with a sidecar.
-    fn list_descriptors(&self) -> Vec<(SessionId, SessionDescriptor)>;
 }
 
 /// Whether an update_descriptor call found a sidecar to edit. Absent is not

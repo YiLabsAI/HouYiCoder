@@ -690,7 +690,7 @@ fn test_merge_session_adds_retry() {
 
     let tmp = std::env::temp_dir().join(format!("merge-cross-{}", std::process::id()));
     let _cleanup = std::fs::remove_dir_all(&tmp);
-    let dir = tmp.join("prev-session");
+    let dir = tmp.join(SessionId::new().to_string());
     std::fs::create_dir_all(&dir).expect("mkdir");
     let ev = SessionLogEntry {
         id: EventId::new(),

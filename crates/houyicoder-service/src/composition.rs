@@ -33,7 +33,7 @@ pub(crate) use containment::{ContainmentAdapter, attach_git_common_dir, restore_
 
 pub use resume::{
     ResumeError, build_runner_for_fork, build_runner_for_resume_export,
-    build_runner_for_resume_sid, latest_session_sid, log_last_active_secs,
+    build_runner_for_resume_sid, latest_session_sid,
 };
 use std::sync::Arc;
 

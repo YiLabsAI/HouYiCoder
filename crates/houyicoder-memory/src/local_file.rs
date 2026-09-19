@@ -1,6 +1,9 @@
 //! LocalFileBackend: persistent ContextBackend for v0. One directory per
 //! session under a root: <root>/<session>/log.jsonl (append-only, 0o600) +
 //! <root>/<session>/checkpoints/<cp>.json. File mode 0o600, dir 0o700 (Unix).
+//! Reads and writes resolve a session's directory from the id in either
+//! spelling: the uuid name, or the ULID name a store written before that
+//! format used.
 //!
 //! Main-chain dedup by event id via an in-memory seen set, mirroring
 //! InMemoryBackend. The set is cold on first append to a session: one
@@ -29,6 +32,7 @@ use houyicoder_async::PFut;
 use houyicoder_context::{
     BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId,
     LenientRead, LogRangeRead, ReverseRead, SessionId, SessionLogEntry,
+    session_class::{LOG_FILE, session_dir},
 };
 
 use crate::sha256_hex;
@@ -96,16 +100,12 @@ impl LocalFileBackend {
         set
     }
 
-    fn session_dir(&self, session: SessionId) -> PathBuf {
-        self.root.join(format!("{session}"))
-    }
-
     pub(crate) fn log_path(&self, session: SessionId) -> PathBuf {
-        self.session_dir(session).join("log.jsonl")
+        session_dir(&self.root, session).join(LOG_FILE)
     }
 
     fn checkpoint_dir(&self, session: SessionId) -> PathBuf {
-        self.session_dir(session).join("checkpoints")
+        session_dir(&self.root, session).join("checkpoints")
     }
 
     fn checkpoint_path(&self, session: SessionId, cp: CheckpointId) -> PathBuf {
@@ -141,7 +141,7 @@ impl LocalFileBackend {
 
     fn append_sync(&self, event: SessionLogEntry) -> Result<EventId, ContextError> {
         let session = event.session;
-        Self::ensure_dir(&self.session_dir(session))?;
+        Self::ensure_dir(&session_dir(&self.root, session))?;
         let log = self.log_path(session);
         // Dedup: O(1) set lookup, not an O(n) full-log rescan. The set is
         // cold on the first append to a session -- load_seen_set builds it
@@ -335,7 +335,7 @@ impl LocalFileBackend {
         };
         let needle = "\"block_ref\":\"";
         for entry in sessions.flatten() {
-            let log = entry.path().join("log.jsonl");
+            let log = entry.path().join(LOG_FILE);
             let Ok(content) = fs::read_to_string(&log) else {
                 continue;
             };

@@ -3,9 +3,8 @@
 use std::sync::Arc;
 
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{
-    SessionDescriptorStore, SessionEvent, SessionId, SessionLogEntry, SessionProvenance,
-};
+use houyicoder_context::session_class::{LOG_FILE, recent_user_sessions};
+use houyicoder_context::{SessionDescriptorStore, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::resume_picker::{SessionLister, SessionRow};
 
 pub struct SessionListerBridge {
@@ -30,23 +29,18 @@ impl SessionListerBridge {
 impl SessionLister for SessionListerBridge {
     fn list_sessions(&self, current_sid: &str) -> Vec<SessionRow> {
         let current = SessionId::from_display_string(current_sid).unwrap_or_default();
-        // Rank by log mtime before parsing descriptors, and exclude sessions
-        // without a resumable log.
+        // The listing already holds the user's own resumable sessions, ranked
+        // by last-active, so this only applies the visible limit.
         const VISIBLE_LIMIT: usize = 100;
-        let recent = houyicoder_service::session_prune::list_recent_sessions(
-            &self.sessions_root,
-            VISIBLE_LIMIT,
-        );
+        let recent = recent_user_sessions(&self.sessions_root, VISIBLE_LIMIT);
         let mut rows: Vec<SessionRow> = recent
             .into_iter()
-            .filter(|(sid, _)| *sid != current)
-            .filter_map(|(sid, last_active)| {
-                let descriptor = self.descriptor_store.read_descriptor(sid)?;
-                // Subagent sessions are not independently resumable — they
-                // are sidechains of a parent session. Filter them out.
-                if matches!(descriptor.provenance, SessionProvenance::SpawnedBy { .. }) {
-                    return None;
-                }
+            .filter(|entry| entry.sid != current)
+            .filter_map(|entry| {
+                // A user session always has its sidecar, and the entry carries
+                // both it and the directory it was scanned from, so a row costs
+                // no second read.
+                let descriptor = entry.descriptor?;
                 let cwd_basename = descriptor
                     .cwd
                     .rsplit('/')
@@ -59,24 +53,23 @@ impl SessionLister for SessionListerBridge {
                     .as_ref()
                     .filter(|n| !n.trim().is_empty())
                     .cloned()
-                    .unwrap_or_else(|| format!("(session) {}", short_sid(sid)));
-                let log_size =
-                    std::fs::metadata(self.sessions_root.join(sid.to_string()).join("log.jsonl"))
-                        .map(|m| m.len())
-                        .unwrap_or(0);
+                    .unwrap_or_else(|| format!("(session) {}", short_sid(entry.sid)));
+                let log_size = std::fs::metadata(entry.path.join(LOG_FILE))
+                    .map(|m| m.len())
+                    .unwrap_or(0);
                 Some(SessionRow {
-                    sid_str: sid.to_string(),
+                    sid_str: entry.sid.to_string(),
                     title,
                     cwd_basename,
-                    last_active,
+                    last_active: entry.last_active,
                     log_size,
                     ..Default::default()
                 })
             })
             .collect();
-        // Already sorted by last_active desc from list_recent_sessions,
-        // but filter_map may have dropped entries (read_descriptor None), so
-        // the order is preserved -- no re-sort needed.
+        // Already sorted by last_active desc by the listing, which also already
+        // dropped every non-user session; only the current session is removed
+        // above, and a removal preserves order -- so no re-sort is needed.
         // Dedup by the cheap title: when multiple sessions share the same
         // sidecar name (the common "re-running + naming alike" case), keep
         // only the most recently active one. The sort put the newest first,
@@ -98,7 +91,7 @@ impl SessionLister for SessionListerBridge {
         // old starts_with heuristic would have mistaken for a placeholder).
         // Only when there is no sidecar name do we pay the log-head read +
         // serde parse for the first-prompt slug. last_active is already the
-        // log mtime (set by list_sessions' stat), so no re-stat here.
+        // log mtime the listing carried, so no re-stat here.
         let has_name = self
             .descriptor_store
             .read_descriptor(sid)
@@ -207,8 +200,8 @@ mod tests {
         store.write_descriptor(sid, m).unwrap();
     }
 
-    /// Stamp a path's mtime to N seconds ago so the stat-first sort is
-    /// deterministic. list_recent_sessions resolves mtime at whole-second
+    /// Stamp a path's mtime to N seconds ago so the last-active sort is
+    /// deterministic. The listing resolves mtime at whole-second
     /// granularity, so two sessions written in the same second tie and the
     /// sort falls back to readdir order (non-deterministic); ageing each to
     /// a distinct second pins the order the tests assert on. The sidecar's
@@ -408,6 +401,56 @@ mod tests {
         assert!(
             !rows.iter().any(|r| r.sid_str == b.to_string()),
             "older shared-title session is dropped"
+        );
+        let _r = std::fs::remove_dir_all(&root);
+    }
+
+    /// A directory named in the legacy id spelling is reachable: the sid prints
+    /// as a UUID, so a reader that rebuilds the directory from the id finds
+    /// nothing and the row disappears. The listing carries the scanned
+    /// directory and the sidecar, so the row renders either way.
+    #[tokio::test]
+    async fn test_bridge_reads_legacy_name() {
+        const LEGACY: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let root = temp_root();
+        let dir = root.join(LEGACY);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sid = SessionId::from_display_string(LEGACY).unwrap();
+        assert_ne!(
+            dir,
+            root.join(sid.to_string()),
+            "the fixture is only meaningful while the two spellings differ"
+        );
+        std::fs::write(
+            dir.join("session.json"),
+            serde_json::to_vec(&descriptor(Some("legacy session"), "/repo", 1)).unwrap(),
+        )
+        .unwrap();
+        let entry = SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: 0,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: "legacy prompt".into(),
+            },
+        };
+        std::fs::write(
+            dir.join("log.jsonl"),
+            format!("{}\n", serde_json::to_string(&entry).unwrap()),
+        )
+        .unwrap();
+
+        let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+        let log: Arc<dyn SessionLog> = Arc::new(store);
+        let bridge = SessionListerBridge::new(log, root.clone());
+        let rows = bridge.list_sessions(&SessionId::new().to_string());
+        assert_eq!(rows.len(), 1, "a legacy-named session is still a row");
+        assert_eq!(rows[0].sid_str, sid.to_string());
+        assert_eq!(rows[0].title, "legacy session");
+        assert!(
+            rows[0].log_size > 0,
+            "the size is read from the directory the scan found"
         );
         let _r = std::fs::remove_dir_all(&root);
     }

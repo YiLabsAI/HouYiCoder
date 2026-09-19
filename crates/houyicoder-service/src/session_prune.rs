@@ -1,10 +1,11 @@
 //! Session retention: plan + apply, two phases over the sid-keyed sessions
 //! root. The shape mirrors SnapshotStore::prune (ttl, cap, protected) -
 //! one prune vocabulary across the store - adapted for sessions: the cap
-//! counts sessions (not bytes), last-active is the log.jsonl mtime, and a
-//! session with no log is idle since its dir mtime, pruned sooner via
-//! empty_ttl_secs (the empty-session net for the lazy-materialize crash
-//! window: a turn's durable log landed but the sidecar did not).
+//! counts the user's own sessions (not bytes) and last-active is the log's
+//! mtime, else the directory's. A shell - a directory a process created and
+//! appended nothing to - is idle since that same mtime and pruned sooner via
+//! empty_ttl_secs; a log whose sidecar never landed is not a shell, so it is
+//! bounded by the full ttl.
 //!
 //! Two phases, not prune(dry_run): plan_prune is read-only (it decides what
 //! to remove without touching anything), so its tests assert on the plan's
@@ -21,6 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use houyicoder_context::SessionId;
+use houyicoder_context::session_class::{SessionClass, scan_sessions};
 
 /// The retention policy: how old before a session is prunable, how soon an
 /// empty one is, the count cap, and the sessions a caller is live in (never
@@ -88,9 +90,11 @@ pub struct PruneEntry {
     pub action: PruneAction,
 }
 
-/// The decision: what to remove, and how many sessions survive the TTL pass
-/// (for cap context + "N of M kept" rendering). A value - routing, dry-run,
-/// and /status render the same plan.
+/// The decision: what to remove, and how many of the user's own sessions
+/// survive. Only those are counted, so the number is smaller than the
+/// directories left on disk whenever a child, a crash orphan, or a shell
+/// survives outside the cap. A value - routing, dry-run, and /status render
+/// the same plan.
 #[derive(Debug, Clone, Default)]
 pub struct PrunePlan {
     pub entries: Vec<PruneEntry>,
@@ -121,65 +125,44 @@ pub struct PruneReport {
 }
 
 /// Read the sessions root and decide what to remove: a session older than
-/// ttl by last-active (Ttl), one with no log older than empty_ttl (EmptyTtl),
-/// then the oldest survivors past the count cap (CapOverflow). The
-/// protected set is never pruned or counted. Read-only - nothing is removed;
-/// pass the plan to apply_prune to execute.
+/// ttl by last-active (Ttl), a shell older than empty_ttl (EmptyTtl), then
+/// the oldest of the user's own sessions past the count cap (CapOverflow).
+/// The protected set is never pruned or counted. Read-only - nothing is
+/// removed; pass the plan to apply_prune to execute.
 pub fn plan_prune(root: &Path, policy: &PrunePolicy) -> PrunePlan {
     let now = now_secs();
     let mut entries: Vec<PruneEntry> = Vec::new();
     let mut kept: Vec<(PathBuf, u64)> = Vec::new();
 
-    let Ok(dir_entries) = std::fs::read_dir(root) else {
-        return PrunePlan::default();
-    };
-    for entry in dir_entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
+    for session in scan_sessions(root) {
+        if policy.protected.contains(&session.sid) {
             continue;
         }
-        let Some(sid_str) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        // A dir whose name is not a session id (an index/ sub-dir, a stray)
-        // is not a session - skip it from both prune and cap.
-        let Some(sid) = SessionId::from_display_string(sid_str) else {
-            continue;
-        };
-        if policy.protected.contains(&sid) {
-            continue;
-        }
-        let has_log = path.join("log.jsonl").is_file();
-        let last_active = if has_log {
-            log_mtime(&path).unwrap_or_else(|| dir_mtime(&path))
-        } else {
-            dir_mtime(&path)
-        };
-        let ttl = if has_log {
-            policy.ttl_secs
-        } else {
+        let last_active = session.last_active;
+        let user = session.is_user_session();
+        let shell = session.class == SessionClass::Shell;
+        let ttl = if shell {
             policy.empty_ttl_secs
+        } else {
+            policy.ttl_secs
         };
         if ttl > 0 && now.saturating_sub(last_active) > ttl {
             entries.push(PruneEntry {
-                path,
+                path: session.path,
                 kind: PruneKind::Session,
-                reason: if has_log {
-                    PruneReason::Ttl
-                } else {
+                reason: if shell {
                     PruneReason::EmptyTtl
+                } else {
+                    PruneReason::Ttl
                 },
                 last_active,
                 action: PruneAction::RemoveDir,
             });
-        } else if has_log {
-            // Only sessions with a log count toward the cap — they are the
-            // resumable sessions the cap bounds. A no-log session that
-            // survives empty_ttl is neither pruned nor cap-counted; empty_ttl
-            // alone bounds it. Counting it here would trigger cap overflow on
-            // crash-orphans the user cannot resume, disagreeing with the
-            // resume picker (which also skips no-log sessions).
-            kept.push((path, last_active));
+        } else if user {
+            // The cap bounds the user's own sessions - the rows the picker
+            // offers. A child, a crash orphan, and a shell are bounded by
+            // their TTL window alone.
+            kept.push((session.path, last_active));
         }
     }
 
@@ -307,23 +290,6 @@ fn truncate_tail(path: &Path, keep_bytes: u64) -> bool {
     true
 }
 
-fn log_mtime(dir: &Path) -> Option<u64> {
-    let m = std::fs::metadata(dir.join("log.jsonl")).ok()?;
-    m.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-}
-
-fn dir_mtime(dir: &Path) -> u64 {
-    std::fs::metadata(dir)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -435,23 +401,46 @@ pub fn plan_all(targets: &PruneTargets, policy: &PrunePolicy) -> PrunePlan {
 /// onto different defaults.
 pub const EMPTY_TTL_SECS: u64 = 24 * 60 * 60;
 
-/// Ceiling on the gap-range precise plan at startup. A store this size or
-/// smaller gets a real plan to catch a TTL backlog under the count cap;
-/// larger stores fall back to the count path. A constant, not the
-/// user-configurable cap: a user who raises the cap to keep more sessions
-/// must not thereby pay a full stat on every launch.
+/// Ceiling on the gap-range precise plan at startup, in scanned directories:
+/// a store this size or smaller gets a real plan to catch a TTL backlog under
+/// the count cap, larger ones are judged by the count route alone. A constant,
+/// not the user-configurable cap: a user who raises the cap to keep more
+/// sessions must not thereby pay a full stat on every launch.
 pub const GAP_PRECISE_MAX_DIRS: usize = 2000;
 
+/// Whether a store of this many directories gets the gap route's precise plan.
+/// At or under the ceiling a plan catches a TTL backlog the count route cannot
+/// see; above it the count route judges alone, so a launch never pays a second
+/// pass over a store that large.
+fn gap_route_taken(dir_count: usize) -> bool {
+    dir_count <= GAP_PRECISE_MAX_DIRS
+}
+
 /// The startup backlog notice. Two routes, no drift between them:
-/// - over the count cap: a count notice naming the store size (a directory
-///   count, not a prunable count, so it cannot disagree with cleanup's plan).
-/// - in the gap range (above the routing threshold, at or under the cap and
-///   the GAP_PRECISE_MAX_DIRS ceiling): a precise plan decides whether a TTL
-///   backlog exists. The notice then carries no number: the gap policy is
-///   approximate (no lock-held scan), so a prunable count here could disagree
-///   with cleanup's authoritative plan. The notice routes; cleanup counts.
+/// - over the count cap: a count notice naming the store size (the count of
+///   the user's own sessions, the class the picker lists from, so neither can
+///   name a session the other does not; the picker shows a bounded prefix of
+///   them, not a different set).
+/// - in the gap range (above the routing threshold, under the ceiling): a
+///   precise plan decides whether a TTL backlog exists. The notice then
+///   carries no number: the gap policy is approximate (no lock-held scan), so
+///   a prunable count here could disagree with cleanup's authoritative plan.
+///   The notice routes; cleanup counts.
 ///
-/// cap 0 (count rule opted out) yields None. A read failure yields None.
+/// The routing input is the scanned directory total, not the user count: a
+/// store whose backlog is sub-agent children or crash orphans holds thousands
+/// of prunable directories and almost no user sessions, and that store is the
+/// one the cleanup pointer is for. The number above stays on user sessions,
+/// so the routing change does not restate it.
+///
+/// Above the ceiling the gap route is not taken and the count route is the
+/// only judge, so a store that large whose backlog is children or orphans and
+/// whose user count is under the cap is reported by neither route. The ceiling
+/// is a cost guard -- the precise plan is a second pass over the store -- and
+/// that hole is accepted for now rather than paid for on every launch.
+///
+/// cap 0 (count rule opted out) yields None, and an unreadable root counts
+/// zero.
 pub fn store_backlog_notice(
     sessions_root: &Path,
     cap: usize,
@@ -461,14 +450,18 @@ pub fn store_backlog_notice(
     if cap == 0 {
         return None;
     }
-    let count = count_session_dirs(sessions_root)?;
+    let sessions = scan_sessions(sessions_root);
+    let count = sessions
+        .iter()
+        .filter(|session| session.is_user_session())
+        .count();
     if count > cap {
         return Some(format!(
             "session store holds {count} sessions, over the retention count \
              of {cap} — run houyi cleanup to review"
         ));
     }
-    if count > threshold && count <= cap.min(GAP_PRECISE_MAX_DIRS) {
+    if sessions.len() > threshold && gap_route_taken(sessions.len()) {
         let plan = plan_prune(sessions_root, policy);
         if plan.len() >= threshold {
             return Some(
@@ -477,63 +470,6 @@ pub fn store_backlog_notice(
         }
     }
     None
-}
-
-/// One readdir + one stat per entry over the sessions root: the count of
-/// session directories that carry a log (a SessionId-shaped name + a
-/// directory + log.jsonl). A session without a log is a crash-orphan the
-/// empty_ttl net reaps, not a resumable session — counting it here would
-/// inflate the notice above the cap while the resume picker (which also
-/// requires a log) shows far fewer, so the two disagree. Non-session
-/// entries (an index/ subdirectory, a stray file) are excluded for the
-/// same reason.
-fn count_session_dirs(root: &Path) -> Option<usize> {
-    let entries = std::fs::read_dir(root).ok()?;
-    Some(
-        entries
-            .flatten()
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-            .filter(|e| {
-                e.file_name()
-                    .to_str()
-                    .is_some_and(|s| SessionId::from_display_string(s).is_some())
-            })
-            .filter(|e| e.path().join("log.jsonl").is_file())
-            .count(),
-    )
-}
-
-/// List sessions by last-active, stat-only (no sidecar parse). Returns
-/// (sid, last_active_secs) sorted newest-first, limited to the top N.
-/// The caller parses only these N sidecars (read_descriptor), not all -- on a
-/// 50k backlog the stat phase is readdir + one metadata() per dir (fast,
-/// no JSON), and only the visible N pay the serde cost. last-active is
-/// the log.jsonl mtime. A session without a log is skipped: a log is the
-/// precondition for both /resume (resume_sid hard-errors on a missing
-/// log) and --continue (nothing to continue), so listing a no-log
-/// session -- even one with a sidecar -- is a row the user cannot act
-/// on. The skip happens in the stat phase, before the limit is applied,
-/// so the N returned are N actionable sessions -- filtering after the
-/// truncate would spend slots on rows a caller has to discard.
-pub fn list_recent_sessions(root: &Path, limit: usize) -> Vec<(SessionId, u64)> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-    let mut sessions: Vec<(SessionId, u64)> = entries
-        .flatten()
-        .filter_map(|e| {
-            let path = e.path();
-            if !path.is_dir() {
-                return None;
-            }
-            let sid_str = path.file_name()?.to_str()?;
-            let sid = SessionId::from_display_string(sid_str)?;
-            Some((sid, log_mtime(&path)?))
-        })
-        .collect();
-    sessions.sort_by_key(|(_, la)| std::cmp::Reverse(*la));
-    sessions.truncate(limit);
-    sessions
 }
 
 #[cfg(test)]

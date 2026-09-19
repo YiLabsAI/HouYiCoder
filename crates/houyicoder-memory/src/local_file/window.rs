@@ -209,6 +209,42 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// Appending to a session whose directory is named in the other spelling
+    /// lands in that directory: the log path resolves through the store's
+    /// spelling rule, so a writer joins the log a reader would read instead of
+    /// opening a second directory for one session. Joining the id string
+    /// unexamined writes a log no scan pairs with its sidecar.
+    #[test]
+    fn test_append_lands_legacy_dir() {
+        let root = temp_root();
+        let b = LocalFileBackend::new(root.clone());
+        let s = SessionId::new();
+        let legacy = root.join(s.ulid_name());
+        std::fs::create_dir_all(&legacy).expect("create legacy dir");
+        std::fs::write(legacy.join("log.jsonl"), "").expect("seed log");
+
+        let id = EventId::new();
+        pollster::block_on(b.append(evt(
+            s,
+            id,
+            SessionEvent::UserInput {
+                text: "into the legacy dir".into(),
+            },
+        )))
+        .unwrap();
+
+        let written = std::fs::read_to_string(legacy.join("log.jsonl")).expect("read legacy log");
+        assert!(
+            written.contains("into the legacy dir"),
+            "the event lands in the directory the store already holds"
+        );
+        assert!(
+            !root.join(s.to_string()).exists(),
+            "one session does not get a second directory"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// The tolerant read parses good lines + skips + counts bad ones, so one
     /// corrupt line does not blank the search snapshot. The strict replay
     /// path stays separate (it errors on the bad line) -- two paths, not one.
