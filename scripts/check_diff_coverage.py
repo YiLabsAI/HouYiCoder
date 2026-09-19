@@ -32,6 +32,7 @@ from pathlib import Path
 # and check_coverage.sh so a stale line-table cannot pass either consumer.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cov_lcov import (  # noqa: E402
+    carries_verdict,
     cov_env,
     cov_target_dir,
     lcov_executable_lines,
@@ -315,8 +316,9 @@ def drop_profraw(cov_dir: str) -> None:
     leaves the samples, and the report merges every one it finds. A sample from
     an earlier revision carries that revision's line numbers, so merging it
     attributes hits to whatever now occupies those lines. Single-runner
-    assumption: cov_dir is shared, so a concurrent make check in another
-    worktree could have in-flight samples here (see drop_stale_profraw in
+    assumption: cov_dir belongs to this worktree, so another checkout's
+    samples are not at risk, but a concurrent run in this same worktree
+    could have in-flight samples here (see drop_stale_profraw in
     run_tests.py for the same hazard).
     """
     for root, _dirs, files in os.walk(cov_dir):
@@ -326,6 +328,37 @@ def drop_profraw(cov_dir: str) -> None:
                     os.remove(os.path.join(root, name))
                 except OSError:
                     pass
+
+
+def settled_verdict(executable, evidence, rebuild, measure):
+    """Work out which line table a verdict may be drawn from, and what it refuses.
+
+    Positions reported outside the file they belong to mean the line table
+    predates an edit, which is a fact about the instrumented artifacts rather
+    than about the code, so the gate settles it itself rather than asking the
+    author to clear the tree by hand. The rebuild is spent only on a table that
+    is already suspect, and it is spent once.
+
+    Returns that table, the evidence that must refuse it, and whether a rebuild
+    produced a table. The table is handed back rather than kept private because
+    a verdict drawn from the table this gate just called untrustworthy is the
+    hazard it exists to catch: a stale table is a projection of an older file,
+    so it can credit a hit to whatever now sits at that position and pass.
+
+    A rebuild that produced no table -- the tool failed, or the report carried
+    no executable lines -- leaves the evidence as it was, so it cannot clear a
+    refusal; the same for a table that is still stale after the rebuild, which
+    is a disagreement no rebuild explains.
+    """
+    if not evidence:
+        return executable, evidence, False
+    rebuilt = rebuild()
+    if not carries_verdict(rebuilt):
+        return executable, evidence, False
+    # The rebuild's own table is what any verdict must use, and the measure says
+    # whether that table can carry one: a table still stale after the rebuild is
+    # a disagreement no rebuild explains, so its evidence refuses as it stands.
+    return rebuilt, measure(rebuilt), True
 
 
 def instrumented_report(cov_dir: str, rebuild: bool) -> Path | None:
@@ -338,10 +371,14 @@ def instrumented_report(cov_dir: str, rebuild: bool) -> Path | None:
     usual path fast, and is right until a verdict depends on them being current.
     """
     if rebuild:
-        # Nukes the shared cov tree to force a fresh line table. Single-runner
-        # assumption: a concurrent make check in another worktree compiling
-        # against the same shared target/cov would see its artifacts deleted
-        # mid-flight. Per-dir lock or private rebuild dir is follow-up.
+        # Clears the whole cov tree to force a fresh line table. Single-runner
+        # assumption: the cache dir is per worktree, so this is not another
+        # checkout's artifacts, but a concurrent run in this same worktree --
+        # or any run pointed here by HOUYICODER_COV_DIR -- compiles against a
+        # tree that is being deleted mid-flight. Two paths reach this clear:
+        # a verdict below the threshold, and a report whose positions do not
+        # fit the source, which any edit that shortens a file can produce.
+        # Per-dir lock or private rebuild dir is follow-up.
         shutil.rmtree(os.path.join(ROOT, cov_dir), ignore_errors=True)
     else:
         drop_profraw(cov_dir)
@@ -358,6 +395,25 @@ def instrumented_report(cov_dir: str, rebuild: bool) -> Path | None:
         out.unlink(missing_ok=True)
         return None
     return out
+
+
+def rebuilt_table(cov_dir: str):
+    """The executable-line table of a newly rebuilt instrumented tree.
+
+    None when the rebuild produced no table, which the caller must read as a
+    failed rebuild rather than as a clean one: an unreadable report parses to no
+    table, a report cut off after its file headers parses to one whose every row
+    is empty, and neither has a position past end-of-file, so taking either for
+    clean would clear the refusal that prompted the rebuild.
+    """
+    report = instrumented_report(cov_dir, rebuild=True)
+    if report is None:
+        return None
+    try:
+        rows = lcov_executable_lines(report)
+        return rows if carries_verdict(rows) else None
+    finally:
+        report.unlink(missing_ok=True)
 
 
 def tally(added: dict, executable: dict) -> tuple[int, int, list[str]]:
@@ -451,10 +507,38 @@ def main() -> int:
         created_temp = True
 
     executable = lcov_executable_lines(lcov_path)
+    if not carries_verdict(executable):
+        # A report cut off after its file headers parses to a table whose every
+        # row is empty, and an empty table has no line to count: reporting "no
+        # new executable lines" from it would pass a gate that read nothing.
+        print(
+            f"error: no executable lines in the report at {lcov_path}, so it carries "
+            "no verdict.",
+            file=sys.stderr,
+        )
+        # The refusing report goes either way. A cached one left in place stays
+        # the newest file in the cov dir, so the freshness check keeps reusing
+        # it and every later run refuses the same way; clearing it by hand is
+        # the move this gate exists to remove.
+        lcov_path.unlink(missing_ok=True)
+        return 2
     if created_temp:
         lcov_path.unlink(missing_ok=True)
 
     stale = stale_mapping_evidence(executable)
+    if stale:
+        print(
+            "note: the line table predates an edit, so the report's positions are "
+            "suspect — rebuilding the instrumented tree to refresh it. The tree is "
+            "cleared first, so this run pays a cold build.",
+            file=sys.stderr,
+        )
+    # The verdict is drawn from the table this returns, never from the suspect
+    # one: that table describes an older file, so its hits sit on whatever
+    # positions now hold other code.
+    executable, stale, table_rebuilt = settled_verdict(
+        executable, stale, lambda: rebuilt_table(COV_DIR), stale_mapping_evidence
+    )
     if stale:
         print(
             "error: the coverage report describes source that is not the source on "
@@ -467,11 +551,20 @@ def main() -> int:
         )
         for s in stale[:5]:
             print(f"    {s}", file=sys.stderr)
-        print(
-            "  The line table comes from the instrumented binary, so this means the\n"
-            "  binary predates an edit. Delete target/cov and re-run to rebuild it.",
-            file=sys.stderr,
-        )
+        if not table_rebuilt:
+            print(
+                "  The rebuild that would have settled it produced no line table, so\n"
+                "  the positions above stand as reported. Re-run once.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "  The table was rebuilt once and the disagreement stands, so it is not\n"
+                "  leftover artifacts: the source changed while the table was being\n"
+                "  rebuilt, or something else rewrote the report. Re-run once — report\n"
+                "  it if it persists.",
+                file=sys.stderr,
+            )
         return 2
 
     covered_added, counted_added, missing = tally(added, executable)
@@ -491,16 +584,22 @@ def main() -> int:
     # This protects the failing direction only. The same staleness can hide a
     # genuinely uncovered line by crediting it with a hit that belonged to
     # earlier code, and that direction passes silently and is not rechecked here.
-    if pct + 1e-9 < THRESHOLD:
+    #
+    # A table already rebuilt above is not rebuilt again: the verdict is being
+    # drawn from a table built in this run, which is exactly what the recheck
+    # would go and buy.
+    if pct + 1e-9 < THRESHOLD and not table_rebuilt:
         print(
-            f"note: {pct:.1f}% is below the threshold; rebuilding the instrumented "
+            f"note: {pct:.1f}% is below the threshold — rebuilding the instrumented "
             "tree to rule out a stale line table before failing.",
             file=sys.stderr,
         )
-        rebuilt = instrumented_report(COV_DIR, rebuild=True)
-        if rebuilt is not None:
-            executable = lcov_executable_lines(rebuilt)
-            rebuilt.unlink(missing_ok=True)
+        # Same reader as above, so the same refusal applies: a rebuilt report
+        # carrying no executable lines is a failed rebuild, not a clean table,
+        # and is not allowed to turn a failing verdict into a passing one.
+        refreshed = rebuilt_table(COV_DIR)
+        if refreshed is not None:
+            executable = refreshed
             covered_added, counted_added, missing = tally(added, executable)
             if counted_added == 0:
                 print(f"ok: no new executable lines vs {BASE}.")

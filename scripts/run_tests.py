@@ -89,17 +89,19 @@ use_cov = shutil.which("cargo-llvm-cov") is not None and not use_nextest
 # its build cache on RUSTFLAGS; llvm-cov runs with instrumentation flags,
 # plain cargo test does not -- sharing the default target/ thrashes the
 # cache (a full rebuild on every cov<->plain switch, even for a docs-only
-# change). Pin the cov cache to a shared target/cov/ under the main
-# checkout so all worktrees reuse the same instrumented binaries — a new
-# worktree's first make check is warm, not a cold full-cov rebuild.
-# Cargo's incremental cache is content-addressed, so differing source
-# states across worktrees re-compile only the changed crates. The path
-# is resolved in cov_lcov so the writer here + the diff-cov reader agree.
+# change). The cov cache lives under target/cov/ of THIS worktree: a report is
+# derived from the objects in the target dir, so a cache holding a sibling
+# worktree's binaries would pull their line tables into this one's report and
+# the stale-mapping guard would then refuse a verdict here. The price is a
+# cold build the first time this cache is used, and the share of it sccache
+# can cache is the compiles rather than the final links, so it is a no-op
+# where it is not installed (RUSTC_WRAPPER is wired below). The path is
+# resolved in cov_lcov so the writer here + the diff-cov reader agree.
 COV_TARGET_DIR = cov_target_dir()
-# The report name carries this worktree. The instrumented binaries are shared
-# because cargo keys them by content; a report describes one worktree's
-# sources, so sharing its name hands the last writer's line table to the next
-# worktree's gate.
+# The report name carries this worktree. A report describes one worktree's
+# sources, so one shared name would hand the last writer's line table to the
+# next worktree's gate; the same reasoning is why the cache dir above is per
+# worktree rather than shared.
 LCOV_PATH = lcov_path(COV_TARGET_DIR)
 
 # Scope the coverage pass to the CHANGED crates only (--package), not the
@@ -127,19 +129,18 @@ def drop_stale_profraw():
     This is one of two staleness vectors. The other is the instrumented
     binary's line table, which is baked in at compile time and cannot be
     fixed by dropping samples alone: a binary built before the last edit
-    describes the file as it used to be. When that is the cause, clearing
-    profraw is not enough -- the whole cov cache must go (rm -rf target/cov)
-    so the next run rebuilds the table. The stale-mapping guard in
-    scripts/cov_lcov.py catches this by checking for lines past the end of
-    the source file, which only a stale table produces.
+    describes the file as it used to be. The stale-mapping guard in
+    scripts/cov_lcov.py catches that by checking for lines past the end of the
+    source file, which only a stale table produces, and the diff-cov gate
+    settles it there by clearing the cache and rebuilding the table itself.
 
     Only the samples go here. The compiled artifacts stay, so this costs
     nothing but the re-run that was going to happen anyway.
 
-    The cache is shared across worktrees, so this walks the shared dir;
-    a single-runner assumption holds here (concurrent make check across
-    worktrees would delete a sibling's in-flight samples). Per-run profraw
-    isolation for the parallel case is follow-up.
+    A single-runner assumption holds here: the cache dir belongs to this
+    worktree, so the walk is not deleting a sibling's samples, but a second
+    concurrent run in this same worktree would see its samples go. Per-run
+    profraw isolation for the parallel case is follow-up.
     """
     if not os.path.isdir(COV_TARGET_DIR):
         return

@@ -33,7 +33,12 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cov_lcov import check, normalize, stale_mapping_evidence  # noqa: E402
+from cov_lcov import (  # noqa: E402
+    carries_verdict,
+    check,
+    normalize,
+    stale_mapping_evidence,
+)
 
 # A real source file the detector can stat + read. normalize() maps any path
 # form to crates/... so this is repo-root-relative.
@@ -118,7 +123,18 @@ def main() -> int:
     if "no executable lines" not in err:
         failures.append(f"empty lcov: diagnostic missing 'no executable lines': {err.strip()}")
 
-    # 5. normalize() maps any path form to crates/... so evidence points at the
+    # 5. carries_verdict(): the rule both gates use before drawing a verdict
+    #    from a table. The header-only shape is the one truthiness alone gets
+    #    wrong -- keys present, every row empty -- and a report cut off after
+    #    its headers parses to exactly that, so a gate that read rows only for
+    #    truthiness would pass on a report it never read.
+    if carries_verdict({}):
+        failures.append("carries_verdict: an empty table carries no verdict")
+    if carries_verdict({REAL_SRC: {}}):
+        failures.append("carries_verdict: headers with no DA line carry no verdict")
+    if not carries_verdict({REAL_SRC: {last: False}}):
+        failures.append("carries_verdict: an uncovered line is still a verdict")
+    # 6. normalize() maps any path form to crates/... so evidence points at the
     #    real file. Pin it so a prefix-match rewrite cannot quietly break it.
     if normalize("abs/path/to/crates/foo/lib.rs") != "crates/foo/lib.rs":
         failures.append("normalize did not strip to crates/ prefix")
@@ -137,11 +153,11 @@ if __name__ == "__main__":
 
 
 def test_lcov_path_carries_worktree() -> None:
-    """The report name identifies the worktree that wrote it. The build cache
-    is shared across worktrees on purpose; a shared report name is not the
-    same thing, because a report describes one worktree's sources -- the
-    stale-mapping check then refuses a neighbour's line table, which reads as
-    a broken gate rather than as the collision it is."""
+    """The report name identifies the worktree that wrote it. The cache is per
+    worktree, and the name still carries the worktree so a report arriving from
+    elsewhere cannot pass as this one's: a report describes one worktree's
+    sources, so the stale-mapping check refuses a neighbour's line table, which
+    reads as a broken gate rather than as the collision it is."""
     import cov_lcov
 
     path = cov_lcov.lcov_path("/tmp/cov")
@@ -156,9 +172,9 @@ def test_lcov_path_carries_worktree() -> None:
 
 
 def test_cov_dir_override() -> None:
-    """A worktree can opt out of the shared cache. It has to be able to: the
-    report generator scans the target dir for objects, so a sibling's test
-    binaries land in the report with their own line tables and the gate
+    """A worktree can point its cache dir elsewhere. It has to be able to: the
+    report generator scans the target dir for objects, so objects built
+    elsewhere land in the report with their own line tables and the gate
     refuses a verdict it cannot draw."""
     import os
 

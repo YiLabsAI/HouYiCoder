@@ -23,12 +23,12 @@ CLI: python3 scripts/cov_lcov.py --check <lcov-path>
      python3 scripts/cov_lcov.py --env
   --check exits 0 if no stale mapping found, 2 if found (with evidence
   printed to stderr), 1 if the lcov file cannot be read. --cov-dir prints
-  the resolved shared instrumented-cache dir (used by the gates + shell).
-  --lcov-path prints this worktree's report path inside that dir.
-  --env prints shell export lines for the shared instrumented-build env,
-  so the shell gate builds with the same flags as the python gates -- a
-  flag that differs between them lands in the cargo fingerprint and makes
-  the two gates rebuild each other's artifacts on every alternation.
+  the resolved instrumented-cache dir for this worktree (used by the gates
+  + shell). --lcov-path prints this worktree's report path inside that dir.
+  --env prints shell export lines for the instrumented-build env, so the
+  shell gate builds with the same flags as the python gates -- a flag that
+  differs between them lands in the cargo fingerprint and makes the two
+  gates rebuild each other's artifacts on every alternation.
 """
 from __future__ import annotations
 
@@ -92,13 +92,13 @@ def cov_env(cov_dir: str, base: dict | None = None) -> dict:
 
 
 def lcov_path(cov_dir: str | None = None) -> str:
-    """This worktree's report path inside the shared cache dir.
+    """This worktree's report path inside this worktree's cache dir.
 
-    Sharing the build cache is safe -- cargo keys artifacts by content. A
-    report is not an artifact of that kind: it is a snapshot of one
-    worktree's sources, so a single shared name lets whichever worktree ran
-    last hand its line table to the next worktree's gate, which the
-    stale-mapping check above then correctly refuses. One name per writer.
+    The cache is already per worktree, and the name still carries the worktree
+    so a report that arrives from elsewhere -- copied by hand, or written by a
+    run whose cache dir was pointed here -- cannot hand one worktree's line
+    table to another worktree's gate, which the stale-mapping check above would
+    then refuse on a verdict that was in fact clean. One name per writer.
     """
     base = cov_dir if cov_dir is not None else cov_target_dir()
     root = _worktree_root()
@@ -152,6 +152,18 @@ def lcov_executable_lines(lcov_path: Path) -> dict[str, dict[int, bool]]:
     return out
 
 
+def carries_verdict(rows: dict[str, dict[int, bool]]) -> bool:
+    """Whether a line table has any executable line to draw a verdict from.
+
+    Both gates must agree on this, so it lives beside the reader: a report cut
+    off after its file headers parses to a table whose keys exist and whose
+    every row is empty, and an empty table has no line to count, so "no new
+    executable lines" from it would pass a gate that read nothing. Testing
+    truthiness alone misses that shape, which is why the check is on the rows.
+    """
+    return bool(rows) and any(rows.values())
+
+
 def stale_mapping_evidence(executable: dict, root: Path = ROOT) -> list[str]:
     """Lines the report places outside the file they belong to.
 
@@ -177,7 +189,7 @@ def check(report: Path) -> int:
         print(f"error: lcov report not found at {report}", file=sys.stderr)
         return 1
     executable = lcov_executable_lines(report)
-    if not executable:
+    if not carries_verdict(executable):
         print(f"error: no executable lines parsed from {report}", file=sys.stderr)
         return 1
     evidence = stale_mapping_evidence(executable)

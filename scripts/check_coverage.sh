@@ -47,20 +47,21 @@ THRESHOLD=${COV_THRESHOLD:-85}
 # Isolate the instrumented build cache (target/cov) so it does not thrash the
 # plain dev cache. Clean profraw only (not the build): llvm-cov merges every
 # sample it finds, and the instrumented binary is cargo-dep-tracked so only the
-# samples go stale. Resolve the shared cache dir from cov_lcov so this gate
-# agrees with run_tests.py + check_diff_coverage.py (writer/reader one path).
+# samples go stale. Resolve this worktree's cache dir from cov_lcov so this
+# gate agrees with run_tests.py + check_diff_coverage.py (writer/reader one path).
 COV_DIR="$(python3 scripts/cov_lcov.py --cov-dir 2>/dev/null || echo target/cov)"
 # One instrumented-build env for every gate (cov_lcov.py --env): a flag that
 # differs between this gate and run_tests.py lands in the cargo fingerprint,
 # and the two gates then rebuild each other's artifacts on every alternation
 # -- the chronic "cold again" between make check and make check-full.
 eval "$(python3 scripts/cov_lcov.py --env 2>/dev/null || true)"
-# The report name carries this worktree: the cache is shared, and a report is
-# a snapshot of one worktree's sources, so a shared name lets the last writer
-# hand its line table to another worktree's gate.
+# The report name carries this worktree: a report is a snapshot of one
+# worktree's sources, so a name that anyone could write lets a report arriving
+# from elsewhere hand its line table to this gate.
 LCOV="$(python3 scripts/cov_lcov.py --lcov-path 2>/dev/null || echo "$COV_DIR/houyi-cov.lcov")"
-# Single-runner assumption: COV_DIR is shared, so this delete could hit a
-# sibling worktree's in-flight samples under concurrent make check.
+# Single-runner assumption: COV_DIR belongs to this worktree, so this delete
+# can only hit a concurrent run in this same worktree, or one pointed here by
+# HOUYICODER_COV_DIR.
 find "$COV_DIR" -name '*.profraw' -delete 2>/dev/null || true
 # --locked: this runs as its own CI job in parallel with the lint/test jobs,
 # so it cannot rely on an earlier `cargo check --locked` in the same job to

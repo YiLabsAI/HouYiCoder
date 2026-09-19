@@ -27,19 +27,31 @@ Covered logics:
     on its own)
   - the IGNORE substring filter still drops test files while keeping
     production files
+  - a suspect line table is settled by one rebuild: the table it produced is
+    what the verdict must use, clean clears the refusal while still-stale
+    keeps it, and a current table spends no rebuild
+  - neither a failed rebuild nor a rebuilt report carrying no executable lines
+    can clear a refusal: a report cut off after its file headers parses to a
+    truthy table whose rows are all empty, so the reader refuses it before any
+    measurement, and the report is unlinked either way
 
 Run: python3 scripts/test_diff_cov.py  (wired into make check as
 diff-cov-tests). Exit 0 = pass, 1 = fail.
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_diff_coverage as gate  # noqa: E402
 from check_diff_coverage import (  # noqa: E402
     is_path_rewrite,
     is_macro_rename,
     module_renames,
     parse_added_lines,
+    rebuilt_table,
+    settled_verdict,
 )
 
 RENAMES = {"projection_memory": "projection::memory"}
@@ -182,6 +194,116 @@ def main() -> int:
         'eprintln!("failed: {e}");', 'tracing::warn!("different message");'
     ):
         failures.append("is_macro_rename: message change must NOT be exempt")
+
+    # 12. a suspect line table is settled by one rebuild, and the table the
+    # verdict must use is what comes back -- the rebuilt one, never the table
+    # this call just called untrustworthy. Paired on one entry point: a clean
+    # rebuild clears the refusal, a still-stale one keeps it, and reverting
+    # either half (returning the suspect table, or keeping the evidence of a
+    # settled table) turns one of these red.
+    SUSPECT_TABLE = {"a.rs": {9: True}}
+    SUSPECT = ["a.rs:9 (file has 8 lines)"]
+    FRESH = {"a.rs": {1: True}}
+    calls = []
+
+    def rebuild(table):
+        def go():
+            calls.append(1)
+            return table
+
+        return go
+
+    def measure_fresh_only(table):
+        return [] if table is FRESH else ["measured the table that prompted the rebuild"]
+
+    got, evidence, rebuilt = settled_verdict(
+        SUSPECT_TABLE, SUSPECT, rebuild(FRESH), measure_fresh_only
+    )
+    if got is not FRESH or evidence != [] or rebuilt is not True or len(calls) != 1:
+        failures.append(f"settled_verdict: a clean rebuilt table must be the one used, got {got}")
+    got, evidence, rebuilt = settled_verdict(
+        SUSPECT_TABLE, SUSPECT, rebuild(FRESH), lambda _t: SUSPECT
+    )
+    if got is not FRESH or evidence != SUSPECT or rebuilt is not True:
+        failures.append(f"settled_verdict: a stale rebuilt table must still refuse, got {evidence}")
+
+    # 13. a current table spends no rebuild -- this branch must stay off the
+    # normal path, where a rebuild costs a full instrumented compile -- and the
+    # caller's own table stays the one the verdict is drawn from.
+    spent = []
+
+    def never():
+        spent.append(1)
+        return FRESH
+
+    got, evidence, rebuilt = settled_verdict(FRESH, [], never, lambda _t: [])
+    if got is not FRESH or evidence != [] or rebuilt is not False or spent:
+        failures.append(f"settled_verdict: a current table must not rebuild, spent {spent}")
+
+    # 14. a rebuild that produced no table leaves both the evidence and the
+    # refusal standing, and it is caught before the measurement: an empty
+    # table has no position past end-of-file, so measuring it would read as
+    # clean and clear a refusal the rebuild never settled.
+    measured = []
+    got, evidence, rebuilt = settled_verdict(
+        SUSPECT_TABLE, SUSPECT, lambda: {}, lambda t: measured.append(t) or []
+    )
+    if got is not SUSPECT_TABLE or evidence != SUSPECT or rebuilt is not False or measured:
+        failures.append(f"settled_verdict: an empty rebuilt table must refuse, got {evidence}")
+    got, evidence, rebuilt = settled_verdict(SUSPECT_TABLE, SUSPECT, lambda: None, lambda _t: [])
+    if got is not SUSPECT_TABLE or evidence != SUSPECT or rebuilt is not False:
+        failures.append(f"settled_verdict: a failed rebuild must not clear it, got {evidence}")
+    # Headers without a DA line parse to keys whose every row is empty, which is
+    # truthy: the guard must read the rows, not the table.
+    got, evidence, rebuilt = settled_verdict(
+        SUSPECT_TABLE, SUSPECT, lambda: {"crates/a/src/lib.rs": {}}, lambda t: measured.append(t) or []
+    )
+    if got is not SUSPECT_TABLE or evidence != SUSPECT or rebuilt is not False or measured:
+        failures.append(f"settled_verdict: a rebuilt table with empty rows must refuse, got {evidence}")
+
+    # 15. the reader of a rebuilt report refuses one whose file entries carry no
+    # executable lines. The parse gives an empty row per file header, which is a
+    # truthy table with no position that can disagree with anything, so a report
+    # cut off after its headers would clear the refusal the rebuild was spent to
+    # settle. The control is the same report one DA line longer.
+    original = gate.instrumented_report
+    written = []
+
+    def report_of(body: str):
+        def write(cov_dir, rebuild):
+            fd, name = tempfile.mkstemp(suffix=".lcov")
+            os.close(fd)
+            path = Path(name)
+            path.write_text(body, encoding="utf-8")
+            written.append(path)
+            return path
+
+        return write
+
+    try:
+        gate.instrumented_report = report_of("SF:crates/a/src/lib.rs\nend_of_record\n")
+        before = len(written)
+        if rebuilt_table("cov") is not None:
+            failures.append("rebuilt_table: a report with no DA lines must read as no table")
+        # The patch must be the reader that ran: without this the case would
+        # pass on an unreached writer and fall through to a real instrumented
+        # build.
+        if len(written) != before + 1:
+            failures.append("rebuilt_table: the patched rebuild was not reached")
+        elif written[-1].exists():
+            failures.append("rebuilt_table: the rebuilt report must be removed")
+
+        gate.instrumented_report = report_of("SF:crates/a/src/lib.rs\nDA:1,1\nend_of_record\n")
+        if rebuilt_table("cov") != {"crates/a/src/lib.rs": {1: True}}:
+            failures.append("rebuilt_table: a report with a DA line must yield that table")
+        if written[-1].exists():
+            failures.append("rebuilt_table: the report is removed on the reading path too")
+
+        gate.instrumented_report = lambda cov_dir, rebuild: None
+        if rebuilt_table("cov") is not None:
+            failures.append("rebuilt_table: a failed rebuild must read as no table")
+    finally:
+        gate.instrumented_report = original
 
     if failures:
         for f in failures:
