@@ -357,8 +357,10 @@ pub struct App {
     /// its durable assistant frame. Drives the live-row render.
     pub live_active: bool,
     /// Transient reasoning preview from streamed ReasoningDelta chunks.
-    /// Cleared on Done. Held for the post-turn ThoughtFor summary, not
-    /// echoed live (the live indicator is the spinner verb, see live_block).
+    /// Cleared on Done. Not echoed live (the live indicator is the spinner
+    /// verb, see live_block); the spinner reads its length for the minimum
+    /// reasoning hold, and a run that streamed any of it counts as having
+    /// live output.
     pub live_reasoning_text: String,
     /// The content block currently streaming during a live turn. A
     /// ReasoningDelta flips it to Thinking, an assistant-text Delta to
@@ -487,11 +489,6 @@ pub struct App {
     /// Verbose render: force results, reasoning, and fold groups expanded
     /// with untruncated chips. Set in the search view, cleared on exit.
     pub verbose: bool,
-    /// Session counter minting a stable unique turn_id for each completed
-    /// turn's ThoughtFor line (incremented at FinalOutput Done). Drives
-    /// ThoughtFor.turn_id so expand/collapse state keys off turn identity,
-    /// not reasoning text (which can collide across turns).
-    pub turn_seq: u64,
     /// Parallel to last_row_callids: the fold-group key a visible row belongs
     /// to (Some on a collapsed summary / expanded collapse-hint row) so Ctrl+O
     /// and click can toggle the fold group under the selection anchor.

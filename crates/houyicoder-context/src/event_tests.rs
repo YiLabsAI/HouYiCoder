@@ -318,6 +318,12 @@ fn test_event_variants_round_trip() {
                 content_hash: 0xdeadbeef,
             },
         ),
+        event(
+            s,
+            EventId::new(),
+            SessionEvent::RunCompleted { secs: Some(7) },
+        ),
+        event(s, EventId::new(), SessionEvent::RunCompleted { secs: None }),
     ];
     for e in &cases {
         let json = serde_json::to_string(e).expect("serialize");
@@ -351,6 +357,27 @@ fn test_event_variants_round_trip() {
             content_hash: 0, ..
         } => {}
         other => panic!("expected legacy SkillListing with hash 0, got {other:?}"),
+    }
+    // A turn whose loop was never measured records no duration, and a record
+    // written before the field existed carries it in the stored form alone.
+    // Both read as unknown, never as a turn that took no time.
+    let untimed = cases
+        .iter()
+        .find(|e| matches!(e.event, SessionEvent::RunCompleted { secs: None }))
+        .expect("unmeasured record case present");
+    let json = serde_json::to_string(untimed).unwrap();
+    assert!(
+        json.contains("\"RunCompleted\""),
+        "named in the stored form: {json}"
+    );
+    let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    if let Some(serde_json::Value::Object(fields)) = v.get_mut("event") {
+        fields.remove("secs");
+    }
+    let older: SessionLogEntry = serde_json::from_value(v).expect("legacy deserialize");
+    match older.event {
+        SessionEvent::RunCompleted { secs: None } => {}
+        other => panic!("expected RunCompleted with no duration, got {other:?}"),
     }
 }
 

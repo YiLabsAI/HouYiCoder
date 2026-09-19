@@ -1,32 +1,37 @@
 //! The transcript-snapshot bridge: an impl of the TUI's TranscriptSnapshot
-//! seam backed by the runner's SessionLog. The search view loads the whole
-//! durable session log (every SessionLogEntry) via the backend's sync read,
-//! projects each event to a SessionUpdate, and flattens to TranscriptLine
-//! through the same transcript_from_frames the live render uses, so the
-//! snapshot renders identically to the live transcript.
+//! seam backed by the runner's SessionLog. The search view reads the durable
+//! session log via the backend's sync read, maps each event to the frames the
+//! live stream carries, and flattens them through the same
+//! transcript_from_frames the live render uses, so scrolling through history
+//! shows the turns the live view showed.
 //!
-//! The event-to-SessionUpdate mapping is the service layer's
-//! map_session_update -- one function, shared with the live path.
-//! A local copy would drift (it already did: TurnAborted was missing from
-//! the copy, so an interrupted turn rendered live but not in the snapshot
-//! -- the index!=render the snapshot seam exists to eliminate). Sharing the
-//! function is the structural parity guarantee, not a test.
+//! The mappings are the service layer's map_session_update and
+//! map_acpx_notification, the same two the live push uses. A local copy would
+//! drift, as one already did when it left out the interruption notice.
+//!
+//! Run state is what the two paths cannot share: this one reads a log written
+//! by another process, so a turn that no record closes stays open here.
 //!
 //! For logs over the threshold, the window method seeks + parses per screen
 //! (never loading the whole log), and the lazy offset index (index_chunk)
 //! reverse-reads from the tail so the view can seek to any scroll position
 //! without reading the prefix. G triggers a full build with progress.
 
+//! A window read walks a bounded lookback ahead of the window's first line, so
+//! a window that starts inside a turn still carries that turn's summary row.
+//! Rows are named within the frames a window loaded, so a row's name is stable
+//! for one anchor and differs from the name the whole-log read gives it.
+
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{SessionId, SessionLogEntry};
-use houyicoder_service::protocol_adapter::map_session_update;
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_service::protocol_adapter::{map_acpx_notification, map_session_update};
 use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::transcript::snapshot::{
     IndexProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
-use houyicoder_tui::transcript::{TranscriptFrame, transcript_from_frames};
+use houyicoder_tui::transcript::{TranscriptFrame, bounds_turn_in, transcript_from_frames};
 
 /// The reverse-read chunk for the lazy index: 4 MB per index_chunk call.
 /// At 60 fps this completes a 310 MB / 90k-event log in ~1.5 s (77 chunks).
@@ -35,6 +40,17 @@ const INDEX_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 /// The window read budget: 256 KB per screen (~70 events at 3.6 KB avg).
 #[cfg(test)]
 const WINDOW_MAX_BYTES: u64 = 256 * 1024;
+
+/// One reverse-read step of the turn lookback: the log ahead of a window is
+/// read in 64 KB steps. A recorded turn spans 16 KB at the median and 66 KB at
+/// the ninetieth percentile, so one step carries the turn a window starts
+/// inside.
+const LOOKBACK_STEP_BYTES: u64 = 64 * 1024;
+
+/// The most a window read spends finding the turn it starts inside. A turn
+/// whose opening message sits further back than this renders without its
+/// summary row, as it did before the lookback existed.
+const LOOKBACK_MAX_BYTES: u64 = 512 * 1024;
 
 /// The lazy event-byte-offset index. Built by reverse-reading from the
 /// tail (EOF) toward BOF, prepending each batch so offsets stay in
@@ -79,23 +95,114 @@ impl SessionLogSnapshot {
         serde_json::from_str::<SessionLogEntry>(line).ok()
     }
 
-    /// Map raw JSONL lines through the shared mapping + flatten to
-    /// TranscriptLine. Corrupt lines are skipped + counted (the tolerant
-    /// path, not the strict replay path).
-    fn project_lines(lines: &[(u64, String)]) -> (Vec<TranscriptLine>, usize) {
-        let mut skipped = 0;
-        let frames: Vec<TranscriptFrame> = lines
+    /// Map a durable event to the frames the projection reads, through the
+    /// same two mappers the live push uses: the session/update stream and the
+    /// acpx notifications it has no variant for. Both are needed — a run
+    /// completion record arrives as a notification, and it is what tells the
+    /// projection where a turn ended.
+    fn frames_of(event: &SessionEvent) -> [Option<TranscriptFrame>; 2] {
+        [
+            map_session_update(event).map(TranscriptFrame::Session),
+            map_acpx_notification(event).map(TranscriptFrame::Acpx),
+        ]
+    }
+
+    /// The frames a run of durable events projects to. The snapshot has no run
+    /// state to consult, so a turn its log carries no record for is left open:
+    /// the snapshot never claims a turn ended that the log does not record as
+    /// ended.
+    fn frames_of_events<'a>(
+        events: impl IntoIterator<Item = &'a SessionLogEntry>,
+    ) -> Vec<TranscriptFrame> {
+        let mut frames = Vec::new();
+        for event in events {
+            frames.extend(Self::frames_of(&event.event).into_iter().flatten());
+        }
+        frames
+    }
+
+    /// Project a run of durable events to transcript lines.
+    fn project_events<'a>(
+        events: impl IntoIterator<Item = &'a SessionLogEntry>,
+    ) -> Vec<TranscriptLine> {
+        let frames = Self::frames_of_events(events);
+        transcript_from_frames(&frames, 0..frames.len(), true)
+    }
+
+    /// The frames a line's event projects to, in log order.
+    fn frames_of_line(line: &str) -> Vec<TranscriptFrame> {
+        Self::parse_event(line)
+            .map(|ev| Self::frames_of(&ev.event).into_iter().flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// Whether the step holds where a turn begins or ends, in the sense the
+    /// projection reads: a message that opened a turn, or the record that
+    /// closed one. The step's lines arrive newest first, so reading them in
+    /// reverse walks the log forward and the frames of a message and of its
+    /// delivery mark stay in the order the projection expects.
+    fn holds_boundary(step: &[(u64, String)]) -> bool {
+        let mut frames: Vec<TranscriptFrame> = Vec::new();
+        for (_, line) in step.iter().rev() {
+            frames.extend(Self::frames_of_line(line));
+        }
+        bounds_turn_in(&frames)
+    }
+
+    /// The lines of the log ahead of a window, read so the projection knows
+    /// where the turn the window starts inside began. The read walks back in
+    /// 64 KB steps and stops at the first step holding a turn boundary, so it
+    /// costs the turn the window cuts into rather than the whole log.
+    fn turn_lookback(&self, first_byte: u64) -> Vec<(u64, String)> {
+        let backend = self.session_log.backend();
+        let mut from = first_byte;
+        let mut budget = LOOKBACK_MAX_BYTES;
+        let mut newest_first: Vec<(u64, String)> = Vec::new();
+        while from > 0 && budget > 0 {
+            let step = budget.min(LOOKBACK_STEP_BYTES);
+            let rev = backend.read_lines_reverse(self.session_id, from, step);
+            budget -= step;
+            let bounded = Self::holds_boundary(&rev.lines);
+            newest_first.extend(rev.lines);
+            if bounded {
+                break;
+            }
+            from = rev.next_from.unwrap_or(0);
+        }
+        newest_first.reverse();
+        newest_first
+    }
+
+    /// Project one screen: the window's own lines, folded against the frames
+    /// the lookback recovered. A window starting inside a turn reaches the fold
+    /// with the turn's opening frame behind its first line, which is what keeps
+    /// the summary row the fold derives at the frame that closed the turn.
+    /// Only the window's lines become rows; corrupt ones are skipped + counted.
+    fn project_window(
+        &self,
+        first_byte: u64,
+        lines: &[(u64, String)],
+    ) -> (Vec<TranscriptLine>, usize) {
+        let ahead = if first_byte > 0 {
+            self.turn_lookback(first_byte)
+        } else {
+            Vec::new()
+        };
+        let ahead_events: Vec<SessionLogEntry> = ahead
             .iter()
-            .filter_map(|(_, line)| match Self::parse_event(line) {
-                Some(ev) => map_session_update(&ev.event).map(TranscriptFrame::Session),
-                None => {
-                    skipped += 1;
-                    None
-                }
-            })
+            .filter_map(|(_, line)| Self::parse_event(line))
             .collect();
-        let rendered = transcript_from_frames(&frames);
-        (rendered, skipped)
+        let mut frames = Self::frames_of_events(&ahead_events);
+        let start = frames.len();
+        let mut skipped = 0;
+        for (_, line) in lines {
+            match Self::parse_event(line) {
+                Some(ev) => frames.extend(Self::frames_of(&ev.event).into_iter().flatten()),
+                None => skipped += 1,
+            }
+        }
+        let window = transcript_from_frames(&frames, start..frames.len(), true);
+        (window, skipped)
     }
 }
 
@@ -114,13 +221,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
             };
         }
         let read = self.session_log.backend().read_log_lenient(self.session_id);
-        let frames: Vec<TranscriptFrame> = read
-            .events
-            .iter()
-            .filter_map(|ev| map_session_update(&ev.event))
-            .map(TranscriptFrame::Session)
-            .collect();
-        let lines = transcript_from_frames(&frames);
+        let lines = Self::project_events(&read.events);
         SnapshotLoad {
             lines,
             skipped: read.skipped,
@@ -133,7 +234,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
             .session_log
             .backend()
             .read_log_range(self.session_id, anchor, max_bytes);
-        let (lines, skipped) = Self::project_lines(&range.lines);
+        let (lines, skipped) = self.project_window(anchor, &range.lines);
         WindowLoad {
             lines,
             start_offset: anchor,
@@ -159,7 +260,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
             .read_lines_reverse(self.session_id, total, max_bytes);
         let fwd: Vec<(u64, String)> = rev.lines.into_iter().rev().collect();
         let start_offset = fwd.first().map(|(o, _)| *o).unwrap_or(total);
-        let (lines, skipped) = Self::project_lines(&fwd);
+        let (lines, skipped) = self.project_window(start_offset, &fwd);
         WindowLoad {
             lines,
             start_offset,
@@ -188,7 +289,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
                 .read_lines_reverse(self.session_id, from_byte, max_bytes);
         let fwd: Vec<(u64, String)> = rev.lines.into_iter().rev().collect();
         let start_offset = fwd.first().map(|(o, _)| *o).unwrap_or(0);
-        let (lines, skipped) = Self::project_lines(&fwd);
+        let (lines, skipped) = self.project_window(start_offset, &fwd);
         WindowLoad {
             lines,
             start_offset,
@@ -259,393 +360,5 @@ impl TranscriptSnapshot for SessionLogSnapshot {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use houyicoder_context::{EventId, SessionEvent};
-    use houyicoder_tui::records::TranscriptLine;
-
-    fn ev(kind: SessionEvent) -> SessionLogEntry {
-        SessionLogEntry {
-            id: EventId::new(),
-            session: SessionId::new(),
-            ts: 0,
-            prev_hash: None,
-            event: kind,
-        }
-    }
-
-    /// A bash call + result pair projects to a Tool chip row followed by a
-    /// result row whose body is the raw stdout. The parity guarantee + the
-    /// footprint source (body stored once).
-    #[test]
-    fn test_bash_renders_stdout_body() {
-        let events = &[
-            ev(SessionEvent::ToolCall {
-                call_id: "c1".into(),
-                tool: "bash".into(),
-                input: serde_json::json!({"command": "echo hi"}),
-            }),
-            ev(SessionEvent::tool_result(
-                "c1".to_string(),
-                serde_json::json!({"stdout": "hi\nthere", "exitCode": 0}),
-            )),
-        ];
-        let frames: Vec<TranscriptFrame> = events
-            .iter()
-            .filter_map(|ev| map_session_update(&ev.event))
-            .map(TranscriptFrame::Session)
-            .collect();
-        let lines = transcript_from_frames(&frames);
-        assert!(lines.len() >= 2, "call + result rows: {lines:?}");
-        let body = match &lines[1] {
-            TranscriptLine::Tool { body, .. } => body.clone(),
-            other => panic!("expected result row, got {other:?}"),
-        };
-        assert!(body.contains("hi"), "stdout in body: {body}");
-        assert!(body.contains("there"), "full stdout in body: {body}");
-    }
-
-    /// TurnAborted must surface in the snapshot. The shared mapping
-    /// closes the drift structurally; this test pins it.
-    #[test]
-    fn test_turn_aborted_visible_snapshot() {
-        let events = &[ev(SessionEvent::TurnAborted {
-            reason: "user escape".into(),
-        })];
-        let frames: Vec<TranscriptFrame> = events
-            .iter()
-            .filter_map(|ev| map_session_update(&ev.event))
-            .map(TranscriptFrame::Session)
-            .collect();
-        let lines = transcript_from_frames(&frames);
-        let text = match &lines[..] {
-            [TranscriptLine::User(s)] => s.clone(),
-            other => panic!("expected one user notice row, got {other:?}"),
-        };
-        assert!(
-            text.contains("interrupted"),
-            "TurnAborted notice in the snapshot: {text}"
-        );
-        assert!(
-            text.contains("user escape"),
-            "the abort reason carries through: {text}"
-        );
-    }
-
-    #[test]
-    fn test_audit_events() {
-        assert!(
-            map_session_update(&SessionEvent::MetaUser {
-                text: "nudge".into()
-            })
-            .is_none()
-        );
-        assert!(
-            map_session_update(&SessionEvent::TurnStarted {
-                turn: 1,
-                call_in_turn: 0
-            })
-            .is_none()
-        );
-    }
-
-    /// Build a real LocalFileBackend + SessionStore + SessionLogSnapshot over a
-    /// temp root, appending the given events. For the real-backend acceptance
-    /// tests (parity, multibyte, large-log budget) that must exercise the
-    /// byte-window + reverse-read + index paths on disk, not the mock.
-    fn bridge_with_log(
-        events: &[SessionLogEntry],
-    ) -> (SessionLogSnapshot, SessionId, std::path::PathBuf) {
-        use houyicoder_memory::LocalFileBackend;
-        use houyicoder_session::SessionStore;
-        let root = std::env::temp_dir().join(format!(
-            "houyi_bridge_acceptance_{}_{}",
-            SessionId::new(),
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&root).expect("create temp root");
-        let backend = LocalFileBackend::new(root.clone());
-        let store = SessionStore::new(Box::new(backend));
-        // SessionStore.append drives a tokio Mutex, so it needs a tokio runtime
-        // (pollster cannot drive it); block_on a fresh runtime.
-        let rt = tokio::runtime::Runtime::new().expect("test runtime");
-        for ev in events {
-            rt.block_on(store.append(ev.clone())).expect("append");
-        }
-        let session = events.first().map(|e| e.session).unwrap_or_default();
-        let snap = SessionLogSnapshot::new(std::sync::Arc::new(store), session);
-        (snap, session, root)
-    }
-
-    fn ev_session(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
-        SessionLogEntry {
-            id,
-            session,
-            ts: 0,
-            prev_hash: None,
-            event: kind,
-        }
-    }
-
-    /// Source parity: the whole-log load and the byte-window read render the
-    /// same lines for the same events. The window path seeks + parses per
-    /// screen; the load path reads the whole log tolerantly. Both go through
-    /// the same map_session_update + transcript_from_frames, so the
-    /// rendered text must match byte-for-byte (the parity guarantee that
-    /// closes index!=render).
-    #[test]
-    fn test_window_matches_load_render() {
-        let session = SessionId::new();
-        let events: Vec<SessionLogEntry> = (0..5)
-            .map(|i| {
-                ev_session(
-                    session,
-                    EventId::new(),
-                    SessionEvent::UserInput {
-                        text: format!("line {i}"),
-                    },
-                )
-            })
-            .collect();
-        let (snap, _s, root) = bridge_with_log(&events);
-        let load = snap.load(1 << 20);
-        let win = snap.window(0, 1 << 20);
-        let load_text: Vec<String> = load.lines.iter().map(|l| l.render()).collect();
-        let win_text: Vec<String> = win.lines.iter().map(|l| l.render()).collect();
-        assert_eq!(load_text, win_text, "load vs window render parity");
-        assert!(!win_text.is_empty());
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// A multi-byte UTF-8 sequence is preserved across a window boundary: the
-    /// 64KB-chunk reverse read + the line-aligned forward read never split a
-    /// multi-byte sequence, so no U+FFFD appears + the content is intact.
-    #[test]
-    fn test_window_safe_on_multibyte() {
-        let session = SessionId::new();
-        let body = "边界测试 UTF-8 安全性 🦀 end".to_string();
-        let events = vec![
-            ev_session(
-                session,
-                EventId::new(),
-                SessionEvent::AssistantMessage {
-                    text: body.clone(),
-                    thinking: None,
-                },
-            ),
-            ev_session(
-                session,
-                EventId::new(),
-                SessionEvent::AssistantMessage {
-                    text: "second".into(),
-                    thinking: None,
-                },
-            ),
-        ];
-        let (snap, _s, root) = bridge_with_log(&events);
-        // Forward window from 0 + reverse tail window both must keep the
-        // multibyte char intact (no corruption across chunk edges).
-        let fwd = snap.window(0, 1 << 20);
-        let rev = snap.tail_window(1 << 20);
-        let joined_fwd: String = fwd
-            .lines
-            .iter()
-            .map(|l| l.render())
-            .collect::<Vec<_>>()
-            .join("|");
-        assert!(
-            joined_fwd.contains('🦀'),
-            "forward window keeps the multibyte: {joined_fwd}"
-        );
-        let joined_rev: String = rev
-            .lines
-            .iter()
-            .map(|l| l.render())
-            .collect::<Vec<_>>()
-            .join("|");
-        assert!(
-            joined_rev.contains('🦀'),
-            "reverse tail keeps the multibyte: {joined_rev}"
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// The lazy index does not cover the whole log until G completes: byte_at
-    /// returns None for un-indexed positions, then Some after the build. The
-    /// full build completes in a bounded number of chunks (no infinite loop).
-    #[test]
-    fn test_index_builds_bounded_chunks() {
-        let session = SessionId::new();
-        let events: Vec<SessionLogEntry> = (0..200)
-            .map(|i| {
-                ev_session(
-                    session,
-                    EventId::new(),
-                    SessionEvent::UserInput {
-                        text: format!("ev {i} padding to a few bytes"),
-                    },
-                )
-            })
-            .collect();
-        let (snap, _s, root) = bridge_with_log(&events);
-        // Before the build, byte_at is None (index not done).
-        assert!(snap.byte_at(0).is_none(), "byte_at None before the build");
-        let mut steps = 0u32;
-        let progress = loop {
-            let p = snap.index_chunk();
-            steps += 1;
-            if p.done || steps > 1000 {
-                break p;
-            }
-        };
-        assert!(progress.done, "index build completed in {steps} chunks");
-        assert!(steps <= 1000, "bounded, no infinite loop ({steps} steps)");
-        assert!(snap.byte_at(0).is_some(), "byte_at answers after the build");
-        assert!(
-            snap.event_count().is_some(),
-            "event_count answers after the build"
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// Real-machine budget on a large log: enter (tail_window) actually
-    /// materializes the mapping (lines > 0 + the tail needle renders), the
-    /// enter < 300 ms, one window scan < 100 ms, the full index build
-    /// completes, and the resident window + index stay bounded. Generates a
-    /// synthetic local-format log just over the threshold so the mapping is
-    /// real (a foreign-format log would parse-skip to empty, measuring only
-    /// the byte mechanism). Set HOUYICODER_LARGE_LOG to a real log path to
-    /// additionally stress the byte mechanism on a bigger file (mapping may
-    /// be empty there -- the content assertions are skipped in that mode).
-    #[test]
-    #[ignore]
-    // too_many_lines: a budget benchmark -- setup, measure, assert in one body.
-    // Splitting obscures the measured region.
-    #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
-    fn test_large_log_budget() {
-        use houyicoder_memory::LocalFileBackend;
-        use houyicoder_session::SessionStore;
-        let root = std::env::temp_dir().join(format!(
-            "houyi_large_budget_{}_{}",
-            SessionId::new(),
-            std::process::id()
-        ));
-        let session = SessionId::new();
-        let session_dir = root.join(format!("{session}"));
-        std::fs::create_dir_all(&session_dir).expect("create session dir");
-        let log_path = session_dir.join("log.jsonl");
-
-        const NEEDLE: &str = "BUDGETNEEDLE";
-        let real_log = std::env::var("HOUYICODER_LARGE_LOG").ok();
-        let using_real = real_log
-            .as_ref()
-            .map(|p| std::path::Path::new(p).exists())
-            .unwrap_or(false);
-        if using_real {
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(real_log.as_deref().unwrap(), &log_path)
-                .expect("symlink the large log");
-        } else {
-            // Synthetic local-format log just over the threshold: ~520 events
-            // with a ~32 KB body each ~ 16+ MB. The last event carries the
-            // needle so the tail window's mapping must surface it.
-            let mut buf: Vec<u8> = Vec::with_capacity(17 * 1024 * 1024);
-            for i in 0..520u32 {
-                let text = if i == 519 {
-                    format!("{NEEDLE} {}", "x".repeat(32 * 1024))
-                } else {
-                    "x".repeat(32 * 1024)
-                };
-                let ev = SessionLogEntry {
-                    id: EventId::new(),
-                    session,
-                    ts: i as u64,
-                    prev_hash: None,
-                    event: SessionEvent::UserInput { text },
-                };
-                let mut line = serde_json::to_vec(&ev).expect("serialize event");
-                line.push(b'\n');
-                buf.extend_from_slice(&line);
-            }
-            std::fs::write(&log_path, buf).expect("write synthetic log");
-        }
-        let backend = LocalFileBackend::new(root.clone());
-        let store = SessionStore::new(Box::new(backend));
-        let snap = SessionLogSnapshot::new(std::sync::Arc::new(store), session);
-
-        let total = snap.log_size();
-        assert!(
-            total > 16 * 1024 * 1024,
-            "the large log is over the threshold ({total} bytes)"
-        );
-
-        // Enter (tail window): one 256 KB reverse read + parse + project.
-        let t0 = std::time::Instant::now();
-        let tail = snap.tail_window(WINDOW_MAX_BYTES);
-        let enter_ms = t0.elapsed().as_millis();
-        assert!(
-            enter_ms < 300,
-            "tail_window < 300ms on {total} bytes (took {enter_ms}ms)"
-        );
-        // Content materialization (the real-mapping mode): the tail window
-        // must hold rendered lines + the needle, not be empty. Skipped for a
-        // foreign-format real log (mapping parses to nothing there).
-        let rendered: String = tail
-            .lines
-            .iter()
-            .map(|l| l.render())
-            .collect::<Vec<_>>()
-            .join("|");
-        if !using_real {
-            assert!(
-                !tail.lines.is_empty(),
-                "tail window materialized lines (not empty):\n{rendered}"
-            );
-            assert!(
-                rendered.contains(NEEDLE),
-                "tail window contains the needle (real mapping):\n{}",
-                &rendered[..rendered.len().min(400)]
-            );
-        }
-        // The resident window is bounded by WINDOW_MAX_BYTES regardless of log size.
-        let window_bytes: usize = tail.lines.iter().map(|l| l.render().len()).sum();
-        assert!(
-            window_bytes < 1_000_000,
-            "resident window bounded ({window_bytes} bytes), not the whole {total}-byte log"
-        );
-
-        // One older-window scan (window_before): bounded read + parse + project < 100 ms.
-        let t0 = std::time::Instant::now();
-        let _scan = snap.window_before(tail.start_offset, WINDOW_MAX_BYTES);
-        let scan_ms = t0.elapsed().as_millis();
-        assert!(scan_ms < 100, "window_before < 100ms (took {scan_ms}ms)");
-
-        // Full index build: completes in a bounded number of chunks (no freeze
-        // -- one chunk per frame in production; here we drain to done).
-        let t0 = std::time::Instant::now();
-        let mut steps = 0u32;
-        let progress = loop {
-            let p = snap.index_chunk();
-            steps += 1;
-            if p.done || steps > 100_000 {
-                break p;
-            }
-        };
-        let build_s = t0.elapsed().as_secs_f64();
-        assert!(
-            progress.done,
-            "full index completed in {steps} chunks / {build_s:.1}s"
-        );
-        // The offset index size is event-count x 8 bytes, not the log size.
-        let idx_bytes = snap.event_count().map(|n| n * 8).unwrap_or(0);
-        assert!(
-            idx_bytes < 5_000_000,
-            "index bounded ({idx_bytes} bytes), not the {total}-byte log"
-        );
-        eprintln!(
-            "large_log_budget: log {total} bytes ({}), enter {enter_ms}ms, scan {scan_ms}ms, index {steps} chunks {build_s:.1}s ({idx_bytes}B)",
-            if using_real { "real" } else { "synthetic" }
-        );
-        let _removed = std::fs::remove_dir_all(&root);
-    }
-}
+#[path = "transcript_snapshot_bridge_tests.rs"]
+mod tests;

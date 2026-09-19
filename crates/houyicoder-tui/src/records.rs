@@ -127,20 +127,29 @@ pub enum TranscriptLine {
     /// The per-turn "thought for Ns" line, carrying the turn's reasoning text
     /// so Ctrl+O can expand it inline below the answer (the
     /// "Thought for Ns (ctrl+o to expand)" shape). reasoning is None when the
-    /// turn emitted no reasoning (no hint, no expand).
+    /// turn emitted no reasoning (no hint, no expand). The frame projection
+    /// derives this row from the turn's own frames, so the live turn and the
+    /// same turn replayed from the log render the same row.
     ThoughtFor {
-        secs: u32,
+        /// How long the turn's drive legs ran, summed: the time the agent
+        /// spent working, not the wall clock the turn was open for. A wait for
+        /// an approval between legs is excluded, so a wait for the user does
+        /// not read as thinking time. None when the log carries no completion
+        /// record for that turn (written before the record existed): the row
+        /// then shows no duration, rather than claiming zero seconds.
+        secs: Option<u32>,
         reasoning: Option<String>,
         /// One-line tool-call summary for this turn ("ran 3 tools (2 bash,
         /// 1 grep)"); None when the turn ran no tools.
         tool_summary: Option<String>,
-        /// Stable unique id for THIS turn's ThoughtFor (a session counter
-        /// minted at Done). The expand/collapse state (expanded_thinking)
-        /// is keyed by this, NOT by the reasoning text — two turns can
-        /// produce identical reasoning text, and keying by reasoning would
-        /// collide them so expanding one expanded both. Survives transcript
-        /// rebuilds because ThoughtFor is TUI-only (preserved, not
-        /// re-derived) on rebuild.
+        /// Identity of THIS turn's row: the position of the frame that ended
+        /// the turn, counted in the frames the reader folded. A rebuild folds
+        /// the whole log, so the name holds still while its window slides and
+        /// across a session reload; a read that folds only the lines it loaded
+        /// names rows within those lines. The expand/collapse state
+        /// (expanded_thinking) is keyed by this, NOT by the reasoning text:
+        /// two turns can produce identical text, and keying by reasoning would
+        /// collide them so expanding one expanded both.
         turn_id: String,
     },
     /// /context breakdown rendered INLINE as conversation content (multi-row
@@ -335,13 +344,12 @@ impl TranscriptLine {
     /// Slash-command User echoes (starting with /), ContextGrid, System,
     /// and Approval lines have no matching SessionLogEntry, so the transcript
     /// rebuild must preserve them at their original positions instead of
-    /// appending them at the end.
+    /// appending them at the end. A line the projection derives (ThoughtFor)
+    /// is not TUI-only: the rebuild re-derives it, and treating it as
+    /// preserved would leave a second copy behind.
     pub fn is_tui_only(&self) -> bool {
         match self {
-            Self::ContextGrid(_)
-            | Self::System(_)
-            | Self::ThoughtFor { .. }
-            | Self::Interrupted => true,
+            Self::ContextGrid(_) | Self::System(_) | Self::Interrupted => true,
             Self::User(s) => s.starts_with('/'),
             _ => false,
         }
@@ -362,6 +370,35 @@ impl TranscriptLine {
     /// expands their bodies via the per-item expand state, not here.
     pub fn render_verbose(&self) -> String {
         self.render_with(true)
+    }
+
+    /// The thought-row label for a given expand affordance: the flat render,
+    /// the search text, and the row emitter build it here so the index
+    /// matches what the transcript shows. hint is the toggle the caller
+    /// offers (None when the row carries no reasoning to expand, or when an
+    /// enclosing block owns the toggle). None when the line is not a thought
+    /// row.
+    pub(crate) fn thought_row_text(&self, hint: Option<&str>) -> Option<String> {
+        let Self::ThoughtFor {
+            secs, tool_summary, ..
+        } = self
+        else {
+            return None;
+        };
+        let mut text = match secs {
+            Some(s) => format!("Thought for {s}s"),
+            None => "Thought".to_string(),
+        };
+        if let Some(summary) = tool_summary {
+            text.push_str(", ");
+            text.push_str(summary);
+        }
+        if let Some(toggle) = hint {
+            text.push_str(" (ctrl+o to ");
+            text.push_str(toggle);
+            text.push(')');
+        }
+        Some(format!("✻ {text}"))
     }
 
     pub(crate) fn tool_call_rows(&self, width: u16, full: bool) -> Option<Vec<String>> {
@@ -438,21 +475,17 @@ impl TranscriptLine {
             Self::System(s) => format!("✻ {s}"),
             Self::Interrupted => INTERRUPTED_NOTICE.to_string(),
             Self::Thinking { text } => format!("✻ {}", thinking_brief(text)),
-            Self::ThoughtFor {
-                secs,
-                reasoning,
-                tool_summary,
-                ..
-            } => match (reasoning, tool_summary) {
-                (Some(_), Some(ts)) => {
-                    format!("✻ Thought for {}s, {} (ctrl+o to expand)", secs, ts)
-                }
-                (Some(_), None) => {
-                    format!("✻ Thought for {}s (ctrl+o to expand)", secs)
-                }
-                (None, Some(ts)) => format!("✻ Thought for {}s, {}", secs, ts),
-                (None, None) => format!("✻ Thought for {}s", secs),
-            },
+            Self::ThoughtFor { .. } => {
+                let hint = matches!(
+                    self,
+                    Self::ThoughtFor {
+                        reasoning: Some(_),
+                        ..
+                    }
+                )
+                .then_some("expand");
+                self.thought_row_text(hint).unwrap_or_default()
+            }
             // The grid block is rendered by the working-surface renderer as a
             // multi-row inline widget (grid + legend side-by-side, drill-down,
             // suggestions). render() returns a flat-text fallback so /search

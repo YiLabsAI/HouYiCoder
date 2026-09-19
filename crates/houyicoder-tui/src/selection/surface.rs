@@ -324,17 +324,17 @@ impl Surface for TranscriptSurface<'_> {
             && self.app.selection.is_click_only()
             && self.app.selection.span_origin.is_none();
         if clean {
-            // Read the anchor row's tag/text/fold-key, then drop the borrows
-            // before the &mut App toggle calls.
+            // Read the anchor row's tag, fold key, and turn handle, then drop
+            // the borrows before the &mut App toggle calls.
             let target = (|| {
                 let ri = self.app.anchor_visible_row()?;
-                let (tag, text) = self
+                let tag = self
                     .app
                     .last_transcript_rows
                     .borrow()
                     .get(ri)
-                    .cloned()
-                    .unwrap_or((selection::TAG_PLAIN, String::new()));
+                    .map(|(t, _)| *t)
+                    .unwrap_or(selection::TAG_PLAIN);
                 let fold_key = self
                     .app
                     .last_row_fold_keys
@@ -342,9 +342,16 @@ impl Surface for TranscriptSurface<'_> {
                     .get(ri)
                     .cloned()
                     .flatten();
-                Some((ri, tag, text, fold_key))
+                let turn_id = self
+                    .app
+                    .last_row_turn_ids
+                    .borrow()
+                    .get(ri)
+                    .cloned()
+                    .flatten();
+                Some((ri, tag, fold_key, turn_id))
             })();
-            if let Some((ri, tag, text, fold_key)) = target {
+            if let Some((ri, tag, fold_key, turn_id)) = target {
                 if tag == selection::TAG_FOLD {
                     self.app.toggle_fold_at_row(ri);
                     self.app.selection.last_click = None;
@@ -357,8 +364,12 @@ impl Surface for TranscriptSurface<'_> {
                     self.app.selection.clear();
                     return;
                 }
-                if text.contains("Thought for") {
-                    self.app.toggle_thinking_expand_at_row(ri);
+                // A row publishes a turn handle exactly when it offers a
+                // toggle, so the handle is the row's shape. Matching the
+                // rendered text instead missed every summary whose duration
+                // is unknown, because that text names a duration the row
+                // cannot state.
+                if turn_id.is_some() && self.app.toggle_thinking_expand_at_row(ri) {
                     self.app.selection.last_click = None;
                     self.app.selection.clear();
                     return;

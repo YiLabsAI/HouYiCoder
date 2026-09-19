@@ -118,11 +118,11 @@ async fn test_abort_in_tool_dispatch() {
 /// and then never returns. Proves the approval path races the call against the
 /// run token: without that race a stop issued while an approved command runs
 /// waits for the command to finish, so a long script ignores the key.
-struct GuardedHangingTool {
+pub(crate) struct GuardedHangingTool {
     started: Arc<tokio::sync::Notify>,
 }
 impl GuardedHangingTool {
-    fn new(started: Arc<tokio::sync::Notify>) -> Self {
+    pub(crate) fn new(started: Arc<tokio::sync::Notify>) -> Self {
         Self { started }
     }
 }

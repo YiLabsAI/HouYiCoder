@@ -207,7 +207,8 @@ pub fn assemble_model_input_with(
             | SessionEvent::HookSignal { .. }
             | SessionEvent::TurnStarted { .. }
             | SessionEvent::SubagentSpawn { .. }
-            | SessionEvent::SubagentReturn { .. } => {
+            | SessionEvent::SubagentReturn { .. }
+            | SessionEvent::RunCompleted { .. } => {
                 i += 1;
             }
         }

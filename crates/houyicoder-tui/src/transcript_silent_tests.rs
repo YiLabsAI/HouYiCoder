@@ -41,7 +41,7 @@ fn test_silent_bash_renders_done() {
         tool_call("c1", "bash", serde_json::json!({"command": "mv a b"})),
         tool_result("c1", serde_json::json!({"stdout": "", "exit_code": 0})),
     ];
-    let lines = transcript_from_frames(&frames);
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let body = result_body(&lines);
     assert_eq!(
         body, "done",
@@ -58,7 +58,7 @@ fn test_non_silent_bash_empty() {
         tool_call("c1", "bash", serde_json::json!({"command": "echo"})),
         tool_result("c1", serde_json::json!({"stdout": "", "exit_code": 0})),
     ];
-    let lines = transcript_from_frames(&frames);
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let body = result_body(&lines);
     assert!(
         body.is_empty(),
@@ -77,7 +77,7 @@ fn test_silent_bash_with_output() {
             serde_json::json!({"stdout": "renamed a -> b", "exit_code": 0}),
         ),
     ];
-    let lines = transcript_from_frames(&frames);
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let body = result_body(&lines);
     assert_eq!(body, "renamed a -> b");
 }

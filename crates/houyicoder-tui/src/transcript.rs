@@ -1,7 +1,11 @@
 //! Wire-frame-to-transcript projection: rebuild the readable transcript lines
 //! from the ordered session/update + acpx frame stream the driver accumulates,
-//! plus the per-turn reasoning + tool-summary folds the ThoughtFor row
-//! surfaces. Split from records.rs so each file stays under the size gate.
+//! and fold each turn's reasoning + tool calls into the one summary row the
+//! transcript shows for that turn. The projection derives that row from the
+//! turn's own frames rather than from what a host happened to watch live, so
+//! a turn replayed from the log renders the row the live turn rendered.
+
+use std::ops::Range;
 
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -59,14 +63,288 @@ pub fn chunk_text(chunk: &ContentChunk) -> String {
     }
 }
 
+/// Whether the transcript draws this tool call as a chip. A transparent tool
+/// draws through its own widget (the checklist) or as the question prompt
+/// itself, so the turn summary counts only the calls the user sees.
+fn tool_renders_chip(title: &str) -> bool {
+    title != "todo_write" && title != "AskUserQuestion"
+}
+
+/// The duration a run-completion record carries. A record without a readable
+/// one closes the turn with no duration rather than a claimed zero.
+fn recorded_secs(params: &serde_json::Value) -> Option<u32> {
+    params
+        .get("secs")
+        .and_then(|v| v.as_u64())
+        .map(|s| s.min(u32::MAX as u64) as u32)
+}
+
+/// Whether the frame is a run-completion record: the marker that names where a
+/// turn ended.
+pub(crate) fn is_run_completed(frame: &TranscriptFrame) -> bool {
+    matches!(frame, TranscriptFrame::Acpx(n) if n.method == AcpxMethod::ContextRunCompleted)
+}
+
+/// Whether the frame is a user message. Both a fresh prompt and a message
+/// queued during a turn arrive as one, so the frame alone cannot say which it
+/// is.
+fn is_user_frame(frame: &TranscriptFrame) -> bool {
+    matches!(
+        frame,
+        TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
+    )
+}
+
+/// Whether the message at the position opens a turn: a message the log does
+/// not mark as delivered into the turn already running. The mark sits right
+/// after the message it belongs to, so the frame beside it answers this.
+fn opens_turn(frames: &[TranscriptFrame], at: usize) -> bool {
+    frames.get(at).is_some_and(is_user_frame) && !frames.get(at + 1).is_some_and(marks_delivery)
+}
+
+/// Whether a run of frames holds where a turn begins or ends, read in log
+/// order: a message that opened a turn, or the record that closed one. A
+/// message the log marks as delivered into the turn already running is
+/// neither, so a reader seeking backwards through a log reads past it rather
+/// than stopping ahead of the turn's real opening — stopping there would leave
+/// the fold without the frame that opened the turn it is asked to summarize.
+pub fn bounds_turn_in(frames: &[TranscriptFrame]) -> bool {
+    (0..frames.len()).any(|at| is_run_completed(&frames[at]) || opens_turn(frames, at))
+}
+
+/// Whether the frame marks the message beside it as belonging to the turn that
+/// was already running, rather than a message that opens a turn. A queued
+/// interjection, a background child's completion, and the notice that a turn
+/// was interrupted all reach the host as user messages, exactly like a fresh
+/// prompt, so the message chunk alone cannot say which of the four it is. The
+/// projection writes this mark right after the message it belongs to.
+fn marks_delivery(frame: &TranscriptFrame) -> bool {
+    matches!(
+        frame,
+        TranscriptFrame::Acpx(n)
+            if matches!(
+                n.method,
+                AcpxMethod::ContextMidTurnInput
+                    | AcpxMethod::ContextChildCompleted
+                    | AcpxMethod::ContextTurnInterrupted
+            )
+    )
+}
+
+/// Where the turn a window starts inside begins: the message that opened it.
+/// A user frame is not always an opening — a message the log marks as
+/// delivered into the running turn belongs to the turn already running, so
+/// the walk continues past it. The search stops at the first undelivered
+/// message; a record before it ends the turn instead, and there the window
+/// opens between turns, with no turn to fold. A window cut inside a turn
+/// still folds that turn, so its row keeps its place rather than vanishing
+/// whenever the oldest frames of the view fall inside a turn.
+fn open_turn_before(log: &[TranscriptFrame], start: usize) -> Option<usize> {
+    let mut search_from = start;
+    loop {
+        let k = log[..search_from]
+            .iter()
+            .rposition(|f| is_user_frame(f) || is_run_completed(f))?;
+        // A record here closed the turn before this position, so the window
+        // opens between turns: no turn to fold.
+        if !is_user_frame(&log[k]) {
+            return None;
+        }
+        // A message the log marks as delivered into the running turn did not
+        // open it, so the turn begins further back. Reading it as the opening
+        // would cut the turn's earlier facts out of the row.
+        if opens_turn(log, k) {
+            return Some(k);
+        }
+        search_from = k;
+    }
+}
+
+/// The facts one turn accumulates for its summary row, gathered as the
+/// projection walks that turn's frames. The row is emitted where the turn
+/// ends, so the summary lands under the answer it describes.
+struct TurnFold<'a> {
+    /// The whole log, for what a window cannot carry on its own: which turn the
+    /// window opens inside, what that turn did before the window began, and
+    /// whether the message beside it was delivered into a running turn.
+    log: &'a [TranscriptFrame],
+    /// Log position of the frame that opened the open turn. None when the
+    /// window opens between turns — a record behind it ended the one before —
+    /// or ahead of any turn at all: frames before the first user message (a
+    /// session notice) belong to no turn this projection can summarize.
+    opened_at: Option<usize>,
+    /// Log position of the newest frame folded into the turn. The row is
+    /// named by where the turn ended, which this is once the turn closes.
+    ended_at: usize,
+    reasoning: String,
+    /// Tool calls by tool, in the order the turn first used each.
+    tools: Vec<(String, u32)>,
+    calls: u32,
+}
+
+impl<'a> TurnFold<'a> {
+    /// Fold a window of the log, starting from the turn the window opens
+    /// inside (if any). Frames of earlier turns are not folded; the caller
+    /// pushes the rows of the turns they closed. What the open turn did before
+    /// the window is folded in for facts, with no rows of its own.
+    fn new(log: &'a [TranscriptFrame], window: &Range<usize>) -> Self {
+        let mut fold = Self {
+            log,
+            opened_at: open_turn_before(log, window.start),
+            ended_at: window.start,
+            reasoning: String::new(),
+            tools: Vec::new(),
+            calls: 0,
+        };
+        fold.absorb_ahead(window.start);
+        fold
+    }
+
+    /// Fold what the open turn did before the window, so the row summarizes the
+    /// turn rather than the part of it this window happens to hold. Without it
+    /// a window whose oldest frame is the turn's own record finds no reasoning
+    /// and no calls to summarize, and drops a row the whole-log read writes.
+    /// These frames render no rows of their own here.
+    fn absorb_ahead(&mut self, start: usize) {
+        let Some(opened_at) = self.opened_at else {
+            return;
+        };
+        let log = self.log;
+        for frame in &log[opened_at + 1..start] {
+            self.gather(frame);
+        }
+    }
+
+    /// Whether the user message at abs was delivered into the turn running
+    /// when it arrived, rather than opening a turn of its own. The projection
+    /// writes the mark for such a message immediately after it, so the frame
+    /// beside the message answers this.
+    fn delivered_into_turn(&self, abs: usize) -> bool {
+        self.log.get(abs + 1).is_some_and(marks_delivery)
+    }
+
+    /// Fold one frame into the open turn. A user message opens a turn and ends
+    /// the one before it, unless the log marks it as delivered into that turn;
+    /// a completion record ends the turn it followed and carries that run's
+    /// duration. Returns the row for a turn this frame ended, for the caller to
+    /// push where the turn ended.
+    fn note(&mut self, abs: usize, frame: &TranscriptFrame) -> Option<TranscriptLine> {
+        match frame {
+            TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_)) => {
+                let closed = if self.delivered_into_turn(abs) {
+                    None
+                } else {
+                    self.close(None)
+                };
+                if self.opened_at.is_none() {
+                    self.opened_at = Some(abs);
+                    self.ended_at = abs;
+                    self.reasoning.clear();
+                    self.tools.clear();
+                    self.calls = 0;
+                }
+                return closed;
+            }
+            TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(_))
+            | TranscriptFrame::Session(SessionUpdate::ToolCall(_)) => self.gather(frame),
+            TranscriptFrame::Acpx(n) if n.method == AcpxMethod::ContextRunCompleted => {
+                self.ended_at = abs;
+                return self.close(recorded_secs(&n.params));
+            }
+            _ => {}
+        }
+        self.ended_at = abs;
+        None
+    }
+
+    /// Collect what one frame of the open turn contributes to its summary: its
+    /// reasoning text, and the tool calls it made. Read for the frames the
+    /// window holds and for those it reads back to reach the turn's opening.
+    fn gather(&mut self, frame: &TranscriptFrame) {
+        if self.opened_at.is_none() {
+            return;
+        }
+        match frame {
+            TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(chunk)) => {
+                self.reasoning.push_str(&chunk_text(chunk));
+            }
+            TranscriptFrame::Session(SessionUpdate::ToolCall(call))
+                if tool_renders_chip(&call.title) =>
+            {
+                match self.tools.iter_mut().find(|(tool, _)| tool == &call.title) {
+                    Some(slot) => slot.1 += 1,
+                    None => self.tools.push((call.title.clone(), 1)),
+                }
+                self.calls += 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// Close the open turn and return its row: None when no turn is open, or
+    /// when the turn has nothing to summarize. A plain reply renders no row
+    /// whose expand affordance would lead to nothing.
+    fn close(&mut self, secs: Option<u32>) -> Option<TranscriptLine> {
+        self.opened_at.take()?;
+        if self.reasoning.is_empty() && self.calls == 0 {
+            return None;
+        }
+        let reasoning = (!self.reasoning.is_empty()).then(|| std::mem::take(&mut self.reasoning));
+        Some(TranscriptLine::ThoughtFor {
+            secs,
+            reasoning,
+            tool_summary: self.tool_summary(),
+            turn_id: format!("f{}", self.ended_at),
+        })
+    }
+
+    /// The one-line tool summary ("ran 3 tools (2 bash, 1 grep)"), grouped by
+    /// tool with the most-used first. None when the turn called none.
+    fn tool_summary(&mut self) -> Option<String> {
+        if self.calls == 0 {
+            return None;
+        }
+        self.tools
+            .sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        let parts: Vec<String> = self
+            .tools
+            .iter()
+            .map(|(tool, count)| format!("{count} {tool}"))
+            .collect();
+        let noun = if self.calls == 1 { "tool" } else { "tools" };
+        Some(format!("ran {} {noun} ({})", self.calls, parts.join(", ")))
+    }
+}
+
 /// Rebuild the transcript from the ordered wire frame stream the driver
 /// accumulated. Each SessionUpdate maps to one TranscriptLine; the acpx
 /// audit kinds the transcript surfaces (compaction, summary) become System
 /// lines; the meta-user nudge + permission-decision audit are dropped
 /// (control-only). Tool-call outcomes are resolved in a first pass from the
 /// matching ToolCallUpdate so the call chip colors by outcome.
+///
+/// log is the whole frame log and window is the part of it to render. Only the
+/// window's frames become lines, but two of the facts those lines are built on
+/// lie outside it when the window does not start at the log's beginning: the
+/// turn an opening frame sits inside, and the mark that says a user message was
+/// delivered into a running turn. Both are read from the log, so a window and
+/// the whole log agree about where turns begin and end.
+///
+/// The window's start is the log position of its first frame: a turn's summary
+/// row is named by where that turn ended in the log, so the name holds still
+/// while the window slides (a window that dropped its oldest frames would
+/// otherwise renumber every row and detach the expand state from its row).
+/// newest_open says whether the newest turn may still be running: a turn still
+/// going yields no row, since a half-accumulated summary would otherwise render
+/// as a finished one.
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
-pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine> {
+pub fn transcript_from_frames(
+    log: &[TranscriptFrame],
+    window: Range<usize>,
+    newest_open: bool,
+) -> Vec<TranscriptLine> {
+    let frames = &log[window.clone()];
+    let base = window.start;
     // First pass: resolve each tool call's outcome + output from its matching
     // ToolCallUpdate (by tool_call_id) so the call chip colors by outcome and
     // the result row carries the precomputed body. Also record the tool name
@@ -224,7 +502,13 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
     // arrival order so the Nth late result for a reused call_id pairs with the
     // Nth matching call (matches take_update's FIFO consume).
     let mut late_results: Vec<(String, String, serde_json::Value)> = Vec::new();
-    for f in frames {
+    let mut fold = TurnFold::new(log, &window);
+    for (i, f) in frames.iter().enumerate() {
+        // The turn fold runs first: the row of a turn this frame ends lands
+        // ahead of this frame's own lines, which is where the turn ended.
+        if let Some(row) = fold.note(base + i, f) {
+            out.push(row);
+        }
         match f {
             TranscriptFrame::Session(SessionUpdate::UserMessageChunk(chunk)) => {
                 out.push(TranscriptLine::User(chunk_text(chunk)));
@@ -257,7 +541,7 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
                 }
                 // The call row (skipped for the transparent HITL question
                 // tool — its answer row below still renders).
-                if tc.title != "AskUserQuestion" {
+                if tool_renders_chip(&tc.title) {
                     let outcome = upd
                         .as_ref()
                         .and_then(|(oc, _)| *oc)
@@ -341,6 +625,18 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
             _ => {}
         }
     }
+    // The window's last turn. A log written before the completion record
+    // existed ends its final turn nowhere else, so this is where that turn's
+    // summary row comes from. The window must reach the end of the log for
+    // this: a window cut mid-log keeps its last turn open, whose end the rest
+    // of the log still holds, and a turn nothing has stopped running yet
+    // yields no summary at all.
+    if !newest_open
+        && window.end == log.len()
+        && let Some(row) = fold.close(None)
+    {
+        out.push(row);
+    }
     // Reposition pass: attach each late result right after its matching call
     // row so a result that arrived after a thought pulls back to its call
     // (preserving call+result adjacency + input order). A late result whose
@@ -379,62 +675,6 @@ pub fn transcript_from_frames(frames: &[TranscriptFrame]) -> Vec<TranscriptLine>
         }
     }
     out
-}
-
-/// Extract the current turn's reasoning: scan from the last user message
-/// chunk onward so a Ctrl+O expand shows only this turn's chain of thought,
-/// not a concatenation of every prior turn's reasoning.
-pub fn turn_reasoning(frames: &[TranscriptFrame]) -> Option<String> {
-    let last_user = frames.iter().rposition(|f| {
-        matches!(
-            f,
-            TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
-        )
-    });
-    let start = last_user.map(|i| i + 1).unwrap_or(0);
-    let mut r = String::new();
-    for f in &frames[start..] {
-        if let TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(chunk)) = f {
-            r.push_str(&chunk_text(chunk));
-        }
-    }
-    if r.is_empty() { None } else { Some(r) }
-}
-
-/// A one-line summary of the tools the current turn invoked, in the shape
-/// the folded ThoughtFor row surfaces ("ran 3 tools (2 bash, 1 grep)").
-/// Scans from the last user message chunk onward so only this turn's tool
-/// calls land in the summary. Returns None when the turn ran no tools.
-pub fn turn_tool_summary(frames: &[TranscriptFrame]) -> Option<String> {
-    let last_user = frames.iter().rposition(|f| {
-        matches!(
-            f,
-            TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
-        )
-    });
-    let start = last_user.map(|i| i + 1).unwrap_or(0);
-    let mut counts: Vec<(String, u32)> = Vec::new();
-    let mut total = 0u32;
-    for f in &frames[start..] {
-        if let TranscriptFrame::Session(SessionUpdate::ToolCall(tc)) = f {
-            if tc.title == "AskUserQuestion" {
-                continue;
-            }
-            if let Some(slot) = counts.iter_mut().find(|(t, _)| t == &tc.title) {
-                slot.1 += 1;
-            } else {
-                counts.push((tc.title.clone(), 1));
-            }
-            total += 1;
-        }
-    }
-    if total == 0 {
-        return None;
-    }
-    counts.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
-    let parts: Vec<String> = counts.iter().map(|(t, c)| format!("{c} {t}")).collect();
-    let noun = if total == 1 { "tool" } else { "tools" };
-    Some(format!("ran {total} {noun} ({})", parts.join(", ")))
 }
 
 #[cfg(test)]

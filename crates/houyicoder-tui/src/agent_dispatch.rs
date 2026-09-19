@@ -567,7 +567,10 @@ impl App {
         let folded = if frames.is_empty() {
             vec![self.empty_child_transcript_line(&child_sid)]
         } else {
-            transcript_from_frames(&frames)
+            // The child log is fetched whole, and the fetch may land while
+            // the child is still running: its last turn is left open rather
+            // than summarized from frames that are still arriving.
+            transcript_from_frames(&frames, 0..frames.len(), true)
         };
         // Swap the child rows into the matching Subagent line in place
         // to preserve position. Mirrors the ContextGrid refresh.

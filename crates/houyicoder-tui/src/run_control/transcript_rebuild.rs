@@ -7,7 +7,7 @@
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::records::TranscriptLine;
 use crate::state::App;
-use crate::transcript::{TranscriptFrame, transcript_from_frames};
+use crate::transcript::{TranscriptFrame, is_run_completed, transcript_from_frames};
 
 impl App {
     /// Rebuild the transcript while preserving TUI-only lines at their current
@@ -16,16 +16,22 @@ impl App {
     pub(crate) fn rebuild_transcript(&mut self) {
         let turn_start = self.current_turn_start();
         // A changed turn boundary or truncated frame log invalidates the stable
-        // prefix. Later frames in the same turn reuse it.
+        // prefix. Later frames in the same turn reuse it. A record in that tail
+        // forces the whole window too: the row a record derives needs the turn
+        // it closes, and that turn opened before the tail begins, so folding
+        // the tail alone could not name it.
+        let record_in_tail = self.frames[turn_start..].iter().any(is_run_completed);
         let need_full = self.current_turn_boundary.frame_index > self.frames.len()
-            || self.current_turn_boundary.frame_index != turn_start;
+            || self.current_turn_boundary.frame_index != turn_start
+            || record_in_tail;
+        // A window of the frame log, not the whole of it: the derived rows
+        // name their turn by log position, so the slice carries where it
+        // starts, and a run in flight keeps its newest turn open.
+        let newest_open = self.run_state.is_active();
         if need_full {
             let frame_start = self.visible_frame_start();
-            let event_lines = if frame_start > 0 {
-                transcript_from_frames(&self.frames[frame_start..])
-            } else {
-                transcript_from_frames(&self.frames)
-            };
+            let event_lines =
+                transcript_from_frames(&self.frames, frame_start..self.frames.len(), newest_open);
             let mut merged: Vec<TranscriptLine> =
                 Vec::with_capacity(self.transcript.len() + event_lines.len());
             let mut event_idx = 0;
@@ -47,11 +53,16 @@ impl App {
             // Map the stable frame prefix to its transcript boundary while
             // retaining any interleaved TUI-only lines. Using transcript.len()
             // here would include the changing tail and duplicate it later.
-            let prefix_line_count = if frame_start > 0 {
-                transcript_from_frames(&self.frames[frame_start..turn_start.max(frame_start)]).len()
-            } else {
-                transcript_from_frames(&self.frames[..turn_start]).len()
-            };
+            // A turn still open where the prefix ends finishes later in the tail:
+            // the projection leaves that turn open because the prefix stops
+            // short of the log's end, so the row it would write belongs after
+            // the tail, and the count is what tells the next rebuild how much
+            // of this transcript is stable. The turn's own boundary decisions
+            // still read the same log facts as the full projection, so the two
+            // counts agree line for line.
+            let prefix_end = turn_start.max(frame_start);
+            let prefix_line_count =
+                transcript_from_frames(&self.frames, frame_start..prefix_end, newest_open).len();
             let mut stable_end = 0;
             let mut non_tui = 0;
             for (i, line) in self.transcript.iter().enumerate() {
@@ -68,7 +79,8 @@ impl App {
         } else {
             // Rebuild only the changing tail and preserve TUI-only lines at
             // their existing positions.
-            let tail = transcript_from_frames(&self.frames[turn_start..]);
+            let tail =
+                transcript_from_frames(&self.frames, turn_start..self.frames.len(), newest_open);
             let mut merged: Vec<TranscriptLine> =
                 Vec::with_capacity(self.current_turn_boundary.line_index + tail.len());
             merged.extend_from_slice(&self.transcript[..self.current_turn_boundary.line_index]);
@@ -123,7 +135,13 @@ impl App {
             return;
         }
         let batch_start = from.saturating_sub(PREPEND_BATCH);
-        let new_lines = transcript_from_frames(&self.frames[batch_start..from]);
+        // The batch is a slice out of the middle of the log: the turn it
+        // breaks off at the end continues into the lines already loaded, so
+        // its summary row is not this batch's to write. A turn whose end lies
+        // further up the log is another matter: this batch carries its frames,
+        // so it folds that turn's row like any other window.
+        let new_lines =
+            transcript_from_frames(&self.frames, batch_start..from, self.run_state.is_active());
         if new_lines.is_empty() {
             self.loaded_from_frame.set(batch_start);
             return;
@@ -283,6 +301,10 @@ fn same_frame(visible: &TranscriptLine, fresh: &TranscriptLine) -> bool {
         ) => (a_name == "result") == (b_name == "result") && a_id == b_id,
         (User(a), User(b)) | (Agent(a), Agent(b)) => a == b,
         (Thinking { text: a }, Thinking { text: b }) => a == b,
+        // A turn summary row is named by where its turn ended, so the same
+        // name is the same row: pairing by role alone would let a row whose
+        // turn slid out of the window hand its expand state to a later turn.
+        (ThoughtFor { turn_id: a, .. }, ThoughtFor { turn_id: b, .. }) => a == b,
         (Subagent { child_sid: a, .. }, Subagent { child_sid: b, .. }) => a == b,
         _ => role(visible) == role(fresh),
     }

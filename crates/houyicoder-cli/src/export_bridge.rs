@@ -333,6 +333,7 @@ fn collect_checkpoints_and_errors(
             | SessionEvent::CacheBreak { .. }
             | SessionEvent::SubagentSpawn { .. }
             | SessionEvent::SubagentReturn { .. }
+            | SessionEvent::RunCompleted { .. }
             | SessionEvent::NotificationInjected { .. }
             | SessionEvent::Unknown => {}
         }

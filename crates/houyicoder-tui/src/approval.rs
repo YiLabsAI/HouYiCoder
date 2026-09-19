@@ -115,37 +115,46 @@ impl App {
     /// reasoning block. False when the transcript holds neither.
     pub(crate) fn toggle_tail_expand(&mut self) -> bool {
         use crate::records::TranscriptLine;
-        let last_subagent = self
-            .transcript
-            .iter()
-            .rposition(|l| matches!(l, TranscriptLine::Subagent { .. }));
-        let last_thinking = self.transcript.iter().rposition(|l| {
-            matches!(
-                l,
-                TranscriptLine::ThoughtFor {
-                    reasoning: Some(_),
-                    ..
-                }
-            )
-        });
-        let subagent_wins = match (last_subagent, last_thinking) {
-            (Some(s), Some(t)) => s > t,
-            (Some(_), None) => true,
-            _ => false,
+        // The tail is taken from the transcript the view renders. Reading the
+        // live transcript while a search or delegation view is open picks a
+        // line the user cannot see, so the key toggles an off-screen block.
+        let (subagent_wins, picked): (bool, Option<(String, bool)>) = {
+            let lines = self.active_transcript();
+            let last_subagent = lines
+                .iter()
+                .rposition(|l| matches!(l, TranscriptLine::Subagent { .. }));
+            let last_thinking = lines.iter().rposition(|l| {
+                matches!(
+                    l,
+                    TranscriptLine::ThoughtFor {
+                        reasoning: Some(_),
+                        ..
+                    }
+                )
+            });
+            let wins = match (last_subagent, last_thinking) {
+                (Some(s), Some(t)) => s > t,
+                (Some(_), None) => true,
+                _ => false,
+            };
+            let found = if wins {
+                last_subagent.and_then(|idx| match &lines[idx] {
+                    TranscriptLine::Subagent {
+                        child_sid,
+                        folded_transcript,
+                        ..
+                    } => Some((child_sid.clone(), folded_transcript.is_empty())),
+                    _ => None,
+                })
+            } else {
+                None
+            };
+            (wins, found)
         };
         if subagent_wins {
-            let Some(idx) = last_subagent else {
+            let Some((sid, needs_fetch)) = picked else {
                 return false;
             };
-            let TranscriptLine::Subagent {
-                child_sid,
-                folded_transcript,
-                ..
-            } = &self.transcript[idx]
-            else {
-                return false;
-            };
-            let (sid, needs_fetch) = (child_sid.clone(), folded_transcript.is_empty());
             self.apply_subagent_toggle(sid, needs_fetch);
             return true;
         }
@@ -319,25 +328,30 @@ impl App {
     /// ThoughtFor with reasoning was toggled.
     pub(crate) fn toggle_thinking_expand(&mut self) -> bool {
         use crate::records::TranscriptLine;
-        // Scan the transcript in reverse for the last ThoughtFor with
-        // reasoning. The latest is unique → no ambiguity for keyboard users.
-        // Key by turn_id (not reasoning text) so two turns with identical
-        // reasoning do not collide.
-        for line in self.transcript.iter().rev() {
-            if let TranscriptLine::ThoughtFor {
-                reasoning: Some(_),
-                turn_id,
-                ..
-            } = line
-            {
-                if !self.expanded_thinking.remove(turn_id) {
-                    self.expanded_thinking.insert(turn_id.clone());
-                }
-                self.pin_transcript_top();
-                return true;
-            }
+        // The rendered rows come from the active transcript, so the last
+        // reasoning block is read from the same slice. Keyed by turn_id
+        // rather than reasoning text so two turns with identical reasoning
+        // do not collide.
+        let target = self
+            .active_transcript()
+            .iter()
+            .rev()
+            .find_map(|line| match line {
+                TranscriptLine::ThoughtFor {
+                    reasoning: Some(_),
+                    turn_id,
+                    ..
+                } => Some(turn_id.clone()),
+                _ => None,
+            });
+        let Some(turn_id) = target else {
+            return false;
+        };
+        if !self.expanded_thinking.remove(&turn_id) {
+            self.expanded_thinking.insert(turn_id);
         }
-        false
+        self.pin_transcript_top();
+        true
     }
 
     /// Toggle thinking expansion by display row index (used by the click
@@ -362,10 +376,16 @@ impl App {
         // turn_id is set only on the header row; confirm the transcript line
         // is a reasoning-bearing ThoughtFor before toggling (defensive — the
         // render path already gates the hint on reasoning: Some).
-        let has_reasoning = self
-            .transcript
-            .iter()
-            .any(|line| matches!(line, TranscriptLine::ThoughtFor { reasoning: Some(_), turn_id: tid, .. } if tid == &turn_id));
+        let has_reasoning = self.active_transcript().iter().any(|line| {
+            matches!(
+                line,
+                TranscriptLine::ThoughtFor {
+                    reasoning: Some(_),
+                    turn_id: tid,
+                    ..
+                } if tid == &turn_id
+            )
+        });
         if !has_reasoning {
             return false;
         }

@@ -481,6 +481,7 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
         | SessionEvent::CompactionBoundary { .. }
         | SessionEvent::Summary { .. }
         | SessionEvent::PermissionDecision { .. }
+        | SessionEvent::RunCompleted { .. }
         | SessionEvent::TruncationVerdict { .. }
         | SessionEvent::WorktreeEnter { .. }
         | SessionEvent::WorktreeExit { .. }
@@ -502,13 +503,28 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
     })
 }
 
-/// Map a session event to its acpx/context/* extension notification. Covers
-/// the audit kinds with no standard session/update variant; kinds that
-/// already map to session/update return None. Params carry the event's serde
-/// shape so a client reconstructs the typed payload.
-pub(crate) fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
+/// Map a session event to its acpx/context/* extension notification. Carries
+/// the audit events the standard session/update stream has no variant for,
+/// plus the marks that tell a message delivered into a running turn from one
+/// that opens a turn: both arrive as a message chunk, and the chunk cannot
+/// say which it is. An event carrying neither returns None. Params carry the
+/// event's serde shape so a client reconstructs the typed payload.
+///
+/// Shared with the live push and with any reader that projects a durable log
+/// off-line, so both see the same frames for the same event.
+pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
     use AcpxMethod::*;
     Some(match kind {
+        // Delivered into the running turn: the message chunk rides the
+        // session/update stream and this mark rides immediately after it, so
+        // a reader that walks the stream in order knows the message did not
+        // open a turn.
+        SessionEvent::MidTurnInput { .. } => {
+            AcpxNotification::new(ContextMidTurnInput, serde_json::json!({}))
+        }
+        SessionEvent::NotificationInjected { .. } => {
+            AcpxNotification::new(ContextChildCompleted, serde_json::json!({}))
+        }
         SessionEvent::MetaUser { text } => {
             AcpxNotification::new(ContextMetaUser, serde_json::json!({ "text": text }))
         }
@@ -518,6 +534,9 @@ pub(crate) fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotificat
         ),
         SessionEvent::Summary { text } => {
             AcpxNotification::new(ContextSummary, serde_json::json!({ "text": text }))
+        }
+        SessionEvent::RunCompleted { secs } => {
+            AcpxNotification::new(ContextRunCompleted, serde_json::json!({ "secs": secs }))
         }
         SessionEvent::PermissionDecision {
             call_id,
@@ -533,7 +552,13 @@ pub(crate) fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotificat
                 "scope": scope,
             }),
         ),
-        SessionEvent::TurnAborted { .. } => return None,
+        // The interrupt notice is an event of the turn it interrupts, not a
+        // message that opens a turn: the mark rides beside the notice so a
+        // reader keeps the turn whole instead of ending it at the notice and
+        // starting another, which would report one turn's work as two rows.
+        SessionEvent::TurnAborted { .. } => {
+            AcpxNotification::new(ContextTurnInterrupted, serde_json::json!({}))
+        }
         SessionEvent::TruncationVerdict { .. }
         | SessionEvent::WorktreeEnter { .. }
         | SessionEvent::WorktreeExit { .. }
@@ -542,10 +567,8 @@ pub(crate) fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotificat
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::CacheBreak { .. }
         | SessionEvent::SubagentSpawn { .. }
-        | SessionEvent::SubagentReturn { .. }
-        | SessionEvent::NotificationInjected { .. } => return None,
+        | SessionEvent::SubagentReturn { .. } => return None,
         SessionEvent::UserInput { .. }
-        | SessionEvent::MidTurnInput { .. }
         | SessionEvent::MemoryRecall { .. }
         | SessionEvent::SkillListing { .. }
         | SessionEvent::SkillBody { .. }

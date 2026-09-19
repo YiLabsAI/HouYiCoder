@@ -36,6 +36,13 @@ impl Runner {
         // A recovery attempt is a fresh turn: reset the max_turns budget so a
         // session retried after a crash is not permanently capped.
         self.reset_user_turn();
-        self.drive_loop(session, 0, Usage::default(), &token).await
+        let started = std::time::Instant::now();
+        let result = self.drive_loop(session, 0, Usage::default(), &token).await;
+        // The re-drive is a drive loop like any other: the turn it ends needs
+        // its record, or the frontend has no marker closing the regenerated
+        // turn and its summary row would fold into the next turn's.
+        self.record_run_completion(session, Some(started), &result)
+            .await;
+        result
     }
 }

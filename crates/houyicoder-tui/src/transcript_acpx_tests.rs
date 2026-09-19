@@ -33,7 +33,7 @@ fn test_acpx_compaction_summary_surface() {
             serde_json::json!({ "text": "nudge" }),
         )),
     ];
-    let lines = transcript_from_frames(&frames);
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     // User + compaction + summary; meta-user dropped.
     assert_eq!(lines.len(), 3);
     assert!(matches!(lines[0], TranscriptLine::User(_)));

@@ -34,7 +34,7 @@ pub use super::skill_hooks::SkillHookRegistrar;
 pub use super::skill_reload::SkillReloadGuard;
 pub use super::status::{StatusSnapshot, UsageAccumulator};
 pub use super::step::{ApprovalDecision, ApprovalRequest, NextStep, TurnOutcome};
-pub use super::thinking::{thinking_brief, turn_reasoning, turn_tool_summary};
+pub use super::thinking::thinking_brief;
 pub use super::tool::{StubTool, ToolRegistry};
 pub use super::tools::{
     AskUserQuestionTool, BashTool, ConversationSearchTool, DelegationTool, EditTool,

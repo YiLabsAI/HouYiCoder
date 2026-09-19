@@ -205,19 +205,21 @@ fn test_rule_destination_round_trips() {
 }
 
 /// TurnAborted maps to the "aborted" trajectory label, a visible
-/// session-update message chunk (so the host renders the boundary
-/// notice), and skips the acpx context mapping (it is not a
-/// model-input or side-channel event).
+/// session-update message chunk (so the host renders the boundary notice),
+/// and the acpx mark that tells a reader the notice belongs to the turn it
+/// interrupts rather than opening a turn of its own.
 #[test]
 fn test_turn_aborted_maps_label() {
     use houyicoder_context::SessionEvent;
+    use houyicoder_protocol::acpx::AcpxMethod;
     let kind = SessionEvent::TurnAborted {
         reason: "crash".into(),
     };
     assert_eq!(event_name(&kind), "aborted");
-    assert!(
-        map_acpx_notification(&kind).is_none(),
-        "acpx context skips TurnAborted"
+    assert_eq!(
+        map_acpx_notification(&kind).map(|n| n.method),
+        Some(AcpxMethod::ContextTurnInterrupted),
+        "the notice carries the mark that keeps the turn whole"
     );
     // The session-update mapping must produce a visible message chunk
     // so the host renders the boundary notice (guardrail 3).

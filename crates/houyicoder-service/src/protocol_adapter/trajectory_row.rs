@@ -25,6 +25,7 @@ pub fn event_name(kind: &SessionEvent) -> &'static str {
         SessionEvent::WorktreeEnter { .. } => "worktree_enter",
         SessionEvent::WorktreeExit { .. } => "worktree_exit",
         SessionEvent::TurnUsage { .. } => "usage",
+        SessionEvent::RunCompleted { .. } => "run_completed",
         SessionEvent::HookSignal { .. } => "hook",
         SessionEvent::TurnStarted { .. } => "turn_start",
         SessionEvent::RewardObservation { .. } => "reward",

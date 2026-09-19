@@ -48,6 +48,50 @@ fn test_reasoning_streams_and_persists() {
     assert!(app.live_reasoning_text.is_empty());
 }
 
+/// A turn's summary row is derived from the durable frames, not pushed from
+/// the live run: the record that closes the turn lands in the frame log, and
+/// the rebuild folds the turn's reasoning into its row there. Driving the real
+/// run end to end is what proves the delivery order the derivation needs — the
+/// record reaches the frontend, and the rebuild that reads it covers the turn
+/// the record closes rather than only the frames after it.
+#[test]
+fn test_run_row_from_record() {
+    let resp = CompletionResponse {
+        output: vec![
+            OutputItem::Reasoning {
+                text: "pondering the task".into(),
+            },
+            OutputItem::Text {
+                text: "here is my answer".into(),
+            },
+        ],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let p = Arc::new(FakeProvider::new(vec![resp]));
+    let mut app = app_with_provider(p, ToolRegistry::new());
+    app.spawn_run("go".into());
+    let mut settled = false;
+    for _ in 0..200 {
+        app.poll_agent();
+        if !app.agent_busy() {
+            settled = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(settled, "run should settle within the poll window");
+    let row = app.transcript.iter().find_map(|l| match l {
+        TranscriptLine::ThoughtFor {
+            reasoning, turn_id, ..
+        } => Some((reasoning.clone(), turn_id.clone())),
+        _ => None,
+    });
+    let (reasoning, turn_id) = row.expect("the finished turn must surface its summary row");
+    assert_eq!(reasoning.as_deref(), Some("pondering the task"));
+    assert_eq!(turn_id, "f3", "named by the frame that ended the turn");
+}
+
 /// Regression guard for output-tail truncation. A streamed reply must land in
 /// the transcript in full after Done — head and the last 4-char delta (the
 /// tail). The response stream handler ships each chunk via try_send on a

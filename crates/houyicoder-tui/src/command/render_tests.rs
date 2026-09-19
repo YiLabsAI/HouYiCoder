@@ -137,7 +137,7 @@ fn test_verdict_skipped_on_surface() {
             }),
         ),
     )];
-    let lines = crate::transcript::transcript_from_frames(&frames);
+    let lines = crate::transcript::transcript_from_frames(&frames, 0..frames.len(), false);
     assert!(
         lines.is_empty(),
         "verdict must not appear on the interaction surface"

@@ -256,7 +256,7 @@ fn test_click_thoughtfor_expands_one() {
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
-            secs: 2,
+            secs: Some(2),
             reasoning: Some(r1.clone()),
             tool_summary: None,
             turn_id: "t1".into(),
@@ -264,7 +264,7 @@ fn test_click_thoughtfor_expands_one() {
         TranscriptLine::User("q2".into()),
         TranscriptLine::Agent("a2".into()),
         TranscriptLine::ThoughtFor {
-            secs: 5,
+            secs: Some(5),
             reasoning: Some(r2.clone()),
             tool_summary: None,
             turn_id: "t2".into(),
@@ -321,7 +321,7 @@ fn test_click_thoughtfor_none_reasoning() {
         TranscriptLine::Agent("a1".into()),
         // No reasoning: renders as "Thought for 3s" with no (ctrl+o) hint.
         TranscriptLine::ThoughtFor {
-            secs: 3,
+            secs: Some(3),
             reasoning: None,
             tool_summary: None,
             turn_id: "t1".into(),
@@ -330,7 +330,7 @@ fn test_click_thoughtfor_none_reasoning() {
         TranscriptLine::Agent("a2".into()),
         // Has reasoning: renders with "(ctrl+o to expand)".
         TranscriptLine::ThoughtFor {
-            secs: 5,
+            secs: Some(5),
             reasoning: Some("real reasoning for turn two".into()),
             tool_summary: None,
             turn_id: "t2".into(),
@@ -364,6 +364,76 @@ fn test_click_thoughtfor_none_reasoning() {
     );
 }
 
+/// Regression: a summary row whose duration was never measured must expand
+/// its reasoning on a click. The click gate matched the rendered row text
+/// against a prefix naming a duration, so this row (which cannot state one)
+/// fell through to the collapse branch and the gesture was swallowed, while
+/// the same summary with a duration expanded. The gate now reads the handle
+/// the draw published, which a row carries exactly when it offers a toggle.
+#[test]
+fn test_click_thought_no_duration() {
+    use crate::records::TranscriptLine;
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.transcript = vec![
+        TranscriptLine::User("q1".into()),
+        TranscriptLine::Agent("a1".into()),
+        TranscriptLine::ThoughtFor {
+            secs: None,
+            reasoning: Some("a turn whose duration was never measured".into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        },
+        TranscriptLine::ThoughtFor {
+            secs: Some(4),
+            reasoning: None,
+            tool_summary: None,
+            turn_id: "t2".into(),
+        },
+    ];
+    let _out = render_text(&app, 80, 24);
+    let rect = app.transcript_rect.get();
+    let ri = app
+        .last_transcript_rows
+        .borrow()
+        .iter()
+        .position(|(_, t)| t.contains("Thought (ctrl+o to expand)"))
+        .expect("the unmeasured summary row rendered with its hint");
+    let x = rect.x;
+    let y = rect.y + ri as u16;
+    crate::app::handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    assert!(
+        app.expanded_thinking.contains("t1"),
+        "a summary with no duration still expands its reasoning: {:?}",
+        app.expanded_thinking
+    );
+    // The next summary carries no reasoning at all, so it offers no toggle:
+    // the same gesture must leave the expand state alone.
+    let _out = render_text(&app, 80, 24);
+    let rect = app.transcript_rect.get();
+    let ri = app
+        .last_transcript_rows
+        .borrow()
+        .iter()
+        .position(|(_, t)| t.contains("Thought for 4s"))
+        .expect("the second summary row rendered");
+    let y = rect.y + ri as u16;
+    crate::app::handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    assert!(
+        !app.expanded_thinking.contains("t2"),
+        "a summary with nothing to show publishes no handle: {:?}",
+        app.expanded_thinking
+    );
+}
+
 /// Regression: when an earlier ThoughtFor (reasoning=Some) has scrolled OFF
 /// the top of the viewport and a later one is visible, clicking the visible
 /// one must expand IT, not the off-screen one. The old click path counted
@@ -382,7 +452,7 @@ fn test_click_thoughtfor_scrolled_off() {
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
-            secs: 2,
+            secs: Some(2),
             reasoning: Some("off-screen reasoning turn one".into()),
             tool_summary: None,
             turn_id: "t1".into(),
@@ -395,7 +465,7 @@ fn test_click_thoughtfor_scrolled_off() {
         ));
     }
     transcript.push(TranscriptLine::ThoughtFor {
-        secs: 5,
+        secs: Some(5),
         reasoning: Some("visible reasoning turn two".into()),
         tool_summary: None,
         turn_id: "t2".into(),
@@ -450,7 +520,7 @@ fn test_same_reason_thoughts_independent() {
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
-            secs: 2,
+            secs: Some(2),
             reasoning: Some(shared.clone()),
             tool_summary: None,
             turn_id: "t1".into(),
@@ -458,7 +528,7 @@ fn test_same_reason_thoughts_independent() {
         TranscriptLine::User("q2".into()),
         TranscriptLine::Agent("a2".into()),
         TranscriptLine::ThoughtFor {
-            secs: 5,
+            secs: Some(5),
             reasoning: Some(shared.clone()),
             tool_summary: None,
             turn_id: "t2".into(),

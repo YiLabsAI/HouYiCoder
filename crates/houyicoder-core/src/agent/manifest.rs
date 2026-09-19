@@ -419,7 +419,8 @@ fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &super::context::To
         | SessionEvent::HookSignal { .. }
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::SubagentSpawn { .. }
-        | SessionEvent::SubagentReturn { .. } => 0,
+        | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::RunCompleted { .. } => 0,
     }
 }
 

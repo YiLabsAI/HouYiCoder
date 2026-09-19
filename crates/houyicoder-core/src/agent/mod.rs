@@ -58,6 +58,7 @@ mod tool;
 mod tools;
 mod truncation;
 mod turn_group;
+mod user_turn;
 mod verify;
 pub mod worktree_controller;
 pub mod worktree_session;
@@ -83,8 +84,7 @@ pub use exports::{
     VerifyFailure, VerifyGate, WebFetchTool, WorkspaceProbe, WorktreeController, WriteTool,
     apply_manifest, assemble_model_input, build_grid, build_hook_fire, build_manifest,
     combine_verdicts, derive_backbone, extraction_prompt, merge_summary, never_worse, parse_event,
-    render_backbone_block, stub_breakdown, thinking_brief, turn_reasoning, turn_tool_summary,
-    unified_diff,
+    render_backbone_block, stub_breakdown, thinking_brief, unified_diff,
 };
 pub use inference::{InferenceConfig, RequestInferenceConfig};
 
@@ -108,6 +108,7 @@ use append::new_event;
 use call::accumulate_usage;
 use fallback::FallbackToolOutcome;
 use multi_agent::bus_types::BusMessage;
+use user_turn::UserTurn;
 
 pub mod runner_config;
 use runner_config::RunnerConfig;
@@ -183,7 +184,10 @@ pub struct Runner {
     /// the cancel field (the lifecycle token, terminal). Guarded by a std
     /// Mutex.
     turn_cancel: Mutex<Option<CancellationToken>>,
-    user_turn: Mutex<u32>,
+    /// The current user turn's budget and measured work, guarded by a std
+    /// Mutex. Reset at every turn start, so a turn's record reports the work
+    /// its own legs did rather than an earlier turn's.
+    user_turn: Mutex<UserTurn>,
     /// Optional post-run verification gate. When set, after a run reaches
     /// FinalOutput the runner calls verify before returning. A failed verify
     /// surfaces RunOutcome::VerifyFailed instead of FinalOutput so the caller
@@ -777,6 +781,8 @@ mod denied_agents_tests;
 #[cfg(test)]
 mod hook_gate_tests;
 mod outcome_counts;
+#[cfg(test)]
+mod run_completion_tests;
 #[cfg(test)]
 mod runner_tests;
 #[cfg(test)]

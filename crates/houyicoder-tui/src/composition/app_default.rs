@@ -159,7 +159,6 @@ pub fn app() -> App {
         teammate_view: None,
         fleet: Default::default(),
         verbose: false,
-        turn_seq: 0,
         last_row_fold_keys: RefCell::new(Vec::new()),
         last_row_expanded_group: RefCell::new(Vec::new()),
         last_row_turn_ids: RefCell::new(Vec::new()),

@@ -497,7 +497,7 @@ fn test_thought_keep_affordance() {
     app.screen = Screen::Working;
     app.transcript
         .push(crate::records::TranscriptLine::ThoughtFor {
-            secs: 42,
+            secs: Some(42),
             reasoning: Some("a train of thought that expands inline".into()),
             tool_summary: None,
             turn_id: "t1".into(),

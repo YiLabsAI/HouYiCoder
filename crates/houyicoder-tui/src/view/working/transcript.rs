@@ -476,10 +476,7 @@ pub(crate) fn push_line_rows(
         return true;
     }
     if let TranscriptLine::ThoughtFor {
-        secs,
-        reasoning,
-        turn_id,
-        ..
+        reasoning, turn_id, ..
     } = line
     {
         let expanded = app.expanded_thinking.contains(turn_id) || app.verbose;
@@ -487,16 +484,16 @@ pub(crate) fn push_line_rows(
         // operated: no hint, and no turn id below, so the enclosing block
         // stays the only thing the next toggle acts on.
         let hint = match reasoning {
-            Some(_) if sink.in_subagent() => "",
-            Some(_) if expanded => "collapse",
-            Some(_) => "expand",
-            None => "",
+            Some(_) if sink.in_subagent() => None,
+            Some(_) if expanded => Some("collapse"),
+            Some(_) => Some("expand"),
+            None => None,
         };
-        let row_text = match hint {
-            "" => format!("✻ Thought for {}s", secs),
-            _ => format!("✻ Thought for {}s (ctrl+o to {})", secs, hint),
-        };
-        let handle = (!sink.in_subagent()).then(|| turn_id.clone());
+        let row_text = line.thought_row_text(hint).unwrap_or_default();
+        // The handle is the row's toggle identity: it is published exactly
+        // when the row offers a toggle, so a click consults the row the draw
+        // produced instead of re-deriving the row's shape from its text.
+        let handle = hint.map(|_| turn_id.clone());
         sink.push(
             Row::new(SYSTEM, row_text)
                 .group(grp_key.clone())

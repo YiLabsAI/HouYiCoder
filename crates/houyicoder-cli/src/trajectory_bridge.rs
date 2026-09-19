@@ -185,6 +185,7 @@ fn build_trajectory_event(
         | SessionEvent::RewardObservation { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
+        | SessionEvent::RunCompleted { .. }
         | SessionEvent::NotificationInjected { .. } => return None,
         SessionEvent::Unknown => return None,
     };

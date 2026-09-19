@@ -338,6 +338,23 @@ pub enum SessionEvent {
         /// A human-readable reason: process crash, forced abort, etc.
         reason: String,
     },
+    /// The terminal record of one turn: the model answered, handed off, or the
+    /// loop stopped. It marks where the turn ended, which nothing else in the
+    /// log does (a turn holds many assistant messages, one per tool
+    /// iteration, and messages also arrive inside a turn). secs is the
+    /// wall-clock length of the drive loop that reached the outcome, measured
+    /// where that loop ran, so a run paused for approval and later resumed
+    /// records the resumed leg alone; a turn that ended without a loop (an
+    /// abort while paused) records no duration rather than a claimed zero.
+    /// Durable so a frontend labels the turn with the duration it took, after
+    /// a replay as well as live: a session loaded from this log shows how long
+    /// each turn reasoned instead of only the turn the process happened to
+    /// watch.
+    #[serde(rename = "RunCompleted")]
+    RunCompleted {
+        #[serde(default)]
+        secs: Option<u32>,
+    },
     /// The per-turn truncation verdict. Persisted so the session log carries
     /// trajectory-grade data: every completed turn and every recovery
     /// iteration records whether the provider cut the reply at the token cap,

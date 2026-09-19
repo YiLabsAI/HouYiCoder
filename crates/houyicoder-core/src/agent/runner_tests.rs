@@ -369,7 +369,7 @@ async fn test_resume_appends_rejection() {
     }
 }
 
-fn runner_with_cfg0() -> RunnerConfig {
+pub(crate) fn runner_with_cfg0() -> RunnerConfig {
     RunnerConfig {
         model: "test".into(),
         instructions: "you are a test agent".into(),

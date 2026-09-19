@@ -276,7 +276,7 @@ async fn test_drive_translates_agent_status() {
 #[tokio::test]
 async fn test_drive_survives_unknown_method() {
     let mut engine = FakeEngine::new();
-    engine.unknown_acpx_method("acpx/context/run_completed");
+    engine.unknown_acpx_method("acpx/context/future_note");
     engine.event(FrontendEvent::SystemLine {
         text: "after".into(),
     });

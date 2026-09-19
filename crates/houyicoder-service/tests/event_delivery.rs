@@ -687,3 +687,61 @@ async fn test_input_batch_preserves_fifo() {
     drop(client);
     drop(handle.await);
 }
+
+/// The record that closes a turn reaches the frontend as part of that turn:
+/// after the frames the turn produced and before the response that reports the
+/// run finished. A frontend labels the turn from this frame, so a record that
+/// arrives late would leave the newest turn unlabelled while the run is over,
+/// and one that never arrives would leave it unlabelled after a reload.
+#[tokio::test]
+async fn test_completion_record_precedes_response() {
+    let (mut client, handle, req_id) = spawn_server_with(
+        ToolRegistry::new(),
+        vec![CompletionResponse {
+            output: vec![
+                OutputItem::Reasoning {
+                    text: "weighing".into(),
+                },
+                OutputItem::Text {
+                    text: "done".into(),
+                },
+            ],
+            usage: Usage::default(),
+            model: "test".into(),
+        }],
+    )
+    .await;
+    let frames = collect_until_response(&mut client, req_id).await;
+    let record_at = frames
+        .iter()
+        .position(|f| {
+            matches!(
+                f,
+                ServerFrame::Event(EventEnvelope {
+                    payload: FrontendEvent::Acpx { notification },
+                    ..
+                }) if notification.method == AcpxMethod::ContextRunCompleted
+            )
+        })
+        .expect("the closing record reaches the client");
+    let thought_at = frames
+        .iter()
+        .position(|f| {
+            matches!(
+                f,
+                ServerFrame::Event(EventEnvelope {
+                    payload: FrontendEvent::SessionUpdate {
+                        update: SessionUpdate::AgentThoughtChunk(_)
+                    },
+                    ..
+                })
+            )
+        })
+        .expect("the turn's own frames reach the client");
+    assert!(
+        thought_at < record_at,
+        "the record follows the turn it closes: {frames:?}"
+    );
+    drop(client);
+    drop(handle.await);
+}

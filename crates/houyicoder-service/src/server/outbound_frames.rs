@@ -148,3 +148,7 @@ impl Server {
         io.send_frame(frame).await
     }
 }
+
+#[cfg(test)]
+#[path = "outbound_frames_tests.rs"]
+mod outbound_frames_tests;

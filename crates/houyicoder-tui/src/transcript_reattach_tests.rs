@@ -62,7 +62,7 @@ fn test_late_results_to_call() {
             serde_json::json!({"filenames": ["f.rs"], "num_files": 1}),
         ),
     ];
-    let t = transcript_from_frames(&frames);
+    let t = transcript_from_frames(&frames, 0..frames.len(), false);
     let c1_call = t
         .iter()
         .position(|l| matches!(l, TranscriptLine::Tool { call_id, name, .. } if call_id == "c1" && name != "result"))
@@ -134,7 +134,7 @@ fn test_edit_diff_skips_fold() {
             }),
         ),
     ];
-    let lines = transcript_from_frames(&frames);
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     assert_eq!(lines.len(), 2, "call + result, got {lines:?}");
     assert!(matches!(
         &lines[1],
@@ -175,7 +175,7 @@ fn test_edit_diff_survives_batch() {
         ),
         tool_result("c3", serde_json::json!({"num_matches": 1})),
     ];
-    let lines = transcript_from_frames(&frames);
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let edit_idx = lines
         .iter()
         .position(|l| matches!(l, TranscriptLine::Tool { tool, .. } if tool == "edit"))
@@ -245,7 +245,7 @@ fn test_agent_result_renders_subagent() {
             }),
         ),
     ];
-    let lines = transcript_from_frames(&frames);
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let sub = lines
         .iter()
         .find(|l| matches!(l, TranscriptLine::Subagent { .. }))
@@ -277,7 +277,7 @@ fn test_non_agent_skips_subagent() {
         tool_call("c1", "bash", serde_json::json!({"command": "ls"})),
         tool_result("c1", serde_json::json!({"stdout": "a.rs\nb.rs"})),
     ];
-    let lines = transcript_from_frames(&frames);
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     assert!(
         lines
             .iter()

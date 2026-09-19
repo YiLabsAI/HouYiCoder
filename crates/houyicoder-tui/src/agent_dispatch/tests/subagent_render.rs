@@ -249,7 +249,7 @@ fn test_ctrl_o_fallthrough() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.transcript.push(TranscriptLine::ThoughtFor {
-        secs: 3,
+        secs: Some(3),
         reasoning: Some("pondered the task".into()),
         tool_summary: None,
         turn_id: "t1".into(),

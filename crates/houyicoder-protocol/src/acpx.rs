@@ -80,8 +80,9 @@ pub enum AcpxMethod {
 
     // acpx/context/* — SessionLogEntry kinds the base session/update has no
     // standard counterpart for (CompactionBoundary, Summary, MetaUser,
-    // PermissionDecision). These ride the extension notification stream
-    // (the durable-context audit trail), orthogonal to session/update.
+    // PermissionDecision, RunCompleted). These ride the extension
+    // notification stream (the durable-context audit trail), orthogonal to
+    // session/update.
     #[serde(rename = "acpx/context/compaction_boundary")]
     ContextCompactionBoundary,
     #[serde(rename = "acpx/context/summary")]
@@ -90,6 +91,32 @@ pub enum AcpxMethod {
     ContextMetaUser,
     #[serde(rename = "acpx/context/permission_decision")]
     ContextPermissionDecision,
+    /// A run reached its terminal outcome. Carries secs in params: how long
+    /// the turn's drive legs ran, summed, which is the work it spent rather
+    /// than the wall clock it was open for. The host closes the turn's summary
+    /// row on this frame, so a replayed session shows the same row the live
+    /// one did.
+    #[serde(rename = "acpx/context/run_completed")]
+    ContextRunCompleted,
+    /// A message delivered into a running turn rather than one that opens it.
+    /// The message itself rides the user-message stream; this mark rides
+    /// beside it, because the chunk a client reads cannot say which of the two
+    /// it is and a turn boundary turns on that. A queued interjection and a
+    /// background child's completion are both delivered this way.
+    #[serde(rename = "acpx/context/mid_turn_input")]
+    ContextMidTurnInput,
+    /// A background child finished and its result was handed to the running
+    /// turn. Marked as delivered rather than opening, by the same rule as a
+    /// queued interjection.
+    #[serde(rename = "acpx/context/child_completed")]
+    ContextChildCompleted,
+    /// A turn was interrupted (a cancel, or a process that died mid-turn) and
+    /// the run regenerates inside the same user turn. The notice rides the
+    /// user-message stream and this mark rides beside it, so a reader does not
+    /// mistake the notice for a message that opens a turn and split one user
+    /// turn into two summary rows.
+    #[serde(rename = "acpx/context/turn_interrupted")]
+    ContextTurnInterrupted,
 
     // acpx/a2a/*, acpx/trajectory/*, acpx/cas/* — placeholder namespaces;
     // payload shapes land with their respective subsystems.
@@ -255,7 +282,7 @@ mod tests {
         // grows, and a build that cannot name a method still reads the
         // notification carrying it. The payload survives for a consumer to
         // report.
-        let json = r#"{"method":"acpx/context/run_completed","params":{"secs":12}}"#;
+        let json = r#"{"method":"acpx/context/future_note","params":{"secs":12}}"#;
         let back: AcpxNotification = serde_json::from_str(json).unwrap();
         assert!(matches!(back.method, AcpxMethod::Unknown));
         assert_eq!(back.params["secs"], 12);
@@ -291,6 +318,10 @@ mod tests {
             AcpxMethod::ContextSummary => "acpx/context/summary",
             AcpxMethod::ContextMetaUser => "acpx/context/meta_user",
             AcpxMethod::ContextPermissionDecision => "acpx/context/permission_decision",
+            AcpxMethod::ContextRunCompleted => "acpx/context/run_completed",
+            AcpxMethod::ContextMidTurnInput => "acpx/context/mid_turn_input",
+            AcpxMethod::ContextChildCompleted => "acpx/context/child_completed",
+            AcpxMethod::ContextTurnInterrupted => "acpx/context/turn_interrupted",
             AcpxMethod::A2aHandoff => "acpx/a2a/handoff",
             AcpxMethod::TrajectorySnapshot => "acpx/trajectory/snapshot",
             AcpxMethod::CasBlockRef => "acpx/cas/block_ref",
@@ -328,6 +359,10 @@ mod tests {
             AcpxMethod::ContextSummary,
             AcpxMethod::ContextMetaUser,
             AcpxMethod::ContextPermissionDecision,
+            AcpxMethod::ContextRunCompleted,
+            AcpxMethod::ContextMidTurnInput,
+            AcpxMethod::ContextChildCompleted,
+            AcpxMethod::ContextTurnInterrupted,
             AcpxMethod::A2aHandoff,
             AcpxMethod::TrajectorySnapshot,
             AcpxMethod::CasBlockRef,

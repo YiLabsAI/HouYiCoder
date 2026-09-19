@@ -873,7 +873,7 @@ fn test_child_rows_hide_handles() {
         prompt: String::new(),
         folded_transcript: vec![
             TranscriptLine::ThoughtFor {
-                secs: 4,
+                secs: Some(4),
                 reasoning: Some("child reasoning".into()),
                 tool_summary: None,
                 turn_id: "child-turn".into(),

@@ -15,6 +15,7 @@ use houyicoder_api::provider::ModelProvider;
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 impl Runner {
     /// Construct a runner that shares an already-Arced store. The caller keeps
@@ -57,7 +58,7 @@ impl Runner {
             aborted: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             turn_cancel: Mutex::new(None),
-            user_turn: Mutex::new(0),
+            user_turn: Mutex::new(UserTurn::default()),
             verify_gate: None,
             undo_stack: None,
             snapshot_store: None,
@@ -100,19 +101,17 @@ impl Runner {
     /// drive loop caps on it so max_turns bounds one user turn's tool loop,
     /// not the session's accumulated turns.
     pub(super) fn bump_user_turn(&self) -> u32 {
-        let mut count = self.user_turn.lock().expect("user_turn lock");
-        *count += 1;
-        *count
+        self.user_turn.lock().expect("user_turn lock").spend_call()
     }
 
     /// Read the current user turn's model-call count.
     pub(super) fn user_turn(&self) -> u32 {
-        *self.user_turn.lock().expect("user_turn lock")
+        self.user_turn.lock().expect("user_turn lock").calls()
     }
 
-    /// Start a fresh max_turns budget for a new user turn.
+    /// Start a fresh user turn: a new max_turns budget and no work measured.
     pub(super) fn reset_user_turn(&self) {
-        *self.user_turn.lock().expect("user_turn lock") = 0;
+        self.user_turn.lock().expect("user_turn lock").begin();
     }
 
     /// Run the agent on a user input. Appends the user event, then drives the
@@ -166,7 +165,10 @@ impl Runner {
         // A new user turn gets a fresh max_turns budget: the cap bounds one
         // turn's tool loop, not the session's accumulated turns.
         self.reset_user_turn();
+        let started = Instant::now();
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
+        self.record_run_completion(session, Some(started), &result)
+            .await;
         self.emit_run_result(&result);
         // Best-effort fact persistence: failures are logged, not fatal.
         if let Ok(_) = result
@@ -200,7 +202,11 @@ impl Runner {
         self.append_user_input(session, user_input).await?;
         // A forked run is a fresh turn: reset the max_turns budget.
         self.reset_user_turn();
-        self.drive_loop(session, 0, Usage::default(), &token).await
+        let started = Instant::now();
+        let result = self.drive_loop(session, 0, Usage::default(), &token).await;
+        self.record_run_completion(session, Some(started), &result)
+            .await;
+        result
     }
 
     /// Continue a run paused on Interruption. Applies caller decisions to
@@ -213,23 +219,62 @@ impl Runner {
         session: SessionId,
         decisions: &[ApprovalDecision],
     ) -> Result<RunResult, RunError> {
-        if let Some(r) = self.aborted_short_circuit(session).await? {
+        let aborted = match self.aborted_short_circuit(session).await {
+            Ok(aborted) => aborted,
+            Err(e) => {
+                // The failed resume ends the turn as a completed one does, so
+                // its record lands too: without it the turn stays open and its
+                // work carries into the next turn's row. This call drives no
+                // leg of its own, so the record reports what the legs before
+                // the pause accounted.
+                let failed: Result<RunResult, RunError> = Err(e);
+                self.record_run_completion(session, None, &failed).await;
+                return failed;
+            }
+        };
+        if let Some(r) = aborted {
             // Abort skips drive_loop, so finalize here.
             let result = Ok(r);
+            // The turn still ends here, so the record closes it: skipping it
+            // would leave the aborted turn open and its reasoning and tool
+            // calls would fold into the next turn's summary row. This call
+            // drives no leg of its own, so the record reports the work the
+            // legs before the pause already accounted.
+            self.record_run_completion(session, None, &result).await;
             self.emit_run_result(&result);
             self.finalize_input_buffer(&result);
             return result;
         }
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
-        let remaining = self.apply_decisions(session, decisions, &token).await?;
+        // The leg opens before the decisions are applied: executing the
+        // approved tools is work this turn spends, so the clock has to cover it.
+        let started = Instant::now();
+        let remaining = match self.apply_decisions(session, decisions, &token).await {
+            Ok(remaining) => remaining,
+            Err(e) => {
+                // A released call that could not be recorded leaves the turn
+                // unfinished all the same. The record closes it and reports the
+                // work this leg did, so a failed resume is not mistaken for a
+                // turn still running.
+                let failed: Result<RunResult, RunError> = Err(e);
+                self.record_run_completion(session, Some(started), &failed)
+                    .await;
+                return failed;
+            }
+        };
         if !remaining.is_empty() {
             self.mark_paused();
-            return Ok(RunResult {
+            let result = Ok(RunResult {
                 outcome: RunOutcome::Interruption(remaining),
                 turns: self.user_turn(),
                 usage: Usage::default(),
             });
+            // The turn is still open, so this accounts the leg and records
+            // nothing.
+            self.record_run_completion(session, Some(started), &result)
+                .await;
+            return result;
         }
         // Resume the same user turn from its current per-turn count, so the
         // cap, the reported turns, and the convergence reminder all share the
@@ -237,8 +282,49 @@ impl Runner {
         let result = self
             .drive_loop(session, self.user_turn(), Usage::default(), &token)
             .await;
+        self.record_run_completion(session, Some(started), &result)
+            .await;
         self.emit_run_result(&result);
         result
+    }
+
+    /// Record the end of a turn: how long the turn's drive legs ran, when any
+    /// did. Every leg the caller drove is added to the turn's work first, so a
+    /// leg that pauses on approvals hands its time to the turn and the leg that
+    /// later finishes it reports the whole. A run paused on approvals has not
+    /// finished, so the leg that finishes the turn writes the record instead —
+    /// the record belongs to the turn's end, whichever call drove it. A turn
+    /// that ended without a loop (an abort while paused on an approval) still
+    /// records its end: the frontend needs the boundary, and it reports the
+    /// work the legs before the pause did. Failure to write is logged, not
+    /// fatal: the record feeds the frontend's turn summary, and the run already
+    /// has its outcome to report.
+    pub(super) async fn record_run_completion(
+        &self,
+        session: SessionId,
+        leg: Option<Instant>,
+        result: &Result<RunResult, RunError>,
+    ) {
+        let paused =
+            matches!(result, Ok(run) if matches!(run.outcome, RunOutcome::Interruption(_)));
+        let secs = {
+            let mut turn = self.user_turn.lock().expect("user_turn lock");
+            if let Some(leg) = leg {
+                turn.account(leg.elapsed());
+            }
+            if paused {
+                return;
+            }
+            turn.take_worked()
+                .map(|worked| worked.as_secs().min(u32::MAX as u64) as u32)
+        };
+        if let Err(e) = self
+            .store
+            .append(new_event(session, SessionEvent::RunCompleted { secs }))
+            .await
+        {
+            tracing::warn!("run completion record failed: {e}");
+        }
     }
 
     /// Re-apply or clear skill entitlements at the turn boundary. A skill
