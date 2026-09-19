@@ -581,8 +581,8 @@ fn test_context_grid_after_run() {
     let p = Arc::new(FakeProvider::text("hello back"));
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.screen = crate::state::Screen::Working;
-    // Simulate /context: push User echo + ContextGrid (TUI-only lines).
-    app.push_transcript_line(TranscriptLine::User("/context".into()));
+    // Simulate /context: raise the command echo + ContextGrid rows.
+    app.push_unanswered_echo("/context".into());
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
     // Spawn "hi" and wait for Done.
     app.spawn_run("hi".into());
@@ -683,9 +683,9 @@ fn test_slash_echo_visible() {
 
 #[test]
 fn test_tui_lines_survive_runs() {
-    // After a second run, TUI-only lines from the first run (System
-    // "thought for Ns") must stay at their position, not accumulate at
-    // the tail or vanish.
+    // After a second run, the rows the frontend raised in the first run
+    // (System "thought for Ns") must stay at their position, not
+    // accumulate at the tail or vanish.
     let p = Arc::new(FakeProvider::text("first reply"));
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.screen = crate::state::Screen::Working;

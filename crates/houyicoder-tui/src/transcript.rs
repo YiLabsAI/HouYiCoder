@@ -1,9 +1,11 @@
-//! Wire-frame-to-transcript projection: rebuild the readable transcript lines
-//! from the ordered session/update + acpx frame stream the driver accumulates,
-//! and fold each turn's reasoning + tool calls into the one summary row the
+//! Frame-to-transcript projection: rebuild the readable transcript lines from
+//! the ordered session/update + acpx frame stream the driver accumulates, and
+//! fold each turn's reasoning + tool calls into the one summary row the
 //! transcript shows for that turn. The projection derives that row from the
 //! turn's own frames rather than from what a host happened to watch live, so
-//! a turn replayed from the log renders the row the live turn rendered.
+//! a turn replayed from the log renders the row the live turn rendered. A row
+//! the frontend raises itself rides the same log, so it keeps its place for
+//! the same reason.
 
 use std::ops::Range;
 
@@ -12,7 +14,7 @@ use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate, ToolCallStatus};
 
 use crate::brief::{result_summary, tool_call_brief};
-use crate::records::{ToolOutcome, TranscriptLine};
+use crate::records::{ContextView, ToolOutcome, TranscriptLine};
 
 /// The transcript-snapshot seam (a loader backed by the durable log) lives
 /// as a directory submodule here so its path is transcript::snapshot, not a
@@ -24,11 +26,12 @@ use crate::result_body::{
     command_is_silent_success, extract_body, output_has_diff, write_result_body,
 };
 
-/// One frame of the wire turn stream, preserved in arrival order so the
+/// One frame of the turn stream, preserved in arrival order so the
 /// transcript rebuild keeps the time-ordered interleave of session/update
 /// chunks and acpx/context/* audit notifications (a compaction checkpoint
 /// lands between the tool calls that bracketed it, not at the tail). The
-/// driver accumulates these as the server pushes them; the transcript is a
+/// driver accumulates the server's frames as it pushes them, and the
+/// frontend appends its own rows to the same log; the transcript is a
 /// faithful projection of that ordered stream, never a stub.
 #[derive(Debug, Clone)]
 pub enum TranscriptFrame {
@@ -39,6 +42,56 @@ pub enum TranscriptFrame {
     /// base session/update has no variant for (compaction boundary, summary,
     /// permission decision, meta user), or a token-level provider event.
     Acpx(AcpxNotification),
+    /// A row the frontend raises on its own account, listed in FrontendRow:
+    /// no server frame carries it, so the frontend puts it in this log at the
+    /// position it happened. Every view of the log renders it there — the live
+    /// turn, a window that slid past older frames, scrollback loading frames
+    /// above it — and a view that no longer covers its frame shows it no more.
+    Frontend(FrontendRow),
+}
+
+/// A row the frontend raises on its own account. It renders through the same
+/// projection as the server's frames, so it lands where it was raised and
+/// stays there while the window slides, rather than drifting to the head of
+/// whatever rows a rebuild happens to keep.
+#[derive(Debug, Clone)]
+pub enum FrontendRow {
+    /// A system line: command feedback, a notice, a warning, a failure.
+    System(String),
+    /// A /context breakdown rendered inline as conversation content.
+    Context(ContextView),
+    /// The abort notice, welded under the message the abort cut off.
+    Interrupted,
+    /// The notice that the interrupted submission went back to the input box.
+    InputRestored,
+    /// The echo of a submitted command.
+    Echo(String),
+}
+
+impl FrontendRow {
+    /// The row the frontend raises for a line no server frame carries, or None
+    /// for a line the log itself reproduces. The text decides nothing: a
+    /// submitted message keeps a prompt echo only until the server sends the
+    /// frame for that text, so a line opening with a slash is still the log's.
+    pub(crate) fn from_line(line: &TranscriptLine) -> Option<Self> {
+        match line {
+            TranscriptLine::System(text) => Some(Self::System(text.clone())),
+            TranscriptLine::ContextGrid(view) => Some(Self::Context(view.clone())),
+            TranscriptLine::Interrupted => Some(Self::Interrupted),
+            _ => None,
+        }
+    }
+
+    /// The row this frame renders as.
+    fn line(&self) -> TranscriptLine {
+        match self {
+            Self::System(text) => TranscriptLine::System(text.clone()),
+            Self::Context(view) => TranscriptLine::ContextGrid(view.clone()),
+            Self::Interrupted => TranscriptLine::Interrupted,
+            Self::InputRestored => TranscriptLine::System("input restored".into()),
+            Self::Echo(text) => TranscriptLine::User(text.clone()),
+        }
+    }
 }
 
 /// Convert a fetched child frame to the live-frame shape the projection
@@ -96,10 +149,9 @@ fn is_user_frame(frame: &TranscriptFrame) -> bool {
 }
 
 /// Whether the message at the position opens a turn: a message the log does
-/// not mark as delivered into the turn already running. The mark sits right
-/// after the message it belongs to, so the frame beside it answers this.
+/// not mark as delivered into the turn already running.
 fn opens_turn(frames: &[TranscriptFrame], at: usize) -> bool {
-    frames.get(at).is_some_and(is_user_frame) && !frames.get(at + 1).is_some_and(marks_delivery)
+    frames.get(at).is_some_and(is_user_frame) && !message_marked_delivered(frames, at)
 }
 
 /// Whether a run of frames holds where a turn begins or ends, read in log
@@ -117,7 +169,7 @@ pub fn bounds_turn_in(frames: &[TranscriptFrame]) -> bool {
 /// interjection, a background child's completion, and the notice that a turn
 /// was interrupted all reach the host as user messages, exactly like a fresh
 /// prompt, so the message chunk alone cannot say which of the four it is. The
-/// projection writes this mark right after the message it belongs to.
+/// projection writes this mark beside the message it belongs to.
 fn marks_delivery(frame: &TranscriptFrame) -> bool {
     matches!(
         frame,
@@ -129,6 +181,20 @@ fn marks_delivery(frame: &TranscriptFrame) -> bool {
                     | AcpxMethod::ContextTurnInterrupted
             )
     )
+}
+
+/// Whether the log marks the user message at at as delivered into the turn
+/// that was already running. The mark sits beside the message, but a row the
+/// frontend raises while the message is in hand can land between the two:
+/// the mark is read past those rows, so one raised there cannot leave the
+/// message reading as a turn of its own for the rest of the session.
+fn message_marked_delivered(frames: &[TranscriptFrame], at: usize) -> bool {
+    frames
+        .get(at + 1..)
+        .unwrap_or_default()
+        .iter()
+        .find(|f| !matches!(f, TranscriptFrame::Frontend(_)))
+        .is_some_and(marks_delivery)
 }
 
 /// Where the turn a window starts inside begins: the message that opened it.
@@ -215,12 +281,9 @@ impl<'a> TurnFold<'a> {
         }
     }
 
-    /// Whether the user message at abs was delivered into the turn running
-    /// when it arrived, rather than opening a turn of its own. The projection
-    /// writes the mark for such a message immediately after it, so the frame
-    /// beside the message answers this.
+    /// Whether the message at abs was delivered into the running turn.
     fn delivered_into_turn(&self, abs: usize) -> bool {
-        self.log.get(abs + 1).is_some_and(marks_delivery)
+        message_marked_delivered(self.log, abs)
     }
 
     /// Fold one frame into the open turn. A user message opens a turn and ends
@@ -251,6 +314,9 @@ impl<'a> TurnFold<'a> {
                 self.ended_at = abs;
                 return self.close(recorded_secs(&n.params));
             }
+            // A row the frontend raises is not a fact of the turn it sits in:
+            // it does not move where the turn ended, which names the row.
+            TranscriptFrame::Frontend(_) => return None,
             _ => {}
         }
         self.ended_at = abs;
@@ -316,12 +382,13 @@ impl<'a> TurnFold<'a> {
     }
 }
 
-/// Rebuild the transcript from the ordered wire frame stream the driver
-/// accumulated. Each SessionUpdate maps to one TranscriptLine; the acpx
-/// audit kinds the transcript surfaces (compaction, summary) become System
-/// lines; the meta-user nudge + permission-decision audit are dropped
-/// (control-only). Tool-call outcomes are resolved in a first pass from the
-/// matching ToolCallUpdate so the call chip colors by outcome.
+/// Rebuild the transcript from the ordered frame log the driver accumulated.
+/// Each SessionUpdate maps to one TranscriptLine; the acpx audit kinds the
+/// transcript surfaces (compaction, summary) become System lines; the
+/// meta-user nudge + permission-decision audit are dropped (control-only);
+/// a row the frontend raised renders where its own frame sits. Tool-call
+/// outcomes are resolved in a first pass from the matching ToolCallUpdate so
+/// the call chip colors by outcome.
 ///
 /// log is the whole frame log and window is the part of it to render. Only the
 /// window's frames become lines, but two of the facts those lines are built on
@@ -510,6 +577,7 @@ pub fn transcript_from_frames(
             out.push(row);
         }
         match f {
+            TranscriptFrame::Frontend(row) => out.push(row.line()),
             TranscriptFrame::Session(SessionUpdate::UserMessageChunk(chunk)) => {
                 out.push(TranscriptLine::User(chunk_text(chunk)));
             }

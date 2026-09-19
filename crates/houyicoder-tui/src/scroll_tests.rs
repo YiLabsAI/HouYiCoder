@@ -8,11 +8,25 @@
 use crate::composition;
 use crate::state::Screen;
 use crate::test_harness::{render_buffer, render_text};
+use crate::transcript::TranscriptFrame;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app
+}
+
+/// Deliver one agent text frame and rebuild, so the row is one the log can
+/// reproduce: a row written onto the transcript alone does not survive the
+/// rebuild a later line triggers.
+fn agent_row(app: &mut crate::state::App, text: &str) {
+    app.frames
+        .push(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text { text: text.into() }),
+        )));
+    app.rebuild_transcript();
 }
 
 fn render(app: &crate::state::App) -> String {
@@ -586,7 +600,7 @@ fn test_legacy_search_definitions_gone() {
 fn test_search_all_informs_user() {
     use crate::records::TranscriptLine;
     let mut app = working();
-    app.transcript = vec![TranscriptLine::Agent("needle in window".into())];
+    agent_row(&mut app, "needle in window");
     app.run_tui_local_command("search --all needle");
     assert!(app.search.active, "--all still enters the search view");
     assert!(app.verbose);

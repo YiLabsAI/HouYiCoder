@@ -642,6 +642,36 @@ fn test_record_spans_mid_turn() {
 }
 
 #[test]
+fn test_frontend_row_between_mark() {
+    // A notice raised while a queued message was in hand sits between that
+    // message and the mark saying the running turn absorbed it. The message
+    // still belongs to that turn, so the turn keeps the facts gathered before
+    // it and ends once, at the record: reading the mark from the frame
+    // immediately beside the message would end the turn there and leave the
+    // facts gathered before it on a row of their own.
+    let mut frames = vec![user_msg("go"), thought("first half ")];
+    frames.push(user_msg("queued note"));
+    frames.push(TranscriptFrame::Frontend(FrontendRow::System(
+        "model set to haiku".into(),
+    )));
+    frames.push(TranscriptFrame::Acpx(AcpxNotification::new(
+        AcpxMethod::ContextMidTurnInput,
+        serde_json::json!({}),
+    )));
+    frames.push(thought("second half"));
+    frames.push(run_completed(Some(3)));
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    let rows = lines
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::ThoughtFor { .. }))
+        .count();
+    assert_eq!(rows, 1, "one row for the one turn: {lines:?}");
+    let row = thought_row(&lines).expect("a row");
+    assert_eq!(row.reasoning.as_deref(), Some("first half second half"));
+    assert_eq!(row.turn_id, "f6");
+}
+
+#[test]
 fn test_child_notice_no_split() {
     // A background child's result is handed to the running turn the same way
     // a queued message is, so it folds into that turn rather than ending it.

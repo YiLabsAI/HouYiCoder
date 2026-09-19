@@ -231,7 +231,9 @@ fn test_clear_resets_session() {
     assert_eq!(app.spec_ctx.step, "idle");
     assert_eq!(app.pane, Pane::Transcript);
     assert_eq!(app.transcript.len(), 1);
-    assert_eq!(app.todos.cursor(), 0);
+    // The checklist cursor restarts on the cleared log rather than keeping
+    // the stale 4, so it stands where the reset left the log it reads.
+    assert_eq!(app.todos.cursor(), app.frames.len());
     assert!(app.todos.items.is_empty());
 }
 

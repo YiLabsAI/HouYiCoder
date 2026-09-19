@@ -519,20 +519,12 @@ impl App {
             drill: ContextDrillDown::default(),
             suggestions,
         };
-        // Replace the last ContextGrid (from the /context cache
-        // fast-path) so a refresh does not stack two grids. Search
-        // backwards instead of checking only the last line: a non-grid
-        // line (System, Agent chunk, hook notification) may land
-        // between the fast-path push and this reply, and the prior
-        // last()-only check would skip the pop → duplicate grid.
-        let last_grid = self
-            .transcript
-            .iter()
-            .rposition(|l| matches!(l, TranscriptLine::ContextGrid(_)));
-        if let Some(idx) = last_grid {
-            self.transcript.remove(idx);
-        }
-        self.push_transcript_line(TranscriptLine::ContextGrid(view));
+        // Replace the view the newest grid renders, so a refresh updates the
+        // grid where it stands instead of stacking a second one. The grid's
+        // frame holds its place, so the replacement needs no search by
+        // position: whatever rows landed between the cached push and this
+        // reply stay below the grid they followed.
+        self.replace_context_view(view);
     }
 
     /// Render the compaction outcome as a one-line system message,

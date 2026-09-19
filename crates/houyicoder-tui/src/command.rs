@@ -457,10 +457,10 @@ impl App {
             // when the first token matches a known command. Otherwise the
             // whole input (a path like /home/you/sample-project, or an
             // unknown token like /nope) is a message to the model — never an
-            // "unknown command" error. Push a tentative User echo for the
+            // "unknown command" error. Raise a tentative echo for the
             // command path; if no command matched, pop it so the message path
             // below echoes + sends exactly once (no double echo).
-            self.push_transcript_line(TranscriptLine::User(text.clone()));
+            self.push_unanswered_echo(text.clone());
             if self.run_tui_local_command(stripped.trim()) {
                 return;
             }
@@ -470,9 +470,7 @@ impl App {
             }
             // No command matched: undo the tentative echo and fall through to
             // send the /-prefixed input as a message to the model.
-            if matches!(self.transcript.last(), Some(TranscriptLine::User(_))) {
-                self.transcript.pop();
-            }
+            self.drop_tentative_echo();
         }
         // Artifact Normal mode: plain text is not auto-annotated. The input box
         // is for slash commands; direct edits start with c/o/d/i. Drop the text
@@ -483,8 +481,10 @@ impl App {
         }
         // Auto-start path. When a real runner is wired, spawn runner.run on
         // the tokio runtime; the transcript is rebuilt from real SessionLogEntries
-        // when the run lands. Without a runner, fall back to the legacy stub
-        // reply so tests and the no-runtime path keep working.
+        // when the run lands. An app with no runner reaches no model, so no frame
+        // will follow this submission: the frontend raises the row, and the typed
+        // task opens the drafting surface it would open with a runner. No reply
+        // follows, because there is nothing to reply with.
         let text = crate::paste::PasteStore::expand(&text, &self.pasted);
         if self.session.is_some() {
             let project = crate::history::current_project();
@@ -493,13 +493,7 @@ impl App {
             self.spawn_run(text);
             return;
         }
-        self.push_transcript_line(TranscriptLine::User(text));
-        self.push_transcript_line(TranscriptLine::Agent(
-            "reading files and drafting a design from your task".into(),
-        ));
-        self.push_transcript_line(TranscriptLine::Read {
-            path: "src/lib.rs".to_string(),
-        });
+        self.push_unanswered_echo(text);
         self.enter_stage(
             Stage::Design,
             Pane::Spec,

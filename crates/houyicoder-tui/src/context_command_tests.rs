@@ -2,15 +2,13 @@
 //! gate. The /context cache fast-path + the ContextResult grid landing.
 use super::*;
 
-/// The dedup in agent_dispatch (pop stale ContextGrid before pushing the fresh
-/// one) must handle a non-grid line landing between the cache fast-path push
-/// and the ContextResult reply. The prior check was transcript.last() is
-/// ContextGrid -- if a System line intervened, the pop was skipped and a
-/// duplicate grid appeared. This test injects a System line between the two
-/// and asserts only one grid from the second call (the stale fast-path grid
-/// was popped).
+/// The second /context draws the cached grid at once and then swaps its payload
+/// for the reply grid in place, so the transcript holds one grid either way. A
+/// non-grid line landing between the two must not leave a second grid: the test
+/// injects a System line between them and asserts the second call adds one grid,
+/// not two.
 #[test]
-fn test_dedup_handles_intervening_line() {
+fn test_second_context_one_grid() {
     use houyicoder_protocol::frontend::SlashCommand;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
@@ -54,14 +52,14 @@ fn test_dedup_handles_intervening_line() {
         .iter()
         .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
         .count();
-    // Desired: fast-path grid was popped by dedup -> only the reply grid
+    // Desired: the fast-path grid was replaced in place -> only the reply grid
     // remains -> total = grids_after_first + 1.
-    // Bug: dedup skipped (System line blocks the last-line check) -> both
-    // grids remain -> total = grids_after_first + 2.
+    // Bug: the reply grid lands beside the fast-path one -> total =
+    // grids_after_first + 2.
     assert_eq!(
         grids_final,
         grids_after_first + 1,
-        "dedup should pop stale fast-path grid even when a non-grid line intervenes"
+        "the second /context leaves one grid even when a non-grid line intervenes"
     );
 }
 

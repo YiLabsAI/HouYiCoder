@@ -1,7 +1,9 @@
 //! App methods extracted from state.rs so state.rs stays under the
 //! size gate with room for field doc restoration.
 
+use crate::records::ContextView;
 use crate::state::{App, Divergence, Stage, TranscriptLine, Verdict, ViewportMode};
+use crate::transcript::{FrontendRow, TranscriptFrame};
 use houyicoder_protocol::frontend::SlashCommand;
 
 impl App {
@@ -68,10 +70,69 @@ impl App {
     /// a user scrolled back stays in place — agent output never yanks a
     /// reader of history. User-initiated re-follow (input, End, Ctrl+End,
     /// PageDown to bottom) happens at the action site, not here.
+    ///
+    /// A line the frontend raises on its own account (a system line, a context
+    /// view, an interrupt notice) enters the frame log at the position it
+    /// happened and renders from there: the log, not this list, is what holds
+    /// its place.
     pub fn push_transcript_line(&mut self, line: TranscriptLine) {
-        self.transcript.push(line);
-        crate::scroll::bound_scrollback(&mut self.transcript);
-        self.bump_transcript_version();
+        match FrontendRow::from_line(&line) {
+            Some(row) => self.raise_frontend_row(row),
+            None => {
+                self.transcript.push(line);
+                crate::scroll::bound_scrollback(&mut self.transcript);
+                self.bump_transcript_version();
+            }
+        }
+    }
+
+    /// Show input the user submitted that no server frame will carry: a command,
+    /// which never reaches the model, or a message in an app with no runner
+    /// connected. The row enters the frame log, which keeps its place for a
+    /// rebuild and drops it with a window that no longer covers its frame.
+    pub fn push_unanswered_echo(&mut self, text: String) {
+        self.raise_frontend_row(FrontendRow::Echo(text));
+    }
+
+    /// Append a row the frontend raises to the frame log, then rebuild so the
+    /// row renders where its frame now sits. Every such append ends here: a
+    /// frame the projection has not seen is a row the transcript is missing.
+    pub(crate) fn raise_frontend_row(&mut self, row: FrontendRow) {
+        self.frames.push(TranscriptFrame::Frontend(row));
+        self.rebuild_transcript();
+    }
+
+    /// Drop the tentative command echo raised for an input that turned out
+    /// not to be a command, so the message path below raises it once as a
+    /// prompt.
+    pub fn drop_tentative_echo(&mut self) {
+        if matches!(
+            self.frames.last(),
+            Some(TranscriptFrame::Frontend(FrontendRow::Echo(_)))
+        ) {
+            self.frames.pop();
+            self.rebuild_transcript();
+        }
+    }
+
+    /// Replace the newest context view with a fresh one, or raise it when the
+    /// log holds none yet. The row keeps the place its frame holds, so a
+    /// refresh updates the grid where it stands instead of stacking another.
+    pub fn replace_context_view(&mut self, view: ContextView) {
+        let at = self
+            .frames
+            .iter()
+            .rposition(|f| matches!(f, TranscriptFrame::Frontend(FrontendRow::Context(_))));
+        match at {
+            Some(at) => {
+                if let TranscriptFrame::Frontend(FrontendRow::Context(slot)) = &mut self.frames[at]
+                {
+                    *slot = view;
+                }
+                self.rebuild_after_frame_edit();
+            }
+            None => self.raise_frontend_row(FrontendRow::Context(view)),
+        }
     }
 
     /// Invalidate the render pass's cached row set by bumping the transcript

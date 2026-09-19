@@ -14,7 +14,7 @@ use crate::records::{Approval, AskQuestion, TranscriptLine};
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome};
 use crate::state::App;
 use crate::state::enums::LiveBlock;
-use crate::transcript::{TranscriptFrame, chunk_text};
+use crate::transcript::{FrontendRow, TranscriptFrame, chunk_text};
 
 const MAX_REBUILD_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;
@@ -171,8 +171,11 @@ impl App {
         // Preserve the submitted input in case interruption restores the turn.
         self.last_run_input = Some(input.clone());
         // A fresh submission answers the previous turn's interruption, so its
-        // notice and restore line are cleared before this turn's lines land.
-        clear_interruption_markers(&mut self.transcript);
+        // notice and restore line leave the log before this turn's lines land:
+        // both are rows the frontend raised, and a rebuild renders them again
+        // from the log they would still sit in.
+        clear_interruption_markers(&mut self.frames);
+        self.rebuild_transcript();
         self.push_transcript_line(TranscriptLine::User(input));
         self.last_delta_at = None;
         self.displayed_tokens.set(0);
@@ -610,7 +613,8 @@ impl App {
 
     /// Remove the latest submitted turn from the frame log and rebuild the
     /// transcript. Used when interruption arrives before substantive output so
-    /// the user can edit and resend the restored input.
+    /// the user can edit and resend the restored input. The rows the frontend
+    /// raised during that turn go with it: they describe work now discarded.
     pub fn rewind_to_last_user_input(&mut self) {
         let Some(start) = self.frames.iter().rposition(|f| {
             matches!(
@@ -626,14 +630,16 @@ impl App {
 }
 
 /// Clear the previous run's interruption markers: the Interrupted notice and
-/// the "input restored" line that can precede it. Matched by content, not by
-/// position: a turn with real output has no restore line, and its lone notice
-/// otherwise survives every rebuild and reappears at each later run's start as
-/// if the run had just been interrupted.
-fn clear_interruption_markers(transcript: &mut Vec<TranscriptLine>) {
-    transcript.retain(|line| {
-        !matches!(line, TranscriptLine::Interrupted)
-            && !matches!(line, TranscriptLine::System(s) if s == "input restored")
+/// the restore line that can precede it. Each marker names itself in the log,
+/// so a turn with real output clears its lone notice while a turn that gave
+/// the submission back clears both — matched by identity, not by position or
+/// by the words the row happens to render.
+fn clear_interruption_markers(frames: &mut Vec<TranscriptFrame>) {
+    frames.retain(|f| {
+        !matches!(
+            f,
+            TranscriptFrame::Frontend(FrontendRow::Interrupted | FrontendRow::InputRestored)
+        )
     });
 }
 

@@ -134,8 +134,9 @@ pub struct App {
     /// skip-set). Backed by a JSONL file at the config home.
     pub history: HistoryNav,
     pub transcript: Vec<TranscriptLine>,
-    /// The durable wire frame history, owned by App. Incoming frames append
-    /// here before the transcript is rebuilt.
+    /// The ordered frame log, owned by App: the server's frames and the rows
+    /// the frontend raises for lines no server frame carries. Both append here
+    /// before the transcript is rebuilt.
     pub frames: Vec<TranscriptFrame>,
     pub(crate) current_turn_boundary: CurrentTurnBoundary,
     /// Verdict cursor: acpx permission_decision frames are deserialized once

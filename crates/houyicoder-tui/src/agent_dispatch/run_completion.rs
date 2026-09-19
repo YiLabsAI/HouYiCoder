@@ -7,6 +7,7 @@ use houyicoder_protocol::frontend::run::{RunOutcome, RunResult};
 use super::super::should_preserve_interrupted_turn;
 use crate::records::TranscriptLine;
 use crate::state::enums::LiveBlock;
+use crate::transcript::FrontendRow;
 
 impl super::App {
     /// Finalize a run. The error side is a display string, not the protocol
@@ -66,7 +67,7 @@ impl super::App {
                             _ => false,
                         };
                         if restored {
-                            self.system_line("input restored");
+                            self.raise_frontend_row(FrontendRow::InputRestored);
                         }
                         self.push_transcript_line(TranscriptLine::Interrupted);
                     }

@@ -10,9 +10,12 @@ use crate::state::App;
 use crate::transcript::{TranscriptFrame, is_run_completed, transcript_from_frames};
 
 impl App {
-    /// Rebuild the transcript while preserving TUI-only lines at their current
-    /// positions. The stable prefix is reused within a turn; a user boundary or
-    /// rewind rebuilds the bounded visible history.
+    /// Rebuild the transcript from the frame log while preserving the expand
+    /// state of the rows that reappear. The stable prefix is reused within a
+    /// turn; a user boundary or rewind rebuilds the bounded visible history.
+    /// A row the frontend raised renders from its own frame, so a rebuild
+    /// re-derives it exactly where it was raised, and a window that no longer
+    /// covers that frame drops it along with the rows around it.
     pub(crate) fn rebuild_transcript(&mut self) {
         let turn_start = self.current_turn_start();
         // A changed turn boundary or truncated frame log invalidates the stable
@@ -36,10 +39,7 @@ impl App {
                 Vec::with_capacity(self.transcript.len() + event_lines.len());
             let mut event_idx = 0;
             for line in &self.transcript {
-                if line.is_tui_only() {
-                    merged.push(line.clone());
-                } else if event_idx < event_lines.len() && same_frame(line, &event_lines[event_idx])
-                {
+                if event_idx < event_lines.len() && same_frame(line, &event_lines[event_idx]) {
                     merged.push(merge_subagent(line, event_lines[event_idx].clone()));
                     event_idx += 1;
                 }
@@ -50,35 +50,20 @@ impl App {
             merged.extend_from_slice(&event_lines[event_idx..]);
             self.transcript = merged;
             self.current_turn_boundary.frame_index = turn_start;
-            // Map the stable frame prefix to its transcript boundary while
-            // retaining any interleaved TUI-only lines. Using transcript.len()
-            // here would include the changing tail and duplicate it later.
-            // A turn still open where the prefix ends finishes later in the tail:
-            // the projection leaves that turn open because the prefix stops
-            // short of the log's end, so the row it would write belongs after
-            // the tail, and the count is what tells the next rebuild how much
-            // of this transcript is stable. The turn's own boundary decisions
-            // still read the same log facts as the full projection, so the two
-            // counts agree line for line.
+            // Map the stable frame prefix to its transcript boundary: the
+            // prefix's rows are the transcript's first rows, one per row the
+            // projection derives from it, and that count says how much of this
+            // transcript the next tail rebuild may reuse. A turn still open
+            // where the prefix ends writes its row in the tail, so the tail
+            // rebuild re-derives it; both counts read the same log facts and
+            // agree line for line.
             let prefix_end = turn_start.max(frame_start);
             let prefix_line_count =
                 transcript_from_frames(&self.frames, frame_start..prefix_end, newest_open).len();
-            let mut stable_end = 0;
-            let mut non_tui = 0;
-            for (i, line) in self.transcript.iter().enumerate() {
-                if non_tui >= prefix_line_count {
-                    stable_end = i;
-                    break;
-                }
-                if !line.is_tui_only() {
-                    non_tui += 1;
-                }
-                stable_end = i + 1;
-            }
-            self.current_turn_boundary.line_index = stable_end;
+            self.current_turn_boundary.line_index = prefix_line_count.min(self.transcript.len());
         } else {
-            // Rebuild only the changing tail and preserve TUI-only lines at
-            // their existing positions.
+            // Rebuild only the changing tail, pairing each row with the frame
+            // it rendered so the expand state survives.
             let tail =
                 transcript_from_frames(&self.frames, turn_start..self.frames.len(), newest_open);
             let mut merged: Vec<TranscriptLine> =
@@ -86,9 +71,7 @@ impl App {
             merged.extend_from_slice(&self.transcript[..self.current_turn_boundary.line_index]);
             let mut tail_idx = 0;
             for line in &self.transcript[self.current_turn_boundary.line_index..] {
-                if line.is_tui_only() {
-                    merged.push(line.clone());
-                } else if tail_idx < tail.len() && same_frame(line, &tail[tail_idx]) {
+                if tail_idx < tail.len() && same_frame(line, &tail[tail_idx]) {
                     merged.push(merge_subagent(line, tail[tail_idx].clone()));
                     tail_idx += 1;
                 } else if tail_idx < tail.len() && matches!(line, TranscriptLine::User(_)) {
@@ -105,6 +88,16 @@ impl App {
         // Re-derive view caches incrementally from their frame cursors.
         self.accumulate_wire_state();
         self.bump_transcript_version();
+    }
+
+    /// Rebuild the whole visible window after a frame's payload changed in
+    /// place. A reused prefix holds rows derived from the frames it covers, so
+    /// a row whose frame changed under it would keep the former content until
+    /// something else forced a full rebuild: the boundary is set one past the
+    /// log, a position no frame holds, so the next rebuild takes that path.
+    pub(crate) fn rebuild_after_frame_edit(&mut self) {
+        self.current_turn_boundary.frame_index = self.frames.len() + 1;
+        self.rebuild_transcript();
     }
 
     /// Return the oldest frame included in the bounded transcript history.
@@ -147,21 +140,14 @@ impl App {
             return;
         }
         let prepended = new_lines.len();
-        // Insert the older lines before the currently loaded history.
-        // TUI-only lines at the top of the transcript (system messages pushed
-        // before any frame) stay above the prepended frame-derived lines.
-        let mut split = 0;
-        for (i, line) in self.transcript.iter().enumerate() {
-            if !line.is_tui_only() {
-                split = i;
-                break;
-            }
-            split = i + 1;
-        }
+        // Insert the older lines before the currently loaded history: the
+        // batch's frames all precede the frames already loaded, and a row the
+        // frontend raised among the batch's frames rides the batch's own
+        // projection, so it lands where it was raised rather than above the
+        // history it belongs inside.
         let mut merged = Vec::with_capacity(new_lines.len() + self.transcript.len());
-        merged.extend_from_slice(&self.transcript[..split]);
         merged.extend(new_lines);
-        merged.extend_from_slice(&self.transcript[split..]);
+        merged.extend_from_slice(&self.transcript);
         self.transcript = merged;
         self.loaded_from_frame.set(batch_start);
         // Older lines extend the stable prefix and must survive the next tail
@@ -275,8 +261,8 @@ enum LineRole {
 
 /// Whether both lines render the same frame: same role, and a row that belongs
 /// to a frame names the same source — its tool call, its text, its child
-/// session. Role alone mispairs once a TUI-only line or a slid window shifts
-/// the positions, which leaves a notice inside a newer turn.
+/// session. Role alone mispairs once a slid window shifts the positions,
+/// which leaves a notice inside a newer turn.
 fn same_frame(visible: &TranscriptLine, fresh: &TranscriptLine) -> bool {
     use TranscriptLine::*;
     let role = |l: &TranscriptLine| match l {

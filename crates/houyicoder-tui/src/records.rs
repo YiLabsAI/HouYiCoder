@@ -340,21 +340,6 @@ fn command_is_semantic_success(command: &str, exit_code: i64) -> bool {
 }
 
 impl TranscriptLine {
-    /// True when this line is TUI-only (not derived from session events).
-    /// Slash-command User echoes (starting with /), ContextGrid, System,
-    /// and Approval lines have no matching SessionLogEntry, so the transcript
-    /// rebuild must preserve them at their original positions instead of
-    /// appending them at the end. A line the projection derives (ThoughtFor)
-    /// is not TUI-only: the rebuild re-derives it, and treating it as
-    /// preserved would leave a second copy behind.
-    pub fn is_tui_only(&self) -> bool {
-        match self {
-            Self::ContextGrid(_) | Self::System(_) | Self::Interrupted => true,
-            Self::User(s) => s.starts_with('/'),
-            _ => false,
-        }
-    }
-
     /// Render the line as a glyph-led string for the transcript pane. No
     /// role pipe-prefix: a leading glyph carries the role, matching the
     /// clean chat surface. > user, ● assistant, ✻ system notice,

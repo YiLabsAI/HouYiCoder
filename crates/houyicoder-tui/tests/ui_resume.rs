@@ -593,9 +593,12 @@ fn test_clear_barrier_msg_runs() {
     // run1 ends -> drain /clear (clears transcript, emits the archive notice)
     // -> drain the message -> run2 -> "done". run1's "done" is rebuilt + cleared
     // in the same event-loop iteration (no render between), so assert the
-    // archive notice (/clear drained) + run2's "done" instead.
+    // archive notice (/clear drained) + run2's "done" instead. The notice is
+    // read from the screen, not the output stream: the renderer emits only the
+    // cells that changed, so a notice landing on a row that already carried
+    // some of its letters never appears whole in the stream.
     assert!(
-        s.wait_for_plain("new session started", RENDER_TIMEOUT),
+        s.wait_for_screen("new session started", RENDER_TIMEOUT),
         "/clear drained + cleared the transcript:\n{}",
         s.output_plain()
     );
