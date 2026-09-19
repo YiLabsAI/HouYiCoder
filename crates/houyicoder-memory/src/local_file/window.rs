@@ -103,8 +103,8 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// A multi-byte UTF-8 sequence is not corrupted: the byte-carry
-    /// reassembles it, no U+FFFD.
+    /// A multi-byte UTF-8 sequence is not corrupted: the window is split on
+    /// terminators only, so no split falls inside it, no U+FFFD.
     #[test]
     fn test_reverse_read_multibyte_safe() {
         let root = temp_root();
@@ -457,9 +457,9 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// A reverse read of a single line with no trailing newline carries the
-    /// whole content as remainder (no \n to split on) then yields it at BOF.
-    /// Covers the no-newline-carry branch + the final-remainder push.
+    /// A reverse read of a single line with no trailing newline yields its
+    /// content as the log's one line: the window holds no terminator, and
+    /// nothing above the window ends it either.
     #[test]
     fn test_reverse_read_no_newline() {
         let root = temp_root();

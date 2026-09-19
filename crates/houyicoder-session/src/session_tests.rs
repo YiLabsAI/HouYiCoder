@@ -671,3 +671,172 @@ async fn test_prev_hash_survives_drift() {
     );
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// A newest entry wide enough to span several reverse walks: the read reaches
+/// its head only through the read's byte budget, and the cold path must hash
+/// the bytes of the line the log ends with, not of an older line the walk
+/// stopped on.
+#[tokio::test]
+async fn test_wide_last_line_hash() {
+    let root = std::env::temp_dir().join(format!(
+        "cold-wide-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+    let sid = SessionId::new();
+    drop(appended_event(&store, sid, SessionEvent::UserInput { text: "a".into() }).await);
+    // Wider than the 64 KB the reverse read walks per chunk.
+    let wide = appended_event(
+        &store,
+        sid,
+        SessionEvent::UserInput {
+            text: "z".repeat(100_000),
+        },
+    )
+    .await;
+    let log_path = root.join(sid.to_string()).join("log.jsonl");
+    let raw = std::fs::read_to_string(&log_path).unwrap();
+    let last_line = raw.lines().last().expect("the log holds lines").to_string();
+    store.last_hashes.lock().unwrap().clear();
+    let cold = store.compute_prev_hash(sid).await.unwrap();
+    assert_eq!(
+        cold,
+        Some(SessionStore::hash_line_bytes(last_line.as_bytes())),
+        "cold path must hash the line the log ends with",
+    );
+    assert_eq!(
+        cold,
+        Some(SessionStore::hash_event(&wide).unwrap()),
+        "the hash still matches the event that was appended",
+    );
+    assert_ne!(
+        cold,
+        Some(SessionStore::hash_line_bytes(first_line_bytes(&raw))),
+        "cold path must not fall back to the first line of the log",
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The bytes of the log's first line, for probing which line a hash came from.
+fn first_line_bytes(raw: &str) -> &[u8] {
+    raw.lines().next().unwrap_or_default().as_bytes()
+}
+
+/// A newest entry wider than the cold path's reverse-read budget: the read
+/// reports that it did not reach that line, so the cold path replays and
+/// hashes the event it parsed. Taking the newest line the batch did hold
+/// instead links the next entry to the line before the last, and the chain
+/// breaks with every later entry still chaining.
+#[tokio::test]
+async fn test_wide_over_budget_hash() {
+    let root = std::env::temp_dir().join(format!(
+        "cold-over-budget-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+    let sid = SessionId::new();
+    drop(appended_event(&store, sid, SessionEvent::UserInput { text: "a".into() }).await);
+    // Wider than the 1 MiB the cold path reads.
+    let wide = appended_event(
+        &store,
+        sid,
+        SessionEvent::UserInput {
+            text: "z".repeat(1_500_000),
+        },
+    )
+    .await;
+    let log_path = root.join(sid.to_string()).join("log.jsonl");
+    let raw = std::fs::read_to_string(&log_path).unwrap();
+    store.last_hashes.lock().unwrap().clear();
+    let cold = store.compute_prev_hash(sid).await.unwrap();
+    assert_eq!(
+        cold,
+        Some(SessionStore::hash_event(&wide).unwrap()),
+        "the cold path must link to the line the log ends with",
+    );
+    assert_ne!(
+        cold,
+        Some(SessionStore::hash_line_bytes(first_line_bytes(&raw))),
+        "cold path must not fall back to the line before the last",
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A log torn mid-write: the trailing bytes no terminator follows hold no
+/// line, so the newest whole line the log holds is the one before them and
+/// the cold path hashes it. A read that rejected the log for its missing
+/// terminator would replay instead, fail on the partial bytes, and leave the
+/// session unable to append at all.
+#[tokio::test]
+async fn test_torn_tail_hash() {
+    let root = std::env::temp_dir().join(format!(
+        "cold-torn-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+    let sid = SessionId::new();
+    drop(
+        appended_event(
+            &store,
+            sid,
+            SessionEvent::UserInput {
+                text: "first".into(),
+            },
+        )
+        .await,
+    );
+    drop(
+        appended_event(
+            &store,
+            sid,
+            SessionEvent::UserInput {
+                text: "second".into(),
+            },
+        )
+        .await,
+    );
+    let log_path = root.join(sid.to_string()).join("log.jsonl");
+    let size = std::fs::metadata(&log_path).unwrap().len();
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&log_path)
+        .unwrap();
+    f.set_len(size - 5).unwrap();
+    let raw = std::fs::read_to_string(&log_path).unwrap();
+    store.last_hashes.lock().unwrap().clear();
+    let cold = store.compute_prev_hash(sid).await.unwrap();
+    assert_eq!(
+        cold,
+        Some(SessionStore::hash_line_bytes(first_line_bytes(&raw))),
+        "the last whole line the log holds is its first",
+    );
+    // The append after the tear still lands: the cold path reads the line the
+    // log holds rather than failing on the bytes it does not.
+    store.last_hashes.lock().unwrap().clear();
+    store
+        .append(evt(
+            sid,
+            EventId::new(),
+            SessionEvent::UserInput {
+                text: "third".into(),
+            },
+        ))
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&root).ok();
+}

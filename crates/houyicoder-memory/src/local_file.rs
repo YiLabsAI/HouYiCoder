@@ -394,6 +394,104 @@ impl LocalFileBackend {
     }
 }
 
+/// Whether the log's byte at the given offset ends a line. A read holds the
+/// bytes of its own window, so this answers for the one byte either side of it:
+/// the byte before the window's first says whether the window starts at a
+/// line's head, the byte at its newest boundary whether the window's last
+/// stretch is a line the log terminates. A read that fails leaves the caller
+/// without the fact, which costs it the segment rather than the whole batch.
+fn byte_ends_line(f: &mut fs::File, at: u64) -> bool {
+    let mut one = [0u8; 1];
+    f.seek(SeekFrom::Start(at)).is_ok() && f.read_exact(&mut one).is_ok() && one[0] == b'\n'
+}
+
+/// The bytes one backward read covers, oldest first, and what the log holds
+/// either side of them. Splitting these bytes into lines is all the read needs:
+/// an edge can fall anywhere inside a line, so the pieces are put together from
+/// the window rather than from a carry that has to survive the walk.
+struct LogWindow<'a> {
+    bytes: &'a [u8],
+    /// Absolute offset of the window's first byte.
+    start: u64,
+    /// The read's newest boundary: one past the window's last byte.
+    from_byte: u64,
+    /// The window holds the log from its first byte.
+    covers_log: bool,
+    /// The byte before the window ends a line, so the window's first segment
+    /// has a head the log shows.
+    starts_at_line: bool,
+    /// The byte at from_byte ends a line, so the window's last segment is a
+    /// line the log terminates without the window holding the terminator.
+    ends_with_line: bool,
+}
+
+/// What a window's bytes yield: the whole lines and whether the newest whole
+/// line the log holds at or below the window came back.
+struct WindowLines {
+    /// (byte offset of the line's start, raw line text), newest first.
+    lines: Vec<(u64, String)>,
+    /// True when the batch's first line is the log's newest whole line at or
+    /// below the window. False when the window yields no line, or yields lines
+    /// older than that one: its budget ran out on bytes holding no terminator
+    /// before reaching the line, so no read of that budget returns it.
+    newest_line_returned: bool,
+}
+
+impl LogWindow<'_> {
+    /// The whole lines the window holds, newest first. A segment whose head or
+    /// terminator the window does not show is no line yet: the walk re-reads it
+    /// from a boundary that holds it, or, for a line wider than the read's
+    /// budget, never.
+    fn whole_lines(&self) -> WindowLines {
+        let mut lines: Vec<(u64, String)> = Vec::new();
+        let mut head_shown = self.starts_at_line;
+        let mut start = 0usize;
+        // One past the newest returned line's terminator, or past the line's
+        // own end when the log holds no terminator for it. At the window's
+        // start, so a window that yields no line leaves every byte of itself
+        // to answer whether a terminator sits above the batch.
+        let mut newest_end = self.start;
+        for (i, &b) in self.bytes.iter().enumerate() {
+            if b != b'\n' {
+                continue;
+            }
+            if head_shown {
+                let text = String::from_utf8_lossy(&self.bytes[start..i]).into_owned();
+                newest_end = self.start + i as u64 + 1;
+                lines.push((self.start + start as u64, text));
+            }
+            start = i + 1;
+            head_shown = true;
+        }
+        // The bytes after the last terminator in the window: a whole line when
+        // the log terminates it at the window's boundary, when they are the
+        // whole log, which one line written without a terminator ends as, or
+        // when the window ends on the terminator itself, which ends an empty
+        // line. An empty window holds no line at all.
+        if !self.bytes.is_empty() {
+            let one_line_log = self.covers_log && start == 0;
+            if self.ends_with_line || one_line_log {
+                let text = String::from_utf8_lossy(&self.bytes[start..]).into_owned();
+                newest_end = self.from_byte;
+                lines.push((self.start + start as u64, text));
+            }
+        }
+        lines.reverse();
+        // A terminator among the bytes above the newest returned line ends a
+        // newer line the window does not hold whole, so no read of this window
+        // returns it. A window that yields no line returns none: it holds no
+        // head or no terminator to end one, so a caller has nothing to take for
+        // the log's newest line.
+        let above = (newest_end - self.start) as usize;
+        let newest_line_returned =
+            !lines.is_empty() && !self.bytes[above.min(self.bytes.len())..].contains(&b'\n');
+        WindowLines {
+            newest_line_returned,
+            lines,
+        }
+    }
+}
+
 impl ContextBackend for LocalFileBackend {
     fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
         let id = self.append_sync(event);
@@ -555,81 +653,59 @@ impl ContextBackend for LocalFileBackend {
         from_byte: u64,
         max_bytes: u64,
     ) -> ReverseRead {
-        // Reverse line reader: read backward in 64KB chunks, carrying the
-        // partial-line prefix (before the first newline) as raw bytes into
-        // the next earlier chunk so a multi-byte UTF-8 sequence split by a
-        // chunk edge is not corrupted. Yields complete lines newest-first,
-        // each with its byte offset.
+        // Backward whole-line read: take the newest max_bytes of the log as one
+        // window and split it into lines. A window edge can fall inside a line,
+        // so the byte either side of the window is read to learn whether the
+        // segments at its ends are lines the log shows whole. The bytes stay
+        // raw, so a multi-byte UTF-8 sequence never meets a split inside it.
         let log = self.log_path(session);
-        let Ok(f) = fs::File::open(&log) else {
+        let Ok(mut f) = fs::File::open(&log) else {
             return ReverseRead::default();
         };
-        let mut f = f;
         let size = f.metadata().map(|m| m.len()).unwrap_or(0);
         if size == 0 {
             return ReverseRead::default();
         }
-        const CHUNK: usize = 64 * 1024;
-        let mut position = from_byte.min(size);
-        let mut remainder: Vec<u8> = Vec::new();
-        let mut out: Vec<(u64, String)> = Vec::new();
-        let mut consumed: u64 = 0;
-        let mut buf = vec![0u8; CHUNK];
-        while position > 0 && consumed < max_bytes {
-            let chunk_size = (position as usize).min(CHUNK);
-            let chunk_start = position - chunk_size as u64;
-            if f.seek(SeekFrom::Start(chunk_start)).is_err() {
-                break;
-            }
-            if f.read_exact(&mut buf[..chunk_size]).is_err() {
-                break;
-            }
-            position = chunk_start;
-            consumed += chunk_size as u64;
-            // combined = [chunk][remainder] (remainder = partial line AFTER chunk, from prior iter)
-            let mut combined = Vec::with_capacity(chunk_size + remainder.len());
-            combined.extend_from_slice(&buf[..chunk_size]);
-            combined.extend_from_slice(&remainder);
-            let Some(nl) = combined.iter().position(|&b| b == b'\n') else {
-                // No newline in this chunk + remainder; carry all as remainder.
-                remainder = combined;
-                continue;
-            };
-            // The part before nl is a partial line spanning into the PREVIOUS
-            // chunk -> it becomes the new remainder (carried to the next iter).
-            remainder = combined[..nl].to_vec();
-            // The bytes after nl are complete lines (forward order within
-            // the chunk). Split on \n, tracking each line's absolute start.
-            let after = &combined[nl + 1..];
-            let mut abs = chunk_start + (nl + 1) as u64;
-            let mut chunk_lines: Vec<(u64, String)> = Vec::new();
-            let mut s = 0usize;
-            for i in 0..after.len() {
-                if after[i] == b'\n' {
-                    let text = String::from_utf8_lossy(&after[s..i]).into_owned();
-                    chunk_lines.push((abs, text));
-                    abs += (i - s + 1) as u64;
-                    s = i + 1;
-                }
-            }
-            // The bytes after the last \n in after are a partial trailing
-            // line -- but combined always ends with the carried remainder,
-            // which we've already folded. If after has a non-newline tail,
-            // it belongs to the next-earlier chunk (handled when that chunk's
-            // remainder is set). Drop it here (not a complete line yet).
-            // Reverse the chunk's lines (newest-first) + append to out.
-            for line in chunk_lines.into_iter().rev() {
-                out.push(line);
-            }
+        let from_byte = from_byte.min(size);
+        // One byte at the least, so the window's start sits below the read's
+        // boundary and a walk over the log always moves down.
+        let start = from_byte.saturating_sub(max_bytes.max(1));
+        let mut bytes = vec![0u8; (from_byte - start) as usize];
+        if f.seek(SeekFrom::Start(start)).is_err() || f.read_exact(&mut bytes).is_err() {
+            // The window is lost, not the walk: the batch comes back empty and
+            // the resume point below this read carries the walk on.
+            bytes.clear();
         }
-        // Final remainder: the first line of the file, if any (no leading \n).
-        if !remainder.is_empty() && position == 0 {
-            let text = String::from_utf8_lossy(&remainder).into_owned();
-            out.push((0, text));
-        }
-        let next_from = if position == 0 { None } else { Some(position) };
+        let window = LogWindow {
+            bytes: &bytes,
+            start,
+            from_byte,
+            covers_log: start == 0 && from_byte == size,
+            starts_at_line: start == 0 || byte_ends_line(&mut f, start - 1),
+            ends_with_line: from_byte < size && byte_ends_line(&mut f, from_byte),
+        };
+        let whole = window.whole_lines();
+        // Where a walk resumes. A window starting at a line's head left nothing
+        // over, so the next read ends there. One starting inside a line holds
+        // that line's tail only: the next read must end just past its
+        // terminator to hold it whole, or, for a line wider than the read, pass
+        // it. The walk always moves down, which is what ends a walk over a log
+        // whose lines are wider than the read.
+        let next_from = if start == 0 {
+            None
+        } else if window.starts_at_line {
+            Some(start)
+        } else {
+            let past_line = bytes
+                .iter()
+                .position(|&b| b == b'\n')
+                .map(|i| start + i as u64 + 1)
+                .filter(|end| *end < from_byte);
+            Some(past_line.unwrap_or(start))
+        };
         ReverseRead {
-            lines: out,
+            lines: whole.lines,
+            newest_line_returned: whole.newest_line_returned,
             next_from,
         }
     }

@@ -299,10 +299,11 @@ impl SessionStore {
     /// replaying + re-serializing the last event: the on-disk bytes are stable
     /// across a serde schema change (re-serialization normalizes field order
     /// and drops unknown fields, breaking the chain on a log a prior binary
-    /// wrote), and the reverse-read avoids a full replay. Falls back to replay
-    /// and re-serialization when the reverse-read yields nothing (an in-memory
-    /// backend, or a last line past the read budget — within one binary the
-    /// re-serialization matches the disk bytes there).
+    /// wrote), and the reverse-read avoids a full replay. The read reports
+    /// whether it reached the log's newest line; when it did not (an
+    /// in-memory backend, or a line wider than the read's budget), this falls
+    /// back to replay and re-serialization, which within one binary matches
+    /// the disk bytes there.
     async fn compute_prev_hash(
         &self,
         session: SessionId,
@@ -323,7 +324,15 @@ impl SessionStore {
         let rr = self
             .backend
             .read_lines_reverse(session, u64::MAX, COLD_REVERSE_BYTES);
-        if let Some((_offset, line)) = rr.lines.first() {
+        // The batch holds whole lines newest first, and the read reports whether
+        // it reached the log's last line: a line no window of the read holds
+        // never comes back, and the older line the batch starts with instead
+        // is the wrong bytes to link the next entry to. Trailing bytes no
+        // terminator follows hold no line, so a read that reaches the last
+        // whole line above them reports that line, torn tail or not.
+        if rr.newest_line_returned
+            && let Some((_offset, line)) = rr.lines.first()
+        {
             let h = Self::hash_line_bytes(line.as_bytes());
             self.last_hashes
                 .lock()

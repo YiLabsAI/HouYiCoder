@@ -32,16 +32,28 @@ pub struct LogRangeRead {
     pub bytes_total: u64,
 }
 
-/// A reverse line batch: complete JSONL lines ending at or before from_byte,
-/// in reverse (newest-first) order, each with its byte offset, plus the byte
-/// offset to continue backward from (None at BOF). 64KB chunks with raw-byte
-/// carry across boundaries so a multi-byte UTF-8 sequence split by a chunk
-/// edge is not corrupted.
-
+/// A reverse line batch: whole JSONL lines ending at or before from_byte, in
+/// reverse (newest-first) order, each with its byte offset, plus the byte
+/// offset to continue backward from (None at BOF). Lines are split on their
+/// terminator, so a line the log holds in parts never reaches a caller, and
+/// a line wider than the read's byte budget stays out of the batch: its head
+/// is above the oldest byte the read holds. The newest_line_returned flag
+/// reports whether the batch reached the newest line, which is the one place
+/// a caller asking for the log's last line can be misled.
 #[derive(Debug, Default, Clone)]
 pub struct ReverseRead {
     /// (byte offset of the line's start, raw line text), reverse order.
     pub lines: Vec<(u64, String)>,
+    /// True when lines.first() is the newest whole line the log holds at or
+    /// below from_byte, so a caller after the log's last line can take
+    /// lines.first() as it. False when the batch holds no line at all, or
+    /// holds lines older than that one: the read's byte budget ran out on bytes
+    /// holding no terminator before reaching the line, so no read of that
+    /// budget returns it. Trailing bytes no terminator follows hold no line, so
+    /// an unterminated tail costs the flag nothing once a read reaches the last
+    /// whole line before it; the one exception is a log that is nothing but
+    /// such bytes, which comes back as its one line.
+    pub newest_line_returned: bool,
     /// None at BOF (the whole prefix is read); else continue backward here.
     pub next_from: Option<u64>,
 }
@@ -172,11 +184,17 @@ pub trait ContextBackend: Send + Sync {
         LogRangeRead::default()
     }
 
-    /// Read complete lines in REVERSE from from_byte (the line ending at
-    /// from_byte is the first returned). 64KB chunks with raw-byte carry
-    /// across boundaries (UTF-8 safe). Returns lines (newest-first) + their
-    /// byte offsets + next_from (None at BOF). The lazy offset index + the G
-    /// full scan both build on this. Default empty (no on-disk log).
+    /// Read whole lines in REVERSE from from_byte: the newest line the log
+    /// holds that ends at or below from_byte comes back first. Lines are
+    /// split on their terminator, so a line the log holds in parts never
+    /// reaches a caller, and a line wider than max_bytes stays out of the
+    /// batch: every read of that budget fails to reach its head. next_from is
+    /// where a walk resumes: None at BOF, else the boundary below which no
+    /// byte is left over, so a walk in reads smaller than the log gives each
+    /// line back once, whole. newest_line_returned reports whether the batch
+    /// reached the log's newest line at or below from_byte. The lazy offset
+    /// index and the window lookback both build on this. Default empty (no
+    /// on-disk log).
     fn read_lines_reverse(
         &self,
         _session: SessionId,
