@@ -1,24 +1,13 @@
-//! Delegation economy gate.
+//! Delegation prompt displacement gate.
 //!
-//! A pre-commit proxy for the token cost of delegation vs inline. This binary
-//! has no fleet telemetry, so a deterministic fixture stands in for the
-//! measurement channel a deployed fleet gets from run-volume sampling. The
-//! gate's reach is harness overhead only: it checks that delegating keeps the
-//! parent's assembled prompt small (the child runs in a fresh context).
-//! Strategy quality (real delegation behavior, re-exploration, prompt quality)
-//! is measured by the eval + dogfood runs, NOT here — a green gate does not
-//! prove delegation is a good idea, only that the harness does not inflate
-//! the parent's context.
+//! Guarded invariant: work a delegated child performs must not enter the
+//! parent's assembled prompt, and the child's short result must return in it.
+//! Reach is harness overhead only; strategy quality lives in the eval and
+//! dogfood runs.
 //!
-//! Token counts come from the ACTUAL prompts the engine assembles, measured
-//! by a real BPE tokenizer (Tokenizer::real, opt out of the fast chars-per-4
-//! path). The scripted provider's Usage field is NOT trusted (it would be
-//! tautological — the gate would assert on numbers the fixture author made
-//! up). The scripted responses only drive the scenario deterministically.
-//!
-//! #[ignore] + not in the nextest blocking-exclusion list, so it runs in
-//! make verify's blocking ignored-suite (the binary name delegation_economy
-//! matches no exclusion). NOT report-only: a regression here fails verify.
+//! Token counts come from the prompts the engine assembles, measured by a real
+//! BPE tokenizer; the canned provider's Usage is not trusted. Ignored, and the
+//! binary name matches no nextest exclusion, so a regression here fails verify.
 
 #![cfg(test)]
 
@@ -99,17 +88,17 @@ const PRE_CONTEXT: &str = "project: a Rust auth service. modules: auth.rs (verif
 
 const SUB_TASK: &str = "audit the auth module for security issues and report.";
 
-/// A unique, newline-free fragment of ANALYSIS. The inclusion check searches
-/// for this, not the full ANALYSIS, because the agent tool's tool_result is
-/// JSON and serde_json escapes newlines — the full ANALYSIS (real newlines)
-/// would never substring-match the escaped tool_result. This fragment has no
-/// JSON-special chars and does not appear in CHILD_SUMMARY, so it cleanly
-/// separates "the child's full work leaked" from "only the summary returned".
+/// Newline-free fragment of ANALYSIS: the tool_result is JSON, so serde_json
+/// escapes the analysis newlines and only a fragment can match. Absent from
+/// CHILD_SUMMARY, which separates a leak from a summary-only return.
 const ANALYSIS_FRAGMENT: &str = "short-circuits on the first byte mismatch";
+
+/// Fragment unique to CHILD_SUMMARY: the inclusion check searches it.
+const SUMMARY_FRAGMENT: &str = "see child transcript for detail";
 
 /// One recorded provider call: the assembled prompt text + its real-BPE token
 /// count, captured at call time so the fixture measures what the engine
-/// actually sent, not the scripted Usage field.
+/// actually sent, not the canned Usage field.
 #[derive(Clone)]
 struct CallRecord {
     prompt_text: String,
@@ -117,7 +106,7 @@ struct CallRecord {
 }
 
 /// A provider wrapper that records each CompletionRequest's assembled prompt
-/// text + real-BPE token count, then delegates to a scripted FakeProvider.
+/// text + real-BPE token count, then delegates to a canned FakeProvider.
 /// Defined in the service test crate so it can use the engine crate's
 /// Tokenizer (the provider leaf crate cannot depend on the engine layer).
 struct RecordingProvider {
@@ -221,15 +210,12 @@ fn agent_tool_call(id: &str, subagent_type: &str, prompt: &str, description: &st
     }
 }
 
-/// Build a parent Runner + its RecordingProvider. When spawn is true the
-/// runner carries a real MultiAgentRuntime (production spawn path) so the
-/// agent tool runs the child with a fresh child session + a production
-/// system prompt. The child's scripted responses are separate from the
-/// parent's so calls attribute cleanly.
+/// Build a parent Runner + its RecordingProvider. With a delegating runner the
+/// child runs on a real runtime path, with its own provider so calls attribute.
 struct Harness {
     runner: Arc<Runner>,
     parent: Arc<RecordingProvider>,
-    /// The child's recording provider; None in inline mode (no spawn).
+    /// The child's recording provider; None in inline mode.
     child: Option<Arc<RecordingProvider>>,
     session: SessionId,
 }
@@ -321,12 +307,10 @@ fn first_prefix(records: &[CallRecord], tok: &Tokenizer, marker: &str) -> u32 {
         .unwrap_or(0)
 }
 
-/// The inline parent does the whole sub-task itself: its context carries the
-/// long analysis into the final turn's prompt. The delegation parent delegates:
-/// the analysis stays in the child's fresh context, the parent carries only the
-/// short summary. The load-bearing assertions are volume-independent; the
-/// 60%/1.5x numbers are reported, not gated, because their discriminating
-/// power scales with the chosen blob size rather than the mechanism.
+/// Inline the parent does the sub-task, so the analysis lands in its prompt;
+/// delegating keeps it in the child and the parent carries the summary. The
+/// load-bearing assertions are volume-independent; the cost ratio is reported,
+/// not gated, because its power scales with the blob size.
 #[ignore]
 #[test]
 fn test_delegation_displaces_child() {
@@ -335,11 +319,10 @@ fn test_delegation_displaces_child() {
         .build()
         .unwrap();
 
-    // --- self-check: the fixture uses a real BPE, not the fast chars/4 path ---
+    // --- self-check: a real BPE, not the fast chars/4 path ---
     let tok = Tokenizer::real();
     let pinned = tok.count(GOLDEN_SAMPLE);
-    // Re-baseline deliberately if the BPE table changes; the point is that
-    // only real() produces this count, so swapping real->new reds here.
+    // Only real() produces this count, so swapping real->new reds here.
     assert_eq!(
         pinned, 51,
         "golden BPE count drifted; re-pin after a tiktoken table change"
@@ -387,24 +370,26 @@ fn test_delegation_displaces_child() {
     let delegation_peak = peak(&delegation_records);
 
     // --- load-bearing assertion 1: inclusion ---
-    // The analysis MUST NOT appear in any parent prompt in delegation mode.
-    // This is the invariant delegation buys: the child's full work does not
-    // leak into the parent's assembled context.
+    // Without this the exclusion check passes vacuously on an empty result.
+    assert!(
+        any_contains(&delegation_records, SUMMARY_FRAGMENT),
+        "delegation parent must carry the child's result; \
+         an empty result would make the exclusion check vacuous"
+    );
+
+    // --- load-bearing assertion 2: exclusion ---
+    // The invariant delegation buys: the child's full work stays out.
     assert!(
         !any_contains(&delegation_records, ANALYSIS_FRAGMENT),
         "delegation parent must not carry the child's full analysis; \
          the harness would be inflating the parent context"
     );
 
-    // --- load-bearing assertion 2: displacement ---
-    // The savings must cover the displaced content (the analysis) minus the
-    // legitimate costs delegation always pays: the child's summary (the
-    // parent receives it in place of the analysis) + a fixed harness-metadata
-    // overhead (the agent-tool-call, the agentId UUID, the usage fields the
-    // tool_result carries). METADATA_BUDGET covers that overhead (measured
-    // ~90 tok; 150 flags any growth). This bound is volume-independent: it
-    // holds at any analysis size large enough to displace, and a small
-    // delegation where overhead dominates is a real economy finding, not a
+    // --- load-bearing assertion 3: displacement bound ---
+    // Savings must cover the displaced analysis minus what delegation always
+    // pays: the summary + fixed metadata (tool call, agentId, usage fields;
+    // measured ~90 tok, so 150 flags growth). Volume-independent: a small
+    // delegation where overhead dominates is a real cost finding, not a
     // harness bug, so the bound must not fail it.
     const METADATA_BUDGET: u32 = 150;
     let analysis_tokens = tok.count(ANALYSIS);
@@ -424,9 +409,9 @@ fn test_delegation_displaces_child() {
         delegation_peak
     );
 
-    // --- load-bearing assertion 3: prefix parity ---
-    // Both modes' parent system-prompt prefix must be equal, else a future
-    // single-side script change silently makes the two peaks incomparable.
+    // --- load-bearing assertion 4: prefix parity ---
+    // Equal prefixes keep the two peaks comparable; a one-sided prompt edit
+    // would silently break that.
     let inline_prefix = first_prefix(&inline_records, &tok, PRE_CONTEXT);
     let delegation_prefix = first_prefix(&delegation_records, &tok, PRE_CONTEXT);
     assert_eq!(
@@ -434,11 +419,7 @@ fn test_delegation_displaces_child() {
         "parent prefix must be identical across modes (else peaks are not comparable)"
     );
 
-    // --- report values (non-gated): the harness must not cost more than 1.5x ---
-    // The ratio's denominator is the inline parent total; the numerator adds the
-    // child's total (the fresh-context runs). Reported, not gated: the ratio's
-    // discriminating power scales with the chosen analysis size, so it is a
-    // sanity number, not a load-bearing gate.
+    // --- report values (non-gated): parent + child against the inline parent ---
     let delegation_total = total(&delegation_records);
     let child_total = delegation
         .child
@@ -447,16 +428,14 @@ fn test_delegation_displaces_child() {
         .unwrap_or(0);
     let ratio = (delegation_total + child_total) as f64 / total(&inline_records) as f64;
     eprintln!(
-        "delegation economy (report-only, not gated — reach is harness overhead, not strategy): \
+        "delegation prompt displacement (report-only, not gated — reach is harness overhead, not strategy): \
          displacement={saved}tok analysis={analysis_tokens}tok summary={summary_tokens}tok \
          inline_peak={inline_peak} delegation_peak={delegation_peak} total_ratio={ratio:.2}"
     );
 }
 
-/// Mutation verification: when the child returns its full analysis as the
-/// result (no displacement), the inclusion invariant MUST break — the
-/// analysis appears in a parent prompt. This proves the inclusion check has
-/// teeth; without it the gate would be theater.
+/// Mutation verification: a child that returns its full analysis MUST red the
+/// exclusion check, else the gate would be theater.
 #[ignore]
 #[test]
 fn test_gate_catches_undisplaced() {
@@ -475,8 +454,7 @@ fn test_gate_catches_undisplaced() {
             text_response("done"),
             text_response("summary"),
         ],
-        // Mutation: child returns the FULL analysis as its final result, so
-        // build_tool_result carries it verbatim into the parent's context.
+        // Mutation: the child's result is the full analysis, carried verbatim.
         vec![text_response(ANALYSIS)],
         true,
     );
@@ -487,6 +465,43 @@ fn test_gate_catches_undisplaced() {
     assert!(
         any_contains(&records, ANALYSIS_FRAGMENT),
         "the gate must catch the undisplaced case: when the child's full \
-         analysis leaks into the parent, the inclusion check reds"
+         analysis leaks into the parent, the exclusion check reds"
+    );
+}
+
+/// Mutation verification of the other direction: a delegation that drops the
+/// child's result MUST red the inclusion check, else an empty result would read
+/// as a clean displacement.
+#[ignore]
+#[test]
+fn test_gate_catches_missing_result() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let delegation = build_harness(
+        vec![
+            text_response("ack"),
+            CompletionResponse {
+                output: vec![agent_tool_call("ag1", "explore", SUB_TASK, "auth audit")],
+                usage: Usage::default(),
+                model: "test".into(),
+            },
+            text_response("done"),
+            text_response("summary"),
+        ],
+        // Mutation: the child's final result omits the summary text, so the
+        // parent prompt never carries it.
+        vec![text_response("no findings")],
+        true,
+    );
+    run(&rt, &delegation.runner, delegation.session, PRE_CONTEXT);
+    run(&rt, &delegation.runner, delegation.session, SUB_TASK);
+    run(&rt, &delegation.runner, delegation.session, "summarize");
+    let records = delegation.parent.records();
+    assert!(
+        !any_contains(&records, SUMMARY_FRAGMENT),
+        "the gate must catch the dropped-result case: when the child's result \
+         never reaches the parent, the inclusion check reds"
     );
 }
