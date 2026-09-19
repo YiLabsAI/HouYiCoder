@@ -8,10 +8,8 @@
 //! not persisted, so a fresh process counts all messages on the first
 //! pass.
 //!
-//! This first slice is synchronous: the fork runs to completion before
-//! returning. Fire-and-forget spawn, coalescing, and shutdown drain land in
-//! the next slice. The forked agent always receives the full conversation as
-//! its prompt-cache prefix; the cursor only governs the new-message count fed
+//! The forked agent always receives the full conversation as its
+//! prompt-cache prefix; the cursor only governs the new-message count fed
 //! into the extraction prompt, the mutex scan range, and the advance that
 //! prevents re-counting.
 
@@ -37,9 +35,10 @@ use super::{RunError, RunResult, RunnerConfig};
 pub enum ExtractOutcome {
     /// The forked agent ran to completion.
     Extracted(RunResult),
-    /// The fork was skipped because the main agent already saved a memory in
-    /// this turn range (mutual exclusion). The cursor still advances past the
-    /// range so the next run does not re-scan it.
+    /// The fork was skipped: either the main agent already saved a memory in
+    /// this turn range (mutual exclusion — the cursor still advances past the
+    /// range), or the range held no new model-visible messages (a zero
+    /// window — nothing to advance past).
     Skipped { new_message_count: usize },
 }
 
@@ -48,7 +47,8 @@ pub enum ExtractOutcome {
 /// extraction on demand. The cursor is an in-memory Option of the last
 /// consumed message id; it advances on a successful run and on a
 /// mutual-exclusion skip, but NOT on error (errored messages are reconsidered
-/// next pass).
+/// next pass) and not on a zero-window skip (the cursor already covers the
+/// range).
 pub struct MemoryExtractor {
     cursor: Mutex<Option<EventId>>,
     in_progress: Mutex<bool>,
@@ -129,6 +129,11 @@ impl MemoryExtractor {
             self.emit_changes(MemoryChangeOrigin::PrimaryAgent, primary_changes);
             return Ok(ExtractOutcome::Skipped { new_message_count });
         }
+        // The trailing drain arrives without the fire-path pre-check. A zero
+        // window must not fork: the model still sees the whole prefix.
+        if new_message_count == 0 {
+            return Ok(ExtractOutcome::Skipped { new_message_count });
+        }
         let recorder = Arc::new(MutationLog::new());
         let result = run_forked_extract(
             Arc::clone(&self.store),
@@ -200,11 +205,12 @@ impl MemoryExtractor {
     /// the spawned task arming it.
     pub fn extract_memories(self: &Arc<Self>, messages: Vec<SessionLogEntry>) {
         // Cheap pre-check: if there are no new messages since the cursor, do
-        // nothing — avoids spawning a forked LLM run when the conversation
-        // has not advanced (e.g. a re-emitted FinalOutput after a verify
-        // retry). The cursor-missing fallback in count_messages_since counts
-        // all, so this only short-circuits when the cursor is already at the
-        // last message.
+        // nothing — avoids the task spawn and the in-progress/stash churn
+        // when the conversation has not advanced (e.g. a re-emitted
+        // FinalOutput after a verify retry). The pass body re-checks, which
+        // is what covers the trailing drain. The cursor-missing fallback in
+        // count_messages_since counts all, so this only short-circuits when
+        // the cursor is already at the last message.
         let cursor = *self.cursor.lock().expect("cursor");
         if count_messages_since(&messages, cursor.as_ref()) == 0 {
             return;

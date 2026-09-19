@@ -386,6 +386,63 @@ async fn test_extract_skips_main_saved() {
     );
 }
 
+/// The mutual-exclusion branch must run before the zero-window guard: a
+/// save_memory suffix is not model-visible, so the window can be zero
+/// while primary changes exist — the notice and the advance must survive.
+#[tokio::test]
+async fn test_primary_beats_zero_window() {
+    let provider = Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    });
+    let (ext, _memory) = extractor(Arc::clone(&provider) as Arc<dyn ModelProvider>);
+    let (sink, recording) = RecordingChanges::new();
+    ext.set_memory_changed_handler(sink.memory_changed_handler());
+    let mut msgs = conversation();
+    // Cursor at the last model-visible message; the save pair that follows
+    // is invisible to the count but visible to the mutex scan.
+    *ext.cursor.lock().expect("cursor") = Some(msgs.last().expect("last").id);
+    append_event(
+        &mut msgs,
+        SessionEvent::ToolCall {
+            call_id: "main-save".into(),
+            tool: "save_memory".into(),
+            input: serde_json::json!({
+                "key": "k", "description": "d",
+                "source": "feedback", "content": "c"
+            }),
+        },
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::ToolResult {
+            call_id: "main-save".into(),
+            output: serde_json::json!({"saved": "k"}),
+            duration_ms: 0,
+        },
+    );
+    let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
+    assert!(
+        matches!(
+            outcome,
+            ExtractOutcome::Skipped {
+                new_message_count: 0
+            }
+        ),
+        "zero window with primary changes still skips"
+    );
+    assert_eq!(*provider.calls.lock().expect("calls"), 0, "no fork ran");
+    assert_eq!(
+        *ext.cursor.lock().expect("cursor"),
+        Some(msgs.last().expect("last").id),
+        "the primary branch still advances the cursor"
+    );
+    assert_eq!(
+        recording.summaries(),
+        vec![(1, MemoryChangeOrigin::PrimaryAgent)],
+        "the primary save still emits its notice"
+    );
+}
+
 /// On a provider error the cursor does NOT advance — the errored range
 /// is reconsidered on the next pass.
 #[tokio::test]
@@ -644,6 +701,57 @@ async fn test_extract_skips_no_new() {
     assert!(
         ext.pending_context.lock().expect("pending").is_none(),
         "no stash when no new messages"
+    );
+}
+
+/// run_extraction_once must skip a zero-new-message window rather than
+/// fork: the model would still see the whole prefix and re-extract.
+#[tokio::test]
+async fn test_zero_window_skips_fork() {
+    let provider = Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    });
+    let (ext, _memory) = extractor(Arc::clone(&provider) as Arc<dyn ModelProvider>);
+    let msgs = conversation();
+    *ext.cursor.lock().expect("cursor") = Some(msgs.last().expect("last").id);
+    let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
+    assert!(
+        matches!(
+            outcome,
+            ExtractOutcome::Skipped {
+                new_message_count: 0
+            }
+        ),
+        "a zero window skips"
+    );
+    assert_eq!(*provider.calls.lock().expect("calls"), 0, "no fork ran");
+}
+
+/// The trailing drain reaches run_extraction_once without the fire-path
+/// pre-check: a stashed context the cursor already covers must not fork.
+#[tokio::test]
+async fn test_trailing_zero_window() {
+    let provider = Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    });
+    let (ext, _memory) = extractor(Arc::clone(&provider) as Arc<dyn ModelProvider>);
+    let msgs = conversation();
+    *ext.cursor.lock().expect("cursor") = Some(msgs.last().expect("last").id);
+    *ext.pending_context.lock().expect("pending") = Some(msgs.clone());
+    *ext.in_progress.lock().expect("in_progress") = true;
+    Arc::clone(&ext).run_extraction(msgs, false).await;
+    assert_eq!(
+        *provider.calls.lock().expect("calls"),
+        0,
+        "neither pass forked"
+    );
+    assert!(
+        !*ext.in_progress.lock().expect("in_progress"),
+        "in_progress cleared after the chain"
+    );
+    assert!(
+        ext.pending_context.lock().expect("pending").is_none(),
+        "pending drained"
     );
 }
 
