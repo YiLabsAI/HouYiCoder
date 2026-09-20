@@ -1,6 +1,6 @@
 //! Real-binary PTY smoke for paths-gated skill activation. #[ignore]
-//! (spawns the binary + a PTY). Run via make test ui or
-//! cargo test --test ui_skill_paths -- --ignored after cargo build --bin houyi.
+//! (spawns the binary + a PTY). Run via make suite ui or
+//! cargo test --test ui_all ui_skill_paths:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

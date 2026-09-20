@@ -1,7 +1,7 @@
 //! Real-binary PTY UI tests for the permission MODE switching. #[ignore]
 //! (each spawns the houyi binary + a PTY — too slow for the 60s commit gate).
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_mode -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_mode:: -- --ignored after cargo build --bin houyi.
 //!
 //! Mode switching is Shift+Tab only — the canonical mechanism. There is no
 //! /mode or /mode-log slash command (those were self-invention; the switch

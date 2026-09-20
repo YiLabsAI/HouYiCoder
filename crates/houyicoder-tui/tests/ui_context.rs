@@ -8,8 +8,8 @@
 //! because app.session is always Some), and a post-compact session shows the
 //! folded summary + Compact buffer category + Cache prefix line.
 //!
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_context -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_context:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

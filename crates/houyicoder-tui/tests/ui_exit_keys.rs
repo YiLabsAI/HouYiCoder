@@ -1,6 +1,6 @@
 //! Real-binary PTY smoke for the exit-key alignment. #[ignore] (spawns
-//! the binary + a PTY). Run via make test ui or
-//! cargo test --test ui_exit_keys -- --ignored after cargo build --bin houyi.
+//! the binary + a PTY). Run via make suite ui or
+//! cargo test --test ui_all ui_exit_keys:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

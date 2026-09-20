@@ -1,7 +1,7 @@
 //! Real-binary PTY smoke test for the /hooks pane. #[ignore] (each spawns
 //! the houyi binary + a PTY -- too slow for the commit gate). Run via
-//! make test ui (builds the bin first) or
-//! cargo test --test ui_hooks -- --ignored after cargo build --bin houyi.
+//! make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_hooks:: -- --ignored after cargo build --bin houyi.
 //!
 //! Industrial-usability proof for the hooks surface: open the pane and
 //! assert the read-only subtitle ("N hooks configured") + the settings

@@ -1,7 +1,7 @@
 //! Real-binary PTY UI tests for the git-consent checkpoint surface. #[ignore]
 //! (each spawns the houyi binary + a PTY — too slow for the 60s commit gate).
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_consent -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_consent:: -- --ignored after cargo build --bin houyi.
 //!
 //! The git-confirm checkpoint (git commit/rebase/reset/tag default Ask) is
 //! exercised at the gate + render layers by the permission crate's unit

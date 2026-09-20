@@ -6,8 +6,8 @@
 //! edit) and the transcript renders the real result — the foundation for the
 //! permission-flow + rendering-fidelity suites.
 //!
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_tools -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_tools:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

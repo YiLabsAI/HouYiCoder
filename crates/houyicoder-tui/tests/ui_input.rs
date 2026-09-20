@@ -1,11 +1,11 @@
 //! Real-binary PTY tests for input-box key behavior: the busy-Esc gate and
 //! the readline-style Ctrl+U clear shortcut. The unit layer covers InputBuffer
-//! mutation and the keys.rs gate; this
-//! layer drives the real crossterm byte path so the key-routing + repaint chain
-//! is pinned, not just the state machine.
+//! mutation and the keys.rs gate; this layer drives the real crossterm byte
+//! path so the key-routing + repaint chain is pinned, not just the state
+//! machine.
 //!
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_input -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_input:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

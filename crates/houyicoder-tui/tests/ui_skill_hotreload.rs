@@ -1,5 +1,5 @@
 //! Real-binary PTY test for skill hot-reload. #[ignore] (spawns the binary
-//! + a PTY). Run via make test ui after cargo build --bin houyi.
+//! + a PTY). Run via make suite ui after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

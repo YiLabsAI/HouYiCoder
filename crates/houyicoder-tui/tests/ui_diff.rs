@@ -10,8 +10,8 @@
 //! real render path through the binary (the stashed-width vs actual-width
 //! drift class only surfaces at interaction time). This drives that path.
 //!
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_diff -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_diff:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

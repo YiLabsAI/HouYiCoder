@@ -5,7 +5,7 @@
 //!
 //! macOS-only (seatbelt + the unified log); #[ignore] like the other
 //! binary-spawning PTY tests. Run after cargo build --bin houyi:
-//! cargo test --test ui_entitlement -- --ignored
+//! cargo test --test ui_all ui_entitlement:: -- --ignored
 #![cfg(target_os = "macos")]
 
 use std::path::PathBuf;

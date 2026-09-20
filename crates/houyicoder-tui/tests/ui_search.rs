@@ -6,8 +6,8 @@
 //! loop + wire + repaint chain: the view actually opens, the match is
 //! visible, and the keys route).
 //!
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_search -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_search:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

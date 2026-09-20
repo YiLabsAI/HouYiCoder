@@ -5,8 +5,8 @@
 //! fires end-to-end. The user's #1 concern: after answering (approve/deny),
 //! the transcript must not leave a stale error line.
 //!
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_approval -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_approval:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

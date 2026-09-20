@@ -11,7 +11,7 @@
 //! - inside a worktree, an egress command still raises the card (the narrow
 //!   fence does not silence the gate).
 //!
-//! Run via make test ui, or cargo test --test ui_fence -- --ignored.
+//! Run via make suite ui, or cargo test --test ui_all ui_fence:: -- --ignored.
 
 #![allow(clippy::unwrap_in_result)]
 

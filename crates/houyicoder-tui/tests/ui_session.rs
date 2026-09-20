@@ -6,8 +6,8 @@
 //! layer cannot reach, since the unit tier compiles the lib under cfg(test)
 //! and gets the in-memory default instead.
 //!
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_session -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_session:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 

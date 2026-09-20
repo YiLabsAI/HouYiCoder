@@ -3,7 +3,7 @@
 //! and the run pauses with live state still set. Live reasoning does not echo
 //! as a block, so the block must stay gone while paused.
 //!
-//! Run via make test ui (builds the bin first) or
+//! Run via make suite ui (builds the bin first) or
 //! cargo test --test ui_all ui_thinking:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]

@@ -1,7 +1,7 @@
 //! Real-binary PTY smoke tests for the /worktrees pane. #[ignore] (each
 //! spawns the houyi binary + a PTY -- too slow for the 60s commit gate).
-//! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_worktree -- --ignored after cargo build --bin houyi.
+//! Run via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_worktree:: -- --ignored after cargo build --bin houyi.
 //!
 //! Industrial-usability proof for the worktree surface: launch the real
 //! binary in the workspace root (a real git repo with linked worktrees),

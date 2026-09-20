@@ -1,7 +1,7 @@
 //! Real-binary PTY UI tests for the /permissions pane. #[ignore] (each
 //! spawns the houyi binary + a PTY — too slow for the 60s commit gate). Run
-//! via make test ui (builds the bin first) or
-//! cargo test --test ui_permissions -- --ignored after cargo build --bin houyi.
+//! via make suite ui (builds the bin first) or
+//! cargo test --test ui_all ui_permissions:: -- --ignored after cargo build --bin houyi.
 //!
 //! These catch the flow / render / key-routing class that TestBackend unit
 //! tests cannot: the real crossterm event loop, the real repaint, and the full
