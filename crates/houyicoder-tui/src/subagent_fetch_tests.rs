@@ -12,7 +12,7 @@ use houyicoder_protocol::frontend::FrontendRequest;
 /// the full round-trip without a live child run; the projection itself is
 /// pinned by the pure fill test.
 #[test]
-fn test_expand_fetches_child_wired() {
+fn test_expand_fires_child_fetch() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.screen = crate::state::Screen::Working;

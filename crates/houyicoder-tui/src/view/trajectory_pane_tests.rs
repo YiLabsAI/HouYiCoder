@@ -112,7 +112,7 @@ fn test_level0_renders_turn_list() {
 
 /// A stub TrajectoryLog that flips a shared flag when called, so a test can
 /// prove the render path read from the seam (not the mock fallback) when the
-/// composition root wired an impl. The flag is shared via Arc so the test
+/// composition root attached an impl. The flag is shared via Arc so the test
 /// reads it after the draw without downcasting the trait object.
 struct StubLog {
     called: std::sync::Arc<std::sync::Mutex<bool>>,
@@ -134,7 +134,7 @@ impl TrajectoryLog for StubLog {
 }
 
 #[test]
-fn test_wired_seam_supplies_view() {
+fn test_attached_seam_supplies_view() {
     // When the seam is Some, draw_content must call it (covering the Some
     // branch) rather than the mock fallback. The stub flips a shared flag on
     // call; a render pass leaves it set.
@@ -153,7 +153,7 @@ fn test_wired_seam_supplies_view() {
         .unwrap();
     assert!(
         *flag.lock().unwrap(),
-        "draw_content must call the wired seam, not the mock fallback"
+        "draw_content must call the attached seam, not the mock fallback"
     );
 }
 

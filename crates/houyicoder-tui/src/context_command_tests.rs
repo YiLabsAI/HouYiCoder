@@ -124,10 +124,10 @@ fn test_context_cache_renders_repeat() {
     );
 }
 
-/// /undo on a wired app ships an UndoQuery + surfaces the reply. The undo
+/// /undo on a connected app ships an UndoQuery + surfaces the reply. The undo
 /// stack is empty on a fresh session, so the reply is "nothing to undo".
 #[test]
-fn test_undo_ships_when_wired() {
+fn test_undo_ships_connected() {
     use houyicoder_protocol::frontend::SlashCommand;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());

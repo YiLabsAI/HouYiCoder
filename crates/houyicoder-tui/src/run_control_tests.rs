@@ -697,7 +697,7 @@ fn test_resolve_clears_thinking_window() {
 
 /// Slash queries (context / status / model) only ship with a live connection.
 #[test]
-fn test_slash_queries_ship_wired() {
+fn test_slash_queries_ship_connected() {
     use houyicoder_protocol::frontend::SlashCommand;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
@@ -832,14 +832,14 @@ fn test_agents_tools_round_trip() {
 }
 
 /// /memory pane d-action + /memory forget command both ship a MemoryForgetQuery
-/// when a session is wired (the carrier-present branch). The pane action routes
+/// when a session is connected (the carrier-present branch). The pane action routes
 /// the row's scope; the command form routes "auto". Pins the send sites so a
 /// refactor that drops the scope field or reverts to the no-carrier branch
 /// fails here. The observable is the registered pending action — the submit
 /// itself writes no transcript line; the outcome lands with the reply. A
 /// repeat submit of a key already in flight ships nothing.
 #[test]
-fn test_forget_ships_queries_wired() {
+fn test_forget_ships_queries_connected() {
     use crate::agent_message::SessionMessage;
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::SlashCommand;
@@ -926,10 +926,10 @@ fn test_toggle_repeat_press_dropped() {
     );
 }
 
-/// /permission git on a wired app takes the server-present branch (mint +
+/// /permission git on a connected app takes the server-present branch (mint +
 /// ship the query), which the server-less tests skip.
 #[test]
-fn test_git_ops_ships_wired() {
+fn test_git_ops_ships_connected() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.input.set("/permissions git".to_string());
@@ -963,7 +963,7 @@ fn test_idle_seeds_mode_query() {
 }
 
 /// The /model pane Enter ships a ModelSwitch { model, effort, effort_toggled,
-/// speed } over the wire when a session is wired (the carrier-present branch).
+/// speed } over the wire when a session is connected (the carrier-present branch).
 /// Pumps the driver + the in-proc server round-trip so the model result reply
 /// lands as an SessionMessage the no-op handler absorbs without error.
 /// Pins the TUI-side wire plumbing: the outbound ModelSwitch->ModelSet mapping
@@ -1045,7 +1045,7 @@ fn test_startup_handshake_drains_trust() {
     let mut app = app_with_provider(p, ToolRegistry::new());
     // Queue a trust ask before the handshake, simulating a server that
     // surfaces the gate before the first draw.
-    let tx = app.agent_tx.as_ref().expect("agent tx wired");
+    let tx = app.agent_tx.as_ref().expect("agent tx connected");
     tx.send(SessionMessage::Request {
         request: RequestId(7),
         payload: ServerRequest::Trust {

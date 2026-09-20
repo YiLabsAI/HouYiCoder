@@ -64,7 +64,7 @@ fn test_context_zero_stub() {
 }
 
 #[test]
-fn test_sandbox_none_wired() {
+fn test_sandbox_reports_no_breaker() {
     let s = render_sandbox(&snap_with_data(), "landlock");
     assert!(s.contains("landlock"), "{s}");
     assert!(s.contains("none wired"), "{s}");

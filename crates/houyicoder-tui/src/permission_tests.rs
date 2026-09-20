@@ -64,7 +64,7 @@ fn last_system(app: &App) -> String {
 #[test]
 fn test_permission_rule_add_list() {
     // /permissions add/list/del are wire verbs now (server authority). Drive
-    // them on a wired app + pump the driver between commands so the server's
+    // them on a connected app + pump the driver between commands so the server's
     // PermissionRulesResult replies land in rules_cache before the next read.
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
@@ -122,7 +122,7 @@ fn test_permission_bad_effect_rejected() {
 
 #[test]
 fn test_status_bar_renders_mode() {
-    // A wired app shows the mode pill in the agent status bar. Render and
+    // A connected app shows the mode pill in the agent status bar. Render and
     // confirm the current mode label lands in the bottom status line.
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
@@ -471,7 +471,7 @@ fn key_press(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
 #[test]
 fn test_permission_add_submode_flow() {
     // a enters Add, typing fills the input, Enter parses + ships the rule,
-    // sub-mode clears. (In wired mode the pane does not render; asserts state.)
+    // sub-mode clears. (In connected mode the pane does not render; asserts state.)
     use crate::state::PermissionInput;
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
@@ -583,7 +583,7 @@ fn test_permission_remove_submode_deletes() {
 fn test_permission_workspace_add_flow() {
     // 'a' on the Workspace tab enters AddDir; typing fills the input box;
     // Enter ships the path (the system line confirms the ship). Uses the
-    // wired app so typed chars route to the input box like the rule Add flow.
+    // connected app so typed chars route to the input box like the rule Add flow.
     use crate::state::{PermissionInput, PermissionTab};
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
@@ -690,8 +690,8 @@ fn test_permission_palette_opens_pane() {
 }
 
 #[test]
-fn test_permissions_pane_renders_wired() {
-    // In agent-chat mode (a wired session) the main area is the transcript
+fn test_permissions_pane_renders_connected() {
+    // In agent-chat mode (a connected session) the main area is the transcript
     // for most panes, but /permissions takes over the main area like the
     // artifact pane — so the tab header + rule list render, not the chat
     // stream. Guards the draw_main overlay routing.
@@ -701,7 +701,7 @@ fn test_permissions_pane_renders_wired() {
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("Allow"),
-        "tab header renders in wired mode: {text}"
+        "tab header renders in connected mode: {text}"
     );
     assert!(text.contains("Recent"), "Recent tab renders: {text}");
 }
