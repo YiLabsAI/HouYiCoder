@@ -4,13 +4,11 @@
 //! effect on the next request: the in-flight request already carries the old
 //! model, and the reply says so rather than claiming the switch changed it.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use common::{pair, recv_hello, send_frame};
+use crate::common::{self, pair, recv_hello, send_frame};
 use futures::StreamExt;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;

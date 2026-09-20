@@ -2,8 +2,6 @@
 //! runs paired queries with reward enabled and disabled, then prints comparable
 //! tool, error, redundancy, and memory metrics. Requires a real provider.
 
-#![cfg(test)]
-
 use houyicoder_context::SessionId;
 
 struct QueryMetrics {

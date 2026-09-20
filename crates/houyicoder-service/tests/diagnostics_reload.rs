@@ -17,10 +17,9 @@
 
 use std::sync::Arc;
 
+use crate::common;
 use houyicoder_service::diagnostics;
 use tracing_subscriber::filter::LevelFilter;
-
-mod common;
 
 /// A level raised through the handle takes effect in the engine layer
 /// without a restart, and a level of off suppresses the same call site.

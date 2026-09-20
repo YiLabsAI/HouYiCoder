@@ -45,11 +45,10 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
 }
 
 // Frame plumbing (pair, send_frame, recv_frame, recv_hello) is shared via
-// tests/common/mod.rs so this binary does not duplicate it. The stub_runner
+// tests/common/mod.rs so this module does not duplicate it. The stub_runner
 // below stays local: its canned reply + max_turns are specific to these
 // turn-outcome assertions.
-mod common;
-use common::{pair, recv_frame, recv_hello, send_frame};
+use crate::common::{pair, recv_frame, recv_hello, send_frame};
 
 /// A full turn through the in-memory carrier: handshake, MessageSend, then the
 /// server forwards the turn events and returns the run outcome. The client

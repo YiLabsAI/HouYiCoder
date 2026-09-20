@@ -13,8 +13,6 @@
 //! trips the ceiling under the narrow one - the differential proves the
 //! switch flipped the gate, not a change in the history.
 
-mod common;
-
 use std::sync::Arc;
 
 use houyicoder_api::provider::{ModelProvider, stream_from_response};
@@ -36,7 +34,7 @@ use houyicoder_protocol::llm::{
 use houyicoder_service::server::Server;
 use houyicoder_session::SessionStore;
 
-use common::{pair, recv_frame_within, recv_hello, send_frame};
+use crate::common::{pair, recv_frame_within, recv_hello, send_frame};
 
 /// A canned-response provider that negotiates no context window, so the
 /// runner resolves the window from the active model id through the

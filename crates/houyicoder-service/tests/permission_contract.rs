@@ -10,8 +10,6 @@
 //! InvalidRequest (a well-formed frame that is not a valid request for the
 //! current state), not InvalidFrame.
 
-mod common;
-
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::sandbox::SandboxSession;
@@ -27,7 +25,7 @@ use houyicoder_protocol::frontend::permission::{
 };
 use houyicoder_service::server::Server;
 
-use common::{pair, recv_frame, recv_hello, send_frame, stub_runner};
+use crate::common::{pair, recv_frame, recv_hello, send_frame, stub_runner};
 
 /// Spawn the server's serve loop + complete the Hello handshake. Returns the
 /// client channel halves for the test to send requests + read responses.

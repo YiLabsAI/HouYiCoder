@@ -11,8 +11,6 @@
 //! reads it when the run future is pending, so no timing sleep is needed —
 //! the queue ordering is deterministic.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -40,7 +38,7 @@ use houyicoder_protocol::llm::{
 use houyicoder_service::server::Server;
 use houyicoder_session::SessionStore;
 
-use common::{pair, recv_frame_within, recv_hello, send_frame};
+use crate::common::{pair, recv_frame_within, recv_hello, send_frame};
 
 /// A provider that blocks on a Notify before returning, so the run future
 /// stays pending while a control frame is injected.

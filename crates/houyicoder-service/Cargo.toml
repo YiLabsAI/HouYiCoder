@@ -3,6 +3,15 @@ name = "houyicoder-service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
+
+[[test]]
+name = "service_all"
+path = "tests/service_all.rs"
+
+[[test]]
+name = "reward_bench"
+path = "tests/reward_bench.rs"
 
 [lib]
 path = "src/lib.rs"

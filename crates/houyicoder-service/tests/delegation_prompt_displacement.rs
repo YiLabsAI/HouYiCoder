@@ -6,10 +6,8 @@
 //! dogfood runs.
 //!
 //! Token counts come from the prompts the engine assembles, measured by a real
-//! BPE tokenizer; the canned provider's Usage is not trusted. Ignored, and the
-//! binary name matches no nextest exclusion, so a regression here fails verify.
-
-#![cfg(test)]
+//! BPE tokenizer; the canned provider's Usage is not trusted. Ignored, and no
+//! nextest exclusion filter matches it, so a regression here fails verify.
 
 use std::sync::{Arc, Mutex};
 

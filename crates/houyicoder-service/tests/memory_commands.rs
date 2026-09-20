@@ -17,8 +17,7 @@ use houyicoder_session::SessionStore;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-mod common;
-use common::{pair, recv_frame, recv_hello, send_frame};
+use crate::common::{pair, recv_frame, recv_hello, send_frame};
 
 fn stub_runner() -> (Arc<Runner>, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
