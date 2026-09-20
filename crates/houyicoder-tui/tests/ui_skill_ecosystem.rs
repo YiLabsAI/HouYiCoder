@@ -2,11 +2,9 @@
 //! discovered, listed, and invocable via the @skill: activation prefix.
 //! Proves the cross-ecosystem compatibility path works end-to-end.
 
-#![cfg(test)]
-
-mod common;
-
-use common::{RENDER_TIMEOUT, fresh_temp_dir, pty_session_with_home, run_skill_command};
+use crate::common::{
+    self, RENDER_TIMEOUT, fresh_temp_dir, pty_session_with_home, run_skill_command,
+};
 
 /// Build a PTY session with a temp HOME (containing a .claude/skills/
 /// ecosystem skill) and a temp workspace (containing a native skill).

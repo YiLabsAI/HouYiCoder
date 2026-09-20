@@ -13,9 +13,9 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session, run_slash_command};
+use crate::common::{
+    self, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session, run_slash_command,
+};
 
 /// /context renders every section on a fresh zero-turn session. The session is always Some in the real binary (composition wires
 /// app.session = Some(live_session)), so /context hits the server's real

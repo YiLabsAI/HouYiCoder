@@ -4,9 +4,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session};
 
 /// A single ctrl+D shows the exit-confirm toast and does not quit (the
 /// toast rendering proves the app is alive + processed the key).

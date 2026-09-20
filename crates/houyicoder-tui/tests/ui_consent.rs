@@ -19,9 +19,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{RENDER_TIMEOUT, pty_session, run_slash_command};
+use crate::common::{RENDER_TIMEOUT, pty_session, run_slash_command};
 
 /// /permissions git on|off toggles the checkpoint. The wire round-trip sets
 /// the gate flag; the system line reflects the new state. The toggle is

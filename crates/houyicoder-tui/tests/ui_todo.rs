@@ -5,9 +5,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session_scripted, pty_session_slow_scripted};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session_scripted, pty_session_slow_scripted};
 
 /// One todo_write call, then plain text so the run ends cleanly. The todo
 /// carries the content the user saw leak as a raw JSON row.

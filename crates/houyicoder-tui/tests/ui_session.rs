@@ -11,9 +11,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session_scripted};
+use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session_scripted};
 use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 /// A single-response script: one call whose only item is a plain-text reply,

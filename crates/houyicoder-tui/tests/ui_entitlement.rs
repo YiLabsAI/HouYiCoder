@@ -8,12 +8,10 @@
 //! cargo test --test ui_entitlement -- --ignored
 #![cfg(target_os = "macos")]
 
-mod common;
-
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::{Key, pty_session_with_home};
+use crate::common::{Key, pty_session_with_home};
 
 /// Looks up a mach service no profile allows, then exits 1 with a
 /// denial-signature stderr so the bash discovery gate fires.

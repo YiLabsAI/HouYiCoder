@@ -14,9 +14,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session, run_slash_command};
+use crate::common::{self, Key, RENDER_TIMEOUT, pty_session, run_slash_command};
 
 /// /hooks opens the pane and renders the "N hooks configured" subtitle +
 /// the "edit settings.json to configure" hint. Esc at the event-list level

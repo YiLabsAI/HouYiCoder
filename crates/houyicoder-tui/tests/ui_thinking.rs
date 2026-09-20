@@ -11,9 +11,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session_scripted};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session_scripted};
 
 /// A response that streams a reasoning item, then a bash ToolCall (the bash
 /// ASKs in Manual mode), then plain text to end the run after the approve.

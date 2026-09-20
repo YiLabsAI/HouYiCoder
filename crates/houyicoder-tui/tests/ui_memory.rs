@@ -5,9 +5,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, fresh_temp_dir, pty_session_isolated, run_slash_command};
+use crate::common::{Key, RENDER_TIMEOUT, fresh_temp_dir, pty_session_isolated, run_slash_command};
 use std::path::PathBuf;
 
 /// A fresh temp HOME the test owns. The memory roots + the settings file land

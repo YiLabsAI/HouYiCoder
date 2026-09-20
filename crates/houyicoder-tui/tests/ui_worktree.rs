@@ -13,9 +13,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session, pty_session_in_repo, run_slash_command};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session, pty_session_in_repo, run_slash_command};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;

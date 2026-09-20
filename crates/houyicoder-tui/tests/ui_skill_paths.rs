@@ -4,12 +4,10 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{Key, RENDER_TIMEOUT, pty_session_in_repo, run_skill_command};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session_in_repo, run_skill_command};
 
 /// Throwaway git repo with a paths-gated skill plus a matching file under
 /// src/ and a non-matching one under other/.

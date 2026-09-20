@@ -11,9 +11,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session_scripted};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session_scripted};
 
 /// A two-response script: the first carries a read ToolCall (so the runner
 /// executes the real read tool on the workspace manifest), the second is plain

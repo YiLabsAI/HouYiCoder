@@ -5,9 +5,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
+use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
 use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 /// --resume <sid> re-opens an existing session: the sid is REUSED (not a

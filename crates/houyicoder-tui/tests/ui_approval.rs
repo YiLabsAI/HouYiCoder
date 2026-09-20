@@ -10,9 +10,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session_in_repo};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session_in_repo};
 use std::path::PathBuf;
 use std::process::Command;
 

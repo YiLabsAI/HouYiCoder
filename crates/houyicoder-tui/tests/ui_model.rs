@@ -5,9 +5,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
+use crate::common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
 use std::path::Path;
 use std::time::{Duration, Instant};
 

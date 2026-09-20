@@ -15,9 +15,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, pty_session, pty_session_in_repo};
+use crate::common::{Key, pty_session, pty_session_in_repo};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;

@@ -5,9 +5,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session_slow};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session_slow};
 
 /// Large enough that the stub's first delta lands well after the test's key
 /// sequence. The run is in-flight (agent_busy, spinner live) for this whole

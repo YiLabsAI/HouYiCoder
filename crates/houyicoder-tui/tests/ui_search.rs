@@ -11,9 +11,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session_scripted};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session_scripted};
 
 /// The reply carries "needle" so /search needle has a match in the agent
 /// line; the user prompt "find needle please" is a SECOND match (an older

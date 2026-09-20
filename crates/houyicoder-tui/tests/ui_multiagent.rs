@@ -5,9 +5,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session_scripted, pty_session_slow_scripted};
+use crate::common::{self, Key, RENDER_TIMEOUT, pty_session_scripted, pty_session_slow_scripted};
 use std::time::Duration;
 
 /// A child text long enough that the collapsed fold summary truncates it.

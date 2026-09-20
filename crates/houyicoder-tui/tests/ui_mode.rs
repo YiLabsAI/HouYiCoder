@@ -14,9 +14,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session, pty_session_slow};
+use crate::common::{Key, RENDER_TIMEOUT, pty_session, pty_session_slow};
 
 /// At session start the status pill renders the default mode (Auto). Proves
 /// the status bar + the mode pill render through the real repaint path.

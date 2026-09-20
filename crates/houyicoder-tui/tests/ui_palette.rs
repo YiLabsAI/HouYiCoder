@@ -15,9 +15,7 @@
 //!   - /debug (auto-run) → Enter runs it → the debug system line
 //!     renders as a fresh transcript tail row.
 
-mod common;
-
-use common::{Key, RENDER_TIMEOUT, pty_session};
+use crate::common::{self, Key, RENDER_TIMEOUT, pty_session};
 use std::time::Duration;
 
 /// After a gesture that leaves the palette / a pane open, sleep so crossterm
@@ -101,7 +99,7 @@ fn test_palette_select_runs_debug() {
 #[test]
 #[ignore]
 fn test_palette_select_runs_export() {
-    use common::fresh_temp_dir;
+    use crate::common::fresh_temp_dir;
     let dir = fresh_temp_dir("export");
     let target = dir.join("session.json");
     let mut s = pty_session();

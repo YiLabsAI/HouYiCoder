@@ -11,9 +11,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-mod common;
-
-use common::{
+use crate::common::{
     Key, RENDER_TIMEOUT, fresh_temp_dir, open_permissions, pty_session, pty_session_in_dir,
     pty_session_scripted, tab_to_workspace,
 };
