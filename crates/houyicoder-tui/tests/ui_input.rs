@@ -17,8 +17,8 @@ use std::thread;
 use std::time::Duration;
 
 use crate::common::{
-    Key, RENDER_TIMEOUT, pty_session, pty_session_scripted, pty_session_slow_in_repo,
-    pty_session_slow_scripted,
+    Key, RENDER_TIMEOUT, pty_session, pty_session_slow_in_repo, pty_session_slow_scripted,
+    pty_session_slow_scripted_rows,
 };
 
 /// Seed a throwaway git repo for isolated PTY startup (see common/mod.rs).
@@ -61,6 +61,31 @@ const UNIQUE_TOKEN: &str = "zzqxwaffle";
 /// input ("first task") so a submit of the WRONG text (the interrupt-restore
 /// path re-filling the box with the aborted run's origin) fails the wait.
 const QUEUED_TOKEN: &str = "zzqueuedpony";
+
+/// The stub reply of the busy-draft journey, four characters so the stub
+/// emits it as one delta and the text reads back as one run. A longer reply
+/// arrives in several deltas and the joined pieces would not read
+/// contiguously in the render. The word appears in no other render string,
+/// so the latch cannot be satisfied by chrome.
+const DRAFT_REPLY: &str = "zeal";
+
+/// Delay before the stub's first delta in the busy-draft journey. The run has
+/// to outlast the draft, the clear, and the probe, and has to end inside the
+/// test budget; the stub pays this delay per reply chunk.
+const DRAFT_REPLY_DELAY_MS: u64 = 500;
+
+/// The char pair typed after the clear. Neither char is in the draft token,
+/// so a box that kept the draft reads as the token plus this pair and the
+/// clear check fires.
+const CLEAR_PROBE: &str = "7q";
+
+/// How long the cleared input box has to repaint. The clear repaints on the
+/// next frame, so this is a bound on the effect, not a wait for the key.
+const CLEAR_WINDOW: Duration = Duration::from_millis(400);
+
+/// The placeholder the input box draws while it is empty. It is the latch
+/// that the cleared box reached the screen, so an absence check can follow it.
+const EMPTY_BOX_HINT: &str = "let's build, or / for commands";
 
 /// Esc while a run is in-flight with a draft aborts the run AND leaves the
 /// draft intact (so the user can resend after redirecting). This is the
@@ -105,33 +130,71 @@ fn test_esc_draft_aborts_kept() {
 #[test]
 #[ignore]
 fn test_ctrlu_clears_busy_draft() {
-    let mut s = pty_session_slow_in_repo(make_temp_repo(3), RUN_DELAY_MS);
+    let script = serde_json::json!([[{"type": "Text", "text": DRAFT_REPLY}]]).to_string();
+    let mut s = pty_session_slow_scripted(DRAFT_REPLY_DELAY_MS, &script);
     s.send_str("hi");
     s.send_key(&Key::Enter);
+    // The live spinner row is the busy latch: it renders as the run starts,
+    // before the stub's first delta, so the keys below land mid-run instead
+    // of resting on the delay to cover them.
+    assert!(
+        s.wait_for_compact("Working…", RENDER_TIMEOUT),
+        "the run should go live before the reply lands:\n{}",
+        s.output()
+    );
     s.send_str(UNIQUE_TOKEN);
+    // The draft on screen is the premise of the clear check: the token has to
+    // sit in the box before Ctrl+U, or its absence afterwards would prove
+    // nothing. The terminal screen is the lens here rather than the output
+    // stream, whose repaints carry only the cells that changed.
+    assert!(
+        s.wait_for_screen(UNIQUE_TOKEN, RENDER_TIMEOUT),
+        "the busy draft should render in the input box:\n{}",
+        s.screen().contents()
+    );
+    // The key has to land while the run is live for the abort check to mean
+    // anything, so the reply must not have arrived yet.
+    assert!(
+        !s.output_compact().contains(DRAFT_REPLY),
+        "the reply should not have landed before the key:\n{}",
+        s.output()
+    );
     // Ctrl+U clears the draft; the run is not aborted.
     s.send_key(&Key::Ctrl('u'));
-    thread::sleep(Duration::from_millis(200));
-    s.clear_output();
-    // A sentinel char proves the input box is alive + now holds only the new
-    // char (the draft was wiped, not the run's input frozen).
-    s.send_str("z");
-    thread::sleep(Duration::from_millis(200));
+    // The cleared box repaints with its placeholder. Absence alone cannot be
+    // checked by waiting: a screen read is a snapshot, and the draft is still
+    // on screen until the clear's frame lands, so the check below has to run
+    // after the repaint rather than before it.
     assert!(
-        !s.output_compact().contains(UNIQUE_TOKEN),
+        s.wait_for_screen(EMPTY_BOX_HINT, CLEAR_WINDOW),
+        "the cleared box should repaint:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        !s.screen().contents().contains(UNIQUE_TOKEN),
         "Ctrl+U should clear the draft:\n{}",
+        s.screen().contents()
+    );
+    // A probe pair proves the input box is alive and now holds only the new
+    // chars: the draft was wiped, not frozen in place.
+    s.send_str(CLEAR_PROBE);
+    assert!(
+        s.wait_for_screen(CLEAR_PROBE, RENDER_TIMEOUT),
+        "input should still accept chars after Ctrl+U:\n{}",
+        s.screen().contents()
+    );
+    // Ctrl+U must not abort the run: the stub's reply lands and the
+    // Interrupted notice never does. (If it did, the clear-draft escape hatch
+    // would double as a panic key, defeating the Esc/ctrl-u split this test
+    // pins.) The reply latch covers the whole run, so an abort firing at any
+    // point in it lands in the absence check below.
+    assert!(
+        s.wait_for_compact(DRAFT_REPLY, RENDER_TIMEOUT),
+        "the run should finish normally after Ctrl+U:\n{}",
         s.output()
     );
     assert!(
-        s.output_compact().contains('z'),
-        "input should still accept a new char after Ctrl+U:\n{}",
-        s.output()
-    );
-    // Ctrl+U must not abort the run: the Interrupted notice never lands.
-    // (If it did, the clear-draft escape hatch would double as a panic key,
-    // defeating the Esc/ctrl-u split this test pins.)
-    assert!(
-        !s.wait_for_compact("Interrupted", Duration::from_millis(600)),
+        !s.output_compact().contains("Interrupted"),
         "Ctrl+U should not abort the run:\n{}",
         s.output()
     );
@@ -165,41 +228,61 @@ fn test_esc_keeps_queue() {
     );
 }
 
-/// Shortcut: Ctrl+U kills to line start (readline semantics). Verified by
-/// behavior, not input-box pixels (the box renders char-by-char so the typed
-/// text is never a contiguous substring anyway): type a token, Ctrl+U, then
-/// Enter. If Ctrl+U cleared the input, Enter submits an empty box (a no-op,
-/// no user echo). If Ctrl+U failed, Enter submits the token and the user echo
-/// renders the token as one contiguous line. So the token's contiguous presence
-/// after Ctrl+U+Enter is the failure signal.
+/// Shortcut: Ctrl+U kills to line start (readline semantics). The token is
+/// the premise and the empty-box placeholder is the effect, both read off the
+/// terminal screen: the output stream is the wrong lens here, since a repaint
+/// carries only the cells that changed and the typed echo would never read
+/// back as one run.
 #[test]
 #[ignore]
 fn test_ctrl_u_clears_input() {
     let mut s = pty_session();
     s.send_str(UNIQUE_TOKEN);
-    // Wipe the char-by-char typed render so the absence check reads only what
-    // renders after the Ctrl+U + Enter.
-    s.clear_output();
+    assert!(
+        s.wait_for_screen(UNIQUE_TOKEN, RENDER_TIMEOUT),
+        "the typed draft should render in the input box:\n{}",
+        s.screen().contents()
+    );
     // Ctrl+U = 0x15 in a raw terminal.
     s.send_bytes(&[0x15]);
-    s.send_key(&Key::Enter);
+    // The cleared box repaints with its placeholder. Absence alone cannot be
+    // checked by waiting: a screen read is a snapshot, and the token is still
+    // on screen until the clear's frame lands, so the check below has to run
+    // after the repaint rather than before it.
     assert!(
-        !s.wait_for(UNIQUE_TOKEN, Duration::from_millis(600)),
-        "Ctrl+U should clear the input so Enter submits nothing:\n{}",
-        s.output()
+        s.wait_for_screen(EMPTY_BOX_HINT, RENDER_TIMEOUT),
+        "the cleared box should repaint:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        !s.screen().contents().contains(UNIQUE_TOKEN),
+        "Ctrl+U should clear the input:\n{}",
+        s.screen().contents()
+    );
+    // The probe pair proves the box is alive and holds only the new chars.
+    s.send_str(CLEAR_PROBE);
+    assert!(
+        s.wait_for_screen(CLEAR_PROBE, RENDER_TIMEOUT),
+        "the input box should accept chars after Ctrl+U:\n{}",
+        s.screen().contents()
     );
 }
 
 /// Streaming CJK text leaves no isolated user-background cells on the final
-/// terminal screen.
+/// terminal screen. The scripted stream is paced one delta per millisecond so
+/// the wide-character rows are repainted across many frames: a back-to-back
+/// stream collapses the response into a frame or two and the incremental
+/// repaint the test exists for never runs. The screen is short so the stream
+/// needed to push the user row out of view stays small: the stub charges the
+/// delay per delta, and the row count is what sets how much text that takes.
 #[test]
 #[ignore]
 fn test_cjk_background_clean() {
     let marker = "\u{80cc}\u{666f}\u{68c0}\u{67e5}\u{5b8c}\u{6210}";
     let cjk = "\u{4e2d}\u{6587}\u{5bbd}\u{5b57}\u{7b26}\u{6d41}\u{5f0f}\u{5237}\u{65b0}";
-    let response = format!("{}{marker}", cjk.repeat(300));
+    let response = format!("{}{marker}", cjk.repeat(150));
     let script = serde_json::json!([[{"type":"Text", "text": response}]]).to_string();
-    let mut s = pty_session_scripted(&script);
+    let mut s = pty_session_slow_scripted_rows(1, &script, 12);
     s.send_str("\u{8bf7}\u{8fde}\u{7eed}\u{8f93}\u{51fa}\u{5bbd}\u{5b57}\u{7b26}");
     s.send_key(&Key::Enter);
     assert!(

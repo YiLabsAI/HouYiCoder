@@ -139,9 +139,10 @@ fn test_pill_running_verb_inflight() {
     s.send_str("find auth");
     s.send_str("\r");
     // While the child is in-flight (2s delay), the pill shows the running
-    // row (type + verb, colon-separated) before the done row replaces it.
+    // row's hollow circle before the done row replaces it. The type + verb
+    // text is not a latch: the fold-group head renders it at completion too.
     assert!(
-        s.wait_for_compact("explore:", RENDER_TIMEOUT * 2),
+        s.wait_for_compact("◯", RENDER_TIMEOUT * 2),
         "pill should render the running row while the child is in-flight:\n{}",
         s.output()
     );
@@ -217,10 +218,12 @@ fn test_pill_running_to_done() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    // Running row first (colon-separated type + verb), then the done row. The
-    // stub delay only has to hold the running row long enough to be seen; a
-    // longer window would just idle before the done row lands.
-    assert!(s.wait_for_compact("explore:", RENDER_TIMEOUT * 2));
+    // The running row first, then the done row. The latch is the hollow
+    // circle, which only the running row draws: the fold-group head renders
+    // the same "explore:" text once the child completes, so that string
+    // cannot tell the two states apart. The stub delay only has to hold the
+    // running row long enough to be seen.
+    assert!(s.wait_for_compact("◯", RENDER_TIMEOUT * 2));
     assert!(
         s.wait_for_compact("explore·done", RENDER_TIMEOUT * 3),
         "pill should transition to the done row after completion:\n{}",

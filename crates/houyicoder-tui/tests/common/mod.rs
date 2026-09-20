@@ -769,6 +769,22 @@ pub fn pty_session_scripted_rows(script_json: &str, rows: u16) -> PtySession {
     ))
 }
 
+/// Like pty_session_slow_scripted, but on a shorter terminal. A journey that
+/// has to push earlier output out of view needs less streamed text when the
+/// screen holds fewer rows, and the stream is what the stub charges delay for.
+pub fn pty_session_slow_scripted_rows(ms: u64, script_json: &str, rows: u16) -> PtySession {
+    let sessions_dir = fresh_temp_dir("sessions");
+    pty_session_inner(PtySession::launch_with_sessions_dir_rows(
+        Some(script_json.to_string()),
+        Some(ms),
+        None,
+        None,
+        &[],
+        sessions_dir,
+        rows,
+    ))
+}
+
 /// Like pty_session_scripted, but the binary runs in the given repo
 /// dir (a throwaway git repo) instead of the workspace root. Used by the
 /// worktree PTY tests so a real linked worktree is created + removed under the

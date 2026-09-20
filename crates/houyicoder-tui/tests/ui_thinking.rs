@@ -18,10 +18,10 @@ const REASONING_THEN_BASH_SCRIPT: &str = r#"[
   [{"type":"Text","text":"done"}]
 ]"#;
 
-/// No live ∴ Thinking block renders during a reasoning turn, through the real
-/// binary. In Manual mode the bash ToolCall raises an approval card; the run
-/// pauses on it with live_active still true, so the paused render is where a
-/// live reasoning echo would surface.
+/// Live reasoning does not echo as a block during a reasoning turn, through
+/// the real binary. In Manual mode the bash ToolCall raises an approval card;
+/// the run pauses on it with live_active still true, so the paused render is
+/// where a live reasoning echo would surface.
 #[test]
 #[ignore]
 fn test_no_live_thinking_block() {
@@ -43,9 +43,13 @@ fn test_no_live_thinking_block() {
         "the guarded bash should raise the approval card:\n{}",
         s.output()
     );
+    // The streamed reasoning text is the latch. A live block would echo it
+    // verbatim; the collapsed transcript line carries the duration only, so
+    // the text appearing here would mean the live echo came back.
     assert!(
-        !s.output_compact().contains("∴Thinking"),
-        "the live ∴ Thinking block must not render during the turn:\n{}",
+        !s.output_compact()
+            .contains("analyzingtherequestcarefullystepbystep"),
+        "live reasoning must not echo as a block during the turn:\n{}",
         s.output()
     );
     // Approve the bash (default Yes focus) so the run resumes + ends cleanly.

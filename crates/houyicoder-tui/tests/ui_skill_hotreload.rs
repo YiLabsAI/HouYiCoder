@@ -11,9 +11,11 @@ use std::time::{Duration, Instant};
 
 use crate::common::{Key, PtySession, RENDER_TIMEOUT, pty_session_in_repo, run_slash_command};
 
-/// Close the skills pane so the next slash query can be typed. The pane
-/// replaces the input box, so a leaked Enter would drill into an entry
-/// instead of re-querying.
+/// Return to the idle input box so the next slash query can be typed. The
+/// skills pane replaces the input box, so a leaked Enter would drill into an
+/// entry instead of re-querying. Esc is sent until the idle hint renders or
+/// the attempts run out; a frame that arrives too late for a short read is
+/// absorbed by the caller's retry loop.
 fn close_skills_pane(s: &mut PtySession) {
     const IDLE: &str = "let's build, or / for commands";
     for _ in 0..5 {
@@ -62,10 +64,10 @@ fn make_hotreload_repo(slug: u64) -> PathBuf {
     dir
 }
 
-/// The stub model replies once. A skill body injected by an activation is a
-/// user message like any other, so the reply alone cannot prove activation.
-const HOTRELOAD_SCRIPT: &str = r#"[
-  [{"type":"Text","text":"newskillpassed"}]
+/// The launcher requires a stub script. This journey drives no turn, so the
+/// reply is never rendered and nothing is asserted on it.
+const RELOAD_STUB: &str = r#"[
+  [{"type":"Text","text":"stub reply"}]
 ]"#;
 
 /// A skills directory created mid-session is picked up by the hot-reload
@@ -76,7 +78,7 @@ const HOTRELOAD_SCRIPT: &str = r#"[
 #[ignore]
 fn test_hotreload_picks_new_skill() {
     let repo = make_hotreload_repo(1);
-    let mut s = pty_session_in_repo(repo.clone(), HOTRELOAD_SCRIPT);
+    let mut s = pty_session_in_repo(repo.clone(), RELOAD_STUB);
     // A new skills directory reloads without waiting on write stability, so
     // the tree is staged complete and renamed in, and the reload sees every
     // file at once. Creating the directory then the file inside it would land
@@ -93,26 +95,24 @@ fn test_hotreload_picks_new_skill() {
         repo.join(".houyicoder").join("skills"),
     )
     .expect("rename skills into place");
-    // Query the listing until the reload lands. The seed skill in the same
-    // listing shows the read reaches the registry rather than the screen.
+    // Query the listing until the reload lands, then read the frame that
+    // carries it. Both rows are asserted on that one frame: the pane renders
+    // a listing, so an echo of the typed command could not carry the seeded
+    // skill beside the new one.
     let deadline = Instant::now() + RENDER_TIMEOUT;
-    let mut listed = false;
+    let mut listing = String::new();
     while Instant::now() < deadline {
         run_slash_command(&mut s, "skills");
         if s.wait_for_screen("written mid-session", Duration::from_millis(200)) {
-            listed = true;
+            listing = s.screen().contents();
             break;
         }
         close_skills_pane(&mut s);
     }
     assert!(
-        listed,
-        "a skills directory created mid-session should list after hot-reload:\n{}",
-        s.output()
-    );
-    assert!(
-        s.output().contains("seed skill for the watch root"),
-        "the listing should carry the discovered seed skill too:\n{}",
+        listing.contains("written mid-session")
+            && listing.contains("seed skill for the watch root"),
+        "the reloaded skills directory should list beside the seeded one:\n{}",
         s.output()
     );
     drop(s);

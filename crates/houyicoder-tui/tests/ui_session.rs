@@ -117,24 +117,6 @@ fn wait_for_session_files(root: &Path, names: &[&str], timeout: Duration) -> Opt
     }
 }
 
-/// Poll a session log until it contains a marker, or the deadline. The event
-/// the test waits on is a durable line landing on disk -- not a guessed delay
-/// (a fixed sleep races the flush under load, and a partial log later reads
-/// as if another session wrote to it). Returns as soon as the marker lands.
-fn wait_for_log_contains(path: &Path, marker: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if fs::read_to_string(path)
-            .map(|s| s.contains(marker))
-            .unwrap_or(false)
-        {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    false
-}
-
 /// A fixture export file: two durable events (a user prompt + an assistant
 /// reply) with a legacy ULID session id, so the resume path also exercises
 /// the tolerant SessionId deserialize (a pre-change export resumes). The
@@ -192,6 +174,11 @@ fn write_resume_fixture() -> PathBuf {
 /// The TUI showing the resumed history on the working surface is the
 /// slash /resume de-stub (a separate acceptance row); the launch path
 /// only needs the model to see the replayed history + the log to persist.
+/// The continued turn's typed text. A word the fixture, the stub reply, or an
+/// injected record could carry would let the durable latch match state the
+/// resumed log already holds.
+const CONTINUED_TOKEN: &str = "zzcarryon";
+
 #[test]
 #[ignore]
 fn test_resume_export_persists_history() {
@@ -245,12 +232,14 @@ fn test_resume_export_persists_history() {
     // the new session continues the conversation on disk). Drive a stub
     // reply + assert the log grew beyond the seeded events.
     let seeded_len = body.lines().count();
-    s.send_str("continue");
+    s.send_str(CONTINUED_TOKEN);
     s.send_key(&Key::Enter);
     // The turn appends the user message first, so waiting for that line is the
-    // durable latch for the append.
+    // durable latch for the append. The token is not a word the fixture, the
+    // stub reply, or a recall record could carry, so the latch cannot be
+    // satisfied by anything the seeded log already holds.
     assert!(
-        common::wait_file_contains(&log, "continue", RENDER_TIMEOUT),
+        common::wait_file_contains(&log, CONTINUED_TOKEN, RENDER_TIMEOUT),
         "the continued turn should land in the resumed log:\n{}",
         s.output_plain()
     );
@@ -449,17 +438,6 @@ fn test_resume_lock_rejects_second() {
     );
 }
 
-/// List the session-id dirs (each a sid directory) under a sessions root.
-/// Files (the export json, lock files) are filtered out.
-fn sid_dirs(root: &Path) -> Vec<PathBuf> {
-    fs::read_dir(root)
-        .unwrap_or_else(|e| panic!("read sessions root {root:?}: {e}"))
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect()
-}
-
 /// User journey: export a LIVE session mid-run, then resume that export
 /// while the source is still alive. The resume mints a NEW sid (a fork,
 /// not an adopt), so the two processes write independent logs with no lock
@@ -518,13 +496,13 @@ fn test_resume_export_live_session() {
     );
 
     // Snapshot A's sid before B spawns (A is the only sid so far).
-    let sid_a = sid_dirs(&sessions_dir)
+    let sid_a = common::sid_dirs(&sessions_dir)
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("A sid dir missing under {sessions_dir:?}"));
     let log_a_path = sid_a.join("log.jsonl");
     assert!(
-        wait_for_log_contains(&log_a_path, "logged", RENDER_TIMEOUT),
+        common::wait_file_contains(&log_a_path, "logged", RENDER_TIMEOUT),
         "A's reply should land durably before the export reads the log:\n{}",
         a.output()
     );
@@ -559,7 +537,7 @@ fn test_resume_export_live_session() {
     );
 
     // B mints a NEW sid (fork, not adopt) -> differs from A.
-    let sids = sid_dirs(&sessions_dir);
+    let sids = common::sid_dirs(&sessions_dir);
     assert!(sids.len() >= 2, "A + B should both have sid dirs: {sids:?}");
     let sid_b = sids
         .iter()
@@ -593,7 +571,7 @@ fn test_resume_export_live_session() {
     );
     let log_b_path = sid_b.join("log.jsonl");
     assert!(
-        wait_for_log_contains(&log_b_path, "from B", RENDER_TIMEOUT),
+        common::wait_file_contains(&log_b_path, "from B", RENDER_TIMEOUT),
         "B's user input should land durably in B's log:\n{}",
         b.output()
     );
