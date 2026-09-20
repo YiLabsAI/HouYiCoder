@@ -38,6 +38,8 @@ Covered logics:
 Run: python3 scripts/test_diff_cov.py  (wired into make check as
 diff-cov-tests). Exit 0 = pass, 1 = fail.
 """
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -253,6 +255,19 @@ def main() -> int:
     got, evidence, rebuilt = settled_verdict(SUSPECT_TABLE, SUSPECT, lambda: None, lambda _t: [])
     if got is not SUSPECT_TABLE or evidence != SUSPECT or rebuilt is not False:
         failures.append(f"settled_verdict: a failed rebuild must not clear it, got {evidence}")
+    # A rebuild that raises must land the same way as one that returned nothing:
+    # the refusal stands, and the exception must not escape -- a traceback exits
+    # 1, which is not the gate's refusal exit. The redirect keeps the deliberate
+    # traceback off this test's own output.
+    def boom():
+        raise OSError("the instrumented run fell over")
+
+    with contextlib.redirect_stderr(io.StringIO()):
+        got, evidence, rebuilt = settled_verdict(
+            SUSPECT_TABLE, SUSPECT, boom, lambda _t: []
+        )
+    if got is not SUSPECT_TABLE or evidence != SUSPECT or rebuilt is not False:
+        failures.append(f"settled_verdict: a raising rebuild must refuse, got {evidence}")
     # Headers without a DA line parse to keys whose every row is empty, which is
     # truthy: the guard must read the rows, not the table.
     got, evidence, rebuilt = settled_verdict(

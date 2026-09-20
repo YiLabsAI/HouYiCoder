@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 # Shared lcov parse + stale-mapping detect + reject, used by both this gate
@@ -352,7 +353,19 @@ def settled_verdict(executable, evidence, rebuild, measure):
     """
     if not evidence:
         return executable, evidence, False
-    rebuilt = rebuild()
+    try:
+        rebuilt = rebuild()
+    except Exception as exc:
+        # A raise mid-rebuild must read as a refusal, not escape as a traceback
+        # that exits 1: a crash in the gate's own self-heal cannot look like a
+        # clean pass, and the evidence already in hand is the honest verdict.
+        print(
+            f"error: the rebuild raised {type(exc).__name__}: {exc} — the "
+            "refusal stands because no table could be produced.",
+            file=sys.stderr,
+        )
+        traceback.print_exc()
+        return executable, evidence, False
     if not carries_verdict(rebuilt):
         return executable, evidence, False
     # The rebuild's own table is what any verdict must use, and the measure says
