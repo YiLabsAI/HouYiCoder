@@ -42,13 +42,7 @@ fn make_temp_repo(slug: u64) -> PathBuf {
     drop(std::fs::remove_dir_all(&dir));
     std::fs::create_dir_all(&dir).expect("mkdir repo");
     std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
-    for args in [
-        &["init", "-q"][..],
-        &["config", "user.email", "t@x"][..],
-        &["config", "user.name", "t"][..],
-        &["add", "Cargo.toml"][..],
-        &["commit", "-m", "init", "-q"][..],
-    ] {
+    for args in [&["init", "-q"][..], &["add", "Cargo.toml"][..]] {
         let ok = Command::new("git")
             .arg("-C")
             .arg(&dir)
@@ -58,6 +52,23 @@ fn make_temp_repo(slug: u64) -> PathBuf {
             .unwrap_or(false);
         assert!(ok, "git {:?}", args);
     }
+    let ok = Command::new("git")
+        .arg("-C")
+        .arg(&dir)
+        .args([
+            "-c",
+            "user.email=t@x",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-m",
+            "init",
+            "-q",
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(ok, "git commit");
     dir
 }
 

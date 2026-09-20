@@ -218,7 +218,7 @@ fn test_esc_clears_child_pill() {
         "the stopped child should render a terminal pill row:\n{}",
         s.output()
     );
-    std::thread::sleep(FLEET_GRACE + Duration::from_secs(2));
+    std::thread::sleep(FLEET_GRACE);
     s.clear_output();
     s.send_str(" ");
     std::thread::sleep(Duration::from_millis(300));

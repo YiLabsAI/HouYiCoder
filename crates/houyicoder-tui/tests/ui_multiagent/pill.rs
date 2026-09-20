@@ -45,7 +45,7 @@ fn test_teammate_pill_pins_view() {
     // completed (non-killed, non-failed) child. Wait past the grace window
     // to prove the stay is not a transient render: the banner is still the
     // active state (Shift+Down exits; Esc is a no-op on a completed child).
-    std::thread::sleep(FLEET_GRACE + Duration::from_secs(2));
+    std::thread::sleep(FLEET_GRACE);
     // clear the buffer so the post-exit frame is what we assert on, not the
     // pre-exit banner bytes still in the scrollback.
     s.clear_output();

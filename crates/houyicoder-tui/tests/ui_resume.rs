@@ -7,6 +7,8 @@
 
 use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
 use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// --resume <sid> re-opens an existing session: the sid is REUSED (not a
 /// fork), the model is restored from the descriptor, the seeded history stays,
@@ -54,12 +56,17 @@ fn test_resume_sid_reopens_history() {
     let before_lines = before.lines().count();
     s.send_str("after reopen");
     s.send_key(&Key::Enter);
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    let after = std::fs::read_to_string(&log_path).unwrap();
-    assert!(
-        after.lines().count() > before_lines,
-        "a continued turn should append to the same sid log:\n{after}"
-    );
+    let deadline = Instant::now() + RENDER_TIMEOUT;
+    let after = loop {
+        let after = std::fs::read_to_string(&log_path).unwrap();
+        if after.lines().count() > before_lines {
+            break after;
+        }
+        if Instant::now() > deadline {
+            panic!("a continued turn should append to the same sid log:\n{after}");
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
     assert!(
         after.contains("after reopen"),
         "the new turn should be in the reused sid log:\n{after}"

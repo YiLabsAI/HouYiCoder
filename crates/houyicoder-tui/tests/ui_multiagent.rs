@@ -16,7 +16,7 @@ const LONG_CHILD: &str = "This is a long child analysis that exceeds the one-lin
 /// The grace window after which a completed pill row drops when the user
 /// is not viewing it. Tests wait past this to prove the pin holds + the
 /// post-exit drop fires. Mirrors the FLEET_GRACE constant in agent_message.
-const FLEET_GRACE: Duration = Duration::from_secs(5);
+const FLEET_GRACE: Duration = Duration::from_millis(500);
 
 #[path = "ui_multiagent/background.rs"]
 mod background;
