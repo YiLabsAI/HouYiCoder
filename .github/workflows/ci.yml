@@ -113,11 +113,17 @@ jobs:
           HOUYICODER_SANDBOX_NO_ENFORCE: "1"
       # always(): the report is worth publishing precisely when a gate above
       # failed, since that is when someone needs to see which lines are bare.
+      # Derive the lcov path from cov_lcov.py, the same source the writer uses:
+      # the report name carries the worktree, so a hardcoded name silently misses.
+      - name: Resolve lcov path
+        if: always()
+        id: lcov
+        run: echo "path=$(python3 scripts/cov_lcov.py --lcov-path)" >> "$GITHUB_OUTPUT"
       - name: Upload to Codecov
         if: always()
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: YiLabsAI/HouYiCoder
-          files: target/cov/houyi-cov.lcov
+          files: ${{ steps.lcov.outputs.path }}
           fail_ci_if_error: false
