@@ -96,7 +96,7 @@ use tokio_util::sync::CancellationToken;
 
 use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::provider::ModelProvider;
-use houyicoder_context::SessionId;
+use houyicoder_context::{EventId, SessionId};
 use houyicoder_protocol::frontend::model::{ModelChoice, SpeedMode};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, EffortLevel};
@@ -370,8 +370,7 @@ impl Runner {
 
     /// The active skill name, if any. Peek, not take: the cell must survive
     /// across turns so a later failing bash attributes to the skill that
-    /// was invoked (the model may run several turns of commands after the
-    /// skill body loads). The next skill invocation overwrites it.
+    /// was invoked. The next skill invocation overwrites it.
     pub(crate) fn active_skill(&self) -> Option<String> {
         self.active_skill.lock().expect("active_skill lock").clone()
     }
@@ -385,6 +384,11 @@ impl Runner {
     /// The dream's cross-session scan root, or None when in-memory.
     pub fn dream_session_log_root(&self) -> Option<&std::path::Path> {
         self.memory.dream_session_log_root()
+    }
+
+    /// Last message id the extraction consumed or was seeded to, else None.
+    pub fn extractor_cursor(&self) -> Option<EventId> {
+        self.memory.extractor_cursor()
     }
 
     /// The active model id (the /model pane select). Reads the atomic

@@ -32,6 +32,13 @@ pub trait SessionLog: Send + Sync {
     /// until events are appended this process for the session.
     fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry>;
 
+    /// The id of the latest mirrored event, or None when the session has no
+    /// mirror yet. Defaults to reading the snapshot; a store with an indexed
+    /// mirror overrides it to answer without cloning the log.
+    fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
+        self.trajectory_snapshot(session).pop().map(|e| e.id)
+    }
+
     /// Clone the finalized suffix beginning at start from the in-memory mirror.
     /// Implementations should avoid cloning the already-consumed prefix.
     fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {

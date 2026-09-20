@@ -159,15 +159,12 @@ pub struct BuildRunnerOptions {
 }
 
 impl BuildRunnerOptions {
-    /// Production persistence opt-in: both stores on disk at the sid-keyed
-    /// sessions root (still redirectable via the sessions-dir env).
+    /// Both stores on disk at the sid-keyed root when production persistence is opted in.
     pub fn disk(project: Option<String>, rule_store: Option<Arc<dyn RuleStore>>) -> Self {
         Self::disk_at(session_log_root(), project, rule_store)
     }
 
-    /// The same preset at an explicit root, for a caller that owns one (a
-    /// test isolating its session dir) - the exact store wiring the binary
-    /// entries get, without rebuilding it by hand.
+    /// The same preset at an explicit root, for a test isolating its session dir.
     pub fn disk_at(
         root: std::path::PathBuf,
         project: Option<String>,
@@ -575,13 +572,13 @@ pub(crate) fn assemble(
         Some(ws) => {
             let memory_provider: Arc<dyn MemoryProvider> =
                 Arc::new(memory::memory_provider_for(&ws));
-            let cwd = ws.clone();
             let session_log_root = runner.store().session_log_root();
             let (runtime, warnings) = memory::build_memory_runtime(
                 runner.store(),
+                session,
                 memory_provider,
                 provider_for_extractor,
-                cwd.clone(),
+                ws.clone(),
                 model_for_extractor,
                 session_log_root,
             );
@@ -773,10 +770,8 @@ impl SessionHost {
             })
     }
 
-    /// The lifecycle store (the single source of truth for the parked
-    /// PendingTurn + the lease holder + the state). pub(crate) so the
-    /// serve_session entry point can run the lease guard + read the pending
-    /// turn without the host exposing its internal map.
+    /// Single source of truth for the parked PendingTurn, lease holder, and
+    /// state. pub(crate) so serve_session runs the lease guard.
     pub(crate) fn store(&self) -> &crate::lifecycle::SessionLeaseStore {
         &self.store
     }

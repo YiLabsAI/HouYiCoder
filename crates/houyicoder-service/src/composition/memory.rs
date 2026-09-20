@@ -52,6 +52,7 @@ fn build_memory_extractor(
 /// Build a configured memory runtime and return settings warnings.
 pub(super) fn build_memory_runtime(
     store: Arc<dyn SessionLog>,
+    session: SessionId,
     provider: Arc<dyn MemoryProvider>,
     model_provider: Arc<dyn ModelProvider>,
     cwd: std::path::PathBuf,
@@ -66,6 +67,11 @@ pub(super) fn build_memory_runtime(
         cwd.clone(),
         model.clone(),
     );
+    // Seed the cursor to the restored tail so the first pass counts only
+    // messages that arrive after startup, not the history this process never watched.
+    if let Some(id) = store.last_trajectory_id(session) {
+        extractor.seed_cursor(id);
+    }
     let dream = build_dream_runner(
         model_provider,
         Arc::clone(&provider),
@@ -112,7 +118,16 @@ pub(super) fn heal_memory_index(provider: &houyicoder_memory::MarkdownMemoryProv
 
 #[cfg(test)]
 mod tests {
-    use super::heal_memory_index;
+    use super::{build_memory_runtime, heal_memory_index};
+    use houyicoder_api::memory::MemoryProvider;
+    use houyicoder_api::provider::ModelProvider;
+    use houyicoder_api::session::SessionLog;
+    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+    use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
+    use houyicoder_provider::FakeProvider;
+    use houyicoder_session::SessionStore;
+    use std::sync::Arc;
+
     fn temp_root() -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -153,6 +168,62 @@ mod tests {
             "no index written for an empty root"
         );
         drop(std::fs::remove_dir_all(&root));
+    }
+
+    #[tokio::test]
+    async fn test_runtime_seeds_extractor_cursor() {
+        let store: Arc<dyn SessionLog> =
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        let session = SessionId::new();
+        let last = EventId::new();
+        store
+            .append(SessionLogEntry {
+                id: last,
+                session,
+                ts: 0,
+                prev_hash: None,
+                event: SessionEvent::UserInput {
+                    text: "restored".into(),
+                },
+            })
+            .await
+            .expect("append");
+        let root = temp_root();
+        let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
+        let model: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+        let (runtime, _warnings) = build_memory_runtime(
+            Arc::clone(&store),
+            session,
+            memory,
+            model,
+            std::env::temp_dir(),
+            "test-model".into(),
+            None,
+        );
+        assert_eq!(
+            runtime.extractor_cursor(),
+            Some(last),
+            "the restored tail seeds the extraction cursor"
+        );
+        // A session the store cannot answer for keeps the count-all cursor.
+        let root2 = temp_root();
+        let fresh = SessionId::new();
+        let (runtime, _warnings) = build_memory_runtime(
+            store,
+            fresh,
+            Arc::new(MarkdownMemoryProvider::new(root2.clone())),
+            Arc::new(FakeProvider::text("ok")),
+            std::env::temp_dir(),
+            "test-model".into(),
+            None,
+        );
+        assert_eq!(
+            runtime.extractor_cursor(),
+            None,
+            "an unknown session seeds nothing"
+        );
+        drop(std::fs::remove_dir_all(&root));
+        drop(std::fs::remove_dir_all(&root2));
     }
 
     #[cfg(unix)]

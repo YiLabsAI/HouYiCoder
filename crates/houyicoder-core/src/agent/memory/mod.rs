@@ -12,7 +12,7 @@ use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    CheckpointManifest, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId,
+    CheckpointManifest, EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId,
     SessionLogEntry,
 };
 
@@ -72,6 +72,12 @@ impl MemoryRuntime {
             gates,
             background: BackgroundMemory { extractor, dream },
         }
+    }
+
+    /// Last message id the extraction consumed or was seeded to, or None
+    /// with no extractor configured or nothing consumed yet.
+    pub fn extractor_cursor(&self) -> Option<EventId> {
+        self.background.extractor.as_ref().and_then(|e| e.cursor())
     }
 
     /// Return the configured provider.

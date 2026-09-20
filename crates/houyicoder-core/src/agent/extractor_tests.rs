@@ -209,6 +209,29 @@ fn extractor(provider: Arc<dyn ModelProvider>) -> (Arc<MemoryExtractor>, Arc<Rec
     (ext, memory)
 }
 
+#[test]
+fn test_seed_never_moves_cursor() {
+    let provider = Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    });
+    let (ext, _memory) = extractor(Arc::clone(&provider) as Arc<dyn ModelProvider>);
+    assert_eq!(ext.cursor(), None, "a fresh extractor consumed nothing");
+    let first = EventId::new();
+    ext.seed_cursor(first);
+    assert_eq!(
+        ext.cursor(),
+        Some(first),
+        "the seed lands on an empty cursor"
+    );
+    let later = EventId::new();
+    ext.seed_cursor(later);
+    assert_eq!(
+        ext.cursor(),
+        Some(first),
+        "a cursor already set never moves again"
+    );
+}
+
 /// Build a simple conversation prefix: user asks, assistant answers.
 fn conversation() -> Vec<SessionLogEntry> {
     let session = houyicoder_context::SessionId::new();
@@ -462,8 +485,9 @@ async fn test_extract_keeps_cursor_error() {
 }
 
 /// count_messages_since counts all model-visible messages when the cursor
-/// is None (fresh process) and when the cursor id is not in the messages
-/// (compaction removed it) — never 0, which would disable extraction.
+/// is None (nothing consumed or seeded yet) and when the cursor id is not
+/// in the messages (compaction removed it) — never 0, which would disable
+/// extraction.
 #[test]
 fn test_count_since_fallbacks_missing() {
     let msgs = conversation();

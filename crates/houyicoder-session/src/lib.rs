@@ -232,6 +232,17 @@ impl SessionStore {
             .unwrap_or_default()
     }
 
+    /// The id of the latest mirrored event, or None when the session has no
+    /// mirror entries. Reads the tail in place — no clone of the log.
+    pub fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
+        self.trajectory
+            .lock()
+            .expect("trajectory mutex poisoned")
+            .get(&session)
+            .and_then(|events| events.last())
+            .map(|e| e.id)
+    }
+
     /// Clone only the finalized suffix beginning at start.
     pub fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
         self.trajectory
@@ -602,6 +613,9 @@ impl houyicoder_api::session::SessionLog for SessionStore {
     }
     fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
         Self::trajectory_snapshot(self, session)
+    }
+    fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
+        Self::last_trajectory_id(self, session)
     }
     fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
         Self::trajectory_since(self, session, start)

@@ -489,6 +489,24 @@ mod tests {
         SessionId::new()
     }
 
+    /// This log does not override last_trajectory_id, so the call runs the
+    /// port default body and answers the snapshot tail.
+    #[test]
+    fn test_port_default_last_id() {
+        let log = InMemoryLog::new();
+        let s = make_session();
+        assert_eq!(log.last_trajectory_id(s), None, "no events, no id");
+        log.push(make_event(SessionEvent::UserInput { text: "a".into() }));
+        let e2 = make_event(SessionEvent::Reasoning { text: "b".into() });
+        let last = e2.id;
+        log.push(e2);
+        assert_eq!(
+            log.last_trajectory_id(s),
+            Some(last),
+            "the default answers the snapshot tail"
+        );
+    }
+
     fn make_manifest_summarized(ids: Vec<EventId>) -> CheckpointManifest {
         let anchor = ids.first().copied().unwrap_or_else(EventId::new);
         let last = ids.last().copied().unwrap_or_else(EventId::new);

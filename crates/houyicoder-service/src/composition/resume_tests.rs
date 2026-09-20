@@ -89,6 +89,13 @@ fn test_resume_export_seeds_log() {
         .unwrap();
     let events = rt.block_on(async { runner.store().replay(new_sid).await.unwrap() });
     assert!(events.len() >= 2, "seeded events should replay: {events:?}");
+    // The mirror was filled before assembly, so the extractor cursor is
+    // seeded to the restored tail: the history is never re-extracted.
+    assert_eq!(
+        runner.extractor_cursor(),
+        events.last().map(|e| e.id),
+        "the restored tail seeds the extractor cursor"
+    );
     let body =
         std::fs::read_to_string(sessions.join(new_sid.to_string()).join("log.jsonl")).unwrap();
     assert!(
@@ -542,6 +549,12 @@ fn test_fork_keeps_source_untouched() {
         .unwrap();
     let events = rt.block_on(async { runner.store().replay(forked_sid).await.unwrap() });
     assert!(events.len() >= 2, "forked store replays the seeded events");
+    // The fork fills the mirror before assembly too: same seeding contract.
+    assert_eq!(
+        runner.extractor_cursor(),
+        events.last().map(|e| e.id),
+        "the forked tail seeds the extractor cursor"
+    );
     std::fs::remove_dir_all(&sessions).ok();
 }
 

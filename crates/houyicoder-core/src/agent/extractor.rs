@@ -4,9 +4,10 @@
 //! skips the fork when the main agent already saved a memory via a
 //! save_memory tool call in this turn range (no point re-extracting what was
 //! just written). Both are recomputed by re-scanning the message log each
-//! call — no stored flag. State is process-lifetime only: the cursor is
-//! not persisted, so a fresh process counts all messages on the first
-//! pass.
+//! call — no stored flag. The cursor lives for the process lifetime: a
+//! resumed session seeds it from the restored history so the first pass
+//! counts only what arrives after the restore, while a session the store
+//! cannot answer for keeps the None cursor and counts all messages.
 //!
 //! The forked agent always receives the full conversation as its
 //! prompt-cache prefix; the cursor only governs the new-message count fed
@@ -85,6 +86,22 @@ impl MemoryExtractor {
             config,
             memory_changed: Mutex::new(None),
         }
+    }
+
+    /// Seed the cursor to a restored history's last event, but only while it
+    /// is still None. A live extractor may already have consumed past the
+    /// seed point; rewinding it would double-count that range.
+    pub fn seed_cursor(&self, id: EventId) {
+        let mut cursor = self.cursor.lock().expect("cursor");
+        if cursor.is_none() {
+            *cursor = Some(id);
+        }
+    }
+
+    /// The last message id the extraction consumed or was seeded to, or
+    /// None when neither has happened.
+    pub fn cursor(&self) -> Option<EventId> {
+        *self.cursor.lock().expect("cursor")
     }
 
     /// Install the handler for successful memory changes.
@@ -267,9 +284,9 @@ fn advance_cursor(cursor: &Mutex<Option<EventId>>, messages: &[SessionLogEntry])
 }
 
 /// Count model-visible messages (user + assistant) after the cursor. If the
-/// cursor is None (fresh process) or its id is not found in the messages
-/// (compaction removed it), count all — never return 0, which would
-/// permanently disable extraction for the rest of the session.
+/// cursor is None (nothing consumed or seeded yet) or its id is not found in
+/// the messages (compaction removed it), count all — never return 0, which
+/// would permanently disable extraction for the rest of the session.
 pub(crate) fn count_messages_since(
     messages: &[SessionLogEntry],
     cursor: Option<&EventId>,

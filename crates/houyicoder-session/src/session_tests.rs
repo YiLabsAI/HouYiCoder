@@ -1,4 +1,5 @@
 use super::*;
+use houyicoder_api::session::SessionLog;
 use houyicoder_context::{EventId, SessionEvent};
 use houyicoder_memory::{InMemoryBackend, LocalFileBackend};
 
@@ -120,6 +121,30 @@ async fn test_trajectory_keeps_order() {
         3,
         "backend log survives a mirror reset"
     );
+}
+
+#[tokio::test]
+async fn test_last_id_tracks_mirror() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let s = SessionId::new();
+    assert_eq!(store.last_trajectory_id(s), None, "no mirror, no id");
+    appended_event(&store, s, SessionEvent::UserInput { text: "a".into() }).await;
+    let e2 = appended_event(&store, s, SessionEvent::Reasoning { text: "c".into() }).await;
+    assert_eq!(
+        store.last_trajectory_id(s),
+        Some(e2.id),
+        "the tail follows the append"
+    );
+    let other = SessionId::new();
+    assert_eq!(
+        store.last_trajectory_id(other),
+        None,
+        "the mirror is per-session"
+    );
+    // Through the port: the override answers what the inherent read answers.
+    let port: Arc<dyn SessionLog> = Arc::new(store);
+    assert_eq!(port.last_trajectory_id(s), Some(e2.id));
+    assert_eq!(port.last_trajectory_id(other), None);
 }
 
 #[tokio::test]
