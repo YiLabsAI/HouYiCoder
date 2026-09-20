@@ -20,6 +20,7 @@
 //! events by index), or stats (event/folded counts). Long texts truncate so
 //! the model reads snippets, not a whole re-injected folded block.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -126,7 +127,7 @@ impl Tool for ConversationSearchTool {
             let folded_ids = folded_event_ids(&store, session).await;
             let text_events: Vec<&SessionLogEntry> = events
                 .iter()
-                .filter(|e| event_search_text(e).is_some())
+                .filter(|e| transcript_item(e).is_some())
                 .collect();
             let mut output = String::new();
 
@@ -200,38 +201,45 @@ async fn folded_event_ids(store: &Arc<dyn SessionLog>, session: SessionId) -> Ve
         .collect()
 }
 
-/// The searchable text for a text-bearing event kind, or None for kinds with
-/// no user-facing text (deltas are subsumed by the authoritative message;
-/// hook signals, usage, boundaries, permission, and turn markers carry no
-/// recallable content). Tool calls serialize their input so a tool-call
-/// argument is searchable; tool results serialize their output likewise.
-fn event_search_text(event: &SessionLogEntry) -> Option<String> {
-    let text = match &event.event {
-        SessionEvent::UserInput { text } => text.clone(),
-        SessionEvent::MidTurnInput { text, .. } => text.clone(),
-        SessionEvent::MetaUser { text } => text.clone(),
-        SessionEvent::MemoryRecall { text, .. } => text.clone(),
-        SessionEvent::SkillListing { text, .. } => text.clone(),
-        SessionEvent::SkillBody { content, .. } => content.clone(),
-        SessionEvent::RewardObservation { .. } => return None,
-        SessionEvent::Unknown => return None,
-        SessionEvent::AssistantMessage { text, thinking } => {
-            let mut s = text.clone();
-            if let Some(t) = thinking {
-                if !s.is_empty() {
-                    s.push('\n');
-                }
-                s.push_str(t);
-            }
-            s
-        }
+/// The label and text one event contributes to the search surface: the label
+/// its hit or turn row renders under, and the text the search reads. Both come
+/// from one exhaustive match, so a label can never disagree with the text it
+/// names, and an event added later cannot reach the surface under a wildcard
+/// label with nothing behind it. The text is borrowed where the event already
+/// holds it, and built for the two that always compose one: a tool call
+/// renders its input and a tool result renders its output. An assistant
+/// message builds one only when it joins non-empty thinking.
+///
+/// None for events with nothing to recall. Deltas are subsumed by the
+/// authoritative message; usage, boundaries, permission, worktree, and turn
+/// markers are run bookkeeping. Child-completion notices, subagent return
+/// summaries, and hook reasons also carry text, and are left out on purpose:
+/// they are notices about the run rather than turns of the conversation.
+fn transcript_item(event: &SessionLogEntry) -> Option<(&'static str, Cow<'_, str>)> {
+    let (role, text): (&'static str, Cow<'_, str>) = match &event.event {
+        SessionEvent::UserInput { text }
+        | SessionEvent::MidTurnInput { text, .. }
+        | SessionEvent::MetaUser { text } => ("User", Cow::Borrowed(text.as_str())),
+        SessionEvent::MemoryRecall { text, .. } => ("Memory", Cow::Borrowed(text.as_str())),
+        SessionEvent::SkillListing { text, .. } => ("Skill", Cow::Borrowed(text.as_str())),
+        SessionEvent::SkillBody { content, .. } => ("Skill", Cow::Borrowed(content.as_str())),
+        SessionEvent::AssistantMessage { text, thinking } => (
+            "Assistant",
+            match thinking.as_deref().filter(|t| !t.is_empty()) {
+                Some(t) if text.is_empty() => Cow::Borrowed(t),
+                Some(t) => Cow::Owned(format!("{text}\n{t}")),
+                None => Cow::Borrowed(text.as_str()),
+            },
+        ),
         SessionEvent::ToolCall { tool, input, .. } => {
-            format!("[{tool}]\n{}", input)
+            ("Assistant", Cow::Owned(format!("[{tool}]\n{input}")))
         }
-        SessionEvent::ToolResult { output, .. } => output.to_string(),
-        SessionEvent::Reasoning { text } => text.clone(),
-        SessionEvent::Summary { text } => text.clone(),
-        SessionEvent::AssistantTextDelta { .. }
+        SessionEvent::ToolResult { output, .. } => ("Tool", Cow::Owned(output.to_string())),
+        SessionEvent::Reasoning { text } => ("Reasoning", Cow::Borrowed(text.as_str())),
+        SessionEvent::Summary { text } => ("Summary", Cow::Borrowed(text.as_str())),
+        SessionEvent::RewardObservation { .. }
+        | SessionEvent::Unknown
+        | SessionEvent::AssistantTextDelta { .. }
         | SessionEvent::CompactionBoundary { .. }
         | SessionEvent::CacheBreak { .. }
         | SessionEvent::PermissionDecision { .. }
@@ -248,22 +256,10 @@ fn event_search_text(event: &SessionLogEntry) -> Option<String> {
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::NotificationInjected { .. } => return None,
     };
-    if text.is_empty() { None } else { Some(text) }
-}
-
-/// A role label for an event, for rendering search hits + turn listings.
-fn role_of(event: &SessionLogEntry) -> &'static str {
-    match event.event {
-        SessionEvent::UserInput { .. }
-        | SessionEvent::MidTurnInput { .. }
-        | SessionEvent::MetaUser { .. } => "User",
-        SessionEvent::AssistantMessage { .. } => "Assistant",
-        SessionEvent::ToolCall { .. } => "Assistant",
-        SessionEvent::ToolResult { .. } => "Tool",
-        SessionEvent::Reasoning { .. } => "Reasoning",
-        SessionEvent::Summary { .. } => "Summary",
-        SessionEvent::MemoryRecall { .. } => "Memory",
-        _ => "System",
+    if text.is_empty() {
+        None
+    } else {
+        Some((role, text))
     }
 }
 
@@ -273,14 +269,14 @@ fn search_events(events: &[&SessionLogEntry], query: &str) -> Vec<SearchMatch> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
     for (idx, event) in events.iter().enumerate() {
-        let Some(text) = event_search_text(event) else {
+        let Some((role, text)) = transcript_item(event) else {
             continue;
         };
         if text.to_lowercase().contains(&query_lower) {
             results.push(SearchMatch {
                 index: idx,
                 event_id: event.id,
-                role: role_of(event),
+                role,
                 snippet: extract_snippet(&text, &query_lower),
             });
         }
@@ -345,15 +341,19 @@ fn format_turn_range(events: &[&SessionLogEntry], range: TurnRange) -> String {
     let mut out = format!("## Turns {}-{}\n\n", range.start, range.end);
     for (i, event) in events[range.start..end].iter().enumerate() {
         let idx = range.start + i;
-        out.push_str(&format!("**[{}] {}:**\n", idx, role_of(event)));
-        if let Some(text) = event_search_text(event) {
-            if text.len() > 1000 {
-                out.push_str(&text.chars().take(1000).collect::<String>());
-                out.push_str("... (truncated)\n");
-            } else {
-                out.push_str(&text);
-                out.push('\n');
-            }
+        // An event with no transcript text renders nothing at all, not a
+        // heading over an empty body. The caller indexes text-bearing events,
+        // so this only fires for a direct caller handing over a raw slice.
+        let Some((role, text)) = transcript_item(event) else {
+            continue;
+        };
+        out.push_str(&format!("**[{idx}] {role}:**\n"));
+        if text.len() > 1000 {
+            out.push_str(&text.chars().take(1000).collect::<String>());
+            out.push_str("... (truncated)\n");
+        } else {
+            out.push_str(&text);
+            out.push('\n');
         }
         out.push('\n');
     }
@@ -384,294 +384,5 @@ fn format_stats(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use houyicoder_context::{
-        CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId, SessionId,
-        SessionLogEntry, TurnGroup,
-    };
-    use houyicoder_protocol::extension::ToolError;
-    use std::sync::atomic::AtomicU32;
-
-    /// An in-memory session log the tool tests drive directly. Records events
-    /// in a Vec; current_view returns the manifest the test sets, so the
-    /// folded-id path is exercisable without a real backend.
-    struct InMemoryLog {
-        events: std::sync::Mutex<Vec<SessionLogEntry>>,
-        manifest: std::sync::Mutex<Option<CheckpointManifest>>,
-    }
-
-    impl InMemoryLog {
-        fn new() -> Self {
-            Self {
-                events: std::sync::Mutex::new(Vec::new()),
-                manifest: std::sync::Mutex::new(None),
-            }
-        }
-        fn push(&self, ev: SessionLogEntry) {
-            self.events.lock().unwrap().push(ev);
-        }
-        fn set_manifest(&self, m: CheckpointManifest) {
-            *self.manifest.lock().unwrap() = Some(m);
-        }
-    }
-
-    impl SessionLog for InMemoryLog {
-        fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
-            let id = event.id;
-            self.events.lock().unwrap().push(event);
-            Box::pin(async move { Ok(id) })
-        }
-        fn replay(
-            &self,
-            _session: SessionId,
-        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
-            let events = self.events.lock().unwrap().clone();
-            Box::pin(async move { Ok(events) })
-        }
-        fn current_view(
-            &self,
-            session: SessionId,
-        ) -> PFut<'_, Result<ContextSnapshot, ContextError>> {
-            let events = self.events.lock().unwrap().clone();
-            let manifest = self.manifest.lock().unwrap().clone();
-            Box::pin(async move {
-                Ok(ContextSnapshot {
-                    session,
-                    events,
-                    last_checkpoint: manifest.as_ref().map(|m| m.id),
-                    rewind_points: Vec::new(),
-                    manifest,
-                })
-            })
-        }
-        fn trajectory_snapshot(&self, _session: SessionId) -> Vec<SessionLogEntry> {
-            self.events.lock().unwrap().clone()
-        }
-        fn reset_trajectory(&self, _session: SessionId) {}
-        fn write_checkpoint(
-            &self,
-            manifest: CheckpointManifest,
-        ) -> PFut<'_, Result<houyicoder_context::CheckpointId, ContextError>> {
-            let id = manifest.id;
-            *self.manifest.lock().unwrap() = Some(manifest);
-            Box::pin(async move { Ok(id) })
-        }
-        fn read_checkpoint(
-            &self,
-            _id: houyicoder_context::CheckpointId,
-        ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
-            let m = self.manifest.lock().unwrap().clone();
-            Box::pin(async move { m.ok_or(ContextError::NotFound) })
-        }
-        fn list_checkpoints(
-            &self,
-            _session: SessionId,
-        ) -> PFut<'_, Result<Vec<houyicoder_context::CheckpointId>, ContextError>> {
-            Box::pin(async move { Ok(Vec::new()) })
-        }
-        fn backend(&self) -> &dyn ContextBackend {
-            unreachable!("tool tests do not touch the backend")
-        }
-    }
-
-    fn make_event(kind: SessionEvent) -> SessionLogEntry {
-        SessionLogEntry {
-            id: EventId::new(),
-            session: SessionId::new(),
-            ts: 0,
-            prev_hash: None,
-            event: kind,
-        }
-    }
-
-    fn make_session() -> SessionId {
-        SessionId::new()
-    }
-
-    /// This log does not override last_trajectory_id, so the call runs the
-    /// port default body and answers the snapshot tail.
-    #[test]
-    fn test_port_default_last_id() {
-        let log = InMemoryLog::new();
-        let s = make_session();
-        assert_eq!(log.last_trajectory_id(s), None, "no events, no id");
-        log.push(make_event(SessionEvent::UserInput { text: "a".into() }));
-        let e2 = make_event(SessionEvent::Reasoning { text: "b".into() });
-        let last = e2.id;
-        log.push(e2);
-        assert_eq!(
-            log.last_trajectory_id(s),
-            Some(last),
-            "the default answers the snapshot tail"
-        );
-    }
-
-    fn make_manifest_summarized(ids: Vec<EventId>) -> CheckpointManifest {
-        let anchor = ids.first().copied().unwrap_or_else(EventId::new);
-        let last = ids.last().copied().unwrap_or_else(EventId::new);
-        CheckpointManifest {
-            id: houyicoder_context::CheckpointId::new(),
-            session: SessionId::new(),
-            last_event: last,
-            summary: Some("folded".to_string()),
-            plan: vec![TurnGroup {
-                turn_id: anchor,
-                disposition: Disposition::Summarized,
-                event_ids: ids,
-            }],
-            ts: 0,
-        }
-    }
-
-    /// Build the tool + a ctx bound to a session, with an event log preloaded.
-    fn harness(
-        events: Vec<SessionLogEntry>,
-        manifest: Option<CheckpointManifest>,
-    ) -> (ConversationSearchTool, ToolCtx, Arc<AtomicU32>) {
-        let log = Arc::new(InMemoryLog::new());
-        for ev in events {
-            log.push(ev);
-        }
-        if let Some(m) = manifest {
-            log.set_manifest(m);
-        }
-        let meter = Arc::new(AtomicU32::new(0));
-        let tool = ConversationSearchTool::new(log, Arc::clone(&meter));
-        let ctx = ToolCtx::new("call_1").with_session(make_session());
-        (tool, ctx, meter)
-    }
-
-    #[tokio::test]
-    async fn test_recalls_compacted_detail_keyword() {
-        // A folded UserInput + a verbatim AssistantMessage. Searching the
-        // folded keyword lands a match in the Summarized span — the recall
-        // meter bumps, proving the tool recalls compacted detail.
-        let folded = make_event(SessionEvent::UserInput {
-            text: "remember the migration plan".to_string(),
-        });
-        let folded_id = folded.id;
-        let verbatim = make_event(SessionEvent::AssistantMessage {
-            text: "ok".to_string(),
-            thinking: None,
-        });
-        let manifest = make_manifest_summarized(vec![folded_id]);
-        let (tool, ctx, meter) = harness(vec![folded, verbatim], Some(manifest));
-        let out = tool
-            .execute(ctx, json!({"query": "migration"}))
-            .await
-            .unwrap();
-        let text = out.to_string();
-        assert!(text.contains("migration plan"), "snippet present: {text}");
-        assert!(
-            text.contains("1 in compacted detail"),
-            "folded-match count shown: {text}"
-        );
-        assert_eq!(meter.load(Ordering::Relaxed), 1, "recall meter bumped");
-    }
-
-    #[tokio::test]
-    async fn test_no_session_returns_error() {
-        // Without a session bound, the tool cannot replay — fail with a
-        // clear error rather than a panic.
-        let log = Arc::new(InMemoryLog::new());
-        let meter = Arc::new(AtomicU32::new(0));
-        let tool = ConversationSearchTool::new(log, meter);
-        let ctx = ToolCtx::new("call_1"); // no with_session
-        let err = tool.execute(ctx, json!({"query": "x"})).await.unwrap_err();
-        match err {
-            ToolError::Failed(_) => {}
-            other => panic!("expected Failed, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_search_filters_turn_range() {
-        // A turns range returns only events in [start, end); events outside
-        // the range are absent from the output.
-        let e0 = make_event(SessionEvent::UserInput {
-            text: "zero".to_string(),
-        });
-        let e1 = make_event(SessionEvent::UserInput {
-            text: "one".to_string(),
-        });
-        let e2 = make_event(SessionEvent::UserInput {
-            text: "two".to_string(),
-        });
-        let e3 = make_event(SessionEvent::UserInput {
-            text: "three".to_string(),
-        });
-        let (tool, ctx, _meter) = harness(vec![e0, e1, e2, e3], None);
-        let out = tool
-            .execute(ctx, json!({"turns": {"start": 1, "end": 3}}))
-            .await
-            .unwrap();
-        let text = out.to_string();
-        assert!(text.contains("one"), "range includes one: {text}");
-        assert!(text.contains("two"), "range includes two: {text}");
-        assert!(!text.contains("zero"), "range excludes zero: {text}");
-        assert!(!text.contains("three"), "range excludes three: {text}");
-    }
-
-    #[tokio::test]
-    async fn test_query_reports_no_results() {
-        let e = make_event(SessionEvent::UserInput {
-            text: "hello".to_string(),
-        });
-        let (tool, ctx, _meter) = harness(vec![e], None);
-        let out = tool
-            .execute(ctx, json!({"query": "nonexistent"}))
-            .await
-            .unwrap();
-        assert!(out.to_string().contains("No results found"));
-    }
-
-    #[tokio::test]
-    async fn test_stats_reports_counts() {
-        let e0 = make_event(SessionEvent::UserInput {
-            text: "a".to_string(),
-        });
-        let e1 = make_event(SessionEvent::Summary {
-            text: "sum".to_string(),
-        });
-        let folded_id = e0.id;
-        let manifest = make_manifest_summarized(vec![folded_id]);
-        let (tool, ctx, _meter) = harness(vec![e0, e1], Some(manifest));
-        let out = tool.execute(ctx, json!({"stats": true})).await.unwrap();
-        let text = out.to_string();
-        assert!(text.contains("Total events: 2"), "{text}");
-        assert!(text.contains("Folded (compacted) events: 1"), "{text}");
-        assert!(text.contains("Has summary: true"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn test_verbatim_match_skips_meter() {
-        // A match in the verbatim (non-folded) span is not a recall of
-        // compacted detail — the meter must stay zero.
-        let folded = make_event(SessionEvent::UserInput {
-            text: "folded".to_string(),
-        });
-        let folded_id = folded.id;
-        let verbatim = make_event(SessionEvent::AssistantMessage {
-            text: "verbatim gem".to_string(),
-            thinking: None,
-        });
-        let manifest = make_manifest_summarized(vec![folded_id]);
-        let (tool, ctx, meter) = harness(vec![folded, verbatim], Some(manifest));
-        let out = tool.execute(ctx, json!({"query": "gem"})).await.unwrap();
-        assert!(out.to_string().contains("verbatim gem"));
-        assert_eq!(
-            meter.load(Ordering::Relaxed),
-            0,
-            "verbatim match not a recall"
-        );
-    }
-
-    /// An Unknown kind (a future-binary event type) carries no searchable
-    /// text, so event_search_text returns None rather than indexing garbage.
-    #[test]
-    fn test_search_text_unknown_none() {
-        let e = make_event(SessionEvent::Unknown);
-        assert!(event_search_text(&e).is_none());
-    }
-}
+#[path = "conversation_search_tests.rs"]
+mod tests;
