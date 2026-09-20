@@ -63,6 +63,11 @@ pub struct TodoState {
     pub(crate) expanded: bool,
     pub(crate) completion_at: HashMap<String, Instant>,
     cursor: usize,
+    /// True while restored history (a resume replay or a rewind) is being
+    /// re-fed into the accumulator. Every appended frame during that phase is
+    /// a snapshot restore, not a live transition, so no completion timestamp
+    /// records and an all-completed list clears on the spot.
+    replaying_history: bool,
 }
 
 impl TodoState {
@@ -92,15 +97,16 @@ impl TodoState {
         let Some(mut items) = latest else {
             return;
         };
-        let initial_projection = self.items.is_empty();
         if !run_active {
             pause_inactive(&mut items);
         }
-        // Cold is inferred, not identified: an empty view while the run is
-        // inactive, as after a resume replay or a rewind. It restores a
-        // snapshot rather than transitioning live, so it records no
-        // completion timestamps.
-        let cold_projection = initial_projection && !run_active;
+        // Cold is identified, not inferred: the App marks the replay phase
+        // while restored history or a rewind is re-fed into the accumulator.
+        // Such frames restore a snapshot rather than transitioning live, so
+        // they record no completion timestamps and an all-completed list
+        // clears on the spot. The phase persists across every replayed frame,
+        // so a list that finishes on a later frame still reads as cold.
+        let cold_projection = self.replaying_history;
         if cold_projection
             && !items.is_empty()
             && items
@@ -109,6 +115,11 @@ impl TodoState {
         {
             // A restored all-completed list is finished history; clear it
             // on the spot instead of installing items for the next prune.
+            // A late replayed frame must also drop the partial list an
+            // earlier frame installed, so clear rather than merely return.
+            self.items.clear();
+            self.completion_at.clear();
+            self.expanded = false;
             return;
         }
         if !cold_projection {
@@ -177,6 +188,13 @@ impl TodoState {
     /// Reset checklist content, expansion, timestamps, and frame cursor.
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// Mark the replay phase as begun or ended. The App sets this while
+    /// restored history or a rewind is re-fed into the accumulator and clears
+    /// it when a live run starts.
+    pub(crate) fn set_replaying_history(&mut self, replaying_history: bool) {
+        self.replaying_history = replaying_history;
     }
 
     #[cfg(test)]
@@ -373,11 +391,54 @@ mod tests {
         })));
         for _ in 0..3 {
             let mut state = TodoState::default();
+            state.set_replaying_history(true);
             state.update(std::slice::from_ref(&frame), false);
             assert!(state.items.is_empty());
             assert!(state.completion_at.is_empty());
             assert!(!state.prune(Instant::now()), "nothing left to prune");
         }
+    }
+
+    /// A resume replays the transcript across several frames, not one. The
+    /// all-completed list that lands on a later replayed frame still reads as
+    /// cold: the partial list an earlier frame installed clears instead of
+    /// flashing the finished list with a fresh timestamp.
+    #[test]
+    fn test_replay_later_frame_cold() {
+        let open = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [
+                {"content": "one", "status": "in_progress"},
+                {"content": "two", "status": "pending"}
+            ]
+        })));
+        let partial = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [
+                {"content": "one", "status": "completed"},
+                {"content": "two", "status": "pending"}
+            ]
+        })));
+        let finished = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [
+                {"content": "one", "status": "completed"},
+                {"content": "two", "status": "completed"}
+            ]
+        })));
+        let mut frames: Vec<TranscriptFrame> = Vec::new();
+        let mut state = TodoState::default();
+        state.set_replaying_history(true);
+
+        frames.push(open);
+        state.update(&frames, false);
+        assert_eq!(state.items.len(), 2);
+
+        frames.push(partial);
+        state.update(&frames, false);
+        assert_eq!(state.items.len(), 2);
+
+        frames.push(finished);
+        state.update(&frames, false);
+        assert!(state.items.is_empty());
+        assert!(state.completion_at.is_empty());
     }
 
     /// A rewind truncates the transcript below the cursor. The rollback
@@ -393,6 +454,7 @@ mod tests {
         assert!(state.completion_at.contains_key("done"));
 
         state.set_cursor(4);
+        state.set_replaying_history(true);
         state.update(std::slice::from_ref(&frame), false);
         assert!(state.items.is_empty());
         assert!(state.completion_at.is_empty());
@@ -423,6 +485,7 @@ mod tests {
             ]
         })));
         let mut state = TodoState::default();
+        state.set_replaying_history(true);
         state.update(std::slice::from_ref(&frame), false);
 
         assert_eq!(state.items.len(), 2);
@@ -442,8 +505,10 @@ mod tests {
             ]
         })));
         let mut state = TodoState::default();
+        state.set_replaying_history(true);
         state.update(std::slice::from_ref(&mixed), false);
         assert!(state.completion_at.is_empty());
+        state.set_replaying_history(false);
 
         let finished = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
             "todos": [

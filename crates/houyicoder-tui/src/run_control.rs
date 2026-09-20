@@ -168,6 +168,7 @@ impl App {
         }
         // Only errors matching this request terminate the active run.
         self.run_state.start(req_id, Instant::now());
+        self.todos.set_replaying_history(false);
         // Preserve the submitted input in case interruption restores the turn.
         self.last_run_input = Some(input.clone());
         // A fresh submission answers the previous turn's interruption, so its
@@ -625,6 +626,7 @@ impl App {
             return;
         };
         self.frames.truncate(start);
+        self.todos.set_replaying_history(true);
         self.rebuild_transcript();
     }
 }

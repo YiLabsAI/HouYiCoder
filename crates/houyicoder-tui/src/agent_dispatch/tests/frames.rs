@@ -141,6 +141,7 @@ fn test_replayed_done_clears() {
     for _ in 0..3 {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
+        app.todos.set_replaying_history(true);
         app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
             ("old work", "completed"),
             ("current", "completed"),
@@ -157,12 +158,46 @@ fn test_replayed_done_clears() {
     }
 }
 
+/// The regression the one-shot cold proxy missed: a replayed transcript that
+/// reaches all-completed on a LATER frame (after a partial list already
+/// installed) still clears on the spot, so the rendered footer never flashes
+/// the finished list. Each frame arrives as its own update, mirroring a
+/// resume re-feeding history frame by frame.
+#[test]
+fn test_replayed_later_frame_clears() {
+    let mut app = crate::composition::app();
+    app.screen = crate::state::Screen::Working;
+    app.todos.set_replaying_history(true);
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
+        ("one", "in_progress"),
+        ("two", "pending"),
+    ]))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
+        ("one", "completed"),
+        ("two", "pending"),
+    ]))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
+        ("one", "completed"),
+        ("two", "completed"),
+    ]))));
+    app.start_run_for_test(1);
+    app.handle_agent_message(done_msg());
+    assert!(app.todos.items.is_empty());
+    assert!(app.todos.completion_at.is_empty());
+    let out = crate::test_harness::render_text(&app, 100, 24);
+    assert!(
+        !out.contains("one") && !out.contains("two"),
+        "historic tasks must not flash after a multi-frame resume: {out}"
+    );
+}
+
 /// The other half of the resume matrix: a replayed list with open work
 /// still renders, so clearing targets finished history only.
 #[test]
 fn test_replayed_open_renders() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
+    app.todos.set_replaying_history(true);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("old work", "completed"),
         ("open task", "pending"),

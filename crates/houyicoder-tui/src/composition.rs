@@ -285,6 +285,7 @@ impl App {
             }
         }
         *self = build_app(bundle);
+        self.todos.set_replaying_history(true);
         // A swap is always initiated from the working screen (the user is on
         // the transcript when they /resume), so force Working regardless of the
         // bundle's skip_login. This nails the skip_login coupling: a bundle
