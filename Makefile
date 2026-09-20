@@ -134,6 +134,12 @@ check-full: check
 # Real-provider tests, expected-failure reproductions, and benchmarks remain
 # explicit so verification never consumes network credentials or model tokens.
 NEXTEST_VERIFY_FILTER := -E 'not(test(/bug_repro/)) and not(binary(/live_agent/)) and not(binary(/openai_compat_real/)) and not(binary(/mcp_live_server/)) and not(binary(/reward_bench/)) and not(test(/frame_timing_benchmark/))'
+# Per-crate discovery: nextest's list phase spawns every test binary in
+# parallel and -j does not gate it, so a workspace-wide run deadlocks in
+# macOS 26.6.2 _dyld_start. Running -p per crate bounds each discovery
+# wave to that crate's binaries. Live-provider crates are excluded (their
+# ignored tests are filtered out anyway).
+NEXTEST_VERIFY_CRATES := houyicoder-tui houyicoder-service houyicoder-sandbox houyicoder-permission houyicoder-cli houyicoder-core
 # Parallel-safety: fresh_temp_dir retries on AlreadyExists (nextest gives each
 # test its own process, so the per-process SEQ counter restarts at 0; an
 # OS-recycled pid could mint a path matching a leftover dir). No --retries
@@ -144,9 +150,12 @@ verify: check-full
 	@echo "▶ Building the houyi bin (the PTY tests spawn it via a hardcoded path;"
 	@echo "  cargo test does not build the plain bin target, only the test binaries)."
 	@$(CARGO) build --bin houyi
-	@echo "▶ Running deterministic ignored suites in parallel."
-	@start=$$(date +%s); \
-	$(CARGO) nextest run --workspace --run-ignored only -j 3 $(NEXTEST_VERIFY_FILTER); status=$$?; \
+	@echo "▶ Running ignored suites per crate (package-group discovery)."
+	@start=$$(date +%s); status=0; \
+	for crate in $(NEXTEST_VERIFY_CRATES); do \
+		echo "  $$crate"; \
+		$(CARGO) nextest run -p $$crate --run-ignored only -j 3 $(NEXTEST_VERIFY_FILTER) || status=$$?; \
+	done; \
 	end=$$(date +%s); total=$$((end - start)); \
 	warn_budget=$${VERIFY_BUDGET_WARN:-60}; \
 	if [ $$total -gt $$warn_budget ]; then \
