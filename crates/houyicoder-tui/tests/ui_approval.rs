@@ -162,20 +162,18 @@ fn test_deny_bash_clears_ends() {
         "the approval card should render:\n{}",
         s.output()
     );
-    // Esc rejects the current approval (handle_approval Esc arm). The bare
-    // 0x1b needs a gap so crossterm resolves it as Esc, not a sequence start.
+    // Esc rejects the current approval. The bare 0x1b needs a gap so crossterm
+    // resolves it as Esc, not a sequence start. Clear before the deny so the
+    // post-deny render lands fresh; deny does not cycle mode, so the status
+    // label stays manual.
+    s.clear_output();
     s.send_key(&Key::Esc);
     std::thread::sleep(std::time::Duration::from_millis(200));
-    // The reject verdict ships; the run resumes + ends on "done".
     assert!(
         s.wait_for("done", RENDER_TIMEOUT),
         "denying should still let the run end:\n{}",
         s.output()
     );
-    // Wipe history so the absence check reads the CURRENT render: the card
-    // must be gone (no stranded "1. Yes") after the run ended.
-    s.clear_output();
-    s.wait_for("auto mode on", RENDER_TIMEOUT);
     assert!(
         !s.output().contains("1. Yes"),
         "the approval card should clear after denying (no stranded card):\n{}",
