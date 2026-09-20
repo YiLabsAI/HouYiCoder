@@ -150,6 +150,8 @@ verify: check-full
 	@echo "▶ Building the houyi bin (the PTY tests spawn it via a hardcoded path;"
 	@echo "  cargo test does not build the plain bin target, only the test binaries)."
 	@$(CARGO) build --bin houyi
+	@echo "▶ Building all test binaries once (per-crate nextest reuses them)."
+	@$(CARGO) build --tests --workspace
 	@echo "▶ Running ignored suites per crate (package-group discovery)."
 	@start=$$(date +%s); status=0; \
 	for crate in $(NEXTEST_VERIFY_CRATES); do \
