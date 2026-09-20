@@ -1,7 +1,7 @@
 //! Integration test: the agent loop wires BashTool + a real macOS Seatbelt
 //! sandbox + HITL approval end to end. Exercises Runner run/resume against
 //! MacSeatbeltSession (real sandbox-exec), so it lives outside the unit suite.
-//! Run with: make test-integration. Mac-only.
+//! Run with: make test integration. Mac-only.
 
 #![cfg(target_os = "macos")]
 

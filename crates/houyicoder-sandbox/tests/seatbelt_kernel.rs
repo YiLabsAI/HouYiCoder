@@ -21,7 +21,7 @@
 //!
 //! Human-readable report, useful when debugging a profile change, run from
 //! this crate's directory:
-//!   cargo test --test seatbelt_kernel -- --nocapture
+//!   cargo test --test sandbox_all seatbelt_kernel:: -- --nocapture
 //! Set HOUYI_PROFILE_DUMP=1 to also print the full rendered profile.
 
 // These probes must invoke sandbox-exec directly: the thing under test IS the

@@ -1,5 +1,5 @@
 //! Integration tests for BashTool/WriteTool/ReadTool against a real macOS
-//! Seatbelt sandbox. Run with: make test-integration. Mac-only.
+//! Seatbelt sandbox. Run with: make test integration. Mac-only.
 
 #![cfg(target_os = "macos")]
 

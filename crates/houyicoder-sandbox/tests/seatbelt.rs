@@ -1,6 +1,6 @@
 //! Integration tests for the macOS Seatbelt sandbox backend. These run real
 //! sandbox-exec commands, so they live outside the unit suite and are gated
-//! to macOS. Run with: make test-integration.
+//! to macOS. Run with: make test integration.
 
 #![cfg(target_os = "macos")]
 

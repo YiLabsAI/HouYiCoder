@@ -3,6 +3,15 @@ name = "houyicoder-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
+
+[[test]]
+name = "core_all"
+path = "tests/core_all.rs"
+
+[[test]]
+name = "reward_baseline"
+path = "tests/reward_baseline.rs"
 
 [lib]
 path = "src/lib.rs"

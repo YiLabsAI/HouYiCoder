@@ -128,7 +128,13 @@ def main() -> int:
         (line for line in makefile.splitlines() if line.startswith("NEXTEST_VERIFY_FILTER")),
         "",
     )
-    for binary in ("live_agent", "openai_compat_real", "mcp_live_server", "reward_bench"):
+    for binary in (
+        "live_agent",
+        "openai_compat_real",
+        "mcp_live_server",
+        "reward_bench",
+        "reward_baseline",
+    ):
         if f"not(binary(/{binary}/))" not in verify_filter:
             failures.append(f"verify must exclude {binary}")
 
