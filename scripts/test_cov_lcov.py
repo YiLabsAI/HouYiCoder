@@ -16,6 +16,10 @@ reject case carries a must-pass counterpart:
   - missing lcov file -> exit 1 + diagnostic
   - empty/unparseable lcov -> exit 1 + diagnostic
 
+It also pins the report name, the cache-dir override, and the shared build
+env that the two gates ride on, so a drift that breaks either gate's
+writer/reader agreement is caught rather than surfacing as a broken gate.
+
 The clean case deliberately sits on the last line of the file rather than
 somewhere in the middle. An off-by-one is the likeliest way this detector
 breaks, and a middle line cannot see one: an in-range assertion far from the
@@ -28,11 +32,13 @@ cov-lcov-tests). Exit 0 = pass, 1 = fail.
 """
 import contextlib
 import io
+import os
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cov_lcov  # noqa: E402
 from cov_lcov import (  # noqa: E402
     carries_verdict,
     check,
@@ -139,6 +145,54 @@ def main() -> int:
     if normalize("abs/path/to/crates/foo/lib.rs") != "crates/foo/lib.rs":
         failures.append("normalize did not strip to crates/ prefix")
 
+    # 7. the report name carries the worktree that wrote it, and is stable for
+    #    one worktree. The name is per writer -- a report that arrives from a
+    #    neighbour, or whose cache dir was pointed here by hand, has a different
+    #    name and cannot pass as this one's line table.
+    path = cov_lcov.lcov_path("/tmp/cov")
+    if not path.startswith("/tmp/cov/houyi-cov-") or not path.endswith(".lcov"):
+        failures.append(f"lcov_path: report name not in its cov dir or not lcov: {path}")
+    if Path(cov_lcov._worktree_root()).name not in path:
+        failures.append(f"lcov_path: report name lost the worktree name: {path}")
+    if cov_lcov.lcov_path("/tmp/cov") != path:
+        failures.append("lcov_path: name not stable for one worktree")
+
+    # 8. a worktree can point its cache dir elsewhere, and the report name
+    #    follows it -- the generator scans that dir for objects, so the override
+    #    has to reach both the target dir and the name.
+    prev = os.environ.get("HOUYICODER_COV_DIR")
+    os.environ["HOUYICODER_COV_DIR"] = "/tmp/private-cov"
+    try:
+        if cov_lcov.cov_target_dir() != "/tmp/private-cov":
+            failures.append("cov_dir override: cov_target_dir ignored HOUYICODER_COV_DIR")
+        if not cov_lcov.lcov_path().startswith("/tmp/private-cov/houyi-cov-"):
+            failures.append("cov_dir override: lcov_path did not follow the override")
+    finally:
+        if prev is None:
+            del os.environ["HOUYICODER_COV_DIR"]
+        else:
+            os.environ["HOUYICODER_COV_DIR"] = prev
+
+    # 9. the shared instrumented-build env pins the cache-key inputs -- target
+    #    dir remap, incremental off, debug info off -- so one gate drifting from
+    #    another lands in the cargo fingerprint and the gates then rebuild each
+    #    other's artifacts. The caller's flags survive and are not doubled when
+    #    the env is reapplied.
+    env = cov_lcov.cov_env("/tmp/covx", {"RUSTFLAGS": "-Cfoo"})
+    if env.get("CARGO_TARGET_DIR") != "/tmp/covx":
+        failures.append("cov_env: CARGO_TARGET_DIR not pinned to the cov dir")
+    if env.get("CARGO_INCREMENTAL") != "0":
+        failures.append("cov_env: CARGO_INCREMENTAL not pinned off")
+    if env.get("CARGO_PROFILE_DEV_DEBUG") != "0":
+        failures.append("cov_env: CARGO_PROFILE_DEV_DEBUG not pinned off")
+    if "--remap-path-prefix=/tmp/covx=/houyi-cov" not in env.get("RUSTFLAGS", ""):
+        failures.append("cov_env: remap-path pin missing from RUSTFLAGS")
+    if "-Cfoo" not in env.get("RUSTFLAGS", ""):
+        failures.append("cov_env: caller flag dropped from RUSTFLAGS")
+    again = cov_lcov.cov_env("/tmp/covx", dict(env))
+    if again.get("RUSTFLAGS") != env.get("RUSTFLAGS"):
+        failures.append("cov_env: reapplying the env doubled a flag")
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)
@@ -150,65 +204,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-def test_lcov_path_carries_worktree() -> None:
-    """The report name identifies the worktree that wrote it. The cache is per
-    worktree, and the name still carries the worktree so a report arriving from
-    elsewhere cannot pass as this one's: a report describes one worktree's
-    sources, so the stale-mapping check refuses a neighbour's line table, which
-    reads as a broken gate rather than as the collision it is."""
-    import cov_lcov
-
-    path = cov_lcov.lcov_path("/tmp/cov")
-    assert path.startswith("/tmp/cov/houyi-cov-"), path
-    assert path.endswith(".lcov"), path
-    root = cov_lcov._worktree_root()
-    assert Path(root).name in path, (root, path)
-    # Two different worktrees resolve to different names, so neither reads the
-    # other's report.
-    other = cov_lcov.lcov_path("/tmp/cov")
-    assert other == path, "stable for one worktree"
-
-
-def test_cov_dir_override() -> None:
-    """A worktree can point its cache dir elsewhere. It has to be able to: the
-    report generator scans the target dir for objects, so objects built
-    elsewhere land in the report with their own line tables and the gate
-    refuses a verdict it cannot draw."""
-    import os
-
-    import cov_lcov
-
-    prev = os.environ.get("HOUYICODER_COV_DIR")
-    os.environ["HOUYICODER_COV_DIR"] = "/tmp/private-cov"
-    try:
-        assert cov_lcov.cov_target_dir() == "/tmp/private-cov"
-        assert cov_lcov.lcov_path().startswith("/tmp/private-cov/houyi-cov-")
-    finally:
-        if prev is None:
-            del os.environ["HOUYICODER_COV_DIR"]
-        else:
-            os.environ["HOUYICODER_COV_DIR"] = prev
-
-
-def test_cov_env_stable_keys() -> None:
-    """The shared instrumented-build env pins the cache-key inputs: the
-    target-dir remap (path-independent rmetas, so a new worktree hits the
-    dependency cache), incremental off (sccache refuses incremental), and
-    debug info off (coverage line tables come from the coverage mapping, not
-    DWARF). One gate drifting from another lands in the cargo fingerprint and
-    the gates then rebuild each other's artifacts on every alternation."""
-    import os
-
-    import cov_lcov
-
-    env = cov_lcov.cov_env("/tmp/covx", {"RUSTFLAGS": "-Cfoo"})
-    assert env["CARGO_TARGET_DIR"] == "/tmp/covx"
-    assert env["CARGO_INCREMENTAL"] == "0"
-    assert env["CARGO_PROFILE_DEV_DEBUG"] == "0"
-    assert "--remap-path-prefix=/tmp/covx=/houyi-cov" in env["RUSTFLAGS"]
-    assert "-Cfoo" in env["RUSTFLAGS"], "caller flags survive"
-    again = cov_lcov.cov_env("/tmp/covx", dict(env))
-    assert again["RUSTFLAGS"] == env["RUSTFLAGS"], "idempotent, no flag doubling"
-    _ = os
