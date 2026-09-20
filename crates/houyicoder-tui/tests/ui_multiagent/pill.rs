@@ -1,3 +1,5 @@
+use std::thread;
+
 use super::*;
 
 /// Teammate-view pill + stay journey: when the user drills into a
@@ -45,7 +47,7 @@ fn test_teammate_pill_pins_view() {
     // completed (non-killed, non-failed) child. Wait past the grace window
     // to prove the stay is not a transient render: the banner is still the
     // active state (Shift+Down exits; Esc is a no-op on a completed child).
-    std::thread::sleep(FLEET_GRACE);
+    thread::sleep(FLEET_GRACE);
     // clear the buffer so the post-exit frame is what we assert on, not the
     // pre-exit banner bytes still in the scrollback.
     s.clear_output();
@@ -211,11 +213,13 @@ fn test_pill_running_to_done() {
         [{"type":"Text","text":"auth in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
-    let mut s = common::pty_session_slow_scripted(2000, script);
+    let mut s = common::pty_session_slow_scripted(120, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    // Running row first (colon-separated type + verb), then the done row.
+    // Running row first (colon-separated type + verb), then the done row. The
+    // stub delay only has to hold the running row long enough to be seen; a
+    // longer window would just idle before the done row lands.
     assert!(s.wait_for_compact("explore:", RENDER_TIMEOUT * 2));
     assert!(
         s.wait_for_compact("explore·done", RENDER_TIMEOUT * 3),

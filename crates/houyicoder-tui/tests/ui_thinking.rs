@@ -1,13 +1,10 @@
-//! Real-binary PTY test for the thinking indicator during a streamed turn.
-//! A scripted response carries a Reasoning item + a guarded bash ToolCall; in
-//! Manual mode the bash ASKs, and raise_agent_approval does NOT clear
-//! live_active/live_reasoning_text (only Done does). The live ∴ Thinking
-//! block was removed (live reasoning does not echo
-//! as a block); the thinking indicator is now the spinner row's
-//! "Thinking" verb. This pins that the block stays gone end-to-end.
+//! Real-binary PTY test for the live thinking block. The script carries a
+//! Reasoning item then a guarded bash ToolCall; in Manual mode the bash ASKs
+//! and the run pauses with live state still set. Live reasoning does not echo
+//! as a block, so the block must stay gone while paused.
 //!
 //! Run via make test ui (builds the bin first) or
-//! cargo test --test ui_thinking -- --ignored after cargo build --bin houyi.
+//! cargo test --test ui_all ui_thinking:: -- --ignored after cargo build --bin houyi.
 
 #![allow(clippy::unwrap_in_result)]
 
@@ -23,9 +20,8 @@ const REASONING_THEN_BASH_SCRIPT: &str = r#"[
 
 /// No live ∴ Thinking block renders during a reasoning turn, through the real
 /// binary. In Manual mode the bash ToolCall raises an approval card; the run
-/// pauses on it with live_active still true (raise_agent_approval does not
-/// clear it). The thinking indicator is the spinner row's "Thinking" verb —
-/// the ∴ block must not surface a ctrl+o hint on every interaction.
+/// pauses on it with live_active still true, so the paused render is where a
+/// live reasoning echo would surface.
 #[test]
 #[ignore]
 fn test_no_live_thinking_block() {
@@ -40,13 +36,15 @@ fn test_no_live_thinking_block() {
     );
     s.send_str("go");
     s.send_key(&Key::Enter);
-    // The reasoning streams into live_reasoning_text, then the bash ToolCall
-    // raises the approval card — the run pauses, live_active stays true. The
-    // spinner carries the "Thinking" verb; the ∴ Thinking block must NOT
-    // render (live reasoning does not echo as a block).
-    s.wait_for("Thinking", RENDER_TIMEOUT);
+    // The approval card is the latch: it renders only once the reasoning has
+    // streamed and the paused ToolCall is waiting on the verdict.
     assert!(
-        !s.output().contains("∴ Thinking"),
+        s.wait_for("1. Yes", RENDER_TIMEOUT),
+        "the guarded bash should raise the approval card:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output_compact().contains("∴Thinking"),
         "the live ∴ Thinking block must not render during the turn:\n{}",
         s.output()
     );
@@ -55,6 +53,13 @@ fn test_no_live_thinking_block() {
     assert!(
         s.wait_for("done", RENDER_TIMEOUT),
         "approving should resume the run + render done:\n{}",
+        s.output()
+    );
+    // The reasoning reached the transcript as a collapsed line, so the
+    // absence above is a real fold rather than an item that never streamed.
+    assert!(
+        s.output_compact().contains("✻Thoughtfor"),
+        "the reasoning should land as a collapsed transcript line:\n{}",
         s.output()
     );
 }

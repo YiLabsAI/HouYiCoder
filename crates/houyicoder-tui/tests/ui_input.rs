@@ -9,19 +9,25 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use crate::common::{
-    Key, RENDER_TIMEOUT, pty_session, pty_session_slow_in_repo, pty_session_slow_scripted,
-};
+use std::env;
+use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{self, Command};
+use std::thread;
+use std::time::Duration;
+
+use crate::common::{
+    Key, RENDER_TIMEOUT, pty_session, pty_session_scripted, pty_session_slow_in_repo,
+    pty_session_slow_scripted,
+};
 
 /// Seed a throwaway git repo for isolated PTY startup (see common/mod.rs).
 #[allow(clippy::disallowed_methods)]
 fn make_temp_repo(slug: u64) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyi-input-repo-{}-{slug}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).expect("mkdir repo");
-    std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
+    let dir = env::temp_dir().join(format!("houyi-input-repo-{}-{slug}", process::id()));
+    drop(fs::remove_dir_all(&dir));
+    fs::create_dir_all(&dir).expect("mkdir repo");
+    fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
     for args in [
         &["init", "-q"][..],
         &["config", "user.email", "t@x"][..],
@@ -40,7 +46,6 @@ fn make_temp_repo(slug: u64) -> PathBuf {
     }
     dir
 }
-use std::time::Duration;
 
 /// Large enough that the stub's first delta lands well after the test's key
 /// sequence, so the run is in-flight with zero streamed content for the whole
@@ -74,7 +79,7 @@ fn test_esc_draft_aborts_kept() {
     s.send_str(UNIQUE_TOKEN);
     // Esc aborts the run; the draft stays in the input box.
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(200));
     assert!(
         s.wait_for("Interrupted", RENDER_TIMEOUT),
         "Esc should abort the in-flight run:\n{}",
@@ -87,7 +92,7 @@ fn test_esc_draft_aborts_kept() {
     // wrongly cleared the draft, Done would restore the origin + surface
     // "input restored", failing this absence check.
     assert!(
-        !s.wait_for_compact("inputrestored", RENDER_TIMEOUT),
+        !s.wait_for_compact("inputrestored", Duration::from_millis(600)),
         "the draft should survive the abort (no origin restore):\n{}",
         s.output()
     );
@@ -106,12 +111,12 @@ fn test_ctrlu_clears_busy_draft() {
     s.send_str(UNIQUE_TOKEN);
     // Ctrl+U clears the draft; the run is not aborted.
     s.send_key(&Key::Ctrl('u'));
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(200));
     s.clear_output();
     // A sentinel char proves the input box is alive + now holds only the new
     // char (the draft was wiped, not the run's input frozen).
     s.send_str("z");
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(200));
     assert!(
         !s.output_compact().contains(UNIQUE_TOKEN),
         "Ctrl+U should clear the draft:\n{}",
@@ -126,7 +131,7 @@ fn test_ctrlu_clears_busy_draft() {
     // (If it did, the clear-draft escape hatch would double as a panic key,
     // defeating the Esc/ctrl-u split this test pins.)
     assert!(
-        !s.wait_for_compact("Interrupted", RENDER_TIMEOUT),
+        !s.wait_for_compact("Interrupted", Duration::from_millis(600)),
         "Ctrl+U should not abort the run:\n{}",
         s.output()
     );
@@ -194,7 +199,7 @@ fn test_cjk_background_clean() {
     let cjk = "\u{4e2d}\u{6587}\u{5bbd}\u{5b57}\u{7b26}\u{6d41}\u{5f0f}\u{5237}\u{65b0}";
     let response = format!("{}{marker}", cjk.repeat(300));
     let script = serde_json::json!([[{"type":"Text", "text": response}]]).to_string();
-    let mut s = pty_session_slow_scripted(1, &script);
+    let mut s = pty_session_scripted(&script);
     s.send_str("\u{8bf7}\u{8fde}\u{7eed}\u{8f93}\u{51fa}\u{5bbd}\u{5b57}\u{7b26}");
     s.send_key(&Key::Enter);
     assert!(
@@ -202,7 +207,7 @@ fn test_cjk_background_clean() {
         "scripted CJK response should finish:\n{}",
         s.output()
     );
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(200));
     let screen = s.screen();
     let (rows, cols) = screen.size();
     let residual: Vec<(u16, u16)> = (0..rows)
@@ -227,7 +232,7 @@ fn test_native_cursor_hidden() {
     let mut s = pty_session();
     s.clear_output();
     s.send_str("x");
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(200));
     assert!(
         !s.output().contains("\u{1b}[?25h"),
         "redraw must not show the hardware cursor:\n{}",
@@ -244,7 +249,7 @@ fn test_esc_keeps_input() {
     s.send_str(UNIQUE_TOKEN);
     s.clear_output();
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(200));
     s.send_key(&Key::Enter);
     assert!(
         s.wait_for(UNIQUE_TOKEN, RENDER_TIMEOUT),

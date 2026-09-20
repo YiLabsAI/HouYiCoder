@@ -592,6 +592,22 @@ pub fn fresh_temp_dir(slug: &str) -> PathBuf {
     }
 }
 
+/// Poll a file until its contents carry the marker. The durable-write latch
+/// for tests whose next step reads what the server flushed: a fixed sleep
+/// either races the flush or idles after it already landed.
+pub fn wait_file_contains(path: &Path, marker: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if fs::read_to_string(path).is_ok_and(|body| body.contains(marker)) {
+            return true;
+        }
+        if Instant::now() > deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Seed a throwaway git repo the binary can run in (a workspace manifest so
 /// resolve_project_workspace pins the dir). Isolates the project-scope
 /// memory root from the developer's real workspace so list scans are not

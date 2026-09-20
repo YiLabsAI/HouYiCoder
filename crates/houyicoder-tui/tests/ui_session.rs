@@ -11,8 +11,17 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session_scripted};
+use std::env;
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
 use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
+
+use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session_scripted};
 
 /// A single-response script: one call whose only item is a plain-text reply,
 /// so the run completes in one step (no tool call, no approval pause). The
@@ -54,7 +63,7 @@ fn test_turn_writes_durable_log() {
         )
     });
     let log = sid_dir.join("log.jsonl");
-    let body = std::fs::read_to_string(&log).unwrap();
+    let body = fs::read_to_string(&log).unwrap();
     assert!(!body.is_empty(), "session log empty: {log:?}");
     // The log is one JSON object per durable line; the assistant reply text
     // is the canonical signal the turn landed. The exact field shape is
@@ -67,7 +76,7 @@ fn test_turn_writes_durable_log() {
     // The first durable append materializes the descriptor used by resume
     // and status paths.
     let descriptor_path = sid_dir.join("session.json");
-    let descriptor = std::fs::read_to_string(&descriptor_path).unwrap();
+    let descriptor = fs::read_to_string(&descriptor_path).unwrap();
     assert!(
         !descriptor.is_empty(),
         "session.json empty: {descriptor_path:?}"
@@ -89,14 +98,10 @@ fn test_turn_writes_durable_log() {
 /// files under it. Each name is checked with is_file, so a directory of
 /// that name does not satisfy it. None on timeout, so the caller attaches
 /// the PTY output to the failure the way the wait_for helpers do.
-fn wait_for_session_files(
-    root: &std::path::Path,
-    names: &[&str],
-    timeout: std::time::Duration,
-) -> Option<std::path::PathBuf> {
-    let deadline = std::time::Instant::now() + timeout;
+fn wait_for_session_files(root: &Path, names: &[&str], timeout: Duration) -> Option<PathBuf> {
+    let deadline = Instant::now() + timeout;
     loop {
-        let found = std::fs::read_dir(root)
+        let found = fs::read_dir(root)
             .into_iter()
             .flatten()
             .filter_map(Result::ok)
@@ -105,10 +110,10 @@ fn wait_for_session_files(
         if found.is_some() {
             return found;
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             return None;
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -116,20 +121,16 @@ fn wait_for_session_files(
 /// the test waits on is a durable line landing on disk -- not a guessed delay
 /// (a fixed sleep races the flush under load, and a partial log later reads
 /// as if another session wrote to it). Returns as soon as the marker lands.
-fn wait_for_log_contains(
-    path: &std::path::Path,
-    marker: &str,
-    timeout: std::time::Duration,
-) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    while std::time::Instant::now() < deadline {
-        if std::fs::read_to_string(path)
+fn wait_for_log_contains(path: &Path, marker: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if fs::read_to_string(path)
             .map(|s| s.contains(marker))
             .unwrap_or(false)
         {
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(20));
     }
     false
 }
@@ -141,7 +142,7 @@ fn wait_for_log_contains(
 /// verify marks it Unverified but the durable rebuild proceeds (the new
 /// session's chain is internally self-consistent), proving the tolerant
 /// degrade path the design calls for.
-fn write_resume_fixture() -> std::path::PathBuf {
+fn write_resume_fixture() -> PathBuf {
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA"; // legacy ULID (pre-change)
     let sid = SessionId::from_display_string(legacy_sid).expect("legacy ULID parses");
     let mk = |kind: SessionEvent| SessionLogEntry {
@@ -168,17 +169,17 @@ fn write_resume_fixture() -> std::path::PathBuf {
         "model": "stub-resume-model",
         "trajectory": events,
     });
-    let dir = std::env::temp_dir().join(format!(
+    let dir = env::temp_dir().join(format!(
         "houyi-resume-fixture-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::create_dir_all(&dir).expect("mkdir fixture dir");
+    fs::create_dir_all(&dir).expect("mkdir fixture dir");
     let path = dir.join("export.json");
-    std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).expect("write fixture");
+    fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).expect("write fixture");
     path
 }
 
@@ -224,13 +225,13 @@ fn test_resume_export_persists_history() {
     // user prompt + assistant reply from the fixture), proving seed ->
     // disk. The new sid dir is the only one under the isolated sessions root.
     let root = s.sessions_dir();
-    let log = std::fs::read_dir(root)
+    let log = fs::read_dir(root)
         .unwrap_or_else(|e| panic!("read sessions root {root:?}: {e}"))
         .filter_map(Result::ok)
         .map(|e| e.path().join("log.jsonl"))
         .find(|p| p.exists())
         .unwrap_or_else(|| panic!("no session log under {root:?}:\n{}", s.output()));
-    let body = std::fs::read_to_string(&log).unwrap();
+    let body = fs::read_to_string(&log).unwrap();
     assert!(
         body.contains("resumed hello from export"),
         "seeded user prompt should be in the log:\n{body}"
@@ -246,15 +247,20 @@ fn test_resume_export_persists_history() {
     let seeded_len = body.lines().count();
     s.send_str("continue");
     s.send_key(&Key::Enter);
-    // The stub provider replies (no API key); wait for the turn to land.
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    let body2 = std::fs::read_to_string(&log).unwrap();
+    // The turn appends the user message first, so waiting for that line is the
+    // durable latch for the append.
+    assert!(
+        common::wait_file_contains(&log, "continue", RENDER_TIMEOUT),
+        "the continued turn should land in the resumed log:\n{}",
+        s.output_plain()
+    );
+    let body2 = fs::read_to_string(&log).unwrap();
     assert!(
         body2.lines().count() > seeded_len,
         "a continued turn should append to the resumed log:\n{body2}"
     );
 
-    drop(std::fs::remove_dir_all(
+    drop(fs::remove_dir_all(
         fixture.parent().expect("fixture has a parent dir"),
     ));
 }
@@ -292,7 +298,7 @@ fn test_resume_missing_reports_error() {
 /// --resume <sid> or the /resume picker can re-open it. The log carries one
 /// UserInput event (a genesis line with prev_hash null, so the chain
 /// verifies); the descriptor carries the model the resume path should restore.
-fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prompt: &str) {
+fn seed_session_on_disk(root: &Path, sid_str: &str, model: &str, prompt: &str) {
     let sid = SessionId::from_display_string(sid_str).expect("sid parses");
     let event = SessionLogEntry {
         id: EventId::new(),
@@ -305,8 +311,8 @@ fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prom
     };
     let line = serde_json::to_string(&event).expect("serialize event");
     let dir = root.join(sid_str);
-    std::fs::create_dir_all(&dir).expect("mkdir session dir");
-    std::fs::write(dir.join("log.jsonl"), format!("{line}\n")).expect("write log");
+    fs::create_dir_all(&dir).expect("mkdir session dir");
+    fs::write(dir.join("log.jsonl"), format!("{line}\n")).expect("write log");
     let descriptor = serde_json::json!({
         "name": null,
         "name_source": "auto",
@@ -316,7 +322,7 @@ fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prom
         "version": "test",
         "created_at": 1000,
     });
-    std::fs::write(
+    fs::write(
         dir.join("session.json"),
         serde_json::to_string_pretty(&descriptor).expect("serialize descriptor"),
     )
@@ -374,13 +380,17 @@ fn test_resume_picker_swaps_process() {
     );
     // Drive a turn: the appended events must land in A's log, not B's.
     let log_a = sessions_dir.join(sid_a).join("log.jsonl");
-    let before = std::fs::read_to_string(&log_a).unwrap_or_default();
+    let before = fs::read_to_string(&log_a).unwrap_or_default();
     let before_lines = before.lines().count();
     s.send_str("after switch");
     s.send_key(&Key::Enter);
-    // The stub provider replies; wait for the turn text to land on disk.
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    let after = std::fs::read_to_string(&log_a).unwrap_or_default();
+    // The appended turn in A's log is the latch; the swap must not redirect it.
+    assert!(
+        common::wait_file_contains(&log_a, "after switch", RENDER_TIMEOUT),
+        "the turn should land in session A's log:\n{}",
+        s.output_plain()
+    );
+    let after = fs::read_to_string(&log_a).unwrap_or_default();
     assert!(
         after.lines().count() > before_lines,
         "in-process swap should append to session A's log:\nbefore({before_lines}):\n{before}\nafter:\n{after}"
@@ -441,8 +451,8 @@ fn test_resume_lock_rejects_second() {
 
 /// List the session-id dirs (each a sid directory) under a sessions root.
 /// Files (the export json, lock files) are filtered out.
-fn sid_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    std::fs::read_dir(root)
+fn sid_dirs(root: &Path) -> Vec<PathBuf> {
+    fs::read_dir(root)
         .unwrap_or_else(|e| panic!("read sessions root {root:?}: {e}"))
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -557,8 +567,8 @@ fn test_resume_export_live_session() {
         .unwrap_or_else(|| panic!("B sid (new, != A) missing: {sids:?}"));
 
     // B's log carries A's exported history (the turn A drove before export).
-    let log_b = std::fs::read_to_string(sid_b.join("log.jsonl"))
-        .unwrap_or_else(|e| panic!("read B log: {e}"));
+    let log_b =
+        fs::read_to_string(sid_b.join("log.jsonl")).unwrap_or_else(|e| panic!("read B log: {e}"));
     assert!(
         log_b.contains("hello from A"),
         "B should be seeded with A's exported history:\n{log_b}"
@@ -566,7 +576,7 @@ fn test_resume_export_live_session() {
 
     // A's log line count before B drives a turn (log_a_path set above, after
     // A's reply landed durably -- the full turn is on disk here).
-    let a_before = std::fs::read_to_string(&log_a_path)
+    let a_before = fs::read_to_string(&log_a_path)
         .unwrap_or_else(|e| panic!("read A log: {e}"))
         .lines()
         .count();
@@ -587,17 +597,14 @@ fn test_resume_export_live_session() {
         "B's user input should land durably in B's log:\n{}",
         b.output()
     );
-    let log_b_after = std::fs::read_to_string(&log_b_path).unwrap();
+    let log_b_after = fs::read_to_string(&log_b_path).unwrap();
     assert!(
         log_b_after.contains("from B"),
         "B's turn should land in B's log:\n{log_b_after}"
     );
 
     // A's log untouched by B's fork writes (no double-write to the source).
-    let a_after = std::fs::read_to_string(&log_a_path)
-        .unwrap()
-        .lines()
-        .count();
+    let a_after = fs::read_to_string(&log_a_path).unwrap().lines().count();
     assert_eq!(
         a_after, a_before,
         "A's log must be unchanged by B's fork writes: before={a_before} after={a_after}"
@@ -741,12 +748,33 @@ fn test_fork_keeps_source_untouched() {
     // A continued turn must NOT append to A's log (the source is untouched);
     // it lands in the new sid's log. Count A's lines before + after.
     let log_a = sessions_dir.join(sid_a).join("log.jsonl");
-    let before = std::fs::read_to_string(&log_a).unwrap_or_default();
+    let before = fs::read_to_string(&log_a).unwrap_or_default();
     let before_lines = before.lines().count();
     s.send_str("after fork");
     s.send_key(&Key::Enter);
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    let after = std::fs::read_to_string(&log_a).unwrap_or_default();
+    // The fork's turn lands in its own sid's log, so poll for that instead of
+    // sleeping, then assert the source log is untouched.
+    let deadline = Instant::now() + RENDER_TIMEOUT;
+    let landed = loop {
+        let hit = common::sid_dirs(&sessions_dir).into_iter().any(|dir| {
+            dir.file_name() != Some(OsStr::new(sid_a))
+                && fs::read_to_string(dir.join("log.jsonl"))
+                    .is_ok_and(|body| body.contains("after fork"))
+        });
+        if hit {
+            break true;
+        }
+        if Instant::now() > deadline {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        landed,
+        "the fork's turn should land in the new session's log:\n{}",
+        s.output_plain()
+    );
+    let after = fs::read_to_string(&log_a).unwrap_or_default();
     assert_eq!(
         after.lines().count(),
         before_lines,
@@ -759,8 +787,8 @@ fn test_fork_keeps_source_untouched() {
 #[ignore]
 fn test_retention_notice() {
     let home = fresh_temp_dir("retention-home");
-    std::fs::create_dir_all(home.join(".houyicoder")).unwrap();
-    std::fs::write(
+    fs::create_dir_all(home.join(".houyicoder")).unwrap();
+    fs::write(
         home.join(".houyicoder").join("settings.json"),
         r#"{"session_retention_count": 2}"#,
     )

@@ -5,8 +5,12 @@
 
 #![allow(clippy::unwrap_in_result)]
 
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
+
 use crate::common::{Key, RENDER_TIMEOUT, fresh_temp_dir, pty_session_isolated, run_slash_command};
-use std::path::PathBuf;
 
 /// A fresh temp HOME the test owns. The memory roots + the settings file land
 /// under the project-local state dir inside HOME, so assertions read there
@@ -20,11 +24,11 @@ fn fresh_home(slug: &str) -> PathBuf {
 /// Walk the state dir under HOME for a topic file named <key>.md. The /save
 /// write lands in the auto-scope root under a project-slug subdir; the slug
 /// varies by workspace, so glob the tree rather than hardcode the path.
-fn find_topic(home: &std::path::Path, key: &str) -> Option<PathBuf> {
+fn find_topic(home: &Path, key: &str) -> Option<PathBuf> {
     let needle = format!("{key}.md");
     let mut stack = vec![home.join(".houyicoder")];
     while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else {
+        let Ok(rd) = fs::read_dir(&dir) else {
             continue;
         };
         for e in rd.flatten() {
@@ -66,7 +70,7 @@ fn test_pane_opens() {
         s.output()
     );
     drop(s);
-    drop(std::fs::remove_dir_all(&home));
+    drop(fs::remove_dir_all(&home));
 }
 
 /// /save <key> <source>: <fact> typed as a user message -> the deterministic
@@ -79,29 +83,22 @@ fn test_save_writes_and_lists() {
     // /save is a user message (not a slash command): the extractor pattern
     // matches it after the run completes. Type it as the message body.
     run_slash_command(&mut s, "save smoke-key user: always run make check");
-    // The stub run completes; the fact is written after. Wait for the run
-    // to settle (the stub's final text) before checking disk.
-    assert!(
-        s.wait_for("done", RENDER_TIMEOUT) || s.wait_for("let's build", RENDER_TIMEOUT),
-        "the stub run should complete after /save:\n{}",
-        s.output()
-    );
-    // The save lands just after the run completes (the write races the
-    // done-signal); poll the filesystem for the topic rather than a fixed
-    // sleep so a slow write does not flake and a fast one does not wait.
+    // The write lands after the run completes, so polling the topic file is
+    // the completion signal and the assertion at once. A fixed sleep would
+    // flake on a slow write and idle on a fast one.
     let topic = {
-        let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
+        let deadline = Instant::now() + RENDER_TIMEOUT;
         loop {
             if let Some(p) = find_topic(&home, "smoke-key") {
                 break p;
             }
-            if std::time::Instant::now() > deadline {
-                panic!("/save did not write the topic file:\n{}", s.output());
+            if Instant::now() > deadline {
+                panic!("the /save run should write the topic file:\n{}", s.output());
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            thread::sleep(Duration::from_millis(20));
         }
     };
-    let content = std::fs::read_to_string(&topic).expect("read topic");
+    let content = fs::read_to_string(&topic).expect("read topic");
     assert!(
         content.contains("make check"),
         "the topic body should carry the saved fact:\n{content}"
@@ -115,7 +112,7 @@ fn test_save_writes_and_lists() {
         s.output()
     );
     drop(s);
-    drop(std::fs::remove_dir_all(&home));
+    drop(fs::remove_dir_all(&home));
 }
 
 /// The pane's a shortcut toggles auto-memory and persists the setting.
@@ -140,24 +137,24 @@ fn test_toggle_flips_and_persists() {
     );
     // The server flips + persists; the settings file is the durable proof.
     let settings = home.join(".houyicoder").join("settings.json");
-    let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
-    while std::time::Instant::now() < deadline {
-        if let Ok(content) = std::fs::read_to_string(&settings)
+    let deadline = Instant::now() + RENDER_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Ok(content) = fs::read_to_string(&settings)
             && (content.contains("\"auto_memory\":false")
                 || content.contains("\"auto_memory\": false"))
         {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50));
     }
-    let content = std::fs::read_to_string(&settings).unwrap_or_else(|_| String::new());
+    let content = fs::read_to_string(&settings).unwrap_or_else(|_| String::new());
     assert!(
         content.contains("\"auto_memory\":false") || content.contains("\"auto_memory\": false"),
         "toggle should persist auto_memory=false to the settings file:\n{content}\n{}",
         s.output()
     );
     drop(s);
-    drop(std::fs::remove_dir_all(&home));
+    drop(fs::remove_dir_all(&home));
 }
 
 /// Memory tabs, detail navigation, scrolling, and hierarchy keys work through
@@ -168,9 +165,9 @@ fn test_pane_navigation() {
     let home = fresh_home("navigation");
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "save nav-key user: memory navigation detail");
-    let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
-    while find_topic(&home, "nav-key").is_none() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    let deadline = Instant::now() + RENDER_TIMEOUT;
+    while find_topic(&home, "nav-key").is_none() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
     }
     run_slash_command(&mut s, "memory");
     assert!(s.wait_for_screen("nav-key", RENDER_TIMEOUT));
@@ -190,10 +187,10 @@ fn test_pane_navigation() {
     s.send_key(&Key::Esc);
     assert!(s.wait_for_screen("newest first", RENDER_TIMEOUT));
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(200));
     assert!(!s.screen().contents().contains("newest first"));
     drop(s);
-    drop(std::fs::remove_dir_all(&home));
+    drop(fs::remove_dir_all(&home));
 }
 
 /// Forget removes the stored topic and the next list reflects the new count.
@@ -203,30 +200,25 @@ fn test_forget_deletes_and_refreshes() {
     let home = fresh_home("forget");
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "save forget-key user: never skip tests");
-    assert!(
-        s.wait_for("done", RENDER_TIMEOUT) || s.wait_for("let's build", RENDER_TIMEOUT),
-        "the stub run should complete after /save:\n{}",
-        s.output()
-    );
-    // The save lands just after the run completes (the write races the
-    // done-signal); poll the filesystem for the topic rather than a fixed
-    // sleep so a slow write does not flake and a fast one does not wait.
+    // The write lands after the run completes, so polling the topic file is
+    // the completion signal and the assertion at once. A fixed sleep would
+    // flake on a slow write and idle on a fast one.
     let topic = {
-        let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
+        let deadline = Instant::now() + RENDER_TIMEOUT;
         loop {
             if let Some(p) = find_topic(&home, "forget-key") {
                 break p;
             }
-            if std::time::Instant::now() > deadline {
-                panic!("save did not write the topic file:\n{}", s.output());
+            if Instant::now() > deadline {
+                panic!("the /save run should write the topic file:\n{}", s.output());
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            thread::sleep(Duration::from_millis(20));
         }
     };
     run_slash_command(&mut s, "memory forget forget-key");
-    let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
-    while topic.exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    let deadline = Instant::now() + RENDER_TIMEOUT;
+    while topic.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
     }
     assert!(!topic.exists(), "forget should delete the topic file");
     run_slash_command(&mut s, "memory");
@@ -236,7 +228,7 @@ fn test_forget_deletes_and_refreshes() {
         s.output()
     );
     drop(s);
-    drop(std::fs::remove_dir_all(&home));
+    drop(fs::remove_dir_all(&home));
 }
 
 /// Esc closes the memory pane and removes it from the terminal screen.
@@ -252,7 +244,7 @@ fn test_esc_closes_pane() {
         s.output()
     );
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    thread::sleep(Duration::from_millis(300));
     let screen = s.screen().contents();
     assert!(
         !screen.contains("newest first"),
@@ -263,5 +255,5 @@ fn test_esc_closes_pane() {
         "memory controls should be gone:\n{screen}"
     );
     drop(s);
-    drop(std::fs::remove_dir_all(&home));
+    drop(fs::remove_dir_all(&home));
 }

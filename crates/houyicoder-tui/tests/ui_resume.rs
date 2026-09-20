@@ -5,10 +5,15 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
-use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use std::env;
+use std::fs;
+use std::process;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
+
+use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
 
 /// --resume <sid> re-opens an existing session: the sid is REUSED (not a
 /// fork), the model is restored from the descriptor, the seeded history stays,
@@ -48,7 +53,7 @@ fn test_resume_sid_reopens_history() {
         s.output()
     );
     let log_path = sessions_dir.join(sid).join("log.jsonl");
-    let before = std::fs::read_to_string(&log_path).unwrap();
+    let before = fs::read_to_string(&log_path).unwrap();
     assert!(
         before.contains("seeded prompt"),
         "seeded history should still be in the log:\n{before}"
@@ -58,7 +63,7 @@ fn test_resume_sid_reopens_history() {
     s.send_key(&Key::Enter);
     let deadline = Instant::now() + RENDER_TIMEOUT;
     let after = loop {
-        let after = std::fs::read_to_string(&log_path).unwrap();
+        let after = fs::read_to_string(&log_path).unwrap();
         if after.lines().count() > before_lines {
             break after;
         }
@@ -95,7 +100,12 @@ fn test_resume_lock_released_exit() {
     // cleanly via ctrl+D double-press so the lock is released for b2.
     s1.send_key(&Key::Ctrl('d'));
     s1.send_key(&Key::Ctrl('d'));
-    std::thread::sleep(std::time::Duration::from_millis(1000));
+    // The lock is released when the process exits, so the exit is the latch.
+    assert!(
+        s1.wait_for_exit(RENDER_TIMEOUT),
+        "ctrl+D twice should exit the first process:\n{}",
+        s1.output()
+    );
     let mut s2 = PtySession::launch_with_sessions_dir(
         None,
         None,
@@ -179,7 +189,13 @@ fn test_resume_lock_released_crash() {
         sessions_dir.clone(),
     );
     s1.kill_hard();
-    std::thread::sleep(std::time::Duration::from_millis(1000));
+    // A hard kill releases the lock at process teardown, so wait for the
+    // process to go before the second launch claims it.
+    assert!(
+        s1.wait_for_exit(RENDER_TIMEOUT),
+        "the killed process should be reaped:\n{}",
+        s1.output()
+    );
     let mut s2 = PtySession::launch_with_sessions_dir(
         None,
         None,
@@ -255,8 +271,8 @@ fn test_sid_deleted_cwd_degrades() {
         },
     };
     let dir = sessions_dir.join(sid);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
         dir.join("log.jsonl"),
         format!("{}\n", serde_json::to_string(&event).unwrap()),
     )
@@ -270,7 +286,7 @@ fn test_sid_deleted_cwd_degrades() {
         "version": "test",
         "created_at": 1000,
     });
-    std::fs::write(
+    fs::write(
         dir.join("session.json"),
         serde_json::to_string_pretty(&meta).unwrap(),
     )
@@ -328,7 +344,7 @@ fn test_status_rename_emits_title() {
         s.output()
     );
     s.send_key(&Key::Char('e'));
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(200));
     // The editor opens empty (no prefill) so an Auto name is not silently
     // promoted to User by seeding the buffer; typing lands on a clean buffer.
     s.send_str("shiny-new-name");
@@ -343,7 +359,7 @@ fn test_status_rename_emits_title() {
         "OSC 0/2 tab title bytes should be in the stream:\n{}",
         s.output()
     );
-    let descriptor = std::fs::read_to_string(sessions_dir.join(sid).join("session.json"))
+    let descriptor = fs::read_to_string(sessions_dir.join(sid).join("session.json"))
         .unwrap_or_else(|_| String::new());
     assert!(
         descriptor.contains("\"name\": \"shiny-new-name\""),
@@ -356,7 +372,7 @@ fn test_status_rename_emits_title() {
 }
 
 /// User journey: a /resume while a run is in flight defers the swap. A run is in flight
-/// (a 5s-delayed response), the user opens the /resume picker + Enter, the
+/// (a delayed response), the user opens the /resume picker + Enter, the
 /// swap is enqueued as a Command with a "will switch" hint + does NOT happen
 /// while the run is live. After the run ends, the idle drain dispatches the
 /// Command + swaps in-process, loading the target session's history.
@@ -366,12 +382,12 @@ fn test_during_run_defers_swap() {
     let sessions_dir = fresh_temp_dir("sessions-defer-resume");
     let sid_b = "99999999-9999-9999-9999-999999999999";
     common::seed_session_on_disk(&sessions_dir, sid_b, "defer-model-b", "session B prompt");
-    // One-turn script: "done" text. The 5s delay keeps the run in flight
-    // so the input is available while the run is live.
+    // One-turn script: "done" text. The stub delay keeps the run in flight
+    // while the picker round trip lands; a longer window only adds wall time.
     let script = r#"[ [{"type":"Text","text":"done"}] ]"#;
     let mut s = PtySession::launch_with_sessions_dir(
         Some(script.to_string()),
-        Some(5000),
+        Some(900),
         None,
         None,
         &[],
@@ -386,7 +402,7 @@ fn test_during_run_defers_swap() {
         s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
         "working screen"
     );
-    // Start a run (in flight during the 5s scripted delay).
+    // Start a run (in flight during the scripted stub delay).
     s.send_str("run it");
     s.send_key(&Key::Enter);
     // Resume while the run is live: open the picker.
@@ -439,7 +455,7 @@ fn test_swap_carries_queued_message() {
     let script = r#"[ [{"type":"Text","text":"done"}], [{"type":"Text","text":"done b"}] ]"#;
     let mut s = PtySession::launch_with_sessions_dir(
         Some(script.to_string()),
-        Some(5000),
+        Some(900),
         None,
         None,
         &[],
@@ -451,7 +467,7 @@ fn test_swap_carries_queued_message() {
         s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
         "working screen"
     );
-    // Start a run (in flight during the 5s scripted delay).
+    // Start a run (in flight during the scripted stub delay).
     s.send_str("run it");
     s.send_key(&Key::Enter);
     // Enqueue the resume Command first (the barrier).
@@ -510,7 +526,7 @@ fn test_swap_carries_multi_msgs() {
     let script = r#"[ [{"type":"Text","text":"done"}], [{"type":"Text","text":"done b1"}], [{"type":"Text","text":"done b2"}] ]"#;
     let mut s = PtySession::launch_with_sessions_dir(
         Some(script.to_string()),
-        Some(5000),
+        Some(900),
         None,
         None,
         &[],
@@ -572,7 +588,7 @@ fn test_clear_barrier_msg_runs() {
     let script = r#"[ [{"type":"Text","text":"done"}] ]"#;
     let mut s = PtySession::launch_with_sessions_dir(
         Some(script.to_string()),
-        Some(5000),
+        Some(500),
         None,
         None,
         &[],
@@ -741,8 +757,17 @@ fn test_reexport_resume_keeps_history() {
     // input to the durable log (the assistant reply is irrelevant here).
     s.send_str("continuation after resume");
     s.send_key(&Key::Enter);
-    // Let the durable flush land before /export reads the log.
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // /export reads the durable log, so the continuation landing there is the
+    // latch for the flush.
+    assert!(
+        common::wait_file_contains(
+            &sessions_dir.join(sid).join("log.jsonl"),
+            "continuation after resume",
+            RENDER_TIMEOUT
+        ),
+        "the continued turn should reach the durable log:\n{}",
+        s.output()
+    );
     let export_path = sessions_dir.join("reexport.json");
     run_slash_command(&mut s, &format!("export {}", export_path.display()));
     assert!(
@@ -750,7 +775,7 @@ fn test_reexport_resume_keeps_history() {
         "export should report a write after resume + continuation:\n{}",
         s.output()
     );
-    let exported = std::fs::read_to_string(&export_path)
+    let exported = fs::read_to_string(&export_path)
         .unwrap_or_else(|_| panic!("export file missing at {export_path:?}"));
     assert!(
         exported.contains("seeded roundtrip prompt"),
@@ -774,22 +799,22 @@ fn test_reexport_resume_keeps_history() {
 fn test_resume_reuses_provider() {
     let home = fresh_temp_dir("home-resolve-once");
     let sessions_dir = fresh_temp_dir("sessions-resolve-once");
-    let marker = std::env::temp_dir().join(format!(
+    let marker = env::temp_dir().join(format!(
         "houyi-resolve-marker-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    drop(std::fs::remove_file(&marker));
+    drop(fs::remove_file(&marker));
     // Built with serde_json so a temp path's backslashes on Windows escape
     // rather than break the JSON string.
     let settings = serde_json::json!({
         "apiKeyHelper": format!("echo >> {}", marker.display())
     });
-    std::fs::create_dir_all(home.join(".houyicoder")).unwrap();
-    std::fs::write(
+    fs::create_dir_all(home.join(".houyicoder")).unwrap();
+    fs::write(
         home.join(".houyicoder").join("settings.json"),
         settings.to_string(),
     )
@@ -814,7 +839,7 @@ fn test_resume_reuses_provider() {
         "working screen"
     );
     // Startup resolve ran once.
-    let after_start = std::fs::read_to_string(&marker).unwrap_or_default();
+    let after_start = fs::read_to_string(&marker).unwrap_or_default();
     assert_eq!(
         after_start.lines().count(),
         1,
@@ -829,13 +854,13 @@ fn test_resume_reuses_provider() {
         "switch must land and show resumed history:\n{}",
         s.output()
     );
-    let after_switch = std::fs::read_to_string(&marker).unwrap_or_default();
+    let after_switch = fs::read_to_string(&marker).unwrap_or_default();
     assert_eq!(
         after_switch.lines().count(),
         1,
         "session switch must reuse the startup-resolved provider:\n{after_switch}"
     );
-    drop(std::fs::remove_file(&marker));
-    drop(std::fs::remove_dir_all(&home));
-    drop(std::fs::remove_dir_all(&sessions_dir));
+    drop(fs::remove_file(&marker));
+    drop(fs::remove_dir_all(&home));
+    drop(fs::remove_dir_all(&sessions_dir));
 }
