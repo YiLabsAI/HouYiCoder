@@ -964,8 +964,9 @@ fn test_idle_seeds_mode_query() {
 
 /// The /model pane Enter ships a ModelSwitch { model, effort, effort_toggled,
 /// speed } over the wire when a session is connected (the carrier-present branch).
-/// Pumps the driver + the in-proc server round-trip so the model result reply
-/// lands as an SessionMessage the no-op handler absorbs without error.
+/// Pumps the driver + the in-proc server round-trip until the pane stops
+/// holding the commit, which either answer to the switch does, then reads the
+/// applied model, the receipt, and the absence of a rejection row.
 /// Pins the TUI-side wire plumbing: the outbound ModelSwitch->ModelSet mapping
 /// and the inbound ModelResult->SessionMessage mapping, which the --lib lcov
 /// gate sees (the integration model_wire test covers the server side only).
@@ -994,25 +995,30 @@ fn test_model_switch_applies() {
         "the commit waits for the host's answer before claiming anything"
     );
     // Pump the driver round-trip: the ModelSwitch ships as a ModelSet, the
-    // host applies it + replies ModelApplyResult, the driver forwards the
-    // ModelResult. Drain until quiet; assert no request error surfaced.
-    let mut saw_error = false;
+    // host applies it + replies ModelApplyResult, and the driver forwards the
+    // ModelResult. Either answer settles the commit, so the wait ends when the
+    // pane stops holding it, and the assertions below say which one arrived.
+    let mut reached = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app
-            .transcript
-            .iter()
-            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("error:")))
-        {
-            saw_error = true;
+        if !app.model_picker.is_pending() {
+            reached = true;
             break;
         }
         sleep(Duration::from_millis(10));
     }
-    assert!(!saw_error, "ModelSwitch wire round-trip must not error");
+    assert!(reached, "the ModelSwitch round trip must answer");
+    // A rejected switch writes its reason as a pane outcome line; an applied
+    // one writes the receipt below. The two are the reachable answers here.
+    let failure_row = |app: &App| {
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.starts_with("model: ")))
+    };
     assert!(
-        !app.model_picker.is_pending(),
-        "the reply settles the commit"
+        !failure_row(&app),
+        "ModelSwitch wire round-trip must not error: {:?}",
+        app.transcript
     );
     assert_eq!(app.pane, Pane::Transcript, "the reply closes the pane");
     // The receipt is formatted from the reply, so it names the model the
