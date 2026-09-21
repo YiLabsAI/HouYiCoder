@@ -4,6 +4,18 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 autotests = false
+autobenches = false
+
+[features]
+# Exposes internal transcript primitives to the criterion benches. The bench
+# target carries required-features = ["bench"], so the default build and the
+# commit gate never compile it.
+bench = []
+
+[[bench]]
+name = "transcript_baseline"
+harness = false
+required-features = ["bench"]
 
 [[test]]
 name = "ui_all"
@@ -47,6 +59,12 @@ houyicoder-service = { path = "../houyicoder-service" }
 houyicoder-config = { path = "../houyicoder-config" }
 futures = "0.3"
 portable-pty = "0.9"
+# Micro-benchmark harness for the transcript baseline. Required-features on
+# the bench target keeps it out of the default build. MIT/Apache-2.0, actively
+# maintained, the de facto Rust benchmarking library. Pulls in plotters,
+# regex, and tinytemplate, all already in the dependency graph via other
+# dev-deps or low-cost.
+criterion = { version = "0.8", default-features = false }
 # PTY-only terminal model: ANSI stripping loses cursor, background, and wide-cell state;
 # lower-level vte would require reimplementing the screen. MIT, Rust 1.70, released 2025-07-12.
 # Transitive crates: itoa, unicode-width, vte, arrayvec, memchr. License gate passes;

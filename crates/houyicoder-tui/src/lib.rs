@@ -49,6 +49,9 @@ mod toggle_hint;
 pub mod transcript;
 pub mod view;
 
+#[cfg(feature = "bench")]
+pub mod bench_api;
+
 #[cfg(test)]
 mod activity_indicator_tests;
 #[cfg(test)]
