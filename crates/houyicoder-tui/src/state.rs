@@ -42,7 +42,6 @@ use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::SessionConnection;
 use crate::todo_view::TodoState;
-use crate::transcript::TranscriptFrame;
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
 use crate::view::trajectory_pane::TrajectoryLog;
@@ -141,12 +140,6 @@ pub struct App {
     /// count. Moves to TranscriptViewState::unseen_since as an event cursor
     /// once that view-state owner exists.
     pub scrolled_from_frame: Option<usize>,
-    /// The ordered frame log, owned by App: the server's frames and the rows
-    /// the frontend raises for lines no server frame carries. Both append here
-    /// before the transcript is rebuilt. Stays on App until the run-state
-    /// refactor closes and the rebuild path can read frames through the
-    /// transcript domain object.
-    pub frames: Vec<TranscriptFrame>,
     pub transcript_scroll: TranscriptScroll,
     /// Cached display rows: the full pre-visible computation (display_slots +
     /// row formatting). Invalidated by a version counter — only recomputed

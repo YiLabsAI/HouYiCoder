@@ -179,7 +179,7 @@ impl App {
         // notice and restore line leave the log before this turn's lines land:
         // both are rows the frontend raised, and a rebuild renders them again
         // from the log they would still sit in.
-        clear_interruption_markers(&mut self.frames);
+        clear_interruption_markers(self.transcript.frames_mut());
         self.rebuild_transcript();
         self.push_transcript_line(TranscriptLine::User(input));
         self.displayed_tokens.set(0);
@@ -634,7 +634,7 @@ impl App {
     /// the user can edit and resend the restored input. The rows the frontend
     /// raised during that turn go with it: they describe work now discarded.
     pub fn rewind_to_last_user_input(&mut self) {
-        let Some(start) = self.frames.iter().rposition(|f| {
+        let Some(start) = self.transcript.frames().iter().rposition(|f| {
             matches!(
                 f,
                 TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
@@ -642,7 +642,7 @@ impl App {
         }) else {
             return;
         };
-        self.frames.truncate(start);
+        self.transcript.frames_mut().truncate(start);
         self.todos.set_replaying_history(true);
         self.rebuild_transcript();
     }

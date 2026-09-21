@@ -22,8 +22,8 @@ fn working() -> crate::state::App {
 /// reproduce: a row written onto the transcript alone does not survive the
 /// rebuild a later line triggers.
 fn agent_row(app: &mut crate::state::App, text: &str) {
-    app.frames
-        .push(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+    app.transcript
+        .push_frame(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
             ContentChunk::new(ContentBlock::Text { text: text.into() }),
         )));
     app.rebuild_transcript();

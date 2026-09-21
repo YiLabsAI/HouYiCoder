@@ -1,12 +1,25 @@
 //! Benchmark surface for the transcript primitives. Gated by the bench
 //! feature; the bench target declares required-features bench, so the
 //! default build and the commit gate never compile these wrappers. They
-//! expose the two crate-internal entry points the benches need: the
-//! incremental rebuild and the fold-group scan. Both wrappers avoid a
-//! broad mutable-access parameter so the App coupling ratchet is unaffected.
+//! expose the crate-internal entry points the benches need: building an
+//! App over a frame log, the incremental rebuild, and the fold-group scan.
+//! Each wrapper avoids a broad mutable-access parameter so the App
+//! coupling ratchet is unaffected.
 
+use crate::composition;
 use crate::fold::compute_fold_groups;
 use crate::state::App;
+use crate::transcript::TranscriptFrame;
+
+/// Build a bare App carrying the given frame log. A bare App has no
+/// server or runtime, which is all the rebuild and fold paths need. Takes
+/// the log by value and returns the App, so the wrapper carries no broad
+/// mutable-access parameter.
+pub fn app_with_frames(frames: Vec<TranscriptFrame>) -> App {
+    let mut app = composition::app();
+    *app.transcript.frames_mut() = frames;
+    app
+}
 
 /// Rebuild the transcript from the frame log. Takes the App by value and
 /// returns it, so the wrapper carries no broad mutable-access parameter;

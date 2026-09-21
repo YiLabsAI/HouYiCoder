@@ -63,7 +63,7 @@ impl App {
             && !self.transcript_scroll.is_following_tail()
             && self.scrolled_from_frame.is_none()
         {
-            self.scrolled_from_frame = Some(self.frames.len());
+            self.scrolled_from_frame = Some(self.transcript.frame_count());
         }
     }
 
@@ -92,10 +92,10 @@ impl App {
         let Some(from) = self.scrolled_from_frame else {
             return 0;
         };
-        let from = from.min(self.frames.len());
+        let from = from.min(self.transcript.frame_count());
         let mut count = 0usize;
         let mut prev_was_agent = false;
-        for f in &self.frames[from..] {
+        for f in &self.transcript.frames()[from..] {
             match f {
                 // Turn boundary: a new user message starts a new assistant
                 // turn, so the next agent text counts again.

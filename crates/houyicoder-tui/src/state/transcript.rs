@@ -1,16 +1,18 @@
-//! The transcript domain object: viewable lines, the current turn
-//! boundary, and the revision counter. The frame log stays on App until
-//! the run-state refactor closes and the rebuild path can be reshaped to
-//! read frames through this object without crossing the run lifecycle.
+//! The transcript domain object: the ordered frame log, the viewable
+//! lines derived from it, the current turn boundary, and the revision
+//! counter. The frame log lives here so the rebuild path reads frames
+//! through this object.
 
 use std::cell::Cell;
 use std::ops::Deref;
 
 use crate::records::TranscriptLine;
 use crate::state::CurrentTurnBoundary;
+use crate::transcript::TranscriptFrame;
 
 #[derive(Debug, Default)]
 pub struct Transcript {
+    frames: Vec<TranscriptFrame>,
     lines: Vec<TranscriptLine>,
     current_turn: CurrentTurnBoundary,
     revision: Cell<u64>,
@@ -34,6 +36,22 @@ impl From<Vec<TranscriptLine>> for Transcript {
 }
 
 impl Transcript {
+    pub(crate) fn frames(&self) -> &[TranscriptFrame] {
+        &self.frames
+    }
+
+    pub(crate) fn frames_mut(&mut self) -> &mut Vec<TranscriptFrame> {
+        &mut self.frames
+    }
+
+    pub fn push_frame(&mut self, frame: TranscriptFrame) {
+        self.frames.push(frame);
+    }
+
+    pub(crate) fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
     pub(crate) fn lines(&self) -> &[TranscriptLine] {
         &self.lines
     }
@@ -50,8 +68,13 @@ impl Transcript {
         self.lines.push(line);
     }
 
-    pub(crate) fn clear(&mut self) {
+    /// Empty the whole transcript state: the viewable lines, the frame log,
+    /// and the turn boundary. The revision counter stays monotonic so a
+    /// cached render pass never matches a pre-reset version.
+    pub(crate) fn reset(&mut self) {
         self.lines.clear();
+        self.frames.clear();
+        self.current_turn = CurrentTurnBoundary::default();
     }
 
     pub(crate) fn current_turn(&self) -> &CurrentTurnBoundary {
@@ -60,10 +83,6 @@ impl Transcript {
 
     pub(crate) fn current_turn_mut(&mut self) -> &mut CurrentTurnBoundary {
         &mut self.current_turn
-    }
-
-    pub(crate) fn reset_current_turn(&mut self) {
-        self.current_turn = CurrentTurnBoundary::default();
     }
 
     pub fn revision(&self) -> u64 {

@@ -305,10 +305,7 @@ impl App {
     /// /clear: archive the transcript, reset the full chain state, and land
     /// back on a fresh working surface (stage Idle, pane Transcript, step idle).
     fn clear_session(&mut self) {
-        self.transcript.clear();
-        self.frames.clear();
-        // Reset cached boundaries before the next frame rebuild.
-        self.transcript.reset_current_turn();
+        self.transcript.reset();
         self.verdict_cursor = 0;
         self.verdict_log_cache.clear();
         self.todos.clear();

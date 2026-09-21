@@ -166,7 +166,7 @@ fn test_steer_completed_surfaces_notice() {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    app.transcript.clear();
+    app.transcript.reset();
     app.spawn_run("steer running".into());
     assert!(
         !app.transcript

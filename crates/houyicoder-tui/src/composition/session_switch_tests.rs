@@ -75,15 +75,16 @@ fn test_switch_session_resets_view() {
     let mut app = build_app(test_bundle());
     app.transcript
         .push(TranscriptLine::User("old content".into()));
-    app.frames.push(crate::transcript::TranscriptFrame::Session(
-        houyicoder_protocol::frontend::session_update::SessionUpdate::UserMessageChunk(
-            houyicoder_protocol::frontend::session_update::ContentChunk::new(
-                houyicoder_protocol::frontend::run::ContentBlock::Text {
-                    text: "old frame".into(),
-                },
+    app.transcript
+        .push_frame(crate::transcript::TranscriptFrame::Session(
+            houyicoder_protocol::frontend::session_update::SessionUpdate::UserMessageChunk(
+                houyicoder_protocol::frontend::session_update::ContentChunk::new(
+                    houyicoder_protocol::frontend::run::ContentBlock::Text {
+                        text: "old frame".into(),
+                    },
+                ),
             ),
-        ),
-    ));
+        ));
     let new_bundle = test_bundle();
     let new_sid = new_bundle.session.0.clone();
     let new_warning_count = new_bundle.startup_warnings.len();
@@ -102,7 +103,7 @@ fn test_switch_session_resets_view() {
             .any(|l| matches!(l, TranscriptLine::User(t) if t.contains("old content"))),
         "old content gone"
     );
-    assert!(app.frames.is_empty(), "frames cleared");
+    assert!(app.transcript.frames().is_empty(), "frames cleared");
     assert_eq!(app.session_id.0, new_sid, "session_id updated");
     assert!(app.session.is_some(), "new session driver wired");
     assert!(!app.agent_busy(), "agent_busy cleared");

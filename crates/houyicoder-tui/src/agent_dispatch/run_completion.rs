@@ -25,7 +25,7 @@ impl super::App {
         let active = self.run_state.finish();
         self.prompt = None;
         self.rebuild_transcript();
-        self.debug_render_done(&self.frames);
+        self.debug_render_done(self.transcript.frames());
         let was_final = match result {
             Ok(run) => {
                 self.status.tokens = run.usage.total_tokens as u64;
@@ -49,7 +49,9 @@ impl super::App {
                         let restored = match self.last_run_input.take() {
                             Some(text)
                                 if !had_live_output
-                                    && !should_preserve_interrupted_turn(&self.frames)
+                                    && !should_preserve_interrupted_turn(
+                                        self.transcript.frames(),
+                                    )
                                     && self.input.is_empty() =>
                             {
                                 // Remove the empty submission from transcript
@@ -138,12 +140,12 @@ mod tests {
         use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
         use houyicoder_protocol::llm::Usage;
         let mut app = crate::composition::app();
-        app.frames
-            .push(TranscriptFrame::Session(SessionUpdate::UserMessageChunk(
+        app.transcript
+            .push_frame(TranscriptFrame::Session(SessionUpdate::UserMessageChunk(
                 ContentChunk::new(ContentBlock::Text { text: "go".into() }),
             )));
-        app.frames
-            .push(TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(
+        app.transcript
+            .push_frame(TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(
                 ContentChunk::new(ContentBlock::Text {
                     text: "weighing the options".into(),
                 }),

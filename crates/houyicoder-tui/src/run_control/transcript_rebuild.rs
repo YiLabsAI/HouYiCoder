@@ -23,18 +23,24 @@ impl App {
         // forces the whole window too: the row a record derives needs the turn
         // it closes, and that turn opened before the tail begins, so folding
         // the tail alone could not name it.
-        let record_in_tail = self.frames[turn_start..].iter().any(is_run_completed);
+        let record_in_tail = self.transcript.frames()[turn_start..]
+            .iter()
+            .any(is_run_completed);
         let boundary_frame = self.transcript.current_turn().frame_index;
-        let need_full =
-            boundary_frame > self.frames.len() || boundary_frame != turn_start || record_in_tail;
+        let need_full = boundary_frame > self.transcript.frame_count()
+            || boundary_frame != turn_start
+            || record_in_tail;
         // A window of the frame log, not the whole of it: the derived rows
         // name their turn by log position, so the slice carries where it
         // starts, and a run in flight keeps its newest turn open.
         let newest_open = self.run_state.is_active();
         if need_full {
             let frame_start = self.visible_frame_start();
-            let event_lines =
-                transcript_from_frames(&self.frames, frame_start..self.frames.len(), newest_open);
+            let event_lines = transcript_from_frames(
+                self.transcript.frames(),
+                frame_start..self.transcript.frame_count(),
+                newest_open,
+            );
             let mut merged: Vec<TranscriptLine> =
                 Vec::with_capacity(self.transcript.len() + event_lines.len());
             let mut event_idx = 0;
@@ -58,15 +64,22 @@ impl App {
             // rebuild re-derives it; both counts read the same log facts and
             // agree line for line.
             let prefix_end = turn_start.max(frame_start);
-            let prefix_line_count =
-                transcript_from_frames(&self.frames, frame_start..prefix_end, newest_open).len();
+            let prefix_line_count = transcript_from_frames(
+                self.transcript.frames(),
+                frame_start..prefix_end,
+                newest_open,
+            )
+            .len();
             let prefix_line_count = prefix_line_count.min(self.transcript.len());
             self.transcript.current_turn_mut().line_index = prefix_line_count;
         } else {
             // Rebuild only the changing tail, pairing each row with the frame
             // it rendered so the expand state survives.
-            let tail =
-                transcript_from_frames(&self.frames, turn_start..self.frames.len(), newest_open);
+            let tail = transcript_from_frames(
+                self.transcript.frames(),
+                turn_start..self.transcript.frame_count(),
+                newest_open,
+            );
             let boundary_line = self.transcript.current_turn().line_index;
             let mut merged: Vec<TranscriptLine> = Vec::with_capacity(boundary_line + tail.len());
             merged.extend_from_slice(&self.transcript.lines()[..boundary_line]);
@@ -105,7 +118,7 @@ impl App {
     /// something else forced a full rebuild: the boundary is set one past the
     /// log, a position no frame holds, so the next rebuild takes that path.
     pub(crate) fn rebuild_after_frame_edit(&mut self) {
-        self.transcript.current_turn_mut().frame_index = self.frames.len() + 1;
+        self.transcript.current_turn_mut().frame_index = self.transcript.frame_count() + 1;
         self.rebuild_transcript();
     }
 
@@ -114,7 +127,10 @@ impl App {
     /// MAX_REBUILD_FRAMES frames. The loaded boundary is not advanced here,
     /// otherwise an initially empty session would permanently disable the cap.
     fn visible_frame_start(&self) -> usize {
-        let window = self.frames.len().saturating_sub(MAX_REBUILD_FRAMES);
+        let window = self
+            .transcript
+            .frame_count()
+            .saturating_sub(MAX_REBUILD_FRAMES);
         window.min(self.loaded_from_frame.get())
     }
 
@@ -142,8 +158,11 @@ impl App {
         // its summary row is not this batch's to write. A turn whose end lies
         // further up the log is another matter: this batch carries its frames,
         // so it folds that turn's row like any other window.
-        let new_lines =
-            transcript_from_frames(&self.frames, batch_start..from, self.run_state.is_active());
+        let new_lines = transcript_from_frames(
+            self.transcript.frames(),
+            batch_start..from,
+            self.run_state.is_active(),
+        );
         if new_lines.is_empty() {
             self.loaded_from_frame.set(batch_start);
             return;
@@ -180,14 +199,17 @@ impl App {
     /// together.
     pub(crate) fn current_turn_start(&self) -> usize {
         use houyicoder_protocol::frontend::session_update::SessionUpdate;
-        let mut search_from = self.frames.len();
+        let mut search_from = self.transcript.frame_count();
         loop {
-            let Some(idx) = self.frames[..search_from].iter().rposition(|f| {
-                matches!(
-                    f,
-                    TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
-                )
-            }) else {
+            let Some(idx) = self.transcript.frames()[..search_from]
+                .iter()
+                .rposition(|f| {
+                    matches!(
+                        f,
+                        TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
+                    )
+                })
+            else {
                 return 0;
             };
             let candidate = idx + 1;
@@ -206,7 +228,7 @@ impl App {
         use houyicoder_protocol::frontend::session_update::SessionUpdate;
         let mut calls = std::collections::HashSet::new();
         let mut results = std::collections::HashSet::new();
-        for f in &self.frames[..candidate] {
+        for f in &self.transcript.frames()[..candidate] {
             match f {
                 TranscriptFrame::Session(SessionUpdate::ToolCall(tc)) => {
                     calls.insert(tc.tool_call_id.0.as_str());
@@ -220,7 +242,7 @@ impl App {
         // A tail result for a prefix call (split). Hanging calls (no result
         // anywhere) are not in tail_results, so they do not trigger.
         let mut tail_results = std::collections::HashSet::new();
-        for f in &self.frames[candidate..] {
+        for f in &self.transcript.frames()[candidate..] {
             if let TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(upd)) = f {
                 tail_results.insert(upd.tool_call_id.0.as_str());
             }
@@ -239,11 +261,11 @@ impl App {
         // Verdicts are append-only (audit trail). Rewind/clear truncates frames
         // below the cursor → reset + re-parse from 0 so the cache matches the
         // truncated log (no stale verdicts for dropped frames).
-        if self.verdict_cursor > self.frames.len() {
+        if self.verdict_cursor > self.transcript.frame_count() {
             self.verdict_cursor = 0;
             self.verdict_log_cache.clear();
         }
-        for f in self.frames.iter().skip(self.verdict_cursor) {
+        for f in self.transcript.frames().iter().skip(self.verdict_cursor) {
             if let TranscriptFrame::Acpx(n) = f
                 && matches!(n.method, AcpxMethod::ContextPermissionDecision)
                 && let Ok(entry) =
@@ -252,8 +274,9 @@ impl App {
                 self.verdict_log_cache.push(entry);
             }
         }
-        self.verdict_cursor = self.frames.len();
-        self.todos.update(&self.frames, self.agent_busy());
+        self.verdict_cursor = self.transcript.frame_count();
+        self.todos
+            .update(self.transcript.frames(), self.agent_busy());
     }
 }
 

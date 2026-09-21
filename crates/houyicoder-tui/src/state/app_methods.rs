@@ -98,7 +98,7 @@ impl App {
     /// row renders where its frame now sits. Every such append ends here: a
     /// frame the projection has not seen is a row the transcript is missing.
     pub(crate) fn raise_frontend_row(&mut self, row: FrontendRow) {
-        self.frames.push(TranscriptFrame::Frontend(row));
+        self.transcript.push_frame(TranscriptFrame::Frontend(row));
         self.rebuild_transcript();
     }
 
@@ -107,10 +107,10 @@ impl App {
     /// prompt.
     pub fn drop_tentative_echo(&mut self) {
         if matches!(
-            self.frames.last(),
+            self.transcript.frames().last(),
             Some(TranscriptFrame::Frontend(FrontendRow::Echo(_)))
         ) {
-            self.frames.pop();
+            self.transcript.frames_mut().pop();
             self.rebuild_transcript();
         }
     }
@@ -120,12 +120,14 @@ impl App {
     /// refresh updates the grid where it stands instead of stacking another.
     pub fn replace_context_view(&mut self, view: ContextView) {
         let at = self
-            .frames
+            .transcript
+            .frames()
             .iter()
             .rposition(|f| matches!(f, TranscriptFrame::Frontend(FrontendRow::Context(_))));
         match at {
             Some(at) => {
-                if let TranscriptFrame::Frontend(FrontendRow::Context(slot)) = &mut self.frames[at]
+                if let TranscriptFrame::Frontend(FrontendRow::Context(slot)) =
+                    &mut self.transcript.frames_mut()[at]
                 {
                     *slot = view;
                 }

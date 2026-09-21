@@ -621,7 +621,7 @@ impl App {
                 TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(_))
             );
             self.track_running_tool(&frame);
-            self.frames.push(frame);
+            self.transcript.push_frame(frame);
             any = true;
         }
         if any {

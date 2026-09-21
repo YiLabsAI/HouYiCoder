@@ -600,11 +600,11 @@ fn test_spawn_run_interruption() {
 fn test_rewind_drops_user_echo() {
     let mut app = composition::app();
     app.transcript.push(TranscriptLine::User("hello".into()));
-    app.frames.push(user_msg("hello"));
-    app.frames.push(agent_msg("partial"));
+    app.transcript.push_frame(user_msg("hello"));
+    app.transcript.push_frame(agent_msg("partial"));
     app.rewind_to_last_user_input();
     assert!(
-        app.frames.is_empty(),
+        app.transcript.frames().is_empty(),
         "user echo + partial turn content dropped from frames"
     );
     assert!(

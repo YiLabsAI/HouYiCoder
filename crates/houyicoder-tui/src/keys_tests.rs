@@ -788,7 +788,7 @@ fn test_login_local_skips_console() {
 fn test_login_lands_clean() {
     // Landing on Working leaves the transcript empty (placeholder hint only).
     let mut app = composition::app();
-    app.transcript.clear();
+    app.transcript.reset();
     handle_login(&mut app, key(KeyCode::Char('1')));
     assert_eq!(app.screen, Screen::Working);
     assert_eq!(app.transcript.len(), 0);

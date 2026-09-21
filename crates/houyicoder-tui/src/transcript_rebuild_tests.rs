@@ -53,9 +53,7 @@ fn todo_write_frame(id: &str, todos: &[(&str, &str)]) -> TranscriptFrame {
 /// Return an App with empty transcript state.
 fn fresh_app() -> App {
     let mut app = composition::app();
-    app.transcript.clear();
-    app.frames.clear();
-    app.transcript.reset_current_turn();
+    app.transcript.reset();
     app
 }
 
@@ -195,7 +193,7 @@ fn test_context_refresh_after_turn() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
-    app.frames.push(user_msg("go"));
+    app.transcript.push_frame(user_msg("go"));
     app.system_line("marker");
     let mut fresh = composition::context_view();
     fresh.suggestions.push(ContextSuggestion {
@@ -278,8 +276,8 @@ fn test_batch_keeps_single() {
     pump(&mut app, user_msg("go"));
     // Push two frames directly without an intervening rebuild (a batch), then
     // rebuild once — the incremental path must handle the non-empty suffix.
-    app.frames.push(tool_call("c1", "glob"));
-    app.frames.push(tool_result("c1"));
+    app.transcript.push_frame(tool_call("c1", "glob"));
+    app.transcript.push_frame(tool_result("c1"));
     app.rebuild_transcript();
     let calls = app
         .transcript
@@ -439,7 +437,7 @@ fn test_replay_caps_history() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..600 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
         app.rebuild_transcript();
     }
     assert!(app.transcript.len() < 600);
@@ -460,7 +458,7 @@ fn test_rebuild_caps_history() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..600 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     assert!(app.transcript.len() < 600);
@@ -481,7 +479,7 @@ fn test_small_history_complete() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..10 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     assert!(
@@ -496,7 +494,7 @@ fn test_prepend_loads_history() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..600 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     let before = app.transcript.len();
@@ -515,7 +513,7 @@ fn test_prepend_skips_tail() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..600 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     let before = app.transcript.len();
@@ -528,11 +526,11 @@ fn test_prepend_survives_rebuild() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..100 {
-        app.frames.push(user_msg(&format!("old {i}")));
+        app.transcript.push_frame(user_msg(&format!("old {i}")));
     }
-    app.frames.push(user_msg("turn boundary"));
+    app.transcript.push_frame(user_msg("turn boundary"));
     for i in 0..500 {
-        app.frames.push(user_msg(&format!("recent {i}")));
+        app.transcript.push_frame(user_msg(&format!("recent {i}")));
     }
     app.rebuild_transcript();
     assert!(app.loaded_from_frame.get() > 0);
@@ -543,8 +541,8 @@ fn test_prepend_survives_rebuild() {
             .iter()
             .any(|line| matches!(line, TranscriptLine::User(text) if text.contains("old 1")))
     );
-    app.frames
-        .push(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+    app.transcript
+        .push_frame(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
             ContentChunk::new(ContentBlock::Text {
                 text: "new after prepend".into(),
             }),
@@ -566,11 +564,11 @@ fn test_prepend_keeps_echo_place() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..120 {
-        app.frames.push(user_msg(&format!("old {i}")));
+        app.transcript.push_frame(user_msg(&format!("old {i}")));
     }
     app.push_unanswered_echo("/model".into());
     for i in 120..700 {
-        app.frames.push(user_msg(&format!("recent {i}")));
+        app.transcript.push_frame(user_msg(&format!("recent {i}")));
     }
     app.rebuild_transcript();
     app.transcript_scroll.jump_to(0);
@@ -679,12 +677,12 @@ fn test_slide_drops_notice_row() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..10 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     app.push_transcript_line(TranscriptLine::Interrupted);
     for i in 10..710 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     let texts: Vec<&str> = app
@@ -751,12 +749,12 @@ fn test_system_row_leaves_window() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..10 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     app.system_line("debug: logging to /tmp/houyi.log");
     for i in 10..710 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     assert!(
@@ -787,7 +785,7 @@ fn test_notice_undrawn_after_window() {
         "the notice is drawn while its frame is in the window: {drawn}"
     );
     for i in 0..710 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     let after = crate::test_harness::render_text(&app, 80, 40);
@@ -809,12 +807,12 @@ fn test_echo_row_leaves_window() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..10 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     app.push_unanswered_echo("/model".into());
     for i in 10..710 {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     assert!(
@@ -915,9 +913,9 @@ fn test_trim_shifts_boundary() {
     // A turn boundary with a real prefix: 100 user messages, then an agent
     // frame, rebuild sets line_index to the prefix length (100).
     for i in 0..100 {
-        app.frames.push(user_msg(&format!("prefix {i}")));
+        app.transcript.push_frame(user_msg(&format!("prefix {i}")));
     }
-    app.frames.push(agent_msg("turn body"));
+    app.transcript.push_frame(agent_msg("turn body"));
     app.rebuild_transcript();
     let boundary_before = app.transcript.current_turn().line_index;
     assert!(boundary_before > 0, "boundary names the prefix length");
@@ -953,7 +951,7 @@ fn test_scrollback_survives_frame() {
     let mut app = fresh_app();
     app.screen = crate::state::Screen::Working;
     for i in 0..frame_count {
-        app.frames.push(user_msg(&format!("msg {i}")));
+        app.transcript.push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
     // Scroll away and load older frames until the history boundary hits zero.
@@ -973,8 +971,8 @@ fn test_scrollback_survives_frame() {
     );
     // A new frontend row arrives while scrolled back. The rebuild exit must
     // not trim a scrolled-back reader, so the prepended history survives.
-    app.frames
-        .push(TranscriptFrame::Frontend(FrontendRow::System("new".into())));
+    app.transcript
+        .push_frame(TranscriptFrame::Frontend(FrontendRow::System("new".into())));
     app.rebuild_transcript();
     assert!(
         app.transcript

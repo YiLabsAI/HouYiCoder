@@ -233,7 +233,7 @@ fn test_clear_resets_session() {
     assert_eq!(app.transcript.len(), 1);
     // The checklist cursor restarts on the cleared log rather than keeping
     // the stale 4, so it stands where the reset left the log it reads.
-    assert_eq!(app.todos.cursor(), app.frames.len());
+    assert_eq!(app.todos.cursor(), app.transcript.frame_count());
     assert!(app.todos.items.is_empty());
 }
 

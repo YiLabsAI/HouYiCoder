@@ -35,7 +35,6 @@ pub fn app() -> App {
         transcript: Transcript::default(),
         verdict_cursor: 0,
         scrolled_from_frame: None,
-        frames: Vec::new(),
         transcript_scroll: TranscriptScroll::default(),
         display_rows_cache: RefCell::new(Vec::new()),
         display_rows_version: Cell::new(u64::MAX),

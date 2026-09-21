@@ -34,7 +34,8 @@ ACTIVE_OWNERS = {
         # card, interactive question card, permission request id, approval
         # batch, trust prompt, trust choice, trust request id) into one
         # prompt field that holds at most one live ask, net six fewer.
-        "fields": 149,
+        # Transcript took the ordered frame log (one field).
+        "fields": 148,
         "mut_app": 44,
     },
 }
