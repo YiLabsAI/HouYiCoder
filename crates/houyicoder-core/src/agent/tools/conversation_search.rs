@@ -24,6 +24,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::agent::model_window::span_for_lowercase_offsets;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
@@ -290,33 +291,6 @@ fn search_events(events: &[&SessionLogEntry], query: &str) -> Vec<SearchMatch> {
     results
 }
 
-/// The byte indices in text of the first chars whose lowercase forms begin at
-/// or after the two given byte offsets in the lowercase copy. The mapping can
-/// change a char's byte length in either direction, so an offset from the copy
-/// can land inside a char's expansion, where the answer is the char after it,
-/// or reach a char whose form is shorter, where the answer is that char. ASCII
-/// is the common case and maps byte for byte, so it is counted as one without
-/// building its expansion.
-fn text_span_for_copy_offsets(text: &str, start: usize, end: usize) -> (usize, usize) {
-    let mut copy_at = 0;
-    let mut hit_start = None;
-    for (index, ch) in text.char_indices() {
-        if hit_start.is_none() && copy_at >= start {
-            hit_start = Some(index);
-        }
-        if copy_at >= end {
-            return (hit_start.unwrap_or(index), index);
-        }
-        copy_at += if ch.is_ascii() {
-            1
-        } else {
-            ch.to_lowercase().map(char::len_utf8).sum()
-        };
-    }
-    let tail = text.len();
-    (hit_start.unwrap_or(tail), tail)
-}
-
 /// A snippet around the first hit of the query, with ellipsis when the match
 /// is not at the text boundary. None when the text does not contain the query,
 /// so the hit and its window are decided from one lowercase copy rather than
@@ -327,7 +301,7 @@ fn text_span_for_copy_offsets(text: &str, start: usize, end: usize) -> (usize, u
 fn snippet_window(text: &str, query_lower: &str) -> Option<String> {
     let lower = text.to_lowercase();
     let pos = lower.find(query_lower)?;
-    let (hit_start, hit_end) = text_span_for_copy_offsets(text, pos, pos + query_lower.len());
+    let (hit_start, hit_end) = span_for_lowercase_offsets(text, pos, pos + query_lower.len());
     let start = text.floor_char_boundary(hit_start.saturating_sub(50));
     let end = text.ceil_char_boundary((hit_end + 50).min(text.len()));
     let mut snippet = text[start..end].to_string();
