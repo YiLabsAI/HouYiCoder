@@ -897,14 +897,16 @@ fn test_closed_settles_loss() {
     );
     let before = app.transcript.len();
     // The driver sent the death and returned, but the runtime may not have
-    // dropped the task's agent_tx yet — poll until the channel closes.
+    // dropped the task's agent_tx yet — poll with a real deadline until the
+    // channel closes, so a slow instrumented run does not race the drop.
+    let settle = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut first_changed = false;
-    for _ in 0..100 {
+    while std::time::Instant::now() < settle {
         if app.poll_agent() {
             first_changed = true;
             break;
         }
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(
         first_changed,
