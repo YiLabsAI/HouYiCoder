@@ -6,7 +6,6 @@ use houyicoder_protocol::frontend::run::{RunOutcome, RunResult};
 
 use super::super::should_preserve_interrupted_turn;
 use crate::records::TranscriptLine;
-use crate::state::enums::LiveBlock;
 use crate::transcript::FrontendRow;
 
 impl super::App {
@@ -15,19 +14,14 @@ impl super::App {
     /// failure, a per-request error routed to the active run, and driver
     /// death), and all the presentation needs is the message.
     pub(super) fn handle_run_completion(&mut self, result: Result<RunResult, String>) {
-        let had_live_output =
-            !self.live_assistant_text.is_empty() || !self.live_reasoning_text.is_empty();
+        let had_live_output = self.run_progress().is_some_and(|p| {
+            !p.live_assistant_text.is_empty() || !p.live_reasoning_text.is_empty()
+        });
         // The transition to Idle is the effect the settle needs; the ActiveRun
         // the call hands back has no reader once the run's own frames carry
-        // what the turn did.
+        // what the turn did. Dropping it releases the streaming progress, so
+        // the preview and tool-runtime state need no manual clear here.
         self.run_state.finish();
-        self.live_active = false;
-        self.live_assistant_text.clear();
-        self.live_reasoning_text.clear();
-        self.live_block = LiveBlock::None;
-        self.thinking_started_at = None;
-        self.running_tools.clear();
-        self.bash_progress.clear();
         self.pending_permission_req_id.set(None);
         self.rebuild_transcript();
         self.debug_render_done(&self.frames);

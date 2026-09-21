@@ -260,9 +260,12 @@ fn test_spinner_keeps_blank_above() {
 fn test_view_hides_tail() {
     use crate::records::TeammateView;
     let mut app = crate::test_harness::working_app();
-    app.live_active = true;
-    app.live_assistant_text = "parent streaming text".into();
     app.start_run_for_test(0);
+    {
+        let p = app.run_progress_mut().expect("active run");
+        p.live_active = true;
+        p.live_assistant_text = "parent streaming text".into();
+    }
     app.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()

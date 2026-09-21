@@ -20,9 +20,7 @@ use crate::run_state::RunState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
 use crate::state::transcript::Transcript;
-use crate::state::{
-    LiveBlock, ModelPickerState, ParkedKeys, QueueViewState, StatusTab, TrustChoice,
-};
+use crate::state::{ModelPickerState, ParkedKeys, QueueViewState, StatusTab, TrustChoice};
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub fn app() -> App {
@@ -118,15 +116,7 @@ pub fn app() -> App {
         todos: Default::default(),
         last_terminal_rows: Cell::new(24),
         last_transcript_width: Cell::new(0),
-        live_assistant_text: String::new(),
-        live_active: false,
-        live_reasoning_text: String::new(),
-        live_block: LiveBlock::None,
-        thinking_started_at: None,
         displayed_tokens: Cell::new(0),
-        last_delta_at: None,
-        running_tools: HashSet::new(),
-        bash_progress: HashMap::new(),
         pending_approvals: Vec::new(),
         pending_trust: None,
         trust_choice: TrustChoice::default(),

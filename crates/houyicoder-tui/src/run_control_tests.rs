@@ -679,18 +679,23 @@ fn test_resolve_clears_thinking_window() {
     use houyicoder_protocol::frontend::run::ApprovalDecision;
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
+    app.start_run_for_test(1);
     app.pending_permission_req_id.set(Some(RequestId(1)));
-    app.thinking_started_at = Some(std::time::Instant::now());
-    app.live_block = LiveBlock::Thinking;
+    {
+        let p = app.run_progress_mut().expect("active run");
+        p.thinking_started_at = Some(std::time::Instant::now());
+        p.live_block = LiveBlock::Thinking;
+    }
     app.resolve_current_approval(ApprovalDecision {
         call_id: "c1".into(),
         approved: true,
         updated_input: None,
         scope: "once".to_string(),
     });
-    assert_eq!(app.live_block, LiveBlock::None);
+    let p = app.run_progress().expect("active run");
+    assert_eq!(p.live_block, LiveBlock::None);
     assert!(
-        app.thinking_started_at.is_none(),
+        p.thinking_started_at.is_none(),
         "thinking window must clear on resolve"
     );
 }

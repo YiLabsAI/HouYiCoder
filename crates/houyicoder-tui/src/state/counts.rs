@@ -130,7 +130,10 @@ impl App {
         // No live thinking block during the turn (the live ∴ Thinking block
         // was removed; live reasoning does not echo
         // as a block). The thinking indicator is the spinner row.
-        if self.live_active && !self.live_assistant_text.is_empty() {
+        if let Some(p) = self.run_progress()
+            && p.live_active
+            && !p.live_assistant_text.is_empty()
+        {
             if n > 0 || !prefix_empty {
                 n += 1;
             }
@@ -140,7 +143,7 @@ impl App {
             n += self
                 .render_cache
                 .borrow_mut()
-                .live_agent_row_count(&self.live_assistant_text, w);
+                .live_agent_row_count(&p.live_assistant_text, w);
         }
         if self.agent_busy() && self.run_started().is_some() {
             if n > 0 || !prefix_empty {

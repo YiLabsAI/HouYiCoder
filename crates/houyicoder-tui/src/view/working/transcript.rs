@@ -58,15 +58,13 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         v = v
             .wrapping_mul(31)
             .wrapping_add(set_content_hash(&app.expanded_subagents));
-        // bash_progress is baked into the slots text (push_line_rows appends
-        // the elapsed/line-count suffix to a Tool chip), so the cache must
-        // rebuild when it changes -- include its content hash so the cache
-        // refreshes on a tick (elapsed_secs is second-granularity, so ~1
-        // rebuild/sec during a bash run) instead of the old every-frame
-        // || agent_busy bypass that defeated the slots cache during runs.
-        v = v
-            .wrapping_mul(31)
-            .wrapping_add(bash_progress_hash(&app.bash_progress));
+        // bash_progress hash: same as the expand sets above, the chip suffix
+        // is baked into the slot text, so the cache rebuilds on a content
+        // change (a tick, ~1/sec during a bash run).
+        let bp = app
+            .run_progress()
+            .map_or(0, |p| bash_progress_hash(&p.bash_progress));
+        v = v.wrapping_mul(31).wrapping_add(bp);
         // area.width: the slot text is word-wrapped at the pane width
         // (build_slots_rows). A terminal resize changes the width but bumps
         // no other version input -- without this, the cache holds the old
@@ -185,19 +183,22 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();
     // A running tool produces no token deltas but is not a stall: exempt it
     // from the stall gradient; its presence drives the breathing pulse.
-    let tool_active = !app.running_tools.is_empty();
+    let prog = app.run_progress();
+    let tool_active = prog.is_some_and(|p| !p.running_tools.is_empty());
     // Reasoning (LiveBlock::Thinking) also has a sparse token cadence —
     // thinking tokens arrive slowly even when the model is hard at work, so
     // the default 3s stall threshold would flag healthy long thinking as
     // stuck and turn the glyph red. Use the reasoning threshold (10s) so a
     // 30s think stays calm; a true hang still trips once it exceeds it.
-    let reasoning_active = app.live_block == crate::state::enums::LiveBlock::Thinking;
+    let reasoning_active =
+        prog.is_some_and(|p| p.live_block == crate::state::enums::LiveBlock::Thinking);
+    let last_delta = prog.and_then(|p| p.last_delta_at);
     let spin_intensity = if tool_active {
         0.0
     } else if reasoning_active {
-        stall_intensity_reasoning(app.last_delta_at)
+        stall_intensity_reasoning(last_delta)
     } else {
-        stall_intensity(app.last_delta_at)
+        stall_intensity(last_delta)
     };
     let lines: Vec<Line> = visible
         .iter()
@@ -332,7 +333,10 @@ fn rendered_tool_rows(
     let crate::records::TranscriptLine::Tool { call_id, .. } = line else {
         return Some(rows);
     };
-    let Some(prog) = app.bash_progress.get(call_id) else {
+    let Some(prog) = app
+        .run_progress()
+        .and_then(|p| p.bash_progress.get(call_id))
+    else {
         return Some(rows);
     };
     if prog.elapsed_secs < 2 {

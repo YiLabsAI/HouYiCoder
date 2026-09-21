@@ -1,9 +1,39 @@
 //! Run lifecycle state machine: the single source of truth for whether a
 //! run is in flight, paused for approval, or cancelling.
 
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use houyicoder_protocol::envelope::RequestId;
+
+use crate::state::BashProgress;
+use crate::state::enums::LiveBlock;
+
+/// Streaming progress for one in-flight run. Lives with the run, so the
+/// transient preview and tool-runtime state are dropped when the run
+/// finishes rather than outliving it.
+#[derive(Debug, Default)]
+pub struct RunProgress {
+    pub(crate) live_assistant_text: String,
+    pub(crate) live_active: bool,
+    pub(crate) live_reasoning_text: String,
+    pub(crate) live_block: LiveBlock,
+    pub(crate) thinking_started_at: Option<Instant>,
+    pub(crate) last_delta_at: Option<Instant>,
+    pub(crate) running_tools: HashSet<String>,
+    pub(crate) bash_progress: HashMap<String, BashProgress>,
+}
+
+/// One in-flight run: the request id the server correlates, the wall-clock
+/// start, and the streaming progress. Started at the moment the enqueue
+/// succeeded locally — the run is "running" from the App's perspective
+/// even before the first frame arrives.
+#[derive(Debug)]
+pub struct ActiveRun {
+    pub request: RequestId,
+    pub started_at: Instant,
+    pub(crate) progress: RunProgress,
+}
 
 /// The run lifecycle. Idle means no run; the other variants carry the
 /// ActiveRun so the request id, start time, and progress live in one place.
@@ -20,16 +50,6 @@ pub enum RunState {
     Waiting(ActiveRun),
     /// The user cancelled; the run resolves Interrupted on its original id.
     Cancelling(ActiveRun),
-}
-
-/// One in-flight run: the request id the server correlates, the wall-clock
-/// start, and the streaming progress. Started at the moment the enqueue
-/// succeeded locally — the run is "running" from the App's perspective
-/// even before the first frame arrives.
-#[derive(Debug)]
-pub struct ActiveRun {
-    pub request: RequestId,
-    pub started_at: Instant,
 }
 
 impl RunState {
@@ -63,51 +83,66 @@ impl RunState {
         }
     }
 
+    /// Borrow the streaming progress of the active run, or None when idle.
+    pub fn progress(&self) -> Option<&RunProgress> {
+        match self {
+            RunState::Running(r) | RunState::Waiting(r) | RunState::Cancelling(r) => {
+                Some(&r.progress)
+            }
+            RunState::Idle => None,
+        }
+    }
+
+    /// Mutably borrow the streaming progress, or None when idle.
+    pub fn progress_mut(&mut self) -> Option<&mut RunProgress> {
+        match self {
+            RunState::Running(r) | RunState::Waiting(r) | RunState::Cancelling(r) => {
+                Some(&mut r.progress)
+            }
+            RunState::Idle => None,
+        }
+    }
+
     /// Idle → Running. The caller passes the issued request id and the
     /// wall-clock start.
     pub fn start(&mut self, request: RequestId, now: Instant) {
         *self = RunState::Running(ActiveRun {
             request,
             started_at: now,
+            progress: RunProgress::default(),
         });
     }
 
     /// Running → Waiting. No-op if not Running (a late permission ask after
-    /// cancel or completion must not revive a dead run).
+    /// cancel or completion must not revive a dead run). Moves the whole
+    /// ActiveRun so its progress carries across the pause unchanged.
     pub fn begin_waiting(&mut self) {
-        if let RunState::Running(run) = self {
-            let moved = ActiveRun {
-                request: run.request,
-                started_at: run.started_at,
-            };
-            *self = RunState::Waiting(moved);
-        }
+        let prev = std::mem::replace(self, RunState::Idle);
+        *self = match prev {
+            RunState::Running(run) => RunState::Waiting(run),
+            other => other,
+        };
     }
 
     /// Waiting → Running. No-op if not Waiting (a late verdict after the run
-    /// ended must not flip a dead run back to Running).
+    /// ended must not flip a dead run back to Running). Moves the whole
+    /// ActiveRun so its progress carries across the resume.
     pub fn end_waiting(&mut self) {
-        if let RunState::Waiting(run) = self {
-            let moved = ActiveRun {
-                request: run.request,
-                started_at: run.started_at,
-            };
-            *self = RunState::Running(moved);
-        }
+        let prev = std::mem::replace(self, RunState::Idle);
+        *self = match prev {
+            RunState::Waiting(run) => RunState::Running(run),
+            other => other,
+        };
     }
 
-    /// Running/Waiting → Cancelling. No-op if Idle.
+    /// Running/Waiting → Cancelling. No-op if Idle. Moves the whole ActiveRun
+    /// so its progress carries across the cancel.
     pub fn begin_cancel(&mut self) {
-        match self {
-            RunState::Running(run) | RunState::Waiting(run) => {
-                let moved = ActiveRun {
-                    request: run.request,
-                    started_at: run.started_at,
-                };
-                *self = RunState::Cancelling(moved);
-            }
-            _ => {}
-        }
+        let prev = std::mem::replace(self, RunState::Idle);
+        *self = match prev {
+            RunState::Running(run) | RunState::Waiting(run) => RunState::Cancelling(run),
+            other => other,
+        };
     }
 
     /// Any active → Idle. Returns the ActiveRun if one was in flight, so the

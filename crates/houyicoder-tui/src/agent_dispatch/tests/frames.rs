@@ -104,16 +104,25 @@ fn test_transcript_shows_redundant_calls() {
 #[test]
 fn test_tool_frames_track_set() {
     let mut app = composition::app();
+    app.start_run_for_test(0);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
         "call_1",
         "bash",
         ToolCallStatus::InProgress,
     ))));
-    assert!(app.running_tools.contains("call_1"));
+    assert!(
+        app.run_progress()
+            .is_some_and(|p| p.running_tools.contains("call_1"))
+    );
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_done_frame(
         "call_1",
     ))));
-    assert!(app.running_tools.is_empty());
+    assert!(
+        app.run_progress()
+            .expect("active run")
+            .running_tools
+            .is_empty()
+    );
 }
 
 #[test]
@@ -126,7 +135,30 @@ fn test_done_clears_running_tools() {
         ToolCallStatus::InProgress,
     ))));
     app.handle_agent_message(done_msg());
-    assert!(app.running_tools.is_empty());
+    assert!(
+        app.run_progress()
+            .is_none_or(|p| p.running_tools.is_empty())
+    );
+}
+
+/// A streaming delta racing the Done reply lands after finish drops the run,
+/// so it must not resurrect a live preview. This is the one deliberate
+/// behavior change of the RunProgress move: the old flat App fields would
+/// have swallowed the late delta into a stale phantom preview.
+#[test]
+fn test_late_delta_dropped() {
+    let mut app = composition::app();
+    app.start_run_for_test(1);
+    app.handle_agent_message(done_msg());
+    assert!(app.run_progress().is_none(), "done drops the run");
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
+        text: "late".into(),
+    }));
+    assert!(
+        app.run_progress()
+            .is_none_or(|p| p.live_assistant_text.is_empty()),
+        "a late delta after done must not resurrect a live preview"
+    );
 }
 
 #[test]

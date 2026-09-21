@@ -36,7 +36,7 @@ use crate::records::{AskQuestion, TeammateView, ToolOutcome};
 use crate::render_cache::RenderCache;
 use crate::resume_picker::{SessionLister, SessionPickerState};
 use crate::review_queue::ReviewQueue;
-use crate::run_state::RunState;
+use crate::run_state::{RunProgress, RunState};
 use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::SessionConnection;
@@ -349,45 +349,9 @@ pub struct App {
     /// Stashed so the count path soft-wraps to the same width render used
     /// (count == render). 0 before first render = do-not-wrap.
     pub last_transcript_width: Cell<u16>,
-    /// Transient assistant text accumulated from streamed deltas. The first
-    /// durable assistant frame clears it; run completion is the fallback.
-    /// Live preview only — the session log is the source of truth.
-    pub live_assistant_text: String,
-    /// True while live_assistant_text holds a preview not yet superseded by
-    /// its durable assistant frame. Drives the live-row render.
-    pub live_active: bool,
-    /// Transient reasoning preview from streamed ReasoningDelta chunks.
-    /// Cleared on Done. Not echoed live (the live indicator is the spinner
-    /// verb, see live_block); the spinner reads its length for the minimum
-    /// reasoning hold, and a run that streamed any of it counts as having
-    /// live output.
-    pub live_reasoning_text: String,
-    /// The content block currently streaming during a live turn. A
-    /// ReasoningDelta flips it to Thinking, an assistant-text Delta to
-    /// Responding. The spinner verb shows Thinking only while this is
-    /// Thinking (plus the 2-second min-display hold), else Working — so the
-    /// verb tracks the active block, not whether any reasoning streamed.
-    pub live_block: LiveBlock,
-    /// When the reasoning phase started. Enforces a 2-second minimum
-    /// display of the Thinking verb. Cleared on Done.
-    pub thinking_started_at: Option<Instant>,
     /// Last token count displayed by the spinner. Lerps toward the actual
     /// count each frame for a smooth increment animation.
     pub displayed_tokens: Cell<u32>,
-    /// When the last streamed Delta arrived. None until the first delta;
-    /// drives the spinner stall gradient after STALL_THRESHOLD_SECS.
-    /// Cleared on spawn_run/spawn_resume for a grace period.
-    pub last_delta_at: Option<Instant>,
-    /// Call ids of tool calls currently executing (ToolCall seen, no terminal
-    /// update yet). Drives the spinner's tool-use breathing pulse and exempts
-    /// tool runtime from the stall gradient. Cleared on Done.
-    pub running_tools: HashSet<String>,
-    /// Per-call progress for long-running tools (bash): elapsed seconds +
-    /// the running stdout line count (None when the backend does not stream
-    /// stdout). The runner ticks ToolProgress every ~1s; the chip renders
-    /// (Ns) after 2s, or (Ns · M lines) when lines is Some. Cleared when
-    /// the tool result lands (finish_tool) + on Done.
-    pub bash_progress: HashMap<String, BashProgress>,
     /// The original run input while it remains eligible for no-output rollback.
     /// A committed mid-turn input or visible output closes this window.
     pub last_run_input: Option<String>,
@@ -640,6 +604,20 @@ impl App {
     /// The request id of the active run, or None when idle.
     pub fn active_run_req_id(&self) -> Option<RequestId> {
         self.run_state.request_id()
+    }
+
+    /// Borrow the streaming progress of the active run, or None when idle.
+    /// Render paths read through this; the run-scoped preview does not exist
+    /// outside a run.
+    pub(crate) fn run_progress(&self) -> Option<&RunProgress> {
+        self.run_state.progress()
+    }
+
+    /// Mutably borrow the streaming progress, or None when idle. Write paths
+    /// during a run go through this; callers that cannot be idle take it and
+    /// expect an active run.
+    pub(crate) fn run_progress_mut(&mut self) -> Option<&mut RunProgress> {
+        self.run_state.progress_mut()
     }
 
     /// Test seam: transition to Running with a specific request id.

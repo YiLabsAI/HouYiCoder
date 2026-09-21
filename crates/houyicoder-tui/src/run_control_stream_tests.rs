@@ -45,7 +45,10 @@ fn test_reasoning_streams_and_persists() {
         TranscriptLine::Agent(s) if s.contains("answer")
     )));
     // Live preview cleared after Done.
-    assert!(app.live_reasoning_text.is_empty());
+    assert!(
+        app.run_progress()
+            .is_none_or(|p| p.live_reasoning_text.is_empty())
+    );
 }
 
 /// A turn's summary row is derived from the durable frames, not pushed from
@@ -148,7 +151,8 @@ fn test_streamed_tail_survives_done() {
     );
     // The live preview must be cleared once the authoritative frame lands.
     assert!(
-        app.live_assistant_text.is_empty(),
+        app.run_progress()
+            .is_none_or(|p| p.live_assistant_text.is_empty()),
         "live preview should be cleared after Done"
     );
 }
@@ -159,15 +163,20 @@ fn test_streamed_tail_survives_done() {
 #[test]
 fn test_durable_clears_preview() {
     let mut app = composition::app();
-    app.live_active = true;
-    app.live_assistant_text = "same paragraph".into();
+    app.start_run_for_test(0);
+    {
+        let p = app.run_progress_mut().expect("active run");
+        p.live_active = true;
+        p.live_assistant_text = "same paragraph".into();
+    }
 
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
         "same paragraph",
     ))));
 
-    assert!(app.live_assistant_text.is_empty());
-    assert!(!app.live_active);
+    let p = app.run_progress().expect("active run");
+    assert!(p.live_assistant_text.is_empty());
+    assert!(!p.live_active);
     assert_eq!(
         app.transcript
             .iter()
@@ -182,6 +191,7 @@ fn test_durable_clears_preview() {
 #[test]
 fn test_midturn_keeps_order() {
     let mut app = composition::app();
+    app.start_run_for_test(0);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
         "original",
     ))));
@@ -191,8 +201,11 @@ fn test_midturn_keeps_order() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
         "interjection",
     ))));
-    app.live_active = true;
-    app.live_assistant_text = "response".into();
+    {
+        let p = app.run_progress_mut().expect("active run");
+        p.live_active = true;
+        p.live_assistant_text = "response".into();
+    }
 
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
         "response",
@@ -211,7 +224,12 @@ fn test_midturn_keeps_order() {
         .collect();
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].0, user + 1);
-    assert!(app.live_assistant_text.is_empty());
+    assert!(
+        app.run_progress()
+            .expect("active run")
+            .live_assistant_text
+            .is_empty()
+    );
 }
 
 /// Esc aborting a run that already produced real content (agent text landed)
@@ -355,11 +373,11 @@ fn test_live_blocks_restore() {
         "origin",
     ))));
     app.last_run_input = Some("origin".into());
+    app.start_run_for_test(14);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
         text: "visible response".into(),
     }));
 
-    app.start_run_for_test(14);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(14),
         response: ServerResponse::Done {

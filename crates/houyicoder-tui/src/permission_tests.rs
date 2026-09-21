@@ -29,11 +29,15 @@ fn test_reasoning_no_live_block() {
     // Echoing live reasoning each frame was a self-invented surplus that
     // surfaced a ctrl+o hint on every interaction.
     let mut app = app();
+    app.start_run_for_test(0);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::ReasoningDelta {
         text: "pondering deeply".into(),
     }));
-    assert_eq!(app.live_reasoning_text, "pondering deeply");
-    assert!(app.live_active);
+    assert_eq!(
+        app.run_progress().expect("active run").live_reasoning_text,
+        "pondering deeply"
+    );
+    assert!(app.run_progress().expect("active run").live_active);
     let text = render_text(&app, 80, 24);
     assert!(
         !text.contains("∴ Thinking"),

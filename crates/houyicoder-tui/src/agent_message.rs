@@ -261,9 +261,9 @@ pub enum ServerEvent {
     /// One incremental chunk of model reasoning (the breathing thinking row).
     ReasoningDelta { text: String },
     /// A long-running tool (bash) ticks its elapsed seconds so the chip shows
-    /// it is not stuck. Routes to app.bash_progress[call_id]; the chip renders
-    /// (Ns) after 2s, or (Ns · M lines) when lines is Some. Superseded when
-    /// the tool-result frame lands.
+    /// it is not stuck. Routes to the active run's bash ticker keyed by
+    /// call_id; the chip renders (Ns) after 2s, or (Ns · M lines) when lines
+    /// is Some. Superseded when the tool-result frame lands.
     ToolProgress {
         call_id: String,
         elapsed_secs: u64,

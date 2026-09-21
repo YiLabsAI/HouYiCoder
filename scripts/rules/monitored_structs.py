@@ -24,7 +24,13 @@ ACTIVE_OWNERS = {
         # boundary and the render version (two fields; the lines field
         # changed type in place). verdict_cursor stays as an audit
         # capability; scrolled_from_frame waits for the view-state owner.
-        "fields": 163,
+        # RunProgress took the eight streaming-progress fields (assistant
+        # preview, reasoning preview, live block, the two timing clocks,
+        # the running tool set, the bash ticker map) into ActiveRun, so
+        # they live with the run and drop on finish instead of lingering.
+        # Field access is routed through run_progress_mut() on App, so no
+        # function signature changed and the mut_app count holds.
+        "fields": 155,
         "mut_app": 44,
     },
 }

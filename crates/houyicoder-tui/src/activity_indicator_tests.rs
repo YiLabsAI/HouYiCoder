@@ -18,16 +18,22 @@ fn test_spinner_verb_reflects_phase() {
     let mut app = working();
     app.start_run_for_test(0);
     // Reasoning streaming ⇒ Thinking.
-    app.live_reasoning_text = "pondering the task".to_string();
-    app.live_block = crate::state::enums::LiveBlock::Thinking;
+    {
+        let p = app.run_progress_mut().expect("active run");
+        p.live_reasoning_text = "pondering the task".to_string();
+        p.live_block = crate::state::enums::LiveBlock::Thinking;
+    }
     let out = render_text(&app, 80, 12);
     assert!(
         out.contains("Thinking"),
         "reasoning phase should show Thinking:\n{out}"
     );
     // No reasoning streaming ⇒ Working.
-    app.live_reasoning_text.clear();
-    app.live_block = crate::state::enums::LiveBlock::None;
+    {
+        let p = app.run_progress_mut().expect("active run");
+        p.live_reasoning_text.clear();
+        p.live_block = crate::state::enums::LiveBlock::None;
+    }
     let out = render_text(&app, 80, 12);
     assert!(
         out.contains("Working"),
@@ -46,9 +52,12 @@ fn test_verb_works_text_streams() {
     let mut app = working();
     app.start_run_for_test(0);
     // Reasoning streamed first, then assistant text takes over.
-    app.live_reasoning_text = "pondered".to_string();
-    app.live_assistant_text = "Here is the answer".to_string();
-    app.live_block = crate::state::enums::LiveBlock::Responding;
+    {
+        let p = app.run_progress_mut().expect("active run");
+        p.live_reasoning_text = "pondered".to_string();
+        p.live_assistant_text = "Here is the answer".to_string();
+        p.live_block = crate::state::enums::LiveBlock::Responding;
+    }
     let out = render_text(&app, 80, 12);
     assert!(
         out.contains("Working"),

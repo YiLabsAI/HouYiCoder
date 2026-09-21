@@ -25,18 +25,21 @@ pub fn spinner_row_text(
 ) -> String {
     let frame = (elapsed.as_millis() / 120) % 12;
     let glyph = SPINNER_FRAMES[frame as usize];
-    let reasoning_active = app.live_block == crate::state::enums::LiveBlock::Thinking;
-    let thinking_min_active = app
-        .thinking_started_at
+    let prog = app.run_progress();
+    let reasoning_active =
+        prog.is_some_and(|p| p.live_block == crate::state::enums::LiveBlock::Thinking);
+    let thinking_min_active = prog
+        .and_then(|p| p.thinking_started_at)
         .is_some_and(|t| t.elapsed().as_secs() < 2);
     let verb = if reasoning_active || thinking_min_active {
         "Thinking"
     } else {
         "Working"
     };
-    let actual_tok = ((app.live_assistant_text.chars().count()
-        + app.live_reasoning_text.chars().count())
-        / 4) as u32;
+    let live_chars = prog.map_or(0, |p| {
+        p.live_assistant_text.chars().count() + p.live_reasoning_text.chars().count()
+    });
+    let actual_tok = (live_chars / 4) as u32;
     let displayed = app.displayed_tokens.get();
     let tok = if actual_tok > displayed {
         displayed + (actual_tok - displayed).div_ceil(4)

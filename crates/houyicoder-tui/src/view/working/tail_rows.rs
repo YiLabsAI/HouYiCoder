@@ -47,12 +47,15 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> TailRow
         return TailRows::default();
     }
 
-    if app.live_active && !app.live_assistant_text.is_empty() {
+    if let Some(p) = app.run_progress()
+        && p.live_active
+        && !p.live_assistant_text.is_empty()
+    {
         spacer_if_needed(&mut sink);
         let (md_lines, md_plain) = app
             .render_cache
             .borrow_mut()
-            .live_agent_rows(&app.live_assistant_text, area.width);
+            .live_agent_rows(&p.live_assistant_text, area.width);
         for (md_line, plain) in md_lines.into_iter().zip(md_plain) {
             sink.push(Row::new(PLAIN, plain).pre(Some(md_line)));
         }

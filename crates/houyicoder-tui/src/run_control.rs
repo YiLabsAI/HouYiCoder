@@ -180,10 +180,16 @@ impl App {
         clear_interruption_markers(&mut self.frames);
         self.rebuild_transcript();
         self.push_transcript_line(TranscriptLine::User(input));
-        self.last_delta_at = None;
         self.displayed_tokens.set(0);
-        self.thinking_started_at = None;
-        self.live_block = LiveBlock::None;
+        // start() just built fresh progress, so these preview resets touch
+        // default values; routed through the run for the same reason the
+        // resume path clears: a future caller that reuses progress keeps
+        // the reset instead of carrying stale state into the new turn.
+        if let Some(p) = self.run_progress_mut() {
+            p.last_delta_at = None;
+            p.thinking_started_at = None;
+            p.live_block = LiveBlock::None;
+        }
         true
     }
 
@@ -259,10 +265,14 @@ impl App {
         // Resume the run without resetting its clock: end_waiting flips
         // Waiting → Running preserving the original started_at.
         self.run_state.end_waiting();
-        self.last_delta_at = None;
-        // Clear stale thinking state before post-resume streaming begins.
-        self.live_block = LiveBlock::None;
-        self.thinking_started_at = None;
+        // Clear stale thinking state before post-resume streaming begins. The
+        // run carried its progress through the pause, so these resets clear
+        // real leftover values rather than touching defaults.
+        if let Some(p) = self.run_progress_mut() {
+            p.last_delta_at = None;
+            p.live_block = LiveBlock::None;
+            p.thinking_started_at = None;
+        }
     }
 
     /// Resolve the startup trust verdict. Rejection also exits the local TUI,

@@ -484,7 +484,7 @@ fn test_esc_aborts_busy_run() {
     let mut streaming = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.live_active {
+        if app.run_progress().is_some_and(|p| p.live_active) {
             streaming = true;
             break;
         }
@@ -802,6 +802,44 @@ fn test_ask_preserves_start() {
         app.run_started(),
         original_start,
         "the verdict resumes without resetting the clock"
+    );
+}
+
+// RunProgress carries across the Waiting (approval) transition, not just the
+// start clock: live assistant text streamed before the pause and a tracked
+// running tool both survive begin_waiting -> end_waiting, and a post-resume
+// delta appends to the same preview instead of starting over.
+#[test]
+fn test_ask_preserves_progress() {
+    use crate::agent_message::ServerEvent;
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
+        text: "first".into(),
+    }));
+    app.run_progress_mut()
+        .expect("active run")
+        .running_tools
+        .insert("c1".into());
+
+    app.raise_agent_approval(approval_ask("c2"));
+    app.resolve_current_approval(ApprovalDecision {
+        call_id: "c2".into(),
+        approved: true,
+        updated_input: None,
+        scope: "once".into(),
+    });
+
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
+        text: "second".into(),
+    }));
+    let p = app.run_progress().expect("active run");
+    assert_eq!(p.live_assistant_text, "firstsecond");
+    assert!(
+        p.running_tools.contains("c1"),
+        "the tracked tool survives the approval pause"
     );
 }
 

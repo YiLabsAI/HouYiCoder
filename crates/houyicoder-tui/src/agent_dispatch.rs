@@ -162,29 +162,33 @@ impl App {
                 self.apply_frames(iter::once(frame));
             }
             ServerEvent::Delta { text } => {
-                self.live_assistant_text.push_str(&text);
                 // Assistant text is now the active streaming block: the spinner
                 // verb must read Working, not Thinking (a sticky "reasoning
                 // ever streamed" test would lock it to Thinking for the rest
                 // of the turn even while text is streaming).
-                self.live_block = LiveBlock::Responding;
-                self.live_active = true;
-                self.last_delta_at = Some(Instant::now());
+                if let Some(p) = self.run_progress_mut() {
+                    p.live_assistant_text.push_str(&text);
+                    p.live_block = LiveBlock::Responding;
+                    p.live_active = true;
+                    p.last_delta_at = Some(Instant::now());
+                }
                 // Do NOT re-pin to the tail per delta: the draw already pins
                 // to the new tail when follow_tail is true, and a user who
                 // scrolled up to re-read history must stay where they scrolled.
             }
             ServerEvent::ReasoningDelta { text } => {
-                if self.live_reasoning_text.is_empty() && !text.is_empty() {
-                    self.thinking_started_at = Some(Instant::now());
+                if let Some(p) = self.run_progress_mut() {
+                    if p.live_reasoning_text.is_empty() && !text.is_empty() {
+                        p.thinking_started_at = Some(Instant::now());
+                    }
+                    p.live_reasoning_text.push_str(&text);
+                    // Reasoning is the active streaming block: the spinner verb
+                    // reads Thinking while this holds (until an assistant-text
+                    // Delta or a tool start flips it away).
+                    p.live_block = LiveBlock::Thinking;
+                    p.live_active = true;
+                    p.last_delta_at = Some(Instant::now());
                 }
-                self.live_reasoning_text.push_str(&text);
-                // Reasoning is the active streaming block: the spinner verb
-                // reads Thinking while this holds (until an assistant-text
-                // Delta or a tool start flips it away).
-                self.live_block = LiveBlock::Thinking;
-                self.live_active = true;
-                self.last_delta_at = Some(Instant::now());
             }
             ServerEvent::ToolProgress {
                 call_id,
@@ -196,8 +200,10 @@ impl App {
                 // this map + running_tools to append (Ns) / (Ns · M lines)
                 // after 2s. Only meaningful while the call is in flight;
                 // finish_tool clears it when the result lands.
-                if self.running_tools.contains(&call_id) {
-                    self.bash_progress.insert(
+                if let Some(p) = self.run_progress_mut()
+                    && p.running_tools.contains(&call_id)
+                {
+                    p.bash_progress.insert(
                         call_id,
                         BashProgress {
                             elapsed_secs,
@@ -613,9 +619,9 @@ impl App {
             any = true;
         }
         if any {
-            if assistant_committed {
-                self.live_assistant_text.clear();
-                self.live_active = false;
+            if assistant_committed && let Some(p) = self.run_progress_mut() {
+                p.live_assistant_text.clear();
+                p.live_active = false;
             }
             self.rebuild_transcript();
         }
@@ -638,11 +644,13 @@ impl App {
                     self.finish_tool(&call.tool_call_id.0);
                 }
                 _ => {
-                    self.running_tools.insert(call.tool_call_id.0.clone());
-                    // A tool is now running: the active streaming block is no
-                    // longer reasoning, so the spinner verb must read Working
-                    // (not stay Thinking from the last reasoning delta).
-                    self.live_block = LiveBlock::Responding;
+                    if let Some(p) = self.run_progress_mut() {
+                        p.running_tools.insert(call.tool_call_id.0.clone());
+                        // A tool is now running: the active streaming block is no
+                        // longer reasoning, so the spinner verb must read Working
+                        // (not stay Thinking from the last reasoning delta).
+                        p.live_block = LiveBlock::Responding;
+                    }
                 }
             },
             SessionUpdate::ToolCallUpdate(upd)
@@ -662,12 +670,14 @@ impl App {
     /// and without a fresh grace period the spinner would snap red the moment
     /// the tool-runtime stall exemption lifts.
     fn finish_tool(&mut self, call_id: &str) {
-        if self.running_tools.remove(call_id) {
-            self.last_delta_at = Some(Instant::now());
+        if let Some(p) = self.run_progress_mut() {
+            if p.running_tools.remove(call_id) {
+                p.last_delta_at = Some(Instant::now());
+            }
+            // Drop the elapsed ticker for this call — the authoritative result
+            // frame has landed, the chip no longer shows (Ns).
+            p.bash_progress.remove(call_id);
         }
-        // Drop the elapsed ticker for this call — the authoritative result
-        // frame has landed, the chip no longer shows (Ns).
-        self.bash_progress.remove(call_id);
     }
 }
 

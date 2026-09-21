@@ -302,9 +302,12 @@ fn test_busy_count_matches_render() {
     .into();
     // All three trailing blocks active: live reasoning, live assistant, spinner.
     app.start_run_for_test(0);
-    app.live_active = true;
-    app.live_reasoning_text = "reasoning about the task".to_string();
-    app.live_assistant_text = "partial answer streaming".to_string();
+    {
+        let p = app.run_progress_mut().expect("active run");
+        p.live_active = true;
+        p.live_reasoning_text = "reasoning about the task".to_string();
+        p.live_assistant_text = "partial answer streaming".to_string();
+    }
     let _out = render_text(&app, 80, 24);
     let count = app.transcript_display_rows();
     let rendered = app.transcript_scroll.total.get();
@@ -314,8 +317,11 @@ fn test_busy_count_matches_render() {
     );
 
     // Spinner only (no live text yet): still one trailing row plus spacer.
-    app.live_reasoning_text.clear();
-    app.live_assistant_text.clear();
+    {
+        let p = app.run_progress_mut().expect("active run");
+        p.live_reasoning_text.clear();
+        p.live_assistant_text.clear();
+    }
     let _out = render_text(&app, 80, 24);
     let count = app.transcript_display_rows();
     let rendered = app.transcript_scroll.total.get();
