@@ -145,6 +145,10 @@ NEXTEST_VERIFY_CRATES := houyicoder-tui houyicoder-service houyicoder-sandbox ho
 # OS-recycled pid could mint a path matching a leftover dir). No --retries
 # needed; a consistent failure still surfaces. -j 3 caps concurrent
 # houyi-binary spawns (each PTY test spawns the bin).
+# A group can contribute no ignored test at all once the filter is applied:
+# the filter excludes the reward baseline binary, and that binary holds the
+# only ignored test in its crate. An empty group is not a gate failure, so it
+# warns and the run continues; nextest's default is to fail it.
 verify: check-full
 	@./scripts/ensure_nextest.sh
 	@echo "▶ Building the houyi bin (the PTY tests spawn it via a hardcoded path;"
@@ -156,7 +160,7 @@ verify: check-full
 	@start=$$(date +%s); status=0; \
 	for crate in $(NEXTEST_VERIFY_CRATES); do \
 		echo "  $$crate"; \
-		$(CARGO) nextest run -p $$crate --run-ignored only -j 3 $(NEXTEST_VERIFY_FILTER) || status=$$?; \
+		$(CARGO) nextest run -p $$crate --run-ignored only -j 3 --no-tests=warn $(NEXTEST_VERIFY_FILTER) || status=$$?; \
 	done; \
 	end=$$(date +%s); total=$$((end - start)); \
 	warn_budget=$${VERIFY_BUDGET_WARN:-60}; \
