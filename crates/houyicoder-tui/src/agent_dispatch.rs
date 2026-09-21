@@ -566,18 +566,18 @@ impl App {
         };
         // Swap the child rows into the matching Subagent line in place
         // to preserve position. Mirrors the ContextGrid refresh.
-        let idx = self.transcript.iter().rposition(
+        let idx = self.transcript.lines().iter().rposition(
             |l| matches!(l, TranscriptLine::Subagent { child_sid: c, .. } if c == &child_sid),
         );
         if let Some(idx) = idx {
-            let mut line = self.transcript.remove(idx);
+            let mut line = self.transcript.lines_mut().remove(idx);
             if let TranscriptLine::Subagent {
                 folded_transcript, ..
             } = &mut line
             {
                 *folded_transcript = folded.clone();
             }
-            self.transcript.insert(idx, line);
+            self.transcript.lines_mut().insert(idx, line);
             // The swap mutates a line's payload in place instead of
             // pushing, so the row cache needs an explicit bump — the
             // fetched child rows would otherwise stay invisible until

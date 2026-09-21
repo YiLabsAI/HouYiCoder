@@ -58,8 +58,8 @@ impl App {
             }
             C::Agents => {
                 self.pane = Pane::Agents;
-                let v = self.transcript_version.get();
-                self.agents.refresh(&self.transcript, v);
+                let v = self.transcript.revision();
+                self.agents.refresh(self.transcript.lines(), v);
                 if let Some(s) = self.session.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
@@ -308,7 +308,7 @@ impl App {
         self.transcript.clear();
         self.frames.clear();
         // Reset cached boundaries before the next frame rebuild.
-        self.current_turn_boundary = Default::default();
+        self.transcript.reset_current_turn();
         self.verdict_cursor = 0;
         self.verdict_log_cache.clear();
         self.todos.clear();

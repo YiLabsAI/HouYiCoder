@@ -1773,7 +1773,7 @@ fn test_agents_enter_follows_list() {
         folded_transcript: vec![TranscriptLine::Agent("reply".into())],
         color: None,
     });
-    let v = app.transcript_version.get();
+    let v = app.transcript.revision();
     app.agents.refresh(&app.transcript, v);
     app.fleet.entries.push(FleetEntry {
         agent_id: "live".into(),

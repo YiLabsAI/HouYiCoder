@@ -36,7 +36,8 @@ fn test_bash_chip_shows_elapsed() {
     app.transcript = vec![
         TranscriptLine::User("hi".into()),
         tcall("c1", "bash", "npm install", ToolOutcome::Success),
-    ];
+    ]
+    .into();
     app.running_tools.insert("c1".into());
     // agent_busy keeps the group active so it stays expanded and the chip
     // renders as a Line, not collapsed to a summary. Without this the call

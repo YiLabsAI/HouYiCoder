@@ -189,7 +189,7 @@ mod tests {
             folded_transcript: Vec::new(),
             color: None,
         });
-        let v = app.transcript_version.get();
+        let v = app.transcript.revision();
         app.agents.refresh(&app.transcript, v);
         let out = render(&app, 60, 8);
         assert!(

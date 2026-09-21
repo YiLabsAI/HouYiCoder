@@ -37,7 +37,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // chip suffix), so it is in the version hash + rebuilds on a tick, not via
     // the old every-frame agent_busy bypass.
     let slots_version = {
-        let mut v = app.transcript_version.get();
+        let mut v = app.transcript.revision();
         v = v.wrapping_mul(31).wrapping_add(app.agent_busy() as u64);
         v = v.wrapping_mul(31).wrapping_add(app.verbose as u64);
         v = v

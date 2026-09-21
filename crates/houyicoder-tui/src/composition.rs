@@ -24,8 +24,7 @@ use crate::scroll::{SearchState, TranscriptScroll};
 use crate::selection::Selection;
 use crate::session::SessionConnection;
 use crate::state::{
-    App, Pane, PermissionInput, PermissionTab, Screen, SpecContext, Stage, StatusStub,
-    TranscriptLine, ViewportMode,
+    App, Pane, PermissionInput, PermissionTab, Screen, SpecContext, Stage, StatusStub, ViewportMode,
 };
 use houyicoder_client::Client;
 #[cfg(test)]
@@ -441,14 +440,6 @@ fn local_test_settings_path() -> std::path::PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("houyi-settings-{}-{}.json", std::process::id(), n))
-}
-
-fn transcript() -> Vec<TranscriptLine> {
-    // The working surface starts empty — the input box carries a dim
-    // placeholder hint (describe a change or / for commands) that vanishes
-    // on the first keystroke, so the top stays clean instead of a welcome
-    // line floating far from the input.
-    Vec::new()
 }
 
 fn status() -> StatusStub {

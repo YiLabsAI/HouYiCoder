@@ -27,6 +27,32 @@ def test_owner_exact_green():
     assert evaluate_owner(173, 173) == 0
 
 
+def test_second_owner_drift_blocks():
+    # If a second owner were registered, drift below its baseline is red:
+    # a migration cannot shed fields by handing them to an untracked
+    # wrapper. Transcript is below the warn line today, so this is a
+    # forward-looking check on the evaluate function, not a live pin.
+    multi = {
+        "crates/houyicoder-tui/src/state.rs:App": {"fields": 163},
+        "crates/houyicoder-tui/src/state/transcript.rs:Transcript": {"fields": 3},
+    }
+    counts = {k: v["fields"] for k, v in multi.items()}
+    counts["crates/houyicoder-tui/src/state/transcript.rs:Transcript"] = 2
+    errors = evaluate_registry(counts, multi)
+    assert len(errors) == 1 and "dropped" in errors[0]
+
+
+def test_second_owner_growth_blocks():
+    multi = {
+        "crates/houyicoder-tui/src/state.rs:App": {"fields": 163},
+        "crates/houyicoder-tui/src/state/transcript.rs:Transcript": {"fields": 3},
+    }
+    counts = {k: v["fields"] for k, v in multi.items()}
+    counts["crates/houyicoder-tui/src/state/transcript.rs:Transcript"] = 4
+    errors = evaluate_registry(counts, multi)
+    assert len(errors) == 1 and "grew" in errors[0]
+
+
 def test_registry_green():
     counts = {k: v["fields"] for k, v in REGISTRY.items()}
     counts["crates/houyicoder-tui/src/state.rs:Runner"] = 50

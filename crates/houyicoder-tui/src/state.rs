@@ -17,6 +17,7 @@ mod model_picker;
 mod scroll;
 mod search_view;
 mod teammate_view;
+pub(crate) mod transcript;
 
 use crate::agent_message::{FleetState, PaneAgents, SessionMessage};
 use crate::composition::WorktreeEntry;
@@ -113,7 +114,7 @@ impl QueueViewState {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct CurrentTurnBoundary {
     pub(crate) frame_index: usize,
     pub(crate) line_index: usize,
@@ -133,33 +134,31 @@ pub struct App {
     /// Up/Down prompt history navigation (cache + cursor + draft + abort
     /// skip-set). Backed by a JSONL file at the config home.
     pub history: HistoryNav,
-    pub transcript: Vec<TranscriptLine>,
+    pub transcript: transcript::Transcript,
+    /// Cursor into the frame log for the verdict audit cache. Stays on App:
+    /// verdicts are an audit capability, not transcript content.
+    pub verdict_cursor: usize,
+    /// Frame index the user scrolled away from the tail, for the new-message
+    /// count. Moves to TranscriptViewState::unseen_since as an event cursor
+    /// once that view-state owner exists.
+    pub scrolled_from_frame: Option<usize>,
     /// The ordered frame log, owned by App: the server's frames and the rows
     /// the frontend raises for lines no server frame carries. Both append here
-    /// before the transcript is rebuilt.
+    /// before the transcript is rebuilt. Stays on App until the run-state
+    /// refactor closes and the rebuild path can read frames through the
+    /// transcript domain object.
     pub frames: Vec<TranscriptFrame>,
-    pub(crate) current_turn_boundary: CurrentTurnBoundary,
-    /// Verdict cursor: acpx permission_decision frames are deserialized once
-    /// and appended to verdict_log_cache as they cross this cursor. Avoids
-    /// re-deserializing the whole history per rebuild (per-frame now). Reset
-    /// to 0 (and the cache cleared) when frames truncate below it
-    /// (rewind/clear).
-    pub verdict_cursor: usize,
     pub transcript_scroll: TranscriptScroll,
     /// Cached display rows: the full pre-visible computation (display_slots +
     /// row formatting). Invalidated by a version counter — only recomputed
     /// when the transcript or display inputs change, not every frame.
     pub display_rows_cache: RefCell<Vec<(u8, String, Option<ToolOutcome>)>>,
     pub display_rows_version: Cell<u64>,
-    pub transcript_version: Cell<u64>,
     pub cached_callids: RefCell<Vec<Option<String>>>,
     pub cached_fold_keys: RefCell<Vec<Option<String>>>,
     pub cached_expanded_group: RefCell<Vec<Option<String>>>,
     pub cached_turn_ids: RefCell<Vec<Option<String>>>,
     pub cached_pre_rendered: RefCell<Vec<Option<Line<'static>>>>,
-    /// Frame index captured on first scroll-away (None while following). Pill
-    /// counts agent segments in frames since; eviction-safe. Reset on tail return.
-    pub scrolled_from_frame: Option<usize>,
     pub search: SearchState,
     /// Frozen snapshot the search view renders + counts against. Empty
     /// outside the search view; active_transcript picks it when search.active

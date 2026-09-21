@@ -44,7 +44,7 @@ impl App {
             ..Default::default()
         };
         let mut fire_fetch = needs_fetch;
-        for line in &self.transcript {
+        for line in self.transcript.lines() {
             if let TranscriptLine::Subagent {
                 child_sid: sid,
                 subagent_type,

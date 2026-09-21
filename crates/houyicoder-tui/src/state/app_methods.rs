@@ -143,8 +143,7 @@ impl App {
     /// unrelated change happens to bump it — the change appears to be lost,
     /// then materializes later at the wrong moment.
     pub fn bump_transcript_version(&self) {
-        let v = self.transcript_version.get().wrapping_add(1);
-        self.transcript_version.set(v);
+        self.transcript.bump_revision();
     }
 
     /// Cap the live transcript to the viewable scrollback and shift the turn
@@ -157,15 +156,8 @@ impl App {
     /// drop; the rebuild path bumps once for the whole transcript change
     /// regardless.
     pub(crate) fn trim_live_transcript(&mut self) -> usize {
-        if !self.transcript_scroll.is_following_tail() {
-            return 0;
-        }
-        let dropped = crate::scroll::bound_scrollback(&mut self.transcript);
-        self.current_turn_boundary.line_index = self
-            .current_turn_boundary
-            .line_index
-            .saturating_sub(dropped);
-        dropped
+        self.transcript
+            .trim_live(self.transcript_scroll.is_following_tail())
     }
 
     // The page/line scroll methods (scroll_transcript_up / down /

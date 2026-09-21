@@ -220,8 +220,8 @@ fn test_frame_timing_benchmark() {
             // Idle: redraw the same history; the cache should not rebuild.
             let mut app = crate::composition::app();
             app.screen = crate::state::Screen::Working;
-            app.transcript = lines.clone();
-            app.transcript_version.set(app.transcript_version.get() + 1);
+            app.transcript = lines.clone().into();
+            app.transcript.bump_revision();
             render(&app, area);
             let mut durations = Vec::with_capacity(SAMPLES);
             for _ in 0..WARMUP {
@@ -239,8 +239,8 @@ fn test_frame_timing_benchmark() {
                 let per_frame = (rate / 60).max(1);
                 let mut app = crate::composition::app();
                 app.screen = crate::state::Screen::Working;
-                app.transcript = lines.clone();
-                app.transcript_version.set(app.transcript_version.get() + 1);
+                app.transcript = lines.clone().into();
+                app.transcript.bump_revision();
                 let mut lcg = Lcg(0xFEED + rate as u64);
                 render(&app, area);
                 let mut watch = RebuildWatch::new(&app);
@@ -253,7 +253,7 @@ fn test_frame_timing_benchmark() {
                             word(&mut lcg, 12)
                         )));
                     }
-                    app.transcript_version.set(app.transcript_version.get() + 1);
+                    app.transcript.bump_revision();
                     durations.push(render(&app, area));
                     watch.after_frame(&app);
                 }
@@ -270,9 +270,9 @@ fn test_frame_timing_benchmark() {
             // Search: a frozen snapshot view.
             let mut app = crate::composition::app();
             app.screen = crate::state::Screen::Working;
-            app.transcript = lines.clone();
+            app.transcript = lines.clone().into();
             app.search_transcript = lines.clone();
-            app.transcript_version.set(app.transcript_version.get() + 1);
+            app.transcript.bump_revision();
             render(&app, area);
             let mut durations = Vec::with_capacity(100);
             for _ in 0..WARMUP.min(10) {
@@ -297,8 +297,8 @@ fn test_frame_timing_benchmark() {
             let start = Instant::now();
             let mut app = crate::composition::app();
             app.screen = crate::state::Screen::Working;
-            app.transcript = lines.clone();
-            app.transcript_version.set(app.transcript_version.get() + 1);
+            app.transcript = lines.clone().into();
+            app.transcript.bump_revision();
             let mut watch = RebuildWatch::new(&app);
             render(&app, (80, 24));
             watch.after_frame(&app);
@@ -314,14 +314,14 @@ fn test_frame_timing_benchmark() {
     let lines = synth_lines(1000, 0x5EED);
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript = lines.clone();
-    app.transcript_version.set(app.transcript_version.get() + 1);
+    app.transcript = lines.clone().into();
+    app.transcript.bump_revision();
     render(&app, (80, 24));
     let mut watch = RebuildWatch::new(&app);
     let mut durations = Vec::with_capacity(150);
     for i in 0..150 {
         let area = SIZES[i % SIZES.len()];
-        app.transcript_version.set(app.transcript_version.get() + 1);
+        app.transcript.bump_revision();
         durations.push(render(&app, area));
         watch.after_frame(&app);
     }
@@ -339,7 +339,7 @@ fn test_frame_timing_benchmark() {
         } else {
             app.expanded_results.remove(&call_id);
         }
-        app.transcript_version.set(app.transcript_version.get() + 1);
+        app.transcript.bump_revision();
         durations.push(render(&app, (80, 24)));
         watch.after_frame(&app);
     }
@@ -353,8 +353,8 @@ fn test_frame_timing_benchmark() {
         ..Default::default()
     });
     app.teammate_view.as_mut().unwrap().transcript = synth_lines(1000, 0xFADE);
-    app.transcript = synth_lines(1000, 0xC0FFEE);
-    app.transcript_version.set(app.transcript_version.get() + 1);
+    app.transcript = synth_lines(1000, 0xC0FFEE).into();
+    app.transcript.bump_revision();
     render(&app, (80, 24));
     let mut watch = RebuildWatch::new(&app);
     let mut durations = Vec::with_capacity(100);

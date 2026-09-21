@@ -38,7 +38,8 @@ fn test_hint_single_line() {
         TranscriptLine::User("run it".into()),
         bash_call(command),
         bash_result(),
-    ];
+    ]
+    .into();
     drop(render_text(&app, 32, 12));
     let rows = app.last_all_rows.borrow();
     let hint = rows
@@ -65,7 +66,8 @@ fn test_expand_shows_command() {
         TranscriptLine::User("run it".into()),
         bash_call(command),
         bash_result(),
-    ];
+    ]
+    .into();
     app.expanded_fold_groups.insert("c1#0".into());
     let out = render_text(&app, 32, 16);
     assert!(
@@ -214,8 +216,7 @@ fn test_steer_echo_renders() {
 fn test_cache_version_stable_idle() {
     let mut app = working_app();
     app.transcript.push(TranscriptLine::User("hello".into()));
-    let v = app.transcript_version.get().wrapping_add(1);
-    app.transcript_version.set(v);
+    app.transcript.bump_revision();
     let out1 = render_text(&app, 80, 24);
     assert!(
         app.display_rows_version.get() != u64::MAX,

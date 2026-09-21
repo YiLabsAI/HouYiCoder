@@ -55,7 +55,7 @@ fn fresh_app() -> App {
     let mut app = composition::app();
     app.transcript.clear();
     app.frames.clear();
-    app.current_turn_boundary = Default::default();
+    app.transcript.reset_current_turn();
     app
 }
 
@@ -919,7 +919,7 @@ fn test_trim_shifts_boundary() {
     }
     app.frames.push(agent_msg("turn body"));
     app.rebuild_transcript();
-    let boundary_before = app.current_turn_boundary.line_index;
+    let boundary_before = app.transcript.current_turn().line_index;
     assert!(boundary_before > 0, "boundary names the prefix length");
     // Flood past the cap at the tail: trim drains, and the boundary shifts
     // down by the dropped count (saturating at zero).
@@ -928,11 +928,11 @@ fn test_trim_shifts_boundary() {
         app.push_transcript_line(TranscriptLine::Agent("flood".into()));
     }
     assert!(
-        app.current_turn_boundary.line_index <= app.transcript.len(),
+        app.transcript.current_turn().line_index <= app.transcript.len(),
         "boundary stays within the post-trim transcript length"
     );
     assert!(
-        app.current_turn_boundary.line_index < boundary_before,
+        app.transcript.current_turn().line_index < boundary_before,
         "boundary shifted down as the prefix was trimmed"
     );
 }

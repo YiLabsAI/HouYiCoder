@@ -30,7 +30,8 @@ fn test_count_matches_under_snapshot() {
     app.transcript = vec![
         TranscriptLine::User("live alpha".into()),
         TranscriptLine::User("live beta".into()),
-    ];
+    ]
+    .into();
     app.search_transcript = vec![
         TranscriptLine::User("snap one".into()),
         TranscriptLine::User("snap two".into()),

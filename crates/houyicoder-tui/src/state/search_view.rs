@@ -51,7 +51,7 @@ impl App {
                 self.search_skipped = load.skipped;
             }
         } else {
-            self.search_transcript = self.transcript.clone();
+            self.search_transcript = self.transcript.lines().to_vec();
             self.search_truncated = false;
             self.snapshot_log_bytes = 0;
             self.search_skipped = 0;
@@ -143,7 +143,7 @@ impl App {
         } else if self.search.active {
             &self.search_transcript
         } else {
-            &self.transcript
+            self.transcript.lines()
         }
     }
 
@@ -155,7 +155,7 @@ impl App {
         let t: &[crate::records::TranscriptLine] = if self.search.active {
             &self.search_transcript
         } else {
-            &self.transcript
+            self.transcript.lines()
         };
         self.search.run(t);
     }

@@ -227,7 +227,7 @@ fn test_agents_pane_lists_returned() {
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
         color: None,
     });
-    let v = app.transcript_version.get();
+    let v = app.transcript.revision();
     app.agents.refresh(&app.transcript, v);
     assert_eq!(
         app.agents.rows.len(),
@@ -268,7 +268,7 @@ fn test_agents_pane_cursor_walks() {
             color: None,
         });
     }
-    let v = app.transcript_version.get();
+    let v = app.transcript.revision();
     app.agents.refresh(&app.transcript, v);
     app.agents.move_selection(1);
     assert_eq!(app.agents.sel, 1);

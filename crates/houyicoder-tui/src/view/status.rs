@@ -406,6 +406,7 @@ fn stage_hint(app: &App) -> String {
 fn token_savings_k(app: &App) -> u64 {
     let chars: usize = app
         .transcript
+        .lines()
         .iter()
         .map(|l| l.render().chars().count())
         .sum();

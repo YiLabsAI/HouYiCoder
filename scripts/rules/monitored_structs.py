@@ -20,8 +20,11 @@ ACTIVE_OWNERS = {
         # RunState owns the run lifecycle (four fields removed); the model
         # picker consolidates six model fields into one. parked_keys carries
         # the four expansion sets across a session switch. The turn counter
-        # went with the live turn summary it named.
-        "fields": 165,
+        # went with the live turn summary it named. Transcript took the turn
+        # boundary and the render version (two fields; the lines field
+        # changed type in place). verdict_cursor stays as an audit
+        # capability; scrolled_from_frame waits for the view-state owner.
+        "fields": 163,
         "mut_app": 44,
     },
 }

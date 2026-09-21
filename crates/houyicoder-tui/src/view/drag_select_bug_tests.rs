@@ -64,7 +64,8 @@ fn test_redrag_stays_char_mode() {
     app.screen = Screen::Working;
     app.transcript = vec![crate::records::TranscriptLine::Agent(
         "alpha bravo charlie".into(),
-    )];
+    )]
+    .into();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     app.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
@@ -268,7 +269,8 @@ fn test_click_thoughtfor_expands_one() {
             tool_summary: None,
             turn_id: "t2".into(),
         },
-    ];
+    ]
+    .into();
     let _out = render_text(&app, 80, 24);
     let rect = app.transcript_rect.get();
     // Find the FIRST ThoughtFor row's visible index + screen y.
@@ -334,7 +336,8 @@ fn test_click_thoughtfor_none_reasoning() {
             tool_summary: None,
             turn_id: "t2".into(),
         },
-    ];
+    ]
+    .into();
     let _out = render_text(&app, 80, 24);
     let rect = app.transcript_rect.get();
     let rows = app.last_transcript_rows.borrow();
@@ -389,7 +392,8 @@ fn test_click_thought_no_duration() {
             tool_summary: None,
             turn_id: "t2".into(),
         },
-    ];
+    ]
+    .into();
     let _out = render_text(&app, 80, 24);
     let rect = app.transcript_rect.get();
     let ri = app
@@ -469,7 +473,7 @@ fn test_click_thoughtfor_scrolled_off() {
         tool_summary: None,
         turn_id: "t2".into(),
     });
-    app.transcript = transcript;
+    app.transcript = transcript.into();
     // Small height so the tail viewport shows only t2 (t1 scrolled off top).
     let _out = render_text(&app, 80, 8);
     let rect = app.transcript_rect.get();
@@ -532,7 +536,8 @@ fn test_same_reason_thoughts_independent() {
             tool_summary: None,
             turn_id: "t2".into(),
         },
-    ];
+    ]
+    .into();
     let _out = render_text(&app, 80, 24);
     let rect = app.transcript_rect.get();
     let rows = app.last_transcript_rows.borrow();
@@ -596,7 +601,8 @@ fn app_with_fold_group() -> crate::state::App {
         tcall("c2", "read", "a.rs", ToolOutcome::Success),
         tresult("c2", "content", ToolOutcome::Success),
         TranscriptLine::Agent("all done".into()),
-    ];
+    ]
+    .into();
     let _out = render_text(&app, 80, 24);
     app
 }

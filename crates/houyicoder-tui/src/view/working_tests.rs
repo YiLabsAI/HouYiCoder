@@ -16,7 +16,8 @@ fn test_approval_keeps_prior_content() {
     app.transcript = vec![
         TranscriptLine::ContextGrid(composition::context_view()),
         TranscriptLine::User("hi".to_string()),
-    ];
+    ]
+    .into();
     app.approval = Some(Approval {
         tool: "bash".to_string(),
         args: r#"{"command":"ls -la"}"#.to_string(),
@@ -58,7 +59,8 @@ fn test_thinking_not_above_answer() {
             text: "the user said hi, respond briefly".into(),
         },
         TranscriptLine::Agent("Hi! How can I help?".into()),
-    ];
+    ]
+    .into();
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("Hi! How can I help?"),
@@ -128,7 +130,8 @@ fn test_fold_collapse_expand_toggle() {
         tcall("c2", "read", "a.rs", ToolOutcome::Success),
         tresult("c2", "content", ToolOutcome::Success),
         TranscriptLine::Agent("all done".into()),
-    ];
+    ]
+    .into();
 
     // --- Collapsed state ---
     let out = render_text(&app, 80, 24);
@@ -289,7 +292,8 @@ fn test_busy_count_matches_render() {
     app.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         TranscriptLine::Agent("working".to_string()),
-    ];
+    ]
+    .into();
     // All three trailing blocks active: live reasoning, live assistant, spinner.
     app.start_run_for_test(0);
     app.live_active = true;
@@ -329,7 +333,8 @@ fn test_markdown_strips_syntax() {
     app.screen = Screen::Working;
     app.transcript = vec![TranscriptLine::Agent(
         "## Header\n\nSome **bold** and `code` here.".to_string(),
-    )];
+    )]
+    .into();
     let out = render_text(&app, 80, 24);
     assert!(
         !out.contains("##"),
@@ -367,7 +372,7 @@ fn test_copy_preserves_scrolled_content() {
     let lines: Vec<TranscriptLine> = (0..30)
         .map(|i| TranscriptLine::Agent(format!("reply line {i}")))
         .collect();
-    app.transcript = lines;
+    app.transcript = lines.into();
     let _out = render_text(&app, 80, 24);
     // last_all_rows should have all 30 lines (plus spacers), not just the
     // ~20 visible ones.
@@ -451,7 +456,8 @@ fn test_fold_expand_one_only() {
         tresult("c3", "done", ToolOutcome::Success),
         tcall("c4", "bash", "find .", ToolOutcome::Success),
         tresult("c4", "done", ToolOutcome::Success),
-    ];
+    ]
+    .into();
     render_text(&app, 80, 24);
     // Find the first fold-summary row (group A, key=c1) and click it.
     let rect = app.transcript_rect.get();
@@ -530,7 +536,8 @@ fn test_anchor_clamped_to_content() {
     app.transcript = vec![
         crate::records::TranscriptLine::User("alpha bravo charlie".into()),
         crate::records::TranscriptLine::Agent("delta echo foxtrot".into()),
-    ];
+    ]
+    .into();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     app.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
@@ -674,7 +681,7 @@ fn test_todo_count_matches_render() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.transcript = vec![TranscriptLine::User("go".to_string())];
+    app.transcript = vec![TranscriptLine::User("go".to_string())].into();
     app.todos.items = vec![
         item("a", TodoStatus::Completed),
         item("b", TodoStatus::InProgress),
@@ -727,7 +734,7 @@ fn test_todo_rows_are_selectable() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.transcript = vec![TranscriptLine::User("go".to_string())];
+    app.transcript = vec![TranscriptLine::User("go".to_string())].into();
     app.todos.items = vec![
         TodoView {
             content: "write code".into(),
@@ -1016,7 +1023,7 @@ fn test_user_background_band() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.transcript = vec![TranscriptLine::User("中途插话到底有没有问题".into())];
+    app.transcript = vec![TranscriptLine::User("中途插话到底有没有问题".into())].into();
     let buf = render_buffer(&app, 31, 12);
     let area = app.transcript_rect.get();
     let user_y = (area.y..area.y + area.height)
@@ -1068,7 +1075,7 @@ fn test_user_background_clears() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.transcript = vec![TranscriptLine::User("中途插话".into())];
+    app.transcript = vec![TranscriptLine::User("中途插话".into())].into();
     let mut terminal = Terminal::new(TestBackend::new(31, 12)).expect("terminal");
     terminal
         .draw(|frame| crate::view::draw(frame, &app))
@@ -1084,7 +1091,7 @@ fn test_user_background_clears() {
         })
         .expect("user row");
 
-    app.transcript = vec![TranscriptLine::Agent("replacement".into())];
+    app.transcript = vec![TranscriptLine::Agent("replacement".into())].into();
     app.bump_transcript_version();
     terminal
         .draw(|frame| crate::view::draw(frame, &app))

@@ -24,9 +24,9 @@ impl App {
         // it closes, and that turn opened before the tail begins, so folding
         // the tail alone could not name it.
         let record_in_tail = self.frames[turn_start..].iter().any(is_run_completed);
-        let need_full = self.current_turn_boundary.frame_index > self.frames.len()
-            || self.current_turn_boundary.frame_index != turn_start
-            || record_in_tail;
+        let boundary_frame = self.transcript.current_turn().frame_index;
+        let need_full =
+            boundary_frame > self.frames.len() || boundary_frame != turn_start || record_in_tail;
         // A window of the frame log, not the whole of it: the derived rows
         // name their turn by log position, so the slice carries where it
         // starts, and a run in flight keeps its newest turn open.
@@ -38,7 +38,7 @@ impl App {
             let mut merged: Vec<TranscriptLine> =
                 Vec::with_capacity(self.transcript.len() + event_lines.len());
             let mut event_idx = 0;
-            for line in &self.transcript {
+            for line in self.transcript.lines() {
                 if event_idx < event_lines.len() && same_frame(line, &event_lines[event_idx]) {
                     merged.push(merge_subagent(line, event_lines[event_idx].clone()));
                     event_idx += 1;
@@ -48,8 +48,8 @@ impl App {
                 // the next row pairs with its own rendering.
             }
             merged.extend_from_slice(&event_lines[event_idx..]);
-            self.transcript = merged;
-            self.current_turn_boundary.frame_index = turn_start;
+            self.transcript.replace_lines(merged);
+            self.transcript.current_turn_mut().frame_index = turn_start;
             // Map the stable frame prefix to its transcript boundary: the
             // prefix's rows are the transcript's first rows, one per row the
             // projection derives from it, and that count says how much of this
@@ -60,17 +60,18 @@ impl App {
             let prefix_end = turn_start.max(frame_start);
             let prefix_line_count =
                 transcript_from_frames(&self.frames, frame_start..prefix_end, newest_open).len();
-            self.current_turn_boundary.line_index = prefix_line_count.min(self.transcript.len());
+            let prefix_line_count = prefix_line_count.min(self.transcript.len());
+            self.transcript.current_turn_mut().line_index = prefix_line_count;
         } else {
             // Rebuild only the changing tail, pairing each row with the frame
             // it rendered so the expand state survives.
             let tail =
                 transcript_from_frames(&self.frames, turn_start..self.frames.len(), newest_open);
-            let mut merged: Vec<TranscriptLine> =
-                Vec::with_capacity(self.current_turn_boundary.line_index + tail.len());
-            merged.extend_from_slice(&self.transcript[..self.current_turn_boundary.line_index]);
+            let boundary_line = self.transcript.current_turn().line_index;
+            let mut merged: Vec<TranscriptLine> = Vec::with_capacity(boundary_line + tail.len());
+            merged.extend_from_slice(&self.transcript.lines()[..boundary_line]);
             let mut tail_idx = 0;
-            for line in &self.transcript[self.current_turn_boundary.line_index..] {
+            for line in self.transcript.lines()[boundary_line..].iter() {
                 if tail_idx < tail.len() && same_frame(line, &tail[tail_idx]) {
                     merged.push(merge_subagent(line, tail[tail_idx].clone()));
                     tail_idx += 1;
@@ -83,7 +84,7 @@ impl App {
                 }
             }
             merged.extend_from_slice(&tail[tail_idx..]);
-            self.transcript = merged;
+            self.transcript.replace_lines(merged);
         }
         // Bound the viewable transcript at the rebuild exit. A row the
         // frontend raises (a system line, a context view, an interrupt) grows
@@ -104,7 +105,7 @@ impl App {
     /// something else forced a full rebuild: the boundary is set one past the
     /// log, a position no frame holds, so the next rebuild takes that path.
     pub(crate) fn rebuild_after_frame_edit(&mut self) {
-        self.current_turn_boundary.frame_index = self.frames.len() + 1;
+        self.transcript.current_turn_mut().frame_index = self.frames.len() + 1;
         self.rebuild_transcript();
     }
 
@@ -155,12 +156,12 @@ impl App {
         // history it belongs inside.
         let mut merged = Vec::with_capacity(new_lines.len() + self.transcript.len());
         merged.extend(new_lines);
-        merged.extend_from_slice(&self.transcript);
-        self.transcript = merged;
+        merged.extend_from_slice(self.transcript.lines());
+        self.transcript.replace_lines(merged);
         self.loaded_from_frame.set(batch_start);
         // Older lines extend the stable prefix and must survive the next tail
         // rebuild.
-        self.current_turn_boundary.line_index += prepended;
+        self.transcript.current_turn_mut().line_index += prepended;
         // Shift the scroll position down by the prepended count so the
         // viewport content stays stable. NOTE: prepended counts
         // TranscriptLines, not display rows — multi-row lines (Agent,

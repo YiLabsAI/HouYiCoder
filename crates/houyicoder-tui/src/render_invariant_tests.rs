@@ -54,7 +54,8 @@ fn test_transcript_diff_gutter_gap() {
             body,
             is_diff: true,
         },
-    ];
+    ]
+    .into();
     // Expand so the full diff (not the collapsed head) is on screen.
     app.expanded_results.insert("c1".to_string());
     let out = render_text(&app, 100, 32);
@@ -94,7 +95,8 @@ fn test_transcript_diff_bg_fill() {
         call_id: "c1".into(),
         body,
         is_diff: true,
-    }];
+    }]
+    .into();
     app.expanded_results.insert("c1".to_string());
     let buf = render_buffer(&app, 100, 20);
     // Find the add row (the one whose text contains "let a = ONE;").
@@ -143,7 +145,8 @@ fn test_transcript_diff_word_highlight() {
         call_id: "c1".into(),
         body,
         is_diff: true,
-    }];
+    }]
+    .into();
     app.expanded_results.insert("c1".to_string());
     let buf = render_buffer(&app, 100, 20);
     let dump = crate::test_harness::dump_buffer(&buf);
@@ -204,7 +207,8 @@ fn test_transcript_diff_wraps() {
         call_id: "c1".into(),
         body,
         is_diff: true,
-    }];
+    }]
+    .into();
     app.expanded_results.insert("c1".to_string());
     // A narrow pane forces the long added line to wrap to multiple rows.
     let buf = render_buffer(&app, 30, 14);
@@ -448,7 +452,8 @@ fn test_edit_diff_not_folded() {
             body,
             is_diff: true,
         },
-    ];
+    ]
+    .into();
     let out = render_text(&app, 100, 32);
     println!("--- edit diff default render ---\n{out}\n--- end ---");
     assert!(out.contains("let a = ONE;"), "added line visible: {out}");
@@ -470,7 +475,8 @@ fn test_agent_markdown_count_matches() {
     app.transcript = vec![
         TranscriptLine::User("go".to_string()),
         TranscriptLine::Agent("para one\n\npara two\n\n```rust\nfn main() {}\n```".into()),
-    ];
+    ]
+    .into();
     let _out = render_text(&app, 80, 24);
     let count = app.transcript_display_rows();
     let rendered = app.transcript_scroll.total.get();
@@ -490,7 +496,8 @@ fn test_agent_markdown_wraps_narrow() {
     app.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         TranscriptLine::Agent(long.into()),
-    ];
+    ]
+    .into();
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
     let rendered = app.transcript_scroll.total.get();
@@ -512,7 +519,7 @@ fn test_agent_markdown_wraps_narrow() {
 fn test_user_message_wraps_narrow() {
     let mut app = working();
     let long = "this is a very long user prompt that must soft-wrap to multiple rows at a narrow pane width and not drift the count";
-    app.transcript = vec![TranscriptLine::User(long.into())];
+    app.transcript = vec![TranscriptLine::User(long.into())].into();
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
     let rendered = app.transcript_scroll.total.get();
@@ -540,7 +547,7 @@ fn test_resize_narrow_rebuilds_tail() {
     let mut app = working();
     let tail = "ZZZ_TAIL_MARKER_ZZZ";
     let long = format!("{}{}", "x".repeat(80), tail);
-    app.transcript = vec![TranscriptLine::User(long)];
+    app.transcript = vec![TranscriptLine::User(long)].into();
     // Wide render caches the slot text at width 120 (tail on row 1, fits).
     let _wide = render_text(&app, 120, 24);
     // Narrow render: width changed -> cache rebuilds -> tail wraps to a
@@ -558,7 +565,7 @@ fn test_resize_narrow_rebuilds_tail() {
 fn test_user_multiline_count_matches() {
     let mut app = working();
     let multi = "line one is long enough to wrap at this narrow width\nline two\nline three also long enough to wrap";
-    app.transcript = vec![TranscriptLine::User(multi.into())];
+    app.transcript = vec![TranscriptLine::User(multi.into())].into();
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
     let rendered = app.transcript_scroll.total.get();
@@ -585,7 +592,8 @@ fn test_thought_expand_wraps_narrow() {
             tool_summary: None,
             turn_id: "t1".into(),
         },
-    ];
+    ]
+    .into();
     app.expanded_thinking.insert("t1".to_string());
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
@@ -648,7 +656,8 @@ fn test_expanded_results_callid_collide() {
         TranscriptLine::Agent("mid".into()),
         call("c1", "cmd2"),
         result("c1", &r2),
-    ];
+    ]
+    .into();
     // Expand both fold groups so the result rows are visible (not hidden behind
     // a collapsed summary), then expand result 1's BODY via expanded_results.
     app.expanded_fold_groups.insert("c1#0".to_string());
@@ -722,7 +731,8 @@ fn test_verbose_count_matches() {
             is_diff: false,
         },
         TranscriptLine::Agent("done".into()),
-    ];
+    ]
+    .into();
     app.verbose = true;
     for w in [40, 80, 120] {
         let out = render_text(&app, w, 50);

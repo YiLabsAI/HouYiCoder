@@ -19,9 +19,9 @@ use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
+use crate::state::transcript::Transcript;
 use crate::state::{
-    CurrentTurnBoundary, LiveBlock, ModelPickerState, ParkedKeys, QueueViewState, StatusTab,
-    TrustChoice,
+    LiveBlock, ModelPickerState, ParkedKeys, QueueViewState, StatusTab, TrustChoice,
 };
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
@@ -34,20 +34,18 @@ pub fn app() -> App {
         prev_viewport: ViewportMode::Working,
         input: InputField::new(),
         history: HistoryNav::default(),
-        transcript: transcript(),
-        frames: Vec::new(),
-        current_turn_boundary: CurrentTurnBoundary::default(),
+        transcript: Transcript::default(),
         verdict_cursor: 0,
+        scrolled_from_frame: None,
+        frames: Vec::new(),
         transcript_scroll: TranscriptScroll::default(),
         display_rows_cache: RefCell::new(Vec::new()),
         display_rows_version: Cell::new(u64::MAX),
-        transcript_version: Cell::new(0),
         cached_callids: RefCell::new(Vec::new()),
         cached_fold_keys: RefCell::new(Vec::new()),
         cached_expanded_group: RefCell::new(Vec::new()),
         cached_turn_ids: RefCell::new(Vec::new()),
         cached_pre_rendered: RefCell::new(Vec::new()),
-        scrolled_from_frame: None,
         search: SearchState::default(),
         search_transcript: Vec::new(),
         search_truncated: false,

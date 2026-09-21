@@ -111,10 +111,10 @@ fn test_switch_session_resets_view() {
 #[test]
 fn test_swap_bumps_transcript_version() {
     let mut app = build_app(test_bundle());
-    let v_before = app.transcript_version.get();
+    let v_before = app.transcript.revision();
     app.switch_session(test_bundle());
     assert_ne!(
-        app.transcript_version.get(),
+        app.transcript.revision(),
         v_before,
         "version bumped to invalidate cache"
     );
@@ -595,7 +595,7 @@ fn test_swap_restores_open_keys() {
     let first = test_bundle();
     let first_sid = first.session.clone();
     let mut app = build_app(first);
-    app.transcript = folded_transcript();
+    app.transcript = folded_transcript().into();
     app.expanded_results.insert("call-1".into());
     app.expanded_fold_groups.insert("call-1#0".into());
     app.expanded_thinking.insert("1".into());
@@ -624,7 +624,7 @@ fn test_swap_restores_open_keys() {
         app.expanded_subagents
     );
     // The second session opens the same group key plus a key of its own.
-    app.transcript = folded_transcript();
+    app.transcript = folded_transcript().into();
     assert!(
         !group_body_visible(&app),
         "the entered session starts collapsed, so the check below tells the sets apart"
@@ -636,7 +636,7 @@ fn test_swap_restores_open_keys() {
     let mut back = test_bundle();
     back.session = first_sid;
     app.switch_session(back);
-    app.transcript = folded_transcript();
+    app.transcript = folded_transcript().into();
     assert_eq!(
         app.expanded_results.len(),
         1,
