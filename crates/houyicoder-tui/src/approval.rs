@@ -252,7 +252,7 @@ impl App {
     /// space. A flat walk diverges whenever a folded group precedes the
     /// target line and mis-resolves to the wrong Subagent.
     pub(crate) fn subagent_target_at_cursor(&self) -> Option<(String, bool)> {
-        use crate::fold::{DisplaySlot, display_slots};
+        use crate::fold::{DisplaySlot, display_slots, notice_slot_rows};
         use crate::records::TranscriptLine;
         let transcript = self.transcript.lines();
         let slots = display_slots(
@@ -261,6 +261,7 @@ impl App {
             &self.expanded_fold_groups,
             self.verbose,
         );
+        let width = self.last_transcript_width.get();
         self.selection.anchor.and_then(|(_, content_row)| {
             let mut row = 0usize;
             let mut first = true;
@@ -275,10 +276,12 @@ impl App {
                         )
                     }
                     DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, None, false),
-                    DisplaySlot::NoticeCollapsed { idx, .. } => (1, Some(*idx), false),
-                    DisplaySlot::NoticeExpanded { idx, .. } => {
-                        (self.line_display_rows(&transcript[*idx]), Some(*idx), false)
-                    }
+                    DisplaySlot::NoticeCollapsed { idx, .. }
+                    | DisplaySlot::NoticeExpanded { idx, .. } => (
+                        notice_slot_rows(slot, &transcript[*idx], width),
+                        Some(*idx),
+                        false,
+                    ),
                 };
                 if !first && !is_interrupted {
                     row += 1;

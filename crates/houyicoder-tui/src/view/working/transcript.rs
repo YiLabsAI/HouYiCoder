@@ -14,8 +14,8 @@ use ratatui::{
 use super::row_buffer::{Row, RowBuffer, RowParts};
 use super::tail_rows::build_tail_rows;
 use crate::records::ToolOutcome;
-use crate::state::App;
-use crate::state::ViewportMode;
+use crate::state::{App, ViewportMode};
+use crate::toggle_hint::ToggleHint;
 use crate::view::context_view;
 use crate::view::markers::{diff_row, styled_row};
 use crate::view::spinner::{spinner_line, stall_intensity, stall_intensity_reasoning};
@@ -485,8 +485,8 @@ pub(crate) fn push_line_rows(
         // stays the only thing the next toggle acts on.
         let hint = match reasoning {
             Some(_) if sink.in_subagent() => None,
-            Some(_) if expanded => Some("collapse"),
-            Some(_) => Some("expand"),
+            Some(_) if expanded => Some(ToggleHint::Collapse),
+            Some(_) => Some(ToggleHint::Expand),
             None => None,
         };
         let row_text = line.thought_row_text(hint).unwrap_or_default();
@@ -736,7 +736,8 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
                     .expanded_fold_groups
                     .contains(&g.key)
                     .then(|| g.key.clone());
-                let sr = crate::fold::render_summary(&g.stats, &g.git_ops, g.active);
+                let toggle = ToggleHint::for_group(g.active, enclosing.is_some());
+                let sr = crate::fold::render_summary(&g.stats, &g.git_ops, g.active, toggle);
                 sink.push(
                     Row::new(FOLD, sr.plain)
                         .fold_key(Some(g.key.clone()))

@@ -21,8 +21,8 @@ fn test_subagent_renders_collapsed() {
     assert!(out.contains("explore"), "subagent type renders: {out}");
     assert!(out.contains("found auth module"), "summary renders: {out}");
     assert!(
-        out.contains("ctrl+o to expand"),
-        "collapsed shows the expand hint: {out}"
+        out.contains("found auth module (ctrl+o to expand)"),
+        "collapsed shows the expand hint directly after the summary: {out}"
     );
 }
 

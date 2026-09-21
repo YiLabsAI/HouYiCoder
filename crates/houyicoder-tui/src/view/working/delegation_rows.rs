@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use super::row_buffer::{Row, RowBuffer};
 use crate::records::TranscriptLine;
 use crate::state::App;
+use crate::toggle_hint::ToggleHint;
 use crate::view::badge_color;
 
 /// One delegation's render inputs, borrowed from its transcript line. Grouped
@@ -49,8 +50,8 @@ pub(crate) fn push_delegation_rows(
     let nested = sink.in_subagent();
     let hint = match (nested, expanded) {
         (true, _) => String::new(),
-        (false, true) => "  (ctrl+o to collapse)".to_string(),
-        (false, false) => "  (ctrl+o to expand)".to_string(),
+        (false, true) => ToggleHint::Collapse.suffix().to_string(),
+        (false, false) => ToggleHint::Expand.suffix().to_string(),
     };
     let head = format!("\u{23bf} {subagent_type}: {summary}{hint}");
     // Plain tag so the head stays drag-selectable, plus the child session id

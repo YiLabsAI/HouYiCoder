@@ -1,5 +1,35 @@
 use super::*;
 
+use houyicoder_protocol::frontend::memory::{
+    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+};
+
+use crate::composition;
+use crate::keys::handle_ctrl_o;
+use crate::records::TranscriptLine;
+use crate::state::{App, Pane, Screen};
+use crate::test_harness::render_text;
+use crate::view::line_wrap::wrap_line;
+
+/// A working-screen app holding one memory-change notice: the shape every
+/// notice test starts from, so the broadcast setup lives here once.
+fn app_with_notice(id: &str, origin: MemoryChangeOrigin, keys: &[(&str, MemoryOperation)]) -> App {
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
+        id: MemoryChangeId(id.into()),
+        origin,
+        changes: keys
+            .iter()
+            .map(|(key, operation)| MemoryChange {
+                key: (*key).to_string(),
+                operation: *operation,
+            })
+            .collect(),
+    }));
+    app
+}
+
 #[test]
 fn test_frame_log_call_id() {
     let f = tool_call_frame("c1", "glob", ToolCallStatus::InProgress);
@@ -46,8 +76,7 @@ fn test_frame_log_result_shape() {
 /// line.
 #[test]
 fn test_transcript_shows_redundant_calls() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(2),
         response: ServerResponse::Trajectory {
@@ -74,7 +103,7 @@ fn test_transcript_shows_redundant_calls() {
 
 #[test]
 fn test_tool_frames_track_set() {
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
         "call_1",
         "bash",
@@ -89,7 +118,7 @@ fn test_tool_frames_track_set() {
 
 #[test]
 fn test_done_clears_running_tools() {
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.start_run_for_test(1);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
         "call_1",
@@ -104,7 +133,7 @@ fn test_done_clears_running_tools() {
 fn test_completed_list_timestamped() {
     // A completed item in a live run gets a timestamp; an in-progress item
     // does not. The distinction drives the footer grace window.
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.start_run_for_test(1);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("old work", "completed"),
@@ -139,8 +168,8 @@ fn test_completed_list_timestamped() {
 #[test]
 fn test_replayed_done_clears() {
     for _ in 0..3 {
-        let mut app = crate::composition::app();
-        app.screen = crate::state::Screen::Working;
+        let mut app = composition::app();
+        app.screen = Screen::Working;
         app.todos.set_replaying_history(true);
         app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
             ("old work", "completed"),
@@ -150,7 +179,7 @@ fn test_replayed_done_clears() {
         app.handle_agent_message(done_msg());
         assert!(app.todos.items.is_empty());
         assert!(app.todos.completion_at.is_empty());
-        let out = crate::test_harness::render_text(&app, 100, 24);
+        let out = render_text(&app, 100, 24);
         assert!(
             !out.contains("old work"),
             "historic tasks must not render after a resume: {out}"
@@ -165,8 +194,8 @@ fn test_replayed_done_clears() {
 /// resume re-feeding history frame by frame.
 #[test]
 fn test_replayed_later_frame_clears() {
-    let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    let mut app = composition::app();
+    app.screen = Screen::Working;
     app.todos.set_replaying_history(true);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("one", "in_progress"),
@@ -184,7 +213,7 @@ fn test_replayed_later_frame_clears() {
     app.handle_agent_message(done_msg());
     assert!(app.todos.items.is_empty());
     assert!(app.todos.completion_at.is_empty());
-    let out = crate::test_harness::render_text(&app, 100, 24);
+    let out = render_text(&app, 100, 24);
     assert!(
         !out.contains("one") && !out.contains("two"),
         "historic tasks must not flash after a multi-frame resume: {out}"
@@ -195,8 +224,8 @@ fn test_replayed_later_frame_clears() {
 /// still renders, so clearing targets finished history only.
 #[test]
 fn test_replayed_open_renders() {
-    let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    let mut app = composition::app();
+    app.screen = Screen::Working;
     app.todos.set_replaying_history(true);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
         ("old work", "completed"),
@@ -204,7 +233,7 @@ fn test_replayed_open_renders() {
     ]))));
     app.start_run_for_test(1);
     app.handle_agent_message(done_msg());
-    let out = crate::test_harness::render_text(&app, 100, 24);
+    let out = render_text(&app, 100, 24);
     assert!(
         out.contains("open task"),
         "resumed open work must render: {out}"
@@ -217,8 +246,8 @@ fn test_toggle_state_applies_view() {
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::ToggleState;
     // On the pane: the snapshot applies + the pane stays open.
-    let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Memory;
+    let mut app = composition::app();
+    app.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(1),
         response: ServerResponse::MemoryToggleState {
@@ -230,11 +259,11 @@ fn test_toggle_state_applies_view() {
     });
     assert!(!app.memory.toggles().auto_memory, "auto-memory applied");
     assert!(app.memory.toggles().auto_dream, "auto-dream applied");
-    assert_eq!(app.pane, crate::state::Pane::Memory, "pane stays open");
+    assert_eq!(app.pane, Pane::Memory, "pane stays open");
     // Dismissed (pane moved away): the snapshot still applies, but the
     // pane is NOT yanked back to Memory.
-    let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Spec;
+    let mut app = composition::app();
+    app.pane = Pane::Spec;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(2),
         response: ServerResponse::MemoryToggleState {
@@ -250,7 +279,7 @@ fn test_toggle_state_applies_view() {
     );
     assert_eq!(
         app.pane,
-        crate::state::Pane::Spec,
+        Pane::Spec,
         "late result does not yank back a dismissed pane"
     );
 }
@@ -261,7 +290,7 @@ fn test_memory_list_respects_dismissal() {
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     // On the pane: the list populates + the pane stays open.
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(1),
@@ -282,7 +311,7 @@ fn test_memory_list_respects_dismissal() {
     );
     // Dismissed (pane moved away): the data still lands, but the pane is
     // NOT yanked back to Memory.
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.pane = Pane::Spec;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(2),
@@ -312,7 +341,7 @@ fn test_pane_shows_command_result() {
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemoryDetail;
 
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(9),
@@ -328,18 +357,13 @@ fn test_pane_shows_command_result() {
     });
     assert!(app.transcript.iter().any(|line| matches!(
         line,
-        crate::records::TranscriptLine::System(text) if text.contains("build-gate")
+        TranscriptLine::System(text) if text.contains("build-gate")
     )));
 }
 
 #[test]
 fn test_notice_shows_memory_changes() {
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
-    };
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.screen = Screen::Working;
     let changes = vec![
         MemoryChange {
@@ -370,7 +394,7 @@ fn test_notice_shows_memory_changes() {
             .count(),
         1
     );
-    let out = crate::test_harness::render_text(&app, 100, 24);
+    let out = render_text(&app, 100, 24);
     assert!(out.contains("auto-dream"), "origin should render: {out}");
     assert!(
         out.contains("Memory auto-dream: 2 changes · /memory"),
@@ -391,13 +415,13 @@ fn test_notice_shows_memory_changes() {
         origin: MemoryChangeOrigin::PrimaryAgent,
         changes: single,
     }));
-    let out = crate::test_harness::render_text(&app, 100, 24);
+    let out = render_text(&app, 100, 24);
     assert!(
         !out.contains("⎿  stored gamma"),
         "a second single-change notice is collapsed too: {out}"
     );
     app.expanded_fold_groups.insert("mg#1".into());
-    let out = crate::test_harness::render_text(&app, 100, 24);
+    let out = render_text(&app, 100, 24);
     assert!(
         out.contains("⎿  stored gamma"),
         "expanding the notice reveals its key: {out}"
@@ -406,11 +430,8 @@ fn test_notice_shows_memory_changes() {
 
 #[test]
 fn test_notice_summarizes_many_changes() {
-    use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
-    };
-    let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    let mut app = composition::app();
+    app.screen = Screen::Working;
     let changes = (0..4)
         .map(|index| MemoryChange {
             key: format!("project-memory-with-a-deliberately-long-key-{index}"),
@@ -422,7 +443,7 @@ fn test_notice_summarizes_many_changes() {
         origin: MemoryChangeOrigin::AutoMemory,
         changes,
     }));
-    let out = crate::test_harness::render_text(&app, 54, 36);
+    let out = render_text(&app, 54, 36);
     assert!(
         out.contains("Memory auto-memory: 4 changes · /memory"),
         "the summary names the count: {out}"
@@ -435,7 +456,7 @@ fn test_notice_summarizes_many_changes() {
     // Expanding the notice reveals each change as its own ⎿ row (the long keys
     // hard-break across rows, so the per-key rows are the stable assertion).
     app.expanded_fold_groups.insert("mg#0".into());
-    let out = crate::test_harness::render_text(&app, 54, 36);
+    let out = render_text(&app, 54, 36);
     assert_eq!(
         out.matches('⎿').count(),
         4,
@@ -445,11 +466,8 @@ fn test_notice_summarizes_many_changes() {
 
 #[test]
 fn test_notice_single_change_wraps() {
-    use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
-    };
-    let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    let mut app = composition::app();
+    app.screen = Screen::Working;
     let changes = vec![MemoryChange {
         key: "a-single-memory-with-a-long-key-for-a-narrow-notice".into(),
         operation: MemoryOperation::Stored,
@@ -460,7 +478,7 @@ fn test_notice_single_change_wraps() {
         changes,
     }));
     // Collapsed by default: the summary shows, the key stays behind the fold.
-    let out = crate::test_harness::render_text(&app, 24, 40);
+    let out = render_text(&app, 24, 40);
     assert!(
         out.contains("primary agent"),
         "the single change still renders its summary origin: {out}"
@@ -471,7 +489,7 @@ fn test_notice_single_change_wraps() {
     );
     // Expanded (Ctrl+O on the summary), a long key wraps rather than clips.
     app.expanded_fold_groups.insert("mg#0".into());
-    let out = crate::test_harness::render_text(&app, 24, 40);
+    let out = render_text(&app, 24, 40);
     assert!(
         out.contains("for-a-narrow-notice"),
         "a single-change key that outgrows the row wraps instead of clipping: {out}"
@@ -485,11 +503,7 @@ fn test_notice_single_change_wraps() {
 /// ctrl+o.
 #[test]
 fn test_notice_click_toggles_fold() {
-    use crate::state::Screen;
-    use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
-    };
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("click-1".into()),
@@ -500,7 +514,7 @@ fn test_notice_click_toggles_fold() {
         }],
     }));
     // Render to publish last_row_fold_keys, what a click resolves against.
-    let _rendered = crate::test_harness::render_text(&app, 100, 24);
+    let _rendered = render_text(&app, 100, 24);
     let ri = app
         .last_row_fold_keys
         .borrow()
@@ -516,7 +530,7 @@ fn test_notice_click_toggles_fold() {
         app.expanded_fold_groups.contains("mg#0"),
         "a click routes the notice to the fold toggle"
     );
-    let out = crate::test_harness::render_text(&app, 100, 24);
+    let out = render_text(&app, 100, 24);
     assert!(
         out.contains("⎿  stored alpha"),
         "the opened notice shows its key: {out}"
@@ -527,22 +541,20 @@ fn test_notice_click_toggles_fold() {
 /// still toggles by the thought-click path.
 #[test]
 fn test_thought_keep_affordance() {
-    use crate::state::Screen;
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.screen = Screen::Working;
-    app.transcript
-        .push(crate::records::TranscriptLine::ThoughtFor {
-            secs: Some(42),
-            reasoning: Some("a train of thought that expands inline".into()),
-            tool_summary: None,
-            turn_id: "t1".into(),
-        });
-    let out = crate::test_harness::render_text(&app, 100, 24);
+    app.transcript.push(TranscriptLine::ThoughtFor {
+        secs: Some(42),
+        reasoning: Some("a train of thought that expands inline".into()),
+        tool_summary: None,
+        turn_id: "t1".into(),
+    });
+    let out = render_text(&app, 100, 24);
     assert!(
         out.contains("Thought for 42s") && out.contains("(ctrl+o to expand)"),
         "a reasoning thought advertises its expand affordance: {out}"
     );
-    let _rendered = crate::test_harness::render_text(&app, 100, 24);
+    let _rendered = render_text(&app, 100, 24);
     let ri = app
         .last_row_turn_ids
         .borrow()
@@ -556,16 +568,137 @@ fn test_thought_keep_affordance() {
     );
 }
 
+/// A notice advertises the toggle that matches its state: the collapsed
+/// summary offers expand, and opening it offers collapse. An opened notice
+/// carried no hint at all before, so the way back was undiscoverable.
+#[test]
+fn test_notice_hint_matches_state() {
+    let mut app = app_with_notice(
+        "hint-1",
+        MemoryChangeOrigin::AutoMemory,
+        &[("alpha", MemoryOperation::Stored)],
+    );
+    let out = render_text(&app, 100, 24);
+    assert!(
+        out.contains("(ctrl+o to expand)"),
+        "the collapsed summary offers the expand toggle: {out}"
+    );
+    app.expanded_fold_groups.insert("mg#0".into());
+    let out = render_text(&app, 100, 24);
+    assert!(
+        out.contains("⎿  stored alpha"),
+        "the opened notice shows its key: {out}"
+    );
+    assert!(
+        out.contains("(ctrl+o to collapse)"),
+        "the opened summary offers the collapse toggle: {out}"
+    );
+    assert!(
+        !out.contains("(ctrl+o to expand)"),
+        "an open notice does not still offer to expand: {out}"
+    );
+}
+
+/// Every row a notice publishes fits one terminal line: the draw pass slices
+/// its row list by the fold-aware count, so a summary wider than the pane has
+/// to wrap into rows of its own rather than draw two lines for one row.
+#[test]
+fn test_notice_rows_fit_pane() {
+    let app = app_with_notice(
+        "narrow-1",
+        MemoryChangeOrigin::AutoMemory,
+        &[("alpha", MemoryOperation::Stored)],
+    );
+    let _out = render_text(&app, 24, 40);
+    let rows = app.last_all_rows.borrow();
+    assert!(!rows.is_empty(), "the notice publishes rows");
+    for (_, row) in rows.iter() {
+        assert_eq!(
+            wrap_line(row, 24).len(),
+            1,
+            "row outgrows the pane and would draw as several lines: {row:?}"
+        );
+    }
+}
+
+/// The fold-aware count follows the wrap the draw pass performs: at a width
+/// where the summary wraps, a collapsed notice counts the rows it drew, and
+/// the count matches the rows the draw published. It was a constant one
+/// whatever the width before, so a scroll offset built from it drifted.
+#[test]
+fn test_notice_count_matches_render() {
+    let mut app = app_with_notice(
+        "count-1",
+        MemoryChangeOrigin::AutoMemory,
+        &[
+            ("alpha", MemoryOperation::Stored),
+            ("beta", MemoryOperation::Deleted),
+        ],
+    );
+    let _out = render_text(&app, 24, 40);
+    let collapsed = app.fold_aware_rows(None);
+    assert!(
+        collapsed > 1,
+        "the summary outgrows a 24-column pane, so it counts its wrapped rows: {collapsed}"
+    );
+    assert_eq!(
+        collapsed,
+        app.transcript_scroll.total.get(),
+        "the count and the rows the draw published agree"
+    );
+    app.expanded_fold_groups.insert("mg#0".into());
+    let _out = render_text(&app, 24, 40);
+    let expanded = app.fold_aware_rows(None);
+    assert!(
+        expanded > collapsed,
+        "opening the notice adds its key rows: {collapsed} -> {expanded}"
+    );
+    assert_eq!(
+        expanded,
+        app.transcript_scroll.total.get(),
+        "the count and the rows the draw published agree while open too"
+    );
+}
+
+/// The cursor walk counts a notice's wrapped rows the way the draw pass drew
+/// them, so a cursor on the delegation below the notice resolves to that
+/// delegation. The walk and the draw are separate traversals of the same slot
+/// list, so a change to one of them alone shows up here.
+#[test]
+fn test_notice_walk_matches_render() {
+    let mut app = app_with_notice(
+        "cursor-1",
+        MemoryChangeOrigin::AutoMemory,
+        &[("alpha", MemoryOperation::Stored)],
+    );
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "found auth".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    let _out = render_text(&app, 24, 40);
+    let head_row = app
+        .last_all_rows
+        .borrow()
+        .iter()
+        .position(|(_, row)| row.contains("found auth"))
+        .expect("the delegation head rendered");
+    app.selection.anchor = Some((0, head_row));
+    assert!(
+        app.toggle_subagent_expand(),
+        "the cursor on the delegation below the notice resolves to it (row {head_row})"
+    );
+}
+
 /// Regression: Ctrl+O with no cursor still opens and closes the newest
 /// memory-change notice (the no-cursor fallback), so a notice is usable the
 /// way a tool group is from the keyboard without a mouse anchor.
 #[test]
 fn test_notice_ctrl_o_latest() {
-    use crate::state::Screen;
-    use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
-    };
-    let mut app = crate::composition::app();
+    let mut app = composition::app();
     app.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("k1".into()),
@@ -576,12 +709,12 @@ fn test_notice_ctrl_o_latest() {
         }],
     }));
     assert!(app.selection.anchor.is_none(), "no cursor");
-    crate::keys::handle_ctrl_o(&mut app);
+    handle_ctrl_o(&mut app);
     assert!(
         app.expanded_fold_groups.contains("mg#0"),
         "no-cursor Ctrl+O opens the notice"
     );
-    crate::keys::handle_ctrl_o(&mut app);
+    handle_ctrl_o(&mut app);
     assert!(
         !app.expanded_fold_groups.contains("mg#0"),
         "the same key closes it again"

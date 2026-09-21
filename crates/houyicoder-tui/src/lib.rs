@@ -44,6 +44,7 @@ pub mod session;
 pub mod state;
 pub mod terminal_title;
 pub mod todo_view;
+mod toggle_hint;
 pub mod transcript;
 pub mod view;
 

@@ -6,6 +6,7 @@ use crate::fold::{
     DisplaySlot, ToolStats, accumulate_brief, compute_fold_groups, display_slots, render_summary,
 };
 use crate::records::{ToolOutcome, TranscriptLine};
+use crate::toggle_hint::ToggleHint;
 use std::collections::HashSet;
 
 fn tool_call(cid: &str, name: &str, brief: &str, oc: ToolOutcome) -> TranscriptLine {
@@ -43,7 +44,7 @@ fn test_update_chip_not_other() {
     accumulate_brief(&mut s, "edit", "src/foo.rs");
     assert_eq!(s.edit, 1);
     assert_eq!(s.other, 0);
-    let summary = render_summary(&s, &[], false);
+    let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert!(
         !summary.plain.contains("other"),
         "Update call must not render as other: {:?}",
@@ -60,7 +61,7 @@ fn test_webfetch_memory_not_other() {
     accumulate_brief(&mut s, "WebFetch", "https://example.com");
     assert_eq!(s.search, 1);
     assert_eq!(s.other, 0);
-    let summary = render_summary(&s, &[], false);
+    let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert!(!summary.plain.contains("other"), "WebFetch: {:?}", summary);
 
     let mut s = ToolStats::default();
@@ -68,7 +69,7 @@ fn test_webfetch_memory_not_other() {
     assert_eq!(s.mem_write, 1);
     assert_eq!(s.edit, 0);
     assert_eq!(s.other, 0);
-    let summary = render_summary(&s, &[], false);
+    let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert!(
         !summary.plain.contains("other"),
         "save_memory: {:?}",
@@ -269,7 +270,7 @@ fn test_save_memory_wrote_bucket() {
     accumulate_brief(&mut s, "save_memory", "note: x");
     assert_eq!(s.mem_write, 1);
     assert_eq!(s.edit, 0);
-    let summary = render_summary(&s, &[], false);
+    let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert_eq!(summary.plain, "\u{23fa} Wrote 1 memory");
 }
 
@@ -283,7 +284,7 @@ fn test_delete_memory_deleted_bucket() {
     assert_eq!(s.mem_delete, 1);
     assert_eq!(s.mem_write, 0);
     assert_eq!(s.edit, 0);
-    let summary = render_summary(&s, &[], false);
+    let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert_eq!(summary.plain, "\u{23fa} Deleted 1 memory");
 }
 
@@ -296,7 +297,7 @@ fn test_memory_plural_and_order() {
     accumulate_brief(&mut s, "save_memory", "a");
     accumulate_brief(&mut s, "save_memory", "b");
     accumulate_brief(&mut s, "delete_memory", "c");
-    let summary = render_summary(&s, &[], false);
+    let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert_eq!(summary.plain, "\u{23fa} Wrote 2 memories, deleted 1 memory");
 }
 
@@ -308,7 +309,7 @@ fn test_memory_leads_file_ops() {
     let mut s = ToolStats::default();
     accumulate_brief(&mut s, "read", "src/foo.rs");
     accumulate_brief(&mut s, "save_memory", "note");
-    let summary = render_summary(&s, &[], false);
+    let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert_eq!(summary.plain, "\u{23fa} Wrote 1 memory, read 1 file");
 }
 
@@ -320,7 +321,7 @@ fn test_memory_active_tense() {
     let mut s = ToolStats::default();
     accumulate_brief(&mut s, "save_memory", "note");
     accumulate_brief(&mut s, "delete_memory", "old");
-    let summary = render_summary(&s, &[], true);
+    let summary = render_summary(&s, &[], true, None);
     assert_eq!(
         summary.plain,
         "\u{23fa} Writing 1 memory, deleting 1 memory"

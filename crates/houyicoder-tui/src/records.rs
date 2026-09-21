@@ -7,6 +7,8 @@ use houyicoder_protocol::frontend::context::ContextBreakdown;
 
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
+use crate::toggle_hint::ToggleHint;
+
 /// Drill-down rows under the /context grid: per-file memory and per-skill
 /// footprints. These drill-down rows list in two sections below the grid;
 /// the stub path carries canned entries so the layout is faithful before
@@ -139,8 +141,9 @@ pub enum TranscriptLine {
         /// then shows no duration, rather than claiming zero seconds.
         secs: Option<u32>,
         reasoning: Option<String>,
-        /// One-line tool-call summary for this turn ("ran 3 tools (2 bash,
-        /// 1 grep)"); None when the turn ran no tools.
+        /// One-line tool-call summary for this turn ("ran 3 bash" for one
+        /// kind of tool, "ran 3 tools (2 bash, 1 grep)" for mixed kinds);
+        /// None when the turn ran no tools.
         tool_summary: Option<String>,
         /// Identity of THIS turn's row: the position of the frame that ended
         /// the turn, counted in the frames the reader folded. A rebuild folds
@@ -360,10 +363,9 @@ impl TranscriptLine {
     /// The thought-row label for a given expand affordance: the flat render,
     /// the search text, and the row emitter build it here so the index
     /// matches what the transcript shows. hint is the toggle the caller
-    /// offers (None when the row carries no reasoning to expand, or when an
-    /// enclosing block owns the toggle). None when the line is not a thought
-    /// row.
-    pub(crate) fn thought_row_text(&self, hint: Option<&str>) -> Option<String> {
+    /// offers, None when the row carries no reasoning to expand or when an
+    /// enclosing block owns the toggle. None for any other line.
+    pub(crate) fn thought_row_text(&self, hint: Option<ToggleHint>) -> Option<String> {
         let Self::ThoughtFor {
             secs, tool_summary, ..
         } = self
@@ -378,10 +380,8 @@ impl TranscriptLine {
             text.push_str(", ");
             text.push_str(summary);
         }
-        if let Some(toggle) = hint {
-            text.push_str(" (ctrl+o to ");
-            text.push_str(toggle);
-            text.push(')');
+        if let Some(action) = hint {
+            text.push_str(action.suffix());
         }
         Some(format!("✻ {text}"))
     }
@@ -468,7 +468,7 @@ impl TranscriptLine {
                         ..
                     }
                 )
-                .then_some("expand");
+                .then_some(ToggleHint::Expand);
                 self.thought_row_text(hint).unwrap_or_default()
             }
             // The grid block is rendered by the working-surface renderer as a

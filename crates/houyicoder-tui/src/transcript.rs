@@ -16,9 +16,6 @@ use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate,
 use crate::brief::{result_summary, tool_call_brief};
 use crate::records::{ContextView, ToolOutcome, TranscriptLine};
 
-/// The transcript-snapshot seam (a loader backed by the durable log) lives
-/// as a directory submodule here so its path is transcript::snapshot, not a
-/// flat-prefix sibling of this file.
 pub mod snapshot;
 #[cfg(test)]
 use crate::result_body::count_diff_lines;
@@ -364,21 +361,23 @@ impl<'a> TurnFold<'a> {
         })
     }
 
-    /// The one-line tool summary ("ran 3 tools (2 bash, 1 grep)"), grouped by
-    /// tool with the most-used first. None when the turn called none.
+    /// The one-line tool summary, grouped by tool with the most-used first.
+    /// One kind of tool reads as its own count; mixed kinds keep the breakdown.
     fn tool_summary(&mut self) -> Option<String> {
         if self.calls == 0 {
             return None;
         }
         self.tools
             .sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        if let [(tool, count)] = self.tools.as_slice() {
+            return Some(format!("ran {count} {tool}"));
+        }
         let parts: Vec<String> = self
             .tools
             .iter()
             .map(|(tool, count)| format!("{count} {tool}"))
             .collect();
-        let noun = if self.calls == 1 { "tool" } else { "tools" };
-        Some(format!("ran {} {noun} ({})", self.calls, parts.join(", ")))
+        Some(format!("ran {} tools ({})", self.calls, parts.join(", ")))
     }
 }
 

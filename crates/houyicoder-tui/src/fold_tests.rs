@@ -4,6 +4,10 @@
 
 use super::*;
 
+use crate::toggle_hint::ToggleHint;
+
+use crate::view::line_wrap::wrap_line;
+
 #[test]
 fn test_classify_bash_search() {
     assert_eq!(classify_bash("grep -r foo ."), BashKind::Search);
@@ -79,11 +83,11 @@ fn test_render_summary_todo() {
         ..Default::default()
     };
     assert_eq!(
-        render_summary(&s, &[], false).plain,
+        render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
         "\u{23fa} Updated 2 checklists"
     );
     assert_eq!(
-        render_summary(&s, &[], true).plain,
+        render_summary(&s, &[], true, None).plain,
         "\u{23fa} Updating 2 checklists"
     );
     let s = ToolStats {
@@ -91,7 +95,7 @@ fn test_render_summary_todo() {
         ..Default::default()
     };
     assert_eq!(
-        render_summary(&s, &[], false).plain,
+        render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
         "\u{23fa} Updated 1 checklist"
     );
 }
@@ -104,7 +108,7 @@ fn test_render_past_tense() {
         bash: 3,
         ..Default::default()
     };
-    let out = render_summary(&s, &[], false);
+    let out = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert!(
         out.plain.starts_with("\u{23fa} Searched for 2 patterns"),
         "{:?}",
@@ -120,7 +124,7 @@ fn test_render_past_tense() {
         "line carries suffix: {:?}",
         out
     );
-    let active = render_summary(&s, &[], true);
+    let active = render_summary(&s, &[], true, None);
     let active_text: String = active
         .line
         .spans
@@ -140,7 +144,7 @@ fn test_render_summary_active_tense() {
         bash: 1,
         ..Default::default()
     };
-    let out = render_summary(&s, &[], true);
+    let out = render_summary(&s, &[], true, None);
     assert_eq!(out.plain, "\u{23fa} Running 1 shell command");
 }
 
@@ -153,11 +157,11 @@ fn test_render_summary_write() {
         ..Default::default()
     };
     assert_eq!(
-        render_summary(&s, &[], false).plain,
+        render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
         "\u{23fa} Wrote 1 file"
     );
     assert_eq!(
-        render_summary(&s, &[], true).plain,
+        render_summary(&s, &[], true, None).plain,
         "\u{23fa} Writing 1 file"
     );
     let s = ToolStats {
@@ -165,7 +169,7 @@ fn test_render_summary_write() {
         ..Default::default()
     };
     assert_eq!(
-        render_summary(&s, &[], false).plain,
+        render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
         "\u{23fa} Wrote 2 files"
     );
 }
@@ -177,7 +181,7 @@ fn test_render_summary_pluralization() {
         ..Default::default()
     };
     assert_eq!(
-        render_summary(&s, &[], false).plain,
+        render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
         "\u{23fa} Listed 2 directories"
     );
     let s = ToolStats {
@@ -185,14 +189,17 @@ fn test_render_summary_pluralization() {
         ..Default::default()
     };
     assert_eq!(
-        render_summary(&s, &[], false).plain,
+        render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
         "\u{23fa} Listed 1 directory"
     );
 }
 
 #[test]
 fn test_render_summary_empty() {
-    assert_eq!(render_summary(&ToolStats::default(), &[], false).plain, "");
+    assert_eq!(
+        render_summary(&ToolStats::default(), &[], false, Some(ToggleHint::Expand)).plain,
+        ""
+    );
 }
 
 /// Re-reading the same file counts once (read_paths dedup by path) — a
@@ -204,7 +211,10 @@ fn test_read_dedup_same_path() {
     accumulate_brief(&mut s, "read", "a.rs");
     accumulate_brief(&mut s, "read", "a.rs");
     assert_eq!(s.read_count(), 1);
-    assert_eq!(render_summary(&s, &[], false).plain, "\u{23fa} Read 1 file");
+    assert_eq!(
+        render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
+        "\u{23fa} Read 1 file"
+    );
 }
 
 /// Distinct paths count each; mixed with pathless bash cat calls, the cats
@@ -218,7 +228,7 @@ fn test_read_paths_plus_ops() {
     accumulate_brief(&mut s, "bash", "cat x.txt");
     accumulate_brief(&mut s, "bash", "cat y.txt");
     assert_eq!(s.read_count(), 4, "2 paths + 2 ops = 4");
-    let out = render_summary(&s, &[], false);
+    let out = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert!(out.plain.contains("Read 4 files"), "{:?}", out);
 }
 
@@ -294,7 +304,7 @@ fn test_summary_count_bold() {
         search: 2,
         ..Default::default()
     };
-    let out = render_summary(&s, &[], false);
+    let out = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     // The "2" is the count span; it must carry BOLD. Other spans are dim only.
     let count_span = out
         .line
@@ -369,7 +379,7 @@ fn test_git_commit_surfaces_summary() {
     assert_eq!(g.len(), 1);
     assert_eq!(g[0].stats.bash, 0, "git-op bash not counted as bash");
     assert_eq!(g[0].git_ops.len(), 1, "one git op detected");
-    let out = render_summary(&g[0].stats, &g[0].git_ops, false);
+    let out = render_summary(&g[0].stats, &g[0].git_ops, false, Some(ToggleHint::Expand));
     assert!(
         out.plain.contains("Committed abc123"),
         "summary leads with commit: {}",
@@ -397,7 +407,7 @@ fn test_git_push_surfaces_summary() {
         TranscriptLine::Agent("done".into()),
     ];
     let g = compute_fold_groups(&t, false);
-    let out = render_summary(&g[0].stats, &g[0].git_ops, false);
+    let out = render_summary(&g[0].stats, &g[0].git_ops, false, Some(ToggleHint::Expand));
     assert!(
         out.plain.contains("Pushed to main"),
         "push surfaces: {}",
@@ -418,7 +428,7 @@ fn test_git_log_counts_bash() {
     let g = compute_fold_groups(&t, false);
     assert!(g[0].git_ops.is_empty(), "git log is not a surfaced op");
     assert_eq!(g[0].stats.bash, 1, "git log counts as a bash command");
-    let out = render_summary(&g[0].stats, &g[0].git_ops, false);
+    let out = render_summary(&g[0].stats, &g[0].git_ops, false, Some(ToggleHint::Expand));
     assert!(
         out.plain.contains("Ran 1 shell command"),
         "git log is bash: {}",
@@ -632,6 +642,55 @@ fn test_memory_notice_slots() {
         slots[0],
         DisplaySlot::NoticeExpanded { ref key, idx: 0 } if key == "mg#0"
     ));
+}
+
+/// A notice's summary trails the toggle that matches the state it is in: a
+/// collapsed row offers expand, an open row offers collapse.
+#[test]
+fn test_notice_summary_toggle() {
+    let text = "Memory auto-memory: 2 changes · /memory\n  ⎿  stored alpha";
+    assert_eq!(
+        notice_lines(text, false, 200),
+        vec!["✻ Memory auto-memory: 2 changes · /memory (ctrl+o to expand)".to_string()]
+    );
+    assert_eq!(
+        notice_lines(text, true, 200),
+        vec![
+            "✻ Memory auto-memory: 2 changes · /memory (ctrl+o to collapse)".to_string(),
+            "  ⎿  stored alpha".to_string(),
+        ]
+    );
+}
+
+/// A notice slot pointed at a line that is not a notice counts one row: the
+/// slot walk never pairs them, and a defensive count must not invent rows.
+#[test]
+fn test_notice_slot_rows_fallback() {
+    let slot = DisplaySlot::NoticeCollapsed {
+        key: "mg#0".to_string(),
+        idx: 0,
+    };
+    let line = TranscriptLine::Agent("a reply".to_string());
+    assert_eq!(notice_slot_rows(&slot, &line, 40), 1);
+}
+
+/// Every row the notice publishes fits one terminal line at any width. The
+/// draw pass slices its row list by the count, so a row that draws as two
+/// lines shifts every row below it and clips the transcript tail.
+#[test]
+fn test_notice_rows_fit_width() {
+    let text = "Memory auto-memory: 2 changes · /memory\n  ⎿  stored alpha\n  ⎿  deleted a-key-that-outgrows-the-pane";
+    for expanded in [false, true] {
+        for width in [16usize, 24, 40, 80] {
+            for row in notice_lines(text, expanded, width) {
+                assert_eq!(
+                    wrap_line(&row, width).len(),
+                    1,
+                    "row {row:?} outgrows width {width}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

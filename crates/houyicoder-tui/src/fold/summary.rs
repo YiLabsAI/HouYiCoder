@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 
 use crate::fold::ToolStats;
 use crate::git_op::{self, GitOp};
+use crate::toggle_hint::ToggleHint;
 
 /// Rendered summary: a styled Line (bold counts + dim verb/noun + a
 /// "(ctrl+o to expand)" affordance suffix on completed groups) plus the
@@ -98,10 +99,14 @@ fn summary_count_parts(stats: &ToolStats, active: bool) -> Vec<SummaryPart> {
 }
 
 /// Render the summary line. Present participle when active, past tense when
-/// completed. Counts bold within a dim line so the eye latches onto numbers;
-/// a "(ctrl+o to expand)" affordance trails completed groups so the collapse
-/// affordance is discoverable (a CtrlOToExpand hint trails the summary).
-pub(crate) fn render_summary(stats: &ToolStats, git_ops: &[GitOp], active: bool) -> SummaryRender {
+/// completed. Counts are bold within a dim line; toggle is the action the row
+/// currently offers, or None for a group still in flight.
+pub(crate) fn render_summary(
+    stats: &ToolStats,
+    git_ops: &[GitOp],
+    active: bool,
+    toggle: Option<ToggleHint>,
+) -> SummaryRender {
     let count_parts = summary_count_parts(stats, active);
 
     // Git ops lead the line (the load-bearing outcome reads first), then the
@@ -169,10 +174,8 @@ pub(crate) fn render_summary(stats: &ToolStats, git_ops: &[GitOp], active: bool)
     // with the ⎿ hint/result rows below it (same as a single ⏺ Tool() call).
     spans.insert(0, Span::styled("\u{23fa} ", dim));
     let plain = format!("\u{23fa} {}", plain_parts.join(", "));
-    // Completed (non-active) groups get the affordance suffix so the collapse
-    // is discoverable; active groups stay bare (they read as "in progress").
-    if !active {
-        spans.push(Span::styled(" (ctrl+o to expand)", dim));
+    if let Some(action) = toggle {
+        spans.push(Span::styled(action.suffix(), dim));
     }
     SummaryRender {
         line: Line::from(spans),

@@ -2,6 +2,7 @@ use super::*;
 use houyicoder_protocol::frontend::session_update::{
     ToolCall, ToolCallUpdate, ToolCallUpdateFields,
 };
+use serde_json::Value;
 
 fn user_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
@@ -18,14 +19,14 @@ fn thought(text: &str) -> TranscriptFrame {
         ContentBlock::Text { text: text.into() },
     )))
 }
-fn tool_call(id: &str, tool: &str, input: serde_json::Value) -> TranscriptFrame {
+fn tool_call(id: &str, tool: &str, input: Value) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::ToolCall(
         ToolCall::new(id, tool)
             .raw_input(input)
             .status(ToolCallStatus::InProgress),
     ))
 }
-fn tool_result(id: &str, output: serde_json::Value) -> TranscriptFrame {
+fn tool_result(id: &str, output: Value) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
         id,
         ToolCallUpdateFields::new()
@@ -525,16 +526,50 @@ fn test_turn_row_counts_tools() {
     // The summary counts the turn's own calls, grouped by tool with the
     // most-used first. A call from the turn before stays out.
     let frames = vec![
-        tool_call("c0", "bash", serde_json::Value::Null),
+        tool_call("c0", "bash", Value::Null),
         user_msg("go"),
-        tool_call("c1", "bash", serde_json::Value::Null),
-        tool_call("c2", "grep", serde_json::Value::Null),
+        tool_call("c1", "bash", Value::Null),
+        tool_call("c2", "grep", Value::Null),
     ];
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let row = thought_row(&lines).expect("a row for the turn");
     assert_eq!(
         row.tool_summary.as_deref(),
         Some("ran 2 tools (1 bash, 1 grep)")
+    );
+}
+
+#[test]
+fn test_turn_row_one_kind() {
+    // One kind of tool reads as its own count: the breakdown paren would only
+    // repeat the total it sits behind, so "ran 3 bash", never "ran 3 tools
+    // (3 bash)".
+    let frames = vec![
+        user_msg("go"),
+        tool_call("c1", "bash", Value::Null),
+        tool_call("c2", "bash", Value::Null),
+        tool_call("c3", "bash", Value::Null),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    let row = thought_row(&lines).expect("a row for the turn");
+    assert_eq!(row.tool_summary.as_deref(), Some("ran 3 bash"));
+}
+
+#[test]
+fn test_turn_row_two_kinds() {
+    // Two kinds keep the breakdown even when one kind dominates: the count of
+    // the other kind has nowhere else to show.
+    let frames = vec![
+        user_msg("go"),
+        tool_call("c1", "bash", Value::Null),
+        tool_call("c2", "bash", Value::Null),
+        tool_call("c3", "read", Value::Null),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    let row = thought_row(&lines).expect("a row for the turn");
+    assert_eq!(
+        row.tool_summary.as_deref(),
+        Some("ran 3 tools (2 bash, 1 read)")
     );
 }
 
@@ -625,7 +660,7 @@ fn test_record_spans_mid_turn() {
     // arrived.
     let mut frames = vec![user_msg("go"), thought("first half ")];
     frames.extend(mid_turn_msg("queued note"));
-    frames.push(tool_call("c1", "bash", serde_json::Value::Null));
+    frames.push(tool_call("c1", "bash", Value::Null));
     frames.push(thought("second half"));
     frames.push(run_completed(Some(3)));
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
@@ -637,7 +672,7 @@ fn test_record_spans_mid_turn() {
     let row = thought_row(&lines).expect("a row");
     assert_eq!(row.secs, Some(3));
     assert_eq!(row.reasoning.as_deref(), Some("first half second half"));
-    assert_eq!(row.tool_summary.as_deref(), Some("ran 1 tool (1 bash)"));
+    assert_eq!(row.tool_summary.as_deref(), Some("ran 1 bash"));
     assert_eq!(row.turn_id, "f6");
 }
 
@@ -767,12 +802,12 @@ fn test_window_record_only() {
     // the turn's row: a view that reaches the turn's end renders what the whole
     // log renders, rather than dropping it for having nothing in view.
     let mut frames = vec![user_msg("go"), thought("half ")];
-    frames.push(tool_call("c1", "bash", serde_json::Value::Null));
+    frames.push(tool_call("c1", "bash", Value::Null));
     frames.push(run_completed(Some(5)));
     let lines = transcript_from_frames(&frames, 3..4, false);
     let row = thought_row(&lines).expect("a row for the turn the record ends");
     assert_eq!(row.reasoning.as_deref(), Some("half "));
-    assert_eq!(row.tool_summary.as_deref(), Some("ran 1 tool (1 bash)"));
+    assert_eq!(row.tool_summary.as_deref(), Some("ran 1 bash"));
     assert_eq!(row.secs, Some(5));
     assert_eq!(row.turn_id, "f3");
 }

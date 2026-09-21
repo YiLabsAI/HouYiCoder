@@ -157,14 +157,12 @@ fn test_fold_collapse_expand_toggle() {
         !out.contains("Read(a"),
         "collapsed should hide tool calls: {out}"
     );
-    // The ⎿ hint row under the summary uses the project-standard 2-space
-    // gutter ("  ⎿  ", matching records.rs INTERRUPTED_NOTICE + markers.rs
-    // result rows + the canonical '  ⎿  '). Pin so a future edit can't silently drop
-    // to one trailing space (the regression that reads as cramped + ugly).
     assert!(
-        out.contains("  ⎿  "),
-        "hint gutter uses the 2-space ⎿  standard: {out}"
+        out.contains("ctrl+o to expand"),
+        "collapsed summary offers expand: {out}"
     );
+    // The preview row shares the two-space gutter used by child result rows.
+    assert!(out.contains("  ⎿  "), "hint gutter is aligned: {out}");
 
     // --- Ctrl+O on summary row expands ---
     let fold_ri = app
@@ -206,6 +204,14 @@ fn test_fold_collapse_expand_toggle() {
     assert!(
         out.contains("listed 1 directory"),
         "expanded keeps the summary as a collapse-handle header: {out}"
+    );
+    assert!(
+        out.contains("ctrl+o to collapse"),
+        "expanded summary offers collapse: {out}"
+    );
+    assert!(
+        !out.contains("ctrl+o to expand"),
+        "expanded summary no longer offers expand: {out}"
     );
 
     // --- Click on summary row toggles to expanded (same as Ctrl+O) ---

@@ -493,13 +493,14 @@ pub(crate) fn is_memory_notice(line: &TranscriptLine) -> bool {
     first.starts_with("Memory ") && first.ends_with(" · /memory")
 }
 
+/// The memory-change notice block: the rows it renders to, walked by both the
+/// renderer and the fold-aware count.
+mod notice;
+pub(crate) use notice::{notice_lines, notice_slot_rows};
+
 /// Build the visible slot list from the transcript, fold groups, and the
-/// expanded-set. Collapsed groups produce one Summary slot; expanded groups
-/// produce the Summary header (for completed groups) plus individual Line
-/// slots. A single-call active group stays expanded so the user sees the
-/// in-flight call. Multi-call active groups collapse to a live summary so a
-/// long exploration run does not fill the screen with consecutive bash calls.
-/// Lines outside any group always produce a Line slot.
+/// expanded-set: one Summary slot for a collapsed group, the summary header
+/// plus its lines for an expanded one, and a Line slot for everything else.
 pub(crate) fn display_slots(
     transcript: &[TranscriptLine],
     agent_busy: bool,
@@ -518,28 +519,20 @@ pub(crate) fn display_slots(
         if gi < groups.len() && groups[gi].start == i {
             let g = &groups[gi];
             let is_expanded = expanded.contains(&g.key);
-            // Active (in-flight) groups show each call directly — the user
-            // sees each tool call + its folded result as it lands, not a
-            // live summary that hides them (active multi-call groups stay
-            // expanded, not buried behind a "Running N commands" line).
-            // Completed groups collapse to the summary
-            // unless the user expanded one — then the Summary stays as a
-            // collapse-handle header above the lines. Verbose mode (the
-            // search view) forces every group expanded so a search hit is
-            // never hidden behind a collapsed turn summary.
+            // An active group shows each call as it lands (a live summary
+            // would hide them); a completed one collapses to its summary
+            // unless the user expanded it or the search view forces it open.
             let should_collapse = !(is_expanded || g.active || verbose);
             if should_collapse {
                 slots.push(DisplaySlot::Summary(g.clone()));
             } else {
-                // Expanded: the Summary stays as a clickable header (the
-                // group's collapse handle) for completed groups, then each
-                // line. Active groups show just the live calls.
+                // A completed group keeps its summary as the collapse handle
+                // above the lines; an active group has no handle to offer.
                 if !g.active {
                     slots.push(DisplaySlot::Summary(g.clone()));
                 }
-                // Tag each expanded-group line with the group key so the view
-                // can paint the expanded block + route a clean click anywhere
-                // in it to collapse this group (expanded block = one click region).
+                // The group key on each line paints the expanded block and
+                // makes the whole region one click target.
                 for j in i..g.end {
                     slots.push(DisplaySlot::Line(j, Some(g.key.clone())));
                 }
@@ -567,51 +560,32 @@ pub(crate) fn display_slots(
     slots
 }
 
-// Fold-aware display-row counting, split from state.rs so that file stays
-// under the file-size gate. These walk the same display_slots Vec the render
-// path walks, so the count and the rendered rows never diverge.
+// Fold-aware display-row counting: the same display_slots walk the render path
+// takes, so the count and the rendered rows cannot diverge.
 impl crate::state::App {
-    /// Total display rows the current transcript renders to. A line may span
-    /// multiple rows (a tool result body renders its summary, continuations,
-    /// and an optional collapse hint), and a blank spacer is inserted before
-    /// each top-level message except the first. Folded groups contribute one
-    /// summary row instead of their individual lines. All counted so paging
-    /// stays aligned with the rendered row space.
+    /// Total display rows the transcript renders to: a line may span several
+    /// rows, a blank spacer precedes each message but the first, and a
+    /// collapsed group contributes its summary row instead of its lines.
     ///
-    /// Prefers the value the last render published (an O(1) Cell read) over
-    /// recomputing the walk. The draw path builds the rendered rows anyway and
-    /// publishes rows.len() to transcript_scroll.total; this is the
-    /// count==render single source. Callers that query between renders (scroll
-    /// math, the status bar, run_control) read the published value instead of
-    /// each re-walking the transcript - the prior design had scroll read the
-    /// Cell while the status bar + run_control recomputed, a second source
-    /// that drifted a frame + paid the cold-cache O(n x parse) on the draw
-    /// path. Falls back to the recompute before the first render publishes.
+    /// Reads the value the last render published, which is the count==render
+    /// single source; the walk is the fallback before the first render.
     pub fn transcript_display_rows(&self) -> usize {
         let t = self.transcript_scroll.total.get();
         if t > 0 { t } else { self.fold_aware_rows(None) }
     }
 
-    /// The display-row index where transcript line idx starts (sum of row
-    /// counts of all earlier lines, plus one blank spacer per earlier
-    /// message). Used to jump the scroll to a search match. A line inside a
-    /// collapsed fold group maps to the group's summary row position.
+    /// The display-row index where transcript line idx starts, for jumping the
+    /// scroll to a search match. A line inside a collapsed group maps to that
+    /// group's summary row.
     pub fn transcript_row_of_line(&self, idx: usize) -> usize {
         self.fold_aware_rows(Some(idx))
     }
 
-    /// Walk the transcript summing display rows. When target is Some(idx),
-    /// returns the row where line idx starts. When None, returns the total.
-    ///
-    /// Fold-aware counting: a completed turn's consecutive tool calls collapse
-    /// to one summary row (when not expanded) or expand to individual lines
-    /// plus a collapse-hint row (when expanded). The slot region is
-    /// single-sourced: both this count path and the render path
-    /// (view::working::draw_transcript) walk the same display_slots Vec with
-    /// the same spacer logic. The trailing live-preview and spinner rows
-    /// (drawn after the slot region while the agent is busy or a reply
-    /// streams) are added via live_trailing_row_count, which matches the
-    /// render path's post-slot appends so the totals still agree.
+    /// Walk the transcript summing display rows: the row where line target
+    /// starts, or the total when target is None. A completed turn's calls
+    /// collapse to one summary row or expand to their lines, and the trailing
+    /// live rows are counted by live_trailing_row_count, so this total matches
+    /// what the draw pass emits.
     pub(crate) fn fold_aware_rows(&self, target: Option<usize>) -> usize {
         let transcript = self.active_transcript();
         let slots = display_slots(
@@ -620,6 +594,7 @@ impl crate::state::App {
             &self.expanded_fold_groups,
             self.verbose,
         );
+        let width = self.last_transcript_width.get();
         let mut total = 0;
         let mut first = true;
         for slot in &slots {
@@ -632,9 +607,9 @@ impl crate::state::App {
                     (true, self.line_display_rows_mode(&transcript[*i], full))
                 }
                 DisplaySlot::Summary(g) => (true, 1 + g.hint.is_some() as usize),
-                DisplaySlot::NoticeCollapsed { .. } => (true, 1),
-                DisplaySlot::NoticeExpanded { idx, .. } => {
-                    (true, self.line_display_rows_mode(&transcript[*idx], true))
+                DisplaySlot::NoticeCollapsed { idx, .. }
+                | DisplaySlot::NoticeExpanded { idx, .. } => {
+                    (true, notice_slot_rows(slot, &transcript[*idx], width))
                 }
             };
             if !first && needs_spacer {
@@ -654,11 +629,8 @@ impl crate::state::App {
             total += rows;
             first = false;
         }
-        // Trailing live-preview + spinner rows are drawn after the slot region
-        // (see view::working::draw_transcript) when the agent is busy or a
-        // reply is streaming. The total path must include them so the count
-        // matches the rendered total; the target path returns within the loop
-        // above (all transcript line indices sit inside the slot region).
+        // The live rows drawn after the slot region belong to the total; a
+        // target always resolves inside the loop above.
         if target.is_none() {
             total += self.live_trailing_row_count(total == 0);
         }
