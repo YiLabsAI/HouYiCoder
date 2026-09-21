@@ -104,7 +104,7 @@ fn test_switch_session_resets_view() {
     assert_eq!(app.session_id.0, new_sid, "session_id updated");
     assert!(app.session.is_some(), "new session driver wired");
     assert!(!app.agent_busy(), "agent_busy cleared");
-    assert!(app.transcript_scroll.follow_tail, "scroll reset");
+    assert!(app.transcript_scroll.is_following_tail(), "scroll reset");
     assert_eq!(app.pane, crate::state::Pane::Transcript, "pane reset");
 }
 

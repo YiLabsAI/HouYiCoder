@@ -285,7 +285,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // the blank cells to either side must fall through to the transcript
     // surface (start a drag-select), not get swallowed into a jump.
     let pill_visible = app.viewport != ViewportMode::Scroll
-        && !app.transcript_scroll.follow_tail
+        && !app.transcript_scroll.is_following_tail()
         && !app.search.active;
     if pill_visible {
         let count = app.jump_pill_new_count();

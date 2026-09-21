@@ -3,6 +3,7 @@
 //! transcript_scroll field; the debug_scroll helper is private to this impl
 //! block and only these methods call it.
 
+use crate::scroll::ScrollTransition;
 use crate::state::App;
 
 impl App {
@@ -10,32 +11,36 @@ impl App {
     pub fn scroll_transcript_up(&mut self) {
         let total = self.transcript_display_rows();
         let before = self.transcript_scroll.top_offset(total);
-        let was_following = self.transcript_scroll.follow_tail;
+        let was_following = self.transcript_scroll.is_following_tail();
         self.transcript_scroll.page_up(total);
         self.snapshot_scroll_away(was_following);
         let after = self.transcript_scroll.top_offset(total);
         self.debug_scroll("up", total, before, after);
     }
 
-    /// Page the transcript down by one viewport (newer rows).
+    /// Page the transcript down by one viewport (newer rows). A step that
+    /// crosses to the tail trims the live transcript and clears the
+    /// scroll-away snapshot so the cap stays aligned and the new-message pill
+    /// dismisses.
     pub fn scroll_transcript_down(&mut self) {
         let total = self.transcript_display_rows();
         let before = self.transcript_scroll.top_offset(total);
-        let was_following = self.transcript_scroll.follow_tail;
-        self.transcript_scroll.page_down(total);
-        self.reset_scroll_away_if_followed(was_following);
+        if self.transcript_scroll.page_down(total) == ScrollTransition::ReachedTail {
+            self.resume_tail_trim();
+        }
         let after = self.transcript_scroll.top_offset(total);
         self.debug_scroll("down", total, before, after);
     }
 
     /// Return the transcript scroll to following the tail. Also clears the
     /// scroll-away snapshot so the next scroll-back starts a fresh "new
-    /// messages" count (an on-repin clears the unseen
-    /// divider). Called by the jump-to-bottom pill click, a new user
-    /// submission, End, Ctrl+End, and PageDown-to-bottom.
+    /// messages" count (an on-repin clears the unseen divider), and trims the
+    /// live transcript so the cap holds at the tail. Called by the
+    /// jump-to-bottom pill click, a new user submission, End, Ctrl+End, and
+    /// PageDown-to-bottom.
     pub fn scroll_transcript_follow_tail(&mut self) {
         self.transcript_scroll.follow_tail();
-        self.scrolled_from_frame = None;
+        self.resume_tail_trim();
     }
 
     /// Break follow-tail while keeping the current top row on screen. Callers
@@ -55,21 +60,22 @@ impl App {
     /// transcript, max_top==0) or when a snapshot already exists.
     fn snapshot_scroll_away(&mut self, was_following: bool) {
         if was_following
-            && !self.transcript_scroll.follow_tail
+            && !self.transcript_scroll.is_following_tail()
             && self.scrolled_from_frame.is_none()
         {
             self.scrolled_from_frame = Some(self.frames.len());
         }
     }
 
-    /// Clear the scroll-away snapshot when a downward scroll reaches the
-    /// tail (the user scrolled back to the bottom). Symmetric with
-    /// snapshot_scroll_away so PageDown/line-down to the bottom dismisses the
-    /// pill, matching End and the pill click (which go through
-    /// scroll_transcript_follow_tail).
-    fn reset_scroll_away_if_followed(&mut self, was_following: bool) {
-        if !was_following && self.transcript_scroll.follow_tail {
-            self.scrolled_from_frame = None;
+    /// Clear the scroll-away snapshot and trim the live transcript now that
+    /// the viewport is back at the tail. The version bump fires only when the
+    /// trim actually dropped lines, so a no-op return to the tail does not
+    /// invalidate the render cache.
+    fn resume_tail_trim(&mut self) {
+        self.scrolled_from_frame = None;
+        let dropped = self.trim_live_transcript();
+        if dropped > 0 {
+            self.bump_transcript_version();
         }
     }
 
@@ -122,7 +128,7 @@ impl App {
     pub fn scroll_transcript_line_up(&mut self, n: usize) {
         let total = self.transcript_display_rows();
         let before = self.transcript_scroll.top_offset(total);
-        let was_following = self.transcript_scroll.follow_tail;
+        let was_following = self.transcript_scroll.is_following_tail();
         self.transcript_scroll.line_up(n, total);
         self.snapshot_scroll_away(was_following);
         let after = self.transcript_scroll.top_offset(total);
@@ -130,12 +136,14 @@ impl App {
     }
 
     /// Step the transcript down by n lines. See scroll_transcript_line_up.
+    /// A step that crosses to the tail trims and clears the scroll-away
+    /// snapshot, matching page_down.
     pub fn scroll_transcript_line_down(&mut self, n: usize) {
         let total = self.transcript_display_rows();
         let before = self.transcript_scroll.top_offset(total);
-        let was_following = self.transcript_scroll.follow_tail;
-        self.transcript_scroll.line_down(n, total);
-        self.reset_scroll_away_if_followed(was_following);
+        if self.transcript_scroll.line_down(n, total) == ScrollTransition::ReachedTail {
+            self.resume_tail_trim();
+        }
         let after = self.transcript_scroll.top_offset(total);
         self.debug_scroll("line-down", total, before, after);
     }
@@ -154,7 +162,7 @@ impl App {
             before,
             after,
             delta,
-            follow = self.transcript_scroll.follow_tail,
+            follow = self.transcript_scroll.is_following_tail(),
             "scroll"
         );
     }

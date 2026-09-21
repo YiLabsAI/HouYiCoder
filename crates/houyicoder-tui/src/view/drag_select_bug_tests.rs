@@ -116,8 +116,7 @@ fn test_redrag_stays_char_mode() {
 fn test_edge_drag_scrolls_line() {
     let (mut app, _captured) = app_with_lines(40);
     let rect = app.transcript_rect.get();
-    app.transcript_scroll.follow_tail = false;
-    app.transcript_scroll.offset = 10;
+    app.transcript_scroll.jump_to(10);
     let _out = render_text(&app, 80, 24);
     let total = app.transcript_scroll.total.get();
     assert_eq!(app.transcript_scroll.top_offset(total), 10);

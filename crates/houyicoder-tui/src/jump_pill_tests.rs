@@ -107,9 +107,9 @@ fn test_agent_count_rises() {
 /// The viewable window drops its oldest rows once it passes the cap. A
 /// transcript-length baseline would saturate the count to zero after that
 /// drop; the frame-index baseline survives, because frames truncate only on
-/// rewind. The window is filled to the cap before the scroll-away, so the
-/// snapshot reads a full window against a short frame log and the count
-/// below tells the two baselines apart.
+/// rewind. Trim runs only at the tail, so the cap holds on resume, not
+/// mid-scroll-back: the count is frame-based and tracks frames, not the
+/// transcript length that changes while scrolled away.
 #[test]
 fn test_evicted_keeps_count() {
     let mut app = composition::app();
@@ -129,31 +129,45 @@ fn test_evicted_keeps_count() {
         "response",
     ))));
     assert_eq!(app.jump_pill_new_count(), 1);
-    // One row past the cap: this push is the one that drops the oldest rows.
+    // One row past the cap while scrolled back: trim skips a scrolled-back
+    // reader, so the line accumulates past the cap rather than draining.
     app.push_transcript_line(TranscriptLine::User("one past the cap".into()));
     assert_eq!(
         app.transcript.len(),
-        VIEWABLE_SCROLLBACK_CAP,
-        "the fill line the cap must drop leaves the window at its cap"
+        VIEWABLE_SCROLLBACK_CAP + 2,
+        "trim skips while scrolled back, so the line accumulates"
     );
-    // The length alone cannot tell a landed push plus one eviction from a push
-    // that never landed, so the two rows the drop moves name the outcome.
+    // The count is frame-based, so a length change during scroll-away does
+    // not zero it: it still names the frames since the snapshot.
+    assert_eq!(
+        app.jump_pill_new_count(),
+        1,
+        "the frame-based count is independent of the transcript length"
+    );
+    // The cap holds at the tail: resume trims the accumulated rows back.
+    app.scroll_transcript_follow_tail();
+    assert_eq!(
+        app.transcript.len(),
+        VIEWABLE_SCROLLBACK_CAP,
+        "resume-to-tail trims back to the cap"
+    );
     assert!(
         app.transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "one past the cap")),
-        "the pushed row lands in the window"
+        "the newest row survives the resume trim"
     );
     assert!(
         !app.transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "filler line 1")),
-        "the row the push displaced leaves the window"
+        "the oldest row the resume trim drops leaves the window"
     );
+    // Resume cleared the scroll-away snapshot, so the count returns to zero.
     assert_eq!(
         app.jump_pill_new_count(),
-        1,
-        "the dropped rows must not zero the frame-based count"
+        0,
+        "resume clears the scroll-away snapshot"
     );
 }
 
@@ -203,7 +217,7 @@ fn test_click_pill_jumps() {
         mouse(MouseEventKind::Down(MouseButton::Left), px, py),
     );
     assert!(
-        app.transcript_scroll.follow_tail,
+        app.transcript_scroll.is_following_tail(),
         "click returns to the tail"
     );
     assert!(
@@ -229,7 +243,7 @@ fn test_pill_side_falls_through() {
         mouse(MouseEventKind::Down(MouseButton::Left), 0, pill.y),
     );
     assert!(
-        !app.transcript_scroll.follow_tail,
+        !app.transcript_scroll.is_following_tail(),
         "click beside the label must not jump to the tail"
     );
 }
@@ -245,7 +259,7 @@ fn test_short_no_pill() {
     let _out = render_text(&app, 80, 24);
     app.scroll_transcript_line_up(3);
     assert!(
-        app.transcript_scroll.follow_tail,
+        app.transcript_scroll.is_following_tail(),
         "short transcript scroll keeps follow-tail"
     );
     let _out = render_text(&app, 80, 24);
@@ -263,7 +277,7 @@ fn test_pill_hidden_following() {
     }
     let _out = render_text(&app, 80, 24);
     assert!(
-        app.transcript_scroll.follow_tail,
+        app.transcript_scroll.is_following_tail(),
         "default follows the tail"
     );
     let pill = app.jump_pill_rect.get();
@@ -289,7 +303,7 @@ fn test_wheel_moves_content() {
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::ScrollUp, 40, 12));
     let top_after = app.transcript_scroll.top_offset(total);
     assert!(
-        !app.transcript_scroll.follow_tail,
+        !app.transcript_scroll.is_following_tail(),
         "wheel up breaks follow-tail"
     );
     assert!(

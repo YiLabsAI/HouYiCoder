@@ -85,6 +85,14 @@ impl App {
             merged.extend_from_slice(&tail[tail_idx..]);
             self.transcript = merged;
         }
+        // Bound the viewable transcript at the rebuild exit. A row the
+        // frontend raises (a system line, a context view, an interrupt) grows
+        // the transcript through this rebuild path, not the direct push path,
+        // so the cap must sit here to cover both growth paths with one
+        // ceiling. Trim shifts the turn boundary so a tail rebuild's stable
+        // prefix stays in range; a scrolled-back reader is left alone so a
+        // scroll-up session's loaded frames survive.
+        self.trim_live_transcript();
         // Re-derive view caches incrementally from their frame cursors.
         self.accumulate_wire_state();
         self.bump_transcript_version();
@@ -117,7 +125,7 @@ impl App {
             return;
         }
         // Don't prepend when following the tail (user is at the bottom).
-        if self.transcript_scroll.follow_tail {
+        if self.transcript_scroll.is_following_tail() {
             return;
         }
         let top = self

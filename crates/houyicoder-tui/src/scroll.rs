@@ -37,16 +37,17 @@ pub const SEARCH_LOG_THRESHOLD: u64 = 16 * 1024 * 1024;
 pub const WINDOW_MAX_BYTES: u64 = 256 * 1024;
 
 /// Bound the viewable scrollback. Evict the oldest lines once the in-memory
-/// transcript exceeds the cap. The search view renders a frozen snapshot
-/// (active_transcript), not this live vec, so an open search needs no
-/// recompute on eviction -- its matches index into the snapshot which does
-/// not shift. (The prior recompute was the index-shift fix the snapshot
-/// makes dead; keeping it would recompute against the wrong vec and
-/// overwrite the snapshot's matches.)
-pub(crate) fn bound_scrollback(transcript: &mut Vec<TranscriptLine>) {
+/// transcript exceeds the cap, and return how many were dropped. The search
+/// view renders a frozen snapshot (active_transcript), not this live vec, so
+/// an open search needs no recompute on eviction: its matches index into the
+/// snapshot, which does not shift.
+pub(crate) fn bound_scrollback(transcript: &mut Vec<TranscriptLine>) -> usize {
     if transcript.len() > VIEWABLE_SCROLLBACK_CAP {
         let drop = transcript.len() - VIEWABLE_SCROLLBACK_CAP;
         transcript.drain(0..drop);
+        drop
+    } else {
+        0
     }
 }
 
@@ -58,7 +59,11 @@ pub struct TranscriptScroll {
     /// True when pinned to the tail (new rows push in). False once PgUp or a
     /// wheel-up pins a top offset. End or a new user submission restores
     /// follow; mid-run agent output never yanks a reader scrolled back.
-    pub follow_tail: bool,
+    ///
+    /// Private: every flip routes through a method so the App wrapper can run
+    /// the trim and scroll-away cleanup on a return to the tail, rather than
+    /// the flip happening silently inside a scroll op.
+    follow_tail: bool,
     /// Top display-row index when not following the tail. Ignored while
     /// follow_tail is true.
     pub offset: usize,
@@ -69,6 +74,17 @@ pub struct TranscriptScroll {
     /// Total display-row count, written by the view during draw so the key
     /// handler can clamp and detect end-of-buffer.
     pub total: Cell<usize>,
+}
+
+/// The outcome of a downward scroll step. Unchanged: already at the tail,
+/// nothing moved. Pinned: moved to a mid-buffer offset, still scrolled back.
+/// ReachedTail: crossed to the tail, so the caller trims the live transcript
+/// and clears the scroll-away snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTransition {
+    Unchanged,
+    Pinned,
+    ReachedTail,
 }
 
 impl Default for TranscriptScroll {
@@ -83,6 +99,11 @@ impl Default for TranscriptScroll {
 }
 
 impl TranscriptScroll {
+    /// Whether the viewport is pinned to the tail (new rows push in).
+    pub fn is_following_tail(&self) -> bool {
+        self.follow_tail
+    }
+
     pub fn raw_top(&self) -> usize {
         self.offset
     }
@@ -132,16 +153,24 @@ impl TranscriptScroll {
     }
 
     /// Page down by one viewport. Returns to follow-tail when the bottom is
-    /// reached.
-    pub fn page_down(&mut self, total_rows: usize) {
+    /// reached. The transition lets the caller trim the live transcript and
+    /// clear the scroll-away snapshot on a return to the tail, rather than
+    /// the flip happening silently here.
+    pub fn page_down(&mut self, total_rows: usize) -> ScrollTransition {
         let cap = self.effective_cap();
         let cur = self.top_offset(total_rows);
         let max_top = total_rows.saturating_sub(cap);
         if cur + cap >= max_top {
-            self.follow_tail = true;
+            if self.follow_tail {
+                ScrollTransition::Unchanged
+            } else {
+                self.follow_tail = true;
+                ScrollTransition::ReachedTail
+            }
         } else {
             self.offset = cur + cap;
             self.follow_tail = false;
+            ScrollTransition::Pinned
         }
     }
 
@@ -161,15 +190,23 @@ impl TranscriptScroll {
     }
 
     /// Step down by n lines. Returns to follow-tail when the bottom is
-    /// reached. See line_up for why a line step is the wheel default.
-    pub fn line_down(&mut self, n: usize, total_rows: usize) {
+    /// reached. See line_up for why a line step is the wheel default. The
+    /// transition carries whether the step crossed to the tail so the caller
+    /// can trim and clear the scroll-away snapshot.
+    pub fn line_down(&mut self, n: usize, total_rows: usize) -> ScrollTransition {
         let cur = self.top_offset(total_rows);
         let max_top = total_rows.saturating_sub(self.effective_cap());
         if cur + n >= max_top {
-            self.follow_tail = true;
+            if self.follow_tail {
+                ScrollTransition::Unchanged
+            } else {
+                self.follow_tail = true;
+                ScrollTransition::ReachedTail
+            }
         } else {
             self.offset = cur + n;
             self.follow_tail = false;
+            ScrollTransition::Pinned
         }
     }
 
@@ -301,9 +338,10 @@ impl WindowScroll {
 #[derive(Debug, Default, Clone)]
 pub struct SearchState {
     /// True while the search view is active. Single source: read by the
-    /// highlight gate, the chrome, and bound_scrollback (which recomputes
-    /// matches when the transcript is evicted past the 4000-row cap, so a
-    /// long-running agent does not leave stale indices under an open search).
+    /// highlight gate, the chrome, and the active_transcript picker. The
+    /// search view renders a frozen snapshot, not the live vec, so an open
+    /// search needs no recompute when the live transcript is evicted past the
+    /// cap.
     pub active: bool,
     /// The current query string.
     pub query: String,

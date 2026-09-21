@@ -180,7 +180,7 @@ fn test_wheel_scrolls_in_place() {
         app.system_line("a long line of transcript history");
     }
     assert_eq!(app.viewport, ViewportMode::Working);
-    assert!(app.transcript_scroll.follow_tail);
+    assert!(app.transcript_scroll.is_following_tail());
     // Wheel up scrolls the transcript in place — it must NOT enter the
     // full-screen Scroll viewport (which would hide the input box).
     handle_mouse(&mut app, wheel(MouseEventKind::ScrollUp));
@@ -190,7 +190,7 @@ fn test_wheel_scrolls_in_place() {
         "wheel must not enter fullscreen Scroll"
     );
     assert!(
-        !app.transcript_scroll.follow_tail,
+        !app.transcript_scroll.is_following_tail(),
         "wheel-up should detach from the tail"
     );
 }

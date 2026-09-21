@@ -128,7 +128,9 @@ impl App {
             if let Some(view) = self.teammate_view.as_mut() {
                 view.transcript.push(TranscriptLine::User(input.clone()));
                 view.pending_echo = Some(input);
-                self.transcript_scroll.follow_tail = true;
+                // Follow the child tail without trimming the parent: this
+                // scroll tracks the child transcript, not the parent live vec.
+                self.transcript_scroll.follow_tail();
             }
             // Invalidate cached rows after the optimistic echo.
             self.bump_transcript_version();
@@ -493,7 +495,7 @@ impl App {
             self.transcript.len(),
             self.transcript_scroll.cap.get(),
             self.transcript_scroll.total.get(),
-            self.transcript_scroll.follow_tail,
+            self.transcript_scroll.is_following_tail(),
             self.transcript_scroll
                 .top_offset(self.transcript_display_rows()),
             self.approval.is_some(),

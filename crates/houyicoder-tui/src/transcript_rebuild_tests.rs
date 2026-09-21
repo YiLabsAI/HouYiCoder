@@ -500,8 +500,7 @@ fn test_prepend_loads_history() {
     }
     app.rebuild_transcript();
     let before = app.transcript.len();
-    app.transcript_scroll.follow_tail = false;
-    app.transcript_scroll.offset = 0;
+    app.transcript_scroll.jump_to(0);
     app.load_older_frames();
     assert!(app.transcript.len() > before);
     assert!(
@@ -537,8 +536,7 @@ fn test_prepend_survives_rebuild() {
     }
     app.rebuild_transcript();
     assert!(app.loaded_from_frame.get() > 0);
-    app.transcript_scroll.follow_tail = false;
-    app.transcript_scroll.offset = 0;
+    app.transcript_scroll.jump_to(0);
     app.load_older_frames();
     assert!(
         app.transcript
@@ -575,8 +573,7 @@ fn test_prepend_keeps_echo_place() {
         app.frames.push(user_msg(&format!("recent {i}")));
     }
     app.rebuild_transcript();
-    app.transcript_scroll.follow_tail = false;
-    app.transcript_scroll.offset = 0;
+    app.transcript_scroll.jump_to(0);
     app.load_older_frames();
     let at = |app: &App, want: &str| {
         app.transcript
@@ -870,5 +867,119 @@ fn test_system_row_keeps_place() {
         copies, 1,
         "one system row through the rebuilds: {:?}",
         app.transcript
+    );
+}
+
+/// Trim runs only at the tail. A scrolled-back reader pins a fixed viewport,
+/// so draining the oldest lines would shift the content under it; a scroll-up
+/// session's loaded older frames must also survive the next rebuild. This
+/// floods the live transcript past the cap while scrolled back and asserts the
+/// lines accumulate rather than draining.
+#[test]
+fn test_trim_skips_scrollaway() {
+    use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+    let mut app = fresh_app();
+    app.screen = crate::state::Screen::Working;
+    // Follow the tail: direct pushes trim down to the cap.
+    for _ in 0..(VIEWABLE_SCROLLBACK_CAP + 5) {
+        app.push_transcript_line(TranscriptLine::Agent("tail line".into()));
+    }
+    assert_eq!(
+        app.transcript.len(),
+        VIEWABLE_SCROLLBACK_CAP,
+        "follow-tail direct push trims to the cap"
+    );
+    // Scroll away from the tail, then keep pushing: trim must not drain a
+    // scrolled-back reader, so the lines accumulate past the cap.
+    app.transcript_scroll.jump_to(0);
+    let extra = 50;
+    for _ in 0..extra {
+        app.push_transcript_line(TranscriptLine::Agent("scrolled-back line".into()));
+    }
+    assert_eq!(
+        app.transcript.len(),
+        VIEWABLE_SCROLLBACK_CAP + extra,
+        "trim skips while scrolled back, so lines accumulate"
+    );
+}
+
+/// When trim drains at the tail, the turn boundary shifts with it so the next
+/// tail rebuild's stable-prefix slice stays aligned. Before the fix the cap
+/// drained underneath an unchanged boundary, leaving it pointing past the
+/// prefix the next rebuild would reuse.
+#[test]
+fn test_trim_shifts_boundary() {
+    use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+    let mut app = fresh_app();
+    app.screen = crate::state::Screen::Working;
+    // A turn boundary with a real prefix: 100 user messages, then an agent
+    // frame, rebuild sets line_index to the prefix length (100).
+    for i in 0..100 {
+        app.frames.push(user_msg(&format!("prefix {i}")));
+    }
+    app.frames.push(agent_msg("turn body"));
+    app.rebuild_transcript();
+    let boundary_before = app.current_turn_boundary.line_index;
+    assert!(boundary_before > 0, "boundary names the prefix length");
+    // Flood past the cap at the tail: trim drains, and the boundary shifts
+    // down by the dropped count (saturating at zero).
+    let over = VIEWABLE_SCROLLBACK_CAP + 10;
+    for _ in 0..over {
+        app.push_transcript_line(TranscriptLine::Agent("flood".into()));
+    }
+    assert!(
+        app.current_turn_boundary.line_index <= app.transcript.len(),
+        "boundary stays within the post-trim transcript length"
+    );
+    assert!(
+        app.current_turn_boundary.line_index < boundary_before,
+        "boundary shifted down as the prefix was trimmed"
+    );
+}
+
+/// The scroll-up white-load: the user scrolled back and loaded older frames;
+/// a new frame arriving triggers a rebuild whose exit must not drain the rows
+/// just loaded. Before the fix the rebuild exit capped unconditionally and
+/// drained the prepended history, so scrolling up was defeated the moment new
+/// content arrived.
+#[test]
+fn test_scrollback_survives_frame() {
+    use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+    use crate::transcript::FrontendRow;
+    // Enough frames that repeated scroll-up prepends push the transcript
+    // past the viewable cap: the frame window keeps the newest rows, and the
+    // prepended older rows must push the total past the cap.
+    let frame_count = VIEWABLE_SCROLLBACK_CAP + 600;
+    let mut app = fresh_app();
+    app.screen = crate::state::Screen::Working;
+    for i in 0..frame_count {
+        app.frames.push(user_msg(&format!("msg {i}")));
+    }
+    app.rebuild_transcript();
+    // Scroll away and load older frames until the history boundary hits zero.
+    app.transcript_scroll.jump_to(0);
+    while app.loaded_from_frame.get() > 0 {
+        app.load_older_frames();
+    }
+    assert!(
+        app.transcript.len() > VIEWABLE_SCROLLBACK_CAP,
+        "prepended history pushes the transcript past the cap"
+    );
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t.contains("msg 0"))),
+        "oldest loaded row present before the new frame"
+    );
+    // A new frontend row arrives while scrolled back. The rebuild exit must
+    // not trim a scrolled-back reader, so the prepended history survives.
+    app.frames
+        .push(TranscriptFrame::Frontend(FrontendRow::System("new".into())));
+    app.rebuild_transcript();
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t.contains("msg 0"))),
+        "scroll-up history survives the frame arrival"
     );
 }

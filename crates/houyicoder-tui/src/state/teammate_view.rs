@@ -77,7 +77,6 @@ impl App {
         }
         self.teammate_view = Some(view);
         self.transcript_scroll = crate::scroll::TranscriptScroll::default();
-        self.transcript_scroll.follow_tail = true;
         // The render cache keys on transcript_version, which is the
         // invalidation signal for whatever active_transcript returns. Entering
         // the view swaps that source, so bump here or the cache holds the
@@ -103,7 +102,12 @@ impl App {
     /// log, not retained for streaming.
     pub(crate) fn exit_teammate_view(&mut self) {
         self.teammate_view = None;
-        self.transcript_scroll.follow_tail = true;
+        // Resume the parent scroll to the tail without trimming: the child
+        // transcript the reader leaves behind is not the parent transcript the
+        // cap bounds, so a parent trim on exit would drain parent history the
+        // reader never scrolled away from. The raw follow-tail call keeps the
+        // parent scroll at the tail without running the cap.
+        self.transcript_scroll.follow_tail();
         // Exiting swaps active_transcript back to the parent, so the render
         // cache must drop the child rows and rebuild from the parent.
         self.bump_transcript_version();

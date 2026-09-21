@@ -80,7 +80,7 @@ impl App {
             Some(row) => self.raise_frontend_row(row),
             None => {
                 self.transcript.push(line);
-                crate::scroll::bound_scrollback(&mut self.transcript);
+                self.trim_live_transcript();
                 self.bump_transcript_version();
             }
         }
@@ -147,9 +147,30 @@ impl App {
         self.transcript_version.set(v);
     }
 
+    /// Cap the live transcript to the viewable scrollback and shift the turn
+    /// boundary to match. Returns the number of lines dropped. A no-op while
+    /// scrolled back: the viewport pins a fixed top offset, so draining the
+    /// oldest lines would shift the content under the reader, and a scroll-up
+    /// session's loaded older frames would be drained on the next rebuild.
+    /// Trim runs only at the tail, where the offset does not name a viewport
+    /// position. The caller bumps the version when this returns a nonzero
+    /// drop; the rebuild path bumps once for the whole transcript change
+    /// regardless.
+    pub(crate) fn trim_live_transcript(&mut self) -> usize {
+        if !self.transcript_scroll.is_following_tail() {
+            return 0;
+        }
+        let dropped = crate::scroll::bound_scrollback(&mut self.transcript);
+        self.current_turn_boundary.line_index = self
+            .current_turn_boundary
+            .line_index
+            .saturating_sub(dropped);
+        dropped
+    }
+
     // The page/line scroll methods (scroll_transcript_up / down /
     // follow_tail / line_up / line_down + the debug_scroll helper) live in
-    // state_scroll.rs so this file stays under the file-size gate. The impl
+    // state/scroll.rs so this file stays under the file-size gate. The impl
     // block there adds them to App; callers reach them as self.scroll_*.
 
     /// Transition to a new stage, pushing the previous one onto the history
