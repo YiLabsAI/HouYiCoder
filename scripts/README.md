@@ -6,11 +6,11 @@ are their implementation, not a CLI to drive directly.
 
 ## Two tiers
 
-- **`make check`** — the commit gate. Fast (target ~10s warm). Runs on
-  every change before a commit. Structural + unit-level: format, clippy,
-  comment style, no-CJK-in-source, naming, file-size, dependency graph,
-  stderr hygiene, and the `--lib` unit suite with diff coverage. Must be
-  green to commit.
+- **`make check`** — the commit gate. Runs on every change before a commit;
+  the script warns when its total drifts past the warm budget. Structural +
+  unit-level: format, clippy, comment style, no-CJK-in-source, naming,
+  file-size, dependency graph, stderr hygiene, and the `--lib` unit suite
+  with diff coverage. Must be green to commit.
 - **`make verify`** — the deterministic verify gate. Runs workspace tests,
   coverage ratchets, ignored PTY and sandbox suites, and doc-stale reports.
   Live providers and benchmarks use explicit commands so this gate never
@@ -40,7 +40,7 @@ These scripts are part of the repository and run for every contributor:
 | Script | Concern |
 |---|---|
 | `check_rust_naming.py` | Test-fn `test_` prefix, segment/length caps, jargon, vague suffixes, flat-prefix module pairs |
-| `check_rs_comments.py` | .rs comment style — the 6-arm detector: CJK, backtick, codename, doc-ref, own-crate name, comparison framing |
+| `check_rs_comments.py` | .rs comment style — the six-rule detector: CJK, backtick, codename, doc-ref, own-crate name, comparison framing |
 | `check_file_size.py` | Per-file line-count ratchet (prod vs test thresholds, continuous excess) |
 | `check_dep_graph.py` | Crate-to-crate dependency layering whitelist |
 | `check_stderr.py` | No stray console writes in runtime code |
@@ -60,8 +60,12 @@ These scripts are part of the repository and run for every contributor:
 Each `test_*.py` pins the behavior of a gate or shared rule so a future
 widening of a regex or a ratchet-math drift is caught before it silently
 re-opens a gap. They run as the `script-tests` step of `make check`
-(~0.3s; a gate is the machine backstop for a rule the model applies
-unreliably, so the gate itself is guarded).
+(~2.5s, all but one of the meta-tests under 0.2s; a gate is the machine
+backstop for a rule the model applies unreliably, so the gate itself is
+guarded). One meta-test guards a gitignored hook, so it cannot join that
+step: it runs as its own `commit-gate-tests` step, which resolves the hook
+the way the guard that runs it does and reports a skip where the checkout
+carries no copy.
 
 | Meta-test | Pins |
 |---|---|
@@ -78,6 +82,7 @@ unreliably, so the gate itself is guarded).
 | `test_stderr_gate.py` | The console-write gate |
 | `test_run_tests_timeout.py` | The unit-gate timeout reaps cargo's test-binary grandchildren (no orphan spiral) |
 | `test_harness_routing.py` | Correctness, capability-suite, live, and benchmark routing stay separated |
+| `test_hook_commit_gate.py` | The commit gate reads the commit subcommand through git's options, shells, and separators; the marker is one-shot and shell-scoped |
 
 ## Shell helpers
 
@@ -97,7 +102,7 @@ unreliably, so the gate itself is guarded).
 ## Write-time hooks
 
 `hook_rust.py` is a tracked PreToolUse intercept: on an Edit/Write to a
-`.rs` file it runs the same `rules.comments` 6-arm detector as
+`.rs` file it runs the same `rules.comments` six-rule detector as
 `check_rs_comments.py`, so a comparison-framing or codename comment is
 blocked at write time, not just at the next `make check`.
 
@@ -111,7 +116,7 @@ plumbing for the local-only hooks below.
 Shared rule modules imported by both the gate checks and the write-time
 hooks, so write-time and check-time enforce the same patterns:
 
-- `comments.py` — the 6-arm .rs comment detector (CJK, backtick,
+- `comments.py` — the six-rule .rs comment detector (CJK, backtick,
   codename, doc-ref, own-crate name, comparison framing). Used by
   `check_rs_comments.py` and `hook_rust.py`.
 - `naming.py` — test-fn name rules (prefix, segment cap, length, jargon).
@@ -134,11 +139,27 @@ local-only gate scripts a contributor may add; anything matching those
 patterns stays local.
 
 The `.rs-comment-products` wordlist (gitignored) feeds the product-name
-arm in `rules/comments.py` (shared by hook_rust.py, check_rs_comments.py,
-and commit_msg_lint.py) when present. The arm resolves the wordlist through
-the git common dir inside worktrees, so it fires there too; a clean clone
-or CI run with no wordlist skips the arm (internal hygiene, not a
+check in `rules/comments.py` (shared by hook_rust.py, check_rs_comments.py,
+and commit_msg_lint.py) when present. That check resolves the wordlist
+through the git common dir inside worktrees, so it fires there too; a clean
+clone or CI run with no wordlist skips it (internal hygiene, not a
 public-gate guarantee).
+
+`hook_commit_gate.py` (gitignored) blocks a `git commit` until the
+deep-review happened and the user approved the message. It reads a
+marker file in the tree rather than a token bound to one session, so a
+second session sharing the tree can consume a marker the first one set,
+and the gate reads commands rather than reachability: a commit
+reached through a git alias or through shells nested past its depth
+bound is not seen. It is a discipline backstop, not a boundary.
+
+The marker is one-shot against the next shell call, so the touch and the
+commit are consecutive calls. Keep no worktree copy of the gate: the
+guard takes the current tree's copy first, so a copy runs there and
+drifts from the main checkout's at every later edit, while an absent copy
+resolves to the single main-checkout definition through the git common
+dir. The gate and its meta-test both run in a worktree without a copy,
+the meta-test resolving the hook the same way the guard does.
 
 ## Adding a gate
 

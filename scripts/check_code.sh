@@ -106,6 +106,10 @@ fi
 if [ -f scripts/check_sdd_naming.py ]; then
   run_check "sdd-naming" python3 scripts/check_sdd_naming.py
 fi
+# The commit gate is an internal hook the checkout ignores, so the test
+# resolves the hook itself, worktree first and main checkout second, and
+# reports a skip where neither carries one.
+run_check "commit-gate-tests" python3 scripts/test_hook_commit_gate.py
 run_check "file-size"    python3 scripts/check_file_size.py $RS_FILES
 run_check "dep-graph"    python3 scripts/check_dep_graph.py
 run_check "stderr"       python3 scripts/check_stderr.py

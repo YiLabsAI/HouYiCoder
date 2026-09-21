@@ -4,7 +4,7 @@
 #
 # Routing:
 #   .rs staged      → make check (clippy + tests + diff-cov + all gates)
-#   scripts/**.py   → script-tests + no-cjk (the .py-relevant gates)
+#   scripts/**.py   → the check's Python gates (CHECK_SKIP_RUST=1)
 #   docs/**/*.md    → sdd-naming (task-ID gate; .md is exempt from no-cjk)
 #   nothing staged  → skip (deletion-only or empty commit)
 #
@@ -29,12 +29,10 @@ done <<< "$staged"
 if $has_rs; then
   exec make check
 elif $has_py; then
-  python3 scripts/test_hook_rust.py
-  python3 scripts/test_cov_lcov.py
-  python3 scripts/test_flat_prefix.py
-  python3 scripts/test_diff_cov.py
-  python3 scripts/test_stderr_gate.py
-  python3 scripts/check_no_cjk.py
+  # The same Python gates the check runs, without the Rust steps. Listing
+  # them here again let the two registries drift: a test added to the check
+  # was not run at commit time.
+  CHECK_SKIP_RUST=1 exec scripts/check_code.sh
 elif $has_md; then
   if [ -f scripts/check_sdd_naming.py ]; then
     python3 scripts/check_sdd_naming.py
