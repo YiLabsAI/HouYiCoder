@@ -13,11 +13,11 @@
 //! catches that class of bug.
 //!
 //! Classification: integration, not unit. These drive a real external
-//! subsystem, which the unit suite is required never to do. They therefore run
-//! in the heavier pre-push suite rather than the commit gate, which is unit
-//! only by policy; the suite picks this binary up as an ordinary test target,
-//! so no special wiring is involved. Everything is compiled out where there is
-//! no seatbelt.
+//! subsystem, which the unit suite is required never to do, so the commit gate
+//! never runs them and the integration suite does: make test integration
+//! compiles the whole tests tree and runs the tests that carry no ignore. The
+//! sandbox suite holds this file as a module, so the file declares no target
+//! of its own. Everything is compiled out where there is no seatbelt.
 //!
 //! Human-readable report, useful when debugging a profile change, run from
 //! this crate's directory:

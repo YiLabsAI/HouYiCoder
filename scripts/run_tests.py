@@ -17,10 +17,10 @@ test in its own process, so a per-test lazy init (the tiktoken BPE table,
 per binary. For a suite with a heavy OnceLock that path is faster and the
 output is the terse dot form.
 
-Integration tests (tests/) are a separate, heavier suite: run `make
-check-full` before a push. They are NOT in the make check gate (too slow
-for the unit-gate budget); check-full uses a larger ceiling for the
-integration binaries.
+Integration tests (tests/) are a separate, heavier suite: make test
+integration runs them. They are NOT in the make check gate (too slow for
+the unit-gate budget); CI runs them through this script with --full in its
+own step, which is the path FULL and its higher ceiling exist for.
 
 The unit-gate timeout is GATE_SECS; over CHECK_BUDGET_WARN is a warning
 signal -- prune slow steps or raise CHECK_BUDGET_WARN. The gate covers test
