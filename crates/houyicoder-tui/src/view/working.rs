@@ -217,11 +217,10 @@ fn build_working_layout(
     constraints.push(Constraint::Min(1));
     let transcript_idx = constraints.len() - 1;
     let approval_h = app
-        .approval
-        .as_ref()
+        .approval()
         .map(|approval| super::approval::card_height(approval, width))
         .unwrap_or(0);
-    let ask_h = if let Some(aq) = app.ask_question.as_ref() {
+    let ask_h = if let Some(aq) = app.ask_question() {
         aq.card_height()
     } else {
         0u16

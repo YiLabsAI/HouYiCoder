@@ -36,7 +36,7 @@ pub(super) fn draw_inline_search(f: &mut Frame, area: Rect, app: &App) {
 /// so the rendered rows and the reserved height never drift.
 pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     let content_cols = (area.width as usize).saturating_sub(4);
-    let border_color = if app.approval.is_some() || app.ask_question.is_some() {
+    let border_color = if app.approval().is_some() || app.ask_question().is_some() {
         Color::Yellow
     } else {
         Color::Gray

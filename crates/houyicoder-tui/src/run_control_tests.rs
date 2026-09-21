@@ -8,6 +8,7 @@
 use super::*;
 use crate::agent_message::{ServerRequest, ServerResponse};
 use crate::composition;
+use crate::pending_prompt::PendingPrompt;
 use crate::state::{Pane, TranscriptLine};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
@@ -213,7 +214,7 @@ fn test_guarded_tool_manual_raises() {
     let mut raised = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             raised = true;
             break;
         }
@@ -236,7 +237,7 @@ fn test_guarded_tool_auto_raises() {
     let mut raised = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             raised = true;
             break;
         }
@@ -270,7 +271,7 @@ fn test_approve_yes_executes_tool() {
     let mut raised = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             raised = true;
             break;
         }
@@ -279,7 +280,7 @@ fn test_approve_yes_executes_tool() {
     assert!(raised, "Manual should raise an approval popup");
 
     // Approve THIS call (one-shot Yes) — the focused=0 path the user picks.
-    let call_id = app.approval.as_ref().unwrap().call_id.clone();
+    let call_id = app.approval().unwrap().call_id.clone();
     app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
         call_id,
         approved: true,
@@ -331,7 +332,7 @@ fn test_reject_does_not_execute() {
     let mut raised = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             raised = true;
             break;
         }
@@ -339,7 +340,7 @@ fn test_reject_does_not_execute() {
     }
     assert!(raised, "Manual should raise an approval popup");
 
-    let call_id = app.approval.as_ref().unwrap().call_id.clone();
+    let call_id = app.approval().unwrap().call_id.clone();
     app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
         call_id,
         approved: false,
@@ -428,9 +429,12 @@ fn test_permission_ask_raises_popup() {
         request: RequestId(1),
         payload: ServerRequest::Permission { ask: Box::new(ask) },
     });
-    assert!(app.approval.is_some());
-    assert_eq!(app.pending_approvals.len(), 1);
-    let a = app.approval.as_ref().unwrap();
+    assert!(app.approval().is_some());
+    assert_eq!(
+        app.prompt.as_ref().map(|p| p.request_count()).unwrap_or(0),
+        1
+    );
+    let a = app.approval().unwrap();
     assert_eq!(a.tool, "bash");
     assert_eq!(a.call_id, "c1");
 }
@@ -457,7 +461,7 @@ fn test_entitlement_ask_two_option() {
         request: RequestId(3),
         payload: ServerRequest::Permission { ask: Box::new(ask) },
     });
-    let a = app.approval.as_ref().expect("approval raised");
+    let a = app.approval().expect("approval raised");
     assert_eq!(a.tool, ENTITLEMENT_TOOL);
     assert!(
         a.reason.contains("denied during the last command"),
@@ -493,7 +497,7 @@ fn test_approval_ask_carries_delegation() {
         request: RequestId(2),
         payload: ServerRequest::Permission { ask: Box::new(ask) },
     });
-    let a = app.approval.as_ref().expect("approval raised");
+    let a = app.approval().expect("approval raised");
     let d = a.delegation.as_ref().expect("delegation carried");
     assert_eq!(d.child_id, "child-1");
     assert_eq!(d.subagent_type, "explore");
@@ -574,15 +578,18 @@ fn test_spawn_run_interruption() {
     let mut got = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             got = true;
             break;
         }
         sleep(Duration::from_millis(10));
     }
     assert!(got, "agent message should arrive");
-    assert!(app.approval.is_some(), "popup raised");
-    assert_eq!(app.pending_approvals.len(), 1);
+    assert!(app.approval().is_some(), "popup raised");
+    assert_eq!(
+        app.prompt.as_ref().map(|p| p.request_count()).unwrap_or(0),
+        1
+    );
 }
 
 /// Esc-abort before any real content rewinds the frame log past the user
@@ -638,15 +645,15 @@ fn test_resume_after_approval() {
     let mut got = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             got = true;
             break;
         }
         sleep(Duration::from_millis(10));
     }
-    assert!(got && app.approval.is_some());
+    assert!(got && app.approval().is_some());
     // Approve the current approval (one decision for its call_id) and resume.
-    let call_id = app.approval.as_ref().unwrap().call_id.clone();
+    let call_id = app.approval().unwrap().call_id.clone();
     app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
         call_id,
         approved: true,
@@ -663,7 +670,7 @@ fn test_resume_after_approval() {
         sleep(Duration::from_millis(10));
     }
     assert!(got2, "resume message should arrive");
-    assert!(app.approval.is_none());
+    assert!(app.approval().is_none());
     assert!(app.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::Agent(s) if s == "all done"
@@ -680,7 +687,7 @@ fn test_resolve_clears_thinking_window() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(1);
-    app.pending_permission_req_id.set(Some(RequestId(1)));
+    app.prompt = Some(PendingPrompt::permission(RequestId(1), Vec::new()));
     {
         let p = app.run_progress_mut().expect("active run");
         p.thinking_started_at = Some(std::time::Instant::now());
@@ -1069,11 +1076,11 @@ fn test_startup_handshake_drains_trust() {
     .unwrap();
     app.startup_handshake(Duration::from_secs(2));
     assert!(
-        app.pending_trust.is_some(),
+        app.pending_trust().is_some(),
         "handshake drains the trust ask"
     );
     assert_eq!(
-        app.pending_trust_req_id,
+        app.prompt.as_ref().map(|p| p.req_id()),
         Some(houyicoder_protocol::envelope::RequestId(7))
     );
 }
@@ -1085,7 +1092,7 @@ fn test_startup_handshake_empty_timeout() {
     let p = Arc::new(FakeProvider::text("ok"));
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.startup_handshake(Duration::from_millis(50));
-    assert!(app.pending_trust.is_none(), "no card on empty handshake");
+    assert!(app.pending_trust().is_none(), "no card on empty handshake");
 }
 
 #[cfg(test)]

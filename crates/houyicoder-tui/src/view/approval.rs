@@ -19,7 +19,7 @@ use crate::state::App;
 /// horizontal rule at the top replaces the heavy double border; the card
 /// reads as inline content, not a modal popup.
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
-    let Some(a) = app.approval.as_ref() else {
+    let Some(a) = app.approval() else {
         return;
     };
     f.render_widget(Clear, area);

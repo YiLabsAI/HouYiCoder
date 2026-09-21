@@ -8,6 +8,7 @@
 
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition;
+use crate::pending_prompt::PendingPrompt;
 use crate::state::{App, Pane};
 use crate::test_harness::render_text;
 use houyicoder_protocol::envelope::RequestId;
@@ -155,15 +156,18 @@ fn test_status_bar_renders_manual() {
 fn test_approval_popup_no_placeholder() {
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: "{\"command\":\"ls\"}".into(),
-        reason: "agent wants to run this tool".into(),
-        selected: 0,
-        call_id: "c1".into(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: "{\"command\":\"ls\"}".into(),
+            reason: "agent wants to run this tool".into(),
+            selected: 0,
+            call_id: "c1".into(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let text = render_text(&app, 80, 24);
     // Inline prompt renders the real tool call (no placeholder); the proceed
     // question and Esc hint are present.
@@ -192,20 +196,23 @@ fn test_approval_r_binds_reject() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: "{\"command\":\"rm -rf /\"}".into(),
-        reason: "dangerous".into(),
-        selected: 0,
-        call_id: "c1".into(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: "{\"command\":\"rm -rf /\"}".into(),
+            reason: "dangerous".into(),
+            selected: 0,
+            call_id: "c1".into(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
     // handle_working dispatches to handle_approval when approval is set.
     crate::keys::handle_working(&mut app, key);
     assert_eq!(
-        app.approval.as_ref().expect("approval").selected,
+        app.approval().expect("approval").selected,
         1,
         "r must focus No (internal index 1)"
     );
@@ -217,11 +224,14 @@ fn test_entitlement_r_rejects() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(entitlement_approval());
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        entitlement_approval(),
+    ));
     let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
     crate::keys::handle_working(&mut app, key);
     assert_eq!(
-        app.approval.as_ref().expect("approval").selected,
+        app.approval().expect("approval").selected,
         1,
         "r must focus No (index 1 on a two-option card)"
     );

@@ -137,9 +137,9 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
 pub(crate) fn handle_trust(app: &mut App, k: KeyEvent) {
     use crossterm::event::KeyCode;
     match k.code {
-        KeyCode::Up => app.trust_choice = TrustChoice::Accept,
-        KeyCode::Down => app.trust_choice = TrustChoice::Exit,
-        KeyCode::Enter => app.resolve_trust(app.trust_choice == TrustChoice::Accept),
+        KeyCode::Up => app.set_trust_choice(TrustChoice::Accept),
+        KeyCode::Down => app.set_trust_choice(TrustChoice::Exit),
+        KeyCode::Enter => app.resolve_trust(app.trust_choice() == TrustChoice::Accept),
         KeyCode::Char('y') | KeyCode::Char('Y') => app.resolve_trust(true),
         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => app.resolve_trust(false),
         _ => {}

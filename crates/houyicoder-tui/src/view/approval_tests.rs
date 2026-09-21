@@ -3,7 +3,9 @@
 
 use super::{cap_first, diff_preview};
 use crate::composition;
+use crate::pending_prompt::PendingPrompt;
 use crate::test_harness::render_text;
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use serde_json::json;
 
@@ -51,15 +53,18 @@ fn test_cap_first_empty() {
 fn test_render_no_heavy_border() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: r#"{"command":"find . -type f | wc -l"}"#.into(),
-        reason: "agent wants to run this tool".into(),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"find . -type f | wc -l"}"#.into(),
+            reason: "agent wants to run this tool".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     // The heavy double-border box chars must not appear.
     for ch in ['╔', '╗', '╚', '╝', '║', '═'] {
@@ -74,15 +79,18 @@ fn test_render_no_heavy_border() {
 fn test_render_separator_and_question() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: r#"{"command":"find . -type f | wc -l"}"#.into(),
-        reason: "agent wants to run this tool".into(),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"find . -type f | wc -l"}"#.into(),
+            reason: "agent wants to run this tool".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     // Thin separator line present.
     assert!(out.contains('─'), "separator line missing:\n{out}");
@@ -113,15 +121,18 @@ fn test_render_separator_and_question() {
 fn test_render_cursor_on_reject() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: r#"{"command":"ls"}"#.into(),
-        reason: "test".into(),
-        selected: 1,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"ls"}"#.into(),
+            reason: "test".into(),
+            selected: 1,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     let lines: Vec<&str> = out.lines().collect();
     // Find the Yes line and the No line. The cursor marker should be
@@ -142,15 +153,18 @@ fn test_render_cursor_on_reject() {
 fn test_render_cursor_dont_ask() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: r#"{"command":"ls"}"#.into(),
-        reason: "test".into(),
-        selected: 2,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"ls"}"#.into(),
+            reason: "test".into(),
+            selected: 2,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     let lines: Vec<&str> = out.lines().collect();
     let yes_line = lines
@@ -178,16 +192,19 @@ fn test_renders_gate_reason_detail() {
     use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: r#"{"command":"rm -rf x"}"#.into(),
-        reason: "rm needs confirmation".into(),
-        source: Some(AskSource::Detection),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"rm -rf x"}"#.into(),
+            reason: "rm needs confirmation".into(),
+            source: Some(AskSource::Detection),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("Detection: rm needs confirmation"),
@@ -204,16 +221,19 @@ fn test_renders_gate_reason_detail() {
 fn test_renders_containment_note_line() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: r#"{"command":"curl x"}"#.into(),
-        reason: "network egress".into(),
-        containment_note: Some("the sandbox will block this".into()),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"curl x"}"#.into(),
+            reason: "network egress".into(),
+            containment_note: Some("the sandbox will block this".into()),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("the sandbox will block this"),
@@ -229,16 +249,19 @@ fn test_system_safety_hides_option() {
     use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "edit".into(),
-        args: r#"{"path":".git/config"}"#.into(),
-        reason: "protected path".into(),
-        source: Some(AskSource::SystemSafety),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "edit".into(),
+            args: r#"{"path":".git/config"}"#.into(),
+            reason: "protected path".into(),
+            source: Some(AskSource::SystemSafety),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     assert!(
         !out.contains("don't ask again"),
@@ -268,16 +291,19 @@ fn test_two_option_card_compact() {
     use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "edit".into(),
-        args: r#"{"path":".git/config"}"#.into(),
-        reason: "protected path".into(),
-        source: Some(AskSource::SystemSafety),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "edit".into(),
+            args: r#"{"path":".git/config"}"#.into(),
+            reason: "protected path".into(),
+            source: Some(AskSource::SystemSafety),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     let lines: Vec<&str> = out.lines().collect();
     // Find the Yes line, then count non-empty lines until the hint.
@@ -306,16 +332,19 @@ fn test_read_card_compact() {
     use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "read".into(),
-        args: r#"{"path":"/repo/.houyicoder/bash-output/out.log","max_bytes":5000}"#.into(),
-        reason: "accessing a protected path needs confirmation".into(),
-        source: Some(AskSource::SystemSafety),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "read".into(),
+            args: r#"{"path":"/repo/.houyicoder/bash-output/out.log","max_bytes":5000}"#.into(),
+            reason: "accessing a protected path needs confirmation".into(),
+            source: Some(AskSource::SystemSafety),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     let lines: Vec<&str> = out.lines().collect();
     let positions = [
@@ -371,15 +400,18 @@ fn test_long_command_wraps() {
         "python3 -c \"print('command-start'); payload='{}'; print('command-end')\"",
         "x".repeat(120)
     );
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: serde_json::to_string(&serde_json::json!({ "command": long_cmd })).unwrap(),
-        reason: "test".into(),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: serde_json::to_string(&serde_json::json!({ "command": long_cmd })).unwrap(),
+            reason: "test".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("python3 -c"),
@@ -419,18 +451,21 @@ fn test_long_command_wraps() {
 fn test_multiline_command_visible() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: serde_json::json!({
-            "command": "python3 - <<'PY'\nprint('first-line')\nprint('last-line')\nPY"
-        })
-        .to_string(),
-        reason: "test".into(),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: serde_json::json!({
+                "command": "python3 - <<'PY'\nprint('first-line')\nprint('last-line')\nPY"
+            })
+            .to_string(),
+            reason: "test".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
 
     let out = render_text(&app, 60, 24);
     assert!(
@@ -448,16 +483,19 @@ fn test_non_safety_keeps_option() {
     use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: r#"{"command":"rm x"}"#.into(),
-        reason: "rm needs confirmation".into(),
-        source: Some(AskSource::Detection),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"rm x"}"#.into(),
+            reason: "rm needs confirmation".into(),
+            source: Some(AskSource::Detection),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("don't ask again"),
@@ -476,7 +514,7 @@ fn test_non_safety_keeps_option() {
 fn test_entitlement_card_two_option() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
+    app.prompt = Some(PendingPrompt::approval_card(RequestId(0), crate::state::Approval {
         tool: ENTITLEMENT_TOOL.into(),
         args: r#"{"skill":"ego-browser","origin":"user","services":["com.citrolabs.ego.lite.ego-browser"]}"#
             .into(),
@@ -486,7 +524,7 @@ fn test_entitlement_card_two_option() {
         call_id: String::new(),
         options: Vec::new(),
         ..Default::default()
-    });
+    }));
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("Sandbox entitlement"),

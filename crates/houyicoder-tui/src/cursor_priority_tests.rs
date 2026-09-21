@@ -8,7 +8,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::composition;
+use crate::pending_prompt::PendingPrompt;
 use crate::state::{Approval, Screen};
+use houyicoder_protocol::envelope::RequestId;
 
 fn key(c: KeyCode) -> KeyEvent {
     KeyEvent::new(c, KeyModifiers::NONE)
@@ -41,7 +43,10 @@ fn test_reject_records_sticky() {
     // bounced back to Yes each time.
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.approval = Some(approval_at("bash", 0));
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        approval_at("bash", 0),
+    ));
     crate::keys::handle_working(&mut app, key(KeyCode::Esc));
     use houyicoder_protocol::acp_wire::PermissionOptionKind;
     assert_eq!(
@@ -59,7 +64,10 @@ fn test_persist_records_sticky() {
     // allow-always; the next popup preselects index 2.
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.approval = Some(approval_at("bash", 2));
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        approval_at("bash", 2),
+    ));
     crate::keys::handle_working(&mut app, key(KeyCode::Enter));
     use houyicoder_protocol::acp_wire::PermissionOptionKind;
     assert_eq!(

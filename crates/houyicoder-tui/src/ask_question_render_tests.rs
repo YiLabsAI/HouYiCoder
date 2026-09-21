@@ -6,7 +6,9 @@
 use serde_json::json;
 
 use crate::ask_question_tests::{multi_input, single_input, two_question_input};
+use crate::pending_prompt::PendingPrompt;
 use crate::records::AskQuestion;
+use houyicoder_protocol::envelope::RequestId;
 
 // --- nav bar rendering ---
 
@@ -15,7 +17,7 @@ fn test_render_nav_tabs() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
-    app.ask_question = Some(aq);
+    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("h1"), "header 1 tab missing:\n{out}");
     assert!(out.contains("h2"), "header 2 tab missing:\n{out}");
@@ -27,7 +29,7 @@ fn test_render_nav_hidden_single() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
-    app.ask_question = Some(aq);
+    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     // No nav bar (no Submit tab, no h1/h2 tabs). The header chip [Library]
     // is still present.
@@ -51,7 +53,7 @@ fn test_render_multi_next_btn() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &input).expect("parse");
-    app.ask_question = Some(aq);
+    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("Next"), "Next button missing:\n{out}");
 }
@@ -68,7 +70,7 @@ fn test_render_multi_submit_last() {
     app.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &input).expect("parse");
     aq.current = 1; // last question
-    app.ask_question = Some(aq);
+    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("Submit"), "Submit button missing:\n{out}");
     assert!(

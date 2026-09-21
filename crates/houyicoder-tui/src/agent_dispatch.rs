@@ -22,10 +22,11 @@ use crate::agent_message::{
 };
 use crate::command::render::{render_permission_rules_wire, render_trajectory_wire};
 use crate::composition::suggestions_for;
+use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::enums::LiveBlock;
-use crate::state::{App, BashProgress, TrustChoice};
+use crate::state::{App, BashProgress};
 use crate::terminal_title::sync as sync_terminal_title;
 use crate::transcript::{TranscriptFrame, transcript_from_frames};
 
@@ -365,17 +366,14 @@ impl App {
                 // already shipped every Frame up to this point, so App's own
                 // frame log is current.
                 self.rebuild_transcript();
-                self.pending_permission_req_id.set(Some(request));
-                self.raise_agent_approval(*ask);
+                self.raise_agent_approval(*ask, request);
             }
             ServerRequest::Trust { prompt } => {
                 // Startup workspace-trust gate: the server blocks before the
                 // run loop until the user answers. Raise the trust card (no
                 // run to pause — busy is already false at startup, but the
                 // card's presence gates new message sends until resolved).
-                self.pending_trust = Some(prompt);
-                self.trust_choice = TrustChoice::Accept;
-                self.pending_trust_req_id = Some(request);
+                self.prompt = Some(PendingPrompt::trust_ask(request, prompt));
             }
         }
     }

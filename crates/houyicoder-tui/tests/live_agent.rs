@@ -126,21 +126,33 @@ fn test_live_bash_tool_roundtrip() {
         "agent did not produce a tool call within 90s"
     );
     assert!(
-        app.approval.is_some(),
+        app.prompt.as_ref().is_some_and(|p| p.approval().is_some()),
         "expected an approval popup (model should call bash), got: {:?}",
         app.transcript
             .iter()
             .map(|l| l.render())
             .collect::<Vec<_>>()
     );
-    let tool = app.approval.as_ref().unwrap().tool.clone();
+    let tool = app
+        .prompt
+        .as_ref()
+        .and_then(|p| p.approval())
+        .unwrap()
+        .tool
+        .clone();
     assert!(
         tool.contains("bash") || tool == "bash",
         "approval tool should be bash, got {tool}"
     );
     // Approve the current approval (one decision for its call_id) and resume;
     // the sandbox runs, the result feeds back, the model emits a final answer.
-    let call_id = app.approval.as_ref().unwrap().call_id.clone();
+    let call_id = app
+        .prompt
+        .as_ref()
+        .and_then(|p| p.approval())
+        .unwrap()
+        .call_id
+        .clone();
     app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
         call_id,
         approved: true,

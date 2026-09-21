@@ -414,7 +414,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
 
 /// Dispatch a key to the right handler based on screen and overlays.
 pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
-    if app.pending_trust.is_some() {
+    if app.pending_trust().is_some() {
         keys::handle_trust(app, k);
         return;
     }

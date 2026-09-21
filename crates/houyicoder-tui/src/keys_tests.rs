@@ -3,6 +3,7 @@ use super::input::{cycle_pane, handle_input};
 use super::palette::handle_palette;
 use super::*;
 use crate::composition;
+use crate::pending_prompt::PendingPrompt;
 use crate::state::ModelSettingFocus;
 use crate::state::Screen;
 use crate::state::TranscriptLine;
@@ -11,6 +12,7 @@ use crate::test_harness::{
     TransportEvent, connected_app_with_events, model_app, model_caps, model_entry, model_snapshot,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::LoginMode;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::model::{ModelCatalog, ModelChoice, SpeedMode};
@@ -1108,17 +1110,20 @@ fn test_approval_enter_clears_popup() {
     // The verdict is transient (a dismissable card, not a transcript row), so
     // Enter must clear the popup without logging a verdict line.
     let mut app = working_app();
-    app.approval = Some(crate::state::Approval {
-        tool: "FsWrite".to_string(),
-        args: "".to_string(),
-        reason: "".to_string(),
-        selected: 1,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "FsWrite".to_string(),
+            args: "".to_string(),
+            reason: "".to_string(),
+            selected: 1,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     handle_approval(&mut app, key(KeyCode::Enter));
-    assert!(app.approval.is_none(), "popup must clear on confirm");
+    assert!(app.approval().is_none(), "popup must clear on confirm");
 }
 
 // --- Approval key-dispatch tests through handle_working ---
@@ -1129,15 +1134,18 @@ fn test_approval_enter_clears_popup() {
 
 fn approval_app(selected: usize) -> App {
     let mut app = working_app();
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".to_string(),
-        args: r#"{"command":"ls"}"#.to_string(),
-        reason: "test".to_string(),
-        selected,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".to_string(),
+            args: r#"{"command":"ls"}"#.to_string(),
+            reason: "test".to_string(),
+            selected,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     app
 }
 
@@ -1147,7 +1155,7 @@ fn test_approval_down_dont_ask() {
     let mut app = approval_app(0);
     handle_working(&mut app, key(KeyCode::Down));
     assert_eq!(
-        app.approval.as_ref().expect("approval").selected,
+        app.approval().expect("approval").selected,
         2,
         "Down must move cursor to Yes-don't-ask"
     );
@@ -1159,7 +1167,7 @@ fn test_approval_up_wraps() {
     let mut app = approval_app(0);
     handle_working(&mut app, key(KeyCode::Up));
     assert_eq!(
-        app.approval.as_ref().expect("approval").selected,
+        app.approval().expect("approval").selected,
         1,
         "Up must wrap cursor to No"
     );
@@ -1171,7 +1179,7 @@ fn test_approval_down_wraps_yes() {
     let mut app = approval_app(1);
     handle_working(&mut app, key(KeyCode::Down));
     assert_eq!(
-        app.approval.as_ref().expect("approval").selected,
+        app.approval().expect("approval").selected,
         0,
         "Down must wrap from No to Yes"
     );
@@ -1183,7 +1191,7 @@ fn test_approval_left_navigates_previous() {
     let mut app = approval_app(1);
     handle_working(&mut app, key(KeyCode::Left));
     assert_eq!(
-        app.approval.as_ref().expect("approval").selected,
+        app.approval().expect("approval").selected,
         2,
         "Left must move cursor to Yes-don't-ask"
     );
@@ -1195,7 +1203,7 @@ fn test_approval_right_navigates_next() {
     let mut app = approval_app(2);
     handle_working(&mut app, key(KeyCode::Right));
     assert_eq!(
-        app.approval.as_ref().expect("approval").selected,
+        app.approval().expect("approval").selected,
         1,
         "Right must move cursor to No"
     );
@@ -1207,7 +1215,7 @@ fn test_approval_key2_dont_ask() {
     let mut app = approval_app(0);
     handle_working(&mut app, key(KeyCode::Char('2')));
     assert_eq!(
-        app.approval.as_ref().expect("approval").selected,
+        app.approval().expect("approval").selected,
         2,
         "'2' must select Yes-don't-ask"
     );
@@ -1219,7 +1227,7 @@ fn test_key3_selects_no_option() {
     let mut app = approval_app(0);
     handle_working(&mut app, key(KeyCode::Char('3')));
     assert_eq!(
-        app.approval.as_ref().expect("approval").selected,
+        app.approval().expect("approval").selected,
         1,
         "'3' must select No"
     );
@@ -1231,7 +1239,7 @@ fn test_approval_enter_yes_approve() {
     let mut app = approval_app(0);
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(
-        app.approval.is_none(),
+        app.approval().is_none(),
         "approval should clear after confirm"
     );
 }
@@ -1242,7 +1250,7 @@ fn test_approval_enter_no_reject() {
     let mut app = approval_app(1);
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(
-        app.approval.is_none(),
+        app.approval().is_none(),
         "approval should clear after confirm"
     );
 }
@@ -1254,12 +1262,12 @@ fn test_approval_nav_confirm_verdict() {
     // confirm reads the wrong cursor, the verdict will mismatch. Full dispatch.
     let mut app = approval_app(0);
     handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(app.approval.as_ref().unwrap().selected, 1);
+    assert_eq!(app.approval().unwrap().selected, 1);
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(
-        app.approval.is_none(),
+        app.approval().is_none(),
         "Up+Enter must clear the popup: {:?}",
-        app.approval
+        app.prompt
     );
 }
 
@@ -1271,7 +1279,7 @@ fn test_approval_nav_full_cycle() {
     handle_working(&mut app, key(KeyCode::Down)); // 2→1
     handle_working(&mut app, key(KeyCode::Down)); // 1→0 (wrap)
     assert_eq!(
-        app.approval.as_ref().unwrap().selected,
+        app.approval().unwrap().selected,
         0,
         "three Downs must wrap back to Yes"
     );

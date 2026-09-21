@@ -30,7 +30,11 @@ ACTIVE_OWNERS = {
         # they live with the run and drop on finish instead of lingering.
         # Field access is routed through run_progress_mut() on App, so no
         # function signature changed and the mut_app count holds.
-        "fields": 155,
+        # PendingPrompt absorbed the seven reverse-request fields (approval
+        # card, interactive question card, permission request id, approval
+        # batch, trust prompt, trust choice, trust request id) into one
+        # prompt field that holds at most one live ask, net six fewer.
+        "fields": 149,
         "mut_app": 44,
     },
 }

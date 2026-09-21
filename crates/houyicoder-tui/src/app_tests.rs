@@ -211,7 +211,7 @@ fn test_slash_implement_opens_diff() {
     assert_eq!(app.pane, Pane::Diff);
     // /implement no longer raises the tool-approval popup; per-hunk
     // approval happens inline in the diff pane.
-    assert!(app.approval.is_none());
+    assert!(app.approval().is_none());
 }
 
 #[test]

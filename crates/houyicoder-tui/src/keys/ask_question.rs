@@ -21,22 +21,18 @@ use crate::state::App;
 pub(super) fn handle_ask_question(app: &mut App, k: KeyEvent) {
     // Other text input mode: typing writes to other_text, Enter submits or
     // advances, Esc returns to the option list. Tab-nav is disabled.
-    if app.ask_question.as_ref().is_some_and(|aq| aq.other_focused) {
+    if app.ask_question().is_some_and(|aq| aq.other_focused) {
         handle_other_input(app, k);
         return;
     }
 
     // Submit view: Up/Down cycle Submit-answers/Cancel, Enter acts, Esc cancels.
-    if app
-        .ask_question
-        .as_ref()
-        .is_some_and(|aq| aq.is_submit_view())
-    {
+    if app.ask_question().is_some_and(|aq| aq.is_submit_view()) {
         handle_submit_view(app, k);
         return;
     }
 
-    let Some(aq) = app.ask_question.as_mut() else {
+    let Some(aq) = app.ask_question_mut() else {
         return;
     };
     let total = aq.current_option_count();
@@ -82,7 +78,7 @@ pub(super) fn handle_ask_question(app: &mut App, k: KeyEvent) {
 /// Handle Enter on the current question: Other focus, single-select
 /// advance/auto-submit, multi-select toggle, multi-select Submit button.
 fn handle_enter(app: &mut App, qi: usize) {
-    let Some(aq) = app.ask_question.as_mut() else {
+    let Some(aq) = app.ask_question_mut() else {
         return;
     };
     let cursor = aq.cursors.get(qi).copied().unwrap_or(0);
@@ -141,7 +137,7 @@ fn handle_enter(app: &mut App, qi: usize) {
 
 /// Handle keys while the Other text input is focused.
 fn handle_other_input(app: &mut App, k: KeyEvent) {
-    let Some(aq) = app.ask_question.as_mut() else {
+    let Some(aq) = app.ask_question_mut() else {
         return;
     };
     let qi = aq.current;
@@ -180,7 +176,7 @@ fn handle_other_input(app: &mut App, k: KeyEvent) {
 
 /// Handle keys in the submit (review) view: navigate Submit/Cancel, act.
 fn handle_submit_view(app: &mut App, k: KeyEvent) {
-    let Some(aq) = app.ask_question.as_mut() else {
+    let Some(aq) = app.ask_question_mut() else {
         return;
     };
     match k.code {
@@ -208,7 +204,7 @@ fn handle_submit_view(app: &mut App, k: KeyEvent) {
 }
 
 /// Internal action queued during the Enter handler, dispatched after the
-/// mutable borrow on app.ask_question is released.
+/// mutable borrow on the question card is released.
 enum AskAction {
     None,
     Advance,
@@ -218,7 +214,7 @@ enum AskAction {
 /// Advance to the next question, or enter the submit view if this was the
 /// last question. Has no effect when already in the submit view.
 fn advance_ask_question(app: &mut App) {
-    if let Some(aq) = app.ask_question.as_mut()
+    if let Some(aq) = app.ask_question_mut()
         && aq.current < aq.questions.len()
     {
         aq.current += 1;
@@ -229,7 +225,7 @@ fn advance_ask_question(app: &mut App) {
 /// populated input and ship it as the reverse response so the server resumes
 /// the turn with the human's answers injected.
 fn submit_ask_question(app: &mut App) {
-    let Some(aq) = app.ask_question.take() else {
+    let Some(aq) = app.take_ask_question() else {
         return;
     };
     let call_id = aq.call_id.clone();
@@ -248,7 +244,7 @@ fn submit_ask_question(app: &mut App) {
 /// reject) so the tool formats the declined-to-answer text. The declined flag
 /// rides on the original input as updated_input.
 fn cancel_ask_question(app: &mut App) {
-    let Some(aq) = app.ask_question.take() else {
+    let Some(aq) = app.take_ask_question() else {
         return;
     };
     let call_id = aq.call_id.clone();

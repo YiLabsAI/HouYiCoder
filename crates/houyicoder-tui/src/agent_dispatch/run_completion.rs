@@ -22,7 +22,7 @@ impl super::App {
         // what the turn did. Dropping it releases the streaming progress, so
         // the preview and tool-runtime state need no manual clear here.
         self.run_state.finish();
-        self.pending_permission_req_id.set(None);
+        self.prompt = None;
         self.rebuild_transcript();
         self.debug_render_done(&self.frames);
         let was_final = match result {

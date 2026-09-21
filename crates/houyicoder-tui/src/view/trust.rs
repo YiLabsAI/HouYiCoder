@@ -14,7 +14,7 @@ use crate::state::{App, TrustChoice};
 
 /// Render the pending trust decision as the only startup surface.
 pub fn draw(f: &mut Frame, app: &App) {
-    let Some(prompt) = app.pending_trust.as_ref() else {
+    let Some(prompt) = app.pending_trust() else {
         return;
     };
     let card = centered_card(f.area());
@@ -43,10 +43,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         Line::from(" The agent can read, edit, and execute files here."),
         Line::default(),
         option_line(
-            app.trust_choice == TrustChoice::Accept,
+            app.trust_choice() == TrustChoice::Accept,
             "Yes, I trust this folder",
         ),
-        option_line(app.trust_choice == TrustChoice::Exit, "No, exit"),
+        option_line(app.trust_choice() == TrustChoice::Exit, "No, exit"),
         Line::from(Span::styled(
             " Enter to confirm · Esc to cancel",
             Style::new().fg(Color::DarkGray),
@@ -79,9 +79,11 @@ fn option_line(selected: bool, label: &'static str) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::TrustChoice;
+    use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::trust::TrustPrompt;
 
     use crate::composition;
+    use crate::pending_prompt::PendingPrompt;
     use crate::state::Screen;
     use crate::test_harness::render_text;
 
@@ -91,10 +93,13 @@ mod tests {
     fn test_renders_trust_prompt() {
         let mut app = composition::app();
         app.screen = Screen::Working;
-        app.pending_trust = Some(TrustPrompt {
-            project_path: "/home/alice/proj".into(),
-            risks: Vec::new(),
-        });
+        app.prompt = Some(PendingPrompt::trust_ask(
+            RequestId(1),
+            TrustPrompt {
+                project_path: "/home/alice/proj".into(),
+                risks: Vec::new(),
+            },
+        ));
         let out = render_text(&app, 80, 24);
         assert!(
             out.contains("Trust this workspace?"),
@@ -110,7 +115,7 @@ mod tests {
         );
         assert!(out.contains("No, exit"), "decline hint missing:\n{out}");
         assert!(out.contains("› Yes, I trust this folder"));
-        app.trust_choice = TrustChoice::Exit;
+        app.set_trust_choice(TrustChoice::Exit);
         let out = render_text(&app, 80, 24);
         assert!(out.contains("› No, exit"));
     }
@@ -118,10 +123,14 @@ mod tests {
     #[test]
     fn test_long_path_stays_single() {
         let mut app = composition::app();
-        app.pending_trust = Some(TrustPrompt {
-            project_path: "/a/very/long/workspace/path/that/cannot/fit/target-repository".into(),
-            risks: Vec::new(),
-        });
+        app.prompt = Some(PendingPrompt::trust_ask(
+            RequestId(1),
+            TrustPrompt {
+                project_path: "/a/very/long/workspace/path/that/cannot/fit/target-repository"
+                    .into(),
+                risks: Vec::new(),
+            },
+        ));
         let out = render_text(&app, 40, 18);
         assert!(out.contains('…'), "long path is visibly truncated: {out}");
         assert!(
@@ -157,10 +166,13 @@ mod tests {
     fn test_trust_is_sole_screen() {
         let mut app = composition::app();
         app.screen = Screen::Working;
-        app.pending_trust = Some(TrustPrompt {
-            project_path: "/home/alice/proj".into(),
-            risks: Vec::new(),
-        });
+        app.prompt = Some(PendingPrompt::trust_ask(
+            RequestId(1),
+            TrustPrompt {
+                project_path: "/home/alice/proj".into(),
+                risks: Vec::new(),
+            },
+        ));
         let out = render_text(&app, 80, 24);
         assert!(
             out.contains("Trust this workspace?"),

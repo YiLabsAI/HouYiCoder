@@ -20,7 +20,7 @@ use crate::run_state::RunState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
 use crate::state::transcript::Transcript;
-use crate::state::{ModelPickerState, ParkedKeys, QueueViewState, StatusTab, TrustChoice};
+use crate::state::{ModelPickerState, ParkedKeys, QueueViewState, StatusTab};
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub fn app() -> App {
@@ -66,8 +66,7 @@ pub fn app() -> App {
         resume_picker: SessionPickerState::default(),
         pending_resume_target: None,
         palette: PaletteState::default(),
-        approval: None,
-        ask_question: None,
+        prompt: None,
         status: status(),
         spec_ctx: spec_context(),
         spec_clauses: spec_clauses(),
@@ -106,7 +105,6 @@ pub fn app() -> App {
         runtime: None,
         agent_tx: None,
         session: None,
-        pending_permission_req_id: Cell::new(None),
         notifications: NotificationState::default(),
         terminal_focused: true,
         run_state: RunState::Idle,
@@ -117,10 +115,6 @@ pub fn app() -> App {
         last_terminal_rows: Cell::new(24),
         last_transcript_width: Cell::new(0),
         displayed_tokens: Cell::new(0),
-        pending_approvals: Vec::new(),
-        pending_trust: None,
-        trust_choice: TrustChoice::default(),
-        pending_trust_req_id: None,
         last_run_input: None,
         pending: Vec::new(),
         selection: Selection::default(),

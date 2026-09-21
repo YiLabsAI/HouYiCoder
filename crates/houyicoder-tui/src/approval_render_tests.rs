@@ -120,7 +120,7 @@ fn test_option3_no_duplicate_result() {
     let mut raised = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             raised = true;
             break;
         }
@@ -131,7 +131,7 @@ fn test_option3_no_duplicate_result() {
     // Simulate option 3 (always-allow): persist an Allow rule, echo the
     // verdict + system line, then resume with an approve decision -- the
     // exact side effects of handle_approval Enter with selected=2.
-    let call_id = app.approval.as_ref().unwrap().call_id.clone();
+    let call_id = app.approval().unwrap().call_id.clone();
     app.rules_cache
         .push(houyicoder_protocol::frontend::permission::PermissionRule {
             action: "boom".to_string(),

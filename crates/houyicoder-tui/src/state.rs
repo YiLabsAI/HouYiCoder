@@ -31,8 +31,9 @@ use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::palette::PaletteState;
 use crate::paste::PasteStore;
+use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
-use crate::records::{AskQuestion, TeammateView, ToolOutcome};
+use crate::records::{TeammateView, ToolOutcome};
 use crate::render_cache::RenderCache;
 use crate::resume_picker::{SessionLister, SessionPickerState};
 use crate::review_queue::ReviewQueue;
@@ -57,11 +58,9 @@ pub use crate::state::model_picker::{
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionMode, PermissionRule,
 };
-use houyicoder_protocol::frontend::run::ApprovalRequest;
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 use houyicoder_protocol::frontend::tools::ToolEntry;
-use houyicoder_protocol::frontend::trust::TrustPrompt;
 use houyicoder_protocol::frontend::{LoginMode, SessionId};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -246,11 +245,10 @@ pub struct App {
     /// back + set quit, letting the caller fall back to a fresh re-enter.
     pub pending_resume_target: Option<String>,
     pub palette: PaletteState,
-    pub approval: Option<Approval>,
-    /// Parallel to approval: when the model calls AskUserQuestion, the
-    /// interruption is parsed into this card instead of the generic approval
-    /// popup. None for plain tool-approval interruptions.
-    pub ask_question: Option<AskQuestion>,
+    /// The reverse request awaiting a verdict, when one is up: a permission
+    /// ask (plain approval or interactive question) during Waiting, or a
+    /// startup workspace-trust ask before any run. At most one at a time.
+    pub prompt: Option<PendingPrompt>,
     pub status: StatusStub,
     pub spec_ctx: SpecContext,
     pub spec_clauses: Vec<SpecClause>,
@@ -320,9 +318,6 @@ pub struct App {
     /// driver, the message channel back to the event loop, the request-id
     /// counter, and the driver task handle. None in the pure-stub path.
     pub session: Option<SessionConnection>,
-    /// The reverse-request req_id of the currently-shown permission ask,
-    /// echoed back with the verdict. None when no approval card is up.
-    pub pending_permission_req_id: Cell<Option<RequestId>>,
     /// Transient notification toast: one-line auto-expiring hint above the
     /// input box (copy feedback, exit-again prompt). Poll-driven expiry.
     pub notifications: NotificationState,
@@ -355,19 +350,6 @@ pub struct App {
     /// The original run input while it remains eligible for no-output rollback.
     /// A committed mid-turn input or visible output closes this window.
     pub last_run_input: Option<String>,
-    /// Pending approval requests from the last Interruption. The popup shows
-    /// the first; the verdict applies to all (batch decide). Cleared on resume.
-    pub pending_approvals: Vec<ApprovalRequest>,
-    /// A startup workspace-trust ask the server surfaced before the run
-    /// loop. The trust card shows while it is set; a verdict (accept /
-    /// decline) ships the reverse response. None once resolved or when the
-    /// project is already trusted (no prompt fired).
-    pub pending_trust: Option<TrustPrompt>,
-    /// Selected action on the trust screen.
-    pub trust_choice: TrustChoice,
-    /// The reverse-request req_id pairing the pending trust ask, so
-    /// resolve_trust can ship the matching TrustAccept response.
-    pub pending_trust_req_id: Option<RequestId>,
     /// Queued user inputs submitted while a run was in flight (FIFO). A
     /// Typed queue (messages + slash commands); drained FIFO at idle.
     pub pending: Vec<PendingItem>,
@@ -638,8 +620,7 @@ impl std::fmt::Debug for App {
             .field("viewport", &self.viewport)
             .field("transcript_len", &self.transcript.len())
             .field("agent_busy", &self.agent_busy())
-            .field("pending_approvals", &self.pending_approvals.len())
-            .field("pending_trust", &self.pending_trust.is_some())
+            .field("prompt", &self.prompt)
             .field("quit", &self.quit)
             .finish()
     }

@@ -835,20 +835,25 @@ fn test_expanded_block_paints_gray() {
 /// resets to zero so clicks route to the transcript, not stale rows.
 #[test]
 fn test_approval_drag_resets() {
+    use crate::pending_prompt::PendingPrompt;
     use crate::records::Approval;
+    use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.approval = Some(Approval {
-        tool: "bash".into(),
-        args: "rm -rf /tmp/x".into(),
-        reason: "destructive".into(),
-        source: None,
-        delegation: None,
-        containment_note: None,
-        selected: 0,
-        call_id: "c1".into(),
-        options: Vec::new(),
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: "rm -rf /tmp/x".into(),
+            reason: "destructive".into(),
+            source: None,
+            delegation: None,
+            containment_note: None,
+            selected: 0,
+            call_id: "c1".into(),
+            options: Vec::new(),
+        },
+    ));
     let _out = render_text(&app, 80, 24);
     let arect = app.approval_rect.get();
     assert!(
@@ -888,7 +893,7 @@ fn test_approval_drag_resets() {
 
     // After dismissal the rect resets to zero so clicks route to
     // transcript, not stale approval rows.
-    app.approval = None;
+    app.prompt = None;
     let _out = render_text(&app, 80, 24);
     let stale = app.approval_rect.get();
     assert_eq!(

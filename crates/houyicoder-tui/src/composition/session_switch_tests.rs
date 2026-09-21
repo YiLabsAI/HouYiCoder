@@ -1,9 +1,11 @@
 use super::*;
 use crate::agent_message::ConnectionEvent;
 use crate::fold::DisplaySlot;
+use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
 use crate::records::ToolOutcome;
 use crate::state::TranscriptLine;
+use houyicoder_protocol::envelope::RequestId;
 
 fn test_bundle() -> RunnerBundle {
     let bundle = houyicoder_service::composition::build_runner(
@@ -329,7 +331,10 @@ fn test_clears_session_local_state() {
     app.cumulative_steps = 7;
     app.displayed_tokens.set(50);
     app.status.tokens = 999;
-    app.approval = Some(crate::records::Approval::default());
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::records::Approval::default(),
+    ));
     app.selection.anchor = Some((0, 5));
     app.selection.is_dragging = true;
     app.last_all_rows.borrow_mut().push((0, "stale row".into()));
@@ -347,7 +352,7 @@ fn test_clears_session_local_state() {
     assert_eq!(app.cumulative_steps, 0, "cumulative_steps cleared");
     assert_eq!(app.displayed_tokens.get(), 0, "displayed_tokens cleared");
     assert_eq!(app.status.tokens, 0, "status.tokens cleared");
-    assert!(app.approval.is_none(), "approval cleared");
+    assert!(app.approval().is_none(), "approval cleared");
     assert!(app.selection.anchor.is_none(), "selection anchor cleared");
     assert!(!app.selection.is_dragging, "selection drag cleared");
     assert!(
@@ -443,9 +448,8 @@ fn test_tears_down_old_server() {
 /// approval-pending axis the busy test does not cover.
 #[test]
 fn test_idle_drain_noop_approval() {
-    use houyicoder_protocol::envelope::RequestId;
     let mut app = build_app(test_bundle());
-    app.pending_permission_req_id.set(Some(RequestId(42)));
+    app.prompt = Some(PendingPrompt::permission(RequestId(42), Vec::new()));
     app.pending.push(PendingItem::Message("queued".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);

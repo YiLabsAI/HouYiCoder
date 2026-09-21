@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::agent_message::ServerResponse;
+use crate::pending_prompt::PendingPrompt;
 use crate::state::TranscriptLine;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, StopReason};
@@ -60,7 +61,7 @@ fn test_one_at_a_time() {
     let mut got_first = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             got_first = true;
             break;
         }
@@ -69,9 +70,13 @@ fn test_one_at_a_time() {
     assert!(got_first, "first approval should appear");
     // The wire path surfaces one approval at a time: the server sends one
     // reverse permission ask, waits for the verdict, resumes, then re-asks
-    // for any remaining. So pending_approvals is one, not the full batch.
-    assert_eq!(app.pending_approvals.len(), 1, "one approval at a time");
-    let first_id = app.approval.as_ref().unwrap().call_id.clone();
+    // for any remaining. So the ask holds one approval, not the full batch.
+    assert_eq!(
+        app.prompt.as_ref().map(|p| p.request_count()).unwrap_or(0),
+        1,
+        "one approval at a time"
+    );
+    let first_id = app.approval().unwrap().call_id.clone();
 
     // Approve the first (one decision for its call_id).
     app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
@@ -85,10 +90,10 @@ fn test_one_at_a_time() {
     let mut got_second = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() && app.agent_busy() {
+        if app.approval().is_some() && app.agent_busy() {
             continue;
         }
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             got_second = true;
             break;
         }
@@ -98,7 +103,7 @@ fn test_one_at_a_time() {
         got_second,
         "second approval should appear after first approved"
     );
-    let second_id = app.approval.as_ref().unwrap().call_id.clone();
+    let second_id = app.approval().unwrap().call_id.clone();
     assert_ne!(
         first_id, second_id,
         "second approval must be a different call_id"
@@ -140,15 +145,18 @@ fn test_approval_renders_inline() {
 
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".to_string(),
-        args: r#"{"command":"ls"}"#.to_string(),
-        reason: "wants to run".to_string(),
-        selected: 0,
-        call_id: "c1".to_string(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".to_string(),
+            args: r#"{"command":"ls"}"#.to_string(),
+            reason: "wants to run".to_string(),
+            selected: 0,
+            call_id: "c1".to_string(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let text = render_text(&app, 80, 24);
     let tail: Vec<&str> = text.lines().rev().take(12).collect();
     let tail_joined = tail.join("\n");
@@ -164,7 +172,7 @@ fn test_approval_renders_inline() {
     // No approval -> no separator or proceed question near tail.
     let mut app2 = composition::app();
     app2.screen = crate::state::Screen::Working;
-    app2.approval = None;
+    app2.prompt = None;
     let text2 = render_text(&app2, 80, 24);
     assert!(
         !text2.contains("Do you want to proceed?"),
@@ -184,17 +192,20 @@ fn test_approval_esc_rejects_current() {
     }
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".to_string(),
-        args: "".to_string(),
-        reason: "".to_string(),
-        selected: 0,
-        call_id: "c1".to_string(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".to_string(),
+            args: "".to_string(),
+            reason: "".to_string(),
+            selected: 0,
+            call_id: "c1".to_string(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     crate::keys::handle_working(&mut app, key(KeyCode::Esc));
-    assert!(app.approval.is_none(), "current approval cleared");
+    assert!(app.approval().is_none(), "current approval cleared");
 }
 
 #[test]
@@ -208,17 +219,20 @@ fn test_approval_enter_approve_current() {
     }
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".to_string(),
-        args: "".to_string(),
-        reason: "".to_string(),
-        selected: 0,
-        call_id: "c1".to_string(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        crate::state::Approval {
+            tool: "bash".to_string(),
+            args: "".to_string(),
+            reason: "".to_string(),
+            selected: 0,
+            call_id: "c1".to_string(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     crate::keys::handle_working(&mut app, key(KeyCode::Enter));
-    assert!(app.approval.is_none(), "approval cleared after approve");
+    assert!(app.approval().is_none(), "approval cleared after approve");
 }
 
 /// The a/1 and r/3 keys pin the approval selection without resolving it: a
@@ -243,19 +257,19 @@ fn test_approval_char_keys_select() {
         ..Default::default()
     };
     // 'a' (or '1') pins Yes.
-    app.approval = Some(mk());
+    app.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
     crate::keys::handle_working(&mut app, key(KeyCode::Char('a')));
-    assert_eq!(app.approval.as_ref().unwrap().selected, 0, "a pins Yes");
-    assert!(app.approval.is_some(), "card stays open after a");
+    assert_eq!(app.approval().unwrap().selected, 0, "a pins Yes");
+    assert!(app.approval().is_some(), "card stays open after a");
 
     // 'r' pins No. The internal selected index is fixed: 0=Yes,
     // 1=No, 2=Yes-don't-ask. No is always index 1 regardless of
     // card layout (the display order array reorders presentation,
     // not the index meaning).
-    app.approval = Some(mk());
+    app.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
     crate::keys::handle_working(&mut app, key(KeyCode::Char('r')));
-    assert_eq!(app.approval.as_ref().unwrap().selected, 1, "r pins No");
-    assert!(app.approval.is_some(), "card stays open after r");
+    assert_eq!(app.approval().unwrap().selected, 1, "r pins No");
+    assert!(app.approval().is_some(), "card stays open after r");
 }
 
 #[test]
@@ -289,7 +303,7 @@ fn test_approval_pretext_survives_rebuild() {
     let mut got_approval = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             got_approval = true;
             break;
         }
@@ -747,7 +761,7 @@ fn test_guarded_tool_auto_asks() {
     let mut raised = false;
     for _ in 0..200 {
         app.poll_agent();
-        if app.approval.is_some() {
+        if app.approval().is_some() {
             raised = true;
             break;
         }
@@ -786,7 +800,7 @@ fn test_ask_preserves_start() {
     );
     let original_start = app.run_started();
     assert!(original_start.is_some(), "precondition: run started");
-    app.raise_agent_approval(approval_ask("c1"));
+    app.raise_agent_approval(approval_ask("c1"), RequestId(1));
     assert_eq!(
         app.run_started(),
         original_start,
@@ -824,7 +838,7 @@ fn test_ask_preserves_progress() {
         .running_tools
         .insert("c1".into());
 
-    app.raise_agent_approval(approval_ask("c2"));
+    app.raise_agent_approval(approval_ask("c2"), RequestId(1));
     app.resolve_current_approval(ApprovalDecision {
         call_id: "c2".into(),
         approved: true,
@@ -927,7 +941,7 @@ fn test_cycles_preserve_start() {
     assert!(app.spawn_run("work".into()));
     let first_start = app.run_started();
     for round in 0..2 {
-        app.raise_agent_approval(approval_ask(&format!("c{round}")));
+        app.raise_agent_approval(approval_ask(&format!("c{round}")), RequestId(1));
         assert_eq!(
             app.run_started(),
             first_start,
@@ -958,7 +972,7 @@ fn test_waiting_submit_parks() {
     crate::test_harness::attach_connection(&mut app);
     assert!(app.spawn_run("first".into()));
     let first_req = app.active_run_req_id();
-    app.raise_agent_approval(approval_ask("c1"));
+    app.raise_agent_approval(approval_ask("c1"), RequestId(1));
     assert!(!app.agent_busy(), "the spinner pauses during Waiting");
     app.spawn_run("second".into());
     assert_eq!(

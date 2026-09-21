@@ -8,9 +8,11 @@
 #[test]
 fn test_approval_keeps_prior_content() {
     use crate::composition;
+    use crate::pending_prompt::PendingPrompt;
     use crate::records::TranscriptLine;
     use crate::state::{Approval, Screen};
     use crate::test_harness::render_text;
+    use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript = vec![
@@ -18,15 +20,18 @@ fn test_approval_keeps_prior_content() {
         TranscriptLine::User("hi".to_string()),
     ]
     .into();
-    app.approval = Some(Approval {
-        tool: "bash".to_string(),
-        args: r#"{"command":"ls -la"}"#.to_string(),
-        reason: "agent wants to run this tool".to_string(),
-        selected: 0,
-        call_id: String::new(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".to_string(),
+            args: r#"{"command":"ls -la"}"#.to_string(),
+            reason: "agent wants to run this tool".to_string(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("hi"),

@@ -15,7 +15,7 @@ use crate::state::App;
 
 /// Render the AskUserQuestion card inline at the transcript tail.
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
-    let Some(aq) = app.ask_question.as_ref() else {
+    let Some(aq) = app.ask_question() else {
         return;
     };
     f.render_widget(Clear, area);

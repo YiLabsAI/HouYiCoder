@@ -88,7 +88,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // The startup workspace-trust banner is the sole pre-chat setup screen
     // while a trust ask is pending — the main view does not mount until the
     // user answers. A top banner, not a centered popup over a live chat.
-    if app.pending_trust.is_some() {
+    if app.pending_trust().is_some() {
         trust::draw(f, app);
         return;
     }

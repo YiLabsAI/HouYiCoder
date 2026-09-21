@@ -124,13 +124,13 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
     // Approval pending: a/r decide, Enter confirms the focus, Esc dismisses.
     // Other typing is ignored while the run is paused on the permission gate
     // (scroll/palette/search are handled earlier so they still work).
-    if app.approval.is_some() {
+    if app.approval().is_some() {
         handle_approval(app, k);
         return;
     }
     // AskUserQuestion pending: arrows navigate options, Enter selects/toggles,
     // Esc cancels. When Other is focused, typing goes into the text input.
-    if app.ask_question.is_some() {
+    if app.ask_question().is_some() {
         handle_ask_question(app, k);
         return;
     }

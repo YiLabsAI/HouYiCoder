@@ -75,7 +75,7 @@ pub(super) fn approval_prev(current: usize, count: usize) -> usize {
 /// single decision and re-interrupts for the next pending approval, so the
 /// next card appears automatically. This is not a reject-all flow.
 pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
-    let Some(a) = app.approval.as_mut() else {
+    let Some(a) = app.approval_mut() else {
         return;
     };
     match k.code {
@@ -105,7 +105,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
             // Capture the focused verdict by identity before the mutable
             // resolve so the next popup for this tool preselects it.
             let (call_id, tool, kind, approved, scope) = {
-                let a = app.approval.as_ref().expect("approval present");
+                let a = app.approval().expect("approval present");
                 (
                     a.call_id.clone(),
                     a.tool.clone(),
@@ -131,7 +131,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     },
                 );
             } else {
-                app.approval = None;
+                app.prompt = None;
             }
         }
         KeyCode::Esc => {
@@ -140,7 +140,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
             // approvals remain, re-asks. This is not a reject-all. The reject
             // is recorded as a sticky reject-once so the next popup for this
             // tool preselects No.
-            let (call_id, tool) = match app.approval.as_ref() {
+            let (call_id, tool) = match app.approval() {
                 Some(a) => (a.call_id.clone(), a.tool.clone()),
                 None => return,
             };
@@ -158,7 +158,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     },
                 );
             } else {
-                app.approval = None;
+                app.prompt = None;
             }
         }
         _ => {}

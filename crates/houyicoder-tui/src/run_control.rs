@@ -4,11 +4,13 @@
 
 use std::time::{Duration, Instant};
 
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::{AskSource, PermissionMode};
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
+use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
 use crate::records::{Approval, AskQuestion, TranscriptLine};
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome};
@@ -249,8 +251,9 @@ impl App {
     /// verdict as the matching reverse response. No-op when no request awaits
     /// a decision.
     pub fn resolve_current_approval(&mut self, decision: ApprovalDecision) {
-        let Some(req_id) = self.pending_permission_req_id.get() else {
-            return;
+        let req_id = match self.prompt.as_ref() {
+            Some(PendingPrompt::Permission { req_id, .. }) => *req_id,
+            _ => return,
         };
         // Enqueue first: the card and the run-resume state only move once the
         // verdict actually reached the driver.
@@ -258,10 +261,7 @@ impl App {
             self.system_line(Self::enqueue_failure_line("permission", e));
             return;
         }
-        self.pending_permission_req_id.take();
-        self.pending_approvals.clear();
-        self.approval = None;
-        self.ask_question = None;
+        self.prompt = None;
         // Resume the run without resetting its clock: end_waiting flips
         // Waiting → Running preserving the original started_at.
         self.run_state.end_waiting();
@@ -278,16 +278,17 @@ impl App {
     /// Resolve the startup trust verdict. Rejection also exits the local TUI,
     /// but only after the verdict was actually queued.
     pub fn resolve_trust(&mut self, accept: bool) {
-        let Some(req_id) = self.pending_trust_req_id.take() else {
-            return;
+        let req_id = match self.prompt.as_ref() {
+            Some(PendingPrompt::Trust { req_id, .. }) => *req_id,
+            _ => return,
         };
         if let Err(e) = self.enqueue(ClientCommand::TrustVerdict { req_id, accept }) {
-            // The host still waits for this verdict: restore the request id.
-            self.pending_trust_req_id = Some(req_id);
+            // The host still waits for this verdict: the request id lives on
+            // inside the prompt, so nothing to restore on a failed send.
             self.system_line(Self::enqueue_failure_line("trust", e));
             return;
         }
-        self.pending_trust = None;
+        self.prompt = None;
         if !accept {
             self.quit = true;
         }
@@ -296,18 +297,20 @@ impl App {
     /// Present a wire permission request and retain its request identifier.
     /// Question tools use the interactive question card; others use the
     /// generic approval card.
-    fn raise_agent_approval(&mut self, ask: ApprovalRequest) {
+    fn raise_agent_approval(&mut self, ask: ApprovalRequest, req_id: RequestId) {
         let call_id = ask.call_id.clone();
         let tool = ask.tool_name.clone();
         // Pause the spinner while the run waits on the human verdict.
         // begin_waiting preserves the run's identity and start time so the
         // verdict can resume without resetting the clock.
         self.run_state.begin_waiting();
-        self.pending_approvals = vec![ask.clone()];
+        self.prompt = Some(PendingPrompt::permission(req_id, vec![ask.clone()]));
         if tool == "AskUserQuestion"
             && let Some(aq) = AskQuestion::parse(&call_id, &ask.input)
         {
-            self.ask_question = Some(aq);
+            if let Some(p) = self.prompt.as_mut() {
+                p.set_question(Some(aq));
+            }
             return;
         }
         // Malformed questions fall back to the generic card. Safety requests
@@ -330,17 +333,19 @@ impl App {
         if two_option && selected == 2 {
             selected = 0;
         }
-        self.approval = Some(Approval {
-            tool,
-            args,
-            reason,
-            source,
-            delegation: ask.delegation,
-            containment_note,
-            selected,
-            call_id,
-            options: Vec::new(),
-        });
+        if let Some(p) = self.prompt.as_mut() {
+            p.set_approval(Some(Approval {
+                tool,
+                args,
+                reason,
+                source,
+                delegation: ask.delegation,
+                containment_note,
+                selected,
+                call_id,
+                options: Vec::new(),
+            }));
+        }
     }
 
     /// Select the initial approval choice. A remembered verdict wins;
@@ -358,7 +363,7 @@ impl App {
     /// Whether a reverse request still awaits its verdict. Idle client
     /// requests pause so they cannot compete for response frames.
     pub fn reverse_request_in_flight(&self) -> bool {
-        self.pending_permission_req_id.get().is_some()
+        self.prompt.as_ref().is_some_and(|p| p.is_permission())
     }
 
     /// Enqueue the status query, then drain startup messages by type until the
@@ -391,7 +396,7 @@ impl App {
                 break;
             };
             self.handle_agent_message(message);
-            if self.pending_trust.is_some() || self.status_cache.is_some() {
+            if self.pending_trust().is_some() || self.status_cache.is_some() {
                 break;
             }
         }
@@ -508,7 +513,7 @@ impl App {
             self.transcript_scroll.is_following_tail(),
             self.transcript_scroll
                 .top_offset(self.transcript_display_rows()),
-            self.approval.is_some(),
+            self.approval().is_some(),
             self.agent_busy(),
         );
     }

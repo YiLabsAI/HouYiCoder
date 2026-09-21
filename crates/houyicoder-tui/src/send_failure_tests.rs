@@ -6,9 +6,11 @@
 #![cfg(test)]
 
 use crate::agent_message::{ServerEvent, SessionMessage};
+use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
 use crate::test_harness::connection_lost_app;
 use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 fn last_line(app: &crate::state::App) -> String {
     app.transcript
@@ -117,16 +119,18 @@ fn test_drain_refused() {
 #[test]
 fn test_verdict_refused() {
     let mut app = connection_lost_app();
-    app.pending_permission_req_id.set(Some(RequestId(7)));
-    app.approval = Some(crate::state::Approval {
-        tool: "bash".into(),
-        args: r#"{"command":"ls"}"#.into(),
-        reason: "wants to run".into(),
-        selected: 0,
-        call_id: "c1".into(),
-        options: Vec::new(),
-        ..Default::default()
-    });
+    app.prompt = Some(PendingPrompt::approval_card(
+        RequestId(7),
+        crate::state::Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"ls"}"#.into(),
+            reason: "wants to run".into(),
+            selected: 0,
+            call_id: "c1".into(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
     app.resolve_current_approval(crate::run_control::ApprovalDecision {
         call_id: "c1".into(),
         approved: true,
@@ -134,11 +138,11 @@ fn test_verdict_refused() {
         scope: "once".into(),
     });
     assert!(
-        app.approval.is_some(),
+        app.approval().is_some(),
         "the card stays until the verdict is delivered"
     );
     assert!(
-        app.pending_permission_req_id.get().is_some(),
+        app.prompt.as_ref().map(|p| p.req_id()) == Some(RequestId(7)),
         "the request id stays until the verdict is delivered"
     );
     assert!(
@@ -157,14 +161,16 @@ fn test_verdict_refused() {
 #[test]
 fn test_trust_refused() {
     let mut app = connection_lost_app();
-    app.pending_trust_req_id = Some(RequestId(3));
-    app.pending_trust = Some(houyicoder_protocol::frontend::trust::TrustPrompt {
-        project_path: "/proj".into(),
-        risks: Vec::new(),
-    });
+    app.prompt = Some(PendingPrompt::trust_ask(
+        RequestId(3),
+        TrustPrompt {
+            project_path: "/proj".into(),
+            risks: Vec::new(),
+        },
+    ));
     app.resolve_trust(false);
     assert!(
-        app.pending_trust.is_some(),
+        app.pending_trust().is_some(),
         "the trust prompt stays until the verdict is delivered"
     );
     assert!(!app.quit, "a refused rejection must not exit the TUI");
