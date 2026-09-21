@@ -1087,3 +1087,66 @@ fn test_loss_unsent_vs_unknown() {
     );
     assert!(!app.agent_busy(), "either way the active run ends");
 }
+
+// Cancel during a Waiting approval moves the run to Cancelling without
+// dropping the active run: the same request id stays in flight until the
+// interrupted completion arrives.
+#[test]
+fn test_cancel_during_waiting() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    let run_req = app.active_run_req_id().unwrap();
+    app.raise_agent_approval(approval_ask("c1"), RequestId(1));
+    assert!(!app.agent_busy(), "Waiting pauses the spinner");
+    assert!(!app.cancelling(), "Waiting is not Cancelling");
+    app.abort_run();
+    assert!(app.cancelling(), "abort moves Waiting to Cancelling");
+    assert!(app.agent_busy(), "Cancelling still counts as busy");
+    assert_eq!(
+        app.active_run_req_id(),
+        Some(run_req),
+        "the same run stays in flight through the cancel"
+    );
+}
+
+// A connection loss during Waiting settles the run as an error: the run
+// goes idle, the prompt clears, and the outcome is not final so queued
+// input parks instead of draining.
+#[test]
+fn test_loss_during_waiting_settles() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    app.raise_agent_approval(approval_ask("c1"), RequestId(1));
+    assert!(
+        app.active_run_req_id().is_some(),
+        "the run is still in flight while Waiting"
+    );
+    app.apply_connection_loss("connect failed: no server".into(), Vec::new());
+    assert!(!app.agent_busy(), "the loss settles the waiting run");
+    assert!(!app.cancelling(), "nothing is left to cancel");
+    assert_eq!(app.active_run_req_id(), None, "the run id clears on settle");
+    assert!(app.prompt.is_none(), "the approval prompt clears on settle");
+    assert!(!app.status.last_run_final, "an error settle is not final");
+}
+
+// A connection loss during Cancelling settles the same way: the run that
+// was being cancelled ends, and no cancelling state lingers.
+#[test]
+fn test_loss_during_cancelling_settles() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    app.raise_agent_approval(approval_ask("c1"), RequestId(1));
+    app.abort_run();
+    assert!(app.cancelling(), "the run is cancelling before the loss");
+    app.apply_connection_loss("connect failed: no server".into(), Vec::new());
+    assert!(!app.agent_busy(), "the loss settles the cancelling run");
+    assert!(!app.cancelling(), "cancelling clears on settle");
+    assert_eq!(app.active_run_req_id(), None, "the run id clears on settle");
+    assert!(app.prompt.is_none(), "the approval prompt clears on settle");
+}
