@@ -237,6 +237,37 @@ async fn test_query_reports_no_results() {
     assert!(out.to_string().contains("No results found"));
 }
 
+/// A blank query is no query. An empty substring matches every text, so
+/// without the guard the tool would report every event as a hit and count
+/// the whole folded span as recalled. Whitespace matches nothing on this
+/// text, so it is the second input that holds the empty-substring rule.
+#[tokio::test]
+async fn test_blank_query_reports_guidance() {
+    for query in ["", "   "] {
+        let folded = make_event(SessionEvent::UserInput {
+            text: "alpha beta".to_string(),
+        });
+        let folded_id = folded.id;
+        let manifest = make_manifest_summarized(vec![folded_id]);
+        let (tool, ctx, meter) = harness(vec![folded], Some(manifest));
+        let out = tool.execute(ctx, json!({"query": query})).await.unwrap();
+        let text = out.to_string();
+        assert!(
+            text.contains("Provide a query"),
+            "guidance served for {query:?}: {text}"
+        );
+        assert!(
+            !text.contains("Search Results"),
+            "no hit reported for {query:?}: {text}"
+        );
+        assert_eq!(
+            meter.load(Ordering::Relaxed),
+            0,
+            "no recall counted for {query:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_stats_reports_counts() {
     let e0 = make_event(SessionEvent::UserInput {
@@ -457,6 +488,89 @@ fn test_transcript_item_empty_textless() {
     for event in cases {
         assert!(transcript_item(&make_event(event)).is_none(), "no item");
     }
+}
+
+/// A query the text does not contain is no snippet at all, which is what
+/// makes the window one decision with the search rather than a second guess
+/// after it.
+#[test]
+fn test_snippet_miss_is_none() {
+    assert!(snippet_window("alpha beta", "gamma").is_none());
+    assert_eq!(
+        snippet_window("alpha beta", "beta").as_deref(),
+        Some("alpha beta")
+    );
+}
+
+/// A hit past a char whose lowercase form is longer than the char itself
+/// still cuts a snippet out of the original: the dotted capital I maps to
+/// two code points, so an offset from the lowercase copy runs ahead of the
+/// text it has to address. The match is served in the case the text holds,
+/// which is what makes the search case-insensitive rather than the output.
+/// The stretch behind the hit is repeated ahead of it, so a window that
+/// runs past the copy offset lands at the tail of the text and drops the
+/// match instead of merely ending early.
+#[test]
+fn test_snippet_longer_mapping() {
+    let text = format!("{}NEEDLE{}", "İ".repeat(60), "İ".repeat(60));
+    let snippet = snippet_window(&text, "needle").expect("a hit");
+    assert!(
+        snippet.contains("NEEDLE"),
+        "hit served as written: {snippet}"
+    );
+    assert!(
+        snippet.starts_with("...İ"),
+        "the window edge starts a whole char: {snippet}"
+    );
+}
+
+/// The same mapping the other way: the Kelvin sign is three bytes in the text
+/// and one in its lowercase form, so an offset from the copy falls behind the
+/// char that carries it and the window drifts off the hit.
+#[test]
+fn test_snippet_shorter_mapping() {
+    let text = format!("{}NEEDLE{}", "\u{212A}".repeat(60), "\u{212A}".repeat(60));
+    let snippet = snippet_window(&text, "needle").expect("a hit");
+    assert!(
+        snippet.contains("NEEDLE"),
+        "hit served as written: {snippet}"
+    );
+    assert!(
+        snippet.starts_with("...\u{212A}"),
+        "the window edge starts a whole char: {snippet}"
+    );
+}
+
+/// A hit at the head of a text that runs on in wide characters cuts its
+/// trailing edge at a char boundary rather than through a multi-byte char,
+/// and marks the cut.
+#[test]
+fn test_snippet_wide_tail() {
+    let text = format!("needle{}", "中".repeat(60));
+    let snippet = snippet_window(&text, "needle").expect("a hit");
+    assert!(
+        snippet.starts_with("needle中"),
+        "the window edge ends a whole char: {snippet}"
+    );
+    assert!(
+        snippet.ends_with("..."),
+        "the cut tail is marked: {snippet}"
+    );
+}
+
+/// A hit with wide characters on both sides is served whole. A wide char
+/// occupies more bytes in the copy than the one budgeted per char, so a
+/// walk that counts characters rather than bytes reaches the copy offset
+/// long after the hit and cuts its window from the tail of the text.
+#[test]
+fn test_snippet_wide_both_sides() {
+    let text = format!("{}needle{}", "中".repeat(60), "中".repeat(60));
+    let snippet = snippet_window(&text, "needle").expect("a hit");
+    assert!(snippet.contains("needle"), "hit served: {snippet}");
+    assert!(
+        snippet.starts_with("...中"),
+        "the window edge starts a whole char: {snippet}"
+    );
 }
 
 /// The turn listing over a slice that still holds untranslatable events: a

@@ -89,6 +89,7 @@ impl Tool for ConversationSearchTool {
             "properties": {
                 "query": {
                     "type": "string",
+                    "minLength": 1,
                     "description": "Substring search query (case-insensitive). Returns up to 10 matches with surrounding context."
                 },
                 "turns": {
@@ -135,7 +136,11 @@ impl Tool for ConversationSearchTool {
                 output.push_str(&format_stats(&events, &text_events, &folded_ids));
             }
 
-            if let Some(query) = params.query {
+            // A blank query is no query: an empty substring matches every
+            // text, so the search would report every event as a hit and count
+            // the whole folded span as recalled.
+            let query = params.query.filter(|q| !q.trim().is_empty());
+            if let Some(query) = query {
                 let matches = search_events(&text_events, &query);
                 let folded_matches = matches
                     .iter()
@@ -272,36 +277,67 @@ fn search_events(events: &[&SessionLogEntry], query: &str) -> Vec<SearchMatch> {
         let Some((role, text)) = transcript_item(event) else {
             continue;
         };
-        if text.to_lowercase().contains(&query_lower) {
-            results.push(SearchMatch {
-                index: idx,
-                event_id: event.id,
-                role,
-                snippet: extract_snippet(&text, &query_lower),
-            });
-        }
+        let Some(snippet) = snippet_window(&text, &query_lower) else {
+            continue;
+        };
+        results.push(SearchMatch {
+            index: idx,
+            event_id: event.id,
+            role,
+            snippet,
+        });
     }
     results
 }
 
-/// A snippet around the first hit, with ellipsis when the match is not at the
-/// text boundary.
-fn extract_snippet(text: &str, query_lower: &str) -> String {
-    let lower = text.to_lowercase();
-    if let Some(pos) = lower.find(query_lower) {
-        let start = pos.saturating_sub(50);
-        let end = (pos + query_lower.len() + 50).min(text.len());
-        let mut snippet = text[start..end].to_string();
-        if start > 0 {
-            snippet = format!("...{snippet}");
+/// The byte indices in text of the first chars whose lowercase forms begin at
+/// or after the two given byte offsets in the lowercase copy. The mapping can
+/// change a char's byte length in either direction, so an offset from the copy
+/// can land inside a char's expansion, where the answer is the char after it,
+/// or reach a char whose form is shorter, where the answer is that char. ASCII
+/// is the common case and maps byte for byte, so it is counted as one without
+/// building its expansion.
+fn text_span_for_copy_offsets(text: &str, start: usize, end: usize) -> (usize, usize) {
+    let mut copy_at = 0;
+    let mut hit_start = None;
+    for (index, ch) in text.char_indices() {
+        if hit_start.is_none() && copy_at >= start {
+            hit_start = Some(index);
         }
-        if end < text.len() {
-            snippet = format!("{snippet}...");
+        if copy_at >= end {
+            return (hit_start.unwrap_or(index), index);
         }
-        snippet
-    } else {
-        text.chars().take(100).collect()
+        copy_at += if ch.is_ascii() {
+            1
+        } else {
+            ch.to_lowercase().map(char::len_utf8).sum()
+        };
     }
+    let tail = text.len();
+    (hit_start.unwrap_or(tail), tail)
+}
+
+/// A snippet around the first hit of the query, with ellipsis when the match
+/// is not at the text boundary. None when the text does not contain the query,
+/// so the hit and its window are decided from one lowercase copy rather than
+/// two that could disagree. The offsets come from that copy, so they are
+/// mapped back to the text being cut, and the window edges are pulled to a
+/// char boundary, because an offset from the copy or a fixed byte window
+/// lands inside a multi-byte char often enough to be the common case.
+fn snippet_window(text: &str, query_lower: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    let pos = lower.find(query_lower)?;
+    let (hit_start, hit_end) = text_span_for_copy_offsets(text, pos, pos + query_lower.len());
+    let start = text.floor_char_boundary(hit_start.saturating_sub(50));
+    let end = text.ceil_char_boundary((hit_end + 50).min(text.len()));
+    let mut snippet = text[start..end].to_string();
+    if start > 0 {
+        snippet = format!("...{snippet}");
+    }
+    if end < text.len() {
+        snippet = format!("{snippet}...");
+    }
+    Some(snippet)
 }
 
 /// Render up to 10 search matches, with a tail count when truncated. The
