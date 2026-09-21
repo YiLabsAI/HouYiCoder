@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent_message::ConnectionEvent;
 use crate::fold::DisplaySlot;
 use crate::pending_queue::PendingItem;
 use crate::records::ToolOutcome;
@@ -397,13 +398,20 @@ fn test_swap_carries_pending_across() {
 fn test_tears_down_old_server() {
     let (bundle, old_serve) = test_bundle_tracked();
     let mut app = build_app(bundle);
-    // The old server is alive before the swap (serve loop waiting on input
-    // after the handshake settles).
-    let mut tries = 0;
-    while !old_serve.is_finished() && tries < 25 {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        tries += 1;
-    }
+    // The old server serves an established session before the swap: wait for
+    // the driver's readiness announcement, which the handshake produces once,
+    // so the server is proven to be serving rather than merely not yet dead.
+    let msg = app
+        .session
+        .as_mut()
+        .expect("session")
+        .poll_startup(std::time::Duration::from_secs(5))
+        .expect("the handshake result arrives");
+    assert!(
+        matches!(msg, SessionMessage::Connection(ConnectionEvent::Ready)),
+        "the driver announces readiness, got {msg:?}"
+    );
+    app.handle_agent_message(msg);
     assert!(
         !old_serve.is_finished(),
         "old server alive before swap (handshake done, waiting on input)"
