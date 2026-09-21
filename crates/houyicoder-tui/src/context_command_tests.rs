@@ -4,62 +4,61 @@ use super::*;
 
 /// The second /context draws the cached grid at once and then swaps its payload
 /// for the reply grid in place, so the transcript holds one grid either way. A
-/// non-grid line landing between the two must not leave a second grid: the test
-/// injects a System line between them and asserts the second call adds one grid,
-/// not two.
+/// non-grid line landing between the two must not leave a second grid: the
+/// reply carries a different total, so the grid can only show it by taking the
+/// place of the one drawn before the line arrived.
 #[test]
 fn test_second_context_one_grid() {
     use houyicoder_protocol::frontend::SlashCommand;
+    use houyicoder_protocol::frontend::context::stub_breakdown;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.screen = crate::state::Screen::Working;
+    // The cache a first /context filled stands in for that reply: the fast
+    // path renders from it without a round trip.
+    app.context_cache = Some(stub_breakdown());
     app.run_command(SlashCommand::Context);
-    for _ in 0..1000 {
-        app.poll_agent();
-        if app.context_cache.is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    }
-    assert!(
-        app.context_cache.is_some(),
-        "first /context populates cache"
-    );
-    let grids_after_first: usize = app
-        .transcript
-        .iter()
-        .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
-        .count();
-    // Second /context: cache hit -> fast-path pushes a grid + sends query.
-    app.run_command(SlashCommand::Context);
-    // A non-grid line lands between the fast-path push and the ContextResult.
-    app.system_line("concurrent event");
-    // Poll until the ContextResult arrives (grid count changes).
-    for _ in 0..1000 {
-        app.poll_agent();
-        let grids: usize = app
-            .transcript
+    let grids = |app: &App| {
+        app.transcript
             .iter()
             .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
-            .count();
-        if grids != grids_after_first + 1 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    }
-    let grids_final: usize = app
+            .count()
+    };
+    assert_eq!(grids(&app), 1, "the fast path draws the cached grid");
+    // A non-grid line lands between the fast-path push and the reply.
+    app.system_line("concurrent event");
+    let mut fresh = stub_breakdown();
+    fresh.total_tokens = 4_242;
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(7),
+        response: ServerResponse::Context { breakdown: fresh },
+    });
+    // Bug: the reply grid lands beside the fast-path one, leaving two grids.
+    assert_eq!(
+        grids(&app),
+        1,
+        "the reply grid takes the cached one's place"
+    );
+    let shows_fresh = app.transcript.iter().any(|l| {
+        matches!(
+            l,
+            TranscriptLine::ContextGrid(view) if view.breakdown.total_tokens == 4_242
+        )
+    });
+    assert!(shows_fresh, "the grid shows the numbers the reply carried");
+    let grid_at = app
         .transcript
         .iter()
-        .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
-        .count();
-    // Desired: the fast-path grid was replaced in place -> only the reply grid
-    // remains -> total = grids_after_first + 1.
-    // Bug: the reply grid lands beside the fast-path one -> total =
-    // grids_after_first + 2.
-    assert_eq!(
-        grids_final,
-        grids_after_first + 1,
-        "the second /context leaves one grid even when a non-grid line intervenes"
+        .position(|l| matches!(l, TranscriptLine::ContextGrid(_)))
+        .expect("a grid row");
+    let line_at = app
+        .transcript
+        .iter()
+        .position(|l| matches!(l, TranscriptLine::System(t) if t == "concurrent event"))
+        .expect("the line that landed in between");
+    assert!(
+        grid_at < line_at,
+        "the grid keeps the place it was drawn in, above the line that followed it"
     );
 }
 
