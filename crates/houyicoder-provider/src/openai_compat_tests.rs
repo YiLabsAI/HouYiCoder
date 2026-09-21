@@ -135,6 +135,10 @@ fn test_prompt_cache_key_lowered() {
         key.starts_with("houyi-"),
         "key carries the label prefix, got: {key}"
     );
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"]["type"], "ephemeral",
+        "system message carries cache_control block"
+    );
 
     // The same prefix hashes to the same key (stable across turns).
     let body2 = build_request_body(&r);

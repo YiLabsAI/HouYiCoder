@@ -420,50 +420,63 @@ fn clamp_thinking_budget(budget: u32, max_output_tokens: Option<u32>) -> u32 {
     }
 }
 
-/// Build the chat/completions JSON body from the unified CompletionRequest.
-/// Assistant tool_calls are emitted as OpenAI tool_calls (arguments is a JSON
-/// string, per the OpenAI spec — providers parse it back). ToolResult maps
-/// to the tool role with tool_call_id.
-fn build_request_body(req: &CompletionRequest) -> Value {
-    let mut messages = Vec::with_capacity(req.input.len() + 1);
-    messages.push(json!({"role": "system", "content": req.instructions}));
-    for item in &req.input {
-        match item {
-            InputItem::User { content } => {
-                messages.push(json!({"role": "user", "content": content}));
-            }
-            InputItem::Assistant {
-                content,
-                tool_calls,
-            } => {
-                let mut msg = json!({"role": "assistant", "content": content});
-                if !tool_calls.is_empty() {
-                    let tcs: Vec<Value> = tool_calls
-                        .iter()
-                        .map(|c| {
-                            json!({
-                                "id": c.id,
-                                "type": "function",
-                                "function": {
-                                    "name": c.name,
-                                    "arguments": c.input.to_string(),
-                                }
-                            })
+/// Convert input items to OpenAI chat message JSON values.
+fn map_input_item(item: &InputItem) -> Value {
+    match item {
+        InputItem::User { content } => json!({"role": "user", "content": content}),
+        InputItem::Assistant {
+            content,
+            tool_calls,
+        } => {
+            let mut msg = json!({"role": "assistant", "content": content});
+            if !tool_calls.is_empty() {
+                let tcs: Vec<Value> = tool_calls
+                    .iter()
+                    .map(|c| {
+                        json!({
+                            "id": c.id,
+                            "type": "function",
+                            "function": {
+                                "name": c.name,
+                                "arguments": c.input.to_string(),
+                            }
                         })
-                        .collect();
-                    msg["tool_calls"] = Value::Array(tcs);
-                }
-                messages.push(msg);
+                    })
+                    .collect();
+                msg["tool_calls"] = Value::Array(tcs);
             }
-            InputItem::ToolResult { call_id, output } => {
-                messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": output.to_string(),
-                }));
-            }
+            msg
         }
+        InputItem::ToolResult { call_id, output } => json!({
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": output.to_string(),
+        }),
     }
+}
+
+/// Build the chat/completions JSON body from the unified CompletionRequest.
+fn build_request_body(req: &CompletionRequest) -> Value {
+    let has_prefix_breakpoint = req
+        .cache_breakpoints
+        .iter()
+        .any(|bp| bp.kind == BreakpointKind::SystemStaticPrefix);
+    let mut messages = Vec::with_capacity(req.input.len() + 1);
+    if has_prefix_breakpoint {
+        messages.push(json!({
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": req.instructions,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }));
+    } else {
+        messages.push(json!({"role": "system", "content": req.instructions}));
+    }
+    messages.extend(req.input.iter().map(map_input_item));
     let mut body = json!({"model": req.model, "messages": messages, "stream": false});
     if !req.tools.is_empty() {
         let tools: Vec<Value> = req
