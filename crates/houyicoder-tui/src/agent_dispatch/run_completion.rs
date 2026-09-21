@@ -17,11 +17,12 @@ impl super::App {
         let had_live_output = self.run_progress().is_some_and(|p| {
             !p.live_assistant_text.is_empty() || !p.live_reasoning_text.is_empty()
         });
-        // The transition to Idle is the effect the settle needs; the ActiveRun
-        // the call hands back has no reader once the run's own frames carry
-        // what the turn did. Dropping it releases the streaming progress, so
-        // the preview and tool-runtime state need no manual clear here.
-        self.run_state.finish();
+        // Take the ActiveRun out by value. The transition to Idle is the
+        // effect the settle needs, and the run's wall start is read here
+        // before the ActiveRun drops. Dropping it releases the streaming
+        // progress, so the preview and tool-runtime state need no manual
+        // clear here.
+        let active = self.run_state.finish();
         self.prompt = None;
         self.rebuild_transcript();
         self.debug_render_done(&self.frames);
@@ -35,7 +36,7 @@ impl super::App {
                         self.cumulative_tokens += run.usage.total_tokens as u64;
                         self.cumulative_steps += run.turns;
                         if self.session_started_at.is_none() {
-                            self.session_started_at = self.run_started();
+                            self.session_started_at = active.as_ref().map(|r| r.started_at);
                         }
                     }
                     RunOutcome::Handoff { agent } => {

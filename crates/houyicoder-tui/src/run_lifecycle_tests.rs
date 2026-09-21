@@ -857,9 +857,40 @@ fn test_ask_preserves_progress() {
     );
 }
 
-// Finish clears run_started before it is copied into the session start.
+// The run's wall start is copied into the session start before finish
+// drops the ActiveRun, so the first final run fixes the session clock.
 #[test]
-fn test_finish_clears_start() {
+fn test_finish_copies_start() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    crate::test_harness::attach_connection(&mut app);
+    assert!(app.spawn_run("work".into()));
+    let run_req = app.active_run_req_id().unwrap();
+    let started = app.run_started();
+    app.handle_agent_message(SessionMessage::Response {
+        request: run_req,
+        response: ServerResponse::Done {
+            result: Ok(RunResult {
+                outcome: RunOutcome::FinalOutput {
+                    content: vec![ContentBlock::Text { text: "ok".into() }],
+                },
+                usage: Usage::default(),
+                turns: 1,
+                stop_reason: StopReason::EndTurn,
+            }),
+        },
+    });
+    assert_eq!(
+        app.session_started_at, started,
+        "the run start is copied into the session start before the drop"
+    );
+}
+
+// A connection loss after a clean Done pushes its notice but does not
+// re-settle the finished run: last_run_final stays true and the run id
+// stays cleared, so the loss is a notice rather than a second settle.
+#[test]
+fn test_final_run_survives_loss() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
     crate::test_harness::attach_connection(&mut app);
@@ -878,9 +909,21 @@ fn test_finish_clears_start() {
             }),
         },
     });
+    assert!(app.status.last_run_final, "the Done settled as final");
+    let before = app.transcript.len();
+    app.apply_connection_loss("connect failed: no server".into(), Vec::new());
     assert!(
-        app.session_started_at.is_none(),
-        "recorded defect: session start point is cleared before the copy"
+        app.status.last_run_final,
+        "a later loss does not un-final the settled run"
+    );
+    assert_eq!(
+        app.active_run_req_id(),
+        None,
+        "the loss finds no run to settle"
+    );
+    assert!(
+        app.transcript.len() > before,
+        "the loss still pushes its notice line"
     );
 }
 

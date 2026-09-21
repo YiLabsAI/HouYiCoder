@@ -105,7 +105,15 @@ impl App {
         } else {
             cause.as_str()
         };
-        self.handle_run_completion(Err(run_line.to_string()));
+        if run_req.is_some() {
+            // Settle the active run: the loss is its terminal outcome.
+            self.handle_run_completion(Err(run_line.to_string()));
+        } else {
+            // No run is in flight, so the loss is a notice only — it must not
+            // touch run-final state or demote queued input, which a prior
+            // settle owns. The line keeps the shape a settled loss would.
+            self.system_line(format!("agent error: {run_line}"));
+        }
         true
     }
 
