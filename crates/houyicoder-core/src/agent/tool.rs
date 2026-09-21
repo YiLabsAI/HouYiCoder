@@ -44,15 +44,20 @@ impl ToolRegistry {
     }
 
     /// The tool declarations sent to the model in a CompletionRequest.
+    /// Ordered deterministically by name so the tools array serialized into
+    /// the request body is byte-stable across calls and tool registrations.
     pub fn tool_defs(&self) -> Vec<ToolDef> {
-        self.tools
+        let mut defs: Vec<ToolDef> = self
+            .tools
             .values()
             .map(|t| ToolDef {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 input_schema: t.input_schema(),
             })
-            .collect()
+            .collect();
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
+        defs
     }
 
     /// Look up a tool by name. None means the model called an unknown tool;
@@ -164,6 +169,16 @@ mod tests {
             "agent must be dropped (case-insensitive)"
         );
         assert_eq!(child.len(), 1);
+    }
+
+    #[test]
+    fn test_tool_defs_deterministic_sort() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(StubTool::new("zeta")));
+        reg.register(Arc::new(StubTool::new("alpha")));
+        reg.register(Arc::new(StubTool::new("mid")));
+        let names: Vec<String> = reg.tool_defs().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, vec!["alpha", "mid", "zeta"]);
     }
 
     #[test]
