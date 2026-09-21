@@ -15,6 +15,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::state::{App, enums::StatusTab};
 use crate::view::navigation::{key_hint, tab_header};
@@ -181,8 +182,8 @@ fn render_usage(app: &App) -> String {
     let f = crate::command::render::field;
     let ft = crate::command::render::format_tokens;
     let mut s = String::new();
-    s.push_str(&f("input", &ft(u.input_tokens as u64)));
-    s.push_str(&f("output", &ft(u.output_tokens as u64)));
+    s.push_str(&f("input tokens", &ft(u.input_tokens as u64)));
+    s.push_str(&f("output tokens", &ft(u.output_tokens as u64)));
     // Reasoning tokens: a component of output, shown only when >0. The
     // parenthetical note "(incl. in output)" makes the inclusion relation
     // explicit so it is not read as a separate total (I14).
@@ -192,8 +193,22 @@ fn render_usage(app: &App) -> String {
             &format!("{} (incl. in output)", ft(u.reasoning_tokens as u64)),
         ));
     }
-    s.push_str(&f("cache read", &ft(u.cache_read_input_tokens as u64)));
-    s.push_str(&f("cache write", &ft(u.cache_write_input_tokens as u64)));
+    let cache_read = u.cache_read_input_tokens as u64;
+    let cache_value = if u.input_tokens > 0 {
+        format!(
+            "{} ({:.1}% of input)",
+            ft(cache_read),
+            100.0 * cache_read as f64 / u.input_tokens as f64
+        )
+    } else {
+        ft(cache_read)
+    };
+    s.push_str(&f("cached input", &cache_value));
+    // Not every provider reports cache creation. A zero cannot distinguish
+    // an actual zero from an omitted field, so show this row only with data.
+    if u.cache_write_input_tokens > 0 {
+        s.push_str(&f("cache creation", &ft(u.cache_write_input_tokens as u64)));
+    }
     s.push_str(&f(
         "tool calls",
         &format!(
@@ -208,21 +223,43 @@ fn render_usage(app: &App) -> String {
     // ordering. Reasoning per model only when that model used any.
     if snap.by_model.len() >= 2 {
         s.push_str("Usage by model:\n");
+        // The label column tracks the longest id so a long model name never
+        // eats the separating space; 16 keeps short ids aligned. The extra
+        // column beyond the colon guarantees at least one space of gap.
+        let label_width = snap
+            .by_model
+            .iter()
+            .map(|m| m.model.width() + 2)
+            .max()
+            .unwrap_or(0)
+            .max(16);
         for m in &snap.by_model {
+            let label = format!("{}:", m.model);
+            let gap = " ".repeat(label_width.saturating_sub(label.width()));
             let mut row = format!(
-                "  {:<16}{} in · {} out",
-                format!("{}:", m.model),
+                "  {label}{gap}{} input · {} output",
                 ft(m.input_tokens),
                 ft(m.output_tokens),
             );
             if m.reasoning_tokens > 0 {
                 row.push_str(&format!(" · {} reasoning", ft(m.reasoning_tokens)));
             }
+            let cache_pct = if m.input_tokens > 0 {
+                format!(
+                    " ({:.1}%)",
+                    100.0 * m.cache_read_tokens as f64 / m.input_tokens as f64
+                )
+            } else {
+                String::new()
+            };
             row.push_str(&format!(
-                " · {} cache rd · {} cache wr",
+                " · {} cached{}",
                 ft(m.cache_read_tokens),
-                ft(m.cache_write_tokens),
+                cache_pct
             ));
+            if m.cache_write_tokens > 0 {
+                row.push_str(&format!(" · {} cache creation", ft(m.cache_write_tokens)));
+            }
             s.push_str(&row);
             s.push('\n');
         }
@@ -289,8 +326,9 @@ mod tests {
     fn test_usage_tab_has_tokens() {
         let app = crate::test_harness::working_app();
         let s = render_usage(&app);
-        assert!(s.contains("input:"), "input row: {s}");
-        assert!(s.contains("output:"), "output row: {s}");
+        assert!(s.contains("input tokens:"), "input row: {s}");
+        assert!(s.contains("output tokens:"), "output row: {s}");
+        assert!(s.contains("cached input:"), "cache row: {s}");
     }
 
     /// The Config tab renders the resolved model id + the effort badge
@@ -386,14 +424,42 @@ mod tests {
         assert!(qwen_idx < glm_idx, "heaviest model leads: {s}");
         let qwen = lines.iter().find(|l| l.contains("qwen3.7-max")).unwrap();
         let glm = lines.iter().find(|l| l.contains("glm-5.2")).unwrap();
-        assert!(qwen.contains("1.5m in"), "compact m suffix: {qwen}");
-        assert!(qwen.contains("400k out"), "compact k suffix: {qwen}");
+        assert!(qwen.contains("1.5m input"), "compact m suffix: {qwen}");
+        assert!(qwen.contains("400k output"), "compact k suffix: {qwen}");
         assert!(
             !qwen.contains("reasoning"),
             "qwen reasoning 0 omitted: {qwen}"
         );
-        assert!(glm.contains("300k in"), "glm compact: {glm}");
+        assert!(glm.contains("300k input"), "glm compact: {glm}");
         assert!(glm.contains("8k reasoning"), "glm reasoning shown: {glm}");
+    }
+
+    /// A model id wider than the label column still keeps a separating space,
+    /// so the row never runs the id and token count together.
+    #[test]
+    fn test_long_model_id_spacing() {
+        let mut app = crate::test_harness::working_app();
+        let mut snap = app.snapshot_or_stub();
+        snap.by_model = vec![
+            houyicoder_protocol::frontend::status::ModelUsageView {
+                model: "deepseek-v4-pro-0813".into(),
+                input_tokens: 2_000_000,
+                ..Default::default()
+            },
+            houyicoder_protocol::frontend::status::ModelUsageView {
+                model: "qwen3.7-max".into(),
+                input_tokens: 1_000,
+                ..Default::default()
+            },
+        ];
+        app.status_cache = Some(snap);
+        let s = render_usage(&app);
+        assert!(
+            s.contains("deepseek-v4-pro-0813: 2m input"),
+            "long id keeps a space: {s}"
+        );
+        assert!(s.contains("cached"), "clear cache label: {s}");
+        assert!(!s.contains("cache rd"), "no abbreviation: {s}");
     }
 
     /// Compact formatter: k and m suffixes with trailing .0 trimmed, raw

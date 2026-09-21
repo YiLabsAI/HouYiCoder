@@ -120,9 +120,8 @@ impl Runner {
         'outer: loop {
             let snapshot = self.store.current_view(session).await?;
             let tool_defs = self.tools.tool_defs();
-            // Format the MEMORY.md index from the memory provider so it sits
-            // in the byte-stable cache prefix. None when no provider is wired
-            // (tests, stub). Capped at 200 entries.
+            // Read the session-frozen MEMORY.md index for the cacheable system
+            // prefix. Clear and compact are the only refresh points.
             let memory_index = self.format_memory_index();
             let mut assembled = self.context_builder.build_for_turn(
                 &snapshot.events,

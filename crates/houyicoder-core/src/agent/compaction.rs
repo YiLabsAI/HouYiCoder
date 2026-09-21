@@ -208,8 +208,10 @@ impl Runner {
         if let Ok(mut ol) = self.observability.lock() {
             ol.clear_last_turn_delta();
         }
-        // The rebuilt transcript invalidates the prior cache baseline.
+        // The rebuilt transcript invalidates the prior cache baseline. Refresh
+        // the frozen memory index at the same natural cache break.
         self.cached_prefix.invalidate();
+        self.memory.invalidate_index_snapshot();
 
         let post_compact_tokens = estimate_selected_transcript(&events, Some(&manifest));
 

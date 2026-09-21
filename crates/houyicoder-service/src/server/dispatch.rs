@@ -285,7 +285,7 @@ impl Server {
                         .map(|s| s.tokens)
                         .unwrap_or(0);
                 bd.cache_prefix_tokens = Some(prefix);
-                // Hit rate = cache_read / input_tokens from cumulative usage.
+                // Hit rate = cache_read / input_tokens from provider usage.
                 let usage = &snap.cumulative_usage;
                 if usage.input_tokens > 0 {
                     bd.cache_hit_rate =

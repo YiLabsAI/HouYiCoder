@@ -151,7 +151,7 @@ fn test_status_bar_renders_gauge() {
 }
 
 /// The Usage sub-tab body renders the token breakdown labels (input / cache
-/// read / cache write / tool calls). Tab cycles Status → Config → Usage; the
+/// cached input / cache creation / tool calls). Tab cycles Status → Config → Usage; the
 /// prior status test only pinned tab titles, so the Usage body content was
 /// PTY-unverified.
 #[test]

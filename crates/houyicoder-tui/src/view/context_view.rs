@@ -235,11 +235,8 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
             ),
         ]);
     }
-    // Cache prefix is always populated by dispatch (System prompt + Tools
-    // tokens). Hit rate needs a prior provider turn (input_tokens > 0); it is
-    // None under a stub/zero-turn session, so render it as a suffix only when
-    // present — the prefix line still shows without it. Pairing the two
-    // (both- Some) would hide the prefix whenever hit rate is absent.
+    // Cache prefix is the System prompt + Tools token footprint. Hit rate is
+    // the provider-reported ratio from cumulative usage.
     if let Some(prefix) = bd.cache_prefix_tokens {
         let mut line = format!("Cache prefix: {}", fmt_tokens(prefix));
         if let Some(rate) = bd.cache_hit_rate {

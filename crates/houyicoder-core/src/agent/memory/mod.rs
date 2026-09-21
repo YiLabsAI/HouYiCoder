@@ -5,7 +5,7 @@ mod mutation_log;
 mod preservation;
 mod recall;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use houyicoder_api::agent_event::AgentEventHandlers;
@@ -39,12 +39,20 @@ impl BackgroundMemory {
     }
 }
 
+#[derive(Default)]
+enum MemoryIndexSnapshot {
+    #[default]
+    Uninitialized,
+    Loaded(Option<String>),
+}
+
 /// Coordinates memory state and lifecycle operations.
 pub struct MemoryRuntime {
     store: Arc<dyn SessionLog>,
     provider: Option<Arc<dyn MemoryProvider>>,
     gates: MemoryGates,
     background: BackgroundMemory,
+    index_snapshot: Mutex<MemoryIndexSnapshot>,
 }
 
 impl MemoryRuntime {
@@ -55,6 +63,7 @@ impl MemoryRuntime {
             provider: None,
             gates: MemoryGates::new(true, true),
             background: BackgroundMemory::none(),
+            index_snapshot: Mutex::new(MemoryIndexSnapshot::Uninitialized),
         }
     }
 
@@ -71,6 +80,7 @@ impl MemoryRuntime {
             provider,
             gates,
             background: BackgroundMemory { extractor, dream },
+            index_snapshot: Mutex::new(MemoryIndexSnapshot::Uninitialized),
         }
     }
 
@@ -88,6 +98,7 @@ impl MemoryRuntime {
     /// Install a provider during crate-internal incremental assembly.
     pub(crate) fn install_provider(&mut self, provider: Arc<dyn MemoryProvider>) {
         self.provider = Some(provider);
+        self.invalidate_index_snapshot();
     }
 
     /// Read the gate state snapshot.
@@ -138,6 +149,7 @@ impl MemoryRuntime {
         &self,
         session: SessionId,
     ) -> Result<(), crate::agent::RunError> {
+        self.invalidate_index_snapshot();
         let Some(memory) = &self.provider else {
             return Ok(());
         };
@@ -155,29 +167,54 @@ impl MemoryRuntime {
         Ok(())
     }
 
-    /// Format the memory index for the system prompt prefix. Returns None
-    /// when no provider is configured or the store is empty. Capped at 200
-    /// entries.
+    /// Format the memory index for the system prompt prefix. The first result
+    /// is held until clear or compact so background memory writes cannot change
+    /// the provider prefix between ordinary turns.
     pub(crate) fn format_index(&self) -> Option<String> {
+        let Ok(mut snapshot) = self.index_snapshot.lock() else {
+            tracing::warn!("memory index snapshot lock poisoned");
+            return self.build_index();
+        };
+        match &*snapshot {
+            MemoryIndexSnapshot::Loaded(index) => index.clone(),
+            MemoryIndexSnapshot::Uninitialized => {
+                let index = self.build_index();
+                *snapshot = MemoryIndexSnapshot::Loaded(index.clone());
+                index
+            }
+        }
+    }
+
+    fn build_index(&self) -> Option<String> {
         let memory = self.provider.as_ref()?;
         let summaries = memory.list_memories();
         if summaries.is_empty() {
             return None;
         }
-        let lines: String = summaries
-            .iter()
-            .take(200)
-            .map(|s| {
-                format!(
-                    "- {} [{}/{}]: {}\n",
-                    s.key,
-                    s.source.as_label(),
-                    s.origin.as_label(),
-                    s.description
-                )
-            })
-            .collect();
-        Some(lines)
+        Some(
+            summaries
+                .iter()
+                .take(200)
+                .map(|s| {
+                    format!(
+                        "- {} [{}/{}]: {}\n",
+                        s.key,
+                        s.source.as_label(),
+                        s.origin.as_label(),
+                        s.description
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// Refresh the frozen index at a natural prompt-cache invalidation point.
+    pub(crate) fn invalidate_index_snapshot(&self) {
+        if let Ok(mut snapshot) = self.index_snapshot.lock() {
+            *snapshot = MemoryIndexSnapshot::Uninitialized;
+        } else {
+            tracing::warn!("memory index snapshot lock poisoned during invalidation");
+        }
     }
 
     /// List every stored memory as a frontmatter-only summary. Empty when

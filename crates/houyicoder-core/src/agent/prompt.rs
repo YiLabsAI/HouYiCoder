@@ -57,12 +57,9 @@ impl SystemPrompt {
         Self::build_with_memory_index(cwd, None, None)
     }
 
-    /// Build the system prompt with an optional MEMORY.md index section
-    /// (the stable list of memory summaries). When Some, the index is
-    /// appended after the memory-behavior rules, before tool docs, so it
-    /// sits in the byte-stable cache prefix (changes only when memories are
-    /// added or removed — infrequent, so the prefix stays cached between
-    /// those turns).
+    /// Build the system prompt with an optional MEMORY.md index section.
+    /// MemoryRuntime freezes the supplied index until clear or compact, so it
+    /// remains byte-stable across ordinary turns.
     pub fn build_with_memory_index(
         cwd: &Path,
         index: Option<&str>,

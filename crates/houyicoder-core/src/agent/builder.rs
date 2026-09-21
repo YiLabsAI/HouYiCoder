@@ -311,9 +311,7 @@ impl Runner {
         self
     }
 
-    /// Format the memory index for the system prompt prefix. Returns None
-    /// without a provider or the store is empty. Capped at 200
-    /// entries.
+    /// Return the session-frozen memory index for the system prompt prefix.
     pub fn format_memory_index(&self) -> Option<String> {
         self.memory.format_index()
     }
@@ -619,7 +617,7 @@ mod compact_summary_tests {
             .unwrap();
         let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
         let mut runtime = MemoryRuntime::new(store.clone());
-        runtime.install_provider(memory);
+        runtime.install_provider(memory.clone());
         let runner = Runner::new(
             store,
             Arc::new(crate::provider::test_support::FakeProvider::new(vec![])),
@@ -633,6 +631,25 @@ mod compact_summary_tests {
         assert!(s.contains("proj-pref"), "key in index: {s}");
         assert!(s.contains("project"), "source label: {s}");
         assert!(s.contains("prefer let chains"), "description: {s}");
+
+        memory
+            .add(MemoryEntry::new(
+                "late-entry",
+                "written after the first request",
+                MemorySource::Project,
+            ))
+            .unwrap();
+        let frozen = runner.format_memory_index().unwrap();
+        assert!(
+            !frozen.contains("late-entry"),
+            "ordinary turns keep the prefix"
+        );
+        runner.memory.invalidate_index_snapshot();
+        let refreshed = runner.format_memory_index().unwrap();
+        assert!(
+            refreshed.contains("late-entry"),
+            "a cache-break refreshes the index"
+        );
         drop(std::fs::remove_dir_all(&root));
     }
 }

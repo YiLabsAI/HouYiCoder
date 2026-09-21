@@ -24,13 +24,17 @@
 
 use std::time::Duration;
 
-use crate::http_error::{classify_with_body, map_reqwest_err, parse_retry_after};
+use crate::{
+    http_error::{classify_with_body, map_reqwest_err, parse_retry_after},
+    stream_decoder::{ChunkAction, StreamDecoder},
+    usage::parse_usage,
+};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
 use houyicoder_protocol::cache_policy::BreakpointKind;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, EffortLevel, InputItem, LlmEvent, ModelCapabilities,
-    OutputItem, ProviderError, SpeedMode, Usage,
+    OutputItem, ProviderError, SpeedMode,
 };
 use serde_json::{Value, json};
 
@@ -137,8 +141,6 @@ impl ModelProvider for OpenAiCompatibleProvider {
         })
     }
 
-    #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
-    #[expect(unused_assignments, reason = "default-then-overwrite")]
     fn stream(
         &self,
         req: CompletionRequest,
@@ -170,16 +172,8 @@ impl ModelProvider for OpenAiCompatibleProvider {
             yield Ok(LlmEvent::StepStart { index: 0 });
             let mut buf = String::new();
             let mut byte_stream = resp.bytes_stream();
-            let mut final_usage: Option<houyicoder_protocol::llm::Usage> = None;
-            let mut tool_calls: Vec<ToolCallAccum> = Vec::new();
-            // Track which stream is open so Start/End pair correctly. A
-            // reasoning model (Qwen3 with enable_thinking) streams
-            // delta.reasoning_content BEFORE delta.content; a non-reasoning
-            // model emits only content. TextStart is emitted lazily on the
-            // first content delta (not eagerly) so a reasoning-only or
-            // tool-only stream does not produce a spurious empty text block.
-            let mut text_started = false;
-            let mut reasoning_started = false;
+            let mut decoder = StreamDecoder::default();
+            let mut out_events = Vec::new();
             'stream: while let Some(chunk) = byte_stream.next().await {
                 let bytes = match chunk {
                     Ok(b) => b,
@@ -197,122 +191,22 @@ impl ModelProvider for OpenAiCompatibleProvider {
                     }
                     let data = &line[6..];
                     if data == "[DONE]" {
-                        // Break BOTH loops → close-gracefully path. A plain
-                        // break only left the line-parse loop, so the outer
-                        // chunk loop read one more empty chunk before
-                        // terminating.
                         break 'stream;
                     }
-                    let json: Value = match serde_json::from_str(data) {
-                        Ok(v) => v,
-                        Err(_) => continue,
+                    let Ok(json) = serde_json::from_str::<Value>(data) else {
+                        continue;
                     };
-                    // Extract usage if present (final chunk). Routed through
-                    // parse_usage (not serde from_value) so the nested
-                    // completion_tokens_details/prompt_tokens_details breakdown
-                    // is read consistently with the non-streaming path.
-                    if let Some(usage) = json.get("usage")
-                        && !usage.is_null()
-                    {
-                        final_usage = Some(parse_usage(Some(usage)));
+                    out_events.clear();
+                    let action = decoder.handle_chunk(&json, &mut out_events);
+                    for ev in out_events.drain(..) {
+                        yield Ok(ev);
                     }
-                    let choices = match json.get("choices").and_then(|c| c.as_array()) {
-                        Some(c) => c,
-                        None => continue,
-                    };
-                    let choice = match choices.first() {
-                        Some(c) => c,
-                        None => continue,
-                    };
-                    let delta = match choice.get("delta") {
-                        Some(d) => d,
-                        None => continue,
-                    };
-                    // Reasoning content (Qwen3/DashScope thinking field). The
-                    // field name follows the DeepSeek convention; verified
-                    // from Qwen-Agent oai.py. Without this a thinking model's
-                    // reasoning phase produces no content deltas, so the
-                    // token meter reads 0 and the thinking row never shows.
-                    if let Some(reasoning) = delta
-                        .get("reasoning_content")
-                        .and_then(|c| c.as_str())
-                        && !reasoning.is_empty()
-                    {
-                        if !reasoning_started {
-                            reasoning_started = true;
-                            yield Ok(LlmEvent::ReasoningStart {
-                                id: "reason-0".into(),
-                            });
-                        }
-                        yield Ok(LlmEvent::ReasoningDelta {
-                            id: "reason-0".into(),
-                            text: reasoning.into(),
-                        });
-                    }
-                    if let Some(content) = delta.get("content").and_then(|c| c.as_str())
-                        && !content.is_empty()
-                    {
-                        // Transition reasoning → text: close reasoning first.
-                        if reasoning_started {
-                            reasoning_started = false;
-                            yield Ok(LlmEvent::ReasoningEnd {
-                                id: "reason-0".into(),
-                            });
-                        }
-                        if !text_started {
-                            text_started = true;
-                            yield Ok(LlmEvent::TextStart { id: "text-0".into() });
-                        }
-                        yield Ok(LlmEvent::TextDelta {
-                            id: "text-0".into(),
-                            text: content.into(),
-                        });
-                    }
-                    // Accumulate streamed tool-call fragments by index.
-                    if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
-                        for tc in tcs {
-                            accumulate_tool_call(&mut tool_calls, tc);
-                        }
-                    }
-                    if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
-                        if reasoning_started {
-                            reasoning_started = false;
-                            yield Ok(LlmEvent::ReasoningEnd {
-                                id: "reason-0".into(),
-                            });
-                        }
-                        if text_started {
-                            yield Ok(LlmEvent::TextEnd { id: "text-0".into() });
-                        }
-                        // Emit the reassembled tool calls so the loop can
-                        // dispatch them.
-                        for ev in finalize_tool_calls(std::mem::take(&mut tool_calls)) {
-                            yield Ok(ev);
-                        }
-                        yield Ok(LlmEvent::StepFinish {
-                            index: 0,
-                            reason: reason.into(),
-                            usage: final_usage.clone(),
-                        });
-                        yield Ok(LlmEvent::Finish {
-                            reason: reason.into(),
-                            usage: final_usage.clone(),
-                        });
-                        return;
+                    if action == ChunkAction::BreakStream {
+                        break 'stream;
                     }
                 }
             }
-            // Stream ended without [DONE] or finish_reason — an abnormal
-            // close. Delegate to the pure helper so the close-gracefully
-            // decision (length when text was in flight, else stop) and the
-            // closing event sequence are unit-testable without a mock SSE
-            // server (this stream body is HTTP-bound).
-            for ev in abnormal_close_events(
-                reasoning_started,
-                text_started,
-                std::mem::take(&mut tool_calls),
-                final_usage,
-            ) {
+            for ev in decoder.finish_events() {
                 yield Ok(ev);
             }
         };
@@ -350,10 +244,10 @@ impl ModelProvider for OpenAiCompatibleProvider {
 /// finish so the loop can dispatch the call (the input is not shown live as it
 /// streams; only the reassembled call is).
 #[derive(Default)]
-struct ToolCallAccum {
-    id: String,
-    name: String,
-    args: String,
+pub(crate) struct ToolCallAccum {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) args: String,
 }
 
 /// Decide the finish reason for a stream that ended without an explicit
@@ -374,7 +268,7 @@ fn abnormal_close_reason(text_started: bool) -> &'static str {
 /// (a mid-text cut) or stop when no text was generated (a clean tool-call-only
 /// or empty close). Pure so the close-gracefully path is unit-testable
 /// without a mock SSE server (the stream body is HTTP-bound).
-fn abnormal_close_events(
+pub(crate) fn abnormal_close_events(
     reasoning_started: bool,
     text_started: bool,
     tool_calls: Vec<ToolCallAccum>,
@@ -409,7 +303,7 @@ fn abnormal_close_events(
 /// into the by-index accumulator. The first chunk carries id + function.name;
 /// arguments arrive as concatenated string fragments. Pure (no I/O) so the
 /// reassembly is unit-testable without a mock SSE server.
-fn accumulate_tool_call(acc: &mut Vec<ToolCallAccum>, tc: &Value) {
+pub(crate) fn accumulate_tool_call(acc: &mut Vec<ToolCallAccum>, tc: &Value) {
     let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
     if idx >= acc.len() {
         acc.resize_with(idx + 1, ToolCallAccum::default);
@@ -428,34 +322,10 @@ fn accumulate_tool_call(acc: &mut Vec<ToolCallAccum>, tc: &Value) {
     }
 }
 
-/// A per-response generator of unique tool-call ids. A raw id that is empty
-/// or already seen within this response (some OpenAI-compatible endpoints
-/// omit the id field on tool_call deltas, or reuse one id across calls in a
-/// single message) is replaced with a minted houyi_tc_N. Pairing a call to
-/// its result downstream keys on call_id, so a duplicate id crosses results
-/// across calls. Uniqueness is established here at the provider boundary,
-/// once, so every consumer below pairs by identity rather than by arrival:
-///
-/// - transcript FIFO: take_update pairs the next matching id
-/// - pending_approvals: a HashSet of call_id marks a call answered by id
-/// - apply_decisions: routes a decision by find on call_id
-/// - model history: tool messages echo tool_call_id
-///
-/// A duplicate id is not only a display bug: pending_approvals would mark
-/// every same-id call answered (silently dropping a pending call) and
-/// apply_decisions could route an approval onto the wrong call — a safety,
-/// not just a display, failure. The mint makes it unreachable; the consumers
-/// above do not re-defend.
-///
-/// The counter is process-global; uniqueness holds within one process
-/// lifetime. Two same-class assumptions stand, neither defended here: a raw
-/// id will not literally match the minted prefix houyi_tc_N (a provider
-/// echoing our own minted id back would let the counter later mint a
-/// colliding one — the generator does not re-check seen after minting), and
-/// uniqueness is per-process (if a transcript-frame rehydration path is ever
-/// added, frames rebuilt from a persisted log in a new process, the mint
-/// must gain a session prefix so a fresh counter cannot collide with
-/// persisted ids).
+/// Make tool-call ids non-empty and unique within one response. Approval,
+/// result, and model-history routing all key on call_id, so a duplicate can
+/// route a decision or result to the wrong call. Minted ids use a process-wide
+/// counter and reserve the houyi_tc_ prefix.
 fn unique_id_gen() -> impl FnMut(&str) -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -480,7 +350,7 @@ fn unique_id_gen() -> impl FnMut(&str) -> String {
 /// back to {} — the loop never panics on malformed tool input. Id uniqueness
 /// is delegated to unique_id_gen (see its doc for the invariant and the
 /// consumers that depend on it).
-fn finalize_tool_calls(acc: Vec<ToolCallAccum>) -> Vec<LlmEvent> {
+pub(crate) fn finalize_tool_calls(acc: Vec<ToolCallAccum>) -> Vec<LlmEvent> {
     let mut unique_id = unique_id_gen();
     acc.into_iter()
         .filter(|tc| !tc.name.is_empty())
@@ -736,44 +606,6 @@ fn parse_response(json: &Value, model: &str) -> Result<CompletionResponse, Provi
         usage,
         model: model.to_string(),
     })
-}
-
-/// Map the OpenAI usage object to the inclusive-totals Usage struct. OpenAI
-/// reports inclusive prompt_tokens (no cache breakdown unless usage_cache
-/// is requested) — records the totals and leaves the breakdown at zero.
-/// When streaming lands, the per-provider mapper picks the add-vs-subtract
-/// semantic (OpenAI subtracts cached; some compatible vendors add
-/// inclusive).
-fn parse_usage(u: Option<&Value>) -> Usage {
-    let Some(u) = u else {
-        return Usage::default();
-    };
-    fn get(u: &Value, k: &str) -> u32 {
-        u.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32
-    }
-    let input_tokens = get(u, "prompt_tokens");
-    let output_tokens = get(u, "completion_tokens");
-    let total_tokens = get(u, "total_tokens");
-    // Thinking models on OpenAI-compat providers (Qwen3/DashScope) nest the
-    // reasoning-token count under completion_tokens_details, and the cached
-    // prefix under prompt_tokens_details.cached_tokens. Both are subsets:
-    // reasoning of output, cached of input. Without this the reasoning budget
-    // reads 0 and the cache-read column never fills. The OpenAI-compat
-    // API nests these fields (reasoning under completion_tokens_details,
-    // cached under prompt_tokens_details) — this extraction unpacks them.
-    let details = u.get("completion_tokens_details").unwrap_or(&Value::Null);
-    let prompt_details = u.get("prompt_tokens_details").unwrap_or(&Value::Null);
-    let reasoning_tokens = get(details, "reasoning_tokens");
-    let cached_input = get(prompt_details, "cached_tokens");
-    Usage {
-        input_tokens,
-        output_tokens,
-        total_tokens,
-        non_cached_input_tokens: input_tokens.saturating_sub(cached_input),
-        cache_read_input_tokens: cached_input,
-        reasoning_tokens,
-        ..Default::default()
-    }
 }
 
 #[cfg(test)]

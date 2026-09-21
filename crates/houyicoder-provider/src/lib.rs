@@ -13,6 +13,8 @@ use houyicoder_protocol::llm::{
 mod http_error;
 mod openai_compat;
 mod served_models;
+mod stream_decoder;
+mod usage;
 
 /// Adapt a complete (non-streaming) response into a stream of LlmEvents, so a
 /// provider that only knows how to produce a CompletionResponse can still satisfy
