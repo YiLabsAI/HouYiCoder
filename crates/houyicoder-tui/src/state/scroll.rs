@@ -79,9 +79,9 @@ impl App {
     /// One turn counts once, however many agent chunks, tool calls, or
     /// thoughts it contains: only a user message resets prev_was_agent, so
     /// the count follows turn boundaries rather than frame arrivals. The
-    /// snapshot is a frame index rather than a transcript length so
-    /// scrollback eviction cannot silently zero the count, and it is clamped
-    /// in case a rewind truncated frames below it.
+    /// snapshot is a frame index rather than a transcript length, so the cap
+    /// that drops the oldest pushed rows cannot silently zero the count, and
+    /// it is clamped in case a rewind truncated frames below it.
     pub fn jump_pill_new_count(&self) -> usize {
         let Some(from) = self.scrolled_from_frame else {
             return 0;

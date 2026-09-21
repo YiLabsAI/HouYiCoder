@@ -20,7 +20,7 @@ use crate::records::TranscriptLine;
 /// recall; this is the bounded viewable projection, mirroring a native
 /// terminal's bounded scrollback. Fold state is keyed by string (not line
 /// index) so eviction does not corrupt it.
-const VIEWABLE_SCROLLBACK_CAP: usize = 4000;
+pub(crate) const VIEWABLE_SCROLLBACK_CAP: usize = 4000;
 
 /// The search snapshot loads the whole log when at or under this size; over
 /// it, the view opens in byte-window mode (one screen at a time) rather than

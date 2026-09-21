@@ -26,6 +26,8 @@ use houyicoder_protocol::frontend::session_update::{
 
 use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::composition;
+use crate::records::TranscriptLine;
+use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::state::Screen;
 use crate::test_harness::render_text;
 use crate::transcript::TranscriptFrame;
@@ -102,24 +104,56 @@ fn test_agent_count_rises() {
     );
 }
 
-/// bound_scrollback drains the oldest transcript rows past 4000. A
-/// transcript-length baseline would saturate the count to zero after
-/// eviction. The frame-index baseline is immune — frames only truncate on
-/// rewind, so the count survives eviction.
+/// The viewable window drops its oldest rows once it passes the cap. A
+/// transcript-length baseline would saturate the count to zero after that
+/// drop; the frame-index baseline survives, because frames truncate only on
+/// rewind. The window is filled to the cap before the scroll-away, so the
+/// snapshot reads a full window against a short frame log and the count
+/// below tells the two baselines apart.
 #[test]
 fn test_evicted_keeps_count() {
-    let mut app = app_scrolled_back();
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    for i in 0..VIEWABLE_SCROLLBACK_CAP + 1 {
+        app.push_transcript_line(TranscriptLine::User(format!("filler line {i}")));
+    }
+    assert_eq!(
+        app.transcript.len(),
+        VIEWABLE_SCROLLBACK_CAP,
+        "the fill leaves the window at its cap"
+    );
+    let _out = render_text(&app, 80, 24);
+    app.scroll_transcript_line_up(3);
+    let _out = render_text(&app, 80, 24);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
         "response",
     ))));
     assert_eq!(app.jump_pill_new_count(), 1);
-    for i in 0..5000 {
-        app.system_line(format!("filler line {i}"));
-    }
+    // One row past the cap: this push is the one that drops the oldest rows.
+    app.push_transcript_line(TranscriptLine::User("one past the cap".into()));
+    assert_eq!(
+        app.transcript.len(),
+        VIEWABLE_SCROLLBACK_CAP,
+        "the fill line the cap must drop leaves the window at its cap"
+    );
+    // The length alone cannot tell a landed push plus one eviction from a push
+    // that never landed, so the two rows the drop moves name the outcome.
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(s) if s == "one past the cap")),
+        "the pushed row lands in the window"
+    );
+    assert!(
+        !app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(s) if s == "filler line 1")),
+        "the row the push displaced leaves the window"
+    );
     assert_eq!(
         app.jump_pill_new_count(),
         1,
-        "eviction must not zero the frame-based count"
+        "the dropped rows must not zero the frame-based count"
     );
 }
 
