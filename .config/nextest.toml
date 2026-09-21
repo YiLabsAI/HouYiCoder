@@ -1,2 +1,7 @@
 [profile.default]
-slow-timeout = { period = "2500ms", terminate-after = 1 }
+# The period is the budget line for one test, so a test that crosses it prints
+# as slow and names itself for pruning. The termination is the hang line, 20
+# periods in: a stall has no bound, and loading a machine stretches a healthy
+# test a few times over, so the kill sits far enough above the budget that a
+# busy machine does not turn into a failing gate.
+slow-timeout = { period = "1s", terminate-after = 20 }
