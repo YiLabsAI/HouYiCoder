@@ -7,7 +7,6 @@
 //! coupling ratchet is unaffected.
 
 use crate::composition;
-use crate::fold::compute_fold_groups;
 use crate::state::App;
 use crate::transcript::{SequencedFrame, TranscriptFrame};
 
@@ -30,9 +29,10 @@ pub fn rebuild_transcript(mut app: App) -> App {
     app
 }
 
-/// Count the fold groups the scanner builds for the current transcript.
-/// Returns a count because the group type stays crate-internal; the work
-/// is the scan, not the returned type.
-pub fn fold_group_count(app: &App, agent_busy: bool) -> usize {
-    compute_fold_groups(&app.transcript, agent_busy).len()
+/// Recompute the fold groups from the transcript lines and return the count.
+/// The per-draw path reads the cache the rebuild maintains, so this full scan
+/// measures the fold work now confined to the rebuild instead of repeated per
+/// draw; the bench keeps it as the comparable fold-cost metric.
+pub fn recompute_fold_group_count(app: &App) -> usize {
+    crate::fold::compute_fold_groups(app.transcript.lines(), app.agent_busy()).len()
 }

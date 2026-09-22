@@ -580,7 +580,7 @@ fn folded_transcript() -> Vec<TranscriptLine> {
 fn group_body_visible(app: &App) -> bool {
     crate::fold::display_slots(
         &app.transcript,
-        app.agent_busy(),
+        app.transcript.fold_groups(),
         &app.expanded_fold_groups,
         false,
     )

@@ -721,9 +721,10 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
 
     let mut sink = RowBuffer::default();
 
+    let groups = app.active_fold_groups();
     let slots = crate::fold::display_slots(
         app.active_transcript(),
-        app.agent_busy(),
+        groups.as_ref(),
         &app.expanded_fold_groups,
         app.verbose,
     );

@@ -831,7 +831,7 @@ fn test_distinct_keys_callid_reuse() {
     // Expanding only the first group leaves the second collapsed.
     let mut expanded = std::collections::HashSet::new();
     expanded.insert(groups[0].key.clone());
-    let slots = display_slots(&t, false, &expanded, false);
+    let slots = display_slots(&t, &groups, &expanded, false);
     let summaries: Vec<_> = slots
         .iter()
         .filter(|s| matches!(s, DisplaySlot::Summary(_)))

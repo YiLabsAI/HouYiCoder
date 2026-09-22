@@ -257,7 +257,7 @@ impl App {
         let transcript = self.transcript.lines();
         let slots = display_slots(
             transcript,
-            self.agent_busy(),
+            self.transcript.fold_groups(),
             &self.expanded_fold_groups,
             self.verbose,
         );

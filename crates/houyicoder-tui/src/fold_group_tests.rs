@@ -216,7 +216,12 @@ fn test_glob_read_edit_chips() {
         diff_result("c3", ToolOutcome::Success),
     ];
     let expanded = HashSet::new();
-    let slots = display_slots(&reordered, false, &expanded, false);
+    let slots = display_slots(
+        &reordered,
+        &compute_fold_groups(&reordered, false),
+        &expanded,
+        false,
+    );
     // The edit (diff) is exempt — its call chip must surface as a Line slot,
     // not be buried under a Glob/Read summary. Count Line slots whose index is
     // a call row (name != "result"): must include the edit call.
@@ -254,7 +259,7 @@ fn test_slots_no_groups_lines() {
         TranscriptLine::Agent("hello".into()),
     ];
     let expanded = HashSet::new();
-    let slots = display_slots(&t, false, &expanded, false);
+    let slots = display_slots(&t, &compute_fold_groups(&t, false), &expanded, false);
     assert_eq!(slots.len(), 2);
     assert!(matches!(slots[0], DisplaySlot::Line(0, _)));
     assert!(matches!(slots[1], DisplaySlot::Line(1, _)));

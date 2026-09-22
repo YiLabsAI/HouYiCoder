@@ -981,3 +981,95 @@ fn test_scrollback_survives_frame() {
         "scroll-up history survives the frame arrival"
     );
 }
+
+/// The incrementally maintained fold cache must agree with a full recompute
+/// after an append (tail-only recompute) and after a turn boundary (prefix
+/// re-derive). The signature is start, end, key, active; stats, hint, and git
+/// ops derive from the same lines, so they cannot diverge once the boundaries
+/// match.
+fn fold_signature(app: &App) -> Vec<(usize, usize, String, bool)> {
+    app.transcript
+        .fold_groups()
+        .iter()
+        .map(|g| (g.start, g.end, g.key.clone(), g.active))
+        .collect()
+}
+
+fn recompute_fold_signature(app: &App) -> Vec<(usize, usize, String, bool)> {
+    crate::fold::compute_fold_groups(app.transcript.lines(), app.agent_busy())
+        .iter()
+        .map(|g| (g.start, g.end, g.key.clone(), g.active))
+        .collect()
+}
+
+#[test]
+fn test_fold_cache_tracks_recompute() {
+    let mut app = fresh_app();
+    app.start_run_for_test(0);
+    pump(&mut app, user_msg("go"));
+    pump(&mut app, tool_call("c1", "bash"));
+    pump(&mut app, tool_result("c1"));
+    pump(&mut app, tool_call("c2", "bash"));
+    pump(&mut app, tool_result("c2"));
+    assert_eq!(fold_signature(&app), recompute_fold_signature(&app));
+
+    // More pairs in the same turn exercise the incremental tail recompute
+    // (the frozen prefix is reused, only the tail rescans).
+    pump(&mut app, tool_call("c3", "bash"));
+    pump(&mut app, tool_result("c3"));
+    assert_eq!(fold_signature(&app), recompute_fold_signature(&app));
+
+    // A new turn moves the boundary, re-derives the prefix, and flips the
+    // prior turn's group from active to complete.
+    pump(&mut app, user_msg("again"));
+    pump(&mut app, tool_call("d1", "bash"));
+    pump(&mut app, tool_result("d1"));
+    assert_eq!(fold_signature(&app), recompute_fold_signature(&app));
+
+    let sig = fold_signature(&app);
+    assert_eq!(sig.len(), 2, "one group per turn");
+    assert!(!sig[0].3, "prior turn group completes");
+    assert!(sig[1].3, "active turn group stays open");
+}
+
+/// A call id reused across turns must not collide in the fold cache. The
+/// incremental tail path seeds its per-call-id ordinal from the retained
+/// prefix, so turn two's re-emitted c1 continues to c1#1 instead of
+/// colliding with turn one's c1#0.
+#[test]
+fn test_fold_reused_call_id() {
+    let mut app = fresh_app();
+    app.start_run_for_test(0);
+    pump(&mut app, user_msg("go"));
+    pump(&mut app, tool_call("c1", "bash"));
+    pump(&mut app, tool_result("c1"));
+    pump(&mut app, user_msg("again"));
+    pump(&mut app, tool_call("c1", "bash"));
+    pump(&mut app, tool_result("c1"));
+
+    let sig = fold_signature(&app);
+    assert_eq!(sig.len(), 2, "one group per turn");
+    assert_ne!(sig[0].2, sig[1].2, "reused call id must not collide");
+    assert_eq!(sig, recompute_fold_signature(&app));
+}
+
+/// The active flag responds to a pause without a rebuild: begin_waiting
+/// collapses the active group and end_waiting reopens it, both through the
+/// refresh the run-state transitions trigger.
+#[test]
+fn test_fold_active_tracks_waiting() {
+    let mut app = fresh_app();
+    app.start_run_for_test(0);
+    pump(&mut app, user_msg("go"));
+    pump(&mut app, tool_call("w1", "bash"));
+    pump(&mut app, tool_result("w1"));
+    assert!(fold_signature(&app)[0].3, "running group is active");
+
+    app.run_state.begin_waiting();
+    app.refresh_fold_active();
+    assert!(!fold_signature(&app)[0].3, "waiting group collapses");
+
+    app.run_state.end_waiting();
+    app.refresh_fold_active();
+    assert!(fold_signature(&app)[0].3, "resumed group reopens");
+}

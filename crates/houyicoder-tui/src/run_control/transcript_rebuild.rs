@@ -4,6 +4,8 @@
 //! frames extend the current turn. Rewind and scrollback loading invalidate only
 //! the affected range, keeping rebuild cost independent of session length.
 
+use std::ops::Range;
+
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::records::TranscriptLine;
 use crate::state::App;
@@ -32,7 +34,7 @@ impl App {
         // is always the tail, so a rewind drops it without a middle insert.
         let has_frozen = turn_start > frame_start;
         let has_active = turn_start < frame_end;
-        let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+        let mut ranges: Vec<Range<usize>> = Vec::new();
         if has_frozen {
             ranges.push(frame_start..turn_start);
         }
@@ -40,88 +42,8 @@ impl App {
             ranges.push(turn_start..frame_end);
         }
 
-        let mut changes = TranscriptChangeSet::default();
-        let mut cur_idx = 0;
-        let mut clear_all = false;
-        {
-            let blocks = self.transcript.blocks().blocks();
-            // Evict blocks the cap advanced past: a block whose frame range ended
-            // before the window start is out of view, so name the first survivor
-            // for EvictBefore to drain the aged-out prefix. When no block
-            // survives the advance, the whole list is cleared before re-derive.
-            while cur_idx < blocks.len() && blocks[cur_idx].frame_range.end <= frame_start {
-                cur_idx += 1;
-            }
-            if cur_idx > 0 {
-                if let Some(survivor) = blocks.get(cur_idx) {
-                    changes.push(TranscriptChange::EvictBefore { id: survivor.id });
-                } else {
-                    clear_all = true;
-                }
-            }
-            for (ri, range) in ranges.iter().enumerate() {
-                let is_active = has_active && ri + 1 == ranges.len();
-                // The frozen prefix is a single reusable slot whose identity
-                // stays fixed across cap advances (the window slides under it),
-                // so it anchors on Local(0) rather than the moving frame_start;
-                // the active turn anchors on its opening frame's seq or log
-                // position, stable while the turn runs and replaced in place
-                // when a new turn takes the active slot.
-                let id = if is_active {
-                    let anchor_seq = self
-                        .transcript
-                        .frames()
-                        .get(range.start)
-                        .and_then(|sf| sf.seq);
-                    self.transcript.blocks().assign_id(anchor_seq, range.start)
-                } else {
-                    BlockId(BlockAnchor::Local(0))
-                };
-                let slot = blocks.get(cur_idx);
-                let matched = slot.is_some_and(|b| b.id == id);
-                if matched && !is_active && slot.expect("checked").frame_range == *range {
-                    // Unchanged frozen prefix: keep its lines as they are.
-                    cur_idx += 1;
-                    continue;
-                }
-                let lines = transcript_from_frames(
-                    self.transcript.frames(),
-                    range.clone(),
-                    newest_open && is_active,
-                );
-                let revision = slot.map(|b| b.revision.wrapping_add(1)).unwrap_or(0);
-                let block = Block {
-                    id,
-                    frame_range: range.clone(),
-                    lines,
-                    revision,
-                };
-                match slot {
-                    // Slot holds a block whose identity no longer fits the
-                    // range (the cap slid the frozen window, or a new turn
-                    // took the active slot): replace it in place by its old
-                    // identity so the slot order is preserved without a rewind.
-                    Some(old) if !matched => {
-                        changes.push(TranscriptChange::ReplaceBlock { id: old.id, block });
-                        cur_idx += 1;
-                    }
-                    Some(_) => {
-                        changes.push(TranscriptChange::ReplaceBlock { id, block });
-                        cur_idx += 1;
-                    }
-                    None => {
-                        changes.push(TranscriptChange::AppendBlock(block));
-                    }
-                }
-            }
-            // A truncated frame log left blocks past the last range: drop them
-            // back to the last block the walk kept.
-            if cur_idx < blocks.len()
-                && let Some(last_kept) = cur_idx.checked_sub(1).and_then(|i| blocks.get(i))
-            {
-                changes.push(TranscriptChange::RewindTo { id: last_kept.id });
-            }
-        }
+        let (changes, clear_all, prefix_reused) =
+            self.build_block_changes(&ranges, frame_start, has_active, newest_open);
         if clear_all {
             self.transcript.blocks_mut().clear();
         }
@@ -144,10 +66,156 @@ impl App {
         self.transcript.replace_lines(lines);
         self.transcript.current_turn_mut().frame_index = turn_start;
         self.transcript.current_turn_mut().line_index = prefix_line_count;
+        self.update_fold_cache(prefix_line_count, prefix_reused);
 
         self.trim_live_transcript();
         self.accumulate_wire_state();
         self.bump_transcript_version();
+    }
+
+    /// Walk the target ranges against the current block list, matching each by
+    /// stable id. A reused frozen prefix keeps its lines and fold groups; an
+    /// active turn whose frames grew re-derives; a cap advance or a new turn
+    /// replaces a slot in place; a truncated log rewinds the tail. Returns the
+    /// change set, whether the whole list must clear first, and whether the
+    /// frozen prefix was reused (so the fold cache rescans only the tail).
+    fn build_block_changes(
+        &self,
+        ranges: &[Range<usize>],
+        frame_start: usize,
+        has_active: bool,
+        newest_open: bool,
+    ) -> (TranscriptChangeSet, bool, bool) {
+        let mut changes = TranscriptChangeSet::default();
+        let mut cur_idx = 0;
+        let mut clear_all = false;
+        let mut prefix_reused = false;
+        let blocks = self.transcript.blocks().blocks();
+        // Evict blocks the cap advanced past: a block whose frame range ended
+        // before the window start is out of view, so name the first survivor
+        // for EvictBefore to drain the aged-out prefix. When no block
+        // survives the advance, the whole list is cleared before re-derive.
+        while cur_idx < blocks.len() && blocks[cur_idx].frame_range.end <= frame_start {
+            cur_idx += 1;
+        }
+        if cur_idx > 0 {
+            if let Some(survivor) = blocks.get(cur_idx) {
+                changes.push(TranscriptChange::EvictBefore { id: survivor.id });
+            } else {
+                clear_all = true;
+            }
+        }
+        for (ri, range) in ranges.iter().enumerate() {
+            let is_active = has_active && ri + 1 == ranges.len();
+            // The frozen prefix is a single reusable slot whose identity
+            // stays fixed across cap advances (the window slides under it),
+            // so it anchors on Local(0) rather than the moving frame_start;
+            // the active turn anchors on its opening frame's seq or log
+            // position, stable while the turn runs and replaced in place
+            // when a new turn takes the active slot.
+            let id = if is_active {
+                let anchor_seq = self
+                    .transcript
+                    .frames()
+                    .get(range.start)
+                    .and_then(|sf| sf.seq);
+                self.transcript.blocks().assign_id(anchor_seq, range.start)
+            } else {
+                BlockId(BlockAnchor::Local(0))
+            };
+            let slot = blocks.get(cur_idx);
+            let matched = slot.is_some_and(|b| b.id == id);
+            if matched && !is_active && slot.expect("checked").frame_range == *range {
+                // Unchanged frozen prefix: keep its lines and fold groups
+                // as they are, so only the tail re-derives.
+                prefix_reused = true;
+                cur_idx += 1;
+                continue;
+            }
+            let lines = transcript_from_frames(
+                self.transcript.frames(),
+                range.clone(),
+                newest_open && is_active,
+            );
+            let revision = slot.map(|b| b.revision.wrapping_add(1)).unwrap_or(0);
+            let block = Block {
+                id,
+                frame_range: range.clone(),
+                lines,
+                revision,
+            };
+            match slot {
+                // Slot holds a block whose identity no longer fits the
+                // range (the cap slid the frozen window, or a new turn
+                // took the active slot): replace it in place by its old
+                // identity so the slot order is preserved without a rewind.
+                Some(old) if !matched => {
+                    changes.push(TranscriptChange::ReplaceBlock { id: old.id, block });
+                    cur_idx += 1;
+                }
+                Some(_) => {
+                    changes.push(TranscriptChange::ReplaceBlock { id, block });
+                    cur_idx += 1;
+                }
+                None => {
+                    changes.push(TranscriptChange::AppendBlock(block));
+                }
+            }
+        }
+        // A truncated frame log left blocks past the last range: drop them
+        // back to the last block the walk kept.
+        if cur_idx < blocks.len()
+            && let Some(last_kept) = cur_idx.checked_sub(1).and_then(|i| blocks.get(i))
+        {
+            changes.push(TranscriptChange::RewindTo { id: last_kept.id });
+        }
+        (changes, clear_all, prefix_reused)
+    }
+
+    /// Recompute the fold cache after a rebuild. When the frozen prefix was
+    /// reused its lines and groups are unchanged, so only the active tail is
+    /// rescanned; otherwise a turn grew or the window slid and everything is
+    /// recomputed. The cache is keyed by absolute line index, so the split
+    /// point is the prefix's line count.
+    fn update_fold_cache(&mut self, prefix_line_count: usize, prefix_reused: bool) {
+        use crate::fold::{compute_fold_groups, fold_groups_in};
+        use std::collections::HashMap;
+        let agent_busy = self.agent_busy();
+        let groups = if prefix_reused {
+            let mut groups = std::mem::take(self.transcript.fold_groups_mut());
+            // A group that sits before the current turn boundary is in a
+            // completed turn and never active. Count its calls per id first
+            // so the tail continues each ordinal instead of reusing a key
+            // when a call id recurs across turns.
+            groups.retain(|g| g.start < prefix_line_count);
+            let mut ordinal: HashMap<String, u32> = HashMap::new();
+            for g in &mut groups {
+                *ordinal.entry(g.call_id.clone()).or_insert(0) += 1;
+                g.active = false;
+            }
+            groups.extend(fold_groups_in(
+                &self.transcript.lines()[prefix_line_count..],
+                prefix_line_count,
+                agent_busy,
+                &mut ordinal,
+            ));
+            groups
+        } else {
+            compute_fold_groups(self.transcript.lines(), agent_busy)
+        };
+        *self.transcript.fold_groups_mut() = groups;
+    }
+
+    /// Recompute each group's active flag after the run pauses or resumes.
+    /// The flag bakes in the agent-busy state at the last rebuild, so a
+    /// Waiting transition (approval card up, no new frames) would leave it
+    /// stale until the next rebuild. Rare, so the full boundary scan is fine.
+    pub(crate) fn refresh_fold_active(&mut self) {
+        let agent_busy = self.agent_busy();
+        let threshold = crate::fold::last_turn_boundary(self.transcript.lines());
+        for g in self.transcript.fold_groups_mut() {
+            g.active = agent_busy && g.start >= threshold;
+        }
     }
 
     /// Rebuild the whole visible window after a frame's payload changed in

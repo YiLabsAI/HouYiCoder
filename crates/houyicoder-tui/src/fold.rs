@@ -1,6 +1,7 @@
 //! Turn tool-call collapse: consecutive tool calls collapse to one dim
 //! summary line, expandable via ctrl+o or click. Render-layer only.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
@@ -193,6 +194,9 @@ pub(crate) fn accumulate_brief(stats: &mut ToolStats, tool: &str, invocation: &s
 pub(crate) struct FoldGroup {
     /// call_id#ordinal — stable across rebuild and unique per group.
     pub key: String,
+    /// The foldable call's id, kept so a reused call id across turns can
+    /// continue its ordinal instead of colliding with a prefix key.
+    pub call_id: String,
     /// Start transcript index (inclusive).
     pub start: usize,
     /// End transcript index (exclusive).
@@ -223,78 +227,79 @@ pub(crate) fn compute_fold_groups(
     transcript: &[TranscriptLine],
     agent_busy: bool,
 ) -> Vec<FoldGroup> {
-    let last_turn_start = last_turn_boundary(transcript);
+    let mut ordinal = HashMap::new();
+    fold_groups_in(transcript, 0, agent_busy, &mut ordinal)
+}
+
+/// Scan one line slice for foldable groups, offsetting each start/end by
+/// base so a retained prefix and a recomputed tail stay absolute-indexed.
+/// The caller seeds the per-call-id ordinal from the prefix it kept, so the
+/// tail continues numbering instead of resetting and colliding when a call
+/// id is reused across turns. The active flag reads the slice's own last
+/// User/Agent line, the transcript's too when the split is a turn boundary.
+pub(crate) fn fold_groups_in(
+    lines: &[TranscriptLine],
+    base: usize,
+    agent_busy: bool,
+    ordinal: &mut HashMap<String, u32>,
+) -> Vec<FoldGroup> {
+    let last_turn_start = last_turn_boundary(lines);
     let mut groups = Vec::new();
-    // Per-call_id ordinal so same-call_id groups (eager callers reuse one
-    // call_id) get distinct keys (c1#0, c1#1, ...).
-    let mut ordinal: HashMap<String, u32> = HashMap::new();
     let mut i = 0;
-    while i < transcript.len() {
-        // Look for a Tool call (name != "result") to start a group.
-        let Some((call_id, name, status)) = tool_call_at(transcript, i) else {
+    while i < lines.len() {
+        let Some((call_id, name, status)) = tool_call_at(lines, i) else {
             i += 1;
             continue;
         };
-        // Error calls are exempt: skip and do not fold.
-        if tool_call_outcome(transcript, i) == Some(ToolOutcome::Error) {
+        // Error calls are exempt: skip the call and its result.
+        if tool_call_outcome(lines, i) == Some(ToolOutcome::Error) {
             i += 1;
-            // Skip the matching result if present.
-            if is_result_for(transcript, i, &call_id) {
+            if is_result_for(lines, i, call_id) {
                 i += 1;
             }
             continue;
         }
-        // Non-foldable tools (edit, multiedit, write, todo_write, ...) render
-        // individual (each its own call+result) so their content stays
-        // visible by default. These stay as individual
-        // messages; only the search/read/list bash, grep, glob, read,
-        // WebFetch, and memory-write tools fold into a turn summary.
-        if !is_foldable(&name) {
+        // Non-foldable tools render individual so their content stays visible.
+        if !is_foldable(name) {
             i += 1;
-            if is_result_for(transcript, i, &call_id) {
+            if is_result_for(lines, i, call_id) {
                 i += 1;
             }
             continue;
         }
-        // Start accumulating a group.
         let start = i;
-        let n = ordinal.entry(call_id.clone()).or_insert(0);
+        let n = ordinal.entry(call_id.to_string()).or_insert(0);
         let key = format!("{call_id}#{n}");
         *n += 1;
         let mut stats = ToolStats::default();
         let mut git_ops: Vec<GitOp> = Vec::new();
-        accumulate_brief(&mut stats, &name, &status);
-        if let Some(op) = detect_gitop_for_call(transcript, start, &call_id, &name, &status) {
+        accumulate_brief(&mut stats, name, status);
+        if let Some(op) = detect_gitop_for_call(lines, start, call_id, name, status) {
             git_ops.push(op);
         }
-        // Track the LAST foldable call's (tool, invocation) for the ⎿ hint
-        // shown under the collapsed summary — the hint reflects what's most
-        // recently happening in the group, not the first call.
-        let mut last_call: Option<(String, String)> = Some((name.clone(), status.clone()));
-        i += 1; // Consume the matching result.
-        if is_result_for(transcript, i, &call_id) {
+        // Track the last foldable call for the hint shown under the summary.
+        let mut last_call: Option<(String, String)> = Some((name.to_string(), status.to_string()));
+        i += 1;
+        if is_result_for(lines, i, call_id) {
             i += 1;
         }
-        // Extend the group with further consecutive call+result pairs.
-        while let Some((cid, nm, st)) = tool_call_at(transcript, i) {
-            if tool_call_outcome(transcript, i) == Some(ToolOutcome::Error) {
+        // Extend the group with further consecutive call+result pairs; a
+        // non-foldable or error call breaks the run.
+        while let Some((cid, nm, st)) = tool_call_at(lines, i) {
+            if tool_call_outcome(lines, i) == Some(ToolOutcome::Error) {
                 break;
             }
-            // A non-foldable tool (edit, write, ...) breaks the run so it
-            // renders as its own individual call+result (content visible),
-            // not buried under a cross-tool summary. These stay
-            // individual rather than folding into an aggregate.
-            if !is_foldable(&nm) {
+            if !is_foldable(nm) {
                 break;
             }
             let call_idx = i;
-            accumulate_brief(&mut stats, &nm, &st);
-            if let Some(op) = detect_gitop_for_call(transcript, call_idx, &cid, &nm, &st) {
+            accumulate_brief(&mut stats, nm, st);
+            if let Some(op) = detect_gitop_for_call(lines, call_idx, cid, nm, st) {
                 git_ops.push(op);
             }
-            last_call = Some((nm.clone(), st.clone()));
+            last_call = Some((nm.to_string(), st.to_string()));
             i += 1;
-            if is_result_for(transcript, i, &cid) {
+            if is_result_for(lines, i, cid) {
                 i += 1;
             }
         }
@@ -304,8 +309,9 @@ pub(crate) fn compute_fold_groups(
         if stats.total() > 0 || !git_ops.is_empty() {
             groups.push(FoldGroup {
                 key,
-                start,
-                end,
+                call_id: call_id.to_string(),
+                start: base + start,
+                end: base + end,
                 stats,
                 active,
                 hint,
@@ -405,11 +411,9 @@ fn compute_hint(tool: &str, invocation: &str) -> Option<String> {
 }
 
 /// If transcript[i] is a Tool call (name != "result"), return (call_id,
-/// raw tool title, invocation). The raw title drives fold-bucketing so an
-/// Edit call buckets as edit, not other. The invocation (untruncated
-/// command / path / pattern) drives both bucketing (classify_bash, path
-/// dedup) and the ⎿ hint shown under the collapsed summary.
-fn tool_call_at(transcript: &[TranscriptLine], i: usize) -> Option<(String, String, String)> {
+/// raw tool title, invocation) borrowed. The raw title drives fold-bucketing
+/// so an Edit call buckets as edit, not other.
+fn tool_call_at(transcript: &[TranscriptLine], i: usize) -> Option<(&str, &str, &str)> {
     let line = transcript.get(i)?;
     match line {
         TranscriptLine::Tool {
@@ -418,7 +422,7 @@ fn tool_call_at(transcript: &[TranscriptLine], i: usize) -> Option<(String, Stri
             call_id,
             invocation,
             ..
-        } if name != "result" => Some((call_id.clone(), tool.clone(), invocation.clone())),
+        } if name != "result" => Some((call_id.as_str(), tool.as_str(), invocation.as_str())),
         _ => None,
     }
 }
@@ -445,7 +449,7 @@ fn is_result_for(transcript: &[TranscriptLine], i: usize, call_id: &str) -> bool
 /// The index immediately after the last User or Agent line — the start of the
 /// last turn segment. 0 when no such line exists (the whole transcript is one
 /// segment).
-fn last_turn_boundary(transcript: &[TranscriptLine]) -> usize {
+pub(crate) fn last_turn_boundary(transcript: &[TranscriptLine]) -> usize {
     let mut last = 0;
     for (i, line) in transcript.iter().enumerate() {
         match line {
@@ -498,16 +502,16 @@ pub(crate) fn is_memory_notice(line: &TranscriptLine) -> bool {
 mod notice;
 pub(crate) use notice::{notice_lines, notice_slot_rows};
 
-/// Build the visible slot list from the transcript, fold groups, and the
-/// expanded-set: one Summary slot for a collapsed group, the summary header
-/// plus its lines for an expanded one, and a Line slot for everything else.
+/// Build the visible slot list from the transcript, precomputed fold groups,
+/// and the expanded-set: one Summary slot for a collapsed group, the summary
+/// header plus its lines for an expanded one, and a Line slot for the rest.
+/// Groups come from the caller so one cache serves every render and count pass.
 pub(crate) fn display_slots(
     transcript: &[TranscriptLine],
-    agent_busy: bool,
+    groups: &[FoldGroup],
     expanded: &HashSet<String>,
     verbose: bool,
 ) -> Vec<DisplaySlot> {
-    let groups = compute_fold_groups(transcript, agent_busy);
     let mut slots = Vec::new();
     let mut gi = 0;
     let mut i = 0;
@@ -581,6 +585,21 @@ impl crate::state::App {
         self.fold_aware_rows(Some(idx))
     }
 
+    /// The fold groups for the transcript currently on view. The main view
+    /// reads the incrementally maintained cache; the teammate view and the
+    /// search view project a transcript the cache was not built over, so they
+    /// compute groups on demand.
+    pub(crate) fn active_fold_groups(&self) -> Cow<'_, [FoldGroup]> {
+        if self.teammate_view.is_some() || self.search.active {
+            Cow::Owned(compute_fold_groups(
+                self.active_transcript(),
+                self.agent_busy(),
+            ))
+        } else {
+            Cow::Borrowed(self.transcript.fold_groups())
+        }
+    }
+
     /// Walk the transcript summing display rows: the row where line target
     /// starts, or the total when target is None. A completed turn's calls
     /// collapse to one summary row or expand to their lines, and the trailing
@@ -588,9 +607,10 @@ impl crate::state::App {
     /// what the draw pass emits.
     pub(crate) fn fold_aware_rows(&self, target: Option<usize>) -> usize {
         let transcript = self.active_transcript();
+        let groups = self.active_fold_groups();
         let slots = display_slots(
             transcript,
-            self.agent_busy(),
+            groups.as_ref(),
             &self.expanded_fold_groups,
             self.verbose,
         );

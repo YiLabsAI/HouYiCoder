@@ -265,6 +265,7 @@ impl App {
         // Resume the run without resetting its clock: end_waiting flips
         // Waiting → Running preserving the original started_at.
         self.run_state.end_waiting();
+        self.refresh_fold_active();
         // Clear stale thinking state before post-resume streaming begins. The
         // run carried its progress through the pause, so these resets clear
         // real leftover values rather than touching defaults.
@@ -304,6 +305,7 @@ impl App {
         // begin_waiting preserves the run's identity and start time so the
         // verdict can resume without resetting the clock.
         self.run_state.begin_waiting();
+        self.refresh_fold_active();
         self.prompt = Some(PendingPrompt::permission(req_id, vec![ask.clone()]));
         if tool == "AskUserQuestion"
             && let Some(aq) = AskQuestion::parse(&call_id, &ask.input)

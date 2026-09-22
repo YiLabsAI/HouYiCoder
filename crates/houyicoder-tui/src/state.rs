@@ -601,6 +601,10 @@ impl App {
     #[cfg(test)]
     pub fn start_run_for_test(&mut self, req_id: u64) {
         self.run_state.start(RequestId(req_id), Instant::now());
+        // A running agent flips the tail fold group to active; recompute the
+        // cache here because no rebuild follows a lines-built transcript.
+        let groups = crate::fold::compute_fold_groups(self.transcript.lines(), self.agent_busy());
+        *self.transcript.fold_groups_mut() = groups;
     }
 }
 

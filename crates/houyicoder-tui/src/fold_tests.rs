@@ -544,7 +544,7 @@ fn test_slots_collapsed_single_turn() {
         TranscriptLine::Agent("done".into()),
     ];
     let expanded = HashSet::new();
-    let slots = display_slots(&t, false, &expanded, false);
+    let slots = display_slots(&t, &compute_fold_groups(&t, false), &expanded, false);
     assert_eq!(slots.len(), 3);
     assert!(matches!(slots[0], DisplaySlot::Line(0, _)));
     assert!(matches!(slots[1], DisplaySlot::Summary(_)));
@@ -563,7 +563,7 @@ fn test_slots_expanded_summary_header() {
     ];
     let mut expanded = HashSet::new();
     expanded.insert("c1#0".to_string());
-    let slots = display_slots(&t, false, &expanded, false);
+    let slots = display_slots(&t, &compute_fold_groups(&t, false), &expanded, false);
     assert_eq!(slots.len(), 5);
     assert!(matches!(slots[0], DisplaySlot::Line(0, _)));
     assert!(matches!(slots[1], DisplaySlot::Summary(_)));
@@ -580,7 +580,7 @@ fn test_slots_active_single_call() {
         tool_result("c1", ToolOutcome::Success),
     ];
     let expanded = HashSet::new();
-    let slots = display_slots(&t, true, &expanded, false);
+    let slots = display_slots(&t, &compute_fold_groups(&t, true), &expanded, false);
     assert_eq!(slots.len(), 3);
     assert!(matches!(slots[0], DisplaySlot::Line(0, _)));
     assert!(matches!(slots[1], DisplaySlot::Line(1, _)));
@@ -604,7 +604,7 @@ fn test_slots_active_multi_call() {
         tool_result("c3", ToolOutcome::Success),
     ];
     let expanded = HashSet::new();
-    let slots = display_slots(&t, true, &expanded, false);
+    let slots = display_slots(&t, &compute_fold_groups(&t, true), &expanded, false);
     // Line(0) user + all 6 tool lines (no summary while active).
     assert_eq!(slots.len(), 7);
     assert!(matches!(slots[0], DisplaySlot::Line(0, _)));
@@ -613,7 +613,7 @@ fn test_slots_active_multi_call() {
     // Expanding is a no-op while active (already showing each line).
     let mut exp = HashSet::new();
     exp.insert("c1#0".to_string());
-    let slots2 = display_slots(&t, true, &exp, false);
+    let slots2 = display_slots(&t, &compute_fold_groups(&t, true), &exp, false);
     assert_eq!(slots2.len(), 7);
 }
 
@@ -624,7 +624,7 @@ fn test_memory_notice_slots() {
     );
     let t = vec![notice.clone()];
     // Collapsed by default: one NoticeCollapsed slot, keyed by occurrence.
-    let slots = display_slots(&t, false, &HashSet::new(), false);
+    let slots = display_slots(&t, &compute_fold_groups(&t, false), &HashSet::new(), false);
     assert_eq!(slots.len(), 1);
     assert!(matches!(
         slots[0],
@@ -632,12 +632,17 @@ fn test_memory_notice_slots() {
     ));
     // A non-notice System line is a plain Line, not a fold slot.
     let t2 = vec![TranscriptLine::System("forgot alpha".to_string())];
-    let slots = display_slots(&t2, false, &HashSet::new(), false);
+    let slots = display_slots(
+        &t2,
+        &compute_fold_groups(&t2, false),
+        &HashSet::new(),
+        false,
+    );
     assert!(matches!(slots[0], DisplaySlot::Line(0, None)));
     // Expanding the key reveals the notice detail as a Line slot.
     let mut expanded = HashSet::new();
     expanded.insert("mg#0".to_string());
-    let slots = display_slots(&t, false, &expanded, false);
+    let slots = display_slots(&t, &compute_fold_groups(&t, false), &expanded, false);
     assert!(matches!(
         slots[0],
         DisplaySlot::NoticeExpanded { ref key, idx: 0 } if key == "mg#0"

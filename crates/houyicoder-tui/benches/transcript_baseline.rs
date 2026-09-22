@@ -57,7 +57,7 @@ fn fold_scan_bench(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::from_parameter(&id), &size, |b, &n| {
                 let app = bench_api::rebuild_transcript(bench_api::app_with_frames(builder(n)));
                 b.iter(|| {
-                    black_box(bench_api::fold_group_count(&app, true));
+                    black_box(bench_api::recompute_fold_group_count(&app));
                 });
             });
         }
