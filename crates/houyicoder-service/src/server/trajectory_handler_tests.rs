@@ -1,6 +1,5 @@
-//! Dispatch handler wiring tests: drive a FrontendRequest through the real
-//! Server + store and assert the response. Split out of dispatch.rs so that
-//! file stays under the size gate.
+//! Router wiring tests: drive a FrontendRequest through the real Server and
+//! store, then assert the response.
 use super::*;
 use futures::StreamExt;
 use futures::channel::mpsc;

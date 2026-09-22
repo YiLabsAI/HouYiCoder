@@ -270,10 +270,29 @@ impl crate::agent::Runner {
         self.store.trajectory_snapshot(session)
     }
 
-    /// Drop the in-memory trajectory buffer for a session. The host calls
-    /// this on /clear so /trajectory reads fresh after a clear.
-    pub fn reset_trajectory(&self, session: houyicoder_context::SessionId) {
+    /// Clear the session's in-memory trajectory mirror and record the clear as
+    /// a durable boundary marker.
+    ///
+    /// The host calls this on /clear. The mirror is dropped first so the marker
+    /// appended afterwards is the only event in the fresh mirror: the boundary
+    /// stays visible to an in-process reader while the pre-clear history is
+    /// gone from it, and the durable log keeps the whole sequence.
+    pub async fn reset_trajectory(&self, session: houyicoder_context::SessionId) {
+        let prior_turn = match self.observability.lock() {
+            Ok(ol) => ol.turn_coords().0,
+            Err(_) => 0,
+        };
         self.store.reset_trajectory(session);
+        if let Err(e) = self
+            .store
+            .append(crate::agent::append::new_event(
+                session,
+                houyicoder_context::SessionEvent::ContextCleared { prior_turn },
+            ))
+            .await
+        {
+            tracing::warn!("context cleared append failed: {e}");
+        }
     }
 
     /// The names + descriptions of every tool registered on this runner, in

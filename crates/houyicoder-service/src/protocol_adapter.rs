@@ -3,9 +3,11 @@
 //! from serialization.
 
 pub(crate) mod compaction;
+pub(crate) mod hooks;
 pub(crate) mod memory_view;
 pub(crate) mod redundancy;
 pub(crate) mod session_descriptor;
+pub(crate) mod skills;
 mod trajectory_row;
 use trajectory_row::{event_name, hex_short};
 

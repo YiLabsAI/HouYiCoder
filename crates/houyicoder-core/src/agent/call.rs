@@ -437,9 +437,18 @@ impl Runner {
             };
 
             let mut state = StreamFold::default();
+            let mut first_token_elapsed: Option<u64> = None;
             // Process events as they arrive so response handlers and the log
             // observe each delta without waiting for stream completion.
             if let Some(ev) = first {
+                if matches!(
+                    ev,
+                    LlmEvent::TextDelta { .. }
+                        | LlmEvent::ReasoningDelta { .. }
+                        | LlmEvent::ToolCall { .. }
+                ) {
+                    first_token_elapsed = Some(api_start.elapsed().as_millis() as u64);
+                }
                 self.fold_event(ev, &mut state, session, response_handler.as_deref())
                     .await?;
             }
@@ -469,6 +478,16 @@ impl Runner {
                         return Err(RunError::ProviderFatal(ProviderError::Network));
                     }
                 };
+                if first_token_elapsed.is_none()
+                    && matches!(
+                        ev,
+                        LlmEvent::TextDelta { .. }
+                            | LlmEvent::ReasoningDelta { .. }
+                            | LlmEvent::ToolCall { .. }
+                    )
+                {
+                    first_token_elapsed = Some(api_start.elapsed().as_millis() as u64);
+                }
                 self.fold_event(ev, &mut state, session, response_handler.as_deref())
                     .await?;
             }
@@ -557,6 +576,20 @@ impl Runner {
                     inference.max_output_tokens,
                 );
                 self.record_turn_cache(&partial.usage);
+                let total_dur_ms = api_start.elapsed().as_millis() as u64;
+                let decode_dur_ms =
+                    first_token_elapsed.map(|ttft| total_dur_ms.saturating_sub(ttft));
+                if let Err(e) = self
+                    .append_model_step_timing(
+                        session,
+                        total_dur_ms,
+                        first_token_elapsed,
+                        decode_dur_ms,
+                    )
+                    .await
+                {
+                    tracing::debug!("timing append failed: {e}");
+                }
                 self.append_turn_usage(
                     session,
                     &partial.model,
@@ -623,6 +656,14 @@ impl Runner {
                 inference.max_output_tokens,
             );
             self.record_turn_cache(&response.usage);
+            let total_dur_ms = api_start.elapsed().as_millis() as u64;
+            let decode_dur_ms = first_token_elapsed.map(|ttft| total_dur_ms.saturating_sub(ttft));
+            if let Err(e) = self
+                .append_model_step_timing(session, total_dur_ms, first_token_elapsed, decode_dur_ms)
+                .await
+            {
+                tracing::debug!("timing append failed: {e}");
+            }
             self.append_turn_usage(
                 session,
                 &response.model,

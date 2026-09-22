@@ -650,7 +650,7 @@ async fn test_mid_cancel_multi_approval() {
 }
 
 /// An idle RunCancel request (no active run) must NOT set the durable aborted
-/// flag. dispatch.rs routes RunCancel to abort(); the durable flag set by an
+/// flag. The request router sends RunCancel to abort(); the durable flag set by an
 /// idle abort survives across the Interruption boundary (no run() between the
 /// cancel and a later reconnect-resume clears it) and silently short-circuits
 /// that resume — dropping a later approval with no signal. The paused flag
@@ -691,7 +691,7 @@ async fn test_idle_cancel_skips_abort() {
     let handle = tokio::spawn(async move { server.serve(server_io).await });
     client.connect().await.expect("handshake");
 
-    // Idle RunCancel request (no run active) → dispatch.rs → abort(). The
+    // Idle RunCancel request (no run active) → abort(). The
     // paused gate means abort does NOT set the durable flag (not paused).
     client
         .send_request(

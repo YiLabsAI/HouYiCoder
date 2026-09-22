@@ -493,7 +493,10 @@ pub enum SessionEvent {
         #[serde(default)]
         summary: String,
     },
-    /// Model step timing recorded by the agent loop for latency analysis.
+    /// Timing for one model call, recorded by the agent loop for latency
+    /// analysis. The round-trip index is 1-based, matching TurnUsage. ttft and
+    /// decode are absent when the stream produced no first token (an aborted
+    /// or failed call), and total is the whole request wall time either way.
     #[serde(rename = "ModelStepTiming")]
     ModelStepTiming {
         turn: u32,
@@ -504,7 +507,9 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         decode_ms: Option<u64>,
     },
-    /// Recorded when the user explicitly clears conversational context.
+    /// Recorded when the user clears the conversation context. prior_turn is
+    /// the model-call turn count at the moment of the clear, so a replay can
+    /// place the boundary without re-deriving it from event order.
     #[serde(rename = "ContextCleared")]
     ContextCleared {
         prior_turn: u32,

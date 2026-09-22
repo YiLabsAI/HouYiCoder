@@ -39,8 +39,13 @@ pub use event_sequencer::EventSequencer;
 mod frame_carrier;
 pub use frame_carrier::FrameCarrier;
 
-/// Request dispatch: routes one frontend request to its handler.
-mod dispatch;
+/// Request routing plus the per-domain request handlers.
+mod capability_handler;
+mod context_handler;
+mod memory_handler;
+mod permission_handler;
+mod request_router;
+mod status_handler;
 
 /// The /debug request handler.
 mod debug_dispatch;
