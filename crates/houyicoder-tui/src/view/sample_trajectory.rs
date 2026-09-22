@@ -389,6 +389,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
             tool_ms: 3200,
         },
         hidden_turns: 0,
+        delegated: None,
         rows: vec![
             TrajectoryRow::Turn(t1),
             TrajectoryRow::Turn(t2),

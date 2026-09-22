@@ -15,8 +15,9 @@ use houyicoder_tui::records::ToolOutcome;
 mod turns;
 
 use houyicoder_tui::view::trajectory_pane::{
-    EventTiming, EventUsage, RecordOutcome, SessionTiming, TrajectoryLog, TrajectoryRecord,
-    TrajectoryRecordKind, TrajectoryRow, TrajectoryTurn, TrajectoryView, TurnBoundary,
+    DelegatedUsage, EventTiming, EventUsage, RecordOutcome, SessionTiming, TrajectoryLog,
+    TrajectoryRecord, TrajectoryRecordKind, TrajectoryRow, TrajectoryTurn, TrajectoryView,
+    TurnBoundary,
 };
 
 /// Which tool a call id invoked, and with what input, so a later ToolResult
@@ -200,6 +201,12 @@ fn build_summary(
         duration_secs,
         timing: session_timing,
         hidden_turns,
+        delegated: (acc.delegated_calls > 0).then_some(DelegatedUsage {
+            calls: acc.delegated_calls,
+            input: acc.delegated_input,
+            output: acc.delegated_output,
+            cache_read: acc.delegated_cache_read,
+        }),
         rows,
     }
 }
@@ -222,6 +229,10 @@ struct AccTotals {
     /// Whole-log counts, so a completeness check cannot be fooled by the page.
     usage_events: usize,
     turns: usize,
+    delegated_calls: usize,
+    delegated_input: u64,
+    delegated_output: u64,
+    delegated_cache_read: u64,
 }
 
 /// Fold one timing event into the session's latency samples. Tool durations are
@@ -306,6 +317,19 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
                 acc.usage_events += 1;
             }
             SessionEvent::UserInput { .. } => acc.turns += 1,
+            // A delegated child runs its own provider calls, so its usage is
+            // not in the parent's totals; it is reported on its own row.
+            SessionEvent::SubagentReturn {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                ..
+            } => {
+                acc.delegated_calls += 1;
+                acc.delegated_input += *input_tokens;
+                acc.delegated_output += *output_tokens;
+                acc.delegated_cache_read += *cache_read_input_tokens;
+            }
             SessionEvent::ToolResult {
                 output,
                 call_id,
@@ -446,3 +470,11 @@ impl TrajectoryLog for SessionLogTrajectory {
 #[cfg(test)]
 #[path = "trajectory_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "trajectory_records_tests.rs"]
+mod record_tests;
+
+#[cfg(test)]
+#[path = "trajectory_paging_tests.rs"]
+mod paging_tests;

@@ -17,6 +17,9 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use crate::command::render::{
+    field, format_tokens, permission_mode_label, render_breaker_line, render_status,
+};
 use crate::state::{App, enums::StatusTab};
 use crate::view::navigation::{key_hint, tab_header};
 
@@ -63,7 +66,7 @@ fn draw_tab_body(f: &mut Frame, tab: StatusTab, area: Rect, app: &App) {
     let body: String = match tab {
         StatusTab::Status => {
             let snap = app.snapshot_or_stub();
-            crate::command::render::render_status(
+            render_status(
                 &snap,
                 &app.session_id,
                 &app.status.sandbox,
@@ -147,51 +150,10 @@ fn name_edit_line(field: &crate::input::InputField) -> Line<'static> {
 /// state + the snapshot's toggle fields so the tab is a focused config view.
 /// Display-only: the user flips a toggle by editing the settings file (the
 /// settings file is the source of truth, edited externally, not inline).
-/// The Usage tab's latency rows, read from the same typed summary the
-/// trajectory pane reads: one computation, two surfaces, so the two cannot
-/// disagree about the session. A row is omitted when the session recorded no
-/// sample for it — an unmeasured value is not a zero.
-fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut String) {
-    let Some(log) = app.trajectory_log.as_ref() else {
-        return;
-    };
-    let timing = log.trajectory().timing;
-    if timing.model_ms > 0 || timing.tool_ms > 0 {
-        s.push_str(&f(
-            "model / tool time",
-            &format!(
-                "{:.1}s / {:.1}s",
-                timing.model_ms as f64 / 1000.0,
-                timing.tool_ms as f64 / 1000.0
-            ),
-        ));
-    }
-    if let (Some(avg), Some(p95), Some(p99)) =
-        (timing.ttft_avg_ms, timing.ttft_p95_ms, timing.ttft_p99_ms)
-    {
-        s.push_str(&f(
-            "ttft",
-            &format!(
-                "{:.1}s avg · {:.1}s p95 · {:.1}s p99 ({} samples)",
-                avg as f64 / 1000.0,
-                p95 as f64 / 1000.0,
-                p99 as f64 / 1000.0,
-                timing.ttft_samples
-            ),
-        ));
-    }
-    if let Some(tps) = timing.decode_tok_per_sec {
-        s.push_str(&f(
-            "decode speed",
-            &format!("{tps:.1} tok/s ({} samples)", timing.decode_samples),
-        ));
-    }
-}
-
 fn render_config(app: &App) -> String {
+    let f = field;
     let mode = app.current_mode();
     let snap = app.snapshot_or_stub();
-    let f = crate::command::render::field;
     let on_off = |b: bool| if b { "on" } else { "off" };
     let mut s = String::new();
     // Config tab shows the resolved model id (not the tier label) + the
@@ -203,117 +165,24 @@ fn render_config(app: &App) -> String {
     if let Some(effort) = applied.effort {
         s.push_str(&f("effort", effort.label()));
     }
-    s.push_str(&f(
-        "Permission mode",
-        crate::command::render::permission_mode_label(mode),
-    ));
+    s.push_str(&f("Permission mode", permission_mode_label(mode)));
     s.push_str(&f("sandbox", &app.status.sandbox));
-    s.push_str(&f(
-        "breaker",
-        &crate::command::render::render_breaker_line(&snap),
-    ));
+    s.push_str(&f("breaker", &render_breaker_line(&snap)));
     s.push_str(&f("auto-memory", on_off(snap.auto_memory)));
     s.push_str(&f("auto-dream", on_off(snap.auto_dream)));
     s.trim_end().to_string()
 }
 
-fn render_usage(app: &App) -> String {
-    let snap = app.snapshot_or_stub();
-    let u = &snap.cumulative_usage;
-    let f = crate::command::render::field;
-    let ft = crate::command::render::format_tokens;
-    let mut s = String::new();
-    s.push_str(&f("input tokens", &ft(u.input_tokens as u64)));
-    s.push_str(&f("output tokens", &ft(u.output_tokens as u64)));
-    // Reasoning tokens: a component of output, shown only when >0. The
-    // parenthetical note "(incl. in output)" makes the inclusion relation
-    // explicit so it is not read as a separate total (I14).
-    if u.reasoning_tokens > 0 {
-        s.push_str(&f(
-            "reasoning",
-            &format!("{} (incl. in output)", ft(u.reasoning_tokens as u64)),
-        ));
-    }
-    let cache_read = u.cache_read_input_tokens as u64;
-    let cache_value = if u.input_tokens > 0 {
-        format!(
-            "{} ({:.1}% of input)",
-            ft(cache_read),
-            100.0 * cache_read as f64 / u.input_tokens as f64
-        )
-    } else {
-        ft(cache_read)
-    };
-    s.push_str(&f("cached input", &cache_value));
-    // Not every provider reports cache creation. A zero cannot distinguish
-    // an actual zero from an omitted field, so show this row only with data.
-    if u.cache_write_input_tokens > 0 {
-        s.push_str(&f("cache creation", &ft(u.cache_write_input_tokens as u64)));
-    }
-    s.push_str(&f(
-        "tool calls",
-        &format!(
-            "{} ({} ok / {} err)",
-            snap.tool_calls, snap.tool_success, snap.tool_errors
-        ),
-    ));
-    // Session latency, from the same typed summary the trajectory pane reads.
-    render_usage_latency(app, &f, &mut s);
-    // Per-model breakdown only when two or more models share the session;
-    // a single model is already covered by the flat rows above, so a
-    // per-model section would just repeat them. Sorted by input+output
-    // descending (heaviest first), the model-entries
-    // ordering. Reasoning per model only when that model used any.
-    if snap.by_model.len() >= 2 {
-        s.push_str("Usage by model:\n");
-        // The label column tracks the longest id so a long model name never
-        // eats the separating space; 16 keeps short ids aligned. The extra
-        // column beyond the colon guarantees at least one space of gap.
-        let label_width = snap
-            .by_model
-            .iter()
-            .map(|m| m.model.width() + 2)
-            .max()
-            .unwrap_or(0)
-            .max(16);
-        for m in &snap.by_model {
-            let label = format!("{}:", m.model);
-            let gap = " ".repeat(label_width.saturating_sub(label.width()));
-            let mut row = format!(
-                "  {label}{gap}{} input · {} output",
-                ft(m.input_tokens),
-                ft(m.output_tokens),
-            );
-            if m.reasoning_tokens > 0 {
-                row.push_str(&format!(" · {} reasoning", ft(m.reasoning_tokens)));
-            }
-            let cache_pct = if m.input_tokens > 0 {
-                format!(
-                    " ({:.1}%)",
-                    100.0 * m.cache_read_tokens as f64 / m.input_tokens as f64
-                )
-            } else {
-                String::new()
-            };
-            row.push_str(&format!(
-                " · {} cached{}",
-                ft(m.cache_read_tokens),
-                cache_pct
-            ));
-            if m.cache_write_tokens > 0 {
-                row.push_str(&format!(" · {} cache creation", ft(m.cache_write_tokens)));
-            }
-            s.push_str(&row);
-            s.push('\n');
-        }
-    }
-    s.trim_end().to_string()
-}
+#[path = "usage.rs"]
+mod usage;
+use usage::render_usage;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::view::trajectory_pane::{SessionTiming, TrajectoryLog, TrajectoryView};
+    use crate::view::trajectory_pane::{
+        DelegatedUsage, SessionTiming, TrajectoryLog, TrajectoryView,
+    };
 
     /// The sub-tab header renders Status / Config / Usage, with the active one
     /// marked (the active title appears in the header).
@@ -510,7 +379,6 @@ mod tests {
     /// under 1000. Pins the render the Usage tab depends on.
     #[test]
     fn test_format_tokens_compact() {
-        use crate::command::render::format_tokens;
         assert_eq!(format_tokens(0), "0");
         assert_eq!(format_tokens(999), "999");
         assert_eq!(format_tokens(1000), "1k");
@@ -591,6 +459,7 @@ mod tests {
                 tool_ms: 28_400,
             },
             hidden_turns: 0,
+            delegated: None,
             rows: Vec::new(),
         };
         let mut app = crate::test_harness::working_app();
@@ -636,11 +505,131 @@ mod tests {
             duration_secs: 0,
             timing: SessionTiming::default(),
             hidden_turns: 0,
+            delegated: None,
             rows: Vec::new(),
         })));
         let s = render_usage(&app);
         assert!(!s.contains("ttft:"), "no ttft row without samples: {s}");
         assert!(!s.contains("decode speed:"), "no decode row: {s}");
         assert!(!s.contains("model / tool time:"), "no work-time row: {s}");
+    }
+
+    /// Delegated sub-agent work is reported on its own row and says it is not
+    /// part of the rows above, because those come from the parent's calls only.
+    #[test]
+    fn test_usage_tab_delegated() {
+        struct Fixed(TrajectoryView);
+        impl TrajectoryLog for Fixed {
+            fn trajectory(&self) -> TrajectoryView {
+                self.0.clone()
+            }
+        }
+        let mut app = crate::test_harness::working_app();
+        app.trajectory_log = Some(std::sync::Arc::new(Fixed(TrajectoryView {
+            session_id: "s".into(),
+            model: "m".into(),
+            total_turns: 1,
+            tokens_in: Some(10),
+            tokens_out: Some(5),
+            cache_read: None,
+            failures: 0,
+            duration_secs: 1,
+            timing: SessionTiming::default(),
+            hidden_turns: 0,
+            delegated: Some(DelegatedUsage {
+                calls: 2,
+                input: 812_000,
+                output: 41_000,
+                cache_read: 755_000,
+            }),
+            rows: Vec::new(),
+        })));
+        let s = render_usage(&app);
+        assert!(s.contains("delegated usage:"), "the row is present: {s}");
+        assert!(s.contains("812k input"), "input shown: {s}");
+        assert!(s.contains("41k output"), "output shown: {s}");
+        assert!(s.contains("93% cached"), "the child cache share: {s}");
+        assert!(
+            s.contains("not in the rows above"),
+            "the row says how it combines with the totals: {s}"
+        );
+    }
+
+    /// A session with no delegation shows no delegated row.
+    #[test]
+    fn test_usage_tab_no_delegated() {
+        struct Fixed(TrajectoryView);
+        impl TrajectoryLog for Fixed {
+            fn trajectory(&self) -> TrajectoryView {
+                self.0.clone()
+            }
+        }
+        let mut app = crate::test_harness::working_app();
+        app.trajectory_log = Some(std::sync::Arc::new(Fixed(TrajectoryView {
+            session_id: "s".into(),
+            model: "m".into(),
+            total_turns: 1,
+            tokens_in: Some(10),
+            tokens_out: Some(5),
+            cache_read: None,
+            failures: 0,
+            duration_secs: 1,
+            timing: SessionTiming::default(),
+            hidden_turns: 0,
+            delegated: None,
+            rows: Vec::new(),
+        })));
+        let s = render_usage(&app);
+        assert!(!s.contains("delegated usage:"), "no row: {s}");
+    }
+
+    /// A child that returned before reporting usage leaves the row saying so,
+    /// rather than printing zeroes for a cost that was never measured.
+    #[test]
+    fn test_usage_tab_delegated_unreported() {
+        struct Fixed(TrajectoryView);
+        impl TrajectoryLog for Fixed {
+            fn trajectory(&self) -> TrajectoryView {
+                self.0.clone()
+            }
+        }
+        let mut app = crate::test_harness::working_app();
+        app.trajectory_log = Some(std::sync::Arc::new(Fixed(TrajectoryView {
+            session_id: "s".into(),
+            model: "m".into(),
+            total_turns: 1,
+            tokens_in: Some(10),
+            tokens_out: Some(5),
+            cache_read: None,
+            failures: 0,
+            duration_secs: 1,
+            timing: SessionTiming::default(),
+            hidden_turns: 0,
+            delegated: Some(DelegatedUsage {
+                calls: 1,
+                input: 0,
+                output: 0,
+                cache_read: 0,
+            }),
+            rows: Vec::new(),
+        })));
+        let s = render_usage(&app);
+        assert!(s.contains("delegated usage:"), "the row is present: {s}");
+        assert!(
+            s.contains("usage not reported"),
+            "an unmeasured cost says so: {s}"
+        );
+        assert!(
+            !s.contains("0 input"),
+            "it does not claim the child spent nothing: {s}"
+        );
+        let row = s
+            .lines()
+            .find(|l| l.starts_with("delegated usage:"))
+            .expect("the row is present");
+        assert!(
+            !row.contains("cached"),
+            "and no share is invented on the delegated row: {row}"
+        );
     }
 }

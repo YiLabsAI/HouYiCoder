@@ -2,6 +2,7 @@
 //! the file-size gate. Included from trajectory_pane.rs via a path attribute so
 //! the tests still see the parent module's private items via super::*.
 
+use super::list;
 use super::*;
 use crate::view::working;
 use ratatui::{Terminal, backend::TestBackend};
@@ -141,6 +142,7 @@ impl TrajectoryLog for StubLog {
                 tool_ms: 0,
             },
             hidden_turns: 0,
+            delegated: None,
             rows: Vec::new(),
         }
     }
@@ -261,6 +263,7 @@ fn test_level2_renders_projection_kinds() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -373,6 +376,7 @@ fn test_event_detail_redacts_secrets() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -489,6 +493,7 @@ fn test_thinking_tokens_render_nonzero() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -508,7 +513,7 @@ fn test_thinking_tokens_render_nonzero() {
             records: vec![],
         })],
     };
-    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -532,6 +537,7 @@ fn test_thinking_tokens_hidden_zero() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -551,7 +557,7 @@ fn test_thinking_tokens_hidden_zero() {
             records: vec![],
         })],
     };
-    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -578,6 +584,7 @@ fn test_per_turn_model_two() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 boundary_before: None,
@@ -617,7 +624,7 @@ fn test_per_turn_model_two() {
             }),
         ],
     };
-    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -643,6 +650,7 @@ fn test_per_turn_model_one() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 boundary_before: None,
@@ -682,7 +690,7 @@ fn test_per_turn_model_one() {
             }),
         ],
     };
-    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -709,6 +717,7 @@ fn test_turn_row_cached_ratio() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 boundary_before: None,
@@ -748,7 +757,7 @@ fn test_turn_row_cached_ratio() {
             }),
         ],
     };
-    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -785,7 +794,7 @@ fn test_turn_title_user_input() {
         success: true,
         records: vec![],
     };
-    assert_eq!(turn_title(&turn), "fix the bug");
+    assert_eq!(list::turn_title(&turn), "fix the bug");
 }
 
 /// A turn with no user input (a tool-continuation turn) derives a fallback
@@ -824,7 +833,7 @@ fn test_turn_title_falls_back() {
             retries: 0,
         }],
     };
-    let title = turn_title(&turn);
+    let title = list::turn_title(&turn);
     assert!(
         title.contains("Bash: ls -la"),
         "fallback title carries the first record summary: {title}"
@@ -856,7 +865,7 @@ fn test_turn_title_empty() {
         success: true,
         records: vec![],
     };
-    assert_eq!(turn_title(&turn), "(no input)");
+    assert_eq!(list::turn_title(&turn), "(no input)");
 }
 
 /// Entering trajectory initializes cursor to tail, and draw clamps and persists it.
@@ -931,6 +940,7 @@ fn test_timing_and_cache_render() {
             tool_ms: 0,
         },
         hidden_turns: 0,
+        delegated: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -950,7 +960,8 @@ fn test_timing_and_cache_render() {
             records: vec![],
         })],
     };
-    let (header, body, _, _) = draw_turn_list(&view, 0, ratatui::layout::Rect::new(0, 0, 100, 25));
+    let (header, body, _, _) =
+        list::draw_turn_list(&view, 0, ratatui::layout::Rect::new(0, 0, 100, 25));
     let head_text: String = header
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -1042,6 +1053,7 @@ fn test_detail_shows_model_facts() {
             tool_ms: 0,
         },
         hidden_turns: 0,
+        delegated: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             boundary_before: None,
@@ -1100,6 +1112,7 @@ fn test_timeline_shows_record_names() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             boundary_before: None,
@@ -1189,9 +1202,10 @@ fn test_turn_list_boundary() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![TrajectoryRow::Turn(turn)],
     };
-    let (_, body, _, sel_line) = draw_turn_list(&view, 0, Rect::new(0, 0, 120, 20));
+    let (_, body, _, sel_line) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 120, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -1241,12 +1255,13 @@ fn test_turn_list_column_align() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![
             TrajectoryRow::Turn(mk(1, "short", Some(1))),
             TrajectoryRow::Turn(mk(2, "a much longer title that is cut", Some(1_200))),
         ],
     };
-    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 120, 20));
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 120, 20));
     let lines: Vec<String> = body
         .iter()
         .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -1299,6 +1314,7 @@ fn test_turn_detail_latency_split() {
             tool_ms: 0,
         },
         hidden_turns: 0,
+        delegated: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             boundary_before: None,
@@ -1368,13 +1384,14 @@ fn test_turn_list_degrades() {
         cache_read: Some(2_000),
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![
             TrajectoryRow::Turn(turn(12, "宽的标题会让列错位", "qwen3.7-max")),
             TrajectoryRow::Turn(turn(13, "ascii title", "glm-5.2")),
         ],
     };
     let text_at = |w: u16| -> String {
-        let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, w, 10));
+        let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, w, 10));
         body.iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
@@ -1435,21 +1452,25 @@ fn test_turn_list_glyph_aligns() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        delegated: None,
         rows: vec![
             TrajectoryRow::Turn(turn(1, "宽的标题")),
             TrajectoryRow::Turn(turn(2, "ascii")),
         ],
     };
-    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 200, 10));
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 10));
+    // The token column is found by the cell that carries the in/out counts,
+    // not by a glyph that may be reworded: a probe that no longer matches
+    // would silently make this assertion vacuous.
     let col_of_tokens = |line: &ratatui::text::Line<'static>| -> usize {
         let mut col = 0usize;
         for span in &line.spans {
-            if span.content.contains('↓') {
+            if span.content.contains(" in ") {
                 return col;
             }
             col += UnicodeWidthStr::width(span.content.as_ref());
         }
-        col
+        panic!("no token cell in the row: {:?}", line.spans);
     };
     assert_eq!(
         col_of_tokens(&body[0]),

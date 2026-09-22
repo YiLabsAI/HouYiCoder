@@ -52,13 +52,13 @@ pub(super) fn draw_turn_detail(
                     format!(
                         " T{}  \"{}\"",
                         turn.n,
-                        truncate_width(&turn_title(&turn), 30)
+                        truncate_width(&super::list::turn_title(&turn), 30)
                     ),
                     Color::Cyan,
                 ),
                 sp(
                     format!(
-                        "  {}↓ {}↑{} · total {:.1}s",
+                        "  {} in {} out{} · total {:.1}s",
                         fmt_k_opt(turn.tokens_in),
                         fmt_k_opt(turn.tokens_out),
                         cache_str,
@@ -233,7 +233,7 @@ pub(super) fn draw_event_detail(
         ),
         sp(mark, mc),
         sp(
-            format!("  · record {}/{}", idx + 1, turn.records.len()),
+            format!("  · Record {} of {}", idx + 1, turn.records.len()),
             Color::DarkGray,
         ),
     ]));
@@ -296,6 +296,22 @@ pub(super) fn draw_event_detail(
 /// The latency split, provider usage, and retry count of a model call. Each
 /// part is rendered only when the log recorded it: an unmeasured value stays
 /// absent rather than appearing as a zero.
+/// The turn's cache line for the L1 header: how much of the turn's input came
+/// from the prompt cache, shown with the share when the input is known.
+fn format_turn_cache(turn: &TrajectoryTurn) -> String {
+    match (turn.cache_read, turn.tokens_in) {
+        (Some(c), Some(tin)) if tin > 0 => {
+            format!(
+                " · {} ({:.0}%) cache hit",
+                fmt_k(c as usize),
+                100.0 * c as f64 / tin as f64
+            )
+        }
+        (Some(c), _) if c > 0 => format!(" · {} cache hit", fmt_k(c as usize)),
+        _ => String::new(),
+    }
+}
+
 fn push_model_facts(
     body: &mut Vec<Line<'static>>,
     ev: &TrajectoryRecord,
@@ -310,6 +326,18 @@ fn push_model_facts(
             parts.push(format!("decode {decode}ms"));
         }
         push_field(body, "timing", &parts.join(" · "), Color::Gray);
+        // The rate the call decoded at, from its own output and decode span.
+        if let (Some(decode_ms), Some(out)) =
+            (timing.decode_ms, ev.usage.as_ref().and_then(|u| u.output))
+            && decode_ms > 0
+        {
+            push_field(
+                body,
+                "speed",
+                &format!("{:.1} tok/s", out as f64 / (decode_ms as f64 / 1000.0)),
+                Color::Gray,
+            );
+        }
     }
     if let Some(usage) = &ev.usage {
         let parts: Vec<String> = [
