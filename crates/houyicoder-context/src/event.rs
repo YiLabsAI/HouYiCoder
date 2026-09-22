@@ -493,6 +493,22 @@ pub enum SessionEvent {
         #[serde(default)]
         summary: String,
     },
+    /// Model step timing recorded by the agent loop for latency analysis.
+    #[serde(rename = "ModelStepTiming")]
+    ModelStepTiming {
+        turn: u32,
+        step: u32,
+        total_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ttft_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decode_ms: Option<u64>,
+    },
+    /// Recorded when the user explicitly clears conversational context.
+    #[serde(rename = "ContextCleared")]
+    ContextCleared {
+        prior_turn: u32,
+    },
     /// An event kind this build does not know (written by a newer version).
     /// Lets an old binary read a newer log instead of failing the whole
     /// session read on one unrecognized line. A truly corrupt line also

@@ -33,6 +33,8 @@ pub fn event_name(kind: &SessionEvent) -> &'static str {
         SessionEvent::SubagentReturn { .. } => "return",
         SessionEvent::ChildDelegated { .. } => "delegated",
         SessionEvent::NotificationInjected { .. } => "notify",
+        SessionEvent::ModelStepTiming { .. } => "timing",
+        SessionEvent::ContextCleared { .. } => "cleared",
         SessionEvent::Unknown => "unknown",
     }
 }

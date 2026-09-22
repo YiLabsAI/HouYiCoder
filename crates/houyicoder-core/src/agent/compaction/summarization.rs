@@ -196,7 +196,9 @@ fn event_byte_len(event: &SessionLogEntry) -> usize {
         | SessionEvent::SubagentReturn { .. }
         | SessionEvent::ChildDelegated { .. }
         | SessionEvent::RunCompleted { .. }
-        | SessionEvent::NotificationInjected { .. } => 0,
+        | SessionEvent::NotificationInjected { .. }
+        | SessionEvent::ModelStepTiming { .. }
+        | SessionEvent::ContextCleared { .. } => 0,
     }
 }
 

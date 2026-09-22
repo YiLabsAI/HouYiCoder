@@ -1,13 +1,12 @@
-//! Mock trajectory data for the /trajectory pane, extracted to keep the
-//! render module under the file-size gate. Included via a path attribute so
-//! it sees the parent module types via super::*.
+//! Demonstration trajectory data for the timeline pane.
+//!
+//! Provides a static demonstration view when running without a live
+//! session log reader attached.
 
 use super::*;
 
-// Mock data
-
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
-pub(crate) fn mock_trajectory() -> TrajectoryView {
+pub(crate) fn sample_trajectory() -> TrajectoryView {
     // A realistic houyi work session — fixing the permission pipeline crash,
     // then wiring the trajectory pane, then PTY-testing the journey. Real
     // paths, real commands, real-ish timings + start offsets. start_ms
@@ -355,6 +354,11 @@ pub(crate) fn mock_trajectory() -> TrajectoryView {
         tokens_out: Some(4100),
         failures: 1,
         duration_secs: 39,
+        cache_read: Some(9800),
+        ttft_avg_ms: Some(420),
+        ttft_p95_ms: Some(650),
+        ttft_p99_ms: Some(780),
+        decode_tok_per_sec: Some(38.5),
         rows: vec![
             TrajectoryRow::Turn(t1),
             TrajectoryRow::Turn(t2),

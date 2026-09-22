@@ -103,14 +103,19 @@ pub struct TrajectoryView {
     pub total_turns: usize,
     pub tokens_in: Option<usize>,
     pub tokens_out: Option<usize>,
+    pub cache_read: Option<u64>,
     pub failures: usize,
     pub duration_secs: u64,
+    pub ttft_avg_ms: Option<u64>,
+    pub ttft_p95_ms: Option<u64>,
+    pub ttft_p99_ms: Option<u64>,
+    pub decode_tok_per_sec: Option<f64>,
     pub rows: Vec<TrajectoryRow>,
 }
 
-#[path = "mock_trajectory.rs"]
-mod mock;
-use mock::mock_trajectory;
+#[path = "sample_trajectory.rs"]
+mod sample;
+use sample::sample_trajectory;
 
 /// The display title for a turn: the user input when present, otherwise a
 /// derived fallback so a tool-continuation turn (no user input — the model
@@ -139,14 +144,13 @@ fn turn_title(turn: &TrajectoryTurn) -> String {
 /// header + footer stay pinned so the key hints never scroll off. The body
 /// scroll offset tracks the cursor so the selected row is always visible.
 pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
-    // Real data when the composition root wired a bridge (reads the durable
-    // log and projects); mock fallback in stub and unwired modes so the pane
-    // still renders a demo.
+    // Real data when wired; fallback sample in unwired modes so the pane
+    // still renders demonstration rows.
     let traj = app
         .trajectory_log
         .as_ref()
         .map(|l| l.trajectory())
-        .unwrap_or_else(mock_trajectory);
+        .unwrap_or_else(sample_trajectory);
     let level = app.trajectory_level.get();
     let cursor = app.trajectory_cursor.get();
     let turn_idx = app.trajectory_turn_idx.get();
@@ -237,21 +241,59 @@ fn draw_turn_list(
         (None, Some(tout)) => format!("{}↑", fmt_k(tout)),
         (None, None) => "—".to_string(),
     };
-    let header = vec![
-        line(vec![
-            sp(format!("{} turns", traj.total_turns), Color::Cyan),
-            sp(" · ", Color::DarkGray),
-            sp(tokens_summary, Color::Gray),
-            sp(format!(" · {} calls", total_calls), Color::Gray),
-            sp(format!(" · {} fail", traj.failures), Color::Red),
-            sp(format!(" · {}s", traj.duration_secs), Color::Gray),
-        ]),
-        line(vec![
-            sp(traj.model.clone(), Color::DarkGray),
-            sp(" · auto-memory on · auto-dream on", Color::DarkGray),
-        ]),
-        blank(),
-    ];
+    let cache_hit_str = match (traj.cache_read, traj.tokens_in) {
+        (Some(c), Some(tin)) if tin > 0 => {
+            format!(" · cache hit {:.0}%", 100.0 * c as f64 / tin as f64)
+        }
+        _ => String::new(),
+    };
+    let mut header = vec![line(vec![
+        sp(format!("{} turns", traj.total_turns), Color::Cyan),
+        sp(" · ", Color::DarkGray),
+        sp(tokens_summary, Color::Gray),
+        sp(cache_hit_str, Color::Indexed(208)),
+        sp(format!(" · {} calls", total_calls), Color::Gray),
+        sp(format!(" · {} fail", traj.failures), Color::Red),
+        sp(format!(" · total {}s", traj.duration_secs), Color::Gray),
+    ])];
+    let mut timing_spans = Vec::new();
+    if let Some(avg) = traj.ttft_avg_ms {
+        timing_spans.push(sp(
+            format!("TTFT avg {:.1}s", avg as f64 / 1000.0),
+            Color::DarkGray,
+        ));
+    }
+    if let Some(p95) = traj.ttft_p95_ms {
+        if !timing_spans.is_empty() {
+            timing_spans.push(sp(" · ", Color::DarkGray));
+        }
+        timing_spans.push(sp(
+            format!("p95 {:.1}s", p95 as f64 / 1000.0),
+            Color::DarkGray,
+        ));
+    }
+    if let Some(p99) = traj.ttft_p99_ms {
+        if !timing_spans.is_empty() {
+            timing_spans.push(sp(" · ", Color::DarkGray));
+        }
+        timing_spans.push(sp(
+            format!("p99 {:.1}s", p99 as f64 / 1000.0),
+            Color::DarkGray,
+        ));
+    }
+    if let Some(tps) = traj.decode_tok_per_sec {
+        if !timing_spans.is_empty() {
+            timing_spans.push(sp(" · ", Color::DarkGray));
+        }
+        timing_spans.push(sp(format!("decode {:.1} tok/s", tps), Color::DarkGray));
+    }
+    if !timing_spans.is_empty() {
+        timing_spans.push(sp(format!(" · {}", traj.model), Color::DarkGray));
+        header.push(line(timing_spans));
+    } else {
+        header.push(line(vec![sp(traj.model.clone(), Color::DarkGray)]));
+    }
+    header.push(blank());
     // Per-turn model/effort attribution: render only when the session saw
     // ≥2 distinct model ids (otherwise every row would repeat the same id
     // — noise, not signal). When ≥2, each turn that has a model shows it.
@@ -388,12 +430,12 @@ fn format_turn_cache(turn: &TrajectoryTurn) -> String {
     match (turn.cache_read, turn.tokens_in) {
         (Some(c), Some(tin)) if tin > 0 => {
             format!(
-                " · cached {} ({:.0}%)",
+                " · {} ({:.0}%) cache hit",
                 fmt_k(c as usize),
                 100.0 * c as f64 / tin as f64
             )
         }
-        (Some(c), _) if c > 0 => format!(" · cached {}", fmt_k(c as usize)),
+        (Some(c), _) if c > 0 => format!(" · {} cache hit", fmt_k(c as usize)),
         _ => String::new(),
     }
 }

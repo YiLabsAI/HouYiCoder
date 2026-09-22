@@ -209,7 +209,9 @@ pub fn assemble_model_input_with(
             | SessionEvent::SubagentSpawn { .. }
             | SessionEvent::SubagentReturn { .. }
             | SessionEvent::ChildDelegated { .. }
-            | SessionEvent::RunCompleted { .. } => {
+            | SessionEvent::RunCompleted { .. }
+            | SessionEvent::ModelStepTiming { .. }
+            | SessionEvent::ContextCleared { .. } => {
                 i += 1;
             }
         }

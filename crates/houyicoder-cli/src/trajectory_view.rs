@@ -20,7 +20,7 @@ use houyicoder_tui::view::trajectory_pane::{
 ///
 /// Borrowed from the event slice rather than owned: a tool input can be the
 /// whole payload the model sent (a write call carries the entire file body),
-/// and the index exists only for the length of one projection, so copying
+/// and the index exists only during view assembly, so copying
 /// them would duplicate the session's writes for no gain.
 type CallIndex<'a> = HashMap<&'a str, (&'a str, &'a serde_json::Value)>;
 
@@ -160,9 +160,8 @@ fn build_trajectory_event(
             ("summary", preview(text), None, Some(text.clone()), None, 0)
         }
         // Metadata / audit-only / streaming-delta: not a displayable event.
-        // TurnStarted is the turn boundary (the projection groups on it); it
-        // is not itself an event row. TurnUsage contributes tokens at the
-        // turn level (not an event row).
+        // TurnStarted is the turn boundary; it is not itself an event row.
+        // TurnUsage contributes tokens at the turn level.
         SessionEvent::TurnStarted { .. }
         | SessionEvent::TurnUsage { .. }
         | SessionEvent::TruncationVerdict { .. }
@@ -181,7 +180,9 @@ fn build_trajectory_event(
         | SessionEvent::SubagentReturn { .. }
         | SessionEvent::ChildDelegated { .. }
         | SessionEvent::RunCompleted { .. }
-        | SessionEvent::NotificationInjected { .. } => return None,
+        | SessionEvent::NotificationInjected { .. }
+        | SessionEvent::ModelStepTiming { .. }
+        | SessionEvent::ContextCleared { .. } => return None,
         SessionEvent::Unknown => return None,
     };
     Some(TrajectoryEvent {
@@ -209,7 +210,7 @@ fn build_trajectory_event(
 /// rule. start_ms is offset from the turn's TurnStarted.ts (or UserInput.ts in
 /// the legacy path), so a late iteration's bar sits at its real offset, not
 /// "tens of seconds after the user typed."
-/// Per-turn accumulator. Holds all the mutable state the projection loop
+/// Per-turn accumulator. Holds all the mutable state the assembly loop
 /// tracks for the current turn, so the loop body is a thin dispatch instead
 /// of 17 inline field updates. reset is called at every turn boundary;
 /// flush pushes the accumulated TrajectoryTurn + clears the event list.
@@ -335,12 +336,19 @@ impl TurnBuilder {
 
 /// Build the TrajectoryView header from the accumulated turns: session
 /// totals, model label (one id or "N models"), duration, failure count.
+struct TimingStats<'a> {
+    ttfts: &'a [u64],
+    decode_tokens: u64,
+    decode_ms: u64,
+}
+
 fn build_summary(
     turns: Vec<TrajectoryTurn>,
     total_tokens_in: u64,
     total_tokens_out: u64,
     total_failures: usize,
     model: &str,
+    timing: TimingStats<'_>,
 ) -> TrajectoryView {
     let any_unknown = turns.is_empty()
         || turns
@@ -359,6 +367,23 @@ fn build_summary(
         1 => distinct_models[0].to_string(),
         n => format!("{n} models"),
     };
+    let total_cache_read: u64 = turns.iter().filter_map(|t| t.cache_read).sum();
+    let (ttft_avg_ms, ttft_p95_ms, ttft_p99_ms) = if timing.ttfts.is_empty() {
+        (None, None, None)
+    } else {
+        let mut sorted = timing.ttfts.to_vec();
+        sorted.sort_unstable();
+        let avg = sorted.iter().sum::<u64>() / sorted.len() as u64;
+        let p95_idx = ((sorted.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
+        let p99_idx = ((sorted.len() as f64 * 0.99).ceil() as usize).saturating_sub(1);
+        (Some(avg), Some(sorted[p95_idx]), Some(sorted[p99_idx]))
+    };
+    let decode_tok_per_sec = if timing.decode_ms > 0 && timing.decode_tokens > 0 {
+        Some(timing.decode_tokens as f64 / (timing.decode_ms as f64 / 1000.0))
+    } else {
+        None
+    };
+    let rows = turns.into_iter().map(TrajectoryRow::Turn).collect();
     TrajectoryView {
         session_id: String::new(),
         model: header_model,
@@ -373,9 +398,43 @@ fn build_summary(
         } else {
             Some(total_tokens_out as usize)
         },
+        cache_read: if total_cache_read > 0 {
+            Some(total_cache_read)
+        } else {
+            None
+        },
         failures: total_failures,
         duration_secs,
-        rows: turns.into_iter().map(TrajectoryRow::Turn).collect(),
+        ttft_avg_ms,
+        ttft_p95_ms,
+        ttft_p99_ms,
+        decode_tok_per_sec,
+        rows,
+    }
+}
+
+struct AccTotals {
+    total_in: u64,
+    total_out: u64,
+    failures: usize,
+    ttfts: Vec<u64>,
+    decode_tokens: u64,
+    decode_ms: u64,
+}
+
+fn process_event_timing(ev: &SessionEvent, acc: &mut AccTotals) {
+    if let SessionEvent::ModelStepTiming {
+        ttft_ms,
+        decode_ms: d_ms,
+        ..
+    } = ev
+    {
+        if let Some(ttft) = ttft_ms {
+            acc.ttfts.push(*ttft);
+        }
+        if let Some(dec) = d_ms {
+            acc.decode_ms += *dec;
+        }
     }
 }
 
@@ -388,12 +447,18 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
     let mut builder = TurnBuilder::new();
     let mut pending_prompt = String::new();
     let mut n: usize = 0;
-    let mut total_tokens_in: u64 = 0;
-    let mut total_tokens_out: u64 = 0;
-    let mut total_failures: usize = 0;
+    let mut acc = AccTotals {
+        total_in: 0,
+        total_out: 0,
+        failures: 0,
+        ttfts: Vec::new(),
+        decode_tokens: 0,
+        decode_ms: 0,
+    };
     let calls = index_calls(events);
 
     for ev in events {
+        process_event_timing(&ev.event, &mut acc);
         match &ev.event {
             SessionEvent::UserInput { text } if !has_turn_started => {
                 if n > 0 {
@@ -413,8 +478,9 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
                 n = *turn as usize;
                 builder.reset(std::mem::take(&mut pending_prompt), ev.ts);
             }
-            SessionEvent::TurnUsage { .. } => {
-                builder.apply_usage(&ev.event, &mut total_tokens_in, &mut total_tokens_out);
+            SessionEvent::TurnUsage { output_tokens, .. } => {
+                acc.decode_tokens += *output_tokens;
+                builder.apply_usage(&ev.event, &mut acc.total_in, &mut acc.total_out);
             }
             SessionEvent::ToolCall { .. } => {
                 builder.tool_count += 1;
@@ -428,7 +494,7 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
                 builder.duration_ms += *duration_ms;
                 if result_failed(output, call_id, &calls) {
                     builder.tool_fail += 1;
-                    total_failures += 1;
+                    acc.failures += 1;
                 }
                 builder.push_event(ev, builder.offset(ev.ts), &calls);
             }
@@ -452,12 +518,18 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
     if n > 0 {
         builder.flush(&mut turns, n);
     }
+    let timing = TimingStats {
+        ttfts: &acc.ttfts,
+        decode_tokens: acc.decode_tokens,
+        decode_ms: acc.decode_ms,
+    };
     build_summary(
         turns,
-        total_tokens_in,
-        total_tokens_out,
-        total_failures,
+        acc.total_in,
+        acc.total_out,
+        acc.failures,
         model,
+        timing,
     )
 }
 

@@ -1,22 +1,9 @@
-//! The /export projection: derives the export JSON document from the durable
-//! SessionLogEntry stream. Sibling to trajectory_view — that module owns the
-//! /trajectory view projection, this one owns the /export document projection.
-//! Both read the same SessionLogTrajectory; the ExportLog impl lives here so
-//! trajectory_view stays under the file-size gate.
+//! Export view assembly: serializes the session export document from
+//! durable session log entries.
 //!
-//! The export document is the self-evolution data source: a machine-readable
-//! record of everything that happened in the session. Every field is derived
-//! from the durable event stream — the session log is the single source of
-//! truth, not the in-memory OL aggregator (which may be mid-turn + is not
-//! reachable from the TUI bridge). This makes the export stable across
-//! resume: the file reflects what the log recorded, not what a live
-//! accumulator cached.
-//!
-//! USD cost is intentionally absent: deriving it needs the pricing table,
-//! which the bridge does not hold (the OL owns pricing). Token totals are the
-//! durable truth + the cost layer's input; USD lands when the cost-summary
-//! save/restore path exposes pricing to the bridge. Per the
-//! unknown-must-be-None rule, the missing field is omitted rather than 0.
+//! Provides a structured, machine-readable record of turns, tool executions,
+//! token usage, checkpoints, and errors. The durable log is the authoritative
+//! source of truth across resume boundaries.
 
 use std::collections::BTreeMap;
 
@@ -27,7 +14,7 @@ use crate::trajectory_view::SessionLogTrajectory;
 
 /// One per-tool aggregate row: call count, failure count, total + max
 /// wall-clock latency. Failures are ToolResults whose output carries an
-/// error key (the bridge's existing success heuristic). Latency comes from
+/// error key. Latency comes from
 /// the inline duration_ms on ToolResult (0 when the host did not time the
 /// call — fallback or interrupted results).
 #[derive(Debug, serde::Serialize)]
@@ -178,8 +165,8 @@ fn first_prompt_slug(events: &[SessionLogEntry]) -> String {
 
 /// Project the durable event stream into the export document. Pure (no I/O,
 /// no session-log access) so it tests without a SessionLog: feed synthetic
-/// events, assert the aggregated fields. The bridge's export() wraps this +
-/// serializes + builds the filename.
+/// events, assert the aggregated fields. export() wraps this, serializes,
+/// and builds the filename.
 /// Per-tool call counts, failures, and latency. Two passes: the first
 /// establishes tool order + call counts; the second attributes fail +
 /// latency via the call_id-to-tool map.
@@ -336,6 +323,8 @@ fn collect_checkpoints_and_errors(
             | SessionEvent::ChildDelegated { .. }
             | SessionEvent::RunCompleted { .. }
             | SessionEvent::NotificationInjected { .. }
+            | SessionEvent::ModelStepTiming { .. }
+            | SessionEvent::ContextCleared { .. }
             | SessionEvent::Unknown => {}
         }
     }
@@ -345,7 +334,7 @@ fn collect_checkpoints_and_errors(
 /// Builder for the export document. Aggregates tool stats, token usage,
 /// checkpoints, and errors from the durable event stream into the
 /// self-evolution data artifact. Owns the trajectory Vec so no extra copy
-/// is needed at the seam.
+/// is needed.
 pub(crate) struct ExportDataBuilder<'a> {
     events: &'a [SessionLogEntry],
     session_id: &'a str,
@@ -404,8 +393,8 @@ impl ExportLog for SessionLogTrajectory {
 
 #[cfg(test)]
 mod tests {
-    //! The export projection is pure: feed synthetic events, assert the
-    //! aggregated fields. Pins per-tool attribution, usage totals + per-model,
+    //! Unit tests for export data assembly: feeds synthetic events and asserts
+    //! aggregated tool records, token usage, and session checkpoints.
     //! fault collection, checkpoint collection, the filename slug, and the
     //! empty-log edge. The record layer's TurnUsage/ToolResult/HookSignal
     //! work is invisible in the export without them.

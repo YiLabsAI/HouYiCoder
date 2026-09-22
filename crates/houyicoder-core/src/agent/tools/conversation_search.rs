@@ -260,7 +260,9 @@ fn transcript_item(event: &SessionLogEntry) -> Option<(&'static str, Cow<'_, str
         | SessionEvent::SubagentReturn { .. }
         | SessionEvent::ChildDelegated { .. }
         | SessionEvent::RunCompleted { .. }
-        | SessionEvent::NotificationInjected { .. } => return None,
+        | SessionEvent::NotificationInjected { .. }
+        | SessionEvent::ModelStepTiming { .. }
+        | SessionEvent::ContextCleared { .. } => return None,
     };
     if text.is_empty() {
         None

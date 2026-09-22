@@ -34,7 +34,7 @@ use houyicoder_tui::agent_message::SessionMessage;
 mod cleanup;
 #[cfg(unix)]
 mod detach;
-mod export_bridge;
+mod export_view;
 mod housekeeping;
 mod resume_bundle;
 mod session_lister_bridge;

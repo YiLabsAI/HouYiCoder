@@ -491,7 +491,9 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
         | SessionEvent::CacheBreak { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
-        | SessionEvent::ChildDelegated { .. } => return None,
+        | SessionEvent::ChildDelegated { .. }
+        | SessionEvent::ModelStepTiming { .. }
+        | SessionEvent::ContextCleared { .. } => return None,
         // TurnAborted is the user-visible boundary marker: map it as a
         // message chunk so the host renders the notice. The model-input
         // assembler skips it (the partial turn events are already there).
@@ -569,7 +571,9 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         | SessionEvent::CacheBreak { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
-        | SessionEvent::ChildDelegated { .. } => return None,
+        | SessionEvent::ChildDelegated { .. }
+        | SessionEvent::ModelStepTiming { .. }
+        | SessionEvent::ContextCleared { .. } => return None,
         SessionEvent::UserInput { .. }
         | SessionEvent::MemoryRecall { .. }
         | SessionEvent::SkillListing { .. }

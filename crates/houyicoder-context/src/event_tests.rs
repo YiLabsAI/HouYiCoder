@@ -433,3 +433,29 @@ fn test_verdict_preserves_raw_dialect() {
         panic!("expected TruncationVerdict");
     }
 }
+
+#[test]
+fn test_timing_and_clear_events() {
+    let s = SessionId::new();
+    let timing = SessionEvent::ModelStepTiming {
+        turn: 1,
+        step: 0,
+        total_ms: 1250,
+        ttft_ms: Some(350),
+        decode_ms: Some(900),
+    };
+    let e1 = event(s, EventId::new(), timing);
+    let json1 = serde_json::to_string(&e1).expect("serialize");
+    assert!(json1.contains("\"type\":\"ModelStepTiming\""));
+    assert!(json1.contains("\"ttft_ms\":350"));
+    let back1: SessionLogEntry = serde_json::from_str(&json1).expect("deserialize");
+    assert_eq!(back1, e1);
+
+    let cleared = SessionEvent::ContextCleared { prior_turn: 2 };
+    let e2 = event(s, EventId::new(), cleared);
+    let json2 = serde_json::to_string(&e2).expect("serialize");
+    assert!(json2.contains("\"type\":\"ContextCleared\""));
+    assert!(json2.contains("\"prior_turn\":2"));
+    let back2: SessionLogEntry = serde_json::from_str(&json2).expect("deserialize");
+    assert_eq!(back2, e2);
+}

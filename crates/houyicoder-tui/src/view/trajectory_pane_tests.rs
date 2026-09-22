@@ -6,8 +6,8 @@ use super::*;
 use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
-fn test_mock_has_turns_events() {
-    let t = mock_trajectory();
+fn test_sample_has_turns_events() {
+    let t = sample_trajectory();
     assert!(t.total_turns > 0 && t.failures > 0);
     assert!(
         t.rows
@@ -126,8 +126,13 @@ impl TrajectoryLog for StubLog {
             total_turns: 0,
             tokens_in: None,
             tokens_out: None,
+            cache_read: None,
             failures: 0,
             duration_secs: 0,
+            ttft_avg_ms: None,
+            ttft_p95_ms: None,
+            ttft_p99_ms: None,
+            decode_tok_per_sec: None,
             rows: Vec::new(),
         }
     }
@@ -241,8 +246,13 @@ fn test_level2_renders_projection_kinds() {
         total_turns: 1,
         tokens_in: Some(0),
         tokens_out: Some(0),
+        cache_read: None,
         failures: 0,
         duration_secs: 0,
+        ttft_avg_ms: None,
+        ttft_p95_ms: None,
+        ttft_p99_ms: None,
+        decode_tok_per_sec: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             user_input: "real kinds".into(),
@@ -295,8 +305,8 @@ fn test_level2_renders_projection_kinds() {
 /// Gantt-bar visual invariants on the mock trajectory at the turn-detail
 /// level: unicode block bars render (█), the selection glyph pins the
 /// focused row (▸), and the mock's content (a "cargo test" call) shows.
-/// The mock is the only data with non-zero duration_ms (hardcoded in
-/// mock_trajectory.rs); the real binary always wires a real SessionLog
+/// The sample is the only data with non-zero duration_ms (hardcoded in
+/// sample_trajectory.rs); the real binary always wires a real SessionLog
 /// whose fresh session has zero turns, so the bars are unreachable on the
 /// real-binary PTY path — this unit test holds the bar invariants where
 /// they are reachable, and dumps the rendered level to a temp file for
@@ -341,8 +351,13 @@ fn test_event_detail_redacts_secrets() {
         total_turns: 1,
         tokens_in: Some(0),
         tokens_out: Some(0),
+        cache_read: None,
         failures: 0,
         duration_secs: 0,
+        ttft_avg_ms: None,
+        ttft_p95_ms: None,
+        ttft_p99_ms: None,
+        decode_tok_per_sec: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             user_input: "show keys".into(),
@@ -450,8 +465,13 @@ fn test_thinking_tokens_render_nonzero() {
         total_turns: 1,
         tokens_in: Some(100),
         tokens_out: Some(50),
+        cache_read: None,
         failures: 0,
         duration_secs: 0,
+        ttft_avg_ms: None,
+        ttft_p95_ms: None,
+        ttft_p99_ms: None,
+        decode_tok_per_sec: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             user_input: "hi".into(),
@@ -489,8 +509,13 @@ fn test_thinking_tokens_hidden_zero() {
         total_turns: 1,
         tokens_in: Some(100),
         tokens_out: Some(50),
+        cache_read: None,
         failures: 0,
         duration_secs: 0,
+        ttft_avg_ms: None,
+        ttft_p95_ms: None,
+        ttft_p99_ms: None,
+        decode_tok_per_sec: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             user_input: "hi".into(),
@@ -531,8 +556,13 @@ fn test_per_turn_model_two() {
         total_turns: 2,
         tokens_in: Some(200),
         tokens_out: Some(100),
+        cache_read: None,
         failures: 0,
         duration_secs: 0,
+        ttft_avg_ms: None,
+        ttft_p95_ms: None,
+        ttft_p99_ms: None,
+        decode_tok_per_sec: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 n: 1,
@@ -591,8 +621,13 @@ fn test_per_turn_model_one() {
         total_turns: 2,
         tokens_in: Some(200),
         tokens_out: Some(100),
+        cache_read: None,
         failures: 0,
         duration_secs: 0,
+        ttft_avg_ms: None,
+        ttft_p95_ms: None,
+        ttft_p99_ms: None,
+        decode_tok_per_sec: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 n: 1,
@@ -652,8 +687,13 @@ fn test_session_reset_cached_ratio() {
         total_turns: 2,
         tokens_in: Some(200),
         tokens_out: Some(100),
+        cache_read: None,
         failures: 0,
         duration_secs: 0,
+        ttft_avg_ms: None,
+        ttft_p95_ms: None,
+        ttft_p99_ms: None,
+        decode_tok_per_sec: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 n: 2,
@@ -698,7 +738,7 @@ fn test_session_reset_cached_ratio() {
         .map(|s| s.content.as_ref())
         .collect();
     assert!(text.contains("Session Reset"), "reset line present: {text}");
-    assert!(text.contains("50% cached"), "cached ratio present: {text}");
+    assert!(text.contains("50% cache"), "cached ratio present: {text}");
 }
 
 /// A turn with a user input uses it as the title.
@@ -831,4 +871,58 @@ fn test_level1_navigates_events() {
     // Down advances through events
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.trajectory_cursor.get(), 1);
+}
+
+/// Latency timing spans and cache metrics in trajectory view render cleanly.
+#[test]
+fn test_timing_and_cache_render() {
+    let view = TrajectoryView {
+        session_id: "s1".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(1000),
+        tokens_out: Some(200),
+        cache_read: Some(500),
+        failures: 0,
+        duration_secs: 10,
+        ttft_avg_ms: Some(250),
+        ttft_p95_ms: Some(400),
+        ttft_p99_ms: Some(600),
+        decode_tok_per_sec: Some(45.2),
+        rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            n: 1,
+            user_input: "test".into(),
+            tokens_in: Some(1000),
+            tokens_out: Some(200),
+            cache_read: Some(500),
+            cache_write: None,
+            model: None,
+            effort: None,
+            reasoning_tokens: None,
+            tool_count: 0,
+            tool_fail: 0,
+            retries: 0,
+            duration_ms: 1000,
+            success: true,
+            events: vec![],
+        })],
+    };
+    let (header, body, _) = draw_turn_list(&view, 0, ratatui::layout::Rect::new(0, 0, 100, 25));
+    let head_text: String = header
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(head_text.contains("TTFT avg 0.2s"));
+    assert!(head_text.contains("p95 0.4s"));
+    assert!(head_text.contains("p99 0.6s"));
+    assert!(head_text.contains("decode 45.2 tok/s"));
+    assert!(head_text.contains("cache hit 50%"));
+
+    let body_text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(body_text.contains("50% cached"));
 }

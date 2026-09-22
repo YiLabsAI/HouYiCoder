@@ -166,7 +166,7 @@ _GET_PREFIX_BASELINE: frozenset[str] = frozenset({
 })
 _VAGUE_SUFFIX_RE = re.compile(r"(?:Info|Data|Wrapper|Manager|Helper|Util|Base)$")
 _VAGUE_SUFFIX_BASELINE: frozenset[str] = frozenset({
-    "crates/houyicoder-cli/src/export_bridge.rs:ExportData",
+    "crates/houyicoder-cli/src/export_view.rs:ExportData",
     "crates/houyicoder-permission/src/pipeline/mod.rs:ValidatorInfo",
     "crates/houyicoder-tui/src/evidence.rs:DiffData",
     "crates/houyicoder-tui/src/git_op.rs:PrInfo",

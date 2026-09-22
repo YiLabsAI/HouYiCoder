@@ -1,9 +1,5 @@
-//! The projection is pure: feed synthetic events, assert the grouped view.
-//! Pins: turn grouping on TurnStarted (NOT UserInput — a prompt spans N
-//! turns), token/tool aggregation, start_ms offset math, Option tokens
-//! for turns without TurnUsage, and the retry count (#75/#76 UI-layer
-//! regression guard — the record work is invisible in the pane without
-//! these tests).
+//! Tests for trajectory view assembly: verifies turn aggregation from session
+//! events, token and tool metrics, timing percentiles, and retry counts.
 
 use super::*;
 use houyicoder_context::{EventId, SessionLogEntry};
@@ -785,4 +781,67 @@ fn test_memory_recall_excluded() {
             ev.summary
         );
     }
+}
+
+/// Verify that ModelStepTiming events compute correct TTFT percentiles and decode speed.
+#[test]
+fn test_timing_percentiles_and_speed() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "calc".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 0,
+                input_tokens: 1000,
+                output_tokens: 250,
+                cache_read_input_tokens: 800,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 50,
+                model: "qwen".into(),
+                effort: None,
+                recovery: false,
+            },
+        ),
+        ev(
+            115,
+            SessionEvent::ModelStepTiming {
+                turn: 1,
+                step: 0,
+                total_ms: 1000,
+                ttft_ms: Some(200),
+                decode_ms: Some(800),
+            },
+        ),
+        ev(
+            120,
+            SessionEvent::ModelStepTiming {
+                turn: 1,
+                step: 1,
+                total_ms: 1500,
+                ttft_ms: Some(600),
+                decode_ms: Some(900),
+            },
+        ),
+    ];
+    let view = project(&events, "qwen");
+    assert_eq!(view.ttft_avg_ms, Some(400));
+    assert_eq!(view.ttft_p95_ms, Some(600));
+    assert_eq!(view.ttft_p99_ms, Some(600));
+    assert_eq!(view.cache_read, Some(800));
+    assert!(view.decode_tok_per_sec.is_some());
+    let tps = view.decode_tok_per_sec.unwrap();
+    assert!((tps - (250.0 / 1.7)).abs() < 0.1);
 }

@@ -67,6 +67,18 @@ fn test_every_kind_maps() {
         // Unknown lands on neither stream: a future binary's event type the
         // current binary does not recognize carries no mapping.
         (SessionEvent::Unknown, false, false),
+        (
+            SessionEvent::ModelStepTiming {
+                turn: 1,
+                step: 0,
+                total_ms: 100,
+                ttft_ms: None,
+                decode_ms: None,
+            },
+            false,
+            false,
+        ),
+        (SessionEvent::ContextCleared { prior_turn: 1 }, false, false),
     ];
     for (kind, expects_update, expects_acpx) in cases {
         assert_eq!(
@@ -371,4 +383,18 @@ fn test_skill_rule_scoped() {
         Outcome::Allow,
         "different skill: the per-skill rule does not blanket-match"
     );
+}
+
+#[test]
+fn test_timing_cleared_name() {
+    let t = SessionEvent::ModelStepTiming {
+        turn: 1,
+        step: 0,
+        total_ms: 100,
+        ttft_ms: None,
+        decode_ms: None,
+    };
+    assert_eq!(event_name(&t), "timing");
+    let c = SessionEvent::ContextCleared { prior_turn: 1 };
+    assert_eq!(event_name(&c), "cleared");
 }
