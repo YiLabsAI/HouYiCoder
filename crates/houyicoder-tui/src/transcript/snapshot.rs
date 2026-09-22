@@ -1,7 +1,8 @@
-//! The transcript-snapshot seam: a loader backed by the durable session
-//! log, mirroring the trajectory-data bridge. The TUI owns the contract
-//! (this trait); the cli bridge owns the session-log access and the
-//! projection. The TUI never touches the log file or the event types.
+//! The transcript-snapshot port: a loader the durable session log
+//! implements, as the trajectory view does for timeline data. The TUI owns
+//! the contract (this trait); the CLI implementation owns the session-log
+//! access and the projection. The TUI never touches the log file or the
+//! event types.
 //!
 //! Distinct from the deleted SearchLog: that was a searcher (ran the
 //! query on the disk side, which caused index!=render drift). This is a
@@ -61,7 +62,7 @@ pub struct IndexProgress {
 }
 
 /// A loader (not a searcher) backed by the durable session log. The TUI
-/// decides the threshold and degrade from log_size; the bridge only
+/// decides the threshold and degrade from log_size; the implementation only
 /// produces bytes/events and projects them. Search stays in the TUI on the
 /// rendered projection, so synthesized text is never missed.
 ///

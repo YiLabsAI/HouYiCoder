@@ -16,16 +16,16 @@ impl App {
             self.system_line("resume: not connected");
             return;
         }
-        // Connected but the session-history bridge is not installed: a
-        // capability gap, not a disconnect.
-        let Some(lister) = self.session_lister.clone() else {
+        // Connected but the session catalog is not installed: a capability
+        // gap, not a disconnect.
+        let Some(catalog) = self.session_catalog.clone() else {
             self.system_line("resume: session history unavailable");
             return;
         };
         let current_sid = self.session_id.0.clone();
         match arg {
             None => {
-                let rows = lister.list_sessions(&current_sid);
+                let rows = catalog.sessions(&current_sid);
                 if rows.is_empty() {
                     self.system_line("resume: no other sessions on disk");
                     return;
@@ -40,8 +40,8 @@ impl App {
                 let visible = self.resume_picker.rows.len().min(20);
                 for i in 0..visible {
                     if !self.resume_picker.resolved.contains(&i) {
-                        let lister = self.session_lister.clone().unwrap();
-                        lister.resolve_detail(&mut self.resume_picker.rows[i]);
+                        let catalog = self.session_catalog.clone().unwrap();
+                        catalog.resolve_detail(&mut self.resume_picker.rows[i]);
                         self.resume_picker.resolved.insert(i);
                     }
                 }
@@ -57,9 +57,9 @@ impl App {
                 // unnamed sessions), then find a match. Slower than the
                 // picker open path, but this is an explicit name search,
                 // not a list display.
-                let mut rows = lister.list_sessions(&current_sid);
+                let mut rows = catalog.sessions(&current_sid);
                 for row in &mut rows {
-                    lister.resolve_detail(row);
+                    catalog.resolve_detail(row);
                 }
                 let sid = rows
                     .into_iter()
@@ -126,17 +126,17 @@ mod tests {
         })
     }
 
-    struct EmptyLister;
-    impl crate::resume_picker::SessionLister for EmptyLister {
-        fn list_sessions(&self, _current: &str) -> Vec<SessionRow> {
+    struct EmptyCatalog;
+    impl crate::resume_picker::SessionCatalog for EmptyCatalog {
+        fn sessions(&self, _current: &str) -> Vec<SessionRow> {
             Vec::new()
         }
         fn resolve_detail(&self, _row: &mut SessionRow) {}
     }
 
-    struct TwoRowLister;
-    impl crate::resume_picker::SessionLister for TwoRowLister {
-        fn list_sessions(&self, _current: &str) -> Vec<SessionRow> {
+    struct TwoRowCatalog;
+    impl crate::resume_picker::SessionCatalog for TwoRowCatalog {
+        fn sessions(&self, _current: &str) -> Vec<SessionRow> {
             vec![
                 SessionRow {
                     sid_str: "aaaa1111".into(),
@@ -173,10 +173,10 @@ mod tests {
         );
     }
 
-    /// A connected app without the session-history bridge reports the
-    /// capability gap, not a disconnect.
+    /// A connected app without the session catalog reports the capability
+    /// gap, not a disconnect.
     #[test]
-    fn test_resume_lister_gap() {
+    fn test_resume_catalog_gap() {
         let mut app = crate::test_harness::connected_app();
         app.run_resume(None);
         assert!(!app.resume_picker.open);
@@ -184,7 +184,7 @@ mod tests {
             last_line(&app)
                 .expect("a system line lands")
                 .contains("resume: session history unavailable"),
-            "connected /resume without the bridge reports the capability gap"
+            "connected /resume without the catalog reports the capability gap"
         );
     }
 
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn test_empty_store_reports_none() {
         let mut app = crate::test_harness::connected_app();
-        app.session_lister = Some(Arc::new(EmptyLister));
+        app.session_catalog = Some(Arc::new(EmptyCatalog));
         app.run_resume(None);
         assert!(!app.resume_picker.open);
         assert!(app.pending_resume_target.is_none());
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_opens_pane_with_rows() {
         let mut app = crate::test_harness::connected_app();
-        app.session_lister = Some(Arc::new(TwoRowLister));
+        app.session_catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(None);
         assert!(app.resume_picker.open);
         assert_eq!(app.resume_picker.rows.len(), 2);
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn test_matches_sid_directly() {
         let mut app = crate::test_harness::connected_app();
-        app.session_lister = Some(Arc::new(TwoRowLister));
+        app.session_catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("aaaa1111"));
         assert_eq!(app.pending_resume_target.as_deref(), Some("aaaa1111"));
         assert!(!app.quit, "in-process swap does not quit");
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn test_matches_title_substring() {
         let mut app = crate::test_harness::connected_app();
-        app.session_lister = Some(Arc::new(TwoRowLister));
+        app.session_catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("LOGIN"));
         assert_eq!(app.pending_resume_target.as_deref(), Some("aaaa1111"));
     }
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn test_no_match_reports_error() {
         let mut app = crate::test_harness::connected_app();
-        app.session_lister = Some(Arc::new(TwoRowLister));
+        app.session_catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("zzz"));
         assert!(app.pending_resume_target.is_none());
         assert!(!app.quit);
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_busy_run_defers_resume() {
         let mut app = crate::composition::app();
-        app.session_lister = Some(Arc::new(TwoRowLister));
+        app.session_catalog = Some(Arc::new(TwoRowCatalog));
         app.start_run_for_test(0);
         app.screen = crate::state::Screen::Working;
         // /resume <sid> mid-run -> enqueued as a Command, not executed.
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn test_busy_bare_opens_picker() {
         let mut app = crate::test_harness::connected_app();
-        app.session_lister = Some(Arc::new(TwoRowLister));
+        app.session_catalog = Some(Arc::new(TwoRowCatalog));
         app.start_run_for_test(0);
         app.screen = crate::state::Screen::Working;
         app.input.set("/resume".to_string());

@@ -157,7 +157,7 @@ fn test_rewind_pops_last_stage() {
 
 #[test]
 fn test_resume_reports_no_store() {
-    // Without a session lister, resume reports that the store is unavailable.
+    // Without a session catalog, resume reports that the store is unavailable.
     let mut app = working();
     app.run_command(SlashCommand::Resume);
     let out = render(&app);
@@ -168,7 +168,7 @@ fn test_resume_reports_no_store() {
     );
     assert!(
         !app.resume_picker.open,
-        "picker must not open without a lister"
+        "picker must not open without a catalog"
     );
 }
 

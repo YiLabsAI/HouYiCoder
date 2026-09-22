@@ -229,8 +229,8 @@ impl App {
 
     /// /tips + /debug live in the debug submodule.
     /// /export [path]: serialize the durable session trajectory + tool stats +
-    /// usage + checkpoints + errors to a JSON file. The bridge builds the
-    /// document + a suggested filename from the event stream; an explicit
+    /// usage + checkpoints + errors to a JSON file. The implementation builds
+    /// the document + a suggested filename from the event stream; an explicit
     /// path overrides the suggestion, otherwise the suggestion lands in the
     /// cwd. Writes are atomic + 0o600 (owner-only) so a half-written export
     /// never appears + the real tool I/O / reasoning inside stays
@@ -242,7 +242,7 @@ impl App {
             self.system_line("export: not connected");
             return;
         }
-        // Connected but the export bridge is not installed: a capability gap,
+        // Connected but the export source is not installed: a capability gap,
         // not a disconnect.
         let Some(log) = self.export_log.as_ref() else {
             self.system_line("export: unavailable in this session");

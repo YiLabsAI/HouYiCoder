@@ -82,7 +82,7 @@ pub(crate) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolReg
         trajectory_log: None,
         export_log: None,
         snapshot: None,
-        session_lister: None,
+        session_catalog: None,
         skip_login: false,
         startup_warnings,
         history_path: std::env::temp_dir().join("houyi-history-rc-test.jsonl"),
@@ -255,12 +255,12 @@ fn test_guarded_tool_auto_raises() {
 /// approves and asserts the inner tool ran and no approval-required error was
 /// fed back as a result.
 ///
-/// Was red before the execute_authorized bridge landed (a one-shot Yes sent an
+/// Was red before execute_authorized landed (a one-shot Yes sent an
 /// approve decision but apply_decisions called plain execute, whose gate
 /// re-check still saw Ask and returned the tool-requires-approval error, so
 /// the tool never ran). Now green via execute_authorized, which honors the
 /// human Yes (Ask proceeds) while a Deny still blocks. Keep this as the
-/// regression gate for that bridge.
+/// regression gate for that path.
 #[test]
 fn test_approve_yes_executes_tool() {
     let (mut app, boom) = app_with_guarded_tool(

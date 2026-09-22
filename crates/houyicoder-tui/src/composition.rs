@@ -19,6 +19,7 @@ use crate::evidence::{
     PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
 use crate::palette::PaletteState;
+use crate::resume_picker::SessionCatalog;
 use crate::review_queue::ReviewQueue;
 use crate::scroll::{SearchState, TranscriptScroll};
 use crate::selection::Selection;
@@ -26,6 +27,9 @@ use crate::session::SessionConnection;
 use crate::state::{
     App, Pane, PermissionInput, PermissionTab, Screen, SpecContext, Stage, StatusStub, ViewportMode,
 };
+use crate::transcript::snapshot::TranscriptSnapshot;
+use crate::view::export_log::ExportLog;
+use crate::view::trajectory_pane::TrajectoryLog;
 use houyicoder_client::Client;
 #[cfg(test)]
 use houyicoder_core::SessionId;
@@ -34,7 +38,6 @@ use houyicoder_core::agent::Runner;
 #[cfg(test)]
 use houyicoder_permission::DefaultModeGate;
 use ratatui::layout::Rect;
-#[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
@@ -64,14 +67,14 @@ pub struct RunnerBundle {
     /// The resolved model name, for the status bar display. The composition
     /// root resolves this; the TUI never calls the config layer itself.
     pub model: String,
-    /// Injected TrajectoryLog bridge; None falls back to the mock trajectory.
-    pub trajectory_log: Option<std::sync::Arc<dyn crate::view::trajectory_pane::TrajectoryLog>>,
-    /// Injected ExportLog bridge; None makes /export report unavailable in this session.
-    pub export_log: Option<std::sync::Arc<dyn crate::view::export_log::ExportLog>>,
-    /// Injected snapshot bridge (loads the durable log for the search view); None falls back to the in-memory vec.
-    pub snapshot: Option<std::sync::Arc<dyn crate::transcript::snapshot::TranscriptSnapshot>>,
-    /// The session-listing bridge for the /resume picker. None in stub/test.
-    pub session_lister: Option<std::sync::Arc<dyn crate::resume_picker::SessionLister>>,
+    /// Injected trajectory source; None falls back to the mock trajectory.
+    pub trajectory_log: Option<Arc<dyn TrajectoryLog>>,
+    /// Injected export source; None makes /export report unavailable in this session.
+    pub export_log: Option<Arc<dyn ExportLog>>,
+    /// Injected session-log snapshot for the search view; None falls back to the in-memory vec.
+    pub snapshot: Option<Arc<dyn TranscriptSnapshot>>,
+    /// The session catalog for the /resume picker. None in stub/test.
+    pub session_catalog: Option<Arc<dyn SessionCatalog>>,
     pub skip_login: bool,
     /// Startup warnings (bad settings fields, network-policy typos) the host
     /// pushes as initial transcript system lines. Drained from the runner at
@@ -128,7 +131,7 @@ pub fn build_app(bundle: RunnerBundle) -> App {
         trajectory_log,
         export_log,
         snapshot,
-        session_lister,
+        session_catalog,
         skip_login,
         startup_warnings,
         history_path,
@@ -159,7 +162,7 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     app.trajectory_log = trajectory_log;
     app.export_log = export_log;
     app.snapshot = snapshot;
-    app.session_lister = session_lister;
+    app.session_catalog = session_catalog;
     // Push the drained startup warnings as initial system lines BEFORE any run
     // output — synchronous so they land first + do not race with command
     // results (the async-sink path flaked timing tests; this is deterministic).
@@ -345,7 +348,7 @@ pub fn build_app_for_test(project: Option<String>) -> App {
         trajectory_log: None,
         export_log: None,
         snapshot: None,
-        session_lister: None,
+        session_catalog: None,
         skip_login: false,
         startup_warnings,
         history_path: std::env::temp_dir().join(format!(

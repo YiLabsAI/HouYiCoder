@@ -37,10 +37,10 @@ mod detach;
 mod export_view;
 mod housekeeping;
 mod resume_bundle;
-mod session_lister_bridge;
+mod session_catalog;
 mod session_lock;
+mod session_log_snapshot;
 mod trajectory_view;
-mod transcript_snapshot_bridge;
 
 /// Parsed CLI invocation. Each variant maps to one entry path the binary
 /// dispatches on. Parsing is pure (no I/O, no process exit) so the full
@@ -328,7 +328,7 @@ fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn std::err
         trajectory_log: None,
         export_log: None,
         snapshot: None,
-        session_lister: None,
+        session_catalog: None,
         skip_login: false,
         startup_warnings: Vec::new(),
         history_path: houyicoder_config::config_home().join("history.jsonl"),
@@ -577,11 +577,11 @@ fn build_bundle_for_resume(
 }
 
 /// Shared TUI wiring: install the agent event handlers, pair the in-memory
-/// server and client, build the trajectory, export, and snapshot bridges
-/// over the SessionLog, and assemble the RunnerBundle the TUI drives. Both
-/// the fresh path (build_bundle) and the resume path
-/// (build_bundle_for_resume) route through here so the bridge wiring
-/// cannot drift between them.
+/// server and client, build the trajectory view, the export view, and the
+/// session-log snapshot over the SessionLog, and assemble the RunnerBundle
+/// the TUI drives. Both the fresh path (build_bundle) and the resume path
+/// (build_bundle_for_resume) route through here so the wiring cannot drift
+/// between them.
 #[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
 pub(crate) fn assemble_bundle(
     runner: Runner,
@@ -595,29 +595,28 @@ pub(crate) fn assemble_bundle(
     bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 ) -> houyicoder_tui::composition::RunnerBundle {
     // Grab the SessionLog BEFORE the runner moves into the server task — the
-    // trajectory bridge projects it for the /trajectory pane, and the session
+    // trajectory view projects it for the /trajectory pane, and the session
     // picker reads other sessions' log heads to derive their titles.
     let session_log = runner.store();
-    let bridge_session_id = session;
     // The descriptor reader for the session picker (lists sessions + reads each
     // name/cwd/model). Built at the same sid-keyed sessions root the file
     // backend uses.
     let descriptor_store: std::sync::Arc<dyn houyicoder_context::SessionDescriptorStore> =
         houyicoder_service::composition::disk_descriptor_store();
-    // The snapshot bridge loads the durable log into a TranscriptLine
+    // The session-log snapshot loads the durable log into a TranscriptLine
     // snapshot for the search view (read-whole path under the threshold).
-    // Shares the same SessionLog as the trajectory/export bridges (an Arc
-    // clone, so the trajectory bridge still takes ownership of its slot).
+    // Shares the same SessionLog as the trajectory and export views (an Arc
+    // clone, so each view still takes ownership of its slot).
     let snapshot: Option<
         std::sync::Arc<dyn houyicoder_tui::transcript::snapshot::TranscriptSnapshot>,
     > = Some(std::sync::Arc::new(
-        transcript_snapshot_bridge::SessionLogSnapshot::new(session_log.clone(), bridge_session_id),
+        session_log_snapshot::SessionLogSnapshot::new(session_log.clone(), session),
     ));
     // One object backs both the /trajectory view + the /export serializer:
     // both read the same durable event stream.
     let trajectory = std::sync::Arc::new(trajectory_view::SessionLogTrajectory::new(
         session_log.clone(),
-        bridge_session_id,
+        session,
         model.clone(),
     ));
     let trajectory_log: Option<
@@ -648,8 +647,8 @@ pub(crate) fn assemble_bundle(
         trajectory_log,
         export_log,
         snapshot,
-        session_lister: Some(std::sync::Arc::new(
-            session_lister_bridge::SessionListerBridge::new(
+        session_catalog: Some(std::sync::Arc::new(
+            session_catalog::DescriptorSessionCatalog::new(
                 session_log,
                 houyicoder_service::composition::session_log_root(),
             ),

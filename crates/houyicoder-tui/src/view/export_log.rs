@@ -14,15 +14,15 @@
 use std::io;
 use std::path::Path;
 
-/// The serialized export document + a suggested default filename. The bridge
-/// builds both from the durable event stream (started_at + first-prompt slug
-/// drive the filename); the command handler honors an explicit path argument
-/// or falls back to the suggestion.
+/// The serialized export document + a suggested default filename. The
+/// implementation builds both from the durable event stream (started_at +
+/// first-prompt slug drive the filename); the command handler honors an
+/// explicit path argument or falls back to the suggestion.
 pub struct ExportPayload {
     /// Suggested filename (no directory): timestamp + first-prompt slug + .json.
     pub filename: String,
-    /// Pretty-printed JSON document. Serialized at the bridge so the TUI stays
-    /// free of the export data shape (the bridge owns the projection).
+    /// Pretty-printed JSON document. Serialized by the implementation so the
+    /// TUI stays free of the export data shape (it owns the projection).
     pub json: String,
 }
 

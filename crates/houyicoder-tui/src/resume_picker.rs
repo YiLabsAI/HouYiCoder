@@ -2,8 +2,8 @@
 //! slash-palette shape (open + sel + query + filtered + prev/next +
 //! push/pop) so the picker renders in the same inline cell the palette
 //! uses, but over a dynamic session list. The list itself is loaded by the
-//! CLI bridge (SessionLister), which reads the descriptor store + each
-//! session log head; the TUI stays a presentation layer and never names
+//! CLI session catalog (SessionCatalog), which reads the descriptor store +
+//! each session log head; the TUI stays a presentation layer and never names
 //! the storage traits directly (the dep-graph layering).
 
 /// One row in the picker. The sid is NOT shown (the design density
@@ -27,7 +27,7 @@ pub struct SessionRow {
 }
 
 /// The picker overlay state. The rows field is loaded once when the picker
-/// opens (via the SessionLister bridge); the query narrows the loaded rows
+/// opens (via the session catalog); the query narrows the loaded rows
 /// client-side. Selection wraps the filtered list.
 #[derive(Debug, Clone, Default)]
 pub struct SessionPickerState {
@@ -44,19 +44,19 @@ pub struct SessionPickerState {
     pub seen_titles: std::collections::HashSet<String>,
 }
 
-/// The storage-facing trait the CLI bridge implements: list the resumable
-/// sessions (with a derived title each) excluding the current one. The TUI
-/// names this trait, the CLI provides it over the descriptor store + the
-/// SessionLog, so the TUI never imports the storage traits (dep-graph
-/// layering). Returns rows newest-updated first.
+/// The storage-facing trait the CLI implements: the resumable sessions (with
+/// a derived title each) excluding the current one, plus the lazy detail
+/// resolution. The TUI names this trait, the CLI provides it over the
+/// descriptor store + the SessionLog, so the TUI never imports the storage
+/// traits (dep-graph layering). Returns rows newest-updated first.
 ///
-/// Two-phase progressive loading: list_sessions walks the store once and
-/// reads a descriptor only where a row could take a visible slot, so the picker
+/// Two-phase progressive loading: sessions walks the store once and reads a
+/// descriptor only where a row could take a visible slot, so the picker
 /// opens after that one walk and never per frame; rows arrive sorted by real
 /// last activity. resolve_detail fills in the expensive field (title from a
 /// log-head read + serde parse) lazily for visible rows, a few per frame.
-pub trait SessionLister: Send + Sync {
-    fn list_sessions(&self, current_sid: &str) -> Vec<SessionRow>;
+pub trait SessionCatalog: Send + Sync {
+    fn sessions(&self, current_sid: &str) -> Vec<SessionRow>;
     fn resolve_detail(&self, row: &mut SessionRow);
 }
 
@@ -129,7 +129,7 @@ impl SessionPickerState {
         self.resolved.clear();
         self.seen_titles.clear();
         // Seed the dedup set from the cheap titles already on the rows
-        // (descriptor names + unique placeholders). list_sessions already
+        // (descriptor names + unique placeholders). sessions already
         // deduped by these, so each is unique here; seeding lets the lazy
         // slug-dedup suppress unnamed rows whose resolved slug collides
         // with a named session too.

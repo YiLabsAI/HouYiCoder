@@ -149,7 +149,7 @@ impl TranscriptScroll {
     /// Page up by one viewport. Breaks follow-tail and pins the offset. A
     /// no-op (keeping follow-tail) when the transcript fits one viewport or
     /// less — otherwise a wheel on a short session would pin offset 0 and
-    /// surface a ghost "jump to bottom" pill while the view is already at
+    /// surface a ghost jump-to-bottom label while the view is already at
     /// the bottom.
     pub fn page_up(&mut self, total_rows: usize) {
         let cap = self.effective_cap();

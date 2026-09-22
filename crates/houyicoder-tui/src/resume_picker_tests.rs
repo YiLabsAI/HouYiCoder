@@ -8,7 +8,7 @@ use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     // Picker flows drive run_resume, which needs a live session (the
-    // disconnected branch refuses before the lister logic).
+    // disconnected branch refuses before the catalog logic).
     crate::test_harness::connected_app()
 }
 
@@ -16,27 +16,27 @@ fn render(app: &crate::state::App) -> String {
     render_text(app, 100, 28)
 }
 
-/// A stub SessionLister: returns canned rows so the picker state + render +
+/// A stub SessionCatalog: returns canned rows so the picker state + render +
 /// /resume switch can be exercised without a real disk store (the real
-/// lister is the CLI bridge, covered by a bin unit test + a PTY test).
-struct StubLister(Vec<crate::resume_picker::SessionRow>);
+/// catalog is the CLI implementation, covered by a bin unit test + a PTY test).
+struct StubCatalog(Vec<crate::resume_picker::SessionRow>);
 
-impl crate::resume_picker::SessionLister for StubLister {
-    fn list_sessions(&self, _current_sid: &str) -> Vec<crate::resume_picker::SessionRow> {
+impl crate::resume_picker::SessionCatalog for StubCatalog {
+    fn sessions(&self, _current_sid: &str) -> Vec<crate::resume_picker::SessionRow> {
         self.0.clone()
     }
 
     // The stub rows already carry full titles + last_active (canned data), so
-    // progressive detail resolution is a no-op here. The real bridge's
+    // progressive detail resolution is a no-op here. The real catalog's
     // resolve_detail reads the log head + mtime; that path is covered by the
-    // bridge's own tests, not here.
+    // catalog's own tests, not here.
     fn resolve_detail(&self, _row: &mut crate::resume_picker::SessionRow) {}
 }
 
-fn stub_lister_app() -> crate::state::App {
+fn stub_catalog_app() -> crate::state::App {
     use crate::resume_picker::SessionRow;
     let mut app = working();
-    app.session_lister = Some(std::sync::Arc::new(StubLister(vec![
+    app.session_catalog = Some(std::sync::Arc::new(StubCatalog(vec![
         SessionRow {
             sid_str: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
             title: "login flow rework".into(),
@@ -55,13 +55,13 @@ fn stub_lister_app() -> crate::state::App {
     app
 }
 
-/// /resume (no arg) with a lister opens the picker + the render shows the
+/// /resume (no arg) with a catalog opens the picker + the render shows the
 /// rows (title + cwd basename, no sid).
 #[test]
-fn test_resume_opens_picker_lister() {
-    let mut app = stub_lister_app();
+fn test_resume_opens_picker_catalog() {
+    let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
-    assert!(app.resume_picker.open, "picker must open with a lister");
+    assert!(app.resume_picker.open, "picker must open with a catalog");
     let out = render(&app);
     println!("--- /resume picker ---\n{out}\n--- end ---");
     assert!(
@@ -90,7 +90,7 @@ fn test_resume_opens_picker_lister() {
 /// the event loop swaps the session in-process via resume_builder).
 #[test]
 fn test_resume_name_switches_directly() {
-    let mut app = stub_lister_app();
+    let mut app = stub_catalog_app();
     app.run_tui_local_command("resume login flow");
     assert!(
         !app.resume_picker.open,
@@ -107,7 +107,7 @@ fn test_resume_name_switches_directly() {
 /// Typing in the open picker narrows the list by sid OR title.
 #[test]
 fn test_resume_picker_filters_query() {
-    let mut app = stub_lister_app();
+    let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     app.resume_picker.push('s');
     app.resume_picker.push('e');
@@ -128,7 +128,7 @@ fn test_resume_picker_filters_query() {
 #[test]
 fn test_keys_navigate_select_close() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    let mut app = stub_lister_app();
+    let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     assert!(app.resume_picker.open);
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -155,7 +155,7 @@ fn test_keys_navigate_select_close() {
 #[test]
 fn test_picker_backspace_pops_closes() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    let mut app = stub_lister_app();
+    let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     // Type then backspace: pops the char.
     app.resume_picker.push('s');
@@ -185,7 +185,7 @@ fn test_picker_backspace_pops_closes() {
 #[test]
 fn test_picker_enter_fall_back() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    let mut app = stub_lister_app();
+    let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     // Type a query matching neither row's sid nor title.
     for c in "zzz-no-match".chars() {
@@ -206,7 +206,7 @@ fn test_picker_enter_fall_back() {
 #[test]
 fn test_char_keys_reach_push() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    let mut app = stub_lister_app();
+    let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     crate::app::handle_key(
         &mut app,
@@ -227,7 +227,7 @@ fn test_char_keys_reach_push() {
 #[test]
 fn test_resume_picker_empty_list() {
     let mut app = working();
-    app.session_lister = Some(std::sync::Arc::new(StubLister(vec![])));
+    app.session_catalog = Some(std::sync::Arc::new(StubCatalog(vec![])));
     app.run_command(SlashCommand::Resume);
     assert!(!app.resume_picker.open, "picker must not open on empty");
     assert!(app.pending_resume_target.is_none(), "no sid on empty");

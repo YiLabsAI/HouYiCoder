@@ -100,7 +100,7 @@ fn live_app_with_tools(manual: bool) -> houyicoder_tui::state::App {
         trajectory_log: None,
         export_log: None,
         snapshot: None,
-        session_lister: None,
+        session_catalog: None,
         skip_login: false,
         startup_warnings: Vec::new(),
         history_path: std::env::temp_dir().join("houyi-history-live-test.jsonl"),

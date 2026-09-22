@@ -3,15 +3,15 @@
 //! frame, so opening /resume never waits on the expensive per-row reads.
 //! Split out of run_control_tests.rs on size grounds.
 use crate::composition;
-use crate::resume_picker::{SessionLister, SessionRow};
+use crate::resume_picker::{SessionCatalog, SessionRow};
 use crate::state::Pane;
 use std::sync::Arc;
 
-/// A lister whose resolve_detail prepends "resolved-" to the title so the
-/// test can count touched rows. list_sessions returns N unresolved rows.
-struct ResolvingLister(usize);
-impl SessionLister for ResolvingLister {
-    fn list_sessions(&self, _current: &str) -> Vec<SessionRow> {
+/// A catalog whose resolve_detail prepends "resolved-" to the title so the
+/// test can count touched rows. sessions returns N unresolved rows.
+struct ResolvingCatalog(usize);
+impl SessionCatalog for ResolvingCatalog {
+    fn sessions(&self, _current: &str) -> Vec<SessionRow> {
         (0..self.0)
             .map(|i| SessionRow {
                 sid_str: format!("sid{i}"),
@@ -35,9 +35,9 @@ impl SessionLister for ResolvingLister {
 #[test]
 fn test_poll_resolves_rows_progressively() {
     let mut app = composition::app();
-    app.session_lister = Some(Arc::new(ResolvingLister(5)));
+    app.session_catalog = Some(Arc::new(ResolvingCatalog(5)));
     // Open the picker + load rows (same path as /resume with no arg).
-    app.resume_picker.rows = app.session_lister.clone().unwrap().list_sessions("");
+    app.resume_picker.rows = app.session_catalog.clone().unwrap().sessions("");
     app.resume_picker.open();
     app.pane = Pane::Resume;
     assert!(app.resume_picker.resolved.is_empty());
@@ -71,15 +71,15 @@ fn test_poll_resolves_rows_progressively() {
     assert_eq!(app.resume_picker.resolved.len(), 5);
 }
 
-/// A closed picker never resolves rows even with a lister wired (the open
+/// A closed picker never resolves rows even with a catalog wired (the open
 /// guard short-circuits the whole block). Guards a regression where the
 /// per-frame resolver ran unconditionally and burned I/O on every idle tick.
 #[test]
 fn test_poll_skips_resolution_closed() {
     let mut app = composition::app();
-    app.session_lister = Some(Arc::new(ResolvingLister(1)));
+    app.session_catalog = Some(Arc::new(ResolvingCatalog(1)));
     // Rows loaded but picker NOT open (e.g. closed by Esc, rows not cleared).
-    app.resume_picker.rows = app.session_lister.clone().unwrap().list_sessions("");
+    app.resume_picker.rows = app.session_catalog.clone().unwrap().sessions("");
     assert!(!app.resume_picker.open);
     app.poll_agent();
     assert!(
@@ -104,9 +104,9 @@ fn test_poll_dedups_dup_titles() {
     /// ("dup-title") — equivalent to re-running the same first prompt. The
     /// newer row (index 0, sorted first) stays; the older row (index 1)
     /// hides after it resolves.
-    struct DupLister;
-    impl SessionLister for DupLister {
-        fn list_sessions(&self, _current: &str) -> Vec<SessionRow> {
+    struct DupCatalog;
+    impl SessionCatalog for DupCatalog {
+        fn sessions(&self, _current: &str) -> Vec<SessionRow> {
             vec![
                 SessionRow {
                     sid_str: "newer".into(),
@@ -131,8 +131,8 @@ fn test_poll_dedups_dup_titles() {
     }
 
     let mut app = composition::app();
-    app.session_lister = Some(Arc::new(DupLister));
-    app.resume_picker.rows = app.session_lister.clone().unwrap().list_sessions("");
+    app.session_catalog = Some(Arc::new(DupCatalog));
+    app.resume_picker.rows = app.session_catalog.clone().unwrap().sessions("");
     app.resume_picker.open();
     app.pane = Pane::Resume;
     // Both rows resolve in a single poll (2 rows < 3/frame cap). The newer

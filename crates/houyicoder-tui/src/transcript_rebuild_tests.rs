@@ -164,7 +164,7 @@ fn test_slash_echo_survives_rebuild() {
 #[test]
 fn test_submission_echo_one_row() {
     let mut app = fresh_app();
-    app.screen = crate::state::Screen::Working;
+    app.screen = Screen::Working;
     app.input.set("hi".to_string());
     app.submit_input();
     app.rebuild_after_frame_edit();
@@ -720,7 +720,7 @@ fn compaction_frame() -> TranscriptFrame {
 #[test]
 fn test_log_notice_single_row() {
     let mut app = fresh_app();
-    app.screen = crate::state::Screen::Working;
+    app.screen = Screen::Working;
     pump(&mut app, user_msg("go"));
     pump(&mut app, compaction_frame());
     pump(&mut app, agent_msg("ok"));
@@ -772,7 +772,7 @@ fn test_system_row_leaves_window() {
 #[test]
 fn test_notice_undrawn_after_window() {
     let mut app = fresh_app();
-    app.screen = crate::state::Screen::Working;
+    app.screen = Screen::Working;
     app.system_line("debug: logging to /tmp/houyi.log");
     let drawn = crate::test_harness::render_text(&app, 80, 40);
     assert!(
@@ -830,7 +830,7 @@ fn test_echo_row_leaves_window() {
 #[test]
 fn test_system_row_keeps_place() {
     let mut app = fresh_app();
-    app.screen = crate::state::Screen::Working;
+    app.screen = Screen::Working;
     pump(&mut app, user_msg("msg 0"));
     app.system_line("model set to haiku");
     pump(&mut app, user_msg("msg 1"));
@@ -872,7 +872,7 @@ fn test_system_row_keeps_place() {
 fn test_trim_skips_scrollaway() {
     use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
     let mut app = fresh_app();
-    app.screen = crate::state::Screen::Working;
+    app.screen = Screen::Working;
     // Follow the tail: direct pushes trim down to the cap.
     for _ in 0..(VIEWABLE_SCROLLBACK_CAP + 5) {
         app.push_transcript_line(TranscriptLine::Agent("tail line".into()));
@@ -904,7 +904,7 @@ fn test_trim_skips_scrollaway() {
 fn test_trim_shifts_boundary() {
     use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
     let mut app = fresh_app();
-    app.screen = crate::state::Screen::Working;
+    app.screen = Screen::Working;
     // A turn boundary with a real prefix: 100 user messages, then an agent
     // frame, rebuild sets line_index to the prefix length (100).
     for i in 0..100 {

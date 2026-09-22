@@ -67,7 +67,7 @@ mod export_command_tests;
 #[cfg(test)]
 mod frame_timing;
 #[cfg(test)]
-mod jump_pill_tests;
+mod jump_to_bottom_tests;
 #[cfg(test)]
 mod memory_pane_tests;
 #[cfg(test)]

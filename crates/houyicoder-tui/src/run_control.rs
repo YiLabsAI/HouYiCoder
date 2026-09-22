@@ -447,7 +447,7 @@ impl App {
         self.apply_frames(batch);
         // Resolve a bounded number of resume rows per poll.
         if self.resume_picker.open
-            && let Some(lister) = self.session_lister.as_ref()
+            && let Some(catalog) = self.session_catalog.as_ref()
         {
             let mut resolved_count = 0;
             for i in 0..self.resume_picker.rows.len() {
@@ -455,7 +455,7 @@ impl App {
                     break;
                 }
                 if !self.resume_picker.resolved.contains(&i) {
-                    lister.resolve_detail(&mut self.resume_picker.rows[i]);
+                    catalog.resolve_detail(&mut self.resume_picker.rows[i]);
                     self.resume_picker.resolved.insert(i);
                     resolved_count += 1;
                     // Newest rows resolve first, so duplicate titles hide older rows.

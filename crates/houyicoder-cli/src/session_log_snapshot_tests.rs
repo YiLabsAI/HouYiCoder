@@ -1,20 +1,20 @@
-//! Pins for the snapshot bridge: the durable log projected through the same
-//! mapping the live push uses, the byte-window reads on a real backend, and
-//! the offset index. The acceptance guarantees (render parity, multibyte
+//! Pins for the session-log snapshot: the durable log projected through the
+//! same mapping the live push uses, the byte-window reads on a real backend,
+//! and the offset index. The acceptance guarantees (render parity, multibyte
 //! safety, bounded window and index, a row surviving a window that starts
-//! mid-turn) live here; the bridge module carries the seam itself.
+//! mid-turn) live here, not in the module that implements the port.
 
 use super::*;
 use houyicoder_context::{EventId, SessionEvent};
 use houyicoder_tui::records::TranscriptLine;
 
-fn ev(kind: SessionEvent) -> SessionLogEntry {
+fn ev(event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
         prev_hash: None,
-        event: kind,
+        event,
     }
 }
 
@@ -417,13 +417,13 @@ fn bridge_with_log(
     (snap, session, root)
 }
 
-fn ev_session(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
+fn ev_session(session: SessionId, id: EventId, event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
         id,
         session,
         ts: 0,
         prev_hash: None,
-        event: kind,
+        event,
     }
 }
 

@@ -61,7 +61,7 @@ pub fn app() -> App {
         trajectory_log: None,
         export_log: None,
         snapshot: None,
-        session_lister: None,
+        session_catalog: None,
         resume_picker: SessionPickerState::default(),
         pending_resume_target: None,
         palette: PaletteState::default(),

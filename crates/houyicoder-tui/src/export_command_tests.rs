@@ -82,9 +82,9 @@ fn test_export_disconnected() {
 }
 
 #[test]
-fn test_export_lister_gap() {
+fn test_export_source_gap() {
     let mut app = crate::test_harness::connected_app();
-    // Connected, but the export bridge is not installed — a capability gap,
+    // Connected, but the export source is not installed — a capability gap,
     // not a disconnect.
     app.run_export(None);
     let line = last_system_line(&app).expect("a system line lands");

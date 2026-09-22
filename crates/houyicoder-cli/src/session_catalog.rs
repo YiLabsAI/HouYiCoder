@@ -1,19 +1,19 @@
-//! Adapt durable session descriptors and logs to the TUI session picker.
+//! Adapt durable session descriptors and logs to the TUI SessionCatalog port.
 
 use std::sync::Arc;
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::session_class::{LOG_FILE, recent_user_sessions};
 use houyicoder_context::{SessionDescriptorStore, SessionEvent, SessionId, SessionLogEntry};
-use houyicoder_tui::resume_picker::{SessionLister, SessionRow};
+use houyicoder_tui::resume_picker::{SessionCatalog, SessionRow};
 
-pub struct SessionListerBridge {
+pub struct DescriptorSessionCatalog {
     descriptor_store: Arc<dyn SessionDescriptorStore>,
     session_log: Arc<dyn SessionLog>,
     sessions_root: std::path::PathBuf,
 }
 
-impl SessionListerBridge {
+impl DescriptorSessionCatalog {
     /// Build both session readers from the same root.
     pub fn new(session_log: Arc<dyn SessionLog>, sessions_root: std::path::PathBuf) -> Self {
         let descriptor_store =
@@ -26,8 +26,8 @@ impl SessionListerBridge {
     }
 }
 
-impl SessionLister for SessionListerBridge {
-    fn list_sessions(&self, current_sid: &str) -> Vec<SessionRow> {
+impl SessionCatalog for DescriptorSessionCatalog {
+    fn sessions(&self, current_sid: &str) -> Vec<SessionRow> {
         let current = SessionId::from_display_string(current_sid).unwrap_or_default();
         // The listing already holds the user's own resumable sessions, ranked
         // by last-active, so this only applies the visible limit.
@@ -174,7 +174,7 @@ mod tests {
     fn temp_root() -> std::path::PathBuf {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!("lister-bridge-{}-{n}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("session-catalog-{}-{n}", std::process::id()));
         let _r = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
@@ -194,7 +194,7 @@ mod tests {
     }
 
     /// Write a descriptor for a session at the root (real disk, one truth
-    /// source with the bridge's sessions_root).
+    /// source with the catalog's sessions_root).
     fn write_descriptor(root: &std::path::Path, sid: SessionId, m: &SessionDescriptor) {
         let store = FileDescriptorStore::new(root.to_path_buf());
         store.write_descriptor(sid, m).unwrap();
@@ -239,7 +239,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bridge_lists_derives_titles() {
+    async fn test_catalog_lists_derives_titles() {
         let root = temp_root();
         let cur = SessionId::new();
         let older = SessionId::new();
@@ -260,8 +260,8 @@ mod tests {
         age(&root.join(older.to_string()).join("log.jsonl"), 100);
         age(&root.join(newer.to_string()).join("log.jsonl"), 200);
         let log: Arc<dyn SessionLog> = Arc::new(store);
-        let bridge = SessionListerBridge::new(log, root.clone());
-        let mut rows = bridge.list_sessions(&cur.to_string());
+        let catalog = DescriptorSessionCatalog::new(log, root.clone());
+        let mut rows = catalog.sessions(&cur.to_string());
         assert_eq!(rows.len(), 2, "current session excluded: {rows:?}");
         assert_eq!(
             rows[0].sid_str,
@@ -270,7 +270,7 @@ mod tests {
         );
         assert!(
             rows[0].title.starts_with("(session) "),
-            "list_sessions returns a placeholder, not the slug: {}",
+            "sessions returns a placeholder, not the slug: {}",
             rows[0].title
         );
         assert_eq!(
@@ -283,12 +283,12 @@ mod tests {
             "descriptor name is the cheap title (no log read)"
         );
         assert_eq!(rows[1].cwd_basename, "b");
-        bridge.resolve_detail(&mut rows[0]);
+        catalog.resolve_detail(&mut rows[0]);
         assert_eq!(
             rows[0].title, "hello-world-prompt",
             "resolve_detail fills the first-prompt slug"
         );
-        bridge.resolve_detail(&mut rows[1]);
+        catalog.resolve_detail(&mut rows[1]);
         assert_eq!(
             rows[1].title, "named session",
             "resolve_detail leaves a descriptor name untouched"
@@ -313,10 +313,10 @@ mod tests {
         .await;
         age(&root.join(sid.to_string()).join("log.jsonl"), 100);
         let log: Arc<dyn SessionLog> = Arc::new(store);
-        let bridge = SessionListerBridge::new(log, root.clone());
-        let mut rows = bridge.list_sessions(&SessionId::new().to_string());
+        let catalog = DescriptorSessionCatalog::new(log, root.clone());
+        let mut rows = catalog.sessions(&SessionId::new().to_string());
         assert_eq!(rows.len(), 1);
-        bridge.resolve_detail(&mut rows[0]);
+        catalog.resolve_detail(&mut rows[0]);
         let title = &rows[0].title;
         assert!(
             title.ends_with('\u{2026}'),
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bridge_placeholder_no_prompt() {
+    async fn test_catalog_placeholder_no_prompt() {
         let root = temp_root();
         let sid = SessionId::new();
         write_descriptor(&root, sid, &descriptor(None, "/repo", 1));
@@ -345,8 +345,8 @@ mod tests {
         // placeholder, the property under test.
         append_log(&store, sid, "").await;
         let log: Arc<dyn SessionLog> = Arc::new(store);
-        let bridge = SessionListerBridge::new(log, root.clone());
-        let mut rows = bridge.list_sessions(&SessionId::new().to_string());
+        let catalog = DescriptorSessionCatalog::new(log, root.clone());
+        let mut rows = catalog.sessions(&SessionId::new().to_string());
         assert_eq!(rows.len(), 1);
         assert!(
             rows[0].title.starts_with("(session) "),
@@ -358,7 +358,7 @@ mod tests {
             "the suffix must add distinguishing info: {}",
             rows[0].title
         );
-        bridge.resolve_detail(&mut rows[0]);
+        catalog.resolve_detail(&mut rows[0]);
         assert!(
             rows[0].title.starts_with("(session) "),
             "placeholder survives resolve_detail when no prompt exists: {}",
@@ -368,7 +368,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bridge_dedup_by_title() {
+    async fn test_catalog_dedup_by_title() {
         let root = temp_root();
         let a = SessionId::new();
         let b = SessionId::new();
@@ -387,8 +387,8 @@ mod tests {
         age(&root.join(b.to_string()).join("log.jsonl"), 300);
         age(&root.join(c.to_string()).join("log.jsonl"), 200);
         let log: Arc<dyn SessionLog> = Arc::new(store);
-        let bridge = SessionListerBridge::new(log, root.clone());
-        let rows = bridge.list_sessions(&SessionId::new().to_string());
+        let catalog = DescriptorSessionCatalog::new(log, root.clone());
+        let rows = catalog.sessions(&SessionId::new().to_string());
         assert_eq!(rows.len(), 2, "dedup drops one of the shared-title pair");
         assert!(
             rows.iter().any(|r| r.sid_str == a.to_string()),
@@ -410,7 +410,7 @@ mod tests {
     /// nothing and the row disappears. The listing carries the scanned
     /// directory and the descriptor, so the row renders either way.
     #[tokio::test]
-    async fn test_bridge_reads_legacy_name() {
+    async fn test_catalog_reads_legacy_name() {
         const LEGACY: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
         let root = temp_root();
         let dir = root.join(LEGACY);
@@ -443,8 +443,8 @@ mod tests {
 
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
         let log: Arc<dyn SessionLog> = Arc::new(store);
-        let bridge = SessionListerBridge::new(log, root.clone());
-        let rows = bridge.list_sessions(&SessionId::new().to_string());
+        let catalog = DescriptorSessionCatalog::new(log, root.clone());
+        let rows = catalog.sessions(&SessionId::new().to_string());
         assert_eq!(rows.len(), 1, "a legacy-named session is still a row");
         assert_eq!(rows[0].sid_str, sid.to_string());
         assert_eq!(rows[0].title, "legacy session");

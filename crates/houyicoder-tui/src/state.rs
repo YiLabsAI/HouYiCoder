@@ -36,7 +36,7 @@ use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
 use crate::records::{TeammateView, ToolOutcome};
 use crate::render_cache::RenderCache;
-use crate::resume_picker::{SessionLister, SessionPickerState};
+use crate::resume_picker::{SessionCatalog, SessionPickerState};
 use crate::review_queue::ReviewQueue;
 use crate::run_state::{RunProgress, RunState};
 use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
@@ -217,7 +217,7 @@ pub struct App {
     /// Optional export seam. The composition root injects an impl that reads
     /// the durable session log and serializes the full trajectory, tool
     /// stats, usage, checkpoints, and errors to a JSON document. None when
-    /// the export bridge is not installed; /export then reports the reason
+    /// the export source is not installed; /export then reports the reason
     /// (disconnected, or unavailable in this session).
     pub export_log: Option<Arc<dyn ExportLog>>,
     /// Optional transcript-snapshot seam. The composition root injects an
@@ -226,9 +226,9 @@ pub struct App {
     /// the threshold). None in stub or unwired modes, where the search
     /// view falls back to the in-memory transcript vec.
     pub snapshot: Option<Arc<dyn TranscriptSnapshot>>,
-    /// The session-listing bridge for the /resume picker (lists resumable
-    /// sessions with derived titles). None in stub/test bundles.
-    pub session_lister: Option<Arc<dyn SessionLister>>,
+    /// The session catalog for the /resume picker (resumable sessions with
+    /// derived titles). None in stub/test bundles.
+    pub session_catalog: Option<Arc<dyn SessionCatalog>>,
     /// The session picker overlay state (opened by /resume with no arg).
     pub resume_picker: SessionPickerState,
     /// A pending resume request set when the user picks a session in the

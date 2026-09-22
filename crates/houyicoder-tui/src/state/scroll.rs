@@ -22,7 +22,7 @@ impl App {
 
     /// Page the transcript down by one viewport (newer rows). A step that
     /// crosses to the tail trims the live transcript and clears the
-    /// scroll-away snapshot so the cap stays aligned and the new-message pill
+    /// scroll-away snapshot so the cap stays aligned and the new-message label
     /// dismisses.
     pub fn scroll_transcript_down(&mut self) {
         let total = self.transcript_display_rows();
@@ -38,7 +38,7 @@ impl App {
     /// scroll-away snapshot so the next scroll-back starts a fresh "new
     /// messages" count (an on-repin clears the unseen divider), and trims the
     /// live transcript so the cap holds at the tail. Called by the
-    /// jump-to-bottom pill click, a new user submission, End, Ctrl+End, and
+    /// jump-to-bottom label click, a new user submission, End, Ctrl+End, and
     /// PageDown-to-bottom.
     pub fn scroll_transcript_follow_tail(&mut self) {
         self.transcript_scroll.follow_tail();
@@ -251,7 +251,7 @@ mod tests {
         ));
     }
 
-    /// An empty transcript anchors Local(0) so the pill reads zero rather
+    /// An empty transcript anchors Local(0) so the label reads zero rather
     /// than wrapping past the end.
     #[test]
     fn test_tail_cursor_empty() {

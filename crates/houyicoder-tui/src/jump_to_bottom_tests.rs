@@ -23,7 +23,7 @@ fn agent_msg(text: &str) -> TranscriptFrame {
     )))
 }
 
-/// A tool-only frame (no adjacent agent text) — must not tick the pill count.
+/// A tool-only frame (no adjacent agent text) — must not tick the turn count.
 fn tool_call_frame(id: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::ToolCall(
         ToolCall::new(id, "grep").status(ToolCallStatus::InProgress),
@@ -40,8 +40,8 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
 }
 
 /// Fill the transcript with more than one viewport of system lines, render,
-/// scroll back one line-step, and re-render so the pill rect is published.
-fn app_scrolled_back() -> crate::state::App {
+/// scroll back one line-step, and re-render so the label rect is published.
+fn app_scrolled_back() -> App {
     let mut app = composition::app();
     app.screen = Screen::Working;
     for i in 0..50 {
@@ -237,10 +237,10 @@ fn test_label_side_falls_through() {
 }
 
 /// A scroll-up on a transcript that fits one viewport or less must not break
-/// follow-tail (max_top == 0 guard), so no ghost pill appears while the view
+/// follow-tail (max_top == 0 guard), so no ghost label appears while the view
 /// is already at the bottom.
 #[test]
-fn test_short_no_pill() {
+fn test_short_transcript_no_label() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.system_line("only one line");

@@ -1,9 +1,8 @@
-//! The transcript-snapshot bridge: an impl of the TUI's TranscriptSnapshot
-//! seam backed by the runner's SessionLog. The search view reads the durable
-//! session log via the backend's sync read, maps each event to the frames the
-//! live stream carries, and flattens them through the same
-//! transcript_from_frames the live render uses, so scrolling through history
-//! shows the turns the live view showed.
+//! The session-log implementation of the TUI's TranscriptSnapshot port: the
+//! search view reads the durable session log via the backend's sync read,
+//! maps each event to the frames the live stream carries, and flattens them
+//! through the same transcript_from_frames the live render uses, so scrolling
+//! through history shows the turns the live view showed.
 //!
 //! The mappings are the service layer's map_session_update and
 //! map_acpx_notification, the same two the live push uses. A local copy would
@@ -70,9 +69,9 @@ struct OffsetIndex {
     next_from: Option<u64>,
 }
 
-/// The TranscriptSnapshot bridge: holds the runner's SessionLog + the
-/// session id + the lazy offset index. log_size + load + window + index
-/// all read through the backend's sync path.
+/// The session-log implementation of the TranscriptSnapshot port: holds the
+/// runner's SessionLog + the session id + the lazy offset index. log_size +
+/// load + window + index all read through the backend's sync path.
 pub struct SessionLogSnapshot {
     pub(crate) session_log: Arc<dyn SessionLog>,
     pub(crate) session_id: SessionId,
@@ -360,5 +359,5 @@ impl TranscriptSnapshot for SessionLogSnapshot {
 }
 
 #[cfg(test)]
-#[path = "transcript_snapshot_bridge_tests.rs"]
+#[path = "session_log_snapshot_tests.rs"]
 mod tests;
