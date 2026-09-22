@@ -142,7 +142,7 @@ impl TrajectoryLog for StubLog {
                 tool_ms: 0,
             },
             hidden_turns: 0,
-            delegated: None,
+            subagent_usage: None,
             rows: Vec::new(),
         }
     }
@@ -263,7 +263,7 @@ fn test_level2_renders_projection_kinds() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -376,7 +376,7 @@ fn test_event_detail_redacts_secrets() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -493,7 +493,7 @@ fn test_thinking_tokens_render_nonzero() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -537,7 +537,7 @@ fn test_thinking_tokens_hidden_zero() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -584,7 +584,7 @@ fn test_per_turn_model_two() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 boundary_before: None,
@@ -650,7 +650,7 @@ fn test_per_turn_model_one() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 boundary_before: None,
@@ -717,7 +717,7 @@ fn test_turn_row_cached_ratio() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 boundary_before: None,
@@ -940,7 +940,7 @@ fn test_timing_and_cache_render() {
             tool_ms: 0,
         },
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -1053,7 +1053,7 @@ fn test_detail_shows_model_facts() {
             tool_ms: 0,
         },
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             boundary_before: None,
@@ -1112,7 +1112,7 @@ fn test_timeline_shows_record_names() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             boundary_before: None,
@@ -1202,7 +1202,7 @@ fn test_turn_list_boundary() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(turn)],
     };
     let (_, body, _, sel_line) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 120, 20));
@@ -1255,7 +1255,7 @@ fn test_turn_list_column_align() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(mk(1, "short", Some(1))),
             TrajectoryRow::Turn(mk(2, "a much longer title that is cut", Some(1_200))),
@@ -1314,7 +1314,7 @@ fn test_turn_detail_latency_split() {
             tool_ms: 0,
         },
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             boundary_before: None,
@@ -1384,7 +1384,7 @@ fn test_turn_list_degrades() {
         cache_read: Some(2_000),
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(turn(12, "宽的标题会让列错位", "qwen3.7-max")),
             TrajectoryRow::Turn(turn(13, "ascii title", "glm-5.2")),
@@ -1452,7 +1452,7 @@ fn test_turn_list_glyph_aligns() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
-        delegated: None,
+        subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(turn(1, "宽的标题")),
             TrajectoryRow::Turn(turn(2, "ascii")),
@@ -1476,5 +1476,73 @@ fn test_turn_list_glyph_aligns() {
         col_of_tokens(&body[0]),
         col_of_tokens(&body[1]),
         "the token column sits at one display column on both rows"
+    );
+}
+
+/// A model switch and a compaction each draw their own separator above the turn
+/// they precede, so a latency or cache shift across models is explainable.
+#[test]
+fn test_turn_list_other_boundaries() {
+    let mk = |n: usize, boundary: TurnBoundary| TrajectoryTurn {
+        n,
+        boundary_before: Some(boundary),
+        user_input: format!("turn {n}"),
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: Some(0),
+        cache_write: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
+        reasoning_tokens: None,
+        tool_count: 0,
+        tool_fail: 0,
+        retries: 0,
+        duration_ms: 100,
+        success: true,
+        records: vec![],
+    };
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "2 models".into(),
+        total_turns: 2,
+        tokens_in: Some(20),
+        tokens_out: Some(10),
+        failures: 0,
+        duration_secs: 0,
+        cache_read: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: None,
+        rows: vec![
+            TrajectoryRow::Turn(mk(
+                1,
+                TurnBoundary::ModelSwitch(Box::new(ModelSwitchBoundary {
+                    from: "qwen".into(),
+                    to: "deepseek".into(),
+                    at_secs: 0,
+                })),
+            )),
+            TrajectoryRow::Turn(mk(
+                2,
+                TurnBoundary::Compacted(Box::new(CompactedBoundary {
+                    checkpoint_id: "ck-1".into(),
+                    at_secs: 0,
+                })),
+            )),
+        ],
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("model qwen → deepseek"),
+        "the model switch is named: {text}"
+    );
+    assert!(
+        text.contains("context compacted (checkpoint ck-1)"),
+        "the compaction names its checkpoint: {text}"
     );
 }

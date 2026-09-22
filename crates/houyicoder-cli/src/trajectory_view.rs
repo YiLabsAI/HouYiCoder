@@ -15,9 +15,9 @@ use houyicoder_tui::records::ToolOutcome;
 mod turns;
 
 use houyicoder_tui::view::trajectory_pane::{
-    DelegatedUsage, EventTiming, EventUsage, RecordOutcome, SessionTiming, TrajectoryLog,
-    TrajectoryRecord, TrajectoryRecordKind, TrajectoryRow, TrajectoryTurn, TrajectoryView,
-    TurnBoundary,
+    CompactedBoundary, EventTiming, EventUsage, ModelSwitchBoundary, RecordOutcome, SessionTiming,
+    SubagentUsage, TrajectoryLog, TrajectoryRecord, TrajectoryRecordKind, TrajectoryRow,
+    TrajectoryTurn, TrajectoryView, TurnBoundary,
 };
 
 /// Which tool a call id invoked, and with what input, so a later ToolResult
@@ -133,10 +133,22 @@ fn build_summary(
     model: &str,
     hidden_turns: usize,
 ) -> TrajectoryView {
-    // Every turn the session ran must have reported usage for the totals to be
-    // complete. A page cannot answer that, so the check reads the whole-log
-    // count of usage events against the whole-log count of turns.
-    let any_unknown = acc.usage_events == 0 || acc.usage_events < acc.turns;
+    // The session's economic account is what the whole session spent: the
+    // parent's own calls plus every delegated child's. A child that reported no
+    // usage leaves the total unknown rather than understated.
+    let subagent_usage = (acc.subagent_calls > 0).then_some(SubagentUsage {
+        calls: acc.subagent_calls,
+        input: acc.subagent_input,
+        output: acc.subagent_output,
+        cache_read: acc.subagent_cache_read,
+    });
+    let subagent_unknown =
+        subagent_usage.is_some_and(|d| d.input == 0 && d.output == 0 && d.cache_read == 0);
+    // The totals are known when every turn reported usage, or when delegated
+    // work accounted for the turns that did not. Otherwise they are unknown.
+    let subagent_covered = acc.subagent_calls > 0;
+    let any_unknown = (acc.usage_events == 0 || acc.usage_events < acc.turns) && !subagent_covered
+        || subagent_unknown;
     let total_turns = turns.len() + hidden_turns;
     let duration_secs = acc.duration_ms / 1000;
     let distinct_models: Vec<&str> = turns
@@ -150,7 +162,7 @@ fn build_summary(
         1 => distinct_models[0].to_string(),
         n => format!("{n} models"),
     };
-    let total_cache_read = acc.cache_read;
+    let total_cache_read = acc.cache_read + acc.subagent_cache_read;
     let (ttft_avg_ms, ttft_p95_ms, ttft_p99_ms) = if acc.ttfts.is_empty() {
         (None, None, None)
     } else {
@@ -185,12 +197,12 @@ fn build_summary(
         tokens_in: if any_unknown {
             None
         } else {
-            Some(acc.total_in as usize)
+            Some((acc.total_in + acc.subagent_input) as usize)
         },
         tokens_out: if any_unknown {
             None
         } else {
-            Some(acc.total_out as usize)
+            Some((acc.total_out + acc.subagent_output) as usize)
         },
         cache_read: if total_cache_read > 0 {
             Some(total_cache_read)
@@ -201,12 +213,7 @@ fn build_summary(
         duration_secs,
         timing: session_timing,
         hidden_turns,
-        delegated: (acc.delegated_calls > 0).then_some(DelegatedUsage {
-            calls: acc.delegated_calls,
-            input: acc.delegated_input,
-            output: acc.delegated_output,
-            cache_read: acc.delegated_cache_read,
-        }),
+        subagent_usage,
         rows,
     }
 }
@@ -229,10 +236,10 @@ struct AccTotals {
     /// Whole-log counts, so a completeness check cannot be fooled by the page.
     usage_events: usize,
     turns: usize,
-    delegated_calls: usize,
-    delegated_input: u64,
-    delegated_output: u64,
-    delegated_cache_read: u64,
+    subagent_calls: usize,
+    subagent_input: u64,
+    subagent_output: u64,
+    subagent_cache_read: u64,
 }
 
 /// Fold one timing event into the session's latency samples. Tool durations are
@@ -275,9 +282,17 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str, max_turns: usize)
     let calls = index_calls(window);
     let spawned = spawned_call_ids(window);
     let mut pending: Option<TurnBoundary> = None;
+    let mut last_model: Option<String> = None;
 
     for ev in window {
-        if turns::apply_turn_boundary(&mut builder, ev, &mut turn_rows, &mut n, &mut pending) {
+        if turns::apply_turn_boundary(
+            &mut builder,
+            ev,
+            &mut turn_rows,
+            &mut n,
+            &mut pending,
+            &mut last_model,
+        ) {
             continue;
         }
         turns::apply_turn_content(&mut builder, ev, &calls, &spawned);
@@ -325,10 +340,10 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
                 cache_read_input_tokens,
                 ..
             } => {
-                acc.delegated_calls += 1;
-                acc.delegated_input += *input_tokens;
-                acc.delegated_output += *output_tokens;
-                acc.delegated_cache_read += *cache_read_input_tokens;
+                acc.subagent_calls += 1;
+                acc.subagent_input += *input_tokens;
+                acc.subagent_output += *output_tokens;
+                acc.subagent_cache_read += *cache_read_input_tokens;
             }
             SessionEvent::ToolResult {
                 output,

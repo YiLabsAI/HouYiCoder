@@ -112,6 +112,19 @@ fn test_agent_merges_spawn_return() {
     assert_eq!(agents[0].name.as_deref(), Some("explore"));
     assert_eq!(agents[0].duration_ms, 790, "spans spawn to return");
     assert_eq!(agents[0].outcome, RecordOutcome::Ok);
+    let usage = agents[0]
+        .usage
+        .expect("child usage is attached to the record for L2 display");
+    assert_eq!(usage.input, Some(18000));
+    assert_eq!(usage.output, Some(400));
+    assert_eq!(usage.cache_read, Some(17000));
+    assert_eq!(
+        turn.tokens_in,
+        Some(18000),
+        "turn row tokens fold the child usage too"
+    );
+    assert_eq!(turn.tokens_out, Some(400));
+    assert_eq!(turn.cache_read, Some(17000));
     assert!(
         agents[0]
             .output

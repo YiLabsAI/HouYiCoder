@@ -47,7 +47,7 @@ fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut St
     // above: those come from the parent's own provider calls, and adding the
     // children would make this number disagree with the runner's cumulative
     // usage. The row says so, so the reader knows how to combine them.
-    if let Some(delegated) = view.delegated {
+    if let Some(delegated) = view.subagent_usage {
         // A child that returned before reporting usage leaves every field at
         // zero; that is an unmeasured cost, not a free one, so the row says so
         // instead of printing zeroes.

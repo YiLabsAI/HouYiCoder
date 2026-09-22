@@ -181,7 +181,7 @@ use usage::render_usage;
 mod tests {
     use super::*;
     use crate::view::trajectory_pane::{
-        DelegatedUsage, SessionTiming, TrajectoryLog, TrajectoryView,
+        SessionTiming, SubagentUsage, TrajectoryLog, TrajectoryView,
     };
 
     /// The sub-tab header renders Status / Config / Usage, with the active one
@@ -459,7 +459,7 @@ mod tests {
                 tool_ms: 28_400,
             },
             hidden_turns: 0,
-            delegated: None,
+            subagent_usage: None,
             rows: Vec::new(),
         };
         let mut app = crate::test_harness::working_app();
@@ -505,7 +505,7 @@ mod tests {
             duration_secs: 0,
             timing: SessionTiming::default(),
             hidden_turns: 0,
-            delegated: None,
+            subagent_usage: None,
             rows: Vec::new(),
         })));
         let s = render_usage(&app);
@@ -536,7 +536,7 @@ mod tests {
             duration_secs: 1,
             timing: SessionTiming::default(),
             hidden_turns: 0,
-            delegated: Some(DelegatedUsage {
+            subagent_usage: Some(SubagentUsage {
                 calls: 2,
                 input: 812_000,
                 output: 41_000,
@@ -576,7 +576,7 @@ mod tests {
             duration_secs: 1,
             timing: SessionTiming::default(),
             hidden_turns: 0,
-            delegated: None,
+            subagent_usage: None,
             rows: Vec::new(),
         })));
         let s = render_usage(&app);
@@ -605,7 +605,7 @@ mod tests {
             duration_secs: 1,
             timing: SessionTiming::default(),
             hidden_turns: 0,
-            delegated: Some(DelegatedUsage {
+            subagent_usage: Some(SubagentUsage {
                 calls: 1,
                 input: 0,
                 output: 0,

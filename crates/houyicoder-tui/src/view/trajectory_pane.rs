@@ -110,12 +110,31 @@ impl RecordOutcome {
 }
 
 /// A durable boundary recorded between two turns.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TurnBoundary {
     /// The user cleared the conversation context before this turn. prior_turn
     /// is the model-call count at the clear; at_secs is the durable event's
     /// timestamp, so the pane can say when it happened.
     ContextCleared { prior_turn: u32, at_secs: u64 },
+    /// The model changed between this turn and the previous one.
+    ModelSwitch(Box<ModelSwitchBoundary>),
+    /// A compaction occurred before this turn.
+    Compacted(Box<CompactedBoundary>),
+}
+
+/// Facts for a model-switch boundary between turns.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ModelSwitchBoundary {
+    pub from: String,
+    pub to: String,
+    pub at_secs: u64,
+}
+
+/// Facts for a compaction boundary between turns.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CompactedBoundary {
+    pub checkpoint_id: String,
+    pub at_secs: u64,
 }
 
 #[derive(Clone)]
@@ -253,14 +272,14 @@ impl SessionTiming {
 /// it as its own row so the user can see how much of the cost the children
 /// added.
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
-pub struct DelegatedUsage {
+pub struct SubagentUsage {
     pub calls: usize,
     pub input: u64,
     pub output: u64,
     pub cache_read: u64,
 }
 
-impl DelegatedUsage {
+impl SubagentUsage {
     /// The share of the delegated input that came from cache, when any input
     /// was reported at all.
     pub fn cache_hit_pct(&self) -> Option<f64> {
@@ -287,7 +306,7 @@ pub struct TrajectoryView {
     /// history exists and has not been read yet.
     pub hidden_turns: usize,
     /// What delegated sub-agents spent, when the session delegated any work.
-    pub delegated: Option<DelegatedUsage>,
+    pub subagent_usage: Option<SubagentUsage>,
     pub rows: Vec<TrajectoryRow>,
 }
 

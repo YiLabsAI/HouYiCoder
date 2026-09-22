@@ -293,9 +293,6 @@ pub(super) fn draw_event_detail(
 
 // Helpers
 
-/// The latency split, provider usage, and retry count of a model call. Each
-/// part is rendered only when the log recorded it: an unmeasured value stays
-/// absent rather than appearing as a zero.
 /// The turn's cache line for the L1 header: how much of the turn's input came
 /// from the prompt cache, shown with the share when the input is known.
 fn format_turn_cache(turn: &TrajectoryTurn) -> String {
@@ -312,6 +309,9 @@ fn format_turn_cache(turn: &TrajectoryTurn) -> String {
     }
 }
 
+/// The latency split, provider usage, and retry count of a model call or
+/// delegated child. Each part is rendered only when the log recorded it: an
+/// unmeasured value stays absent rather than appearing as a zero.
 fn push_model_facts(
     body: &mut Vec<Line<'static>>,
     ev: &TrajectoryRecord,

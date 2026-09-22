@@ -373,7 +373,14 @@ impl TurnBuilder {
         self.open_agents.insert(child_session_id.to_string(), index);
     }
 
-    fn finish_agent(&mut self, child_session_id: &str, status: &str, summary: &str, ts: u64) {
+    fn finish_agent(
+        &mut self,
+        child_session_id: &str,
+        status: &str,
+        summary: &str,
+        usage: Option<EventUsage>,
+        ts: u64,
+    ) {
         self.touch(ts);
         let index = match self.open_agents.remove(child_session_id) {
             Some(index) => index,
@@ -400,6 +407,23 @@ impl TurnBuilder {
             "" => RecordOutcome::Pending,
             _ => RecordOutcome::Failed,
         };
+        // A child's usage also accumulates into the turn's own tokens, so the
+        // turn row reports what this user request spent overall.
+        if let Some(child_u) = usage {
+            if let Some(tin) = child_u.input {
+                self.tokens_in = Some(self.tokens_in.unwrap_or(0) + tin);
+            }
+            if let Some(tout) = child_u.output {
+                self.tokens_out = Some(self.tokens_out.unwrap_or(0) + tout);
+            }
+            if let Some(cread) = child_u.cache_read {
+                self.cache_read = Some(self.cache_read.unwrap_or(0) + cread);
+            }
+            if let Some(cwrite) = child_u.cache_write {
+                self.cache_write = Some(self.cache_write.unwrap_or(0) + cwrite);
+            }
+        }
+        record.usage = usage;
         if !summary.is_empty() {
             record.output = Some(summary.to_string());
         }
@@ -427,7 +451,7 @@ impl TurnBuilder {
             .saturating_sub(self.first_ts.unwrap_or(self.last_ts));
         turns.push(TrajectoryTurn {
             n,
-            boundary_before: self.boundary_before,
+            boundary_before: self.boundary_before.take(),
             user_input: std::mem::take(&mut self.user_input),
             tokens_in: self.tokens_in.map(|v| v as usize),
             tokens_out: self.tokens_out.map(|v| v as usize),
@@ -461,6 +485,7 @@ pub(super) fn apply_turn_boundary(
     turns: &mut Vec<TrajectoryTurn>,
     n: &mut usize,
     pending_boundary: &mut Option<TurnBoundary>,
+    last_model: &mut Option<String>,
 ) -> bool {
     match &ev.event {
         SessionEvent::ContextCleared { prior_turn } => {
@@ -468,6 +493,32 @@ pub(super) fn apply_turn_boundary(
                 prior_turn: *prior_turn,
                 at_secs: ev.ts / 1000,
             });
+        }
+        SessionEvent::CompactionBoundary { checkpoint } => {
+            *pending_boundary = Some(TurnBoundary::Compacted(Box::new(CompactedBoundary {
+                checkpoint_id: checkpoint.to_string(),
+                at_secs: ev.ts / 1000,
+            })));
+        }
+        SessionEvent::TurnUsage { model, .. } => {
+            if !model.is_empty() {
+                if let Some(prev) = last_model.as_ref()
+                    && prev != model
+                {
+                    let boundary = TurnBoundary::ModelSwitch(Box::new(ModelSwitchBoundary {
+                        from: prev.clone(),
+                        to: model.clone(),
+                        at_secs: ev.ts / 1000,
+                    }));
+                    if builder.is_open() {
+                        builder.boundary_before = Some(boundary);
+                    } else {
+                        *pending_boundary = Some(boundary);
+                    }
+                }
+                *last_model = Some(model.clone());
+            }
+            return false;
         }
         SessionEvent::UserInput { text } => {
             if builder.is_open() {
@@ -550,8 +601,22 @@ pub(super) fn apply_turn_content(
             child_session_id,
             status,
             summary,
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_write_input_tokens,
+            reasoning_tokens,
             ..
-        } => builder.finish_agent(child_session_id, status, summary, ev.ts),
+        } => {
+            let usage = (*input_tokens > 0 || *output_tokens > 0).then_some(EventUsage {
+                input: Some(*input_tokens),
+                output: Some(*output_tokens),
+                cache_read: Some(*cache_read_input_tokens),
+                cache_write: Some(*cache_write_input_tokens),
+                reasoning: Some(*reasoning_tokens),
+            });
+            builder.finish_agent(child_session_id, status, summary, usage, ev.ts);
+        }
         SessionEvent::MemoryRecall { keys, bytes, .. } => {
             builder.touch(ev.ts);
             let summary = if keys.is_empty() {

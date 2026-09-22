@@ -23,6 +23,36 @@ pub(super) fn turn_title(turn: &TrajectoryTurn) -> String {
 
 // Rendering
 
+/// Render a boundary separator between turns, when the turn carried one.
+fn boundary_line(boundary: &TurnBoundary, now_secs: u64) -> Line<'static> {
+    match boundary {
+        TurnBoundary::ContextCleared { at_secs, .. } => line(vec![sp(
+            format!(
+                "  ── context cleared · {} ──",
+                relative_time(now_secs, *at_secs)
+            ),
+            Color::DarkGray,
+        )]),
+        TurnBoundary::ModelSwitch(b) => line(vec![sp(
+            format!(
+                "  ── model {} → {} · {} ──",
+                b.from,
+                b.to,
+                relative_time(now_secs, b.at_secs)
+            ),
+            Color::DarkGray,
+        )]),
+        TurnBoundary::Compacted(b) => line(vec![sp(
+            format!(
+                "  ── context compacted (checkpoint {}) · {} ──",
+                b.checkpoint_id,
+                relative_time(now_secs, b.at_secs)
+            ),
+            Color::DarkGray,
+        )]),
+    }
+}
+
 /// The body lines for one turn: a context-cleared separator when the log
 /// carries one, then the row itself. The separator is a label rather than a
 /// row, so it never takes a cursor position.
@@ -35,14 +65,8 @@ pub(super) fn turn_row(
 ) -> Vec<Line<'static>> {
     let prefix = if selected { "▸ " } else { "  " };
     let mut out = Vec::new();
-    if let Some(TurnBoundary::ContextCleared { at_secs, .. }) = t.boundary_before {
-        out.push(line(vec![sp(
-            format!(
-                "  ── context cleared · {} ──",
-                relative_time(now_secs, at_secs)
-            ),
-            Color::DarkGray,
-        )]));
+    if let Some(boundary) = &t.boundary_before {
+        out.push(boundary_line(boundary, now_secs));
     }
     let glyph = if t.success { "✓" } else { "✗" };
     let gc = if t.success { Color::Green } else { Color::Red };

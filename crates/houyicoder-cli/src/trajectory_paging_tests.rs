@@ -236,7 +236,7 @@ fn test_session_totals_cover_hidden() {
 /// Delegated usage is summed from the children's own returns, and a session
 /// that delegated nothing reports nothing: the row must not appear as zeroes.
 #[test]
-fn test_delegated_usage_summed() {
+fn test_subagent_usage_summed() {
     let child = |id: &str, tin: u64, tout: u64, cache: u64| {
         ev(
             500,
@@ -271,7 +271,9 @@ fn test_delegated_usage_summed() {
         child("child-2", 32_000, 1_000, 30_000),
     ];
     let view = project(&events, "test", 0);
-    let delegated = view.delegated.expect("two returns produce a delegated row");
+    let delegated = view
+        .subagent_usage
+        .expect("two returns produce a delegated row");
     assert_eq!(delegated.calls, 2);
     assert_eq!(delegated.input, 212_000, "the children's input is summed");
     assert_eq!(delegated.output, 5_000);
@@ -280,17 +282,20 @@ fn test_delegated_usage_summed() {
         delegated.cache_hit_pct(),
         Some(200_000.0 / 212_000.0 * 100.0)
     );
-    // The children's tokens are not folded into the session totals, which come
-    // from the parent's own calls.
+    // The session totals fold both the parent's calls and the children's, so the
+    // headline reports what the whole session spent.
     assert_eq!(
-        view.tokens_in, None,
-        "the parent made no calls, so the session total stays unknown"
+        view.tokens_in,
+        Some(212_000),
+        "the session's economic account includes the delegated work"
     );
+    assert_eq!(view.tokens_out, Some(5_000));
+    assert_eq!(view.cache_read, Some(200_000));
 }
 
 /// A session with no delegation reports no delegated usage at all.
 #[test]
-fn test_delegated_usage_absent() {
+fn test_subagent_usage_absent() {
     let events = vec![ev(
         100,
         SessionEvent::UserInput {
@@ -298,13 +303,13 @@ fn test_delegated_usage_absent() {
         },
     )];
     let view = project(&events, "test", 0);
-    assert!(view.delegated.is_none(), "no children, no row");
+    assert!(view.subagent_usage.is_none(), "no children, no row");
 }
 
 /// A child that reported no usage leaves the row without a cache share rather
 /// than a fabricated one.
 #[test]
-fn test_delegated_usage_no_input() {
+fn test_subagent_usage_unknown() {
     let events = vec![
         ev(
             100,
@@ -328,7 +333,7 @@ fn test_delegated_usage_no_input() {
         ),
     ];
     let view = project(&events, "test", 0);
-    let delegated = view.delegated.expect("the call is still reported");
+    let delegated = view.subagent_usage.expect("the call is still reported");
     assert_eq!(delegated.calls, 1);
     assert_eq!(delegated.input, 0);
     assert_eq!(

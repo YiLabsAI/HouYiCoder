@@ -1016,3 +1016,110 @@ fn test_context_cleared_records_boundary() {
     );
     assert_eq!(second.n, 2, "numbering continues across the clear");
 }
+
+/// A model switch between turns records a boundary so the latency and cache
+/// shift across models is visible in the timeline.
+#[test]
+fn test_model_switch_boundary() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "t1".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            120,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: "qwen".into(),
+                recovery: false,
+                effort: None,
+            },
+        ),
+        ev(200, SessionEvent::UserInput { text: "t2".into() }),
+        ev(
+            205,
+            SessionEvent::TurnStarted {
+                turn: 2,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            220,
+            SessionEvent::TurnUsage {
+                turn: 2,
+                call_in_turn: 1,
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: "deepseek".into(),
+                recovery: false,
+                effort: None,
+            },
+        ),
+    ];
+    let view = project(&events, "qwen", 0);
+    assert_eq!(view.total_turns, 2);
+    let second = match &view.rows[1] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        second.boundary_before,
+        Some(TurnBoundary::ModelSwitch(Box::new(ModelSwitchBoundary {
+            from: "qwen".into(),
+            to: "deepseek".into(),
+            at_secs: 0,
+        })))
+    );
+}
+
+/// A compaction between turns records a boundary naming the checkpoint.
+#[test]
+fn test_compaction_boundary_attached() {
+    use houyicoder_context::CheckpointId;
+    let ck = CheckpointId::new();
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "t1".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(150, SessionEvent::CompactionBoundary { checkpoint: ck }),
+        ev(200, SessionEvent::UserInput { text: "t2".into() }),
+        ev(
+            205,
+            SessionEvent::TurnStarted {
+                turn: 2,
+                call_in_turn: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test", 0);
+    assert_eq!(view.total_turns, 2);
+    let second = match &view.rows[1] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        second.boundary_before,
+        Some(TurnBoundary::Compacted(Box::new(CompactedBoundary {
+            checkpoint_id: ck.to_string(),
+            at_secs: 0,
+        })))
+    );
+}
