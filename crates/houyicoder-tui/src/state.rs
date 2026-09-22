@@ -116,7 +116,6 @@ impl QueueViewState {
 
 #[derive(Default, Debug)]
 pub(crate) struct CurrentTurnBoundary {
-    pub(crate) frame_index: usize,
     pub(crate) line_index: usize,
 }
 
@@ -354,9 +353,9 @@ pub struct App {
     /// Last-rendered transcript rect (screen coords), stashed by the draw
     /// pass so the mouse handler can map a click cell to a transcript row.
     pub transcript_rect: Cell<Rect>,
-    /// Last-rendered "jump to bottom" pill rect; hit-tested before the
+    /// Last-rendered jump-to-bottom label rect; hit-tested before the
     /// transcript surface. Zero rect when hidden.
-    pub jump_pill_rect: Cell<Rect>,
+    pub jump_to_bottom_rect: Cell<Rect>,
     /// Last-rendered transcript rows with their style tag (post-wrap, with
     /// spacer blanks), stashed by the draw pass so copy can extract the
     /// selected text and skip non-content rows (spinner).
@@ -530,6 +529,10 @@ pub struct App {
     pub hooks_level: Cell<u8>,
     /// The selected event index in the /hooks Level-0 list.
     pub hooks_sel: Cell<usize>,
+    /// The oldest frame the scrollback has loaded, in absolute frame
+    /// coordinates, or usize::MAX before any load. It is the view's requested
+    /// boundary; the transcript's resident front is the memory boundary, and a
+    /// load stops at it since a drained frame cannot be rendered.
     pub loaded_from_frame: Cell<usize>,
     /// The /model picker: host snapshot, draft, and the commit in flight.
     pub model_picker: ModelPickerState,

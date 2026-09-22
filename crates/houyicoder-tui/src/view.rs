@@ -71,12 +71,12 @@ pub(crate) fn badge_color(name: &str) -> Option<Color> {
 /// The approval card is likewise inline at the transcript tail (see
 /// working::draw_transcript), not a floating popup.
 pub fn draw(f: &mut Frame, app: &App) {
-    // Zero the jump-to-bottom pill rect at the top of every frame so it can
+    // Zero the jump-to-bottom label rect at the top of every frame so it can
     // never go stale across screens that don't render a transcript (Login,
-    // Console) — draw_transcript re-publishes it when the pill is visible.
-    app.jump_pill_rect.set(Rect::new(0, 0, 0, 0));
+    // Console) — draw_transcript re-publishes it while the label is visible.
+    app.jump_to_bottom_rect.set(Rect::new(0, 0, 0, 0));
     // The fleet strip's click target gets the same stale-rect protection as
-    // the pill and the status bar below.
+    // the label and the status bar below.
     app.fleet.rect.set(Rect::new(0, 0, 0, 0));
     // Same protection for the status bar selection surface: a viewport that
     // draws a status bar re-publishes its rect + rows; one that does not

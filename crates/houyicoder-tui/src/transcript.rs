@@ -10,12 +10,13 @@
 use std::ops::Range;
 
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
-use houyicoder_protocol::frontend::run::ContentBlock;
-use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate, ToolCall};
+use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
 use crate::brief::{result_summary, tool_call_brief};
 use crate::records::{ContextView, ToolOutcome, TranscriptLine};
+use crate::transcript::frame_payload::chunk_text;
 
+pub(crate) mod frame_payload;
 pub mod snapshot;
 mod tool_updates;
 #[cfg(test)]
@@ -146,16 +147,6 @@ impl AsRef<TranscriptFrame> for SequencedFrame {
 impl AsRef<TranscriptFrame> for TranscriptFrame {
     fn as_ref(&self) -> &TranscriptFrame {
         self
-    }
-}
-
-/// The text carried by a content chunk, when the chunk wraps a text block.
-/// Non-text blocks (Image) have no flat text; an empty string degenerates the
-/// line away so a multimodal chunk does not surface as an empty row.
-pub fn chunk_text(chunk: &ContentChunk) -> &str {
-    match &chunk.content {
-        ContentBlock::Text { text } => text.as_str(),
-        _ => "",
     }
 }
 
@@ -290,6 +281,9 @@ struct TurnFold<'a, F: AsRef<TranscriptFrame>> {
     /// Log position of the newest frame folded into the turn. The row is
     /// named by where the turn ended, which this is once the turn closes.
     ended_at: usize,
+    /// The absolute frame index of log[0], added to ended_at so a row name
+    /// stays absolute while the walk indexes the log itself.
+    abs_base: usize,
     reasoning: String,
     /// Tool calls by tool, in the order the turn first used each.
     tools: Vec<(String, u32)>,
@@ -301,11 +295,12 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     /// inside (if any). Frames of earlier turns are not folded; the caller
     /// pushes the rows of the turns they closed. What the open turn did before
     /// the window is folded in for facts, with no rows of its own.
-    fn new(log: &'a [F], window: &Range<usize>) -> Self {
+    fn new(log: &'a [F], window: Range<usize>, abs_base: usize) -> Self {
         let mut fold = Self {
             log,
             opened_at: open_turn_before(log, window.start),
             ended_at: window.start,
+            abs_base,
             reasoning: String::new(),
             tools: Vec::new(),
             calls: 0,
@@ -408,7 +403,7 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
             secs,
             reasoning,
             tool_summary: self.tool_summary(),
-            turn_id: format!("f{}", self.ended_at),
+            turn_id: format!("f{}", self.abs_base + self.ended_at),
         })
     }
 
@@ -459,17 +454,34 @@ pub fn transcript_from_frames<F: AsRef<TranscriptFrame>>(
     window: Range<usize>,
     newest_open: bool,
 ) -> Vec<TranscriptLine> {
-    let frames = &log[window.clone()];
+    transcript_from_frames_at(log, 0, window, newest_open)
+}
+
+/// Project a window of frames to lines when the log's first frame sits at an
+/// absolute frame index other than zero. The window is an absolute frame range
+/// and abs_base is the absolute index of log[0], so a window onto a drained log
+/// still names its turns by absolute position: a turn's row identity stays put
+/// when the resident window's front advances, and expand state stays attached
+/// to it.
+pub fn transcript_from_frames_at<F: AsRef<TranscriptFrame>>(
+    log: &[F],
+    abs_base: usize,
+    window: Range<usize>,
+    newest_open: bool,
+) -> Vec<TranscriptLine> {
+    let start = window.start.saturating_sub(abs_base);
+    let end = window.end.saturating_sub(abs_base).min(log.len());
+    let frames = &log[start..end];
     let (updates, tools) = collect_tool_updates(frames);
     let mut p = Projector {
-        base: window.start,
-        at_end: window.end == log.len(),
+        base: start,
+        at_end: end == log.len(),
         newest_open,
         updates,
         tools,
         out: Vec::with_capacity(frames.len()),
         late_results: Vec::new(),
-        fold: TurnFold::new(log, &window),
+        fold: TurnFold::new(log, start..end, abs_base),
     };
     p.run(frames);
     p.finish();

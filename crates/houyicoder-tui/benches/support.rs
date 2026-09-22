@@ -105,6 +105,36 @@ pub fn tool_heavy(n: usize) -> Vec<TranscriptFrame> {
         .collect()
 }
 
+/// Tool-call plus result pairs carrying payload-sized outputs, grouped into
+/// turns so the drain has closed turns to reclaim. The byte budget, not the
+/// frame cap, decides how much of this log stays resident.
+pub fn tool_large(n: usize) -> Vec<TranscriptFrame> {
+    let payload = "y".repeat(16 * 1024);
+    (0..n)
+        .map(|i| {
+            let turn = i / 9;
+            let phase = i % 9;
+            if phase == 0 {
+                user_msg(&format!("large turn {turn}"))
+            } else {
+                let id = format!("call-{turn}-{}", (phase - 1) / 2);
+                if phase % 2 == 1 {
+                    tool_call(
+                        &id,
+                        "bash",
+                        serde_json::json!({ "command": format!("cat big-{turn}.log") }),
+                    )
+                } else {
+                    tool_result(
+                        &id,
+                        serde_json::json!({ "stdout": format!("out {payload}") }),
+                    )
+                }
+            }
+        })
+        .collect()
+}
+
 /// The three corpus classes, so a bench can iterate them by name.
 pub const CLASSES: &[(&str, CorpusGen)] = &[
     ("short-text", short_text),

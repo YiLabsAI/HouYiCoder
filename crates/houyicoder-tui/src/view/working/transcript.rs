@@ -274,48 +274,42 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     );
     refresh_wide_cells(f, inner);
 
-    // "Jump to bottom" pill: a dim centered overlay on the transcript's
-    // bottom row when the user has scrolled back from the tail. Clicking it
-    // (hit-tested before the transcript surface in handle_mouse) returns to
-    // the tail. A new-messages pill: "N new messages"
-    // when agent response segments landed since the scroll-away snapshot,
-    // else "Jump to bottom". Hidden while following the tail, while a search
-    // or queue overlay is open, and in Scroll mode (which has its own status
-    // bar advertising Esc=tail — two "back to bottom" prompts would clash).
-    // The hit rect is the centered label span, not the full row — a click on
-    // the blank cells to either side must fall through to the transcript
-    // surface (start a drag-select), not get swallowed into a jump.
-    let pill_visible = app.viewport != ViewportMode::Scroll
+    // Jump-to-bottom label: a bright centered overlay on the transcript's
+    // bottom row while the user is scrolled back, showing the agent turns
+    // that landed since the scroll-away snapshot. Clicking it returns to the
+    // tail. Hidden while following the tail, with a search or queue overlay
+    // open, or in Scroll mode, whose status bar already advertises Esc=tail.
+    // The hit rect is the label span, not the full row, so a click beside the
+    // label falls through to the transcript surface and starts a drag-select.
+    let label_visible = app.viewport != ViewportMode::Scroll
         && !app.transcript_scroll.is_following_tail()
         && !app.search.active;
-    if pill_visible {
-        let count = app.jump_pill_new_count();
-        let label = if count > 0 {
-            format!(
-                " {count} new message{} ↓",
-                if count == 1 { "" } else { "s" }
-            )
+    if label_visible {
+        let new = app.new_turn_count();
+        let label = if new.count > 0 {
+            let floor = if new.is_lower_bound { "+" } else { "" };
+            let plural = if new.count == 1 { "" } else { "s" };
+            format!(" {}{floor} new message{plural} ↓", new.count)
         } else {
             " Jump to bottom (click) ↓".to_string()
         };
         let row = inner.y.saturating_add(inner.height.saturating_sub(1));
         let label_w = (label.chars().count() as u16).min(inner.width);
         let x = inner.x + (inner.width - label_w) / 2;
-        let pill = Rect::new(x, row, label_w, 1);
-        f.render_widget(Clear, pill);
-        // Bright text on the user-message bg so the pill reads as a clickable
-        // affordance (a user-message-background pill,
-        // rather than dim text that vanishes into the transcript).
+        let rect = Rect::new(x, row, label_w, 1);
+        f.render_widget(Clear, rect);
+        // Bright text on the user-message bg so the label reads as a clickable
+        // affordance rather than dim text that vanishes into the transcript.
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 label,
                 Style::new().fg(Color::White).bg(Color::Indexed(238)),
             ))),
-            pill,
+            rect,
         );
-        app.jump_pill_rect.set(pill);
+        app.jump_to_bottom_rect.set(rect);
     } else {
-        app.jump_pill_rect.set(Rect::new(0, 0, 0, 0));
+        app.jump_to_bottom_rect.set(Rect::new(0, 0, 0, 0));
     }
 }
 

@@ -16,7 +16,8 @@ use crate::records::{Approval, AskQuestion, TranscriptLine};
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome};
 use crate::state::App;
 use crate::state::enums::LiveBlock;
-use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame, chunk_text};
+use crate::transcript::frame_payload::chunk_text;
+use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame};
 
 const MAX_REBUILD_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;
@@ -179,7 +180,7 @@ impl App {
         // notice and restore line leave the log before this turn's lines land:
         // both are rows the frontend raised, and a rebuild renders them again
         // from the log they would still sit in.
-        clear_interruption_markers(self.transcript.frames_mut());
+        self.transcript.with_frames_mut(clear_interruption_markers);
         self.rebuild_transcript();
         self.push_transcript_line(TranscriptLine::User(input));
         self.displayed_tokens.set(0);
@@ -644,7 +645,7 @@ impl App {
         }) else {
             return;
         };
-        self.transcript.frames_mut().truncate(start);
+        self.transcript.with_frames_mut(|log| log.truncate(start));
         self.todos.set_replaying_history(true);
         self.rebuild_transcript();
     }

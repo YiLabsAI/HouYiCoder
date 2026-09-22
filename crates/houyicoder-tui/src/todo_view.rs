@@ -73,15 +73,25 @@ pub struct TodoState {
 
 impl TodoState {
     /// Apply newly appended todo-write frames using last-write-wins semantics.
-    pub(crate) fn update<F: AsRef<TranscriptFrame>>(&mut self, frames: &[F], run_active: bool) {
+    /// The cursor is an absolute frame boundary and abs_base is the absolute
+    /// index of frames[0], so a front drain shifts neither: the scan resumes
+    /// where it left off instead of re-deriving from a moved front and clearing
+    /// a checklist whose only todo-write frame was drained.
+    pub(crate) fn update<F: AsRef<TranscriptFrame>>(
+        &mut self,
+        frames: &[F],
+        abs_base: usize,
+        run_active: bool,
+    ) {
+        let abs_count = abs_base + frames.len();
         let (start, reset) = match self.cursor {
             None => (0, false),
             Some(EventCursor::Local(n)) => {
                 let n = n as usize;
-                if n > frames.len() {
+                if n > abs_count {
                     (0, true)
                 } else {
-                    (n, false)
+                    (n.saturating_sub(abs_base), false)
                 }
             }
             // The generic slice carries no event seq; re-derive from the front.
@@ -99,7 +109,7 @@ impl TodoState {
                 latest = Some(parsed);
             }
         }
-        self.cursor = Some(EventCursor::Local(frames.len() as u64));
+        self.cursor = Some(EventCursor::Local(abs_count as u64));
         if !run_active {
             pause_inactive(&mut self.items);
         }
@@ -282,6 +292,8 @@ pub fn from_tool_call(update: &SessionUpdate) -> Option<Vec<TodoView>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::slice::from_ref;
+
     use houyicoder_protocol::envelope::EventSeq;
     use houyicoder_protocol::frontend::run::ContentBlock;
     use houyicoder_protocol::frontend::session_update::{
@@ -352,10 +364,10 @@ mod tests {
             "todos": [{"content": "unfinished", "status": "in_progress"}]
         })));
         let mut state = TodoState::default();
-        state.update(std::slice::from_ref(&frame), true);
+        state.update(from_ref(&frame), 0, true);
         assert_eq!(state.items[0].status, TodoStatus::InProgress);
 
-        state.update(std::slice::from_ref(&frame), false);
+        state.update(from_ref(&frame), 0, false);
         assert_eq!(state.items[0].status, TodoStatus::Paused);
     }
 
@@ -405,7 +417,7 @@ mod tests {
         for _ in 0..3 {
             let mut state = TodoState::default();
             state.set_replaying_history(true);
-            state.update(std::slice::from_ref(&frame), false);
+            state.update(from_ref(&frame), 0, false);
             assert!(state.items.is_empty());
             assert!(state.completion_at.is_empty());
             assert!(!state.prune(Instant::now()), "nothing left to prune");
@@ -441,15 +453,15 @@ mod tests {
         state.set_replaying_history(true);
 
         frames.push(open);
-        state.update(&frames, false);
+        state.update(&frames, 0, false);
         assert_eq!(state.items.len(), 2);
 
         frames.push(partial);
-        state.update(&frames, false);
+        state.update(&frames, 0, false);
         assert_eq!(state.items.len(), 2);
 
         frames.push(finished);
-        state.update(&frames, false);
+        state.update(&frames, 0, false);
         assert!(state.items.is_empty());
         assert!(state.completion_at.is_empty());
     }
@@ -463,12 +475,12 @@ mod tests {
             "todos": [{"content": "done", "status": "completed"}]
         })));
         let mut state = TodoState::default();
-        state.update(std::slice::from_ref(&frame), true);
+        state.update(from_ref(&frame), 0, true);
         assert!(state.completion_at.contains_key("done"));
 
         state.set_cursor(4);
         state.set_replaying_history(true);
-        state.update(std::slice::from_ref(&frame), false);
+        state.update(from_ref(&frame), 0, false);
         assert!(state.items.is_empty());
         assert!(state.completion_at.is_empty());
     }
@@ -490,7 +502,7 @@ mod tests {
             0,
             "the usize accessor reads a server cursor as zero"
         );
-        state.update(std::slice::from_ref(&frame), true);
+        state.update(from_ref(&frame), 0, true);
         assert_eq!(
             state.items.len(),
             1,
@@ -506,7 +518,7 @@ mod tests {
             "todos": [{"content": "done", "status": "completed"}]
         })));
         let mut state = TodoState::default();
-        state.update(std::slice::from_ref(&frame), true);
+        state.update(from_ref(&frame), 0, true);
 
         assert!(state.completion_at.contains_key("done"));
         assert!(!state.prune(Instant::now()));
@@ -524,7 +536,7 @@ mod tests {
         })));
         let mut state = TodoState::default();
         state.set_replaying_history(true);
-        state.update(std::slice::from_ref(&frame), false);
+        state.update(from_ref(&frame), 0, false);
 
         assert_eq!(state.items.len(), 2);
         assert!(state.completion_at.is_empty());
@@ -544,7 +556,7 @@ mod tests {
         })));
         let mut state = TodoState::default();
         state.set_replaying_history(true);
-        state.update(std::slice::from_ref(&mixed), false);
+        state.update(from_ref(&mixed), 0, false);
         assert!(state.completion_at.is_empty());
         state.set_replaying_history(false);
 
@@ -555,7 +567,7 @@ mod tests {
             ]
         })));
         let frames = vec![mixed, finished];
-        state.update(&frames, true);
+        state.update(&frames, 0, true);
 
         assert!(state.completion_at.contains_key("current"));
         assert!(state.completion_at.contains_key("old"));

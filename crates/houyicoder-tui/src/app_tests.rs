@@ -8,6 +8,7 @@ use crate::state::{Pane, Stage, TranscriptLine, ViewportMode};
 use crate::test_harness::{
     FailedHandshakeTransport, connected_app_events, connection_lost_app, wait_for_request,
 };
+use crate::todo_view::{TodoStatus, TodoView};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SlashCommand};
 
@@ -221,9 +222,10 @@ fn test_clear_resets_session() {
     app.pane = Pane::Diff;
     app.spec_ctx.step = "implementing".to_string();
     app.todos.set_cursor(4);
-    app.todos.items.push(crate::todo_view::TodoView {
+    app.loaded_from_frame.set(0);
+    app.todos.items.push(TodoView {
         content: "stale".into(),
-        status: crate::todo_view::TodoStatus::Pending,
+        status: TodoStatus::Pending,
         active_form: None,
     });
     app.run_command(SlashCommand::Clear);
@@ -231,9 +233,12 @@ fn test_clear_resets_session() {
     assert_eq!(app.spec_ctx.step, "idle");
     assert_eq!(app.pane, Pane::Transcript);
     assert_eq!(app.transcript.len(), 1);
+    // The scrollback boundary names frames of the cleared log, so it returns to
+    // the frame cap rather than holding the window the old session had loaded.
+    assert_eq!(app.loaded_from_frame.get(), usize::MAX);
     // The checklist cursor restarts on the cleared log rather than keeping
     // the stale 4, so it stands where the reset left the log it reads.
-    assert_eq!(app.todos.cursor(), app.transcript.frame_count());
+    assert_eq!(app.todos.cursor(), app.transcript.abs_frame_count());
     assert!(app.todos.items.is_empty());
 }
 

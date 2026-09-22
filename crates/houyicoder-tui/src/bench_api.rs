@@ -17,7 +17,7 @@ use crate::transcript::{SequencedFrame, TranscriptFrame};
 pub fn app_with_frames(frames: Vec<TranscriptFrame>) -> App {
     let mut app = composition::app();
     let sequenced: Vec<SequencedFrame> = frames.into_iter().map(Into::into).collect();
-    *app.transcript.frames_mut() = sequenced;
+    app.transcript.with_frames_mut(|log| *log = sequenced);
     app
 }
 
@@ -27,6 +27,23 @@ pub fn app_with_frames(frames: Vec<TranscriptFrame>) -> App {
 pub fn rebuild_transcript(mut app: App) -> App {
     app.rebuild_transcript();
     app
+}
+
+/// The resident frame log's estimated byte total and its ceiling. A bench
+/// asserts the log holds under the ceiling instead of growing with the corpus,
+/// so the two values are read together.
+pub fn resident_frame_bytes(app: &App) -> (u64, usize) {
+    (
+        app.transcript.resident_bytes(),
+        app.transcript.resident_byte_budget(),
+    )
+}
+
+/// The absolute index of the oldest resident frame. A bench reads it beside
+/// the byte total, because a payload-heavy log holds under the ceiling only by
+/// draining the frames before this front.
+pub fn resident_frame_front(app: &App) -> usize {
+    app.transcript.frame_window_start()
 }
 
 /// Recompute the fold groups from the transcript lines and return the count.

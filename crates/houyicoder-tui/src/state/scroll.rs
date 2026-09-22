@@ -3,8 +3,10 @@
 //! transcript_scroll field; the debug_scroll helper is private to this impl
 //! block and only these methods call it.
 
-use crate::scroll::ScrollTransition;
+use crate::scroll::{NewTurnCount, ScrollTransition};
 use crate::state::{App, EventCursor};
+use crate::transcript::TranscriptFrame;
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 impl App {
     /// Page the transcript up by one viewport (older rows).
@@ -80,35 +82,32 @@ impl App {
     }
 
     /// Number of new agent turns since the user scrolled away from the tail
-    /// — the N in the "N new messages" pill. Zero while following the tail.
+    /// — the N in the "N new messages" label. Zero while following the tail.
     ///
     /// One turn counts once, however many agent chunks, tool calls, or
     /// thoughts it contains: only a user message resets prev_was_agent, so
     /// the count follows turn boundaries rather than frame arrivals. The
     /// baseline is an absolute or durable cursor rather than a transcript
-    /// length, so the cap that drops the oldest pushed rows and a future
-    /// front-of-window eviction cannot silently zero the count.
-    pub fn jump_pill_new_count(&self) -> usize {
+    /// length, so the cap that drops the oldest pushed rows does not silently
+    /// zero the count.
+    pub fn new_turn_count(&self) -> NewTurnCount {
         let Some(cursor) = self.unseen_since else {
-            return 0;
+            return NewTurnCount::default();
         };
-        let from = self.frame_index_for_cursor(cursor);
+        let (from, is_lower_bound) = match self.frame_index_for_cursor(cursor) {
+            Some(from) => (from, false),
+            None => (0, true),
+        };
         let mut count = 0usize;
         let mut prev_was_agent = false;
         for f in &self.transcript.frames()[from..] {
             match f.as_ref() {
                 // Turn boundary: a new user message starts a new assistant
                 // turn, so the next agent text counts again.
-                crate::transcript::TranscriptFrame::Session(
-                    houyicoder_protocol::frontend::session_update::SessionUpdate::UserMessageChunk(
-                        _,
-                    ),
-                ) => prev_was_agent = false,
-                crate::transcript::TranscriptFrame::Session(
-                    houyicoder_protocol::frontend::session_update::SessionUpdate::AgentMessageChunk(
-                        _,
-                    ),
-                ) => {
+                TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_)) => {
+                    prev_was_agent = false;
+                }
+                TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(_)) => {
                     if !prev_was_agent {
                         count += 1;
                     }
@@ -119,41 +118,45 @@ impl App {
                 _ => {}
             }
         }
-        count
+        NewTurnCount {
+            count,
+            is_lower_bound,
+        }
     }
 
     /// The cursor at the current tail: the boundary one past the last frame.
     /// Anchors Server on the tail frame's event seq when the frame carries
-    /// one, else Local on the resident count. Both resolve to the frame
-    /// count, so the pill reads zero new frames at the moment of capture.
+    /// one, else Local on the absolute frame count, which a front drain does
+    /// not shift. Both resolve to the frame count, so the label reads zero new
+    /// turns at the moment of capture.
     fn event_cursor_at_tail(&self) -> EventCursor {
-        let frames = self.transcript.frames();
-        let count = frames.len();
-        match frames.last() {
+        match self.transcript.frames().last() {
             Some(sf) => match sf.seq {
                 Some(seq) => EventCursor::Server(seq),
-                None => EventCursor::Local(count as u64),
+                None => EventCursor::Local(self.transcript.abs_frame_count() as u64),
             },
             None => EventCursor::Local(0),
         }
     }
 
-    /// Resolve a cursor to the index of the first frame past its anchor: the
-    /// count of frames already consumed. Server finds the anchored seq and
-    /// steps past it; Local is already an absolute boundary, clamped to the
-    /// resident range. Returns the frame count when the anchor is no longer
-    /// resident, so the slice reads empty rather than wrapping.
-    fn frame_index_for_cursor(&self, cursor: EventCursor) -> usize {
-        let frame_count = self.transcript.frame_count();
+    /// Resolve a cursor to the index of the first resident frame past its
+    /// anchor: the count of frames already consumed. Server finds the anchored
+    /// seq and steps past it; Local is an absolute frame index, shifted onto
+    /// the resident range. None when the anchor's frame is no longer resident,
+    /// so the caller counts the whole window instead of reading it as empty.
+    fn frame_index_for_cursor(&self, cursor: EventCursor) -> Option<usize> {
+        let base = self.transcript.frame_window_start();
         match cursor {
             EventCursor::Server(seq) => self
                 .transcript
                 .frames()
                 .iter()
                 .position(|sf| sf.seq == Some(seq))
-                .map(|i| i + 1)
-                .unwrap_or(frame_count),
-            EventCursor::Local(n) => (n as usize).min(frame_count),
+                .map(|i| i + 1),
+            EventCursor::Local(n) => {
+                let abs = n as usize;
+                (abs >= base).then(|| (abs - base).min(self.transcript.frame_count()))
+            }
         }
     }
 
@@ -207,10 +210,10 @@ impl App {
 mod tests {
     use super::*;
     use crate::composition;
-    use crate::transcript::{SequencedFrame, TranscriptFrame};
+    use crate::transcript::SequencedFrame;
     use houyicoder_protocol::envelope::EventSeq;
     use houyicoder_protocol::frontend::run::ContentBlock;
-    use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
+    use houyicoder_protocol::frontend::session_update::ContentChunk;
 
     fn agent_frame(seq: u64, text: &str) -> SequencedFrame {
         SequencedFrame {
@@ -226,20 +229,17 @@ mod tests {
     #[test]
     fn test_tail_cursor_server_anchored() {
         let mut app = composition::app();
-        app.transcript.frames_mut().push(agent_frame(5, "first"));
+        app.transcript.push_frame(agent_frame(5, "first"));
         assert!(matches!(
             app.event_cursor_at_tail(),
             EventCursor::Server(EventSeq(5))
         ));
     }
 
-    /// A tail frame with no server seq anchors Local on the resident count,
-    /// reproducing the old frame_count() baseline bit-for-bit.
+    /// A tail frame with no server seq anchors Local on the absolute frame
+    /// count, which a front drain does not shift.
     #[test]
     fn test_tail_cursor_local_count() {
-        use crate::transcript::TranscriptFrame;
-        use houyicoder_protocol::frontend::run::ContentBlock;
-        use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
         let mut app = composition::app();
         app.transcript
             .push_frame(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
@@ -259,26 +259,32 @@ mod tests {
         assert!(matches!(app.event_cursor_at_tail(), EventCursor::Local(0)));
     }
 
-    /// A server cursor resolves to the frames past the anchored seq; a seq no
-    /// longer resident resolves to the tail so the slice reads empty.
+    /// A server cursor resolves to the frames past the anchored seq. An anchor
+    /// whose frame is no longer resident counts the whole window and reports
+    /// the count as a floor, since the frames it stood on are gone.
     #[test]
     fn test_cursor_resolves_server_anchor() {
         let mut app = composition::app();
-        app.transcript.frames_mut().push(agent_frame(5, "first"));
-        app.transcript.frames_mut().push(agent_frame(6, "second"));
+        app.transcript.push_frame(agent_frame(5, "first"));
+        app.transcript.push_frame(agent_frame(6, "second"));
 
         app.unseen_since = Some(EventCursor::Server(EventSeq(5)));
         assert_eq!(
-            app.jump_pill_new_count(),
+            app.new_turn_count().count,
             1,
             "server anchor on seq 5 leaves the seq 6 turn to count"
         );
+        assert!(!app.new_turn_count().is_lower_bound);
 
         app.unseen_since = Some(EventCursor::Server(EventSeq(999)));
         assert_eq!(
-            app.jump_pill_new_count(),
-            0,
-            "a seq not resident anchors at the tail, no new frames"
+            app.new_turn_count().count,
+            1,
+            "an anchor off the resident range counts the window it still shows"
+        );
+        assert!(
+            app.new_turn_count().is_lower_bound,
+            "the count is a floor when the anchor frame is gone"
         );
     }
 }

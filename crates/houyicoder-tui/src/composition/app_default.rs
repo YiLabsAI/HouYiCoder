@@ -118,7 +118,7 @@ pub fn app() -> App {
         pending: Vec::new(),
         selection: Selection::default(),
         transcript_rect: Cell::new(Rect::new(0, 0, 0, 0)),
-        jump_pill_rect: Cell::new(Rect::new(0, 0, 0, 0)),
+        jump_to_bottom_rect: Cell::new(Rect::new(0, 0, 0, 0)),
         last_transcript_rows: RefCell::new(Vec::new()),
         last_all_rows: RefCell::new(Vec::new()),
         pane_rect: Cell::new(Rect::new(0, 0, 0, 0)),

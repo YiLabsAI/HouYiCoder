@@ -110,7 +110,7 @@ impl App {
             self.transcript.frames().last(),
             Some(sf) if matches!(sf.as_ref(), TranscriptFrame::Frontend(FrontendRow::Echo(_)))
         ) {
-            self.transcript.frames_mut().pop();
+            self.transcript.with_frames_mut(|log| log.pop());
             self.rebuild_transcript();
         }
     }
@@ -127,11 +127,13 @@ impl App {
         });
         match at {
             Some(at) => {
-                if let TranscriptFrame::Frontend(FrontendRow::Context(slot)) =
-                    &mut self.transcript.frames_mut()[at].frame
-                {
-                    *slot = view;
-                }
+                self.transcript.with_frames_mut(|log| {
+                    if let TranscriptFrame::Frontend(FrontendRow::Context(slot)) =
+                        &mut log[at].frame
+                    {
+                        *slot = view;
+                    }
+                });
                 self.rebuild_after_frame_edit();
             }
             None => self.raise_frontend_row(FrontendRow::Context(view)),

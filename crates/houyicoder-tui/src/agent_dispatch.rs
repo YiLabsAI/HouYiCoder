@@ -28,7 +28,8 @@ use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::enums::LiveBlock;
 use crate::state::{App, BashProgress};
 use crate::terminal_title::sync as sync_terminal_title;
-use crate::transcript::{TranscriptFrame, chunk_text, transcript_from_frames};
+use crate::transcript::frame_payload::chunk_text;
+use crate::transcript::{TranscriptFrame, transcript_from_frames};
 
 impl App {
     /// Apply an inbound agent message to application state. Dispatch follows

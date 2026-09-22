@@ -311,6 +311,9 @@ impl App {
     /// back on a fresh working surface (stage Idle, pane Transcript, step idle).
     fn clear_session(&mut self) {
         self.transcript.reset();
+        // The scrollback boundary belongs to the cleared session, so the next
+        // one starts at the frame cap instead of an earlier window.
+        self.loaded_from_frame.set(usize::MAX);
         self.verdict_cursor = 0;
         self.verdict_log_cache.clear();
         self.todos.clear();

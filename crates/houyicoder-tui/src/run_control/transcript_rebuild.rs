@@ -12,7 +12,7 @@ use crate::state::App;
 use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
 };
-use crate::transcript::{TranscriptFrame, transcript_from_frames};
+use crate::transcript::{TranscriptFrame, transcript_from_frames_at};
 
 impl App {
     /// Rebuild the transcript from the frame log. Each turn is one block whose
@@ -25,7 +25,7 @@ impl App {
         let turn_start = self.current_turn_start();
         let newest_open = self.run_state.is_active();
         let frame_start = self.visible_frame_start();
-        let frame_end = self.transcript.frame_count();
+        let frame_end = self.transcript.abs_frame_count();
         // The frozen prefix is one block re-derived as a whole when it grows
         // (a new turn moves turn_start forward, so the prior active run joins
         // it); the active turn is the pair-kept run from turn_start to the log
@@ -49,9 +49,10 @@ impl App {
         }
         self.transcript.blocks_mut().apply(changes);
 
-        // Flatten the in-window blocks to the viewable line list. A block that
-        // fell out the front when the cap advanced (frame range before the
-        // window) is skipped here; frame-window eviction is a later step.
+        // Flatten the in-window blocks to the viewable line list. A block whose
+        // frames sit before the window start (the frame cap, or a drain in an
+        // earlier pass) is skipped here; the drain below runs after this, so the
+        // rows it reclaims still render in the pass that drops them.
         let mut lines: Vec<TranscriptLine> = Vec::new();
         let mut prefix_line_count = 0;
         for b in self.transcript.blocks().blocks() {
@@ -64,12 +65,14 @@ impl App {
             lines.extend_from_slice(&b.lines);
         }
         self.transcript.replace_lines(lines);
-        self.transcript.current_turn_mut().frame_index = turn_start;
         self.transcript.current_turn_mut().line_index = prefix_line_count;
         self.update_fold_cache(prefix_line_count, prefix_reused);
 
-        self.trim_live_transcript();
+        // Every resident frame is scanned before the drain drops any of them,
+        // so a drained frame's verdicts are already in the audit cache.
         self.accumulate_wire_state();
+        self.enforce_frame_byte_budget(turn_start);
+        self.trim_live_transcript();
         self.bump_transcript_version();
     }
 
@@ -116,8 +119,7 @@ impl App {
             let id = if is_active {
                 let anchor_seq = self
                     .transcript
-                    .frames()
-                    .get(range.start)
+                    .resident_frame(range.start)
                     .and_then(|sf| sf.seq);
                 self.transcript.blocks().assign_id(anchor_seq, range.start)
             } else {
@@ -132,8 +134,9 @@ impl App {
                 cur_idx += 1;
                 continue;
             }
-            let lines = transcript_from_frames(
+            let lines = transcript_from_frames_at(
                 self.transcript.frames(),
+                self.transcript.frame_window_start(),
                 range.clone(),
                 newest_open && is_active,
             );
@@ -234,28 +237,59 @@ impl App {
         // fetched child rows because it runs against the cleared list's
         // successors (none) only on the tail path.
         self.transcript.blocks_mut().clear();
-        self.transcript.current_turn_mut().frame_index = self.transcript.frame_count() + 1;
         self.rebuild_transcript();
     }
 
-    /// Return the oldest frame included in the bounded transcript history.
-    /// Scrollback may lower the boundary; normal rebuilds keep only the newest
-    /// MAX_REBUILD_FRAMES frames. The loaded boundary is not advanced here,
-    /// otherwise an initially empty session would permanently disable the cap.
+    /// The oldest frame the frame cap keeps in view, in absolute frame
+    /// coordinates. A scrollback load may reach further back than this.
+    fn capped_frame_start(&self) -> usize {
+        self.transcript
+            .abs_frame_count()
+            .saturating_sub(MAX_REBUILD_FRAMES)
+    }
+
+    /// Return the oldest frame included in the bounded transcript history, in
+    /// absolute frame coordinates. Scrollback may lower the boundary; normal
+    /// rebuilds keep only the newest MAX_REBUILD_FRAMES frames. The loaded
+    /// boundary is not advanced here, otherwise an initially empty session
+    /// would permanently disable the cap, and it never reaches below the
+    /// resident front, whose frames are gone.
     fn visible_frame_start(&self) -> usize {
-        let window = self
-            .transcript
-            .frame_count()
-            .saturating_sub(MAX_REBUILD_FRAMES);
-        window.min(self.loaded_from_frame.get())
+        self.capped_frame_start()
+            .min(self.loaded_from_frame.get())
+            .max(self.transcript.frame_window_start())
+    }
+
+    /// Drain the oldest resident frames until their estimated bytes fall to
+    /// the budget. The rebuild passes the active turn's start, so the user frame
+    /// that opened the turn stays in view while its answer streams and a turn
+    /// whose own bytes exceed the budget holds above it until it ends. A start
+    /// at the resident front means the window holds no such frame, and the
+    /// budget then drains the log down to its newest frame. Frames below the
+    /// kept front leave the viewable window: the durable log still holds the
+    /// server frames, while rows the frontend raised live only in this log.
+    fn enforce_frame_byte_budget(&mut self, turn_start: usize) {
+        let budget = self.transcript.resident_byte_budget() as u64;
+        if self.transcript.resident_bytes() <= budget {
+            return;
+        }
+        let keep_from = if turn_start > self.transcript.frame_window_start() {
+            Some(turn_start - 1)
+        } else {
+            None
+        };
+        self.transcript.drain_front_to_budget(budget, keep_from);
     }
 
     /// Load an older frame batch when scrollback reaches the current history
     /// boundary, preserving the visible viewport position. The window now starts
     /// further back, so the block list is re-derived for the enlarged range.
+    /// Once the boundary reaches the resident window's front the older frames
+    /// were drained and cannot be re-derived in memory, so the load stops; a
+    /// disk-backed load past that point is a later step.
     pub(crate) fn load_older_frames(&mut self) {
         let from = self.visible_frame_start();
-        if from == 0 {
+        if from <= self.transcript.frame_window_start() {
             return;
         }
         // Don't prepend when following the tail (user is at the bottom).
@@ -269,13 +303,20 @@ impl App {
         if top > 5 {
             return;
         }
-        let batch_start = from.saturating_sub(PREPEND_BATCH);
+        // A batch reaching past the resident front can only load the frames that
+        // are still present: the rest were drained, and re-reading them from the
+        // durable log is a later step. The boundary stops at the front so the
+        // window it names stays derivable.
+        let batch_start = from
+            .saturating_sub(PREPEND_BATCH)
+            .max(self.transcript.frame_window_start());
         // Count the older batch's lines to hold the viewport steady across the
         // rebuild that follows. The batch's frames all precede the frames
         // already loaded, and a row the frontend raised among them rides the
         // batch's own projection.
-        let prepended = transcript_from_frames(
+        let prepended = transcript_from_frames_at(
             self.transcript.frames(),
+            self.transcript.frame_window_start(),
             batch_start..from,
             self.run_state.is_active(),
         )
@@ -293,19 +334,21 @@ impl App {
         // reading a static view).
         let cur = self.transcript_scroll.raw_top();
         self.transcript_scroll.set_raw_top(cur + prepended);
-        // Force a full re-derive: the enlarged window cannot match block-by-block
-        // with the prior list, so set a boundary no frame holds and rebuild.
-        self.transcript.current_turn_mut().frame_index = self.transcript.frame_count() + 1;
+        // The lowered boundary moves the window's front, so the next rebuild
+        // re-derives the prefix rather than reusing it.
         self.rebuild_transcript();
         self.bump_transcript_version();
     }
 
     /// Return the first frame in the changing turn. If that boundary would
     /// split a tool call from its result, move it backward until the pair stays
-    /// together.
+    /// together. The oldest boundary this can name is the resident front: the
+    /// frames before it are drained, so a turn whose opening frame they held
+    /// is re-derived from the front on the next rebuild.
     pub(crate) fn current_turn_start(&self) -> usize {
         use houyicoder_protocol::frontend::session_update::SessionUpdate;
-        let mut search_from = self.transcript.frame_count();
+        let base = self.transcript.frame_window_start();
+        let mut search_from = self.transcript.frames().len();
         loop {
             let Some(idx) = self.transcript.frames()[..search_from]
                 .iter()
@@ -316,9 +359,9 @@ impl App {
                     )
                 })
             else {
-                return 0;
+                return base;
             };
-            let candidate = idx + 1;
+            let candidate = base + idx + 1;
             if self.prefix_has_unpaired_call(candidate) {
                 // Move before this user boundary to keep the pair together.
                 search_from = idx;
@@ -330,11 +373,16 @@ impl App {
 
     /// Whether the candidate boundary splits a tool call from a result that
     /// arrives later. A call with no result does not force the boundary back.
+    /// The candidate is an absolute frame index; the scan walks the resident
+    /// log from the window's front, since frames before it were drained.
     fn prefix_has_unpaired_call(&self, candidate: usize) -> bool {
         use houyicoder_protocol::frontend::session_update::SessionUpdate;
+        let base = self.transcript.frame_window_start();
+        let frames = self.transcript.frames();
+        let at = candidate.saturating_sub(base).min(frames.len());
         let mut calls = std::collections::HashSet::new();
         let mut results = std::collections::HashSet::new();
-        for sf in &self.transcript.frames()[..candidate] {
+        for sf in &frames[..at] {
             match sf.as_ref() {
                 TranscriptFrame::Session(SessionUpdate::ToolCall(tc)) => {
                     calls.insert(tc.tool_call_id.0.as_str());
@@ -348,7 +396,7 @@ impl App {
         // A tail result for a prefix call (split). Hanging calls (no result
         // anywhere) are not in tail_results, so they do not trigger.
         let mut tail_results = std::collections::HashSet::new();
-        for sf in &self.transcript.frames()[candidate..] {
+        for sf in &frames[at..] {
             if let TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(upd)) = sf.as_ref() {
                 tail_results.insert(upd.tool_call_id.0.as_str());
             }
@@ -364,14 +412,22 @@ impl App {
     fn accumulate_wire_state(&mut self) {
         use houyicoder_protocol::acpx::AcpxMethod;
         use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
-        // Verdicts are append-only (audit trail). Rewind/clear truncates frames
-        // below the cursor → reset + re-parse from 0 so the cache matches the
-        // truncated log (no stale verdicts for dropped frames).
-        if self.verdict_cursor > self.transcript.frame_count() {
+        // Verdicts are append-only (audit trail). Rewind and clear truncate
+        // frames below the cursor, so the cache resets and re-parses from zero
+        // to match the truncated log. A front drain leaves the absolute count
+        // unchanged, so it never trips this, and the rebuild drains only after
+        // this scan, so every drained frame's verdict is already cached.
+        if self.verdict_cursor > self.transcript.abs_frame_count() {
             self.verdict_cursor = 0;
             self.verdict_log_cache.clear();
         }
-        for sf in self.transcript.frames().iter().skip(self.verdict_cursor) {
+        let base = self.transcript.frame_window_start();
+        for sf in self
+            .transcript
+            .frames()
+            .iter()
+            .skip(self.verdict_cursor.saturating_sub(base))
+        {
             if let TranscriptFrame::Acpx(n) = sf.as_ref()
                 && matches!(n.method, AcpxMethod::ContextPermissionDecision)
                 && let Ok(entry) =
@@ -380,8 +436,11 @@ impl App {
                 self.verdict_log_cache.push(entry);
             }
         }
-        self.verdict_cursor = self.transcript.frame_count();
-        self.todos
-            .update(self.transcript.frames(), self.agent_busy());
+        self.verdict_cursor = self.transcript.abs_frame_count();
+        self.todos.update(
+            self.transcript.frames(),
+            self.transcript.frame_window_start(),
+            self.agent_busy(),
+        );
     }
 }

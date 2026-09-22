@@ -1,6 +1,7 @@
 use super::*;
+use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
-    ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ContentChunk, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use serde_json::Value;
 

@@ -211,10 +211,10 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
     tracing::debug!(kind = ?m.kind, col = m.column, row = m.row, "mouse event");
     match m.kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            // The jump pill overlays the transcript, so it owns the first
-            // hit-test when visible.
-            let pill = app.jump_pill_rect.get();
-            if pill.width > 0 && pill.height > 0 && in_rect(pill, m.column, m.row) {
+            // The jump-to-bottom label overlays the transcript, so it owns the
+            // first hit-test when visible.
+            let rect = app.jump_to_bottom_rect.get();
+            if rect.width > 0 && rect.height > 0 && in_rect(rect, m.column, m.row) {
                 app.scroll_transcript_follow_tail();
                 return;
             }
