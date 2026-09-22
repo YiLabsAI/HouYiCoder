@@ -14,22 +14,24 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
     // agent runs tools per-completion; the axis still shows where time went).
     let t1 = TrajectoryTurn {
         n: 1,
+        boundary_before: None,
         user_input: "fix the permission pipeline crash".into(),
         tokens_in: Some(3200),
         tokens_out: Some(800),
         cache_read: Some(2400),
         cache_write: Some(0),
-        model: None,
-        effort: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
         reasoning_tokens: None,
         tool_count: 4,
         tool_fail: 1,
         retries: 0,
         duration_ms: 12400,
         success: true,
-        events: vec![
+        records: vec![
             ev(
-                "llm",
+                TrajectoryRecordKind::Model,
+                Some("qwen3.7-max"),
                 "thinking (3.2k↓ 0.8k↑ cache 2.4k)",
                 0,
                 2100,
@@ -48,7 +50,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "recall",
+                TrajectoryRecordKind::Memory,
+                None,
                 "3 keys (permission-pipeline, consent-store, gate-decide) 12.3KB",
                 2100,
                 300,
@@ -62,7 +65,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 ),
             ),
             ev(
-                "read",
+                TrajectoryRecordKind::Tool,
+                Some("read"),
                 "crates/houyicoder-permission/src/gate.rs",
                 2400,
                 100,
@@ -72,7 +76,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "edit",
+                TrajectoryRecordKind::Tool,
+                Some("edit"),
                 "crates/houyicoder-permission/src/gate.rs",
                 2500,
                 80,
@@ -84,7 +89,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "bash",
+                TrajectoryRecordKind::Tool,
+                Some("bash"),
                 "cargo test -p houyicoder-permission",
                 2580,
                 3400,
@@ -106,7 +112,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 ),
             ),
             ev(
-                "gate",
+                TrajectoryRecordKind::Error,
+                Some("hook"),
                 "deny: no-backticks (#2)",
                 5980,
                 0,
@@ -116,7 +123,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 Some("rule: no-backticks · count: 2"),
             ),
             ev(
-                "edit",
+                TrajectoryRecordKind::Tool,
+                Some("edit"),
                 "crates/houyicoder-permission/src/gate.rs (retry)",
                 5980,
                 90,
@@ -126,7 +134,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "bash",
+                TrajectoryRecordKind::Tool,
+                Some("bash"),
                 "cargo test -p houyicoder-permission",
                 6070,
                 3100,
@@ -144,7 +153,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 ),
             ),
             ev(
-                "llm",
+                TrajectoryRecordKind::Model,
+                Some("qwen3.7-max"),
                 "fixed the crash - session-scope consent now persists",
                 9170,
                 1200,
@@ -166,22 +176,24 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
     };
     let t2 = TrajectoryTurn {
         n: 2,
+        boundary_before: None,
         user_input: "wire the trajectory pane 3-level drill".into(),
         tokens_in: Some(5100),
         tokens_out: Some(1200),
         cache_read: Some(0),
         cache_write: Some(0),
-        model: None,
-        effort: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
         reasoning_tokens: None,
         tool_count: 5,
         tool_fail: 0,
         retries: 0,
         duration_ms: 8400,
         success: true,
-        events: vec![
+        records: vec![
             ev(
-                "llm",
+                TrajectoryRecordKind::Model,
+                Some("qwen3.7-max"),
                 "thinking (5.1k↓ 1.2k↑)",
                 0,
                 3200,
@@ -198,7 +210,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "recall",
+                TrajectoryRecordKind::Memory,
+                None,
                 "2 keys (trajectory-ux, observability-design) 8.1KB",
                 3200,
                 200,
@@ -210,7 +223,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 ),
             ),
             ev(
-                "read",
+                TrajectoryRecordKind::Tool,
+                Some("read"),
                 "docs/design/feature/observability-design.md",
                 3400,
                 50,
@@ -220,7 +234,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "edit",
+                TrajectoryRecordKind::Tool,
+                Some("edit"),
                 "crates/houyicoder-tui/src/view/trajectory_pane.rs",
                 3450,
                 150,
@@ -230,7 +245,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "edit",
+                TrajectoryRecordKind::Tool,
+                Some("edit"),
                 "crates/houyicoder-tui/src/state.rs",
                 3600,
                 120,
@@ -240,7 +256,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "bash",
+                TrajectoryRecordKind::Tool,
+                Some("bash"),
                 "cargo test -p houyicoder-tui --lib trajectory",
                 3720,
                 2800,
@@ -259,7 +276,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 ),
             ),
             ev(
-                "llm",
+                TrajectoryRecordKind::Model,
+                Some("qwen3.7-max"),
                 "trajectory pane 3-level drill wired",
                 6520,
                 1800,
@@ -277,22 +295,24 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
     };
     let t3 = TrajectoryTurn {
         n: 3,
+        boundary_before: None,
         user_input: "pty test the drill journey".into(),
         tokens_in: Some(2800),
         tokens_out: Some(2100),
         cache_read: Some(0),
         cache_write: Some(0),
-        model: None,
-        effort: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
         reasoning_tokens: None,
         tool_count: 2,
         tool_fail: 0,
         retries: 0,
         duration_ms: 5800,
         success: true,
-        events: vec![
+        records: vec![
             ev(
-                "llm",
+                TrajectoryRecordKind::Model,
+                Some("qwen3.7-max"),
                 "thinking (2.8k↓ 2.1k↑)",
                 0,
                 1500,
@@ -308,7 +328,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "edit",
+                TrajectoryRecordKind::Tool,
+                Some("edit"),
                 "crates/houyicoder-tui/tests/ui_fence.rs",
                 1500,
                 200,
@@ -318,7 +339,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 None,
             ),
             ev(
-                "bash",
+                TrajectoryRecordKind::Tool,
+                Some("bash"),
                 "cargo test --test ui_fence trajectory_drills -- --ignored",
                 1700,
                 3100,
@@ -333,7 +355,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 ),
             ),
             ev(
-                "llm",
+                TrajectoryRecordKind::Model,
+                Some("qwen3.7-max"),
                 "pty journey green",
                 4800,
                 1000,
@@ -372,7 +395,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
 
 #[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
 fn ev(
-    kind: &str,
+    kind: TrajectoryRecordKind,
+    name: Option<&str>,
     summary: &str,
     start_ms: u64,
     ms: u64,
@@ -380,16 +404,25 @@ fn ev(
     thinking: Option<&str>,
     input: Option<&str>,
     output: Option<&str>,
-) -> TrajectoryEvent {
-    TrajectoryEvent {
-        kind: kind.into(),
+) -> TrajectoryRecord {
+    TrajectoryRecord {
+        kind,
+        name: name.map(Into::into),
+        ordinal: 0,
         summary: summary.into(),
         start_ms,
         duration_ms: ms,
-        success: ok,
+        outcome: if ok {
+            RecordOutcome::Ok
+        } else {
+            RecordOutcome::Failed
+        },
         thinking: thinking.map(Into::into),
         input: input.map(Into::into),
         output: output.map(Into::into),
+        usage: None,
+        timing: None,
+        retries: 0,
     }
 }
 fn bg(kind: &str, summary: &str, ms: u64) -> TrajectoryBg {

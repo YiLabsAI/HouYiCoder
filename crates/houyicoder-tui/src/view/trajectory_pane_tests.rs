@@ -12,7 +12,7 @@ fn test_sample_has_turns_events() {
     assert!(
         t.rows
             .iter()
-            .any(|r| matches!(r, TrajectoryRow::Turn(t) if !t.events.is_empty()))
+            .any(|r| matches!(r, TrajectoryRow::Turn(t) if !t.records.is_empty()))
     );
 }
 
@@ -220,24 +220,26 @@ fn test_level2_renders_event_detail() {
 /// fine.
 #[test]
 fn test_level2_renders_projection_kinds() {
-    use crate::view::trajectory_pane::{
-        TrajectoryEvent, TrajectoryRow, TrajectoryTurn, TrajectoryView, draw_event_detail,
-    };
     fn ev(
-        kind: &str,
+        kind: TrajectoryRecordKind,
         thinking: Option<&str>,
         input: Option<&str>,
         output: Option<&str>,
-    ) -> TrajectoryEvent {
-        TrajectoryEvent {
-            kind: kind.into(),
+    ) -> TrajectoryRecord {
+        TrajectoryRecord {
+            kind,
+            name: Some("bash".into()),
+            ordinal: 0,
             summary: "preview".into(),
             start_ms: 0,
             duration_ms: 10,
-            success: true,
+            outcome: RecordOutcome::Ok,
             thinking: thinking.map(Into::into),
             input: input.map(Into::into),
             output: output.map(Into::into),
+            usage: None,
+            timing: None,
+            retries: 0,
         }
     }
     let view = TrajectoryView {
@@ -254,30 +256,41 @@ fn test_level2_renders_projection_kinds() {
         ttft_p99_ms: None,
         decode_tok_per_sec: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            boundary_before: None,
             n: 1,
             user_input: "real kinds".into(),
             tokens_in: Some(0),
             tokens_out: Some(0),
             cache_read: Some(0),
             cache_write: Some(0),
-            model: None,
-            effort: None,
+            models: Vec::new(),
+            efforts: Vec::new(),
             reasoning_tokens: None,
             tool_count: 2,
             tool_fail: 0,
             retries: 0,
             duration_ms: 0,
             success: true,
-            events: vec![
-                ev("reasoning", Some("let me think"), None, None),
-                ev("tool_call", None, Some("echo hi"), None),
-                ev("tool_result", None, None, Some("hi")),
-                ev("llm", Some("decided"), None, Some("the full reply")),
+            records: vec![
+                ev(
+                    TrajectoryRecordKind::Model,
+                    Some("let me think"),
+                    None,
+                    None,
+                ),
+                ev(TrajectoryRecordKind::Tool, None, Some("echo hi"), None),
+                ev(TrajectoryRecordKind::Tool, None, None, Some("hi")),
+                ev(
+                    TrajectoryRecordKind::Model,
+                    Some("decided"),
+                    None,
+                    Some("the full reply"),
+                ),
             ],
         })],
     };
     let body_text = |cursor: usize| {
-        let (_, body, _) = draw_event_detail(&view, 0, cursor, ratatui::layout::Rect::ZERO);
+        let (_, body, _) = detail::draw_event_detail(&view, 0, cursor, ratatui::layout::Rect::ZERO);
         body.iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
             .collect::<String>()
@@ -341,9 +354,6 @@ fn test_trajectory_bar_invariants_mock() {
 /// projects from stays full-fidelity. This pins the redact-on-read boundary.
 #[test]
 fn test_event_detail_redacts_secrets() {
-    use crate::view::trajectory_pane::{
-        TrajectoryEvent, TrajectoryRow, TrajectoryTurn, TrajectoryView, draw_event_detail,
-    };
     let secret = "sk-abcd1234efgh5678ijkl9012mnop3456qrst";
     let view = TrajectoryView {
         session_id: "s".into(),
@@ -359,33 +369,39 @@ fn test_event_detail_redacts_secrets() {
         ttft_p99_ms: None,
         decode_tok_per_sec: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            boundary_before: None,
             n: 1,
             user_input: "show keys".into(),
             tokens_in: Some(0),
             tokens_out: Some(0),
             cache_read: Some(0),
             cache_write: Some(0),
-            model: None,
-            effort: None,
+            models: Vec::new(),
+            efforts: Vec::new(),
             reasoning_tokens: None,
             tool_count: 1,
             tool_fail: 0,
             retries: 0,
             duration_ms: 0,
             success: true,
-            events: vec![TrajectoryEvent {
-                kind: "tool_result".into(),
+            records: vec![TrajectoryRecord {
+                kind: TrajectoryRecordKind::Tool,
+                name: Some("read".into()),
+                ordinal: 0,
                 summary: "creds".into(),
                 start_ms: 0,
                 duration_ms: 10,
-                success: true,
+                outcome: RecordOutcome::Ok,
                 thinking: None,
                 input: None,
                 output: Some(format!("token={secret}")),
+                usage: None,
+                timing: None,
+                retries: 0,
             }],
         })],
     };
-    let (_, body, _) = draw_event_detail(&view, 0, 0, ratatui::layout::Rect::ZERO);
+    let (_, body, _) = detail::draw_event_detail(&view, 0, 0, ratatui::layout::Rect::ZERO);
     let text = body
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
@@ -473,21 +489,22 @@ fn test_thinking_tokens_render_nonzero() {
         ttft_p99_ms: None,
         decode_tok_per_sec: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            boundary_before: None,
             n: 1,
             user_input: "hi".into(),
             tokens_in: Some(100),
             tokens_out: Some(50),
             cache_read: Some(0),
             cache_write: Some(0),
-            model: None,
-            effort: None,
+            models: Vec::new(),
+            efforts: Vec::new(),
             reasoning_tokens: Some(20),
             tool_count: 0,
             tool_fail: 0,
             retries: 0,
             duration_ms: 0,
             success: true,
-            events: vec![],
+            records: vec![],
         })],
     };
     let (_, body, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
@@ -517,21 +534,22 @@ fn test_thinking_tokens_hidden_zero() {
         ttft_p99_ms: None,
         decode_tok_per_sec: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            boundary_before: None,
             n: 1,
             user_input: "hi".into(),
             tokens_in: Some(100),
             tokens_out: Some(50),
             cache_read: Some(0),
             cache_write: Some(0),
-            model: None,
-            effort: None,
+            models: Vec::new(),
+            efforts: Vec::new(),
             reasoning_tokens: None,
             tool_count: 0,
             tool_fail: 0,
             retries: 0,
             duration_ms: 0,
             success: true,
-            events: vec![],
+            records: vec![],
         })],
     };
     let (_, body, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
@@ -565,38 +583,40 @@ fn test_per_turn_model_two() {
         decode_tok_per_sec: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
+                boundary_before: None,
                 n: 1,
                 user_input: "a".into(),
                 tokens_in: Some(100),
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
-                model: Some("qwen3.7-max".into()),
-                effort: Some("high".into()),
+                models: vec!["qwen3.7-max".into()],
+                efforts: vec!["high".into()],
                 reasoning_tokens: None,
                 tool_count: 0,
                 tool_fail: 0,
                 retries: 0,
                 duration_ms: 0,
                 success: true,
-                events: vec![],
+                records: vec![],
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
+                boundary_before: None,
                 n: 2,
                 user_input: "b".into(),
                 tokens_in: Some(100),
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
-                model: Some("glm-5.2".into()),
-                effort: None,
+                models: vec!["glm-5.2".into()],
+                efforts: Vec::new(),
                 reasoning_tokens: None,
                 tool_count: 0,
                 tool_fail: 0,
                 retries: 0,
                 duration_ms: 0,
                 success: true,
-                events: vec![],
+                records: vec![],
             }),
         ],
     };
@@ -630,38 +650,40 @@ fn test_per_turn_model_one() {
         decode_tok_per_sec: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
+                boundary_before: None,
                 n: 1,
                 user_input: "a".into(),
                 tokens_in: Some(100),
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
-                model: Some("qwen3.7-max".into()),
-                effort: None,
+                models: vec!["qwen3.7-max".into()],
+                efforts: Vec::new(),
                 reasoning_tokens: None,
                 tool_count: 0,
                 tool_fail: 0,
                 retries: 0,
                 duration_ms: 0,
                 success: true,
-                events: vec![],
+                records: vec![],
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
+                boundary_before: None,
                 n: 2,
                 user_input: "b".into(),
                 tokens_in: Some(100),
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
-                model: Some("qwen3.7-max".into()),
-                effort: None,
+                models: vec!["qwen3.7-max".into()],
+                efforts: Vec::new(),
                 reasoning_tokens: None,
                 tool_count: 0,
                 tool_fail: 0,
                 retries: 0,
                 duration_ms: 0,
                 success: true,
-                events: vec![],
+                records: vec![],
             }),
         ],
     };
@@ -677,9 +699,9 @@ fn test_per_turn_model_one() {
     );
 }
 
-/// Session reset separator line and cached ratio formatting are covered.
+/// Turn rows render the per-turn cached ratio.
 #[test]
-fn test_session_reset_cached_ratio() {
+fn test_turn_row_cached_ratio() {
     use super::*;
     let view = TrajectoryView {
         session_id: "s".into(),
@@ -696,38 +718,40 @@ fn test_session_reset_cached_ratio() {
         decode_tok_per_sec: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
+                boundary_before: None,
                 n: 2,
                 user_input: "first".into(),
                 tokens_in: Some(100),
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
-                model: None,
-                effort: None,
+                models: Vec::new(),
+                efforts: Vec::new(),
                 reasoning_tokens: None,
                 tool_count: 0,
                 tool_fail: 0,
                 retries: 0,
                 duration_ms: 0,
                 success: true,
-                events: vec![],
+                records: vec![],
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
+                boundary_before: None,
                 n: 1,
-                user_input: "reset-turn".into(),
+                user_input: "second".into(),
                 tokens_in: Some(100),
                 tokens_out: Some(50),
                 cache_read: Some(50),
                 cache_write: Some(0),
-                model: None,
-                effort: None,
+                models: Vec::new(),
+                efforts: Vec::new(),
                 reasoning_tokens: None,
                 tool_count: 1,
                 tool_fail: 0,
                 retries: 0,
                 duration_ms: 500,
                 success: true,
-                events: vec![],
+                records: vec![],
             }),
         ],
     };
@@ -737,29 +761,36 @@ fn test_session_reset_cached_ratio() {
         .flat_map(|l| l.spans.iter())
         .map(|s| s.content.as_ref())
         .collect();
-    assert!(text.contains("Session Reset"), "reset line present: {text}");
-    assert!(text.contains("50% cache"), "cached ratio present: {text}");
+    assert!(
+        text.contains("50% cache"),
+        "the per-turn cached ratio renders: {text}"
+    );
+    assert!(
+        !text.contains('─'),
+        "turn numbering is monotonic, so no boundary separator is drawn: {text}"
+    );
 }
 
 /// A turn with a user input uses it as the title.
 #[test]
 fn test_turn_title_user_input() {
     let turn = TrajectoryTurn {
+        boundary_before: None,
         n: 1,
         user_input: "fix the bug".into(),
         tokens_in: None,
         tokens_out: None,
         cache_read: None,
         cache_write: None,
-        model: None,
-        effort: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
         reasoning_tokens: None,
         tool_count: 0,
         tool_fail: 0,
         retries: 0,
         duration_ms: 0,
         success: true,
-        events: vec![],
+        records: vec![],
     };
     assert_eq!(turn_title(&turn), "fix the bug");
 }
@@ -769,35 +800,45 @@ fn test_turn_title_user_input() {
 #[test]
 fn test_turn_title_falls_back() {
     let turn = TrajectoryTurn {
+        boundary_before: None,
         n: 2,
         user_input: String::new(),
         tokens_in: None,
         tokens_out: None,
         cache_read: None,
         cache_write: None,
-        model: None,
-        effort: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
         reasoning_tokens: None,
         tool_count: 1,
         tool_fail: 0,
         retries: 0,
         duration_ms: 0,
         success: true,
-        events: vec![TrajectoryEvent {
-            kind: "tool_call".into(),
+        records: vec![TrajectoryRecord {
+            kind: TrajectoryRecordKind::Tool,
+            name: Some("bash".into()),
+            ordinal: 0,
             summary: "Bash: ls -la".into(),
             start_ms: 0,
             duration_ms: 10,
-            success: true,
+            outcome: RecordOutcome::Ok,
             thinking: None,
             input: None,
             output: None,
+            usage: None,
+            timing: None,
+            retries: 0,
         }],
     };
     let title = turn_title(&turn);
     assert!(
-        title.contains("(continued)") && title.contains("Bash: ls -la"),
-        "fallback title must mark continuation + carry the event summary: {title}"
+        title.contains("Bash: ls -la"),
+        "fallback title carries the first record summary: {title}"
+    );
+    assert!(
+        !title.contains("(continued)"),
+        "a turn is no longer marked as a continuation: {title}"
     );
 }
 
@@ -805,21 +846,22 @@ fn test_turn_title_falls_back() {
 #[test]
 fn test_turn_title_empty() {
     let turn = TrajectoryTurn {
+        boundary_before: None,
         n: 3,
         user_input: String::new(),
         tokens_in: None,
         tokens_out: None,
         cache_read: None,
         cache_write: None,
-        model: None,
-        effort: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
         reasoning_tokens: None,
         tool_count: 0,
         tool_fail: 0,
         retries: 0,
         duration_ms: 0,
         success: true,
-        events: vec![],
+        records: vec![],
     };
     assert_eq!(turn_title(&turn), "(no input)");
 }
@@ -890,21 +932,22 @@ fn test_timing_and_cache_render() {
         ttft_p99_ms: Some(600),
         decode_tok_per_sec: Some(45.2),
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            boundary_before: None,
             n: 1,
             user_input: "test".into(),
             tokens_in: Some(1000),
             tokens_out: Some(200),
             cache_read: Some(500),
             cache_write: None,
-            model: None,
-            effort: None,
+            models: Vec::new(),
+            efforts: Vec::new(),
             reasoning_tokens: None,
             tool_count: 0,
             tool_fail: 0,
             retries: 0,
             duration_ms: 1000,
             success: true,
-            events: vec![],
+            records: vec![],
         })],
     };
     let (header, body, _) = draw_turn_list(&view, 0, ratatui::layout::Rect::new(0, 0, 100, 25));
@@ -925,4 +968,182 @@ fn test_timing_and_cache_render() {
         .map(|s| s.content.as_ref())
         .collect();
     assert!(body_text.contains("50% cached"));
+}
+
+/// Every outcome has its own glyph and colour, so a pending record never looks
+/// finished and a failure never looks clean.
+#[test]
+fn test_outcome_glyphs() {
+    assert_eq!(RecordOutcome::Ok.glyph(), "✓");
+    assert_eq!(RecordOutcome::Failed.glyph(), "✗");
+    assert_eq!(RecordOutcome::Pending.glyph(), "…");
+}
+
+/// Every record kind has a stable label for the L1 kind column.
+#[test]
+fn test_record_kind_labels() {
+    let labels: Vec<&str> = [
+        TrajectoryRecordKind::Context,
+        TrajectoryRecordKind::Model,
+        TrajectoryRecordKind::Tool,
+        TrajectoryRecordKind::Agent,
+        TrajectoryRecordKind::Memory,
+        TrajectoryRecordKind::Hook,
+        TrajectoryRecordKind::Compaction,
+        TrajectoryRecordKind::Error,
+    ]
+    .iter()
+    .map(|k| k.label())
+    .collect();
+    assert_eq!(
+        labels,
+        vec![
+            "context", "model", "tool", "agent", "memory", "hook", "compact", "error"
+        ]
+    );
+}
+
+/// A model record's detail shows the latency split and the provider usage it
+/// carries, and omits a part the log did not record rather than printing zero.
+#[test]
+fn test_detail_shows_model_facts() {
+    let mut record = record_of(TrajectoryRecordKind::Model, Some("answer"));
+    record.name = Some("qwen3.7-max".into());
+    record.timing = Some(EventTiming {
+        total_ms: 620,
+        ttft_ms: Some(210),
+        decode_ms: Some(410),
+    });
+    record.usage = Some(EventUsage {
+        input: Some(1200),
+        output: Some(340),
+        cache_read: Some(1000),
+        cache_write: None,
+        reasoning: Some(90),
+    });
+    record.retries = 1;
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "qwen3.7-max".into(),
+        total_turns: 1,
+        tokens_in: Some(1200),
+        tokens_out: Some(340),
+        failures: 0,
+        duration_secs: 1,
+        cache_read: Some(1000),
+        ttft_avg_ms: Some(210),
+        ttft_p95_ms: Some(210),
+        ttft_p99_ms: Some(210),
+        decode_tok_per_sec: Some(30.0),
+        rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            n: 1,
+            boundary_before: None,
+            user_input: "ask".into(),
+            tokens_in: Some(1200),
+            tokens_out: Some(340),
+            cache_read: Some(1000),
+            cache_write: None,
+            models: vec!["qwen3.7-max".into()],
+            efforts: Vec::new(),
+            reasoning_tokens: Some(90),
+            tool_count: 0,
+            tool_fail: 0,
+            retries: 1,
+            duration_ms: 620,
+            success: true,
+            records: vec![record],
+        })],
+    };
+    let (header, body, _) = detail::draw_event_detail(&view, 0, 0, Rect::ZERO);
+    let text: String = header
+        .iter()
+        .chain(body.iter())
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("qwen3.7-max"),
+        "the model id is named: {text}"
+    );
+    assert!(text.contains("TTFT 210ms"), "the split is shown: {text}");
+    assert!(text.contains("decode 410ms"), "and its decode part: {text}");
+    assert!(text.contains("cache read 1000"), "usage is shown: {text}");
+    assert!(
+        !text.contains("cache write"),
+        "an unrecorded part stays absent: {text}"
+    );
+    assert!(
+        text.contains("1 length recovery"),
+        "retries are shown: {text}"
+    );
+}
+
+/// The L1 timeline names what each record acted on, so a tool row reads as the
+/// tool it ran rather than as a generic row.
+#[test]
+fn test_timeline_shows_record_names() {
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(0),
+        tokens_out: Some(0),
+        failures: 0,
+        duration_secs: 1,
+        cache_read: None,
+        ttft_avg_ms: None,
+        ttft_p95_ms: None,
+        ttft_p99_ms: None,
+        decode_tok_per_sec: None,
+        rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            n: 1,
+            boundary_before: None,
+            user_input: "go".into(),
+            tokens_in: Some(0),
+            tokens_out: Some(0),
+            cache_read: None,
+            cache_write: None,
+            models: Vec::new(),
+            efforts: Vec::new(),
+            reasoning_tokens: None,
+            tool_count: 1,
+            tool_fail: 0,
+            retries: 0,
+            duration_ms: 100,
+            success: true,
+            records: vec![record_of(TrajectoryRecordKind::Tool, None)],
+        })],
+    };
+    let app = crate::composition::app();
+    let (_, body, _) = detail::draw_turn_detail(&view, 0, 0, Rect::new(0, 0, 120, 20), &app);
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(text.contains("tool"), "the kind column is labelled: {text}");
+    assert!(
+        text.contains("bash"),
+        "the tool name is shown next to it: {text}"
+    );
+}
+
+/// A record with the fields these tests exercise, so each test states only the
+/// parts it cares about.
+fn record_of(kind: TrajectoryRecordKind, output: Option<&str>) -> TrajectoryRecord {
+    TrajectoryRecord {
+        kind,
+        name: Some("bash".into()),
+        ordinal: 0,
+        summary: "preview".into(),
+        start_ms: 0,
+        duration_ms: 10,
+        outcome: RecordOutcome::Ok,
+        thinking: None,
+        input: None,
+        output: output.map(Into::into),
+        usage: None,
+        timing: None,
+        retries: 0,
+    }
 }

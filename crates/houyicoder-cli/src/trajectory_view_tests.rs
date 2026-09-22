@@ -16,9 +16,10 @@ fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 #[test]
-fn test_project_groups_turn_started() {
-    // One prompt + two TurnStarted = two turns. The first turn carries
-    // the prompt text; the second is empty (same prompt's 2nd iteration).
+fn test_turn_groups_by_input() {
+    // One prompt that needs two model calls (a tool round trip between them)
+    // is ONE turn: the user asked once. The second TurnStarted is the second
+    // model call inside that turn, not a second turn.
     let events = vec![
         ev(
             100,
@@ -111,8 +112,11 @@ fn test_project_groups_turn_started() {
         ),
     ];
     let view = project(&events, "test");
-    assert_eq!(view.total_turns, 2, "two TurnStarted => two turns");
-    assert_eq!(view.tokens_in, Some(3000), "session total sums known turns");
+    assert_eq!(
+        view.total_turns, 1,
+        "one prompt is one turn however many model calls it takes"
+    );
+    assert_eq!(view.tokens_in, Some(3000), "session total sums both calls");
     assert_eq!(view.tokens_out, Some(600));
     assert_eq!(view.failures, 1);
     let t1 = match &view.rows[0] {
@@ -120,32 +124,61 @@ fn test_project_groups_turn_started() {
         _ => unreachable!(),
     };
     assert_eq!(t1.n, 1);
-    assert_eq!(t1.user_input, "hello", "first turn carries the prompt text");
-    assert_eq!(t1.tokens_in, Some(1000));
-    assert_eq!(t1.tool_count, 1);
-    assert_eq!(t1.tool_fail, 0);
-    assert_eq!(t1.retries, 0);
-    assert_eq!(t1.duration_ms, 50);
-    let t2 = match &view.rows[1] {
-        TrajectoryRow::Turn(t) => t,
-        _ => unreachable!(),
-    };
-    assert_eq!(t2.n, 2);
-    assert_eq!(t2.user_input, "", "2nd turn of the same prompt: empty");
-    assert_eq!(t2.tokens_in, Some(2000));
-    assert_eq!(t2.tool_fail, 1);
-    // start_ms: ToolResult at ts=120 on a turn starting at TurnStarted ts=105 => 15.
-    let tr = t1.events.iter().find(|e| e.kind == "tool_result").unwrap();
+    assert_eq!(t1.user_input, "hello");
     assert_eq!(
-        tr.start_ms, 15,
-        "offset from TurnStarted.ts, not UserInput.ts"
+        t1.tokens_in,
+        Some(3000),
+        "a turn sums every model call it made, not just the last"
     );
+    assert_eq!(t1.tool_count, 2);
+    assert_eq!(t1.tool_fail, 1);
+    assert_eq!(t1.retries, 0);
+    assert_eq!(
+        t1.duration_ms, 140,
+        "the turn spans its own events (100 to 240), not just its tools"
+    );
+    // Each tool call is one record carrying both its input and its result.
+    let tools: Vec<_> = t1
+        .records
+        .iter()
+        .filter(|e| e.kind == TrajectoryRecordKind::Tool)
+        .collect();
+    assert_eq!(tools.len(), 2, "call and result merge into one record");
+    assert_eq!(tools[0].name.as_deref(), Some("echo"));
+    assert!(tools[0].input.is_some(), "the call input is on the record");
+    assert!(
+        tools[0].output.is_some(),
+        "the result is on the same record"
+    );
+    assert_eq!(tools[0].duration_ms, 50);
+    assert_eq!(tools[0].outcome, RecordOutcome::Ok);
+    assert_eq!(
+        tools[1].outcome,
+        RecordOutcome::Failed,
+        "the error result marks its record failed"
+    );
+    // Two model calls inside the turn, each with its own usage.
+    let models: Vec<_> = t1
+        .records
+        .iter()
+        .filter(|e| e.kind == TrajectoryRecordKind::Model)
+        .collect();
+    assert_eq!(models.len(), 2, "each model call is its own record");
+    assert_eq!(
+        models[0].usage.and_then(|u| u.input),
+        Some(1000),
+        "a model call keeps its own usage for L2 attribution"
+    );
+    assert_eq!(models[1].usage.and_then(|u| u.input), Some(2000));
+    // The user input is the turn's first record, offset zero.
+    assert_eq!(t1.records[0].kind, TrajectoryRecordKind::Context);
+    assert_eq!(t1.records[0].start_ms, 0);
 }
 
 #[test]
 fn test_multi_iteration_produces_turns() {
-    // One prompt, three tool-iteration turns. Without TurnStarted
-    // grouping, these would flatten to 1 row — hiding #75/#76's work.
+    // One prompt, three model calls (two tool round trips between them).
+    // The calls must stay visible as records inside the single turn.
     let events = vec![
         ev(
             100,
@@ -222,25 +255,26 @@ fn test_multi_iteration_produces_turns() {
     ];
     let view = project(&events, "test");
     assert_eq!(
-        view.total_turns, 3,
-        "one prompt, three iterations => 3 turns"
+        view.total_turns, 1,
+        "one prompt stays one turn however many model calls it drives"
     );
-    // Only the first turn carries the prompt text.
     let t1 = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
     assert_eq!(t1.user_input, "fix the bug");
-    let t2 = match &view.rows[1] {
-        TrajectoryRow::Turn(t) => t,
-        _ => unreachable!(),
-    };
-    assert_eq!(t2.user_input, "", "2nd iteration: no new prompt");
-    let t3 = match &view.rows[2] {
-        TrajectoryRow::Turn(t) => t,
-        _ => unreachable!(),
-    };
-    assert_eq!(t3.user_input, "", "3rd iteration: no new prompt");
+    let models = t1
+        .records
+        .iter()
+        .filter(|e| e.kind == TrajectoryRecordKind::Model)
+        .count();
+    assert_eq!(models, 3, "the three calls are visible inside the turn");
+    assert_eq!(
+        t1.tokens_in,
+        Some(16200),
+        "the turn's cost is the sum of its calls"
+    );
+    assert_eq!(t1.tokens_out, Some(2300));
 }
 
 #[test]
@@ -318,9 +352,17 @@ fn test_recovery_retry_same_turn() {
         _ => unreachable!(),
     };
     assert_eq!(t.retries, 1, "one recovery=true TurnUsage => retries 1");
-    // The turn's tokens come from the LAST TurnUsage (call_in_turn=2).
-    assert_eq!(t.tokens_in, Some(4000));
-    assert_eq!(t.tokens_out, Some(600));
+    // The retry burned real tokens, so the turn's cost is the sum of both
+    // calls: a retry is not free and must not be hidden by taking the last.
+    assert_eq!(t.tokens_in, Some(5000));
+    assert_eq!(t.tokens_out, Some(1100));
+    // The retry is attributed to the model call it belongs to.
+    let retried: Vec<_> = t
+        .records
+        .iter()
+        .filter(|e| e.kind == TrajectoryRecordKind::Model && e.retries > 0)
+        .collect();
+    assert_eq!(retried.len(), 1, "the recovery call carries the retry");
 }
 
 #[test]
@@ -413,15 +455,15 @@ fn test_project_reasoning_carries_thinking() {
         _ => unreachable!(),
     };
     let reasoning = turn
-        .events
+        .records
         .iter()
-        .find(|e| e.kind == "reasoning")
+        .find(|e| e.kind == TrajectoryRecordKind::Model)
         .expect("reasoning event projects to a row");
     assert_eq!(reasoning.thinking.as_deref(), Some("let me think..."));
     let llm = turn
-        .events
+        .records
         .iter()
-        .find(|e| e.kind == "llm")
+        .find(|e| e.kind == TrajectoryRecordKind::Model)
         .expect("assistant message projects to an llm row");
     assert_eq!(
         llm.thinking.as_deref(),
@@ -463,8 +505,8 @@ fn test_cancelled_turn_omits_tokens() {
         .expect("one turn");
     assert!(turn.tokens_in.is_none(), "cancelled turn tokens_in None");
     assert!(turn.tokens_out.is_none(), "cancelled turn tokens_out None");
-    assert!(turn.model.is_none(), "cancelled turn model None");
-    assert!(turn.effort.is_none(), "cancelled turn effort None");
+    assert!(turn.models.is_empty(), "cancelled turn model None");
+    assert!(turn.efforts.is_empty(), "cancelled turn effort None");
 }
 
 /// A failed bash tool result projects to a trajectory event whose L2 output
@@ -512,9 +554,9 @@ fn test_tool_result_extracts_body() {
         _ => unreachable!(),
     };
     let tr = turn
-        .events
+        .records
         .iter()
-        .find(|e| e.kind == "tool_result")
+        .find(|e| e.kind == TrajectoryRecordKind::Tool)
         .expect("tool_result event");
     let body = tr.output.as_deref().unwrap_or("");
     assert!(
@@ -578,11 +620,15 @@ fn test_failed_bash_counted() {
     assert_eq!(view.failures, 1, "header failure total counts the failure");
     assert_eq!(turn.tool_fail, 1, "per-turn failure count");
     let tr = turn
-        .events
+        .records
         .iter()
-        .find(|e| e.kind == "tool_result")
+        .find(|e| e.kind == TrajectoryRecordKind::Tool)
         .expect("tool_result event");
-    assert!(!tr.success, "the result row is marked failed");
+    assert_eq!(
+        tr.outcome,
+        RecordOutcome::Failed,
+        "the result row is marked failed"
+    );
 }
 
 /// grep exiting 1 (no matches) is the command reporting a result, not
@@ -627,11 +673,15 @@ fn test_grep_nomatch_ok() {
     assert_eq!(view.failures, 0, "no matches is not a failure");
     assert_eq!(turn.tool_fail, 0, "per-turn count agrees");
     let tr = turn
-        .events
+        .records
         .iter()
-        .find(|e| e.kind == "tool_result")
+        .find(|e| e.kind == TrajectoryRecordKind::Tool)
         .expect("tool_result event");
-    assert!(tr.success, "the result row stays successful");
+    assert_eq!(
+        tr.outcome,
+        RecordOutcome::Ok,
+        "the result row stays successful"
+    );
 }
 
 /// A tool-infrastructure failure (an error key, no exit code) is still a
@@ -671,7 +721,7 @@ fn test_error_key_counted() {
 /// A MetaUser event (system reminder — redundancy nudge, blind-retry warning)
 /// must NOT enter the turn's user_input. The trajectory title reads
 /// user_input; a system reminder showing there would mislead the user into
-/// thinking they typed it. MetaUser is skipped in build_trajectory_event (no
+/// thinking they typed it. MetaUser is skipped in build_record (no
 /// trajectory event row) and never sets user_input in the projection loop.
 #[test]
 fn test_meta_user_excluded() {
@@ -704,35 +754,32 @@ fn test_meta_user_excluded() {
         ),
     ];
     let view = project(&events, "test");
-    // Two turns: first (hello + MetaUser reminder), second (empty prompt
-    // continuation).
-    let first = match &view.rows[0] {
-        TrajectoryRow::Turn(t) => t,
-        _ => unreachable!(),
-    };
-    let second = match &view.rows[1] {
-        TrajectoryRow::Turn(t) => t,
-        _ => unreachable!(),
-    };
-    // First turn's user_input is the real prompt, not the MetaUser reminder.
-    assert_eq!(first.user_input, "hello");
-    // Second turn's user_input is empty (no UserInput between the first
-    // turn's TurnStarted and the second's).
-    assert!(
-        second.user_input.is_empty(),
-        "second turn user_input must be empty, got: {}",
-        second.user_input
+    assert_eq!(
+        view.total_turns, 1,
+        "the second model call stays inside the one turn"
     );
-    // The MetaUser reminder must NOT appear as a trajectory event in either
-    // turn.
-    for turn in [&first, &second] {
-        for ev in &turn.events {
-            assert!(
-                !ev.summary.contains("Note: you just called"),
-                "MetaUser leaked into trajectory events: {}",
-                ev.summary
-            );
-        }
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        turn.user_input, "hello",
+        "the title is the real prompt, not the MetaUser reminder"
+    );
+    assert_eq!(
+        turn.records
+            .iter()
+            .filter(|e| e.kind == TrajectoryRecordKind::Model)
+            .count(),
+        2,
+        "both model calls are records in the turn"
+    );
+    for record in &turn.records {
+        assert!(
+            !record.summary.contains("Note: you just called"),
+            "MetaUser leaked into trajectory records: {}",
+            record.summary
+        );
     }
 }
 
@@ -774,7 +821,7 @@ fn test_memory_recall_excluded() {
         turn.user_input, "fix the bug",
         "MemoryRecall must not overwrite user_input"
     );
-    for ev in &turn.events {
+    for ev in &turn.records {
         assert!(
             !ev.summary.contains("remembered:"),
             "MemoryRecall leaked into trajectory events: {}",
@@ -844,4 +891,798 @@ fn test_timing_percentiles_and_speed() {
     assert!(view.decode_tok_per_sec.is_some());
     let tps = view.decode_tok_per_sec.unwrap();
     assert!((tps - (250.0 / 1.7)).abs() < 0.1);
+}
+
+/// Turn numbering survives a runner rebuild. The runner's TurnStarted counter
+/// lives in the process and restarts at 1 whenever the runner is rebuilt
+/// (resume, reconnect), but the session log keeps growing. Numbering turns from
+/// the user inputs in the log keeps the sequence monotonic; using the counter
+/// would repeat the first turn number in the middle of one session.
+#[test]
+fn test_turn_ids_survive_rebuild() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "first".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::AssistantMessage {
+                text: "a".into(),
+                thinking: None,
+            },
+        ),
+        // Runner rebuilt: the counter restarts, the log does not.
+        ev(
+            200,
+            SessionEvent::UserInput {
+                text: "second".into(),
+            },
+        ),
+        ev(
+            205,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            210,
+            SessionEvent::AssistantMessage {
+                text: "b".into(),
+                thinking: None,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    assert_eq!(view.total_turns, 2);
+    let n: Vec<usize> = view
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            TrajectoryRow::Turn(t) => Some(t.n),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(n, vec![1, 2], "the repeated counter must not repeat the id");
+}
+
+/// Clearing the context records a boundary on the next turn and does not
+/// restart turn numbering: the user cleared the conversation, not the session.
+#[test]
+fn test_context_cleared_records_boundary() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "first".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(150, SessionEvent::ContextCleared { prior_turn: 1 }),
+        ev(
+            200,
+            SessionEvent::UserInput {
+                text: "after clear".into(),
+            },
+        ),
+        ev(
+            205,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    assert_eq!(
+        view.total_turns, 2,
+        "a clear does not create or drop a turn"
+    );
+    let first = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let second = match &view.rows[1] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(first.boundary_before, None);
+    assert_eq!(
+        second.boundary_before,
+        Some(TurnBoundary::ContextCleared { prior_turn: 1 }),
+        "the boundary attaches to the turn after the clear"
+    );
+    assert_eq!(second.n, 2, "numbering continues across the clear");
+}
+
+/// A tool call whose result never lands is pending, not a success: the pane
+/// must not put a checkmark on work that may still fail.
+#[test]
+fn test_tool_without_result_pending() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::ToolCall {
+                call_id: "c1".into(),
+                tool: "bash".into(),
+                input: serde_json::json!({"command": "sleep 999"}),
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let tool = turn
+        .records
+        .iter()
+        .find(|r| r.kind == TrajectoryRecordKind::Tool)
+        .expect("the call is a record");
+    assert_eq!(tool.outcome, RecordOutcome::Pending);
+    assert_eq!(tool.duration_ms, 0, "no result means no duration");
+    assert!(tool.output.is_none());
+    assert_eq!(turn.tool_count, 1);
+    assert_eq!(turn.tool_fail, 0, "pending is not a failure either");
+}
+
+/// A delegation merges its spawn and return into one Agent record spanning the
+/// child's life, so the parent turn shows the work it delegated rather than two
+/// unrelated log lines.
+#[test]
+fn test_agent_merges_spawn_return() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "explore".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::SubagentSpawn {
+                child_session_id: "child-1".into(),
+                subagent_type: "explore".into(),
+                prompt_summary: "find the auth code".into(),
+                isolation: "worktree".into(),
+                policy: "read-only".into(),
+                trigger_source: "model:c1".into(),
+            },
+        ),
+        ev(
+            900,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-1".into(),
+                status: "completed".into(),
+                summary: "auth lives in src/auth.rs".into(),
+                result_ref: "child-1".into(),
+                input_tokens: 18000,
+                output_tokens: 400,
+                cache_read_input_tokens: 17000,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 100,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let agents: Vec<_> = turn
+        .records
+        .iter()
+        .filter(|r| r.kind == TrajectoryRecordKind::Agent)
+        .collect();
+    assert_eq!(agents.len(), 1, "spawn and return are one record");
+    assert_eq!(agents[0].name.as_deref(), Some("explore"));
+    assert_eq!(agents[0].duration_ms, 790, "spans spawn to return");
+    assert_eq!(agents[0].outcome, RecordOutcome::Ok);
+    assert!(
+        agents[0]
+            .output
+            .as_deref()
+            .unwrap_or("")
+            .contains("src/auth.rs"),
+        "the child's result rides the same record"
+    );
+}
+
+/// A queued user message delivered mid-turn is context inside the running turn,
+/// not a new turn: the user did not start a new request.
+#[test]
+fn test_mid_turn_input_context() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "start".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            120,
+            SessionEvent::MidTurnInput {
+                text: "also check the tests".into(),
+                pending_input_id: None,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    assert_eq!(view.total_turns, 1, "an interjection is not a new turn");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let contexts: Vec<_> = turn
+        .records
+        .iter()
+        .filter(|r| r.kind == TrajectoryRecordKind::Context)
+        .collect();
+    assert_eq!(contexts.len(), 2, "the prompt and the update");
+    assert!(
+        contexts[1]
+            .input
+            .as_deref()
+            .unwrap_or("")
+            .contains("also check the tests")
+    );
+}
+
+/// A memory recall is its own record carrying the recalled keys, so the turn
+/// shows what the model was handed rather than hiding it in the prompt.
+#[test]
+fn test_memory_recall_is_record() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::MemoryRecall {
+                text: "remembered".into(),
+                keys: vec!["commit-flow".into(), "gate-decide".into()],
+                bytes: 2048,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let memory = turn
+        .records
+        .iter()
+        .find(|r| r.kind == TrajectoryRecordKind::Memory)
+        .expect("the recall is a record");
+    assert!(
+        memory.summary.contains("2 keys"),
+        "the row counts the recalled keys: {}",
+        memory.summary
+    );
+    assert!(memory.summary.contains("2.0KB"), "and their size");
+    assert!(
+        memory
+            .output
+            .as_deref()
+            .unwrap_or("")
+            .contains("commit-flow"),
+        "the keys are available on drill-down"
+    );
+}
+
+/// A model delegation is issued as a tool call. The turn shows one Agent record
+/// for the delegation, so the tool call it was spawned from must not also
+/// appear: that would count the same work twice, once as the mechanism and once
+/// as the delegation.
+#[test]
+fn test_delegation_hides_tool_call() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "explore".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            108,
+            SessionEvent::ToolCall {
+                call_id: "c1".into(),
+                tool: "agent".into(),
+                input: serde_json::json!({"type": "explore"}),
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::SubagentSpawn {
+                child_session_id: "child-1".into(),
+                subagent_type: "explore".into(),
+                prompt_summary: "find the auth code".into(),
+                isolation: "worktree".into(),
+                policy: "read-only".into(),
+                trigger_source: "model:c1".into(),
+            },
+        ),
+        ev(
+            900,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-1".into(),
+                status: "completed".into(),
+                summary: "done".into(),
+                result_ref: "child-1".into(),
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        turn.records
+            .iter()
+            .filter(|r| r.kind == TrajectoryRecordKind::Tool)
+            .count(),
+        0,
+        "the delegation's tool call is not a separate record"
+    );
+    assert_eq!(
+        turn.records
+            .iter()
+            .filter(|r| r.kind == TrajectoryRecordKind::Agent)
+            .count(),
+        1,
+        "the delegation itself is"
+    );
+    assert_eq!(
+        turn.tool_count, 0,
+        "and it is not counted as a tool call either"
+    );
+}
+
+/// A tool call the model made directly (not a delegation) still shows as a Tool
+/// record, so the delegation rule does not swallow ordinary tool work.
+#[test]
+fn test_direct_tool_call_shows() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "read it".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::ToolCall {
+                call_id: "c9".into(),
+                tool: "read".into(),
+                input: serde_json::json!({"path": "a.rs"}),
+            },
+        ),
+        ev(
+            120,
+            SessionEvent::ToolResult {
+                call_id: "c9".into(),
+                output: serde_json::json!({"content": "fn main() {}"}),
+                duration_ms: 12,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let tools: Vec<_> = turn
+        .records
+        .iter()
+        .filter(|r| r.kind == TrajectoryRecordKind::Tool)
+        .collect();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name.as_deref(), Some("read"));
+    assert_eq!(tools[0].outcome, RecordOutcome::Ok);
+}
+
+/// A hook verdict that is not a denial did not fail. Rendering an observation or
+/// an injection as a red error would report a failure the hook never produced.
+#[test]
+fn test_hook_verdict_neutral() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::HookSignal {
+                event: Default::default(),
+                verdict: houyicoder_context::HookVerdictKind::Observe,
+                error: None,
+                reason: "noted".into(),
+                hook_name: "audit".into(),
+                tool_name: None,
+                triggered_event: None,
+                turn: None,
+                call_in_turn: None,
+            },
+        ),
+        ev(
+            120,
+            SessionEvent::HookSignal {
+                event: Default::default(),
+                verdict: houyicoder_context::HookVerdictKind::Deny,
+                error: None,
+                reason: "no backticks".into(),
+                hook_name: "style".into(),
+                tool_name: None,
+                triggered_event: None,
+                turn: None,
+                call_in_turn: None,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let observed = turn
+        .records
+        .iter()
+        .find(|r| r.name.as_deref() == Some("audit"))
+        .expect("the observation is recorded");
+    assert_eq!(
+        observed.kind,
+        TrajectoryRecordKind::Hook,
+        "an observation is not an error"
+    );
+    assert_eq!(observed.outcome, RecordOutcome::Ok);
+    let denied = turn
+        .records
+        .iter()
+        .find(|r| r.name.as_deref() == Some("style"))
+        .expect("the denial is recorded");
+    assert_eq!(denied.kind, TrajectoryRecordKind::Error);
+    assert_eq!(denied.outcome, RecordOutcome::Failed);
+}
+
+/// A spawn written before the trigger field existed carries an empty source,
+/// which a replay reads as a model trigger. The delegation's own tool call must
+/// still be suppressed, or the same work shows twice.
+#[test]
+fn test_delegation_legacy_hides_tool() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "explore".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            108,
+            SessionEvent::ToolCall {
+                call_id: "c1".into(),
+                tool: "agent".into(),
+                input: serde_json::json!({"type": "explore"}),
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::SubagentSpawn {
+                child_session_id: "child-1".into(),
+                subagent_type: "explore".into(),
+                prompt_summary: "find it".into(),
+                isolation: "worktree".into(),
+                policy: "read-only".into(),
+                trigger_source: String::new(),
+            },
+        ),
+        ev(
+            900,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-1".into(),
+                status: "completed".into(),
+                summary: "done".into(),
+                result_ref: "child-1".into(),
+                input_tokens: 10,
+                output_tokens: 1,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        turn.records
+            .iter()
+            .filter(|r| r.kind == TrajectoryRecordKind::Tool)
+            .count(),
+        0,
+        "the delegation's tool call is suppressed by position"
+    );
+    assert_eq!(
+        turn.records
+            .iter()
+            .filter(|r| r.kind == TrajectoryRecordKind::Agent)
+            .count(),
+        1
+    );
+}
+
+/// A return whose spawn sits outside the loaded window is still shown, rather
+/// than dropped without trace.
+#[test]
+fn test_agent_return_shown() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            900,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-9".into(),
+                status: "completed".into(),
+                summary: "done".into(),
+                result_ref: "child-9".into(),
+                input_tokens: 10,
+                output_tokens: 1,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let agents: Vec<_> = turn
+        .records
+        .iter()
+        .filter(|r| r.kind == TrajectoryRecordKind::Agent)
+        .collect();
+    assert_eq!(agents.len(), 1, "the return is not dropped");
+    assert!(agents[0].summary.contains("child-9"));
+}
+
+/// An unrecognised delegation status is unknown, not a success.
+#[test]
+fn test_agent_unknown_status() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::SubagentSpawn {
+                child_session_id: "child-1".into(),
+                subagent_type: "explore".into(),
+                prompt_summary: "p".into(),
+                isolation: "worktree".into(),
+                policy: "read-only".into(),
+                trigger_source: "model:c1".into(),
+            },
+        ),
+        ev(
+            900,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-1".into(),
+                status: "timeout".into(),
+                summary: String::new(),
+                result_ref: "child-1".into(),
+                input_tokens: 10,
+                output_tokens: 1,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let agent = turn
+        .records
+        .iter()
+        .find(|r| r.kind == TrajectoryRecordKind::Agent)
+        .expect("the delegation is a record");
+    assert_eq!(
+        agent.outcome,
+        RecordOutcome::Failed,
+        "a timeout is a failure"
+    );
+}
+
+/// Model calls are numbered inside their turn, so a multi-call turn reads as a
+/// sequence rather than as interchangeable rows.
+#[test]
+fn test_model_calls_are_numbered() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::AssistantMessage {
+                text: "a".into(),
+                thinking: None,
+            },
+        ),
+        ev(
+            200,
+            SessionEvent::TurnStarted {
+                turn: 2,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            210,
+            SessionEvent::AssistantMessage {
+                text: "b".into(),
+                thinking: None,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let ordinals: Vec<u32> = turn
+        .records
+        .iter()
+        .filter(|r| r.kind == TrajectoryRecordKind::Model)
+        .map(|r| r.ordinal)
+        .collect();
+    assert_eq!(ordinals, vec![1, 2], "the calls are numbered in order");
+}
+
+/// A call that produced a reply is complete even when no timing was recorded,
+/// so it does not stay pending forever.
+#[test]
+fn test_reply_completes_model_call() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::AssistantMessage {
+                text: "answer".into(),
+                thinking: None,
+            },
+        ),
+    ];
+    let view = project(&events, "test");
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    let model = turn
+        .records
+        .iter()
+        .find(|r| r.kind == TrajectoryRecordKind::Model)
+        .expect("the call is a record");
+    assert_eq!(model.outcome, RecordOutcome::Ok);
+}
+
+/// A turn opened by a non-boundary event still gets a number, so a windowed read
+/// that starts mid-run cannot label it turn zero.
+#[test]
+fn test_turn_opened_by_content() {
+    let events = vec![ev(
+        100,
+        SessionEvent::AssistantMessage {
+            text: "mid-run".into(),
+            thinking: None,
+        },
+    )];
+    let view = project(&events, "test");
+    assert_eq!(view.total_turns, 1);
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(turn.n, 1, "a turn is never numbered zero");
 }

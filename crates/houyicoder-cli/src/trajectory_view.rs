@@ -10,8 +10,12 @@ use std::sync::Arc;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::records::ToolOutcome;
+#[path = "trajectory_turns.rs"]
+mod turns;
+
 use houyicoder_tui::view::trajectory_pane::{
-    TrajectoryEvent, TrajectoryLog, TrajectoryRow, TrajectoryTurn, TrajectoryView,
+    EventTiming, EventUsage, RecordOutcome, TrajectoryLog, TrajectoryRecord, TrajectoryRecordKind,
+    TrajectoryRow, TrajectoryTurn, TrajectoryView, TurnBoundary,
 };
 
 /// Which tool a call id invoked, and with what input, so a later ToolResult
@@ -56,6 +60,47 @@ fn index_calls(events: &[SessionLogEntry]) -> CallIndex<'_> {
     calls
 }
 
+/// The tool a model delegation is issued through.
+const DELEGATION_TOOL: &str = "agent";
+
+/// The tool calls that a delegation was spawned from, by call id.
+///
+/// A model delegation is issued as a tool call, and the spawn records that call
+/// as its trigger. The turn shows one Agent record for the delegation, so the
+/// underlying tool call must not also appear as a Tool record: the same work
+/// counted twice, once as the mechanism and once as the delegation.
+///
+/// A spawn written before the trigger field existed carries an empty source,
+/// which a replay reads as a model trigger. Those spawns are matched by
+/// position instead: a spawn immediately follows the call it came from, so it
+/// claims the newest delegation call not already claimed by another spawn.
+fn spawned_call_ids(events: &[SessionLogEntry]) -> std::collections::HashSet<&str> {
+    let mut suppressed = std::collections::HashSet::new();
+    let mut unclaimed: Vec<&str> = Vec::new();
+    for ev in events {
+        match &ev.event {
+            SessionEvent::ToolCall { call_id, tool, .. } if tool == DELEGATION_TOOL => {
+                unclaimed.push(call_id.as_str());
+            }
+            SessionEvent::SubagentSpawn { trigger_source, .. } => {
+                match trigger_source.strip_prefix("model:") {
+                    Some(id) => {
+                        suppressed.insert(id);
+                        unclaimed.retain(|c| *c != id);
+                    }
+                    None => {
+                        if let Some(id) = unclaimed.pop() {
+                            suppressed.insert(id);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    suppressed
+}
+
 /// Whether a tool result records a failure, decided by the same judgment the
 /// transcript chip uses.
 ///
@@ -80,262 +125,7 @@ fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -
     ToolOutcome::from_output_with(output, tool, input) == ToolOutcome::Error
 }
 
-/// Project one SessionLogEntry into a TrajectoryEvent (the per-event row), or None
-/// for kinds that are pure metadata (TurnUsage carries tokens at the turn
-/// level, not as a displayable event; the rest are folded into the turn's
-/// counts or skipped as audit-only).
-fn build_trajectory_event(
-    ev: &SessionLogEntry,
-    start_ms: u64,
-    calls: &CallIndex,
-) -> Option<TrajectoryEvent> {
-    let success = !matches!(
-        &ev.event,
-        SessionEvent::ToolResult { output, call_id, .. }
-            if result_failed(output, call_id, calls)
-    );
-    let (kind, summary, thinking, input, output, duration_ms) = match &ev.event {
-        SessionEvent::UserInput { text } => {
-            ("user", preview(text), None, Some(text.clone()), None, 0)
-        }
-        SessionEvent::MidTurnInput { text, .. } => {
-            ("user", preview(text), None, Some(text.clone()), None, 0)
-        }
-        SessionEvent::AssistantMessage { text, thinking } => {
-            // output carries the full reply so the L2 detail shows it (the
-            // summary is only an 80-char preview).
-            (
-                "llm",
-                preview(text),
-                thinking.clone(),
-                None,
-                Some(text.clone()),
-                0,
-            )
-        }
-        SessionEvent::Reasoning { text } => (
-            "reasoning",
-            preview(text),
-            Some(text.clone()),
-            None,
-            None,
-            0,
-        ),
-        SessionEvent::ToolCall { tool, input, .. } => (
-            "tool_call",
-            format!("{tool}({})", preview(&input.to_string())),
-            None,
-            Some(input.to_string()),
-            None,
-            0,
-        ),
-        SessionEvent::ToolResult {
-            output,
-            duration_ms,
-            ..
-        } => {
-            // Format the tool output the SAME way the transcript does — a
-            // failed bash command shows "Exit code N" + stderr, an edit shows
-            // its diff summary + body, an error shows "error: <msg>". Routing
-            // the trajectory L2 through the same extract_body the transcript
-            // uses means one rendering path for tool results, not two that
-            // drift (the transcript got exit-code formatting; the trajectory
-            // kept the raw JSON dump and showed {"error":"...","exit_code":1}
-            // to the user on drill-down).
-            let body = houyicoder_tui::result_body::extract_body(&output.to_string());
-            (
-                "tool_result",
-                preview(&body),
-                None,
-                None,
-                Some(body),
-                *duration_ms,
-            )
-        }
-        SessionEvent::HookSignal {
-            verdict, reason, ..
-        } => ("hook", format!("{verdict:?} {reason}"), None, None, None, 0),
-        SessionEvent::TurnAborted { reason } => ("aborted", preview(reason), None, None, None, 0),
-        SessionEvent::Summary { text } => {
-            ("summary", preview(text), None, Some(text.clone()), None, 0)
-        }
-        // Metadata / audit-only / streaming-delta: not a displayable event.
-        // TurnStarted is the turn boundary; it is not itself an event row.
-        // TurnUsage contributes tokens at the turn level.
-        SessionEvent::TurnStarted { .. }
-        | SessionEvent::TurnUsage { .. }
-        | SessionEvent::TruncationVerdict { .. }
-        | SessionEvent::PermissionDecision { .. }
-        | SessionEvent::CompactionBoundary { .. }
-        | SessionEvent::CacheBreak { .. }
-        | SessionEvent::MetaUser { .. }
-        | SessionEvent::MemoryRecall { .. }
-        | SessionEvent::SkillListing { .. }
-        | SessionEvent::SkillBody { .. }
-        | SessionEvent::AssistantTextDelta { .. }
-        | SessionEvent::WorktreeEnter { .. }
-        | SessionEvent::WorktreeExit { .. }
-        | SessionEvent::RewardObservation { .. }
-        | SessionEvent::SubagentSpawn { .. }
-        | SessionEvent::SubagentReturn { .. }
-        | SessionEvent::ChildDelegated { .. }
-        | SessionEvent::RunCompleted { .. }
-        | SessionEvent::NotificationInjected { .. }
-        | SessionEvent::ModelStepTiming { .. }
-        | SessionEvent::ContextCleared { .. } => return None,
-        SessionEvent::Unknown => return None,
-    };
-    Some(TrajectoryEvent {
-        kind: kind.to_string(),
-        summary,
-        start_ms,
-        duration_ms,
-        success,
-        thinking,
-        input,
-        output,
-    })
-}
-
-/// Project the durable event stream into the trajectory view. Turns are
-/// grouped on TurnStarted (the durable boundary appended at each model-call
-/// entry) — NOT on UserInput: a single user prompt spans N tool-iteration
-/// turns, and grouping on UserInput flattens them, hiding the per-iteration
-/// work (retries, per-call tokens) the record layer spent two rounds
-/// establishing. For old logs that predate TurnStarted, falls back to
-/// UserInput grouping so they still render.
-///
-/// Per-turn tokens are Option: None when the turn had no TurnUsage (cancelled
-/// or errored mid-stream) — unknown, not zero, per the unknown-must-be-None
-/// rule. start_ms is offset from the turn's TurnStarted.ts (or UserInput.ts in
-/// the legacy path), so a late iteration's bar sits at its real offset, not
-/// "tens of seconds after the user typed."
-/// Per-turn accumulator. Holds all the mutable state the assembly loop
-/// tracks for the current turn, so the loop body is a thin dispatch instead
-/// of 17 inline field updates. reset is called at every turn boundary;
-/// flush pushes the accumulated TrajectoryTurn + clears the event list.
-struct TurnBuilder {
-    events: Vec<TrajectoryEvent>,
-    user_input: String,
-    tokens_in: Option<u64>,
-    tokens_out: Option<u64>,
-    cache_read: Option<u64>,
-    cache_write: Option<u64>,
-    model: Option<String>,
-    effort: Option<String>,
-    reasoning_tokens: Option<u64>,
-    tool_count: usize,
-    tool_fail: usize,
-    retries: usize,
-    duration_ms: u64,
-    success: bool,
-    turn_start_ts: Option<u64>,
-}
-
-impl TurnBuilder {
-    fn new() -> Self {
-        Self {
-            events: Vec::new(),
-            user_input: String::new(),
-            tokens_in: None,
-            tokens_out: None,
-            cache_read: None,
-            cache_write: None,
-            model: None,
-            effort: None,
-            reasoning_tokens: None,
-            tool_count: 0,
-            tool_fail: 0,
-            retries: 0,
-            duration_ms: 0,
-            success: true,
-            turn_start_ts: None,
-        }
-    }
-
-    fn reset(&mut self, user_input: String, ts: u64) {
-        self.events.clear();
-        self.user_input = user_input;
-        self.tokens_in = None;
-        self.tokens_out = None;
-        self.cache_read = None;
-        self.cache_write = None;
-        self.model = None;
-        self.effort = None;
-        self.reasoning_tokens = None;
-        self.tool_count = 0;
-        self.tool_fail = 0;
-        self.retries = 0;
-        self.duration_ms = 0;
-        self.success = true;
-        self.turn_start_ts = Some(ts);
-    }
-
-    fn flush(&mut self, turns: &mut Vec<TrajectoryTurn>, n: usize) {
-        turns.push(TrajectoryTurn {
-            n,
-            user_input: std::mem::take(&mut self.user_input),
-            tokens_in: self.tokens_in.map(|v| v as usize),
-            tokens_out: self.tokens_out.map(|v| v as usize),
-            cache_read: self.cache_read,
-            cache_write: self.cache_write,
-            model: self.model.take(),
-            effort: self.effort.take(),
-            reasoning_tokens: self.reasoning_tokens.map(|v| v as usize),
-            tool_count: self.tool_count,
-            tool_fail: self.tool_fail,
-            retries: self.retries,
-            duration_ms: self.duration_ms,
-            success: self.success,
-            events: std::mem::take(&mut self.events),
-        });
-    }
-
-    fn apply_usage(&mut self, ev: &SessionEvent, total_in: &mut u64, total_out: &mut u64) {
-        if let SessionEvent::TurnUsage {
-            input_tokens,
-            output_tokens,
-            cache_read_input_tokens,
-            cache_write_input_tokens,
-            reasoning_tokens,
-            model: ev_model,
-            effort,
-            recovery,
-            ..
-        } = ev
-        {
-            self.tokens_in = Some(*input_tokens);
-            self.tokens_out = Some(*output_tokens);
-            self.cache_read = Some(*cache_read_input_tokens);
-            self.cache_write = Some(*cache_write_input_tokens);
-            self.model = if ev_model.is_empty() {
-                None
-            } else {
-                Some(ev_model.clone())
-            };
-            self.effort = effort.clone();
-            self.reasoning_tokens = Some(*reasoning_tokens);
-            if *recovery {
-                self.retries += 1;
-            }
-            *total_in += *input_tokens;
-            *total_out += *output_tokens;
-        }
-    }
-
-    fn push_event(&mut self, ev: &SessionLogEntry, offset: u64, calls: &CallIndex) {
-        if let Some(e) = build_trajectory_event(ev, offset, calls) {
-            self.events.push(e);
-        }
-    }
-
-    fn offset(&self, ev_ts: u64) -> u64 {
-        ev_ts.saturating_sub(self.turn_start_ts.unwrap_or(ev_ts))
-    }
-}
-
-/// Build the TrajectoryView header from the accumulated turns: session
-/// totals, model label (one id or "N models"), duration, failure count.
+/// Session-wide timing facts folded from the durable timing events.
 struct TimingStats<'a> {
     ttfts: &'a [u64],
     decode_tokens: u64,
@@ -358,7 +148,7 @@ fn build_summary(
     let duration_secs = turns.iter().map(|t| t.duration_ms).sum::<u64>() / 1000;
     let distinct_models: Vec<&str> = turns
         .iter()
-        .filter_map(|t| t.model.as_deref())
+        .flat_map(|t| t.models.iter().map(String::as_str))
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
@@ -413,6 +203,8 @@ fn build_summary(
     }
 }
 
+/// Session-wide accumulator: token totals for the header plus the timing
+/// samples the header percentiles are computed from.
 struct AccTotals {
     total_in: u64,
     total_out: u64,
@@ -438,14 +230,10 @@ fn process_event_timing(ev: &SessionEvent, acc: &mut AccTotals) {
     }
 }
 
+/// Assemble the trajectory view from the durable event stream.
 pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView {
-    let has_turn_started = events
-        .iter()
-        .any(|e| matches!(e.event, SessionEvent::TurnStarted { .. }));
-
-    let mut turns: Vec<TrajectoryTurn> = Vec::new();
-    let mut builder = TurnBuilder::new();
-    let mut pending_prompt = String::new();
+    let mut turn_rows: Vec<TrajectoryTurn> = Vec::new();
+    let mut builder = turns::TurnBuilder::new();
     let mut n: usize = 0;
     let mut acc = AccTotals {
         total_in: 0,
@@ -456,67 +244,24 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
         decode_ms: 0,
     };
     let calls = index_calls(events);
+    let spawned = spawned_call_ids(events);
+    let mut pending: Option<TurnBoundary> = None;
 
     for ev in events {
         process_event_timing(&ev.event, &mut acc);
-        match &ev.event {
-            SessionEvent::UserInput { text } if !has_turn_started => {
-                if n > 0 {
-                    builder.flush(&mut turns, n);
-                }
-                n += 1;
-                builder.reset(text.clone(), ev.ts);
-                builder.push_event(ev, 0, &calls);
-            }
-            SessionEvent::UserInput { text } => {
-                pending_prompt = text.clone();
-            }
-            SessionEvent::TurnStarted { turn, .. } => {
-                if n > 0 {
-                    builder.flush(&mut turns, n);
-                }
-                n = *turn as usize;
-                builder.reset(std::mem::take(&mut pending_prompt), ev.ts);
-            }
-            SessionEvent::TurnUsage { output_tokens, .. } => {
-                acc.decode_tokens += *output_tokens;
-                builder.apply_usage(&ev.event, &mut acc.total_in, &mut acc.total_out);
-            }
-            SessionEvent::ToolCall { .. } => {
-                builder.tool_count += 1;
-                builder.push_event(ev, builder.offset(ev.ts), &calls);
-            }
-            SessionEvent::ToolResult {
-                duration_ms,
-                output,
-                call_id,
-            } => {
-                builder.duration_ms += *duration_ms;
-                if result_failed(output, call_id, &calls) {
-                    builder.tool_fail += 1;
-                    acc.failures += 1;
-                }
-                builder.push_event(ev, builder.offset(ev.ts), &calls);
-            }
-            SessionEvent::TurnAborted { .. } => {
-                builder.success = false;
-                builder.push_event(ev, builder.offset(ev.ts), &calls);
-            }
-            SessionEvent::RunCompleted { secs } => {
-                if let Some(s) = secs {
-                    let ms = (*s as u64) * 1000;
-                    if ms > builder.duration_ms {
-                        builder.duration_ms = ms;
-                    }
-                }
-            }
-            _ => {
-                builder.push_event(ev, builder.offset(ev.ts), &calls);
-            }
+        if turns::apply_turn_boundary(&mut builder, ev, &mut turn_rows, &mut n, &mut pending) {
+            continue;
         }
+        turns::apply_turn_content(&mut builder, ev, &calls, &spawned, &mut acc);
     }
-    if n > 0 {
-        builder.flush(&mut turns, n);
+    if builder.is_open() {
+        // A turn opened by a non-boundary event (a windowed read that starts
+        // mid-run) still needs a number; the boundary events are the only
+        // other place one is assigned.
+        if n == 0 {
+            n = 1;
+        }
+        builder.flush(&mut turn_rows, n);
     }
     let timing = TimingStats {
         ttfts: &acc.ttfts,
@@ -524,7 +269,7 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
         decode_ms: acc.decode_ms,
     };
     build_summary(
-        turns,
+        turn_rows,
         acc.total_in,
         acc.total_out,
         acc.failures,
@@ -533,6 +278,14 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
     )
 }
 
+/// A byte count as a compact string for the memory row.
+fn fmt_bytes(bytes: u32) -> String {
+    if bytes >= 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes}B")
+    }
+}
 /// Session log trajectory reader: reads a session's durable log and returns
 /// the current TrajectoryView on request.
 pub struct SessionLogTrajectory {
