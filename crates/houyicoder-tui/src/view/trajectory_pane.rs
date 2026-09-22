@@ -172,9 +172,12 @@ pub struct TrajectoryRecord {
 #[derive(Clone)]
 pub struct TrajectoryTurn {
     pub n: usize,
-    /// Boundary recorded between the previous turn and this one, when the log
-    /// carries one. Data only; the pane decides how to draw it.
-    pub boundary_before: Option<TurnBoundary>,
+    /// Boundaries the log recorded between the previous turn and this one, in
+    /// the order they happened. Several durable facts can land in one gap (a
+    /// compaction and then a model switch), so this is a list rather than a
+    /// slot: a single slot would drop one of them without saying so. Data only;
+    /// the pane decides how to draw them.
+    pub boundary_before: Vec<TurnBoundary>,
     pub user_input: String,
     pub tokens_in: Option<usize>,
     pub tokens_out: Option<usize>,
@@ -266,11 +269,10 @@ impl SessionTiming {
 
 /// What delegated sub-agents spent, summed over the session's delegations.
 ///
-/// Kept apart from the session totals rather than folded into them: those come
-/// from the parent's own provider calls, and silently adding the children would
-/// make this number disagree with the runner's cumulative usage. The pane shows
-/// it as its own row so the user can see how much of the cost the children
-/// added.
+/// The session totals already include it: the runner folds a child's usage into
+/// the same cumulative tally the parent's calls go to. This type is the
+/// breakdown, so a surface can say how much of the total the children
+/// contributed instead of only reporting one undivided number.
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct SubagentUsage {
     pub calls: usize,

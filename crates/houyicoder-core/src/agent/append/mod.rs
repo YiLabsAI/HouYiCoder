@@ -18,8 +18,10 @@ use super::compaction::CompactionOutcome;
 use super::hook::{HookEvent, wire::HookOutcome};
 use super::{CompletionResponse, RunError, RunOutcome, RunResult, Runner};
 
-/// The tool a model delegation is issued through.
-const DELEGATION_TOOL: &str = "agent";
+use crate::agent::tools::DELEGATION_TOOL_NAME;
+
+/// The tool a model delegation is issued through, from the tool's own name.
+const DELEGATION_TOOL: &str = DELEGATION_TOOL_NAME;
 
 /// Emit progress after a completed turn when the run will continue.
 pub(crate) fn emit_turn_progress(

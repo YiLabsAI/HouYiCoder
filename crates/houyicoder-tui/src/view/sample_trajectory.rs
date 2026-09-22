@@ -14,7 +14,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
     // agent runs tools per-completion; the axis still shows where time went).
     let t1 = TrajectoryTurn {
         n: 1,
-        boundary_before: None,
+        boundary_before: Vec::new(),
         user_input: "fix the permission pipeline crash".into(),
         tokens_in: Some(3200),
         tokens_out: Some(800),
@@ -176,7 +176,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
     };
     let t2 = TrajectoryTurn {
         n: 2,
-        boundary_before: None,
+        boundary_before: Vec::new(),
         user_input: "wire the trajectory pane 3-level drill".into(),
         tokens_in: Some(5100),
         tokens_out: Some(1200),
@@ -295,7 +295,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
     };
     let t3 = TrajectoryTurn {
         n: 3,
-        boundary_before: None,
+        boundary_before: Vec::new(),
         user_input: "pty test the drill journey".into(),
         tokens_in: Some(2800),
         tokens_out: Some(2100),

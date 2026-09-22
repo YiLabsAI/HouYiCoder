@@ -29,6 +29,11 @@ impl DelegationTool {
     }
 }
 
+/// The tool name a model delegation is issued through. Shared with the fold
+/// that reads the child usage back out of its result, so a rename cannot leave
+/// one side matching a name the other no longer uses.
+pub(crate) const NAME: &str = "agent";
+
 const DESCRIPTION: &str = "\
 Launch a new agent to delegate a sub-task. Use a specialized agent type when one fits; otherwise the general-purpose agent handles research, search, and multi-step execution.
 
@@ -60,7 +65,7 @@ Subagents run in the foreground, so the parent waits for the child result. Backg
 
 impl Tool for DelegationTool {
     fn name(&self) -> &str {
-        "agent"
+        NAME
     }
     fn description(&self) -> &str {
         DESCRIPTION

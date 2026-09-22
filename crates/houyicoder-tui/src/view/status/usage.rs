@@ -43,26 +43,25 @@ fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut St
             &format!("{tps:.1} tok/s ({} samples)", timing.decode_samples),
         ));
     }
-    // Delegated work is reported separately rather than folded into the rows
-    // above: those come from the parent's own provider calls, and adding the
-    // children would make this number disagree with the runner's cumulative
-    // usage. The row says so, so the reader knows how to combine them.
-    if let Some(delegated) = view.subagent_usage {
+    // Delegated work is already inside the token rows above: the runner folds a
+    // child's usage into its cumulative tally. This row exists to say how much
+    // of that total the subagents contributed, so the reader can see the split.
+    if let Some(subagent) = view.subagent_usage {
         // A child that returned before reporting usage leaves every field at
         // zero; that is an unmeasured cost, not a free one, so the row says so
         // instead of printing zeroes.
-        let detail = if delegated.input == 0 && delegated.output == 0 {
-            format!("usage not reported ({} subagent calls)", delegated.calls)
+        let detail = if subagent.input == 0 && subagent.output == 0 {
+            format!("usage not reported ({} subagent calls)", subagent.calls)
         } else {
-            let cache = match delegated.cache_hit_pct() {
+            let cache = match subagent.cache_hit_pct() {
                 Some(pct) => format!(" · {pct:.0}% cached"),
                 None => String::new(),
             };
             format!(
-                "{} input · {} output{cache} ({} subagent calls, not in the rows above)",
-                format_tokens(delegated.input),
-                format_tokens(delegated.output),
-                delegated.calls
+                "{} input · {} output{cache} ({} subagent calls, included above)",
+                format_tokens(subagent.input),
+                format_tokens(subagent.output),
+                subagent.calls
             )
         };
         s.push_str(&f("delegated usage", &detail));

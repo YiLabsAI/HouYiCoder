@@ -38,7 +38,7 @@ fn delegation_result(input: u32, output: u32, cache_read: u32) -> serde_json::Va
 /// A delegation result carries the child's own usage, which the session tally
 /// has to include: otherwise the session understates what it spent.
 #[tokio::test]
-async fn test_delegated_usage_counted() {
+async fn test_subagent_usage_counted() {
     let runner = runner();
     let session = SessionId::new();
     runner
@@ -65,7 +65,7 @@ async fn test_delegated_usage_counted() {
 /// window, so folding it into the footprint would report a window the session
 /// is not using.
 #[tokio::test]
-async fn test_delegated_usage_not_occupancy() {
+async fn test_subagent_usage_occupancy() {
     let runner = runner();
     let session = SessionId::new();
     runner
@@ -138,7 +138,7 @@ async fn test_delegation_without_usage_ignored() {
 /// The folded usage reaches the cumulative tally through the accumulator's own
 /// path, so a parent call and a child both land in the same session figure.
 #[tokio::test]
-async fn test_delegated_adds_to_parent() {
+async fn test_subagent_usage_adds() {
     let runner = runner();
     let session = SessionId::new();
     runner

@@ -265,7 +265,7 @@ fn test_level2_renders_projection_kinds() {
         hidden_turns: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
-            boundary_before: None,
+            boundary_before: Vec::new(),
             n: 1,
             user_input: "real kinds".into(),
             tokens_in: Some(0),
@@ -378,7 +378,7 @@ fn test_event_detail_redacts_secrets() {
         hidden_turns: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
-            boundary_before: None,
+            boundary_before: Vec::new(),
             n: 1,
             user_input: "show keys".into(),
             tokens_in: Some(0),
@@ -495,7 +495,7 @@ fn test_thinking_tokens_render_nonzero() {
         hidden_turns: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
-            boundary_before: None,
+            boundary_before: Vec::new(),
             n: 1,
             user_input: "hi".into(),
             tokens_in: Some(100),
@@ -539,7 +539,7 @@ fn test_thinking_tokens_hidden_zero() {
         hidden_turns: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
-            boundary_before: None,
+            boundary_before: Vec::new(),
             n: 1,
             user_input: "hi".into(),
             tokens_in: Some(100),
@@ -587,7 +587,7 @@ fn test_per_turn_model_two() {
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
-                boundary_before: None,
+                boundary_before: Vec::new(),
                 n: 1,
                 user_input: "a".into(),
                 tokens_in: Some(100),
@@ -605,7 +605,7 @@ fn test_per_turn_model_two() {
                 records: vec![],
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
-                boundary_before: None,
+                boundary_before: Vec::new(),
                 n: 2,
                 user_input: "b".into(),
                 tokens_in: Some(100),
@@ -653,7 +653,7 @@ fn test_per_turn_model_one() {
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
-                boundary_before: None,
+                boundary_before: Vec::new(),
                 n: 1,
                 user_input: "a".into(),
                 tokens_in: Some(100),
@@ -671,7 +671,7 @@ fn test_per_turn_model_one() {
                 records: vec![],
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
-                boundary_before: None,
+                boundary_before: Vec::new(),
                 n: 2,
                 user_input: "b".into(),
                 tokens_in: Some(100),
@@ -720,7 +720,7 @@ fn test_turn_row_cached_ratio() {
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
-                boundary_before: None,
+                boundary_before: Vec::new(),
                 n: 2,
                 user_input: "first".into(),
                 tokens_in: Some(100),
@@ -738,7 +738,7 @@ fn test_turn_row_cached_ratio() {
                 records: vec![],
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
-                boundary_before: None,
+                boundary_before: Vec::new(),
                 n: 1,
                 user_input: "second".into(),
                 tokens_in: Some(100),
@@ -777,7 +777,7 @@ fn test_turn_row_cached_ratio() {
 #[test]
 fn test_turn_title_user_input() {
     let turn = TrajectoryTurn {
-        boundary_before: None,
+        boundary_before: Vec::new(),
         n: 1,
         user_input: "fix the bug".into(),
         tokens_in: None,
@@ -802,7 +802,7 @@ fn test_turn_title_user_input() {
 #[test]
 fn test_turn_title_falls_back() {
     let turn = TrajectoryTurn {
-        boundary_before: None,
+        boundary_before: Vec::new(),
         n: 2,
         user_input: String::new(),
         tokens_in: None,
@@ -848,7 +848,7 @@ fn test_turn_title_falls_back() {
 #[test]
 fn test_turn_title_empty() {
     let turn = TrajectoryTurn {
-        boundary_before: None,
+        boundary_before: Vec::new(),
         n: 3,
         user_input: String::new(),
         tokens_in: None,
@@ -942,7 +942,7 @@ fn test_timing_and_cache_render() {
         hidden_turns: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
-            boundary_before: None,
+            boundary_before: Vec::new(),
             n: 1,
             user_input: "test".into(),
             tokens_in: Some(1000),
@@ -1056,7 +1056,7 @@ fn test_detail_shows_model_facts() {
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
-            boundary_before: None,
+            boundary_before: Vec::new(),
             user_input: "ask".into(),
             tokens_in: Some(1200),
             tokens_out: Some(340),
@@ -1115,7 +1115,7 @@ fn test_timeline_shows_record_names() {
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
-            boundary_before: None,
+            boundary_before: Vec::new(),
             user_input: "go".into(),
             tokens_in: Some(0),
             tokens_out: Some(0),
@@ -1172,10 +1172,10 @@ fn record_of(kind: TrajectoryRecordKind, output: Option<&str>) -> TrajectoryReco
 fn test_turn_list_boundary() {
     let turn = TrajectoryTurn {
         n: 2,
-        boundary_before: Some(TurnBoundary::ContextCleared {
+        boundary_before: vec![TurnBoundary::ContextCleared {
             prior_turn: 1,
             at_secs: now_epoch_secs().saturating_sub(120),
-        }),
+        }],
         user_input: "after clear".into(),
         tokens_in: Some(10),
         tokens_out: Some(5),
@@ -1228,7 +1228,7 @@ fn test_turn_list_boundary() {
 fn test_turn_list_column_align() {
     let mk = |n: usize, title: &str, tin: Option<usize>| TrajectoryTurn {
         n,
-        boundary_before: None,
+        boundary_before: Vec::new(),
         user_input: title.into(),
         tokens_in: tin,
         tokens_out: Some(5),
@@ -1317,7 +1317,7 @@ fn test_turn_detail_latency_split() {
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
-            boundary_before: None,
+            boundary_before: Vec::new(),
             user_input: "ask".into(),
             tokens_in: Some(10),
             tokens_out: Some(400),
@@ -1356,7 +1356,7 @@ fn test_turn_detail_latency_split() {
 fn test_turn_list_degrades() {
     let turn = |n: usize, title: &str, model: &str| TrajectoryTurn {
         n,
-        boundary_before: None,
+        boundary_before: Vec::new(),
         user_input: title.into(),
         tokens_in: Some(1_200),
         tokens_out: Some(500),
@@ -1425,7 +1425,7 @@ fn test_turn_list_degrades() {
 fn test_turn_list_glyph_aligns() {
     let turn = |n: usize, title: &str| TrajectoryTurn {
         n,
-        boundary_before: None,
+        boundary_before: Vec::new(),
         user_input: title.into(),
         tokens_in: Some(1_200),
         tokens_out: Some(500),
@@ -1485,7 +1485,7 @@ fn test_turn_list_glyph_aligns() {
 fn test_turn_list_other_boundaries() {
     let mk = |n: usize, boundary: TurnBoundary| TrajectoryTurn {
         n,
-        boundary_before: Some(boundary),
+        boundary_before: vec![boundary],
         user_input: format!("turn {n}"),
         tokens_in: Some(10),
         tokens_out: Some(5),

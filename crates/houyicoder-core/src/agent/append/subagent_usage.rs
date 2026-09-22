@@ -2,9 +2,9 @@
 
 use houyicoder_protocol::llm::Usage;
 
-/// Read a delegation result's usage block, when it has one. A result without
-/// the block (an older child, a launch that returned no outcome) reports
-/// nothing rather than zeroes.
+/// Read a delegation result's usage block, when it has one. A result with no
+/// block reports nothing rather than zeroes; a block of zeroes is what a
+/// background launch carries, and is reported as the zeroes it is.
 pub(super) fn subagent_usage(output: &serde_json::Value) -> Option<Usage> {
     let usage = output.get("usage")?;
     let field = |name: &str| usage.get(name).and_then(|v| v.as_u64()).unwrap_or(0) as u32;

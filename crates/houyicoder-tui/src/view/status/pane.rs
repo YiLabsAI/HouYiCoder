@@ -514,8 +514,8 @@ mod tests {
         assert!(!s.contains("model / tool time:"), "no work-time row: {s}");
     }
 
-    /// Delegated sub-agent work is reported on its own row and says it is not
-    /// part of the rows above, because those come from the parent's calls only.
+    /// Delegated sub-agent work is reported on its own row, which says the
+    /// token rows above already include it.
     #[test]
     fn test_usage_tab_delegated() {
         struct Fixed(TrajectoryView);
@@ -550,8 +550,8 @@ mod tests {
         assert!(s.contains("41k output"), "output shown: {s}");
         assert!(s.contains("93% cached"), "the child cache share: {s}");
         assert!(
-            s.contains("not in the rows above"),
-            "the row says how it combines with the totals: {s}"
+            s.contains("included above"),
+            "the row says the totals above already include it: {s}"
         );
     }
 

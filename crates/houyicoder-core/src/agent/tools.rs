@@ -15,6 +15,7 @@ mod bash_snapshot;
 mod bash_tool;
 mod conversation_search;
 mod delegation;
+pub(crate) use delegation::NAME as DELEGATION_TOOL_NAME;
 mod edit;
 mod file_edit;
 mod glob;

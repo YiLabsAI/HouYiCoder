@@ -1005,13 +1005,13 @@ fn test_context_cleared_records_boundary() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    assert_eq!(first.boundary_before, None);
+    assert!(first.boundary_before.is_empty());
     assert_eq!(
         second.boundary_before,
-        Some(TurnBoundary::ContextCleared {
+        vec![TurnBoundary::ContextCleared {
             prior_turn: 1,
             at_secs: 1_700_000_000,
-        }),
+        }],
         "the boundary attaches to the turn after the clear"
     );
     assert_eq!(second.n, 2, "numbering continues across the clear");
@@ -1077,11 +1077,11 @@ fn test_model_switch_boundary() {
     };
     assert_eq!(
         second.boundary_before,
-        Some(TurnBoundary::ModelSwitch(Box::new(ModelSwitchBoundary {
+        vec![TurnBoundary::ModelSwitch(Box::new(ModelSwitchBoundary {
             from: "qwen".into(),
             to: "deepseek".into(),
             at_secs: 0,
-        })))
+        }))]
     );
 }
 
@@ -1117,9 +1117,137 @@ fn test_compaction_boundary_attached() {
     };
     assert_eq!(
         second.boundary_before,
-        Some(TurnBoundary::Compacted(Box::new(CompactedBoundary {
+        vec![TurnBoundary::Compacted(Box::new(CompactedBoundary {
             checkpoint_id: ck.to_string(),
             at_secs: 0,
-        })))
+        }))]
+    );
+}
+
+/// Two durable facts in the gap between turns both survive: a compaction
+/// followed by a model switch is two boundaries, not one. A single slot would
+/// have dropped one of them without saying so.
+#[test]
+fn test_two_boundaries_kept() {
+    use houyicoder_context::CheckpointId;
+    let ck = CheckpointId::new();
+    let usage = |ts: u64, model: &str| {
+        ev(
+            ts,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: model.into(),
+                recovery: false,
+                effort: None,
+            },
+        )
+    };
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "t1".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        usage(110, "qwen"),
+        ev(150, SessionEvent::CompactionBoundary { checkpoint: ck }),
+        ev(200, SessionEvent::UserInput { text: "t2".into() }),
+        ev(
+            205,
+            SessionEvent::TurnStarted {
+                turn: 2,
+                call_in_turn: 0,
+            },
+        ),
+        usage(210, "deepseek"),
+    ];
+    let view = project(&events, "test", 0);
+    let second = match &view.rows[1] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        second.boundary_before.len(),
+        2,
+        "both durable facts are kept, in the order they happened; got {:?}",
+        second.boundary_before
+    );
+    assert!(matches!(
+        second.boundary_before[0],
+        TurnBoundary::Compacted(_)
+    ));
+    assert!(matches!(
+        second.boundary_before[1],
+        TurnBoundary::ModelSwitch(_)
+    ));
+}
+
+/// A model switch inside an open turn is not a list boundary: the turn's own
+/// model records already show it, and a separator above the turn would claim
+/// the switch happened between turns.
+#[test]
+fn test_switch_inside_turn() {
+    let usage = |ts: u64, model: &str| {
+        ev(
+            ts,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: model.into(),
+                recovery: false,
+                effort: None,
+            },
+        )
+    };
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "t1".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        usage(110, "qwen"),
+        usage(160, "deepseek"),
+        ev(200, SessionEvent::UserInput { text: "t2".into() }),
+        ev(
+            205,
+            SessionEvent::TurnStarted {
+                turn: 2,
+                call_in_turn: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test", 0);
+    let first = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        first.models,
+        vec!["qwen".to_string(), "deepseek".to_string()],
+        "the turn records both models it used"
+    );
+    let second = match &view.rows[1] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert!(
+        second.boundary_before.is_empty(),
+        "a switch inside the previous turn is not a boundary above this one"
     );
 }

@@ -65,7 +65,7 @@ pub(super) fn turn_row(
 ) -> Vec<Line<'static>> {
     let prefix = if selected { "▸ " } else { "  " };
     let mut out = Vec::new();
-    if let Some(boundary) = &t.boundary_before {
+    for boundary in &t.boundary_before {
         out.push(boundary_line(boundary, now_secs));
     }
     let glyph = if t.success { "✓" } else { "✗" };

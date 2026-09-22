@@ -16,7 +16,7 @@ use super::*;
 /// user input arrives.
 pub(super) struct TurnBuilder {
     records: Vec<TrajectoryRecord>,
-    boundary_before: Option<TurnBoundary>,
+    boundary_before: Vec<TurnBoundary>,
     user_input: String,
     tokens_in: Option<u64>,
     tokens_out: Option<u64>,
@@ -47,7 +47,7 @@ impl TurnBuilder {
     pub(super) fn new() -> Self {
         Self {
             records: Vec::new(),
-            boundary_before: None,
+            boundary_before: Vec::new(),
             user_input: String::new(),
             tokens_in: None,
             tokens_out: None,
@@ -70,9 +70,9 @@ impl TurnBuilder {
         }
     }
 
-    fn reset(&mut self, user_input: String, ts: u64, boundary: Option<TurnBoundary>) {
+    fn reset(&mut self, user_input: String, ts: u64, boundaries: Vec<TurnBoundary>) {
         self.records.clear();
-        self.boundary_before = boundary;
+        self.boundary_before = boundaries;
         self.user_input = user_input;
         self.tokens_in = None;
         self.tokens_out = None;
@@ -96,6 +96,13 @@ impl TurnBuilder {
 
     pub(super) fn is_open(&self) -> bool {
         self.first_ts.is_some()
+    }
+
+    /// True once this turn has reported usage. The first usage of a turn is
+    /// where a switch between turns becomes visible, since the model id only
+    /// appears in the usage event.
+    fn has_usage(&self) -> bool {
+        self.tokens_in.is_some()
     }
 
     /// Offset of a durable timestamp from this turn's first event.
@@ -451,7 +458,7 @@ impl TurnBuilder {
             .saturating_sub(self.first_ts.unwrap_or(self.last_ts));
         turns.push(TrajectoryTurn {
             n,
-            boundary_before: self.boundary_before.take(),
+            boundary_before: std::mem::take(&mut self.boundary_before),
             user_input: std::mem::take(&mut self.user_input),
             tokens_in: self.tokens_in.map(|v| v as usize),
             tokens_out: self.tokens_out.map(|v| v as usize),
@@ -484,18 +491,18 @@ pub(super) fn apply_turn_boundary(
     ev: &SessionLogEntry,
     turns: &mut Vec<TrajectoryTurn>,
     n: &mut usize,
-    pending_boundary: &mut Option<TurnBoundary>,
+    pending_boundary: &mut Vec<TurnBoundary>,
     last_model: &mut Option<String>,
 ) -> bool {
     match &ev.event {
         SessionEvent::ContextCleared { prior_turn } => {
-            *pending_boundary = Some(TurnBoundary::ContextCleared {
+            pending_boundary.push(TurnBoundary::ContextCleared {
                 prior_turn: *prior_turn,
                 at_secs: ev.ts / 1000,
             });
         }
         SessionEvent::CompactionBoundary { checkpoint } => {
-            *pending_boundary = Some(TurnBoundary::Compacted(Box::new(CompactedBoundary {
+            pending_boundary.push(TurnBoundary::Compacted(Box::new(CompactedBoundary {
                 checkpoint_id: checkpoint.to_string(),
                 at_secs: ev.ts / 1000,
             })));
@@ -510,10 +517,14 @@ pub(super) fn apply_turn_boundary(
                         to: model.clone(),
                         at_secs: ev.ts / 1000,
                     }));
-                    if builder.is_open() {
-                        builder.boundary_before = Some(boundary);
-                    } else {
-                        *pending_boundary = Some(boundary);
+                    if !builder.is_open() {
+                        pending_boundary.push(boundary);
+                    } else if !builder.has_usage() {
+                        // The turn's first usage: the switch happened between
+                        // turns, so it belongs above this one. A later usage is
+                        // a switch inside the turn, which its own model records
+                        // already show.
+                        builder.boundary_before.push(boundary);
                     }
                 }
                 *last_model = Some(model.clone());
@@ -525,7 +536,7 @@ pub(super) fn apply_turn_boundary(
                 builder.flush(turns, *n);
             }
             *n += 1;
-            builder.reset(text.clone(), ev.ts, pending_boundary.take());
+            builder.reset(text.clone(), ev.ts, std::mem::take(pending_boundary));
             let record = builder.record(TrajectoryRecordKind::Context, None, preview(text), ev.ts);
             let index = builder.push(record);
             builder.records[index].input = Some(text.clone());
@@ -541,7 +552,7 @@ pub(super) fn apply_turn_boundary(
             // open a turn so those records have a home.
             if !builder.is_open() {
                 *n += 1;
-                builder.reset(String::new(), ev.ts, pending_boundary.take());
+                builder.reset(String::new(), ev.ts, std::mem::take(pending_boundary));
             }
             builder.open_model_call(None, ev.ts);
         }

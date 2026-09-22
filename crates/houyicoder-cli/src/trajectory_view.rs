@@ -144,11 +144,10 @@ fn build_summary(
     });
     let subagent_unknown =
         subagent_usage.is_some_and(|d| d.input == 0 && d.output == 0 && d.cache_read == 0);
-    // The totals are known when every turn reported usage, or when delegated
-    // work accounted for the turns that did not. Otherwise they are unknown.
-    let subagent_covered = acc.subagent_calls > 0;
-    let any_unknown = (acc.usage_events == 0 || acc.usage_events < acc.turns) && !subagent_covered
-        || subagent_unknown;
+    // The totals are known only when every turn reported usage and no delegation
+    // left its own usage unmeasured. A turn with no usage is a hole in the sum,
+    // and a child's tokens do not fill it: they are the child's own spend.
+    let any_unknown = acc.usage_events == 0 || acc.usage_events < acc.turns || subagent_unknown;
     let total_turns = turns.len() + hidden_turns;
     let duration_secs = acc.duration_ms / 1000;
     let distinct_models: Vec<&str> = turns
@@ -281,7 +280,7 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str, max_turns: usize)
     let mut acc = AccTotals::default();
     let calls = index_calls(window);
     let spawned = spawned_call_ids(window);
-    let mut pending: Option<TurnBoundary> = None;
+    let mut pending: Vec<TurnBoundary> = Vec::new();
     let mut last_model: Option<String> = None;
 
     for ev in window {

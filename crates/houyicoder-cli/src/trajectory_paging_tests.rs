@@ -267,6 +267,21 @@ fn test_subagent_usage_summed() {
                 call_in_turn: 0,
             },
         ),
+        ev(
+            110,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 1_000,
+                output_tokens: 100,
+                cache_read_input_tokens: 900,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: "test".into(),
+                recovery: false,
+                effort: None,
+            },
+        ),
         child("child-1", 180_000, 4_000, 170_000),
         child("child-2", 32_000, 1_000, 30_000),
     ];
@@ -282,15 +297,114 @@ fn test_subagent_usage_summed() {
         delegated.cache_hit_pct(),
         Some(200_000.0 / 212_000.0 * 100.0)
     );
-    // The session totals fold both the parent's calls and the children's, so the
+    // The session totals fold the parent's calls and the children's, so the
     // headline reports what the whole session spent.
     assert_eq!(
         view.tokens_in,
-        Some(212_000),
+        Some(213_000),
         "the session's economic account includes the delegated work"
     );
-    assert_eq!(view.tokens_out, Some(5_000));
-    assert_eq!(view.cache_read, Some(200_000));
+    assert_eq!(view.tokens_out, Some(5_100));
+    assert_eq!(view.cache_read, Some(200_900));
+}
+
+/// A turn that reported no usage leaves the session total unknown: a child's
+/// tokens are the child's own spend and cannot fill the parent's hole.
+#[test]
+fn test_subagent_usage_parent_unknown() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "explore".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            500,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-1".into(),
+                status: "completed".into(),
+                summary: "done".into(),
+                result_ref: "child-1".into(),
+                input_tokens: 180_000,
+                output_tokens: 4_000,
+                cache_read_input_tokens: 170_000,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test", 0);
+    assert!(view.subagent_usage.is_some(), "the child is still reported");
+    assert_eq!(
+        view.tokens_in, None,
+        "the parent's turn reported nothing, so the total stays unknown"
+    );
+}
+
+/// A delegation that reported no usage of its own also leaves the total unknown.
+#[test]
+fn test_subagent_usage_unmeasured_unknown() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "explore".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 1_000,
+                output_tokens: 100,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: "test".into(),
+                recovery: false,
+                effort: None,
+            },
+        ),
+        ev(
+            500,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-1".into(),
+                status: "timeout".into(),
+                summary: String::new(),
+                result_ref: "child-1".into(),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+            },
+        ),
+    ];
+    let view = project(&events, "test", 0);
+    assert!(
+        view.subagent_usage.is_some(),
+        "the delegation is reported even without usage"
+    );
+    assert_eq!(
+        view.tokens_in, None,
+        "an unmeasured child leaves the session total unknown"
+    );
 }
 
 /// A session with no delegation reports no delegated usage at all.
