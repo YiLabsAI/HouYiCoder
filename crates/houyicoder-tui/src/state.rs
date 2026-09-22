@@ -11,6 +11,7 @@ use std::time::Instant;
 
 pub(crate) mod app_methods;
 pub(crate) mod counts;
+mod cursors;
 pub(crate) mod enums;
 mod expanded_keys;
 mod model_picker;
@@ -50,6 +51,7 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::hooks::HookEntry;
 
+pub(crate) use crate::state::cursors::EventCursor;
 pub(crate) use crate::state::expanded_keys::ParkedKeys;
 pub use crate::state::model_picker::{
     DEFAULT_LABEL, ModelDraft, ModelPickerState, ModelSettingFocus, PendingCommit,
@@ -136,10 +138,11 @@ pub struct App {
     /// Cursor into the frame log for the verdict audit cache. Stays on App:
     /// verdicts are an audit capability, not transcript content.
     pub verdict_cursor: usize,
-    /// Frame index the user scrolled away from the tail, for the new-message
-    /// count. Moves to TranscriptViewState::unseen_since as an event cursor
-    /// once that view-state owner exists.
-    pub scrolled_from_frame: Option<usize>,
+    /// Cursor anchored on the frame the user last saw before scrolling away
+    /// from the tail, for the new-message count. Absolute (Local) or durable
+    /// (Server) so front-of-window eviction and resume cannot silently shift
+    /// the baseline the way a raw frame index would.
+    pub(crate) unseen_since: Option<EventCursor>,
     pub transcript_scroll: TranscriptScroll,
     /// Cached display rows: the full pre-visible computation (display_slots +
     /// row formatting). Invalidated by a version counter — only recomputed

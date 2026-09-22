@@ -185,12 +185,12 @@ fn test_rescroll_keeps_count() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
         "response",
     ))));
-    let snapshot = app.scrolled_from_frame.expect("snapshot taken");
+    let snapshot = app.unseen_since.expect("snapshot taken");
     // A second scroll-away: was already not following, so the null guard
     // keeps the original baseline.
     app.scroll_transcript_line_up(3);
     assert_eq!(
-        app.scrolled_from_frame,
+        app.unseen_since,
         Some(snapshot),
         "second scroll-away must not reset the baseline"
     );
@@ -226,7 +226,7 @@ fn test_click_pill_jumps() {
         "click returns to the tail"
     );
     assert!(
-        app.scrolled_from_frame.is_none(),
+        app.unseen_since.is_none(),
         "click clears the scroll-away snapshot"
     );
 }

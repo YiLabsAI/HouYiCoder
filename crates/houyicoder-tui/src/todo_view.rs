@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
+use crate::state::EventCursor;
 use crate::transcript::TranscriptFrame;
 
 /// Time a completed task remains visible before clearing from the transcript.
@@ -62,7 +63,7 @@ pub struct TodoState {
     pub(crate) items: Vec<TodoView>,
     pub(crate) expanded: bool,
     pub(crate) completion_at: HashMap<String, Instant>,
-    cursor: usize,
+    cursor: Option<EventCursor>,
     /// True while restored history (a resume replay or a rewind) is being
     /// re-fed into the accumulator. Every appended frame during that phase is
     /// a snapshot restore, not a live transition, so no completion timestamp
@@ -73,24 +74,32 @@ pub struct TodoState {
 impl TodoState {
     /// Apply newly appended todo-write frames using last-write-wins semantics.
     pub(crate) fn update<F: AsRef<TranscriptFrame>>(&mut self, frames: &[F], run_active: bool) {
-        if self.cursor > frames.len() {
-            // Rewind: the transcript shrank below the cursor, so the
-            // projection restarts from zero. Timestamps go with the items;
-            // a retained one would hold the replayed list inside the
-            // completion visibility window.
-            self.cursor = 0;
+        let (start, reset) = match self.cursor {
+            None => (0, false),
+            Some(EventCursor::Local(n)) => {
+                let n = n as usize;
+                if n > frames.len() {
+                    (0, true)
+                } else {
+                    (n, false)
+                }
+            }
+            // The generic slice carries no event seq; re-derive from the front.
+            Some(EventCursor::Server(_)) => (0, true),
+        };
+        if reset {
             self.items.clear();
             self.completion_at.clear();
         }
         let mut latest = None;
-        for frame in frames.iter().skip(self.cursor) {
+        for frame in frames.iter().skip(start) {
             if let TranscriptFrame::Session(update) = frame.as_ref()
                 && let Some(parsed) = from_tool_call(update)
             {
                 latest = Some(parsed);
             }
         }
-        self.cursor = frames.len();
+        self.cursor = Some(EventCursor::Local(frames.len() as u64));
         if !run_active {
             pause_inactive(&mut self.items);
         }
@@ -199,12 +208,15 @@ impl TodoState {
 
     #[cfg(test)]
     pub(crate) fn cursor(&self) -> usize {
-        self.cursor
+        match self.cursor {
+            Some(EventCursor::Local(n)) => n as usize,
+            _ => 0,
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn set_cursor(&mut self, cursor: usize) {
-        self.cursor = cursor;
+        self.cursor = Some(EventCursor::Local(cursor as u64));
     }
 }
 
@@ -270,6 +282,7 @@ pub fn from_tool_call(update: &SessionUpdate) -> Option<Vec<TodoView>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use houyicoder_protocol::envelope::EventSeq;
     use houyicoder_protocol::frontend::run::ContentBlock;
     use houyicoder_protocol::frontend::session_update::{
         ContentChunk, SessionUpdate, ToolCall, ToolCallId,
@@ -458,6 +471,31 @@ mod tests {
         state.update(std::slice::from_ref(&frame), false);
         assert!(state.items.is_empty());
         assert!(state.completion_at.is_empty());
+    }
+
+    /// A server-anchored cursor cannot be resolved against the generic frame
+    /// slice, so the accumulator re-derives from the front; the usize test
+    /// accessor reads a server cursor back as zero.
+    #[test]
+    fn test_server_cursor_re_derives() {
+        let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+            "todos": [{"content": "done", "status": "completed"}]
+        })));
+        let mut state = TodoState {
+            cursor: Some(EventCursor::Server(EventSeq(7))),
+            ..Default::default()
+        };
+        assert_eq!(
+            state.cursor(),
+            0,
+            "the usize accessor reads a server cursor as zero"
+        );
+        state.update(std::slice::from_ref(&frame), true);
+        assert_eq!(
+            state.items.len(),
+            1,
+            "server cursor re-derives from the front"
+        );
     }
 
     /// A live run reaching the all-completed state records timestamps and

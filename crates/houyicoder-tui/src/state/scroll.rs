@@ -4,7 +4,7 @@
 //! block and only these methods call it.
 
 use crate::scroll::ScrollTransition;
-use crate::state::App;
+use crate::state::{App, EventCursor};
 
 impl App {
     /// Page the transcript up by one viewport (older rows).
@@ -61,9 +61,9 @@ impl App {
     fn snapshot_scroll_away(&mut self, was_following: bool) {
         if was_following
             && !self.transcript_scroll.is_following_tail()
-            && self.scrolled_from_frame.is_none()
+            && self.unseen_since.is_none()
         {
-            self.scrolled_from_frame = Some(self.transcript.frame_count());
+            self.unseen_since = Some(self.event_cursor_at_tail());
         }
     }
 
@@ -72,7 +72,7 @@ impl App {
     /// trim actually dropped lines, so a no-op return to the tail does not
     /// invalidate the render cache.
     fn resume_tail_trim(&mut self) {
-        self.scrolled_from_frame = None;
+        self.unseen_since = None;
         let dropped = self.trim_live_transcript();
         if dropped > 0 {
             self.bump_transcript_version();
@@ -85,14 +85,14 @@ impl App {
     /// One turn counts once, however many agent chunks, tool calls, or
     /// thoughts it contains: only a user message resets prev_was_agent, so
     /// the count follows turn boundaries rather than frame arrivals. The
-    /// snapshot is a frame index rather than a transcript length, so the cap
-    /// that drops the oldest pushed rows cannot silently zero the count, and
-    /// it is clamped in case a rewind truncated frames below it.
+    /// baseline is an absolute or durable cursor rather than a transcript
+    /// length, so the cap that drops the oldest pushed rows and a future
+    /// front-of-window eviction cannot silently zero the count.
     pub fn jump_pill_new_count(&self) -> usize {
-        let Some(from) = self.scrolled_from_frame else {
+        let Some(cursor) = self.unseen_since else {
             return 0;
         };
-        let from = from.min(self.transcript.frame_count());
+        let from = self.frame_index_for_cursor(cursor);
         let mut count = 0usize;
         let mut prev_was_agent = false;
         for f in &self.transcript.frames()[from..] {
@@ -120,6 +120,41 @@ impl App {
             }
         }
         count
+    }
+
+    /// The cursor at the current tail: the boundary one past the last frame.
+    /// Anchors Server on the tail frame's event seq when the frame carries
+    /// one, else Local on the resident count. Both resolve to the frame
+    /// count, so the pill reads zero new frames at the moment of capture.
+    fn event_cursor_at_tail(&self) -> EventCursor {
+        let frames = self.transcript.frames();
+        let count = frames.len();
+        match frames.last() {
+            Some(sf) => match sf.seq {
+                Some(seq) => EventCursor::Server(seq),
+                None => EventCursor::Local(count as u64),
+            },
+            None => EventCursor::Local(0),
+        }
+    }
+
+    /// Resolve a cursor to the index of the first frame past its anchor: the
+    /// count of frames already consumed. Server finds the anchored seq and
+    /// steps past it; Local is already an absolute boundary, clamped to the
+    /// resident range. Returns the frame count when the anchor is no longer
+    /// resident, so the slice reads empty rather than wrapping.
+    fn frame_index_for_cursor(&self, cursor: EventCursor) -> usize {
+        let frame_count = self.transcript.frame_count();
+        match cursor {
+            EventCursor::Server(seq) => self
+                .transcript
+                .frames()
+                .iter()
+                .position(|sf| sf.seq == Some(seq))
+                .map(|i| i + 1)
+                .unwrap_or(frame_count),
+            EventCursor::Local(n) => (n as usize).min(frame_count),
+        }
     }
 
     /// Step the transcript up by n lines (wheel = 3, edge auto-scroll = 1).
@@ -164,6 +199,86 @@ impl App {
             delta,
             follow = self.transcript_scroll.is_following_tail(),
             "scroll"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::composition;
+    use crate::transcript::{SequencedFrame, TranscriptFrame};
+    use houyicoder_protocol::envelope::EventSeq;
+    use houyicoder_protocol::frontend::run::ContentBlock;
+    use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
+
+    fn agent_frame(seq: u64, text: &str) -> SequencedFrame {
+        SequencedFrame {
+            seq: Some(EventSeq(seq)),
+            frame: TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                ContentBlock::Text { text: text.into() },
+            ))),
+        }
+    }
+
+    /// A tail frame carrying a server seq anchors the cursor on that seq, so
+    /// the baseline survives a front drain that a raw frame index would not.
+    #[test]
+    fn test_tail_cursor_server_anchored() {
+        let mut app = composition::app();
+        app.transcript.frames_mut().push(agent_frame(5, "first"));
+        assert!(matches!(
+            app.event_cursor_at_tail(),
+            EventCursor::Server(EventSeq(5))
+        ));
+    }
+
+    /// A tail frame with no server seq anchors Local on the resident count,
+    /// reproducing the old frame_count() baseline bit-for-bit.
+    #[test]
+    fn test_tail_cursor_local_count() {
+        use crate::transcript::TranscriptFrame;
+        use houyicoder_protocol::frontend::run::ContentBlock;
+        use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
+        let mut app = composition::app();
+        app.transcript
+            .push_frame(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
+                ContentChunk::new(ContentBlock::Text { text: "hi".into() }),
+            )));
+        assert!(matches!(
+            app.event_cursor_at_tail(),
+            EventCursor::Local(n) if n == 1
+        ));
+    }
+
+    /// An empty transcript anchors Local(0) so the pill reads zero rather
+    /// than wrapping past the end.
+    #[test]
+    fn test_tail_cursor_empty() {
+        let app = composition::app();
+        assert!(matches!(app.event_cursor_at_tail(), EventCursor::Local(0)));
+    }
+
+    /// A server cursor resolves to the frames past the anchored seq; a seq no
+    /// longer resident resolves to the tail so the slice reads empty.
+    #[test]
+    fn test_cursor_resolves_server_anchor() {
+        let mut app = composition::app();
+        app.transcript.frames_mut().push(agent_frame(5, "first"));
+        app.transcript.frames_mut().push(agent_frame(6, "second"));
+
+        app.unseen_since = Some(EventCursor::Server(EventSeq(5)));
+        assert_eq!(
+            app.jump_pill_new_count(),
+            1,
+            "server anchor on seq 5 leaves the seq 6 turn to count"
+        );
+
+        app.unseen_since = Some(EventCursor::Server(EventSeq(999)));
+        assert_eq!(
+            app.jump_pill_new_count(),
+            0,
+            "a seq not resident anchors at the tail, no new frames"
         );
     }
 }
