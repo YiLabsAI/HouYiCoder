@@ -61,6 +61,49 @@ pub fn seed_session_with_cwd(
     event.id
 }
 
+/// Seed a session on disk with one user turn per prompt, so a PTY test can
+/// drive a multi-turn trajectory list. Writes the log through the real backend
+/// so the hash chain is the one a live session produces, then the descriptor.
+pub fn seed_session_turns_on_disk(
+    root: &std::path::Path,
+    sid_str: &str,
+    model: &str,
+    prompts: &[&str],
+) {
+    use houyicoder_context::{ContextBackend, SessionEvent, SessionId, SessionLogEntry};
+    let sid = SessionId::from_display_string(sid_str).expect("sid parses");
+    let backend = houyicoder_memory::LocalFileBackend::new(root.to_path_buf());
+    for (i, prompt) in prompts.iter().enumerate() {
+        let event = SessionLogEntry {
+            id: houyicoder_core::EventId::new(),
+            session: sid,
+            ts: (i as u64) * 1000,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: (*prompt).into(),
+            },
+        };
+        futures::executor::block_on(backend.append(event)).expect("append seeded turn");
+    }
+    let cwd = houyicoder_service::composition::workspace_cwd(None);
+    let dir = root.join(sid_str);
+    std::fs::create_dir_all(&dir).expect("mkdir session dir");
+    let meta = serde_json::json!({
+        "name": null,
+        "name_source": "auto",
+        "cwd": cwd,
+        "model": model,
+        "provenance": {"kind": "fresh"},
+        "version": "test",
+        "created_at": 1000,
+    });
+    std::fs::write(
+        dir.join("session.json"),
+        serde_json::to_string(&meta).expect("serialize descriptor"),
+    )
+    .expect("write descriptor");
+}
+
 /// Seed a session on disk WITH a checkpoint manifest — a post-compact state —
 /// so a launched --resume <sid> followed by /context shows the folded
 /// summary + the Compact buffer category. Writes the log (one UserInput

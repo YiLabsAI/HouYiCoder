@@ -864,3 +864,71 @@ fn test_resume_reuses_provider() {
     drop(fs::remove_dir_all(&home));
     drop(fs::remove_dir_all(&sessions_dir));
 }
+
+/// The trajectory list does not wrap. Up from the oldest turn stays there and
+/// Down from the newest stays there: a session can hold hundreds of turns, and
+/// a wrap would jump the whole history on one keystroke. Driven through the real
+/// terminal so the pane's own key routing is what is under test.
+#[test]
+#[ignore]
+fn test_trajectory_no_wrap_nav() {
+    let sessions_dir = fresh_temp_dir("sessions-traj-nowrap");
+    let sid = "14141414-1414-1414-1414-141414141414";
+    common::seed_session_turns_on_disk(
+        &sessions_dir,
+        sid,
+        "traj-model",
+        &["first prompt", "second prompt", "third prompt"],
+    );
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), sid.to_string()],
+        sessions_dir.clone(),
+    );
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen after sid resume:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    run_slash_command(&mut s, "trajectory");
+    assert!(
+        s.wait_for_plain("3 turns", RENDER_TIMEOUT),
+        "trajectory header must report the three seeded turns:\n{}",
+        s.output_plain()
+    );
+    // Home selects the oldest turn, and Up there must not wrap to the newest.
+    s.send_key(&Key::Home);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        s.screen().contents().contains("▸ T1"),
+        "Home selects the oldest turn:\n{}",
+        s.screen().contents()
+    );
+    s.send_key(&Key::Up);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let screen = s.screen().contents();
+    assert!(
+        screen.contains("▸ T1"),
+        "Up at the oldest turn stays there instead of wrapping to the newest:\n{screen}"
+    );
+    // End selects the newest, and Down there must not wrap to the oldest.
+    s.send_key(&Key::End);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        s.screen().contents().contains("▸ T3"),
+        "End selects the newest turn:\n{}",
+        s.screen().contents()
+    );
+    s.send_key(&Key::Down);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let screen = s.screen().contents();
+    assert!(
+        screen.contains("▸ T3"),
+        "Down at the newest turn stays there instead of wrapping to the oldest:\n{screen}"
+    );
+    drop(s);
+}

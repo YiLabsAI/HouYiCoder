@@ -20,6 +20,9 @@ use ratatui::widgets::Paragraph;
 
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
+use crate::view::relative_time::{now_epoch_secs, relative_time};
+use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
 
 // Data types
 
@@ -109,8 +112,10 @@ impl RecordOutcome {
 /// A durable boundary recorded between two turns.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TurnBoundary {
-    /// The user cleared the conversation context before this turn.
-    ContextCleared { prior_turn: u32 },
+    /// The user cleared the conversation context before this turn. prior_turn
+    /// is the model-call count at the clear; at_secs is the durable event's
+    /// timestamp, so the pane can say when it happened.
+    ContextCleared { prior_turn: u32, at_secs: u64 },
 }
 
 #[derive(Clone)]
@@ -196,10 +201,51 @@ pub enum TrajectoryRow {
 /// durable session log and projects events into the view. None in stub and
 /// unwired modes falls back to the mock so the pane still renders a demo.
 pub trait TrajectoryLog: Send + Sync {
-    /// Project the bridge's session's durable event log into the view.
+    /// Project the session's durable event log into the view. Called on every
+    /// draw, so an implementation reuses its last projection while the log has
+    /// not changed.
     fn trajectory(&self) -> TrajectoryView;
+
+    /// Widen the loaded window by one page of older turns. Called when the user
+    /// walks past the oldest loaded turn; an implementation with nothing older
+    /// to load does nothing.
+    fn load_older(&self) {}
 }
 
+/// Session-wide latency and work-time facts, computed once from the durable
+/// timing events and read by both the trajectory pane and the status pane. One
+/// value, two renderers: neither surface recomputes a percentile or a rate, so
+/// they cannot disagree about the session they describe.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct SessionTiming {
+    /// Time-to-first-token samples and their nearest-rank percentiles. None
+    /// when the session recorded no first token at all.
+    pub ttft_samples: usize,
+    pub ttft_avg_ms: Option<u64>,
+    pub ttft_p95_ms: Option<u64>,
+    pub ttft_p99_ms: Option<u64>,
+    /// Decode samples: how many calls reported a decode span.
+    pub decode_samples: usize,
+    pub decode_tok_per_sec: Option<f64>,
+    /// Wall time spent inside model calls, and inside tool executions. The two
+    /// can overlap (a delegation runs while its parent waits), so they are
+    /// reported separately and never added into a single total.
+    pub model_ms: u64,
+    pub tool_ms: u64,
+}
+
+impl SessionTiming {
+    /// True when the session recorded no timing at all, so a caller hides the
+    /// rows rather than printing zeroes.
+    pub fn is_empty(&self) -> bool {
+        self.ttft_samples == 0
+            && self.decode_samples == 0
+            && self.model_ms == 0
+            && self.tool_ms == 0
+    }
+}
+
+#[derive(Clone)]
 pub struct TrajectoryView {
     pub session_id: String,
     /// Derived: one model when every turn's model field matches (or is
@@ -213,10 +259,10 @@ pub struct TrajectoryView {
     pub cache_read: Option<u64>,
     pub failures: usize,
     pub duration_secs: u64,
-    pub ttft_avg_ms: Option<u64>,
-    pub ttft_p95_ms: Option<u64>,
-    pub ttft_p99_ms: Option<u64>,
-    pub decode_tok_per_sec: Option<f64>,
+    pub timing: SessionTiming,
+    /// How many turns sit before the loaded window. Non-zero means older
+    /// history exists and has not been read yet.
+    pub hidden_turns: usize,
     pub rows: Vec<TrajectoryRow>,
 }
 
@@ -243,10 +289,12 @@ fn turn_title(turn: &TrajectoryTurn) -> String {
 
 // Rendering
 
-/// Main entry: dispatch on the drill level. Each level builder returns
-/// (header, body, footer) line groups; the body is the scrollable cursor list,
-/// header + footer stay pinned so the key hints never scroll off. The body
-/// scroll offset tracks the cursor so the selected row is always visible.
+/// Main entry: dispatch on the drill level. Each level builder returns the
+/// header and footer to pin plus a scrollable body and the body line the
+/// selection sits on; header + footer stay pinned so the key hints never scroll
+/// off. The selected body line, not the row index, drives the scroll offset:
+/// a boundary separator occupies a body line without being a selectable row, so
+/// the two are not the same number.
 pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
     // Real data when wired; fallback sample in unwired modes so the pane
     // still renders demonstration rows.
@@ -258,7 +306,7 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
     let level = app.trajectory_level.get();
     let cursor = app.trajectory_cursor.get();
     let turn_idx = app.trajectory_turn_idx.get();
-    let (header, body, footer) = match level {
+    let (header, body, footer, sel_line) = match level {
         1 => detail::draw_turn_detail(&traj, turn_idx, cursor, area, app),
         2 => detail::draw_event_detail(&traj, turn_idx, cursor, area),
         _ => draw_turn_list(&traj, cursor, area),
@@ -281,8 +329,7 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         app.trajectory_cursor.set(active_len.saturating_sub(1));
     }
     app.trajectory_list_len.set(active_len);
-    let clamped_cursor = app.trajectory_cursor.get();
-    render_scrolled(f, area, header, body, footer, clamped_cursor);
+    render_scrolled(f, area, header, body, footer, sel_line);
 }
 
 /// Render a pane as a pinned header, a cursor-following scrollable body, and a
@@ -296,7 +343,7 @@ fn render_scrolled(
     header: Vec<Line<'static>>,
     body: Vec<Line<'static>>,
     footer: Vec<Line<'static>>,
-    cursor: usize,
+    sel_line: usize,
 ) {
     use ratatui::layout::{Constraint, Direction, Layout};
     let h = header.len() as u16;
@@ -315,12 +362,111 @@ fn render_scrolled(
         0
     } else {
         let half = visible / 2;
-        cursor
+        sel_line
             .saturating_sub(half)
             .min(body.len().saturating_sub(visible))
     };
     f.render_widget(Paragraph::new(body).scroll((scroll as u16, 0)), chunks[1]);
     f.render_widget(Paragraph::new(footer), chunks[2]);
+}
+
+/// The body lines for one turn: a context-cleared separator when the log
+/// carries one, then the row itself. The separator is a label rather than a
+/// row, so it never takes a cursor position.
+fn turn_row(
+    t: &TrajectoryTurn,
+    selected: bool,
+    width: usize,
+    show_per_turn_model: bool,
+    now_secs: u64,
+) -> Vec<Line<'static>> {
+    let prefix = if selected { "▸ " } else { "  " };
+    let mut out = Vec::new();
+    if let Some(TurnBoundary::ContextCleared { at_secs, .. }) = t.boundary_before {
+        out.push(line(vec![sp(
+            format!(
+                "  ── context cleared · {} ──",
+                relative_time(now_secs, at_secs)
+            ),
+            Color::DarkGray,
+        )]));
+    }
+    let glyph = if t.success { "✓" } else { "✗" };
+    let gc = if t.success { Color::Green } else { Color::Red };
+    let tokens = format!("{}↓ {}↑", fmt_k_opt(t.tokens_in), fmt_k_opt(t.tokens_out));
+    let cached = match (t.cache_read, t.tokens_in) {
+        (Some(c), Some(tin)) if tin > 0 && c > 0 => {
+            format!("{:.0}% cached", 100.0 * c as f64 / tin as f64)
+        }
+        _ => String::new(),
+    };
+    // Thinking tokens are a component of output, so the parenthetical sits
+    // tight against the output number and carries its own inclusion note.
+    let thinking = match t.reasoning_tokens {
+        Some(r) if r > 0 => format!("(thinking {})", fmt_k(r)),
+        _ => String::new(),
+    };
+    // Per-turn model and effort only when the session saw at least two distinct
+    // models: one id repeated on every row is noise. A turn that switched
+    // models lists each id it used.
+    let model = if show_per_turn_model && !t.models.is_empty() {
+        t.models.join(",")
+    } else {
+        String::new()
+    };
+    let effort = if show_per_turn_model && !t.efforts.is_empty() {
+        t.efforts.join(",")
+    } else {
+        String::new()
+    };
+    let calls = if t.tool_count > 0 {
+        format!("{} calls", t.tool_count)
+    } else {
+        "(chat)".to_string()
+    };
+    // Only a turn that had a failure states one; a zero would be noise on every
+    // clean row.
+    let fails = if t.tool_fail > 0 {
+        format!("{} fail", t.tool_fail)
+    } else {
+        String::new()
+    };
+    // Columns are dropped from the least informative end as the terminal
+    // narrows, so the duration and the outcome always survive. Padding counts
+    // display columns, not characters: a wide glyph would otherwise shift every
+    // column after it.
+    let mut spans = vec![
+        sp(prefix, Color::Cyan),
+        sp(pad(&format!("T{}", t.n), 5), Color::Cyan),
+        sp(pad(&truncate_width(&turn_title(t), 30), 30), Color::White),
+        sp(pad(&tokens, 15), Color::Gray),
+        sp(pad(&cached, 12), Color::Indexed(208)),
+    ];
+    if width >= 124 {
+        spans.push(sp(pad(&thinking, 16), Color::DarkGray));
+    }
+    if width >= 148 && show_per_turn_model {
+        spans.push(sp(pad(&truncate_width(&model, 20), 20), Color::DarkGray));
+        spans.push(sp(pad(&truncate_width(&effort, 8), 8), Color::DarkGray));
+    }
+    if width >= 96 {
+        spans.push(sp(pad(&calls, 9), Color::Gray));
+        spans.push(sp(
+            pad(&fails, 8),
+            if t.tool_fail > 0 {
+                Color::Red
+            } else {
+                Color::DarkGray
+            },
+        ));
+    }
+    spans.push(sp(
+        format!("{:>6.1}s ", t.duration_ms as f64 / 1000.0),
+        Color::Gray,
+    ));
+    spans.push(sp(glyph, gc));
+    out.push(line(spans));
+    out
 }
 
 /// Level 0: session summary header + turn list body. The cursor selects a row
@@ -329,8 +475,13 @@ fn render_scrolled(
 fn draw_turn_list(
     traj: &TrajectoryView,
     cursor: usize,
-    _area: Rect,
-) -> (Vec<Line<'static>>, Vec<Line<'static>>, Vec<Line<'static>>) {
+    area: Rect,
+) -> (
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    usize,
+) {
     let total_calls: usize = traj
         .rows
         .iter()
@@ -351,8 +502,16 @@ fn draw_turn_list(
         }
         _ => String::new(),
     };
+    let turns_label = if traj.hidden_turns > 0 {
+        format!(
+            "{} turns ({} older not loaded)",
+            traj.total_turns, traj.hidden_turns
+        )
+    } else {
+        format!("{} turns", traj.total_turns)
+    };
     let mut header = vec![line(vec![
-        sp(format!("{} turns", traj.total_turns), Color::Cyan),
+        sp(turns_label, Color::Cyan),
         sp(" · ", Color::DarkGray),
         sp(tokens_summary, Color::Gray),
         sp(cache_hit_str, Color::Indexed(208)),
@@ -361,13 +520,13 @@ fn draw_turn_list(
         sp(format!(" · total {}s", traj.duration_secs), Color::Gray),
     ])];
     let mut timing_spans = Vec::new();
-    if let Some(avg) = traj.ttft_avg_ms {
+    if let Some(avg) = traj.timing.ttft_avg_ms {
         timing_spans.push(sp(
             format!("TTFT avg {:.1}s", avg as f64 / 1000.0),
             Color::DarkGray,
         ));
     }
-    if let Some(p95) = traj.ttft_p95_ms {
+    if let Some(p95) = traj.timing.ttft_p95_ms {
         if !timing_spans.is_empty() {
             timing_spans.push(sp(" · ", Color::DarkGray));
         }
@@ -376,7 +535,7 @@ fn draw_turn_list(
             Color::DarkGray,
         ));
     }
-    if let Some(p99) = traj.ttft_p99_ms {
+    if let Some(p99) = traj.timing.ttft_p99_ms {
         if !timing_spans.is_empty() {
             timing_spans.push(sp(" · ", Color::DarkGray));
         }
@@ -385,7 +544,7 @@ fn draw_turn_list(
             Color::DarkGray,
         ));
     }
-    if let Some(tps) = traj.decode_tok_per_sec {
+    if let Some(tps) = traj.timing.decode_tok_per_sec {
         if !timing_spans.is_empty() {
             timing_spans.push(sp(" · ", Color::DarkGray));
         }
@@ -409,96 +568,32 @@ fn draw_turn_list(
             _ => None,
         })
         .flatten()
-        .collect::<std::collections::HashSet<_>>()
+        .collect::<HashSet<_>>()
         .len()
         >= 2;
     let mut body = Vec::new();
+    let mut sel_line = 0usize;
     let clamped = cursor.min(traj.rows.len().saturating_sub(1));
+    let now_secs = now_epoch_secs();
+    let width = area.width as usize;
     for (i, row) in traj.rows.iter().enumerate() {
         let sel = i == clamped;
         let prefix = if sel { "▸ " } else { "  " };
         match row {
             TrajectoryRow::Turn(t) => {
-                let glyph = if t.success { "✓" } else { "✗" };
-                let gc = if t.success { Color::Green } else { Color::Red };
-                body.push(line(vec![
-                    sp(prefix, Color::Cyan),
-                    sp(format!("T{} ", t.n), Color::Cyan),
-                    sp(
-                        format!("{:32} ", truncate_width(&turn_title(t), 32)),
-                        Color::White,
-                    ),
-                    sp(
-                        format!("{}↓ {}↑", fmt_k_opt(t.tokens_in), fmt_k_opt(t.tokens_out)),
-                        Color::Gray,
-                    ),
-                    match (t.cache_read, t.tokens_in) {
-                        (Some(c), Some(tin)) if tin > 0 && c > 0 => sp(
-                            format!(" · {:.0}% cached", 100.0 * c as f64 / tin as f64),
-                            Color::Indexed(208),
-                        ),
-                        _ => sp(String::new(), Color::DarkGray),
-                    },
-                    // Thinking tokens: shown as (thinking Nk) only when
-                    // reasoning_tokens is Some and >0. The parenthetical
-                    // is tight against the output number with no separator
-                    // so the inclusion relation (reasoning ⊂ output) is
-                    // visually unambiguous (I14).
-                    match t.reasoning_tokens {
-                        Some(r) if r > 0 => {
-                            sp(format!(" (thinking {})", fmt_k(r)), Color::DarkGray)
-                        }
-                        _ => sp(String::new(), Color::DarkGray),
-                    },
-                    // Per-turn model/effort: only when ≥2 distinct models
-                    // in the session (noise otherwise). A turn that switched
-                    // models lists each id it used; an old log without the
-                    // field is omitted rather than filled with a guess.
-                    if show_per_turn_model {
-                        if t.models.is_empty() {
-                            sp(String::new(), Color::DarkGray)
-                        } else {
-                            sp(format!("  {}", t.models.join(",")), Color::DarkGray)
-                        }
-                    } else {
-                        sp(String::new(), Color::DarkGray)
-                    },
-                    // Per-turn effort: only alongside per-turn model (effort
-                    // without model context is meaningless). Empty = omitted.
-                    if show_per_turn_model {
-                        if t.efforts.is_empty() {
-                            sp(String::new(), Color::DarkGray)
-                        } else {
-                            sp(format!(" {}", t.efforts.join(",")), Color::DarkGray)
-                        }
-                    } else {
-                        sp(String::new(), Color::DarkGray)
-                    },
-                    if t.tool_count > 0 {
-                        sp(format!("  {} calls ", t.tool_count), Color::Gray)
-                    } else {
-                        sp("  (chat)   ", Color::DarkGray)
-                    },
-                    if t.tool_count > 0 {
-                        sp(
-                            format!("{} fail  ", t.tool_fail),
-                            if t.tool_fail > 0 {
-                                Color::Red
-                            } else {
-                                Color::DarkGray
-                            },
-                        )
-                    } else {
-                        sp(String::new(), Color::DarkGray)
-                    },
-                    sp(
-                        format!("{:.1}s ", t.duration_ms as f64 / 1000.0),
-                        Color::Gray,
-                    ),
-                    sp(glyph, gc),
-                ]));
+                for extra in turn_row(t, sel, width, show_per_turn_model, now_secs) {
+                    body.push(extra);
+                }
+                // The selected row's body line is taken after any separator, so
+                // the scroll offset follows the row the user actually sees.
+                if sel {
+                    sel_line = body.len() - 1;
+                }
             }
             TrajectoryRow::Bg(bg) => {
+                if sel {
+                    sel_line = body.len();
+                }
                 body.push(line(vec![
                     sp(prefix, Color::Cyan),
                     sp("[bg] ", Color::DarkGray),
@@ -521,7 +616,7 @@ fn draw_turn_list(
             ("Esc", "close"),
         ]),
     ];
-    (header, body, footer)
+    (header, body, footer, sel_line)
 }
 
 fn format_turn_cache(turn: &TrajectoryTurn) -> String {
@@ -544,6 +639,18 @@ fn line(spans: Vec<Span<'static>>) -> Line<'static> {
 fn blank() -> Line<'static> {
     Line::raw("")
 }
+/// Pad a string to a display width, counting columns rather than characters
+/// so a wide glyph cannot shift the columns after it.
+fn pad(text: &str, width: usize) -> String {
+    let w = UnicodeWidthStr::width(text);
+    if w >= width {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    out.push_str(&" ".repeat(width - w));
+    out
+}
+
 fn sp(text: impl Into<String>, color: Color) -> Span<'static> {
     Span::styled(text.into(), Style::default().fg(color))
 }

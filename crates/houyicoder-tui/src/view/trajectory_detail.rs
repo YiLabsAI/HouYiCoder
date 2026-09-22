@@ -25,7 +25,12 @@ pub(super) fn draw_turn_detail(
     cursor: usize,
     area: Rect,
     app: &crate::state::App,
-) -> (Vec<Line<'static>>, Vec<Line<'static>>, Vec<Line<'static>>) {
+) -> (
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    usize,
+) {
     let mut header = Vec::new();
     let mut body = Vec::new();
     let Some(row) = traj.rows.get(turn_idx) else {
@@ -33,6 +38,7 @@ pub(super) fn draw_turn_detail(
             vec![line(vec![sp("no row data", Color::DarkGray)])],
             vec![],
             vec![],
+            0,
         );
     };
     let row = row.clone();
@@ -68,35 +74,19 @@ pub(super) fn draw_turn_detail(
             let summary_w = (area.width as usize).saturating_sub(32 + bar_area).max(8);
             header.push(ruler_line(turn.duration_ms, bar_area));
             for (i, ev) in turn.records.iter().enumerate() {
-                let sel = i == clamped;
-                let prefix = if sel { "▸ " } else { "  " };
-                let bar = positioned_bar(ev.start_ms, ev.duration_ms, turn.duration_ms, bar_area);
-                let bc = outcome_color(ev.outcome);
-                let mark = ev.outcome.glyph();
-                // The name column carries what the record acted on: the tool
-                // it called, the agent it delegated to, the model it asked.
-                let name = ev.name.as_deref().unwrap_or("");
-                body.push(line(vec![
-                    sp(prefix, Color::Cyan),
-                    sp(format!("{:7}", ev.kind.label()), Color::DarkGray),
-                    sp(" ", Color::DarkGray),
-                    sp(format!("{:<11}", truncate_width(name, 11)), Color::Cyan),
-                    sp(bar, bc),
-                    sp(" ", Color::DarkGray),
-                    sp(
-                        format!("{:>5.1}s", ev.duration_ms as f64 / 1000.0),
-                        Color::Gray,
-                    ),
-                    sp(" ", Color::DarkGray),
-                    sp(truncate_width(&ev.summary, summary_w), Color::White),
-                    sp(format!(" {}", mark), bc),
-                ]));
+                body.push(record_row(
+                    ev,
+                    i == clamped,
+                    turn.duration_ms,
+                    bar_area,
+                    summary_w,
+                ));
             }
             let footer = vec![
                 blank(),
                 key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "back")]),
             ];
-            (header, body, footer)
+            (header, body, footer, clamped)
         }
         TrajectoryRow::Bg(bg) => {
             // A [bg] row drilled from L0 has no event timeline — show its
@@ -125,9 +115,76 @@ pub(super) fn draw_turn_detail(
                 sp(format!("{}ms", bg.duration_ms), Color::Gray),
             ]));
             let footer = vec![blank(), key_hint(&[("Esc", "back")])];
-            (header, body, footer)
+            (header, body, footer, 0)
         }
     }
+}
+
+/// One Level 1 timeline row: the kind and name of the record, its bar on the
+/// turn's time axis, its duration, and its summary with any measured latency
+/// appended.
+fn record_row(
+    ev: &TrajectoryRecord,
+    selected: bool,
+    turn_ms: u64,
+    bar_area: usize,
+    summary_w: usize,
+) -> Line<'static> {
+    let prefix = if selected { "▸ " } else { "  " };
+    let bar = positioned_bar(ev.start_ms, ev.duration_ms, turn_ms, bar_area);
+    let bc = outcome_color(ev.outcome);
+    let mark = ev.outcome.glyph();
+    // The name column carries what the record acted on: the tool it called, the
+    // agent it delegated to, the model it asked, prefixed by the call's ordinal
+    // inside the turn.
+    let name = ev.name.as_deref().unwrap_or("");
+    let label = if ev.ordinal > 0 {
+        format!("{} {name}", ev.ordinal)
+    } else {
+        name.to_string()
+    };
+    // A model call states its own measured split: the wait for the first token
+    // and the decode rate of the tokens it produced. A part the log did not
+    // record stays absent.
+    let timing = match &ev.timing {
+        Some(t) if ev.kind == TrajectoryRecordKind::Model => {
+            let mut parts = Vec::new();
+            if let Some(ttft) = t.ttft_ms {
+                parts.push(format!("TTFT {ttft}ms"));
+            }
+            if let (Some(decode_ms), Some(out)) =
+                (t.decode_ms, ev.usage.as_ref().and_then(|u| u.output))
+                && decode_ms > 0
+            {
+                parts.push(format!(
+                    "{:.1} tok/s",
+                    out as f64 / (decode_ms as f64 / 1000.0)
+                ));
+            }
+            if parts.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", parts.join(" · "))
+            }
+        }
+        _ => String::new(),
+    };
+    let summary = format!("{}{}", truncate_width(&ev.summary, summary_w), timing);
+    line(vec![
+        sp(prefix, Color::Cyan),
+        sp(format!("{:7}", ev.kind.label()), Color::DarkGray),
+        sp(" ", Color::DarkGray),
+        sp(format!("{:<11}", truncate_width(&label, 11)), Color::Cyan),
+        sp(bar, bc),
+        sp(" ", Color::DarkGray),
+        sp(
+            format!("{:>5.1}s", ev.duration_ms as f64 / 1000.0),
+            Color::Gray,
+        ),
+        sp(" ", Color::DarkGray),
+        sp(summary, Color::White),
+        sp(format!(" {}", mark), bc),
+    ])
 }
 
 /// Level 2: the full detail of the record selected at Level 1 (the cursor is
@@ -139,7 +196,12 @@ pub(super) fn draw_event_detail(
     turn_idx: usize,
     cursor: usize,
     _area: Rect,
-) -> (Vec<Line<'static>>, Vec<Line<'static>>, Vec<Line<'static>>) {
+) -> (
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    usize,
+) {
     let mut header = Vec::new();
     let mut body = Vec::new();
     let turn = traj.rows.get(turn_idx).and_then(|r| match r {
@@ -147,11 +209,11 @@ pub(super) fn draw_event_detail(
         _ => None,
     });
     let Some(turn) = turn else {
-        return (header, body, vec![]);
+        return (header, body, vec![], 0);
     };
     let ev = turn.records.get(cursor).or_else(|| turn.records.first());
     let Some(ev) = ev else {
-        return (header, body, vec![]);
+        return (header, body, vec![], 0);
     };
     let idx = cursor.min(turn.records.len().saturating_sub(1));
     let mark = ev.outcome.glyph();
@@ -226,7 +288,7 @@ pub(super) fn draw_event_detail(
         sp(format!("{}ms", ev.start_ms), Color::Gray),
     ]));
     let footer = vec![key_hint(&[("Esc", "back")])];
-    (header, body, footer)
+    (header, body, footer, idx)
 }
 
 // Helpers

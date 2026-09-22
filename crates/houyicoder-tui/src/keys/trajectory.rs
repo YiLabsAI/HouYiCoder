@@ -9,40 +9,36 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 /// Handle a key when the /trajectory pane is active. Returns true if the key
 /// was consumed (the caller should not fall through to generic input).
+///
+/// The list is an audit trail with a direction in time, so it does not wrap: Up
+/// from the oldest loaded turn stays there and Down from the newest stays there.
+/// Wrapping would jump a thousand-turn history from end to start on one
+/// keystroke and destroy the sense of where the user is.
 pub fn handle(app: &mut App, k: KeyEvent) -> bool {
     match k.code {
-        // Level 2 is a stable detail view (the event selected at L1), not a
-        // switcher — Up/Down is a no-op there; switch events at L1. The keys
+        // Level 2 is a stable detail view (the record selected at L1), not a
+        // switcher — Up/Down is a no-op there; switch records at L1. The keys
         // are still consumed so they never move the input cursor.
-        // Up/Down wrap around so the user can easily reach the newest (tail)
-        // or oldest (head) turn without hundreds of keystrokes.
         KeyCode::Up => {
             if app.trajectory_level.get() < 2 {
                 let c = app.trajectory_cursor.get();
-                let len = app.trajectory_list_len.get();
-                if c == 0 && len > 0 {
-                    app.trajectory_cursor.set(len.saturating_sub(1));
-                } else {
-                    app.trajectory_cursor.set(c.saturating_sub(1));
+                if c == 0 {
+                    // At the top of the loaded window there is nowhere to move,
+                    // so widen it: the pane loads the tail first and older
+                    // history arrives a page at a time.
+                    if let Some(log) = app.trajectory_log.as_ref() {
+                        log.load_older();
+                    }
                 }
+                app.trajectory_cursor.set(c.saturating_sub(1));
             }
             true
         }
         KeyCode::Down => {
             if app.trajectory_level.get() < 2 {
                 let c = app.trajectory_cursor.get();
-                let len = app.trajectory_list_len.get();
-                if len > 0 && c >= len.saturating_sub(1) {
-                    app.trajectory_cursor.set(0);
-                } else {
-                    let next = c + 1;
-                    let max = if len == 0 {
-                        next
-                    } else {
-                        len.saturating_sub(1)
-                    };
-                    app.trajectory_cursor.set(next.min(max));
-                }
+                let last = app.trajectory_list_len.get().saturating_sub(1);
+                app.trajectory_cursor.set((c + 1).min(last));
             }
             true
         }

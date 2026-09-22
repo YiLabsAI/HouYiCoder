@@ -5,6 +5,9 @@
 //! event of a turn — model calls, tool calls, delegations, context — into the
 //! records and totals the trajectory view renders.
 
+use houyicoder_context::HookVerdictKind;
+use houyicoder_tui::result_body::extract_body;
+
 use super::*;
 
 /// Accumulates one user turn: its records, its summed totals, and the
@@ -230,7 +233,7 @@ impl TurnBuilder {
     }
 
     /// Sum one model call's usage into the turn and onto the call's own record.
-    fn apply_usage(&mut self, ev: &SessionEvent, total_in: &mut u64, total_out: &mut u64, ts: u64) {
+    fn apply_usage(&mut self, ev: &SessionEvent, ts: u64) {
         let SessionEvent::TurnUsage {
             input_tokens,
             output_tokens,
@@ -262,8 +265,6 @@ impl TurnBuilder {
         if *recovery {
             self.retries += 1;
         }
-        *total_in += *input_tokens;
-        *total_out += *output_tokens;
 
         let index = self.current_model_index(ts);
         let record = &mut self.records[index];
@@ -315,7 +316,7 @@ impl TurnBuilder {
         // Format the tool output the same way the transcript does — a failed
         // command shows its exit code and stderr, an edit shows its diff
         // summary. One rendering path for tool results, not two that drift.
-        let body = houyicoder_tui::result_body::extract_body(&output.to_string());
+        let body = extract_body(&output.to_string());
         match self.open_tools.remove(call_id) {
             Some(index) => {
                 let record = &mut self.records[index];
@@ -465,6 +466,7 @@ pub(super) fn apply_turn_boundary(
         SessionEvent::ContextCleared { prior_turn } => {
             *pending_boundary = Some(TurnBoundary::ContextCleared {
                 prior_turn: *prior_turn,
+                at_secs: ev.ts / 1000,
             });
         }
         SessionEvent::UserInput { text } => {
@@ -502,8 +504,7 @@ pub(super) fn apply_turn_content(
     builder: &mut TurnBuilder,
     ev: &SessionLogEntry,
     calls: &CallIndex,
-    spawned: &std::collections::HashSet<&str>,
-    acc: &mut AccTotals,
+    spawned: &HashSet<&str>,
 ) {
     match &ev.event {
         SessionEvent::ModelStepTiming {
@@ -512,10 +513,7 @@ pub(super) fn apply_turn_content(
             decode_ms,
             ..
         } => builder.attach_timing(*total_ms, *ttft_ms, *decode_ms, ev.ts),
-        SessionEvent::TurnUsage { output_tokens, .. } => {
-            acc.decode_tokens += *output_tokens;
-            builder.apply_usage(&ev.event, &mut acc.total_in, &mut acc.total_out, ev.ts);
-        }
+        SessionEvent::TurnUsage { .. } => builder.apply_usage(&ev.event, ev.ts),
         SessionEvent::AssistantMessage { text, thinking } => {
             builder.attach_assistant(text, thinking, ev.ts);
         }
@@ -540,9 +538,6 @@ pub(super) fn apply_turn_content(
                 return;
             }
             let failed = result_failed(output, call_id, calls);
-            if failed {
-                acc.failures += 1;
-            }
             builder.finish_tool(call_id, output, *duration_ms, failed, ev.ts);
         }
         SessionEvent::SubagentSpawn {
@@ -604,12 +599,11 @@ pub(super) fn apply_turn_content(
 /// so it becomes a neutral hook record rather than a red error.
 fn apply_hook_signal(
     builder: &mut TurnBuilder,
-    verdict: &houyicoder_context::HookVerdictKind,
+    verdict: &HookVerdictKind,
     reason: &str,
     hook_name: &str,
     ts: u64,
 ) {
-    use houyicoder_context::HookVerdictKind;
     let kind = match verdict {
         HookVerdictKind::Allow => return,
         HookVerdictKind::Deny => TrajectoryRecordKind::Error,

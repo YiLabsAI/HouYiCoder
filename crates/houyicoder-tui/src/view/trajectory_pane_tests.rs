@@ -3,6 +3,7 @@
 //! the tests still see the parent module's private items via super::*.
 
 use super::*;
+use crate::view::working;
 use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
@@ -69,7 +70,7 @@ fn test_down_clamps_last_row() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            crate::view::working::draw(f, &app);
+            working::draw(f, &app);
         })
         .unwrap();
     let len = app.trajectory_list_len.get();
@@ -105,7 +106,7 @@ fn test_level0_renders_turn_list() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            crate::view::working::draw(f, &app);
+            working::draw(f, &app);
         })
         .unwrap();
 }
@@ -129,10 +130,17 @@ impl TrajectoryLog for StubLog {
             cache_read: None,
             failures: 0,
             duration_secs: 0,
-            ttft_avg_ms: None,
-            ttft_p95_ms: None,
-            ttft_p99_ms: None,
-            decode_tok_per_sec: None,
+            timing: SessionTiming {
+                ttft_samples: 1,
+                ttft_avg_ms: None,
+                ttft_p95_ms: None,
+                ttft_p99_ms: None,
+                decode_samples: 1,
+                decode_tok_per_sec: None,
+                model_ms: 0,
+                tool_ms: 0,
+            },
+            hidden_turns: 0,
             rows: Vec::new(),
         }
     }
@@ -153,7 +161,7 @@ fn test_attached_seam_supplies_view() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            crate::view::working::draw(f, &app);
+            working::draw(f, &app);
         })
         .unwrap();
     assert!(
@@ -174,7 +182,7 @@ fn test_level1_renders_row_detail() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            crate::view::working::draw(f, &app);
+            working::draw(f, &app);
         })
         .unwrap();
     assert!(
@@ -192,7 +200,7 @@ fn test_level1_renders_turn_detail() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            crate::view::working::draw(f, &app);
+            working::draw(f, &app);
         })
         .unwrap();
 }
@@ -206,7 +214,7 @@ fn test_level2_renders_event_detail() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            crate::view::working::draw(f, &app);
+            working::draw(f, &app);
         })
         .unwrap();
 }
@@ -251,10 +259,8 @@ fn test_level2_renders_projection_kinds() {
         cache_read: None,
         failures: 0,
         duration_secs: 0,
-        ttft_avg_ms: None,
-        ttft_p95_ms: None,
-        ttft_p99_ms: None,
-        decode_tok_per_sec: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -290,7 +296,8 @@ fn test_level2_renders_projection_kinds() {
         })],
     };
     let body_text = |cursor: usize| {
-        let (_, body, _) = detail::draw_event_detail(&view, 0, cursor, ratatui::layout::Rect::ZERO);
+        let (_, body, _, _) =
+            detail::draw_event_detail(&view, 0, cursor, ratatui::layout::Rect::ZERO);
         body.iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
             .collect::<String>()
@@ -364,10 +371,8 @@ fn test_event_detail_redacts_secrets() {
         cache_read: None,
         failures: 0,
         duration_secs: 0,
-        ttft_avg_ms: None,
-        ttft_p95_ms: None,
-        ttft_p99_ms: None,
-        decode_tok_per_sec: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -401,7 +406,7 @@ fn test_event_detail_redacts_secrets() {
             }],
         })],
     };
-    let (_, body, _) = detail::draw_event_detail(&view, 0, 0, ratatui::layout::Rect::ZERO);
+    let (_, body, _, _) = detail::draw_event_detail(&view, 0, 0, ratatui::layout::Rect::ZERO);
     let text = body
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
@@ -428,9 +433,7 @@ fn test_enter_drill_esc_back() {
     // holds the pane at the turn-list level.
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal
-        .draw(|f| crate::view::working::draw(f, &app))
-        .unwrap();
+    terminal.draw(|f| working::draw(f, &app)).unwrap();
     assert_eq!(app.trajectory_level.get(), 0);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.trajectory_level.get(), 1);
@@ -457,16 +460,16 @@ fn test_up_down_move_cursor() {
     // Up decrements
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.trajectory_cursor.get(), 0);
-    // Up at top wraps around to end
+    // Up at the top stays at the top: the list is an audit trail with a
+    // direction in time, so it does not wrap.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_cursor.get(), 4);
-    // Down at end wraps around to 0
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.trajectory_cursor.get(), 0);
-    // End jumps to end
+    // End jumps to the newest, and Down there stays put.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert_eq!(app.trajectory_cursor.get(), 4);
-    // Home jumps to top
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.trajectory_cursor.get(), 4);
+    // Home jumps to the oldest.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     assert_eq!(app.trajectory_cursor.get(), 0);
 }
@@ -484,10 +487,8 @@ fn test_thinking_tokens_render_nonzero() {
         cache_read: None,
         failures: 0,
         duration_secs: 0,
-        ttft_avg_ms: None,
-        ttft_p95_ms: None,
-        ttft_p99_ms: None,
-        decode_tok_per_sec: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -507,7 +508,7 @@ fn test_thinking_tokens_render_nonzero() {
             records: vec![],
         })],
     };
-    let (_, body, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -529,10 +530,8 @@ fn test_thinking_tokens_hidden_zero() {
         cache_read: None,
         failures: 0,
         duration_secs: 0,
-        ttft_avg_ms: None,
-        ttft_p95_ms: None,
-        ttft_p99_ms: None,
-        decode_tok_per_sec: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -552,7 +551,7 @@ fn test_thinking_tokens_hidden_zero() {
             records: vec![],
         })],
     };
-    let (_, body, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -577,10 +576,8 @@ fn test_per_turn_model_two() {
         cache_read: None,
         failures: 0,
         duration_secs: 0,
-        ttft_avg_ms: None,
-        ttft_p95_ms: None,
-        ttft_p99_ms: None,
-        decode_tok_per_sec: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 boundary_before: None,
@@ -620,7 +617,7 @@ fn test_per_turn_model_two() {
             }),
         ],
     };
-    let (_, body, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -644,10 +641,8 @@ fn test_per_turn_model_one() {
         cache_read: None,
         failures: 0,
         duration_secs: 0,
-        ttft_avg_ms: None,
-        ttft_p95_ms: None,
-        ttft_p99_ms: None,
-        decode_tok_per_sec: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 boundary_before: None,
@@ -687,7 +682,7 @@ fn test_per_turn_model_one() {
             }),
         ],
     };
-    let (_, body, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -712,10 +707,8 @@ fn test_turn_row_cached_ratio() {
         cache_read: None,
         failures: 0,
         duration_secs: 0,
-        ttft_avg_ms: None,
-        ttft_p95_ms: None,
-        ttft_p99_ms: None,
-        decode_tok_per_sec: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
                 boundary_before: None,
@@ -755,7 +748,7 @@ fn test_turn_row_cached_ratio() {
             }),
         ],
     };
-    let (_, body, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -927,10 +920,17 @@ fn test_timing_and_cache_render() {
         cache_read: Some(500),
         failures: 0,
         duration_secs: 10,
-        ttft_avg_ms: Some(250),
-        ttft_p95_ms: Some(400),
-        ttft_p99_ms: Some(600),
-        decode_tok_per_sec: Some(45.2),
+        timing: SessionTiming {
+            ttft_samples: 1,
+            ttft_avg_ms: Some(250),
+            ttft_p95_ms: Some(400),
+            ttft_p99_ms: Some(600),
+            decode_samples: 1,
+            decode_tok_per_sec: Some(45.2),
+            model_ms: 0,
+            tool_ms: 0,
+        },
+        hidden_turns: 0,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: None,
             n: 1,
@@ -950,7 +950,7 @@ fn test_timing_and_cache_render() {
             records: vec![],
         })],
     };
-    let (header, body, _) = draw_turn_list(&view, 0, ratatui::layout::Rect::new(0, 0, 100, 25));
+    let (header, body, _, _) = draw_turn_list(&view, 0, ratatui::layout::Rect::new(0, 0, 100, 25));
     let head_text: String = header
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -1031,10 +1031,17 @@ fn test_detail_shows_model_facts() {
         failures: 0,
         duration_secs: 1,
         cache_read: Some(1000),
-        ttft_avg_ms: Some(210),
-        ttft_p95_ms: Some(210),
-        ttft_p99_ms: Some(210),
-        decode_tok_per_sec: Some(30.0),
+        timing: SessionTiming {
+            ttft_samples: 1,
+            ttft_avg_ms: Some(210),
+            ttft_p95_ms: Some(210),
+            ttft_p99_ms: Some(210),
+            decode_samples: 1,
+            decode_tok_per_sec: Some(30.0),
+            model_ms: 620,
+            tool_ms: 0,
+        },
+        hidden_turns: 0,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             boundary_before: None,
@@ -1054,7 +1061,7 @@ fn test_detail_shows_model_facts() {
             records: vec![record],
         })],
     };
-    let (header, body, _) = detail::draw_event_detail(&view, 0, 0, Rect::ZERO);
+    let (header, body, _, _) = detail::draw_event_detail(&view, 0, 0, Rect::ZERO);
     let text: String = header
         .iter()
         .chain(body.iter())
@@ -1091,10 +1098,8 @@ fn test_timeline_shows_record_names() {
         failures: 0,
         duration_secs: 1,
         cache_read: None,
-        ttft_avg_ms: None,
-        ttft_p95_ms: None,
-        ttft_p99_ms: None,
-        decode_tok_per_sec: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
             boundary_before: None,
@@ -1115,7 +1120,7 @@ fn test_timeline_shows_record_names() {
         })],
     };
     let app = crate::composition::app();
-    let (_, body, _) = detail::draw_turn_detail(&view, 0, 0, Rect::new(0, 0, 120, 20), &app);
+    let (_, body, _, _) = detail::draw_turn_detail(&view, 0, 0, Rect::new(0, 0, 120, 20), &app);
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -1146,4 +1151,309 @@ fn record_of(kind: TrajectoryRecordKind, output: Option<&str>) -> TrajectoryReco
         timing: None,
         retries: 0,
     }
+}
+
+/// A clear between two turns draws a separator above the turn it precedes, with
+/// when it happened, and the separator is not a selectable row.
+#[test]
+fn test_turn_list_boundary() {
+    let turn = TrajectoryTurn {
+        n: 2,
+        boundary_before: Some(TurnBoundary::ContextCleared {
+            prior_turn: 1,
+            at_secs: now_epoch_secs().saturating_sub(120),
+        }),
+        user_input: "after clear".into(),
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: Some(0),
+        cache_write: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
+        reasoning_tokens: None,
+        tool_count: 0,
+        tool_fail: 0,
+        retries: 0,
+        duration_ms: 100,
+        success: true,
+        records: vec![],
+    };
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        failures: 0,
+        duration_secs: 0,
+        cache_read: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        rows: vec![TrajectoryRow::Turn(turn)],
+    };
+    let (_, body, _, sel_line) = draw_turn_list(&view, 0, Rect::new(0, 0, 120, 20));
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("context cleared"),
+        "the boundary is drawn: {text}"
+    );
+    assert!(text.contains("2m ago"), "with when it happened: {text}");
+    assert_eq!(
+        sel_line, 1,
+        "the selected row sits below the separator, so the scroll offset is \
+         the body line, not the row index"
+    );
+}
+
+/// The turn list pads its columns, so the numbers line up down the list.
+#[test]
+fn test_turn_list_column_align() {
+    let mk = |n: usize, title: &str, tin: Option<usize>| TrajectoryTurn {
+        n,
+        boundary_before: None,
+        user_input: title.into(),
+        tokens_in: tin,
+        tokens_out: Some(5),
+        cache_read: Some(0),
+        cache_write: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
+        reasoning_tokens: None,
+        tool_count: 0,
+        tool_fail: 0,
+        retries: 0,
+        duration_ms: 100,
+        success: true,
+        records: vec![],
+    };
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 2,
+        tokens_in: Some(10),
+        tokens_out: Some(10),
+        failures: 0,
+        duration_secs: 0,
+        cache_read: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        rows: vec![
+            TrajectoryRow::Turn(mk(1, "short", Some(1))),
+            TrajectoryRow::Turn(mk(2, "a much longer title that is cut", Some(1_200))),
+        ],
+    };
+    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 120, 20));
+    let lines: Vec<String> = body
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    // The padded prefix is the same width on both rows, so a long title cannot
+    // push the numbers out of line.
+    let head = |s: &str| s.chars().take(56).collect::<String>();
+    assert_eq!(
+        head(&lines[0]).chars().count(),
+        head(&lines[1]).chars().count()
+    );
+}
+
+/// A model row at Level 1 states its measured split: the first-token wait and
+/// the decode rate of the tokens it produced.
+#[test]
+fn test_turn_detail_latency_split() {
+    let mut record = record_of(TrajectoryRecordKind::Model, Some("answer"));
+    record.name = Some("qwen3.7-max".into());
+    record.ordinal = 1;
+    record.timing = Some(EventTiming {
+        total_ms: 620,
+        ttft_ms: Some(210),
+        decode_ms: Some(410),
+    });
+    record.usage = Some(EventUsage {
+        input: Some(10),
+        output: Some(400),
+        cache_read: None,
+        cache_write: None,
+        reasoning: None,
+    });
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "qwen3.7-max".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(400),
+        failures: 0,
+        duration_secs: 1,
+        cache_read: None,
+        timing: SessionTiming {
+            ttft_samples: 1,
+            ttft_avg_ms: Some(210),
+            ttft_p95_ms: Some(210),
+            ttft_p99_ms: Some(210),
+            decode_samples: 1,
+            decode_tok_per_sec: Some(975.6),
+            model_ms: 620,
+            tool_ms: 0,
+        },
+        hidden_turns: 0,
+        rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            n: 1,
+            boundary_before: None,
+            user_input: "ask".into(),
+            tokens_in: Some(10),
+            tokens_out: Some(400),
+            cache_read: None,
+            cache_write: None,
+            models: vec!["qwen3.7-max".into()],
+            efforts: Vec::new(),
+            reasoning_tokens: None,
+            tool_count: 0,
+            tool_fail: 0,
+            retries: 0,
+            duration_ms: 620,
+            success: true,
+            records: vec![record],
+        })],
+    };
+    let app = crate::composition::app();
+    let (_, body, _, _) = detail::draw_turn_detail(&view, 0, 0, Rect::new(0, 0, 140, 20), &app);
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(text.contains("TTFT 210ms"), "the wait is shown: {text}");
+    assert!(text.contains("975.6 tok/s"), "and the rate: {text}");
+    assert!(
+        text.contains("1 qwen3.7"),
+        "the call is numbered in the name column: {text}"
+    );
+}
+
+/// The turn list drops its least informative columns as the terminal narrows,
+/// so the duration and the outcome always survive; a padded column counts
+/// display columns, so a wide glyph cannot shift the columns after it.
+#[test]
+fn test_turn_list_degrades() {
+    let turn = |n: usize, title: &str, model: &str| TrajectoryTurn {
+        n,
+        boundary_before: None,
+        user_input: title.into(),
+        tokens_in: Some(1_200),
+        tokens_out: Some(500),
+        cache_read: Some(1_000),
+        cache_write: None,
+        models: vec![model.into()],
+        efforts: vec!["high".into()],
+        reasoning_tokens: Some(90),
+        tool_count: 3,
+        tool_fail: 1,
+        retries: 0,
+        duration_ms: 12_400,
+        success: false,
+        records: vec![],
+    };
+    // Two distinct models, so the per-turn model column is drawn at all.
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "2 models".into(),
+        total_turns: 2,
+        tokens_in: Some(2_400),
+        tokens_out: Some(1_000),
+        failures: 2,
+        duration_secs: 24,
+        cache_read: Some(2_000),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        rows: vec![
+            TrajectoryRow::Turn(turn(12, "宽的标题会让列错位", "qwen3.7-max")),
+            TrajectoryRow::Turn(turn(13, "ascii title", "glm-5.2")),
+        ],
+    };
+    let text_at = |w: u16| -> String {
+        let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, w, 10));
+        body.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect()
+    };
+    let wide = text_at(200);
+    assert!(wide.contains("12.4s"), "duration present when wide: {wide}");
+    assert!(wide.contains('✗'), "outcome present when wide: {wide}");
+    assert!(wide.contains("3 calls"), "call count when wide: {wide}");
+    assert!(wide.contains("qwen3.7-max"), "model when wide: {wide}");
+    // Narrow: the low-priority columns are gone, the duration is not.
+    let narrow = text_at(90);
+    assert!(
+        narrow.contains("12.4s"),
+        "duration survives narrow: {narrow}"
+    );
+    assert!(narrow.contains('✗'), "outcome survives narrow: {narrow}");
+    assert!(
+        !narrow.contains("3 calls"),
+        "the call column is the first to go: {narrow}"
+    );
+    assert!(
+        !narrow.contains("qwen3.7-max"),
+        "so is the model column: {narrow}"
+    );
+}
+
+/// The token column starts at the same display column whatever the title holds,
+/// so a wide-glyph title cannot shift the numbers on the rows below it.
+#[test]
+fn test_turn_list_glyph_aligns() {
+    let turn = |n: usize, title: &str| TrajectoryTurn {
+        n,
+        boundary_before: None,
+        user_input: title.into(),
+        tokens_in: Some(1_200),
+        tokens_out: Some(500),
+        cache_read: None,
+        cache_write: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
+        reasoning_tokens: None,
+        tool_count: 0,
+        tool_fail: 0,
+        retries: 0,
+        duration_ms: 100,
+        success: true,
+        records: vec![],
+    };
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 2,
+        tokens_in: Some(2_400),
+        tokens_out: Some(1_000),
+        failures: 0,
+        duration_secs: 0,
+        cache_read: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        rows: vec![
+            TrajectoryRow::Turn(turn(1, "宽的标题")),
+            TrajectoryRow::Turn(turn(2, "ascii")),
+        ],
+    };
+    let (_, body, _, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 200, 10));
+    let col_of_tokens = |line: &ratatui::text::Line<'static>| -> usize {
+        let mut col = 0usize;
+        for span in &line.spans {
+            if span.content.contains('↓') {
+                return col;
+            }
+            col += UnicodeWidthStr::width(span.content.as_ref());
+        }
+        col
+    };
+    assert_eq!(
+        col_of_tokens(&body[0]),
+        col_of_tokens(&body[1]),
+        "the token column sits at one display column on both rows"
+    );
 }

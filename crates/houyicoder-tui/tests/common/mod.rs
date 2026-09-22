@@ -444,6 +444,9 @@ pub enum Key {
     Right,
     Up,
     Down,
+    /// Home / End — the jump-to-first / jump-to-last keys a list pane uses.
+    Home,
+    End,
     /// Shift+Up / Shift+Down — the fleet-pill row selection keys. Crossterm
     /// emits these as CSI sequences with the Shift modifier byte (2).
     ShiftUp,
@@ -471,6 +474,8 @@ impl Key {
             Key::Right => b"\x1b[C".to_vec(),
             Key::Up => b"\x1b[A".to_vec(),
             Key::Down => b"\x1b[B".to_vec(),
+            Key::Home => b"\x1b[H".to_vec(),
+            Key::End => b"\x1b[F".to_vec(),
             // Shift-modified arrows: CSI ... ;2 <final>. The binary's crossterm
             // parser decodes the modifier byte (2 = Shift) + KeyEventModifiers.
             Key::ShiftUp => b"\x1b[1;2A".to_vec(),

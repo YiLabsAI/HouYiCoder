@@ -111,7 +111,7 @@ fn test_turn_groups_by_input() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(
         view.total_turns, 1,
         "one prompt is one turn however many model calls it takes"
@@ -253,7 +253,7 @@ fn test_multi_iteration_produces_turns() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(
         view.total_turns, 1,
         "one prompt stays one turn however many model calls it drives"
@@ -342,7 +342,7 @@ fn test_recovery_retry_same_turn() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(
         view.total_turns, 1,
         "retry stays on the same turn, not a new turn"
@@ -392,7 +392,7 @@ fn test_tokens_none_no_usage() {
         ),
         // No TurnUsage — the turn was cancelled before Finish.
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(view.total_turns, 1);
     let t = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
@@ -408,7 +408,7 @@ fn test_tokens_none_no_usage() {
 
 #[test]
 fn test_project_empty_zero_view() {
-    let view = project(&[], "test");
+    let view = project(&[], "test", 0);
     assert_eq!(view.total_turns, 0);
     assert!(view.rows.is_empty());
 }
@@ -449,7 +449,7 @@ fn test_project_reasoning_carries_thinking() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -493,7 +493,7 @@ fn test_cancelled_turn_omits_tokens() {
         // No TurnUsage — the turn was cancelled before the provider returned
         // usage. Tokens must be None, not 0.
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(view.total_turns, 1);
     let turn = view
         .rows
@@ -548,7 +548,7 @@ fn test_tool_result_extracts_body() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -612,7 +612,7 @@ fn test_failed_bash_counted() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -665,7 +665,7 @@ fn test_grep_nomatch_ok() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -714,7 +714,7 @@ fn test_error_key_counted() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(view.failures, 1);
 }
 
@@ -753,7 +753,7 @@ fn test_meta_user_excluded() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(
         view.total_turns, 1,
         "the second model call stays inside the one turn"
@@ -812,7 +812,7 @@ fn test_memory_recall_excluded() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -883,13 +883,13 @@ fn test_timing_percentiles_and_speed() {
             },
         ),
     ];
-    let view = project(&events, "qwen");
-    assert_eq!(view.ttft_avg_ms, Some(400));
-    assert_eq!(view.ttft_p95_ms, Some(600));
-    assert_eq!(view.ttft_p99_ms, Some(600));
+    let view = project(&events, "qwen", 0);
+    assert_eq!(view.timing.ttft_avg_ms, Some(400));
+    assert_eq!(view.timing.ttft_p95_ms, Some(600));
+    assert_eq!(view.timing.ttft_p99_ms, Some(600));
     assert_eq!(view.cache_read, Some(800));
-    assert!(view.decode_tok_per_sec.is_some());
-    let tps = view.decode_tok_per_sec.unwrap();
+    assert!(view.timing.decode_tok_per_sec.is_some());
+    let tps = view.timing.decode_tok_per_sec.unwrap();
     assert!((tps - (250.0 / 1.7)).abs() < 0.1);
 }
 
@@ -943,7 +943,7 @@ fn test_turn_ids_survive_rebuild() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(view.total_turns, 2);
     let n: Vec<usize> = view
         .rows
@@ -974,7 +974,10 @@ fn test_context_cleared_records_boundary() {
                 call_in_turn: 0,
             },
         ),
-        ev(150, SessionEvent::ContextCleared { prior_turn: 1 }),
+        ev(
+            1_700_000_000_000,
+            SessionEvent::ContextCleared { prior_turn: 1 },
+        ),
         ev(
             200,
             SessionEvent::UserInput {
@@ -989,7 +992,7 @@ fn test_context_cleared_records_boundary() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(
         view.total_turns, 2,
         "a clear does not create or drop a turn"
@@ -1005,7 +1008,10 @@ fn test_context_cleared_records_boundary() {
     assert_eq!(first.boundary_before, None);
     assert_eq!(
         second.boundary_before,
-        Some(TurnBoundary::ContextCleared { prior_turn: 1 }),
+        Some(TurnBoundary::ContextCleared {
+            prior_turn: 1,
+            at_secs: 1_700_000_000,
+        }),
         "the boundary attaches to the turn after the clear"
     );
     assert_eq!(second.n, 2, "numbering continues across the clear");
@@ -1033,7 +1039,7 @@ fn test_tool_without_result_pending() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1095,7 +1101,7 @@ fn test_agent_merges_spawn_return() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1145,7 +1151,7 @@ fn test_mid_turn_input_context() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(view.total_turns, 1, "an interjection is not a new turn");
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
@@ -1188,7 +1194,7 @@ fn test_memory_recall_is_record() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1268,7 +1274,7 @@ fn test_delegation_hides_tool_call() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1330,7 +1336,7 @@ fn test_direct_tool_call_shows() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1387,7 +1393,7 @@ fn test_hook_verdict_neutral() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1465,7 +1471,7 @@ fn test_delegation_legacy_hides_tool() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1515,7 +1521,7 @@ fn test_agent_return_shown() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1567,7 +1573,7 @@ fn test_agent_unknown_status() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1619,7 +1625,7 @@ fn test_model_calls_are_numbered() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1654,7 +1660,7 @@ fn test_reply_completes_model_call() {
             },
         ),
     ];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1678,11 +1684,230 @@ fn test_turn_opened_by_content() {
             thinking: None,
         },
     )];
-    let view = project(&events, "test");
+    let view = project(&events, "test", 0);
     assert_eq!(view.total_turns, 1);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
     assert_eq!(turn.n, 1, "a turn is never numbered zero");
+}
+
+/// The fold runs over the tail window only, and reports how many turns were
+/// left out, so a long session costs the same as a short one.
+#[test]
+fn test_tail_window_limits() {
+    let mut events = Vec::new();
+    for i in 0..5 {
+        events.push(ev(
+            (i as u64) * 1000,
+            SessionEvent::UserInput {
+                text: format!("prompt {i}"),
+            },
+        ));
+    }
+    let view = project(&events, "test", 2);
+    assert_eq!(view.rows.len(), 2, "only the newest window is folded");
+    assert_eq!(view.hidden_turns, 3, "and the rest is reported as hidden");
+    assert_eq!(
+        view.total_turns, 5,
+        "the session's turn count is a whole-log fact, not the page size"
+    );
+    let first = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        first.user_input, "prompt 3",
+        "the window starts at the oldest turn it keeps"
+    );
+    assert_eq!(
+        first.n, 4,
+        "the oldest visible turn keeps the number it has in the session"
+    );
+    // A window wider than the log hides nothing.
+    let all = project(&events, "test", 50);
+    assert_eq!(all.rows.len(), 5);
+    assert_eq!(all.total_turns, 5);
+    assert_eq!(all.hidden_turns, 0);
+    // Zero means no limit, which is how the fold's own tests read a log.
+    let unlimited = project(&events, "test", 0);
+    assert_eq!(unlimited.rows.len(), 5);
+    assert_eq!(unlimited.total_turns, 5);
+    assert_eq!(unlimited.hidden_turns, 0);
+}
+
+/// The reader reuses its projection while the log has not changed, and rebuilds
+/// it when it has: the pane draws every frame, so an unchanged log must not be
+/// re-read and re-folded per draw.
+#[test]
+fn test_reader_cache_invalidates() {
+    use houyicoder_context::{EventId, SessionLogEntry};
+    use houyicoder_session::SessionStore;
+    use std::sync::Arc;
+
+    let store = Arc::new(SessionStore::new(Box::new(
+        houyicoder_memory::InMemoryBackend::new(),
+    )));
+    let sid = houyicoder_context::SessionId::new();
+    let reader = SessionLogTrajectory::new(store.clone(), sid, "test".into());
+
+    // Empty log: one turn-less view, stable across reads.
+    let first = reader.trajectory();
+    assert_eq!(first.total_turns, 0);
+
+    futures::executor::block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "hello".into(),
+        },
+    }))
+    .expect("append");
+
+    let after = reader.trajectory();
+    assert_eq!(after.total_turns, 1, "the append is picked up");
+    let again = reader.trajectory();
+    assert_eq!(
+        again.total_turns, 1,
+        "a second read of an unchanged log gives the same view"
+    );
+}
+
+/// Asking for older history widens the window, so a turn hidden by the first
+/// page appears once the user walks past the oldest loaded turn.
+#[test]
+fn test_reader_loads_older() {
+    use houyicoder_context::{EventId, SessionLogEntry};
+    use houyicoder_session::SessionStore;
+    use std::sync::Arc;
+
+    let store = Arc::new(SessionStore::new(Box::new(
+        houyicoder_memory::InMemoryBackend::new(),
+    )));
+    let sid = houyicoder_context::SessionId::new();
+    for i in 0..(TRAJECTORY_PAGE_TURNS + 5) {
+        futures::executor::block_on(store.append(SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: (i as u64) * 1000,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: format!("prompt {i}"),
+            },
+        }))
+        .expect("append");
+    }
+    let reader = SessionLogTrajectory::new(store.clone(), sid, "test".into());
+    let first = reader.trajectory();
+    assert_eq!(first.rows.len(), TRAJECTORY_PAGE_TURNS);
+    assert_eq!(
+        first.total_turns,
+        TRAJECTORY_PAGE_TURNS + 5,
+        "the session's turn count covers the hidden turns too"
+    );
+    assert_eq!(
+        first.hidden_turns, 5,
+        "the first page hides the older turns"
+    );
+
+    reader.load_older();
+    let wider = reader.trajectory();
+    assert_eq!(
+        wider.total_turns,
+        TRAJECTORY_PAGE_TURNS + 5,
+        "the next page loads the rest"
+    );
+    assert_eq!(wider.hidden_turns, 0);
+}
+
+/// The session totals cover every turn the session ran, not only the page the
+/// rows show. A header that reported the visible page as the session would
+/// contradict the status pane and understate the cost of a long session.
+#[test]
+fn test_session_totals_cover_hidden() {
+    let usage = |ts: u64, tin: u64, tout: u64, fail: bool| {
+        vec![
+            ev(
+                ts,
+                SessionEvent::TurnUsage {
+                    turn: 1,
+                    call_in_turn: 1,
+                    input_tokens: tin,
+                    output_tokens: tout,
+                    cache_read_input_tokens: tin / 2,
+                    cache_write_input_tokens: 0,
+                    reasoning_tokens: 0,
+                    model: "test".into(),
+                    recovery: false,
+                    effort: None,
+                },
+            ),
+            ev(
+                ts + 10,
+                SessionEvent::ToolResult {
+                    call_id: format!("c{ts}"),
+                    output: if fail {
+                        serde_json::json!({"error": "boom"})
+                    } else {
+                        serde_json::json!({"ok": true})
+                    },
+                    duration_ms: 5,
+                },
+            ),
+            ev(
+                ts + 20,
+                SessionEvent::ModelStepTiming {
+                    turn: 1,
+                    step: 1,
+                    total_ms: 100,
+                    ttft_ms: Some(20),
+                    decode_ms: Some(80),
+                },
+            ),
+        ]
+    };
+    let mut events = Vec::new();
+    for (i, (tin, tout, fail)) in [(100u64, 10u64, false), (200, 20, true), (300, 30, false)]
+        .into_iter()
+        .enumerate()
+    {
+        let ts = 1000 + (i as u64) * 1000;
+        events.push(ev(
+            ts,
+            SessionEvent::UserInput {
+                text: format!("prompt {i}"),
+            },
+        ));
+        events.extend(usage(ts + 1, tin, tout, fail));
+    }
+
+    let view = project(&events, "test", 1);
+    assert_eq!(view.rows.len(), 1, "only one turn is shown");
+    assert_eq!(view.hidden_turns, 2);
+    assert_eq!(
+        view.tokens_in,
+        Some(600),
+        "the header reports the session, not the page"
+    );
+    assert_eq!(view.tokens_out, Some(60));
+    assert_eq!(view.cache_read, Some(300), "cache totals span the session");
+    assert_eq!(view.failures, 1, "a hidden turn's failure still counts");
+    assert_eq!(
+        view.timing.ttft_samples, 3,
+        "the percentiles are computed from the whole session"
+    );
+    assert_eq!(view.timing.model_ms, 300);
+    assert_eq!(view.timing.tool_ms, 15);
+    assert_eq!(
+        view.duration_secs, 2,
+        "the session's wall time is its own event span"
+    );
+    let first = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(first.n, 3, "the visible turn keeps its session number");
 }

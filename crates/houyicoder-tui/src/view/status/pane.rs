@@ -147,6 +147,47 @@ fn name_edit_line(field: &crate::input::InputField) -> Line<'static> {
 /// state + the snapshot's toggle fields so the tab is a focused config view.
 /// Display-only: the user flips a toggle by editing the settings file (the
 /// settings file is the source of truth, edited externally, not inline).
+/// The Usage tab's latency rows, read from the same typed summary the
+/// trajectory pane reads: one computation, two surfaces, so the two cannot
+/// disagree about the session. A row is omitted when the session recorded no
+/// sample for it — an unmeasured value is not a zero.
+fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut String) {
+    let Some(log) = app.trajectory_log.as_ref() else {
+        return;
+    };
+    let timing = log.trajectory().timing;
+    if timing.model_ms > 0 || timing.tool_ms > 0 {
+        s.push_str(&f(
+            "model / tool time",
+            &format!(
+                "{:.1}s / {:.1}s",
+                timing.model_ms as f64 / 1000.0,
+                timing.tool_ms as f64 / 1000.0
+            ),
+        ));
+    }
+    if let (Some(avg), Some(p95), Some(p99)) =
+        (timing.ttft_avg_ms, timing.ttft_p95_ms, timing.ttft_p99_ms)
+    {
+        s.push_str(&f(
+            "ttft",
+            &format!(
+                "{:.1}s avg · {:.1}s p95 · {:.1}s p99 ({} samples)",
+                avg as f64 / 1000.0,
+                p95 as f64 / 1000.0,
+                p99 as f64 / 1000.0,
+                timing.ttft_samples
+            ),
+        ));
+    }
+    if let Some(tps) = timing.decode_tok_per_sec {
+        s.push_str(&f(
+            "decode speed",
+            &format!("{tps:.1} tok/s ({} samples)", timing.decode_samples),
+        ));
+    }
+}
+
 fn render_config(app: &App) -> String {
     let mode = app.current_mode();
     let snap = app.snapshot_or_stub();
@@ -216,6 +257,8 @@ fn render_usage(app: &App) -> String {
             snap.tool_calls, snap.tool_success, snap.tool_errors
         ),
     ));
+    // Session latency, from the same typed summary the trajectory pane reads.
+    render_usage_latency(app, &f, &mut s);
     // Per-model breakdown only when two or more models share the session;
     // a single model is already covered by the flat rows above, so a
     // per-model section would just repeat them. Sorted by input+output
@@ -270,6 +313,7 @@ fn render_usage(app: &App) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::trajectory_pane::{SessionTiming, TrajectoryLog, TrajectoryView};
 
     /// The sub-tab header renders Status / Config / Usage, with the active one
     /// marked (the active title appears in the header).
@@ -515,5 +559,88 @@ mod tests {
         let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(rendered.contains("ab"), "before-caret text: {rendered}");
         assert!(rendered.contains('c'), "caret char: {rendered}");
+    }
+
+    /// The Usage tab reports session latency from the same typed summary the
+    /// trajectory pane reads, and omits a row the session has no sample for.
+    #[test]
+    fn test_usage_tab_latency_rows() {
+        struct Fixed(TrajectoryView);
+        impl TrajectoryLog for Fixed {
+            fn trajectory(&self) -> TrajectoryView {
+                self.0.clone()
+            }
+        }
+        let view = TrajectoryView {
+            session_id: "s".into(),
+            model: "m".into(),
+            total_turns: 1,
+            tokens_in: Some(10),
+            tokens_out: Some(5),
+            cache_read: None,
+            failures: 0,
+            duration_secs: 1,
+            timing: SessionTiming {
+                ttft_samples: 612,
+                ttft_avg_ms: Some(1800),
+                ttft_p95_ms: Some(4800),
+                ttft_p99_ms: Some(8200),
+                decode_samples: 590,
+                decode_tok_per_sec: Some(31.4),
+                model_ms: 91_200,
+                tool_ms: 28_400,
+            },
+            hidden_turns: 0,
+            rows: Vec::new(),
+        };
+        let mut app = crate::test_harness::working_app();
+        app.trajectory_log = Some(std::sync::Arc::new(Fixed(view)));
+        let s = render_usage(&app);
+        assert!(s.contains("model / tool time:"), "work time row: {s}");
+        assert!(s.contains("91.2s / 28.4s"), "the split: {s}");
+        assert!(s.contains("ttft:"), "ttft row: {s}");
+        assert!(
+            s.contains("1.8s avg · 4.8s p95 · 8.2s p99"),
+            "percentiles: {s}"
+        );
+        assert!(s.contains("(612 samples)"), "the sample count: {s}");
+        assert!(s.contains("decode speed:"), "decode row: {s}");
+        assert!(s.contains("31.4 tok/s (590 samples)"), "the rate: {s}");
+        // The existing rows keep their names and order above the new ones.
+        assert!(s.contains("input tokens:"), "existing rows intact: {s}");
+        assert!(
+            s.find("input tokens:").unwrap() < s.find("model / tool time:").unwrap(),
+            "latency rows come after the token rows: {s}"
+        );
+    }
+
+    /// With no timing recorded, the Usage tab shows no latency row at all: an
+    /// unmeasured session must not read as instant.
+    #[test]
+    fn test_usage_tab_no_timing() {
+        struct Fixed(TrajectoryView);
+        impl TrajectoryLog for Fixed {
+            fn trajectory(&self) -> TrajectoryView {
+                self.0.clone()
+            }
+        }
+        let mut app = crate::test_harness::working_app();
+        app.trajectory_log = Some(std::sync::Arc::new(Fixed(TrajectoryView {
+            session_id: "s".into(),
+            model: "m".into(),
+            total_turns: 0,
+            tokens_in: None,
+            tokens_out: None,
+            cache_read: None,
+            failures: 0,
+            duration_secs: 0,
+            timing: SessionTiming::default(),
+            hidden_turns: 0,
+            rows: Vec::new(),
+        })));
+        let s = render_usage(&app);
+        assert!(!s.contains("ttft:"), "no ttft row without samples: {s}");
+        assert!(!s.contains("decode speed:"), "no decode row: {s}");
+        assert!(!s.contains("model / tool time:"), "no work-time row: {s}");
     }
 }
