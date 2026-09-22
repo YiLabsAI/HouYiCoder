@@ -688,3 +688,52 @@ fn test_large_log_budget() {
     );
     let _removed = std::fs::remove_dir_all(&root);
 }
+
+/// The rows a scroll back reads are the rows the whole-log load renders, in
+/// the same order and one window at a time: each window ends where the next
+/// older one was asked to end, and every row's text matches. The seam that
+/// puts those rows above the resident ones rests on that parity.
+#[test]
+fn test_scroll_back_parity() {
+    let session = SessionId::new();
+    let events: Vec<SessionLogEntry> = (0..8)
+        .map(|i| {
+            ev_session(
+                session,
+                EventId::new(),
+                SessionEvent::UserInput {
+                    text: format!("line {i}"),
+                },
+            )
+        })
+        .collect();
+    let (snap, _s, root) = bridge_with_log(&events);
+    let load: Vec<String> = snap
+        .load(1 << 20)
+        .lines
+        .iter()
+        .map(|l| l.render())
+        .collect();
+
+    let mut walked: Vec<String> = Vec::new();
+    let mut windows = 0usize;
+    let mut anchor = snap.log_size();
+    while anchor > 0 {
+        let window = snap.window_before(anchor, 1024);
+        if window.lines.is_empty() {
+            break;
+        }
+        windows += 1;
+        let mut texts: Vec<String> = window.lines.iter().map(|l| l.render()).collect();
+        texts.extend(walked);
+        walked = texts;
+        anchor = window.start_offset;
+    }
+
+    assert!(
+        windows > 1,
+        "the walk crossed more than one window, or this checks nothing"
+    );
+    assert_eq!(walked, load, "the walk renders the load's rows");
+    std::fs::remove_dir_all(&root).ok();
+}

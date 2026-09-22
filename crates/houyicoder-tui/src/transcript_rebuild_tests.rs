@@ -3,11 +3,17 @@
 //! New frames render immediately. Stable history is reused while the current
 //! turn is rebuilt, and rewind, replay, and history loading preserve ordering.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+
 use crate::composition;
 use crate::records::{ContextSuggestion, SuggestionSeverity, TranscriptLine};
+use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
+use crate::test_harness::MockSnapshot;
 use crate::todo_view::TodoStatus;
 use crate::transcript::TranscriptFrame;
+use crate::transcript::snapshot::{SnapshotLoad, TranscriptSnapshot, WindowLoad};
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
@@ -1353,4 +1359,486 @@ fn test_todo_survives_eviction() {
             .any(|t| t.content == "ship the window"),
         "the checklist survives the rebuild that follows"
     );
+}
+
+/// An App whose frame window was drained past its start: the oldest frames are
+/// gone, so a scroll back to the front has only the session log to read from.
+fn drained_app() -> App {
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    app.transcript.set_resident_byte_budget(4096);
+    let text = "x".repeat(200);
+    for i in 0..40 {
+        app.transcript.push_frame(user_msg(&format!("{i} {text}")));
+    }
+    app.rebuild_transcript();
+    // The pass that drained the frames still renders their rows. A second
+    // rebuild derives the view from the resident window alone, and the tests
+    // read that settled view.
+    app.rebuild_transcript();
+    let settled = app.transcript.len();
+    app.rebuild_transcript();
+    assert_eq!(
+        app.transcript.len(),
+        settled,
+        "the view settles after the drain"
+    );
+    assert!(
+        app.transcript.frame_window_start() > 0,
+        "the budget drained the oldest frames"
+    );
+    app
+}
+
+/// One window of the session log, as the read port returns it.
+fn log_window(lines: Vec<TranscriptLine>, start_offset: u64, next_offset: u64) -> WindowLoad {
+    WindowLoad {
+        lines,
+        start_offset,
+        next_offset,
+        skipped: 0,
+        bytes_total: 4096,
+    }
+}
+
+/// A log source returning the given windows, newest last.
+fn log_source(windows: Vec<WindowLoad>) -> Arc<MockSnapshot> {
+    Arc::new(MockSnapshot {
+        lines: Vec::new(),
+        log_bytes: 4096,
+        truncated: false,
+        skipped: 0,
+        window_lines: Vec::new(),
+        window_start: 0,
+        windows,
+        index_steps: 0,
+        index_calls: AtomicU32::new(0),
+    })
+}
+
+/// Every row the view holds prints once: a seam that kept the rows the tail
+/// read repeats would show them twice, one that cut short would lose them.
+fn assert_rows_print_once(app: &App) {
+    let mut texts: Vec<String> = app.transcript.iter().map(|l| l.render()).collect();
+    let total = texts.len();
+    texts.sort();
+    texts.dedup();
+    assert_eq!(
+        texts.len(),
+        total,
+        "a row prints twice: {:?}",
+        app.transcript
+    );
+}
+
+/// The rows a scroll back to the resident front reads from the session log:
+/// the frames there were drained, so the log is the only source for them. The
+/// tail read carries the rows the view already shows, and the seam drops them.
+#[test]
+fn test_scrollback_reads_log_rows() {
+    let mut app = drained_app();
+    let front_frame = app.transcript.frame_window_start();
+    let mut lines: Vec<TranscriptLine> = (0..5)
+        .map(|i| TranscriptLine::User(format!("older {i}")))
+        .collect();
+    lines.extend(app.transcript.iter().cloned());
+    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        5,
+        "the log's older rows landed"
+    );
+    let head: Vec<String> = app.transcript.iter().take(5).map(|l| l.render()).collect();
+    let want: Vec<String> = (0..5)
+        .map(|i| TranscriptLine::User(format!("older {i}")).render())
+        .collect();
+    assert_eq!(head, want, "the oldest loaded row leads the view");
+    assert!(
+        matches!(app.transcript.get(5), Some(TranscriptLine::User(t)) if t.starts_with(&format!("{front_frame} "))),
+        "the resident front follows the loaded rows: {:?}",
+        app.transcript.get(5)
+    );
+    assert_rows_print_once(&app);
+    assert_eq!(app.transcript.disk_front(), DiskFront::At(100));
+    assert_eq!(
+        app.transcript_scroll.raw_top(),
+        5,
+        "the viewport held still under the rows that landed above it"
+    );
+}
+
+/// Older rows keep arriving as the reader scrolls past what is loaded: each
+/// read ends where the loaded rows begin, and the last one reaching the log's
+/// start ends the scroll back rather than reading the log again.
+#[test]
+fn test_scrollback_chains_older_window() {
+    let mut app = drained_app();
+    let mut tail: Vec<TranscriptLine> = (0..5)
+        .map(|i| TranscriptLine::User(format!("older {i}")))
+        .collect();
+    tail.extend(app.transcript.iter().cloned());
+    let oldest = vec![
+        TranscriptLine::User("oldest 0".into()),
+        TranscriptLine::User("oldest 1".into()),
+    ];
+    app.snapshot = Some(log_source(vec![
+        log_window(oldest, 0, 100),
+        log_window(tail, 100, 4096),
+    ]));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+    app.load_older_frames();
+
+    assert_eq!(app.transcript.disk_row_count(), 7, "both windows landed");
+    assert!(
+        matches!(app.transcript.first(), Some(TranscriptLine::User(t)) if t == "oldest 0"),
+        "the second read landed above the first"
+    );
+    assert_eq!(app.transcript.disk_front(), DiskFront::At(0));
+    assert_rows_print_once(&app);
+
+    app.load_older_frames();
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        7,
+        "a read at the log's start adds nothing"
+    );
+    assert_eq!(
+        app.transcript.disk_front(),
+        DiskFront::Stopped,
+        "the scroll back stops at the log's start"
+    );
+}
+
+/// Without a wired session log there is nothing to read, so the scroll back
+/// stops at the resident front as it did before the log was reachable.
+#[test]
+fn test_scrollback_without_log_source() {
+    let mut app = drained_app();
+    let shown = app.transcript.len();
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+    assert_eq!(app.transcript.len(), shown);
+    assert_eq!(app.transcript.disk_front(), DiskFront::Unloaded);
+}
+
+/// A window holding no row the visible front matches is not shown: the rows
+/// cannot be placed against the view, and a guessed seam would print content
+/// twice or lose it. The read is remembered as stopping, so standing at the
+/// front does not read the log again on every pass.
+#[test]
+fn test_scrollback_stops_without_match() {
+    let mut app = drained_app();
+    let shown = app.transcript.len();
+    app.snapshot = Some(log_source(vec![log_window(
+        vec![TranscriptLine::Agent("unrelated row".into())],
+        100,
+        4096,
+    )]));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+
+    assert_eq!(app.transcript.disk_row_count(), 0);
+    assert_eq!(app.transcript.len(), shown, "the view is untouched");
+    assert_eq!(app.transcript.disk_front(), DiskFront::Stopped);
+}
+
+/// Rows read back from the session log survive the rebuilds that follow, and
+/// they leave with the view when the reader returns to the tail: the capped
+/// tail view cannot reach them, so holding them would only cost memory.
+#[test]
+fn test_rows_leave_at_end() {
+    let mut app = drained_app();
+    let mut lines: Vec<TranscriptLine> = vec![TranscriptLine::User("older 0".into())];
+    lines.extend(app.transcript.iter().cloned());
+    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+    assert_eq!(app.transcript.disk_row_count(), 1);
+
+    app.transcript.push_frame(agent_msg("answer"));
+    app.rebuild_transcript();
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        1,
+        "the loaded row survives the rebuild"
+    );
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "older 0"))
+    );
+
+    app.transcript_scroll.follow_tail();
+    app.rebuild_transcript();
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        0,
+        "the loaded row leaves with the view it was read for"
+    );
+    assert_eq!(app.transcript.disk_front(), DiskFront::Unloaded);
+    assert!(
+        !app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "older 0"))
+    );
+    assert!(
+        app.transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::Agent(t) if t == "answer")),
+        "the tail row stays"
+    );
+}
+
+/// A row text the log repeats must not cut the window at the wrong place: the
+/// window holds an older copy of the first rows the view shows, and the seam
+/// has to land where the match runs on rather than where the text first
+/// appears.
+#[test]
+fn test_seam_prefers_longest_run() {
+    let mut app = drained_app();
+    let view: Vec<TranscriptLine> = app.transcript.iter().cloned().collect();
+    let mut lines: Vec<TranscriptLine> = vec![
+        view[0].clone(),
+        view[1].clone(),
+        view[2].clone(),
+        TranscriptLine::User("unrelated".into()),
+    ];
+    lines.extend(view.clone());
+    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        4,
+        "the seam landed past the short match"
+    );
+    assert_eq!(
+        app.transcript.get(3).map(|l| l.render()),
+        Some(TranscriptLine::User("unrelated".into()).render()),
+        "the loaded rows end above the view's own first row"
+    );
+}
+
+/// The row the view starts at can sit further back than one window of the log:
+/// the walk crosses into the older window, and the rows that continue the
+/// match live in the newer one.
+#[test]
+fn test_walk_crosses_log_windows() {
+    let mut app = drained_app();
+    let view: Vec<TranscriptLine> = app.transcript.iter().cloned().collect();
+    let mut older: Vec<TranscriptLine> = vec![
+        TranscriptLine::User("old 0".into()),
+        TranscriptLine::User("old 1".into()),
+        view[0].clone(),
+    ];
+    older.extend(view[1..].iter().cloned());
+    let newer: Vec<TranscriptLine> = view[1..].to_vec();
+    app.snapshot = Some(log_source(vec![
+        log_window(older, 0, 100),
+        log_window(newer, 100, 4096),
+    ]));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        2,
+        "the walk crossed into the older window and kept the rows above the seam"
+    );
+    assert!(
+        matches!(app.transcript.first(), Some(TranscriptLine::User(t)) if t == "old 0"),
+        "the oldest loaded row leads the view"
+    );
+    assert_eq!(app.transcript.disk_front(), DiskFront::At(0));
+}
+
+/// A window that does not begin below where the walk asked would leave the
+/// walk standing still, reading the same rows for ever. The port the TUI
+/// owns may not return one, so the walk has to end on its own.
+#[test]
+fn test_walk_stops_without_progress() {
+    let mut app = drained_app();
+    let lines: Vec<TranscriptLine> = (0..8)
+        .map(|i| TranscriptLine::User(format!("unrelated {i}")))
+        .collect();
+    app.snapshot = Some(log_source(vec![log_window(lines, 4096, 4096)]));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+
+    assert_eq!(app.transcript.disk_row_count(), 0, "no rows were read");
+    assert_eq!(app.transcript.disk_front(), DiskFront::Stopped);
+}
+
+/// A read port whose window does not end where the walk asked it to. The walk
+/// joins each window to the rows it already read on that offset, so a window
+/// that breaks it would print a gap; the walk stops instead.
+struct GapSource {
+    window: WindowLoad,
+}
+
+impl TranscriptSnapshot for GapSource {
+    fn log_size(&self) -> u64 {
+        self.window.bytes_total
+    }
+    fn load(&self, _max_bytes: u64) -> SnapshotLoad {
+        SnapshotLoad::default()
+    }
+    fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> WindowLoad {
+        self.window.clone()
+    }
+}
+
+/// A window that does not end where the walk asked leaves a gap between it and
+/// the rows already read, so the walk stops rather than join rows that do not
+/// touch. The rows here do carry the seam, so a walk that took the window at
+/// its word would print them above a row they do not reach.
+#[test]
+fn test_walk_stops_on_gap() {
+    let mut app = drained_app();
+    let view: Vec<TranscriptLine> = app.transcript.iter().cloned().collect();
+    let mut older: Vec<TranscriptLine> = vec![TranscriptLine::User("old 0".into())];
+    older.extend(view);
+    app.snapshot = Some(Arc::new(GapSource {
+        window: WindowLoad {
+            lines: older,
+            start_offset: 100,
+            next_offset: 5005,
+            skipped: 0,
+            bytes_total: 5000,
+        },
+    }));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        0,
+        "the window does not reach the log tail, so no row is taken"
+    );
+    assert_eq!(app.transcript.disk_front(), DiskFront::Stopped);
+}
+
+/// The loaded rows reach the view only while the resident front they sit above
+/// stays put. A drain moves that front past them, and the frames between the
+/// two fronts are gone, so the rows leave rather than leave a hole.
+#[test]
+fn test_rows_leave_on_drain() {
+    let mut app = drained_app();
+    // A folded call/result pair, so the release has a group to shift.
+    pump(&mut app, tool_call("c9", "glob"));
+    pump(&mut app, tool_result("c9"));
+    app.rebuild_transcript();
+    let seam = app.transcript.frame_window_start();
+    let mut lines: Vec<TranscriptLine> = vec![TranscriptLine::User("older 0".into())];
+    lines.extend(app.transcript.iter().cloned());
+    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+    assert_eq!(app.transcript.disk_row_count(), 1);
+    assert_eq!(app.transcript.disk_seam_frame(), seam);
+    assert_eq!(
+        app.transcript_scroll.raw_top(),
+        1,
+        "the loaded row carried the viewport down with it"
+    );
+
+    let text = "y".repeat(200);
+    for i in 0..40 {
+        app.transcript
+            .push_frame(user_msg(&format!("later {i} {text}")));
+    }
+    app.rebuild_transcript();
+
+    assert!(
+        app.transcript.frame_window_start() > seam,
+        "the budget drained past the front the rows were read above"
+    );
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        0,
+        "the loaded row left with the front it sat above"
+    );
+    assert_eq!(app.transcript.disk_front(), DiskFront::Unloaded);
+    assert_eq!(
+        app.transcript_scroll.raw_top(),
+        0,
+        "the viewport holds its place as the row leaves in the drain's own pass"
+    );
+    let cached: Vec<(usize, usize)> = app
+        .transcript
+        .fold_groups()
+        .iter()
+        .map(|g| (g.start, g.end))
+        .collect();
+    let fresh: Vec<(usize, usize)> =
+        crate::fold::compute_fold_groups(app.transcript.lines(), app.agent_busy())
+            .iter()
+            .map(|g| (g.start, g.end))
+            .collect();
+    assert_eq!(
+        cached, fresh,
+        "the fold cache indexes the list the release left"
+    );
+}
+
+/// The rows read back from the log are bounded: once the view holds the row
+/// budget's worth of them, standing at the front reads no further.
+#[test]
+fn test_log_rows_capped() {
+    let mut app = fresh_app();
+    let rows: Vec<TranscriptLine> = (0..crate::scroll::VIEWABLE_SCROLLBACK_CAP)
+        .map(|i| TranscriptLine::User(format!("older {i}")))
+        .collect();
+    app.transcript.prepend_disk_rows(rows, 100, 0);
+    app.transcript_scroll.jump_to(0);
+    app.snapshot = Some(log_source(vec![log_window(
+        vec![TranscriptLine::User("even older".into())],
+        50,
+        100,
+    )]));
+
+    app.load_older_frames();
+
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        crate::scroll::VIEWABLE_SCROLLBACK_CAP,
+        "the loaded rows stay at the budget"
+    );
+    assert_eq!(
+        app.transcript.disk_front(),
+        DiskFront::At(100),
+        "no further window was read"
+    );
+}
+
+/// A view with no rows has no front to match against, so the read returns
+/// without touching the log.
+#[test]
+fn test_scrollback_without_rows() {
+    let mut app = fresh_app();
+    app.snapshot = Some(log_source(vec![log_window(
+        vec![TranscriptLine::User("older 0".into())],
+        100,
+        4096,
+    )]));
+
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+
+    assert_eq!(app.transcript.disk_row_count(), 0);
+    assert_eq!(app.transcript.disk_front(), DiskFront::Unloaded);
 }

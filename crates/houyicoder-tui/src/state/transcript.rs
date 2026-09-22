@@ -1,7 +1,9 @@
 //! The transcript domain object: the ordered frame log, the viewable
 //! lines derived from it, the current turn boundary, and the revision
 //! counter. The frame log lives here so the rebuild path reads frames
-//! through this object.
+//! through this object. Rows read back from the session log for the part of
+//! history the frame window dropped live here too, ahead of the lines the
+//! blocks derive.
 
 pub(crate) mod blocks;
 
@@ -34,8 +36,37 @@ pub struct Transcript {
     /// rebuild so every render and count pass reads the cache instead of
     /// rescanning the transcript.
     fold_groups: Vec<FoldGroup>,
+    /// Rows read back from the session log, older than the resident front.
+    /// They lead the viewable lines: the rebuild prepends them to the lines
+    /// the blocks derive. Empty while the reader follows the tail, whose
+    /// capped view cannot reach them.
+    disk_rows: Vec<TranscriptLine>,
+    /// Where the disk rows begin in the session log, and whether the log holds
+    /// anything older than them.
+    disk_front: DiskFront,
+    /// The resident front the disk rows were read to sit above. A drain moves
+    /// that front past them, and the frames between the two fronts are gone,
+    /// so the rows no longer reach the view and are dropped.
+    disk_seam_frame: usize,
     current_turn: CurrentTurnBoundary,
     revision: Cell<u64>,
+}
+
+/// Where the rows read back from the session log stand, which is what the
+/// next older read needs to know: nothing loaded, the byte offset its window
+/// ends at, or that no older row was found to show.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum DiskFront {
+    /// No rows are loaded. The next read starts at the log tail and drops the
+    /// rows the visible transcript already shows.
+    #[default]
+    Unloaded,
+    /// The loaded rows begin at this byte offset, where the next older read
+    /// ends.
+    At(u64),
+    /// No older row was found: the loaded rows reach the log's start, or the
+    /// log holds no row the visible front matches.
+    Stopped,
 }
 
 /// Default ceiling on the resident frames' estimated bytes.
@@ -51,6 +82,9 @@ impl Default for Transcript {
             blocks: TranscriptBlocks::default(),
             lines: Vec::new(),
             fold_groups: Vec::new(),
+            disk_rows: Vec::new(),
+            disk_front: DiskFront::default(),
+            disk_seam_frame: 0,
             current_turn: CurrentTurnBoundary::default(),
             revision: Cell::new(0),
         }
@@ -231,6 +265,97 @@ impl Transcript {
         self.lines.push(line);
     }
 
+    /// The rows read back from the session log, oldest first.
+    pub(crate) fn disk_rows(&self) -> &[TranscriptLine] {
+        &self.disk_rows
+    }
+
+    pub(crate) fn disk_row_count(&self) -> usize {
+        self.disk_rows.len()
+    }
+
+    /// Where the next older read starts from.
+    pub(crate) fn disk_front(&self) -> DiskFront {
+        self.disk_front
+    }
+
+    pub(crate) fn set_disk_front(&mut self, front: DiskFront) {
+        self.disk_front = front;
+    }
+
+    /// The resident front the disk rows sit above.
+    pub(crate) fn disk_seam_frame(&self) -> usize {
+        self.disk_seam_frame
+    }
+
+    /// Put older rows read from the session log in front of the rows the frame
+    /// log still holds, anchored at the log byte offset the oldest of them
+    /// begins at and at the resident front they sit above. The rows enter the
+    /// visible list here rather than at the next rebuild, so the list and the
+    /// fold cache that indexes it always agree on where they are. The fold
+    /// cache is indexed by line position, so the loaded rows shift every group
+    /// down and bring their own groups at the front. Those groups are computed
+    /// from the loaded rows alone, so a call whose result is the first resident
+    /// row folds without it and a group of a run the frame window drained still
+    /// reads as closed.
+    pub(crate) fn prepend_disk_rows(
+        &mut self,
+        rows: Vec<TranscriptLine>,
+        anchor: u64,
+        seam_frame: usize,
+    ) {
+        if rows.is_empty() {
+            return;
+        }
+        let shift = rows.len();
+        for group in &mut self.fold_groups {
+            group.start += shift;
+            group.end += shift;
+        }
+        let mut head = compute_fold_groups(&rows, false);
+        head.append(&mut self.fold_groups);
+        self.fold_groups = head;
+        self.current_turn.line_index += shift;
+        let mut merged = rows.clone();
+        merged.append(&mut self.lines);
+        self.lines = merged;
+        self.disk_rows.splice(0..0, rows);
+        self.disk_front = DiskFront::At(anchor);
+        self.disk_seam_frame = seam_frame;
+    }
+
+    /// Drop the rows read back from the session log and the place they stood
+    /// at, so the next scroll back reads afresh. The rows leave the visible
+    /// list here, in the same step as the fold cache that indexes it: dropping
+    /// them from the cache alone would count the same removal twice once the
+    /// list itself was cut, shifting every surviving group too far up.
+    /// Returns how many rows were dropped.
+    pub(crate) fn clear_disk_rows(&mut self) -> usize {
+        let dropped = self.disk_rows.len();
+        if dropped == 0 {
+            return 0;
+        }
+        self.disk_rows.clear();
+        self.disk_front = DiskFront::Unloaded;
+        self.disk_seam_frame = 0;
+        let cut = dropped.min(self.lines.len());
+        self.lines.drain(0..cut);
+        self.current_turn.line_index = self.current_turn.line_index.saturating_sub(cut);
+        self.shift_fold_groups_down(cut);
+        dropped
+    }
+
+    /// Move every fold group up by a count of lines dropped from the front,
+    /// dropping the groups the cut left entirely behind. A group straddling
+    /// the cut keeps its surviving tail, its start clamped to the new front.
+    fn shift_fold_groups_down(&mut self, dropped: usize) {
+        self.fold_groups.retain(|g| g.end > dropped);
+        for g in &mut self.fold_groups {
+            g.start = g.start.saturating_sub(dropped);
+            g.end -= dropped;
+        }
+    }
+
     /// The incrementally maintained fold groups over the current lines.
     pub(crate) fn fold_groups(&self) -> &[FoldGroup] {
         &self.fold_groups
@@ -241,14 +366,18 @@ impl Transcript {
     }
 
     /// Empty the whole transcript state: the viewable lines, the frame log,
-    /// and the turn boundary. The revision counter stays monotonic so a
-    /// cached render pass never matches a pre-reset version.
+    /// the rows read back from the session log, and the turn boundary. The
+    /// revision counter stays monotonic so a cached render pass never matches
+    /// a pre-reset version.
     pub(crate) fn reset(&mut self) {
         self.lines.clear();
         self.frames.clear();
         self.frame_window_start = 0;
         self.resident_bytes.set(0);
         self.fold_groups.clear();
+        self.disk_rows.clear();
+        self.disk_front = DiskFront::default();
+        self.disk_seam_frame = 0;
         self.blocks.clear();
         self.current_turn = CurrentTurnBoundary::default();
     }
@@ -267,25 +396,21 @@ impl Transcript {
 
     /// Cap viewable lines at the tail and shift the turn boundary to match.
     /// No-op while scrolled back: the caller passes the follow-tail flag so
-    /// this struct holds no scroll state.
+    /// this struct holds no scroll state. Rows read back from the session log
+    /// are released first: they belong to the scrolled-back view this call is
+    /// ending, and the cap below must not cut them, because their fold groups
+    /// are counted against a list they are no longer in.
     pub(crate) fn trim_live(&mut self, following_tail: bool) -> usize {
         if !following_tail {
             return 0;
         }
+        let released = self.clear_disk_rows();
         let dropped = crate::scroll::bound_scrollback(&mut self.lines);
         self.current_turn.line_index = self.current_turn.line_index.saturating_sub(dropped);
         if dropped > 0 {
-            // Fold groups are absolute-indexed; shift the survivors down and
-            // drop those evicted whole. A group straddling the cut keeps its
-            // start clamped to the new front (the naively-capped prefix is
-            // transient, replaced by the frame window later).
-            self.fold_groups.retain(|g| g.end > dropped);
-            for g in &mut self.fold_groups {
-                g.start = g.start.saturating_sub(dropped);
-                g.end -= dropped;
-            }
+            self.shift_fold_groups_down(dropped);
         }
-        dropped
+        released + dropped
     }
 }
 
@@ -459,6 +584,68 @@ mod tests {
             t.drain_front_to_budget(1, None),
             0,
             "a lone frame above the budget is not drained away"
+        );
+    }
+
+    /// Rows read back from the session log lead the viewable lines, and the
+    /// fold cache follows them: the groups they bring sit at the front and
+    /// every group the resident rows had shifts down by their count. Dropping
+    /// the loaded rows shifts the survivors back up.
+    #[test]
+    fn test_disk_rows_shift_folds() {
+        let mut lines = vec![TranscriptLine::User("go".into())];
+        lines.push(bash_call("c1"));
+        lines.push(bash_result("c1"));
+        let mut t = Transcript::from(lines);
+        assert_eq!(t.fold_groups()[0].start, 1, "the resident pair folds");
+
+        let older = vec![bash_call("c0"), bash_result("c0")];
+        t.prepend_disk_rows(older, 4096, 7);
+        assert_eq!(t.disk_row_count(), 2);
+        assert_eq!(t.disk_front(), DiskFront::At(4096));
+        assert_eq!(t.disk_seam_frame(), 7);
+        assert_eq!(t.fold_groups().len(), 2, "the loaded pair folds too");
+        assert_eq!(t.fold_groups()[0].start, 0, "the loaded group leads");
+        assert_eq!(t.fold_groups()[1].start, 3, "the resident group shifted");
+
+        assert_eq!(t.clear_disk_rows(), 2);
+        assert_eq!(t.disk_front(), DiskFront::Unloaded);
+        assert_eq!(t.disk_row_count(), 0);
+        assert_eq!(t.fold_groups().len(), 1);
+        assert_eq!(t.fold_groups()[0].start, 1, "the resident group shifts up");
+    }
+
+    /// Releasing the rows read back from the session log counts their removal
+    /// once. The cap at the tail drops them from the visible list first, and
+    /// the fold cache that indexes that list must not count the same removal
+    /// again when the rows are released: every surviving group would sit a
+    /// loaded-row too high, over lines it does not cover.
+    #[test]
+    fn test_disk_rows_release_once() {
+        let mut lines = vec![
+            TranscriptLine::User("go".into()),
+            bash_call("c1"),
+            bash_result("c1"),
+        ];
+        while lines.len() <= VIEWABLE_SCROLLBACK_CAP {
+            lines.push(TranscriptLine::User("pad".into()));
+        }
+        let mut t = Transcript::from(lines);
+        t.prepend_disk_rows(vec![TranscriptLine::User("older".into())], 4096, 0);
+
+        t.trim_live(true);
+        t.clear_disk_rows();
+
+        assert_eq!(t.disk_row_count(), 0);
+        let cached: Vec<(usize, usize)> =
+            t.fold_groups().iter().map(|g| (g.start, g.end)).collect();
+        let fresh: Vec<(usize, usize)> = compute_fold_groups(t.lines(), false)
+            .iter()
+            .map(|g| (g.start, g.end))
+            .collect();
+        assert_eq!(
+            cached, fresh,
+            "the fold cache indexes the list the release left"
         );
     }
 
