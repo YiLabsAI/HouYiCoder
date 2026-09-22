@@ -39,7 +39,7 @@ mod housekeeping;
 mod resume_bundle;
 mod session_lister_bridge;
 mod session_lock;
-mod trajectory_bridge;
+mod trajectory_view;
 mod transcript_snapshot_bridge;
 
 /// Parsed CLI invocation. Each variant maps to one entry path the binary
@@ -613,10 +613,9 @@ pub(crate) fn assemble_bundle(
     > = Some(std::sync::Arc::new(
         transcript_snapshot_bridge::SessionLogSnapshot::new(session_log.clone(), bridge_session_id),
     ));
-    // One bridge object backs both the /trajectory view + the /export
-    // serializer — both project the same durable event stream, so a single
-    // Arc<SessionLogTrajectory> is coerced to each trait object the TUI holds.
-    let trajectory = std::sync::Arc::new(trajectory_bridge::SessionLogTrajectory::new(
+    // One object backs both the /trajectory view + the /export serializer:
+    // both read the same durable event stream.
+    let trajectory = std::sync::Arc::new(trajectory_view::SessionLogTrajectory::new(
         session_log.clone(),
         bridge_session_id,
         model.clone(),

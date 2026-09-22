@@ -157,8 +157,24 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
     };
     // Stash the body length so the Up/Down handler can clamp the cursor in
     // [0, len-1] — without this Down past the last row drops the selection.
-    app.trajectory_list_len.set(body.len());
-    render_scrolled(f, area, header, body, footer, cursor);
+    let active_len = match level {
+        1 => traj
+            .rows
+            .get(turn_idx)
+            .map(|r| match r {
+                TrajectoryRow::Turn(t) => t.events.len(),
+                TrajectoryRow::Bg(_) => 0,
+            })
+            .unwrap_or(0),
+        2 => 0,
+        _ => traj.rows.len(),
+    };
+    if active_len > 0 && cursor >= active_len {
+        app.trajectory_cursor.set(active_len.saturating_sub(1));
+    }
+    app.trajectory_list_len.set(active_len);
+    let clamped_cursor = app.trajectory_cursor.get();
+    render_scrolled(f, area, header, body, footer, clamped_cursor);
 }
 
 /// Render a pane as a pinned header, a cursor-following scrollable body, and a
@@ -215,19 +231,17 @@ fn draw_turn_list(
             _ => 0,
         })
         .sum();
+    let tokens_summary = match (traj.tokens_in, traj.tokens_out) {
+        (Some(tin), Some(tout)) => format!("{}↓ {}↑", fmt_k(tin), fmt_k(tout)),
+        (Some(tin), None) => format!("{}↓", fmt_k(tin)),
+        (None, Some(tout)) => format!("{}↑", fmt_k(tout)),
+        (None, None) => "—".to_string(),
+    };
     let header = vec![
         line(vec![
             sp(format!("{} turns", traj.total_turns), Color::Cyan),
             sp(" · ", Color::DarkGray),
-            sp(
-                format!(
-                    "{}↓ {}↑",
-                    fmt_k_opt(traj.tokens_in),
-                    fmt_k_opt(traj.tokens_out)
-                ),
-                Color::Gray,
-            ),
-            sp(" · ctx 42%", Color::DarkGray),
+            sp(tokens_summary, Color::Gray),
             sp(format!(" · {} calls", total_calls), Color::Gray),
             sp(format!(" · {} fail", traj.failures), Color::Red),
             sp(format!(" · {}s", traj.duration_secs), Color::Gray),
@@ -253,11 +267,21 @@ fn draw_turn_list(
         >= 2;
     let mut body = Vec::new();
     let clamped = cursor.min(traj.rows.len().saturating_sub(1));
+    let mut prev_turn_n: Option<usize> = None;
     for (i, row) in traj.rows.iter().enumerate() {
         let sel = i == clamped;
         let prefix = if sel { "▸ " } else { "  " };
         match row {
             TrajectoryRow::Turn(t) => {
+                if let Some(prev) = prev_turn_n
+                    && t.n <= prev
+                {
+                    body.push(line(vec![sp(
+                        "  ── Session Reset (new turn series) ──",
+                        Color::DarkGray,
+                    )]));
+                }
+                prev_turn_n = Some(t.n);
                 let glyph = if t.success { "✓" } else { "✗" };
                 let gc = if t.success { Color::Green } else { Color::Red };
                 body.push(line(vec![
@@ -268,9 +292,16 @@ fn draw_turn_list(
                         Color::White,
                     ),
                     sp(
-                        format!("{}↓ {}↑", fmt_k_opt(t.tokens_in), fmt_k_opt(t.tokens_out),),
+                        format!("{}↓ {}↑", fmt_k_opt(t.tokens_in), fmt_k_opt(t.tokens_out)),
                         Color::Gray,
                     ),
+                    match (t.cache_read, t.tokens_in) {
+                        (Some(c), Some(tin)) if tin > 0 && c > 0 => sp(
+                            format!(" · {:.0}% cached", 100.0 * c as f64 / tin as f64),
+                            Color::Indexed(208),
+                        ),
+                        _ => sp(String::new(), Color::DarkGray),
+                    },
                     // Thinking tokens: shown as (thinking Nk) only when
                     // reasoning_tokens is Some and >0. The parenthetical
                     // is tight against the output number with no separator
@@ -303,15 +334,23 @@ fn draw_turn_list(
                     } else {
                         sp(String::new(), Color::DarkGray)
                     },
-                    sp(format!("  {} calls ", t.tool_count), Color::Gray),
-                    sp(
-                        format!("{} fail  ", t.tool_fail),
-                        if t.tool_fail > 0 {
-                            Color::Red
-                        } else {
-                            Color::DarkGray
-                        },
-                    ),
+                    if t.tool_count > 0 {
+                        sp(format!("  {} calls ", t.tool_count), Color::Gray)
+                    } else {
+                        sp("  (chat)   ", Color::DarkGray)
+                    },
+                    if t.tool_count > 0 {
+                        sp(
+                            format!("{} fail  ", t.tool_fail),
+                            if t.tool_fail > 0 {
+                                Color::Red
+                            } else {
+                                Color::DarkGray
+                            },
+                        )
+                    } else {
+                        sp(String::new(), Color::DarkGray)
+                    },
                     sp(
                         format!("{:.1}s ", t.duration_ms as f64 / 1000.0),
                         Color::Gray,
@@ -335,9 +374,28 @@ fn draw_turn_list(
     }
     let footer = vec![
         blank(),
-        key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")]),
+        key_hint(&[
+            ("Up/Down", "select"),
+            ("Home/End", "top/end"),
+            ("Enter", "open"),
+            ("Esc", "close"),
+        ]),
     ];
     (header, body, footer)
+}
+
+fn format_turn_cache(turn: &TrajectoryTurn) -> String {
+    match (turn.cache_read, turn.tokens_in) {
+        (Some(c), Some(tin)) if tin > 0 => {
+            format!(
+                " · cached {} ({:.0}%)",
+                fmt_k(c as usize),
+                100.0 * c as f64 / tin as f64
+            )
+        }
+        (Some(c), _) if c > 0 => format!(" · cached {}", fmt_k(c as usize)),
+        _ => String::new(),
+    }
 }
 
 /// Level 1: turn title header + a positional Gantt timeline of events. Each
@@ -367,6 +425,7 @@ fn draw_turn_detail(
         TrajectoryRow::Turn(turn) => {
             app.trajectory_at_bg.set(false);
             let clamped = cursor.min(turn.events.len().saturating_sub(1));
+            let cache_str = format_turn_cache(&turn);
             header.push(line(vec![
                 sp(
                     format!(
@@ -378,10 +437,10 @@ fn draw_turn_detail(
                 ),
                 sp(
                     format!(
-                        "  {}↓ {}↑ c{} · total {:.1}s",
+                        "  {}↓ {}↑{} · total {:.1}s",
                         fmt_k_opt(turn.tokens_in),
                         fmt_k_opt(turn.tokens_out),
-                        fmt_k_opt(turn.cache_read.map(|v| v as usize)),
+                        cache_str,
                         turn.duration_ms as f64 / 1000.0
                     ),
                     Color::Gray,

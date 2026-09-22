@@ -14,27 +14,50 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
         // Level 2 is a stable detail view (the event selected at L1), not a
         // switcher — Up/Down is a no-op there; switch events at L1. The keys
         // are still consumed so they never move the input cursor.
+        // Up/Down wrap around so the user can easily reach the newest (tail)
+        // or oldest (head) turn without hundreds of keystrokes.
         KeyCode::Up => {
             if app.trajectory_level.get() < 2 {
                 let c = app.trajectory_cursor.get();
-                app.trajectory_cursor.set(c.saturating_sub(1));
+                let len = app.trajectory_list_len.get();
+                if c == 0 && len > 0 {
+                    app.trajectory_cursor.set(len.saturating_sub(1));
+                } else {
+                    app.trajectory_cursor.set(c.saturating_sub(1));
+                }
             }
             true
         }
         KeyCode::Down => {
             if app.trajectory_level.get() < 2 {
-                // Clamp to [0, len-1] so the selection glyph stays on the last
-                // row instead of vanishing past the end. len is stashed by the
-                // render path (draw_content); 0 before first render = unbounded.
                 let c = app.trajectory_cursor.get();
                 let len = app.trajectory_list_len.get();
-                let next = c + 1;
-                let max = if len == 0 {
-                    next
+                if len > 0 && c >= len.saturating_sub(1) {
+                    app.trajectory_cursor.set(0);
                 } else {
-                    len.saturating_sub(1)
-                };
-                app.trajectory_cursor.set(next.min(max));
+                    let next = c + 1;
+                    let max = if len == 0 {
+                        next
+                    } else {
+                        len.saturating_sub(1)
+                    };
+                    app.trajectory_cursor.set(next.min(max));
+                }
+            }
+            true
+        }
+        KeyCode::Home => {
+            if app.trajectory_level.get() < 2 {
+                app.trajectory_cursor.set(0);
+            }
+            true
+        }
+        KeyCode::End => {
+            if app.trajectory_level.get() < 2 {
+                let len = app.trajectory_list_len.get();
+                if len > 0 {
+                    app.trajectory_cursor.set(len.saturating_sub(1));
+                }
             }
             true
         }

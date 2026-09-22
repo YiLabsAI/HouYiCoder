@@ -418,10 +418,25 @@ fn test_up_down_move_cursor() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_list_len.set(5);
     assert_eq!(app.trajectory_cursor.get(), 0);
+    // Down advances
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.trajectory_cursor.get(), 1);
+    // Up decrements
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.trajectory_cursor.get(), 0);
+    // Up at top wraps around to end
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.trajectory_cursor.get(), 4);
+    // Down at end wraps around to 0
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.trajectory_cursor.get(), 0);
+    // End jumps to end
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    assert_eq!(app.trajectory_cursor.get(), 4);
+    // Home jumps to top
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     assert_eq!(app.trajectory_cursor.get(), 0);
 }
 
@@ -627,6 +642,65 @@ fn test_per_turn_model_one() {
     );
 }
 
+/// Session reset separator line and cached ratio formatting are covered.
+#[test]
+fn test_session_reset_cached_ratio() {
+    use super::*;
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 2,
+        tokens_in: Some(200),
+        tokens_out: Some(100),
+        failures: 0,
+        duration_secs: 0,
+        rows: vec![
+            TrajectoryRow::Turn(TrajectoryTurn {
+                n: 2,
+                user_input: "first".into(),
+                tokens_in: Some(100),
+                tokens_out: Some(50),
+                cache_read: Some(0),
+                cache_write: Some(0),
+                model: None,
+                effort: None,
+                reasoning_tokens: None,
+                tool_count: 0,
+                tool_fail: 0,
+                retries: 0,
+                duration_ms: 0,
+                success: true,
+                events: vec![],
+            }),
+            TrajectoryRow::Turn(TrajectoryTurn {
+                n: 1,
+                user_input: "reset-turn".into(),
+                tokens_in: Some(100),
+                tokens_out: Some(50),
+                cache_read: Some(50),
+                cache_write: Some(0),
+                model: None,
+                effort: None,
+                reasoning_tokens: None,
+                tool_count: 1,
+                tool_fail: 0,
+                retries: 0,
+                duration_ms: 500,
+                success: true,
+                events: vec![],
+            }),
+        ],
+    };
+    let (_, body, _) = draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(text.contains("Session Reset"), "reset line present: {text}");
+    assert!(text.contains("50% cached"), "cached ratio present: {text}");
+}
+
 /// A turn with a user input uses it as the title.
 #[test]
 fn test_turn_title_user_input() {
@@ -708,4 +782,53 @@ fn test_turn_title_empty() {
         events: vec![],
     };
     assert_eq!(turn_title(&turn), "(no input)");
+}
+
+/// Entering trajectory initializes cursor to tail, and draw clamps and persists it.
+#[test]
+fn test_enter_trajectory_clamps_tail() {
+    use houyicoder_protocol::frontend::SlashCommand;
+    let mut app = crate::composition::app();
+    app.run_command(SlashCommand::Trajectory);
+    assert_eq!(app.trajectory_cursor.get(), usize::MAX);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|f| {
+            draw_content(f, f.area(), &app);
+        })
+        .unwrap();
+    // After first draw, cursor is clamped to valid row index
+    let len = app.trajectory_list_len.get();
+    assert!(app.trajectory_cursor.get() < len);
+    // Enter drills into Level 1 without displaying "no row data"
+    crate::keys::handle_working(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert_eq!(app.trajectory_level.get(), 1);
+}
+
+/// Level 1 navigation properly uses events length, allowing Down to advance.
+#[test]
+fn test_level1_navigates_events() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_level.set(1);
+    app.trajectory_turn_idx.set(0);
+    app.trajectory_cursor.set(0);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|f| {
+            draw_content(f, f.area(), &app);
+        })
+        .unwrap();
+    let event_count = app.trajectory_list_len.get();
+    assert!(event_count > 1, "mock turn 0 has multiple events");
+    // Down advances through events
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.trajectory_cursor.get(), 1);
 }

@@ -1,14 +1,8 @@
-//! The trajectory-data bridge: an impl of the TUI's TrajectoryLog seam backed
-//! by the runner's SessionLog. The /trajectory pane queries the durable
-//! session log (every SessionLogEntry) via SessionLog::trajectory_snapshot,
-//! groups events into logical turns, and projects each into the plain-data
-//! TrajectoryView the TUI renders. Mirrors the disk-search bridge: the TUI
-//! owns the contract, this module owns the projection + the session-log
-//! access, the TUI never touches the log file or the event types.
+//! Trajectory view assembly from durable session events.
 //!
-//! The TUI is a synchronous render loop; SessionLog::trajectory_snapshot is
-//! sync (in-memory, no I/O — it reads the live log buffer), so the bridge
-//! does not need the async block_on the disk-search bridge uses for replay.
+//! Groups SessionLogEntry records into turns and builds the TrajectoryView
+//! rendered by the /trajectory pane. Keeps log reads and turn grouping in the
+//! CLI layer so the TUI stays a presentation-only consumer.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -296,6 +290,38 @@ impl TurnBuilder {
         });
     }
 
+    fn apply_usage(&mut self, ev: &SessionEvent, total_in: &mut u64, total_out: &mut u64) {
+        if let SessionEvent::TurnUsage {
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_write_input_tokens,
+            reasoning_tokens,
+            model: ev_model,
+            effort,
+            recovery,
+            ..
+        } = ev
+        {
+            self.tokens_in = Some(*input_tokens);
+            self.tokens_out = Some(*output_tokens);
+            self.cache_read = Some(*cache_read_input_tokens);
+            self.cache_write = Some(*cache_write_input_tokens);
+            self.model = if ev_model.is_empty() {
+                None
+            } else {
+                Some(ev_model.clone())
+            };
+            self.effort = effort.clone();
+            self.reasoning_tokens = Some(*reasoning_tokens);
+            if *recovery {
+                self.retries += 1;
+            }
+            *total_in += *input_tokens;
+            *total_out += *output_tokens;
+        }
+    }
+
     fn push_event(&mut self, ev: &SessionLogEntry, offset: u64, calls: &CallIndex) {
         if let Some(e) = build_trajectory_event(ev, offset, calls) {
             self.events.push(e);
@@ -387,33 +413,8 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
                 n = *turn as usize;
                 builder.reset(std::mem::take(&mut pending_prompt), ev.ts);
             }
-            SessionEvent::TurnUsage {
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                cache_write_input_tokens,
-                reasoning_tokens,
-                model: ev_model,
-                effort,
-                recovery,
-                ..
-            } => {
-                builder.tokens_in = Some(*input_tokens);
-                builder.tokens_out = Some(*output_tokens);
-                builder.cache_read = Some(*cache_read_input_tokens);
-                builder.cache_write = Some(*cache_write_input_tokens);
-                builder.model = if ev_model.is_empty() {
-                    None
-                } else {
-                    Some(ev_model.clone())
-                };
-                builder.effort = effort.clone();
-                builder.reasoning_tokens = Some(*reasoning_tokens);
-                if *recovery {
-                    builder.retries += 1;
-                }
-                total_tokens_in += *input_tokens;
-                total_tokens_out += *output_tokens;
+            SessionEvent::TurnUsage { .. } => {
+                builder.apply_usage(&ev.event, &mut total_tokens_in, &mut total_tokens_out);
             }
             SessionEvent::ToolCall { .. } => {
                 builder.tool_count += 1;
@@ -435,6 +436,14 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
                 builder.success = false;
                 builder.push_event(ev, builder.offset(ev.ts), &calls);
             }
+            SessionEvent::RunCompleted { secs } => {
+                if let Some(s) = secs {
+                    let ms = (*s as u64) * 1000;
+                    if ms > builder.duration_ms {
+                        builder.duration_ms = ms;
+                    }
+                }
+            }
             _ => {
                 builder.push_event(ev, builder.offset(ev.ts), &calls);
             }
@@ -452,8 +461,8 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str) -> TrajectoryView
     )
 }
 
-/// The TrajectoryLog bridge: holds the runner's SessionLog + the session id +
-/// the model name. trajectory() reads the live event buffer + projects.
+/// Session log trajectory reader: reads a session's durable log and returns
+/// the current TrajectoryView on request.
 pub struct SessionLogTrajectory {
     pub(crate) session_log: Arc<dyn SessionLog>,
     pub(crate) session_id: SessionId,
@@ -478,5 +487,5 @@ impl TrajectoryLog for SessionLogTrajectory {
 }
 
 #[cfg(test)]
-#[path = "trajectory_bridge_tests.rs"]
+#[path = "trajectory_view_tests.rs"]
 mod tests;

@@ -1,8 +1,8 @@
 //! The /export projection: derives the export JSON document from the durable
-//! SessionLogEntry stream. Sibling to trajectory_bridge — that module owns the
+//! SessionLogEntry stream. Sibling to trajectory_view — that module owns the
 //! /trajectory view projection, this one owns the /export document projection.
 //! Both read the same SessionLogTrajectory; the ExportLog impl lives here so
-//! trajectory_bridge stays under the file-size gate.
+//! trajectory_view stays under the file-size gate.
 //!
 //! The export document is the self-evolution data source: a machine-readable
 //! record of everything that happened in the session. Every field is derived
@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_tui::view::export_log::{ExportLog, ExportPayload};
 
-use crate::trajectory_bridge::SessionLogTrajectory;
+use crate::trajectory_view::SessionLogTrajectory;
 
 /// One per-tool aggregate row: call count, failure count, total + max
 /// wall-clock latency. Failures are ToolResults whose output carries an
