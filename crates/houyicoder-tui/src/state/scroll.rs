@@ -96,7 +96,7 @@ impl App {
         let mut count = 0usize;
         let mut prev_was_agent = false;
         for f in &self.transcript.frames()[from..] {
-            match f {
+            match f.as_ref() {
                 // Turn boundary: a new user message starts a new assistant
                 // turn, so the next agent text counts again.
                 crate::transcript::TranscriptFrame::Session(

@@ -17,7 +17,7 @@ pub struct RequestId(pub u64);
 /// A globally monotonic event sequence number. The service assigns these;
 /// a client reconnecting reports the last seq it processed so the service
 /// replays the tail without re-sending the whole stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EventSeq(pub u64);
 
 /// A request envelope: the caller's req_id plus the request payload. The

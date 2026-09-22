@@ -1,6 +1,6 @@
 use super::*;
 use houyicoder_protocol::frontend::session_update::{
-    ToolCall, ToolCallUpdate, ToolCallUpdateFields,
+    ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use serde_json::Value;
 

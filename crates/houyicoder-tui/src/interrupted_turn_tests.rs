@@ -40,7 +40,7 @@ fn tool_result(id: &str, output: serde_json::Value) -> TranscriptFrame {
 #[test]
 fn test_missing_user_preserves() {
     // Missing frame context preserves the turn conservatively.
-    assert!(should_preserve_interrupted_turn(&[]));
+    assert!(should_preserve_interrupted_turn(&[] as &[TranscriptFrame]));
 }
 
 #[test]

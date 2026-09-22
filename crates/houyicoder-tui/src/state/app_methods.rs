@@ -108,7 +108,7 @@ impl App {
     pub fn drop_tentative_echo(&mut self) {
         if matches!(
             self.transcript.frames().last(),
-            Some(TranscriptFrame::Frontend(FrontendRow::Echo(_)))
+            Some(sf) if matches!(sf.as_ref(), TranscriptFrame::Frontend(FrontendRow::Echo(_)))
         ) {
             self.transcript.frames_mut().pop();
             self.rebuild_transcript();
@@ -119,15 +119,16 @@ impl App {
     /// log holds none yet. The row keeps the place its frame holds, so a
     /// refresh updates the grid where it stands instead of stacking another.
     pub fn replace_context_view(&mut self, view: ContextView) {
-        let at = self
-            .transcript
-            .frames()
-            .iter()
-            .rposition(|f| matches!(f, TranscriptFrame::Frontend(FrontendRow::Context(_))));
+        let at = self.transcript.frames().iter().rposition(|sf| {
+            matches!(
+                sf.as_ref(),
+                TranscriptFrame::Frontend(FrontendRow::Context(_))
+            )
+        });
         match at {
             Some(at) => {
                 if let TranscriptFrame::Frontend(FrontendRow::Context(slot)) =
-                    &mut self.transcript.frames_mut()[at]
+                    &mut self.transcript.frames_mut()[at].frame
                 {
                     *slot = view;
                 }

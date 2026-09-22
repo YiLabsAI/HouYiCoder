@@ -72,7 +72,7 @@ pub struct TodoState {
 
 impl TodoState {
     /// Apply newly appended todo-write frames using last-write-wins semantics.
-    pub(crate) fn update(&mut self, frames: &[TranscriptFrame], run_active: bool) {
+    pub(crate) fn update<F: AsRef<TranscriptFrame>>(&mut self, frames: &[F], run_active: bool) {
         if self.cursor > frames.len() {
             // Rewind: the transcript shrank below the cursor, so the
             // projection restarts from zero. Timestamps go with the items;
@@ -84,7 +84,7 @@ impl TodoState {
         }
         let mut latest = None;
         for frame in frames.iter().skip(self.cursor) {
-            if let TranscriptFrame::Session(update) = frame
+            if let TranscriptFrame::Session(update) = frame.as_ref()
                 && let Some(parsed) = from_tool_call(update)
             {
                 latest = Some(parsed);

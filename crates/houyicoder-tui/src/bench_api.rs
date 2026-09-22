@@ -9,7 +9,7 @@
 use crate::composition;
 use crate::fold::compute_fold_groups;
 use crate::state::App;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::{SequencedFrame, TranscriptFrame};
 
 /// Build a bare App carrying the given frame log. A bare App has no
 /// server or runtime, which is all the rebuild and fold paths need. Takes
@@ -17,7 +17,8 @@ use crate::transcript::TranscriptFrame;
 /// mutable-access parameter.
 pub fn app_with_frames(frames: Vec<TranscriptFrame>) -> App {
     let mut app = composition::app();
-    *app.transcript.frames_mut() = frames;
+    let sequenced: Vec<SequencedFrame> = frames.into_iter().map(Into::into).collect();
+    *app.transcript.frames_mut() = sequenced;
     app
 }
 

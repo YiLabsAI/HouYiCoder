@@ -3,16 +3,20 @@
 //! counter. The frame log lives here so the rebuild path reads frames
 //! through this object.
 
+pub(crate) mod blocks;
+
 use std::cell::Cell;
 use std::ops::Deref;
 
 use crate::records::TranscriptLine;
 use crate::state::CurrentTurnBoundary;
-use crate::transcript::TranscriptFrame;
+use crate::state::transcript::blocks::TranscriptBlocks;
+use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame};
 
 #[derive(Debug, Default)]
 pub struct Transcript {
-    frames: Vec<TranscriptFrame>,
+    frames: Vec<SequencedFrame>,
+    blocks: TranscriptBlocks,
     lines: Vec<TranscriptLine>,
     current_turn: CurrentTurnBoundary,
     revision: Cell<u64>,
@@ -36,20 +40,51 @@ impl From<Vec<TranscriptLine>> for Transcript {
 }
 
 impl Transcript {
-    pub(crate) fn frames(&self) -> &[TranscriptFrame] {
+    pub(crate) fn frames(&self) -> &[SequencedFrame] {
         &self.frames
     }
 
-    pub(crate) fn frames_mut(&mut self) -> &mut Vec<TranscriptFrame> {
+    pub(crate) fn frames_mut(&mut self) -> &mut Vec<SequencedFrame> {
         &mut self.frames
     }
 
-    pub fn push_frame(&mut self, frame: TranscriptFrame) {
-        self.frames.push(frame);
+    pub fn push_frame(&mut self, frame: impl Into<SequencedFrame>) {
+        self.frames.push(frame.into());
+    }
+
+    /// Drop the trailing Echo frame when the server's user message for the same
+    /// text is now arriving, so the row renders once from the server frame
+    /// instead of twice (the tentative echo the frontend raised plus the
+    /// server's own UserMessageChunk). Only the trailing Echo is examined, so
+    /// no earlier frame's index shifts and the block ranges that name log
+    /// positions stay valid. The caller is the frame batch entry, the one
+    /// place that knows a server user message is arriving.
+    pub fn drop_trailing_echo(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let matches_trailing_echo = matches!(
+            self.frames.last(),
+            Some(sf) if matches!(
+                sf.as_ref(),
+                TranscriptFrame::Frontend(FrontendRow::Echo(t)) if t.as_str() == text
+            )
+        );
+        if matches_trailing_echo {
+            self.frames.pop();
+        }
     }
 
     pub(crate) fn frame_count(&self) -> usize {
         self.frames.len()
+    }
+
+    pub(crate) fn blocks(&self) -> &TranscriptBlocks {
+        &self.blocks
+    }
+
+    pub(crate) fn blocks_mut(&mut self) -> &mut TranscriptBlocks {
+        &mut self.blocks
     }
 
     pub(crate) fn lines(&self) -> &[TranscriptLine] {
@@ -74,11 +109,8 @@ impl Transcript {
     pub(crate) fn reset(&mut self) {
         self.lines.clear();
         self.frames.clear();
+        self.blocks.clear();
         self.current_turn = CurrentTurnBoundary::default();
-    }
-
-    pub(crate) fn current_turn(&self) -> &CurrentTurnBoundary {
-        &self.current_turn
     }
 
     pub(crate) fn current_turn_mut(&mut self) -> &mut CurrentTurnBoundary {

@@ -130,11 +130,16 @@ fn test_evicted_keeps_count() {
     ))));
     assert_eq!(app.jump_pill_new_count(), 1);
     // One row past the cap while scrolled back: trim skips a scrolled-back
-    // reader, so the line accumulates past the cap rather than draining.
+    // reader, so the line accumulates past the cap rather than draining. The
+    // echo rows now live in the session log (frontend Echo frames), and the
+    // session log is not trimmed in this step, so rebuild re-projects the
+    // aged-out echo frame too — one extra row versus the old direct-push
+    // model. This is the known session-log-not-trimmed debt, resolved when
+    // C14 replaces the viewable cap with paged, incremental rendering.
     app.push_transcript_line(TranscriptLine::User("one past the cap".into()));
     assert_eq!(
         app.transcript.len(),
-        VIEWABLE_SCROLLBACK_CAP + 2,
+        VIEWABLE_SCROLLBACK_CAP + 3,
         "trim skips while scrolled back, so the line accumulates"
     );
     // The count is frame-based, so a length change during scroll-away does

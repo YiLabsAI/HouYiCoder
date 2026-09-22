@@ -16,7 +16,7 @@ use crate::records::{Approval, AskQuestion, TranscriptLine};
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome};
 use crate::state::App;
 use crate::state::enums::LiveBlock;
-use crate::transcript::{FrontendRow, TranscriptFrame, chunk_text};
+use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame, chunk_text};
 
 const MAX_REBUILD_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;
@@ -500,7 +500,7 @@ impl App {
     }
 
     /// Env-gated render diagnostic at each turn boundary.
-    fn debug_render_done(&self, frames: &[TranscriptFrame]) {
+    fn debug_render_done<F: AsRef<TranscriptFrame>>(&self, frames: &[F]) {
         if std::env::var("HICODER_DEBUG_RENDER").is_err() {
             return;
         }
@@ -634,9 +634,9 @@ impl App {
     /// the user can edit and resend the restored input. The rows the frontend
     /// raised during that turn go with it: they describe work now discarded.
     pub fn rewind_to_last_user_input(&mut self) {
-        let Some(start) = self.transcript.frames().iter().rposition(|f| {
+        let Some(start) = self.transcript.frames().iter().rposition(|sf| {
             matches!(
-                f,
+                sf.as_ref(),
                 TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
             )
         }) else {
@@ -653,10 +653,10 @@ impl App {
 /// so a turn with real output clears its lone notice while a turn that gave
 /// the submission back clears both — matched by identity, not by position or
 /// by the words the row happens to render.
-fn clear_interruption_markers(frames: &mut Vec<TranscriptFrame>) {
-    frames.retain(|f| {
+fn clear_interruption_markers(frames: &mut Vec<SequencedFrame>) {
+    frames.retain(|sf| {
         !matches!(
-            f,
+            sf.as_ref(),
             TranscriptFrame::Frontend(FrontendRow::Interrupted | FrontendRow::InputRestored)
         )
     });
@@ -665,16 +665,16 @@ fn clear_interruption_markers(frames: &mut Vec<TranscriptFrame>) {
 /// Whether an interrupted turn must remain submitted. Assistant output, tool
 /// calls, and reasoning preserve the turn; a user-only turn may be restored.
 /// Missing user context preserves the turn conservatively.
-fn should_preserve_interrupted_turn(frames: &[TranscriptFrame]) -> bool {
-    let Some(start) = frames.iter().rposition(|f| {
+fn should_preserve_interrupted_turn<F: AsRef<TranscriptFrame>>(frames: &[F]) -> bool {
+    let Some(start) = frames.iter().rposition(|sf| {
         matches!(
-            f,
+            sf.as_ref(),
             TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
         )
     }) else {
         return true;
     };
-    frames[start + 1..].iter().any(|f| match f {
+    frames[start + 1..].iter().any(|sf| match sf.as_ref() {
         TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(chunk)) => {
             !chunk_text(chunk).is_empty()
         }

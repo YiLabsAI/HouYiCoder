@@ -28,7 +28,7 @@ use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::enums::LiveBlock;
 use crate::state::{App, BashProgress};
 use crate::terminal_title::sync as sync_terminal_title;
-use crate::transcript::{TranscriptFrame, transcript_from_frames};
+use crate::transcript::{TranscriptFrame, chunk_text, transcript_from_frames};
 
 impl App {
     /// Apply an inbound agent message to application state. Dispatch follows
@@ -590,6 +590,12 @@ impl App {
                 *folded_transcript = folded.clone();
             }
             self.transcript.lines_mut().insert(idx, line);
+            // The block holds the frame-derived copy the next rebuild
+            // migrates from, so the fetched rows must reach it too, or a
+            // rebuild that re-derives this block reads an empty old copy.
+            self.transcript
+                .blocks_mut()
+                .set_subagent_folded(&child_sid, &folded);
             // The swap mutates a line's payload in place instead of
             // pushing, so the row cache needs an explicit bump — the
             // fetched child rows would otherwise stay invisible until
@@ -620,6 +626,15 @@ impl App {
                 &frame,
                 TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(_))
             );
+            // A server user message replaces the tentative echo the frontend
+            // raised when it submitted: drop that echo so the row renders once
+            // from the server frame. This is the one place that knows the
+            // server user message is arriving, so push_frame stays a pure
+            // append and the streaming token / tool-update hot path pays
+            // nothing for echo bookkeeping.
+            if let TranscriptFrame::Session(SessionUpdate::UserMessageChunk(chunk)) = &frame {
+                self.transcript.drop_trailing_echo(chunk_text(chunk));
+            }
             self.track_running_tool(&frame);
             self.transcript.push_frame(frame);
             any = true;
