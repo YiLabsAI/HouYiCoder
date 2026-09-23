@@ -1,14 +1,33 @@
 //! Run approval, cancellation, restoration, and completion-state tests.
 
+use std::env::temp_dir;
+use std::thread::sleep;
+
 use super::*;
 use crate::agent_message::ServerResponse;
+use crate::keys::handle_working;
 use crate::pending_prompt::PendingPrompt;
 use crate::state::TranscriptLine;
+use crate::test_harness::{attach_connection, dump_buffer, render_buffer, render_text};
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::run::{ApprovalDecision, StopReason};
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, StopReason};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, ProviderError};
 use houyicoder_provider::FakeProvider;
+
+/// Pump the event loop until the predicate holds, or the budget runs out.
+/// Returns whether it held. The run is driven by a worker thread, so a test
+/// observes progress only by polling.
+fn pump_until(app: &mut App, tries: usize, mut held: impl FnMut(&App) -> bool) -> bool {
+    for _ in 0..tries {
+        app.poll_agent();
+        if held(app) {
+            return true;
+        }
+        sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
 
 /// Monotonic counter for unique temp-dir names, avoiding same-nanosecond
 /// collisions when tests run in parallel.
@@ -20,12 +39,8 @@ fn unique_seq() -> u64 {
 
 #[test]
 fn test_one_at_a_time() {
-    // Two tool calls in one turn: the model calls guarded twice (c1, c2)
-    // then a final text reply. The runner interrupts with BOTH approvals;
-    // the UI shows the first. Approve it (one decision) -> core applies it,
-    // returns Interruption(remaining) -> the second card appears. Reject
-    // the second -> core feeds back a "rejected by user" result -> model
-    // emits the final reply. This verifies one-at-a-time approval end-to-end.
+    // Two guarded calls in one turn: the runner raises both approvals, the UI
+    // shows one at a time, and each verdict resumes the same run.
     let responses = vec![
         CompletionResponse {
             output: vec![
@@ -58,15 +73,7 @@ fn test_one_at_a_time() {
     app.spawn_run("do both".into());
 
     // Wait for the first approval card.
-    let mut got_first = false;
-    for _ in 0..200 {
-        app.poll_agent();
-        if app.approval().is_some() {
-            got_first = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let got_first = pump_until(&mut app, 200, |a| a.approval().is_some());
     assert!(got_first, "first approval should appear");
     // The wire path surfaces one approval at a time: the server sends one
     // reverse permission ask, waits for the verdict, resumes, then re-asks
@@ -79,7 +86,7 @@ fn test_one_at_a_time() {
     let first_id = app.approval().unwrap().call_id.clone();
 
     // Approve the first (one decision for its call_id).
-    app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
+    app.resolve_current_approval(ApprovalDecision {
         call_id: first_id.clone(),
         approved: true,
         updated_input: None,
@@ -97,7 +104,7 @@ fn test_one_at_a_time() {
             got_second = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(std::time::Duration::from_millis(10));
     }
     assert!(
         got_second,
@@ -110,7 +117,7 @@ fn test_one_at_a_time() {
     );
 
     // Reject the second (one reject decision for its call_id).
-    app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
+    app.resolve_current_approval(ApprovalDecision {
         call_id: second_id,
         approved: false,
         updated_input: None,
@@ -118,15 +125,9 @@ fn test_one_at_a_time() {
     });
 
     // Wait for the run to finish (model emits the final text).
-    let mut settled = false;
-    for _ in 0..200 {
-        app.poll_agent();
-        if !app.agent_busy() && !app.reverse_request_in_flight() {
-            settled = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let settled = pump_until(&mut app, 200, |a| {
+        !a.agent_busy() && !a.reverse_request_in_flight()
+    });
     assert!(settled, "run should settle after second decision");
     assert!(app.transcript.iter().any(|l| matches!(
         l,
@@ -136,12 +137,10 @@ fn test_one_at_a_time() {
 
 #[test]
 fn test_approval_renders_inline() {
-    // The approval prompt renders inline at the transcript tail (a
-    // bottom-aligned sub-rect), not a floating centered popup. Verify the
-    // thin separator and the proceed question appear in the bottom rows when
-    // an approval is pending, and are absent when none is pending.
+    // The prompt renders inline at the transcript tail, not as a floating
+    // popup, and disappears once no approval is pending.
     use crate::composition;
-    use crate::test_harness::render_text;
+    use render_text;
 
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
@@ -204,7 +203,7 @@ fn test_approval_esc_rejects_current() {
             ..Default::default()
         },
     ));
-    crate::keys::handle_working(&mut app, key(KeyCode::Esc));
+    handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.approval().is_none(), "current approval cleared");
 }
 
@@ -231,14 +230,12 @@ fn test_approval_enter_approve_current() {
             ..Default::default()
         },
     ));
-    crate::keys::handle_working(&mut app, key(KeyCode::Enter));
+    handle_working(&mut app, key(KeyCode::Enter));
     assert!(app.approval().is_none(), "approval cleared after approve");
 }
 
-/// The a/1 and r/3 keys pin the approval selection without resolving it: a
-/// selects Yes, r selects No when remember is shown. The card stays open so
-/// the user can confirm with Enter or change again. Covers the selection arms
-/// the Enter/Esc tests do not reach (they resolve immediately).
+/// The selection keys pin an answer without resolving it, so the user can
+/// change their mind before Enter. The Enter and Esc tests resolve directly.
 #[test]
 fn test_approval_char_keys_select() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -258,28 +255,21 @@ fn test_approval_char_keys_select() {
     };
     // 'a' (or '1') pins Yes.
     app.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
-    crate::keys::handle_working(&mut app, key(KeyCode::Char('a')));
+    handle_working(&mut app, key(KeyCode::Char('a')));
     assert_eq!(app.approval().unwrap().selected, 0, "a pins Yes");
     assert!(app.approval().is_some(), "card stays open after a");
 
-    // 'r' pins No. The internal selected index is fixed: 0=Yes,
-    // 1=No, 2=Yes-don't-ask. No is always index 1 regardless of
-    // card layout (the display order array reorders presentation,
-    // not the index meaning).
+    // No is always index 1, whatever order the card displays.
     app.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
-    crate::keys::handle_working(&mut app, key(KeyCode::Char('r')));
+    handle_working(&mut app, key(KeyCode::Char('r')));
     assert_eq!(app.approval().unwrap().selected, 1, "r pins No");
     assert!(app.approval().is_some(), "card stays open after r");
 }
 
 #[test]
 fn test_approval_pretext_survives_rebuild() {
-    // When the agent produces text followed by a guarded tool call, the
-    // Interruption triggers a transcript rebuild. The assistant pre-text
-    // (the Agent line from the AssistantMessage event) must survive the
-    // merge — not be dropped or overwritten. This guards against a regression
-    // where the live preview vanishes and the rebuilt transcript omits the
-    // assistant's explanation that preceded the approval request.
+    // The assistant text that preceded a guarded call must survive the
+    // transcript rebuild the interruption triggers.
     let responses = vec![CompletionResponse {
         output: vec![
             OutputItem::Text {
@@ -300,15 +290,7 @@ fn test_approval_pretext_survives_rebuild() {
     let mut app = app_with_provider(p, tools);
     app.spawn_run("go ahead".into());
     // Wait for the approval card.
-    let mut got_approval = false;
-    for _ in 0..200 {
-        app.poll_agent();
-        if app.approval().is_some() {
-            got_approval = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let got_approval = pump_until(&mut app, 200, |a| a.approval().is_some());
     assert!(got_approval, "approval card should appear");
     // The agent's pre-text must be in the transcript as an Agent line.
     assert!(
@@ -334,7 +316,7 @@ fn test_walk_finds_workspace_root() {
     // temp repo: root/Cargo.toml ([workspace]) + root/crate/Cargo.toml, then
     // walk up from crate/ and assert it returns the workspace root.
     use std::fs;
-    let root = std::env::temp_dir().join(format!("houyi-walk-{seq}", seq = unique_seq()));
+    let root = temp_dir().join(format!("houyi-walk-{seq}", seq = unique_seq()));
     let crate_dir = root.join("crate");
     fs::create_dir_all(&crate_dir).unwrap();
     fs::write(
@@ -354,14 +336,10 @@ fn test_walk_finds_workspace_root() {
 
 #[test]
 fn test_walk_none_outside_repo() {
-    // From a fresh tempdir whose parent chain has no Cargo.toml, the walk must
-    // return None — this is the HOME-avoidance guard (a regression that
-    // returned Some(home) would silently make the seatbelt workspace the home
-    // dir). The system temp dir on mac (/var/folders/...) has no manifest
-    // above it; if a parent happened to have one this assertion would surface
-    // that (a real env anomaly), not pass silently.
+    // A parent chain with no manifest yields None: the walk must not fall back
+    // to the home directory.
     use std::fs;
-    let d = std::env::temp_dir().join(format!("houyi-none-{}", unique_seq()));
+    let d = temp_dir().join(format!("houyi-none-{}", unique_seq()));
     fs::create_dir_all(&d).unwrap();
     let found = walk_to_workspace_root(&d);
     assert_eq!(
@@ -373,11 +351,8 @@ fn test_walk_none_outside_repo() {
 
 #[test]
 fn test_status_snapshot_accumulates_live() {
-    // End-to-end: a scripted provider returning nonzero usage, run to
-    // completion. The runner's shared accumulator must fold the response
-    // usage so status_snapshot reports the cumulative tally + the last
-    // response's input_tokens (the current window footprint). This wires
-    // the drive_loop write path that /context + /compact read.
+    // A scripted provider reporting usage must land in the shared accumulator,
+    // the figure /context and /compact read.
     let resp = CompletionResponse {
         output: vec![OutputItem::Text {
             text: "done".into(),
@@ -395,27 +370,11 @@ fn test_status_snapshot_accumulates_live() {
     let p = Arc::new(FakeProvider::new(vec![resp]));
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.spawn_run("go".into());
-    let mut settled = false;
-    for _ in 0..200 {
-        app.poll_agent();
-        if !app.agent_busy() {
-            settled = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let settled = pump_until(&mut app, 200, |a| !a.agent_busy());
     assert!(settled, "run should settle");
-    // The TUI holds no engine handle, so the accumulator is read through the
-    // wire: once the run settles (idle), the event loop's periodic status poll
-    // fires a StatusQuery; the server projects runner.status_snapshot and the
-    // driver routes the StatusResult back here. Pump until the cache lands.
-    for _ in 0..200 {
-        app.poll_agent();
-        if app.status_cache.is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    // The TUI holds no engine handle, so the tally arrives over the wire: pump
+    // the periodic status poll until the driver routes it back.
+    pump_until(&mut app, 200, |a| a.status_cache.is_some());
     let snap = app
         .status_cache
         .as_ref()
@@ -487,10 +446,8 @@ impl ModelProvider for HangingProvider {
 
 #[test]
 fn test_esc_aborts_busy_run() {
-    // Esc while a run is in flight aborts it: the cancel token fires, the
-    // drive loop flushes partial text + returns Interrupted, the Done handler
-    // clears busy. The interrupt is implicit — no bracketed user-facing marker
-    // line; the reason only goes to the model as the aborted tool-result.
+    // Esc mid-run aborts: the cancel token fires and the Done handler clears
+    // busy, with no user-facing marker line.
     use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(HangingProvider::new(vec![LlmEvent::TextDelta {
         id: "t1".into(),
@@ -498,24 +455,15 @@ fn test_esc_aborts_busy_run() {
     }]));
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.spawn_run("hi".into());
-    // Wait until the run is actively streaming: agent_busy is set synchronously
-    // by spawn_run, but the cancel token is only installed once the spawned
-    // task enters model_call_stream. The first TextDelta proves the run has
-    // entered the streaming select (so the token exists and abort will land).
-    // Without this gate, Esc could fire before the token is set and miss.
-    let mut streaming = false;
-    for _ in 0..200 {
-        app.poll_agent();
-        if app.run_progress().is_some_and(|p| p.live_active) {
-            streaming = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    // The cancel token exists only once the spawned task is streaming, so wait
+    // for the first delta before firing Esc.
+    let streaming = pump_until(&mut app, 200, |a| {
+        a.run_progress().is_some_and(|p| p.live_active)
+    });
     assert!(streaming, "run should stream a delta before abort");
     assert!(app.agent_busy(), "run should still be in flight");
     // Press Esc on the working surface — must call abort_run.
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Esc,
@@ -524,15 +472,7 @@ fn test_esc_aborts_busy_run() {
     );
     // The cancel token fired; the drive loop returns Interrupted. Poll until
     // the Done message arrives and busy clears.
-    let mut settled = false;
-    for _ in 0..200 {
-        app.poll_agent();
-        if !app.agent_busy() {
-            settled = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let settled = pump_until(&mut app, 200, |a| !a.agent_busy());
     assert!(settled, "aborted run should settle via Interrupted");
     assert!(
         !app.transcript
@@ -552,21 +492,16 @@ fn test_esc_aborts_busy_run() {
 
 #[test]
 fn test_esc_abort_restores_input() {
-    // Abort before the model emits any token: the stream never produces an
-    // event (pending tail), the cancel token fires in the first select, the
-    // drive loop returns Interrupted without appending any assistant content.
-    // The Done handler then sees no real content after the last user input
-    // and restores the original input so the user can edit and resend.
+    // Aborting before any token leaves no assistant content, so the Done
+    // handler restores the input for the user to edit and resend.
     let p = Arc::new(HangingProvider::new(Vec::new()));
     let mut app = app_with_provider(p, ToolRegistry::new());
     let original = "rewrite this as a pure function";
     app.spawn_run(original.into());
     assert!(app.agent_busy(), "run should be in flight");
     assert_eq!(app.last_run_input.as_deref(), Some(original));
-    // The cancel token is installed inside the spawned run() task, which
-    // starts on a worker thread. Re-fire abort each tick: it is a no-op
-    // until the token exists, then lands once the task has set it. Poll
-    // until the Done message arrives and busy clears.
+    // The token is installed on a worker thread, so re-fire abort each tick
+    // until the Done message arrives.
     let mut settled = false;
     for _ in 0..300 {
         app.abort_run();
@@ -575,7 +510,7 @@ fn test_esc_abort_restores_input() {
             settled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(std::time::Duration::from_millis(10));
     }
     assert!(settled, "aborted run should settle via Interrupted");
     // The input box is restored to the original text, cursor at the end.
@@ -608,15 +543,7 @@ fn test_context_grid_after_run() {
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
     // Spawn "hi" and wait for Done.
     app.spawn_run("hi".into());
-    let mut settled = false;
-    for _ in 0..200 {
-        app.poll_agent();
-        if !app.agent_busy() {
-            settled = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let settled = pump_until(&mut app, 200, |a| !a.agent_busy());
     assert!(settled, "run should settle");
     // Assert correct ORDER: User(/context), ContextGrid, User(hi), Agent.
     let ctx_user = app
@@ -656,8 +583,8 @@ fn test_context_grid_after_run() {
         "order wrong: ctx_user={cu} grid={cg} hi={hu} agent={ag}"
     );
     // Render and assert all are visible.
-    let buf = crate::test_harness::render_buffer(&app, 100, 50);
-    let text = crate::test_harness::dump_buffer(&buf);
+    let buf = render_buffer(&app, 100, 50);
+    let text = dump_buffer(&buf);
     assert!(
         text.contains("Context Usage"),
         "grid header not visible: {text}"
@@ -690,8 +617,8 @@ fn test_slash_echo_visible() {
         "ContextGrid missing from transcript"
     );
     // Render tall enough for the grid block.
-    let buf = crate::test_harness::render_buffer(&app, 100, 50);
-    let text = crate::test_harness::dump_buffer(&buf);
+    let buf = render_buffer(&app, 100, 50);
+    let text = dump_buffer(&buf);
     // The User echo renders as "> /context" (the render() glyph for User).
     assert!(
         text.contains("/context"),
@@ -715,22 +642,10 @@ fn test_tui_lines_survive_runs() {
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
     // First run.
     app.spawn_run("hi".into());
-    for _ in 0..200 {
-        app.poll_agent();
-        if !app.agent_busy() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    pump_until(&mut app, 200, |a| !a.agent_busy());
     // Second run.
     app.spawn_run("again".into());
-    for _ in 0..200 {
-        app.poll_agent();
-        if !app.agent_busy() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    pump_until(&mut app, 200, |a| !a.agent_busy());
     // ContextGrid must still be present and before both User(hi) and User(again).
     let cg = app
         .transcript
@@ -766,21 +681,10 @@ fn test_guarded_tool_auto_asks() {
         boom_call_then_reply(),
     );
     app.spawn_run("go".into());
-    let mut raised = false;
-    for _ in 0..200 {
-        app.poll_agent();
-        if app.approval().is_some() {
-            raised = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let raised = pump_until(&mut app, 200, |a| a.approval().is_some());
     assert!(raised, "Auto should raise an approval popup");
     assert!(!boom.ran(), "the tool must not run before approval");
 }
-
-// Records current timing and queue behavior, including known defects, so
-// the run-state migration can prove what changed.
 
 fn approval_ask(call_id: &str) -> ApprovalRequest {
     ApprovalRequest {
@@ -793,15 +697,13 @@ fn approval_ask(call_id: &str) -> ApprovalRequest {
     }
 }
 
-// RunState preserves the run start point across the Waiting (approval)
-// transition: begin_waiting keeps the ActiveRun with its original started_at,
-// so the verdict resume does not reset the clock. This was the B3 defect
-// (ask cleared run_started, verdict reset it); RunState fixes it naturally.
+// RunState keeps the run start across the Waiting transition, so resuming from
+// an approval does not reset the clock.
 #[test]
 fn test_ask_preserves_start() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(
         app.spawn_run("work".into()),
         "run starts on a live connection"
@@ -827,16 +729,14 @@ fn test_ask_preserves_start() {
     );
 }
 
-// RunProgress carries across the Waiting (approval) transition, not just the
-// start clock: live assistant text streamed before the pause and a tracked
-// running tool both survive begin_waiting -> end_waiting, and a post-resume
-// delta appends to the same preview instead of starting over.
+// Streamed text and a tracked running tool both survive the Waiting
+// transition, and a post-resume delta appends to the same preview.
 #[test]
 fn test_ask_preserves_progress() {
     use crate::agent_message::ServerEvent;
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
         text: "first".into(),
@@ -871,7 +771,7 @@ fn test_ask_preserves_progress() {
 fn test_finish_copies_start() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
     let started = app.run_started();
@@ -901,7 +801,7 @@ fn test_finish_copies_start() {
 fn test_final_run_survives_loss() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
     app.handle_agent_message(SessionMessage::Response {
@@ -941,7 +841,7 @@ fn test_final_run_survives_loss() {
 fn test_stale_done_settles_nothing() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
     let stale = RequestId(run_req.0 + 1);
@@ -988,7 +888,7 @@ fn test_stale_done_settles_nothing() {
 fn test_cycles_preserve_start() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let first_start = app.run_started();
     for round in 0..2 {
@@ -1012,15 +912,13 @@ fn test_cycles_preserve_start() {
     }
 }
 
-// With a card up the run is Waiting (still active in the state machine),
-// so a direct submit parks instead of starting a second run. This was the
-// B6 defect (Waiting relied on the UI card to intercept Enter); RunState
-// makes Waiting an active state that parks new input.
+// A submit while a card is up parks instead of starting a second run, because
+// Waiting is an active state.
 #[test]
 fn test_waiting_submit_parks() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("first".into()));
     let first_req = app.active_run_req_id();
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
@@ -1042,7 +940,7 @@ fn test_waiting_submit_parks() {
 fn test_busy_submit_parks() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("first".into()));
     app.spawn_run("second".into());
     assert!(app.agent_busy(), "no second run while busy");
@@ -1055,16 +953,14 @@ fn test_busy_submit_parks() {
     );
 }
 
-// A connection loss whose not_sent list contains the active run's id
-// reports the run as not sent: it never left this process. A loss with an
-// empty not_sent list reports the run as unknown: a write or flush may
-// have delivered the frame even though the carrier then broke.
+// A loss naming the active run in not_sent reports it as not sent; an empty
+// not_sent list reports it as unknown, since the frame may have landed.
 #[test]
 fn test_loss_unsent_vs_unknown() {
     use crate::agent_message::{ConnectionEvent, SessionMessage};
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
 
@@ -1082,7 +978,7 @@ fn test_loss_unsent_vs_unknown() {
     // Reset for the unknown case.
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
         cause: "send failed: pipe broken".into(),
@@ -1103,7 +999,7 @@ fn test_loss_unsent_vs_unknown() {
 fn test_cancel_during_waiting() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
@@ -1126,7 +1022,7 @@ fn test_cancel_during_waiting() {
 fn test_loss_during_waiting_settles() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
     assert!(
@@ -1147,7 +1043,7 @@ fn test_loss_during_waiting_settles() {
 fn test_loss_during_cancelling_settles() {
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
     app.abort_run();
