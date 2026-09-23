@@ -82,23 +82,23 @@ fn test_snapshot_record_row() {
             text: "first answer".into(),
             thinking: None,
         }),
-        ev(SessionEvent::RunCompleted { secs: Some(4) }),
+        ev(SessionEvent::RunCompleted { ms: Some(4_000) }),
         ev(SessionEvent::UserInput { text: "two".into() }),
         ev(SessionEvent::AssistantMessage {
             text: "second answer".into(),
             thinking: None,
         }),
     ];
-    let rows: Vec<(Option<u32>, String)> = SessionLogSnapshot::project_events(events)
+    let rows: Vec<(Option<u64>, String)> = SessionLogSnapshot::project_events(events)
         .iter()
         .filter_map(|l| match l {
-            TranscriptLine::ThoughtFor { secs, turn_id, .. } => Some((*secs, turn_id.clone())),
+            TranscriptLine::ThoughtFor { ms, turn_id, .. } => Some((*ms, turn_id.clone())),
             _ => None,
         })
         .collect();
     assert_eq!(
         rows,
-        vec![(Some(4), "f3".to_string())],
+        vec![(Some(4_000), "f3".to_string())],
         "the record closes the first turn and names it by its log position"
     );
 }
@@ -120,7 +120,7 @@ fn test_live_snapshot_parity() {
             text: "first answer".into(),
             thinking: None,
         }),
-        ev(SessionEvent::RunCompleted { secs: Some(4) }),
+        ev(SessionEvent::RunCompleted { ms: Some(4_000) }),
     ];
     let mut live = Vec::new();
     for event in events {
@@ -210,7 +210,7 @@ fn test_window_mid_turn_row() {
     events.push(ev_session(
         session,
         EventId::new(),
-        SessionEvent::RunCompleted { secs: Some(7) },
+        SessionEvent::RunCompleted { ms: Some(7_000) },
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
@@ -241,11 +241,9 @@ fn test_window_mid_turn_row() {
 /// What the summary row of a projection says: the reasoning it gathered and
 /// the duration its record closed the turn with. None when the projection
 /// writes no row.
-fn row_facts(lines: &[TranscriptLine]) -> Option<(Option<String>, Option<u32>)> {
+fn row_facts(lines: &[TranscriptLine]) -> Option<(Option<String>, Option<u64>)> {
     lines.iter().find_map(|l| match l {
-        TranscriptLine::ThoughtFor {
-            secs, reasoning, ..
-        } => Some((reasoning.clone(), *secs)),
+        TranscriptLine::ThoughtFor { ms, reasoning, .. } => Some((reasoning.clone(), *ms)),
         _ => None,
     })
 }
@@ -276,7 +274,7 @@ fn test_window_at_record_row() {
     events.push(ev_session(
         session,
         EventId::new(),
-        SessionEvent::RunCompleted { secs: Some(7) },
+        SessionEvent::RunCompleted { ms: Some(7_000) },
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
@@ -292,7 +290,7 @@ fn test_window_at_record_row() {
         "a window opening at the record derives the same row: {:?}",
         at_record.lines
     );
-    assert_eq!(whole.1, Some(7), "the record's duration closes the row");
+    assert_eq!(whole.1, Some(7_000), "the record's duration closes the row");
     assert_eq!(
         whole.0.as_deref(),
         Some("step 0step 1step 2step 3step 4step 5"),
@@ -340,7 +338,7 @@ fn test_window_long_turn_row() {
     events.push(ev_session(
         session,
         EventId::new(),
-        SessionEvent::RunCompleted { secs: Some(9) },
+        SessionEvent::RunCompleted { ms: Some(9_000) },
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
@@ -363,7 +361,7 @@ fn test_window_long_turn_row() {
         "a window at the record derives the same row: {:?}",
         at_record.lines
     );
-    assert_eq!(whole.1, Some(9), "the record's duration closes the row");
+    assert_eq!(whole.1, Some(9_000), "the record's duration closes the row");
     let reasoning = whole.0.expect("the row carries the turn's reasoning");
     assert!(
         reasoning.starts_with("0 "),

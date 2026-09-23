@@ -159,11 +159,8 @@ fn tool_renders_chip(title: &str) -> bool {
 
 /// The duration a run-completion record carries. A record without a readable
 /// one closes the turn with no duration rather than a claimed zero.
-fn recorded_secs(params: &serde_json::Value) -> Option<u32> {
-    params
-        .get("secs")
-        .and_then(|v| v.as_u64())
-        .map(|s| s.min(u32::MAX as u64) as u32)
+fn recorded_ms(params: &serde_json::Value) -> Option<u64> {
+    params.get("ms").and_then(|v| v.as_u64())
 }
 
 /// Whether the frame is a run-completion record: the marker that names where a
@@ -355,7 +352,7 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
             | TranscriptFrame::Session(SessionUpdate::ToolCall(_)) => self.gather(frame),
             TranscriptFrame::Acpx(n) if n.method == AcpxMethod::ContextRunCompleted => {
                 self.ended_at = abs;
-                return self.close(recorded_secs(&n.params));
+                return self.close(recorded_ms(&n.params));
             }
             // A row the frontend raises is not a fact of the turn it sits in:
             // it does not move where the turn ended, which names the row.
@@ -393,14 +390,14 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     /// Close the open turn and return its row: None when no turn is open, or
     /// when the turn has nothing to summarize. A plain reply renders no row
     /// whose expand affordance would lead to nothing.
-    fn close(&mut self, secs: Option<u32>) -> Option<TranscriptLine> {
+    fn close(&mut self, ms: Option<u64>) -> Option<TranscriptLine> {
         self.opened_at.take()?;
         if self.reasoning.is_empty() && self.calls == 0 {
             return None;
         }
         let reasoning = (!self.reasoning.is_empty()).then(|| std::mem::take(&mut self.reasoning));
         Some(TranscriptLine::ThoughtFor {
-            secs,
+            ms,
             reasoning,
             tool_summary: self.tool_summary(),
             turn_id: format!("f{}", self.abs_base + self.ended_at),

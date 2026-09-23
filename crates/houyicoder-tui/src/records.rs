@@ -1,7 +1,7 @@
 //! Supporting record types for the App state: the transcript line, the
 //! tool-approval popup, the spec-context strip data, and the status bar
 //! values. Extracted from state.rs so state.rs holds only App and the core
-//! navigation enums (Screen / Stage / Pane). All fields are stub.
+//! navigation enums (Screen / Stage / Pane).
 
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 
@@ -9,6 +9,7 @@ use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 use crate::scroll::TranscriptScroll;
 use crate::toggle_hint::ToggleHint;
+use crate::view::relative_time::turn_span_label;
 
 /// Drill-down rows under the /context grid: per-file memory and per-skill
 /// footprints. These drill-down rows list in two sections below the grid;
@@ -127,9 +128,9 @@ pub enum TranscriptLine {
     /// the ThoughtFor line below the answer, expandable via
     /// Ctrl+O). search_text returns the full text so /search can find it.
     Thinking { text: String },
-    /// The per-turn "thought for Ns" line, carrying the turn's reasoning text
+    /// The per-turn "thought for" line, carrying the turn's reasoning text
     /// so Ctrl+O can expand it inline below the answer (the
-    /// "Thought for Ns (ctrl+o to expand)" shape). reasoning is None when the
+    /// "Thought for 2s (ctrl+o to expand)" shape). reasoning is None when the
     /// turn emitted no reasoning (no hint, no expand). The frame projection
     /// derives this row from the turn's own frames, so the live turn and the
     /// same turn replayed from the log render the same row.
@@ -138,9 +139,9 @@ pub enum TranscriptLine {
         /// spent working, not the wall clock the turn was open for. A wait for
         /// an approval between legs is excluded, so a wait for the user does
         /// not read as thinking time. None when the log carries no completion
-        /// record for that turn; Some(0) when the worked time is under a
-        /// second, which the row reads as <1s rather than as no time at all.
-        secs: Option<u32>,
+        /// record for that turn and the row reads as a bare "Thought"; a
+        /// measured span always prints its number, however short.
+        ms: Option<u64>,
         reasoning: Option<String>,
         /// One-line tool-call summary for this turn ("ran 3 bash" for one
         /// kind of tool, "ran 3 tools (2 bash, 1 grep)" for mixed kinds);
@@ -337,15 +338,14 @@ impl TranscriptLine {
     /// an enclosing block owns it. None for any other line.
     pub(crate) fn thought_row_text(&self, hint: Option<ToggleHint>) -> Option<String> {
         let Self::ThoughtFor {
-            secs, tool_summary, ..
+            ms, tool_summary, ..
         } = self
         else {
             return None;
         };
-        let mut text = match secs {
-            Some(0) => "Thought for <1s".to_string(),
-            Some(s) => format!("Thought for {s}s"),
+        let mut text = match ms {
             None => "Thought".to_string(),
+            Some(ms) => format!("Thought for {}", turn_span_label(*ms)),
         };
         if let Some(summary) = tool_summary {
             text.push_str(", ");

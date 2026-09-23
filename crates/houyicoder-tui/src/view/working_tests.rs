@@ -897,7 +897,7 @@ fn test_child_rows_hide_handles() {
         prompt: String::new(),
         folded_transcript: vec![
             TranscriptLine::ThoughtFor {
-                secs: Some(4),
+                ms: Some(4_000),
                 reasoning: Some("child reasoning".into()),
                 tool_summary: None,
                 turn_id: "child-turn".into(),
@@ -1123,10 +1123,10 @@ fn test_user_background_clears() {
     }));
 }
 
-/// A turn whose recorded duration is zero seconds must draw as under a
-/// second. The builder's text is the whole contract here, so the row is
-/// asserted through a real draw of the working surface rather than at the
-/// builder alone: a sub-second turn must not claim it took no time.
+/// A turn whose recorded duration is under a second draws in milliseconds.
+/// The builder's text is the whole contract here, so the row is asserted
+/// through a real draw of the working surface rather than at the builder
+/// alone: a sub-second turn must not claim it took no time.
 #[test]
 fn test_thought_row_subsecond_draw() {
     use crate::composition;
@@ -1139,7 +1139,7 @@ fn test_thought_row_subsecond_draw() {
     app.transcript = vec![
         TranscriptLine::Agent("done".into()),
         TranscriptLine::ThoughtFor {
-            secs: Some(0),
+            ms: Some(620),
             reasoning: Some("a turn that ran under a second".into()),
             tool_summary: None,
             turn_id: "t1".into(),
@@ -1149,8 +1149,8 @@ fn test_thought_row_subsecond_draw() {
 
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("Thought for <1s"),
-        "a sub-second turn draws as under a second:\n{out}"
+        out.contains("Thought for 620ms"),
+        "a sub-second turn draws in milliseconds:\n{out}"
     );
     assert!(
         !out.contains("Thought for 0s"),

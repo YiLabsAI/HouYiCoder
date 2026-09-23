@@ -349,20 +349,20 @@ pub enum SessionEvent {
     },
     /// The terminal record of one turn: the model answered, handed off, or the
     /// loop stopped. It marks where the turn ended, which nothing else in the
-    /// log does (a turn holds many assistant messages, one per tool
-    /// iteration, and messages also arrive inside a turn). secs is the
-    /// wall-clock length of the drive loop that reached the outcome, measured
-    /// where that loop ran, so a run paused for approval and later resumed
-    /// records the resumed leg alone; a turn that ended without a loop (an
-    /// abort while paused) records no duration rather than a claimed zero.
-    /// Durable so a frontend labels the turn with the duration it took, after
-    /// a replay as well as live: a session loaded from this log shows how long
-    /// each turn reasoned instead of only the turn the process happened to
-    /// watch.
+    /// log does (a turn holds many assistant messages, one per tool iteration,
+    /// and messages also arrive inside a turn). ms is the turn's drive legs
+    /// summed, measured where those loops ran, so a run paused for approval
+    /// and later resumed records both legs and not the wait between them; a
+    /// turn that ended without a loop (an abort while paused) records no
+    /// duration rather than a claimed zero. Milliseconds so a turn shorter
+    /// than a second stays distinguishable from no time at all. Durable so a
+    /// frontend labels the turn with the duration it took, after a replay as
+    /// well as live: a session loaded from this log shows how long each turn
+    /// reasoned instead of only the turn the process happened to watch.
     #[serde(rename = "RunCompleted")]
     RunCompleted {
         #[serde(default)]
-        secs: Option<u32>,
+        ms: Option<u64>,
     },
     /// The per-turn truncation verdict. Persisted so the session log carries
     /// trajectory-grade data: every completed turn and every recovery

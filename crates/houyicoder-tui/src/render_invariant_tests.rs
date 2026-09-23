@@ -587,7 +587,7 @@ fn test_thought_expand_wraps_narrow() {
         TranscriptLine::User("go".into()),
         TranscriptLine::Agent("ok".into()),
         TranscriptLine::ThoughtFor {
-            secs: Some(3),
+            ms: Some(3_000),
             reasoning: Some(reasoning.into()),
             tool_summary: None,
             turn_id: "t1".into(),
@@ -702,7 +702,7 @@ fn test_verbose_count_matches() {
     app.transcript = vec![
         TranscriptLine::User("search".into()),
         TranscriptLine::ThoughtFor {
-            secs: Some(5),
+            ms: Some(5_000),
             reasoning: Some(reasoning),
             tool_summary: None,
             turn_id: "t1".into(),

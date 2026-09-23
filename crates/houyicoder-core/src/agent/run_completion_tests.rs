@@ -21,11 +21,11 @@ use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use houyicoder_session::SessionStore;
 
 /// The durations of every completion record in the log, in order.
-fn recorded_secs(events: &[houyicoder_context::SessionLogEntry]) -> Vec<Option<u32>> {
+fn recorded_ms(events: &[houyicoder_context::SessionLogEntry]) -> Vec<Option<u64>> {
     events
         .iter()
         .filter_map(|e| match &e.event {
-            SessionEvent::RunCompleted { secs } => Some(*secs),
+            SessionEvent::RunCompleted { ms } => Some(*ms),
             _ => None,
         })
         .collect()
@@ -128,9 +128,8 @@ async fn test_finished_run_records_end() {
     let session = SessionId::new();
     runner.run(session, "hi".into()).await.expect("run");
     let events = runner.store().replay(session).await.expect("replay");
-    assert_eq!(
-        recorded_secs(&events),
-        vec![Some(0)],
+    assert!(
+        matches!(recorded_ms(&events).as_slice(), [Some(_)]),
         "one turn, one record: {events:?}"
     );
 }
@@ -144,7 +143,7 @@ async fn test_paused_leg_records_none() {
     let _paused = approvals_of(runner.run(session, "hi".into()).await.expect("run").outcome);
     let events = runner.store().replay(session).await.expect("replay");
     assert!(
-        recorded_secs(&events).is_empty(),
+        recorded_ms(&events).is_empty(),
         "a paused leg records nothing: {events:?}"
     );
 }
@@ -162,9 +161,8 @@ async fn test_aborted_ask_records_work() {
     let stopped = runner.resume(session, &[]).await.expect("resume");
     assert!(matches!(stopped.outcome, RunOutcome::Interrupted(_)));
     let events = runner.store().replay(session).await.expect("replay");
-    assert_eq!(
-        recorded_secs(&events),
-        vec![Some(0)],
+    assert!(
+        matches!(recorded_ms(&events).as_slice(), [Some(_)]),
         "the cancelled ask closes the turn with the work it did: {events:?}"
     );
 }
@@ -189,9 +187,8 @@ async fn test_failed_resume_records_end() {
         .await
         .expect_err("the refused result fails the leg");
     let events = runner.store().replay(session).await.expect("replay");
-    assert_eq!(
-        recorded_secs(&events),
-        vec![Some(0)],
+    assert!(
+        matches!(recorded_ms(&events).as_slice(), [Some(_)]),
         "the failed leg closes the turn: {events:?}"
     );
 }
@@ -213,9 +210,8 @@ async fn test_aborted_failure_records_end() {
         .await
         .expect_err("the refused reconciliation fails the resume");
     let events = runner.store().replay(session).await.expect("replay");
-    assert_eq!(
-        recorded_secs(&events),
-        vec![Some(0)],
+    assert!(
+        matches!(recorded_ms(&events).as_slice(), [Some(_)]),
         "the failed resume closes the turn: {events:?}"
     );
 }
@@ -233,7 +229,7 @@ async fn test_capped_leg_records_end() {
     assert!(matches!(capped.outcome, RunOutcome::MaxTurnsReached { .. }));
     let events = runner.store().replay(session).await.expect("replay");
     assert_eq!(
-        recorded_secs(&events).len(),
+        recorded_ms(&events).len(),
         1,
         "the leg that finished the turn records it once: {events:?}"
     );
@@ -280,9 +276,8 @@ async fn test_stopped_run_records_end() {
         .expect("resume ok");
     assert!(matches!(stopped.outcome, RunOutcome::Interrupted(_)));
     let events = runner.store().replay(session).await.expect("replay");
-    assert_eq!(
-        recorded_secs(&events),
-        vec![Some(0)],
+    assert!(
+        matches!(recorded_ms(&events).as_slice(), [Some(_)]),
         "the stop closes the turn with one record: {events:?}"
     );
 }

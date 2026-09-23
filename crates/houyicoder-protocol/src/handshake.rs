@@ -11,8 +11,12 @@ use serde::{Deserialize, Serialize};
 /// rather than guessing. v5: ModelInfo/ModelResult payloads changed shape
 /// (selected/applied/resolved_default entries and ModelApplyResult replace
 /// the v4 active_id/catalog and ModelApplied forms) — old and new v4 peers
-/// would handshake through and then fail payload decode.
-pub const PROTOCOL_VERSION: u16 = 5;
+/// would handshake through and then fail payload decode. v6: the
+/// run-completion notification carries its duration as ms in place of secs.
+/// The old field is gone rather than supplemented, so a mixed pair would
+/// handshake through and then silently drop every turn's duration label; an
+/// added variant can degrade on its own, a renamed field cannot.
+pub const PROTOCOL_VERSION: u16 = 6;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.
@@ -142,7 +146,7 @@ mod tests {
         let json = serde_json::to_string(&Hello::local()).expect("serialize");
         assert_eq!(
             json,
-            r#"{"protocol_version":5,"capabilities":{"streaming":true,"cas":false,"detach":false},"last_event_seq":null}"#
+            r#"{"protocol_version":6,"capabilities":{"streaming":true,"cas":false,"detach":false},"last_event_seq":null}"#
         );
     }
 

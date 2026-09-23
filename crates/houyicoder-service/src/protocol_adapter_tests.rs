@@ -129,6 +129,30 @@ fn test_permission_decision_maps_acpx() {
     assert_eq!(n.params["scope"], "session");
 }
 
+/// The run-completion notification carries its duration in milliseconds under
+/// the name the frontend reads. Each end spells that name out, so one side
+/// changing it alone would drop every turn's duration and fail nothing else;
+/// this pins the emitting half of the agreement.
+#[test]
+fn test_run_completed_maps_duration() {
+    let record = SessionEvent::RunCompleted { ms: Some(620) };
+    let n = map_acpx_notification(&record).expect("the record maps");
+    assert_eq!(n.method, AcpxMethod::ContextRunCompleted);
+    assert_eq!(n.params["ms"], 620);
+}
+
+/// A turn whose loop was never measured still reaches the frontend, and carries
+/// no duration rather than a zero it would read as a span.
+#[test]
+fn test_run_completed_maps_unmeasured() {
+    let record = SessionEvent::RunCompleted { ms: None };
+    let n = map_acpx_notification(&record).expect("the record maps");
+    assert!(
+        n.params["ms"].is_null(),
+        "an unmeasured turn carries no span"
+    );
+}
+
 #[test]
 fn test_approval_maps_acp_permission() {
     let req = houyicoder_core::agent::ApprovalRequest::new(

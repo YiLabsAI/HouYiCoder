@@ -283,54 +283,62 @@ fn test_thinking_collapses_multiline() {
     assert_eq!(line.search_text(), "first line\nsecond\nthird");
 }
 
-/// A turn that recorded a duration under a second reads as under a second
-/// rather than as zero seconds, which would claim the turn took no time.
-#[test]
-fn test_thought_row_zero_secs() {
+/// The label a thought row carrying this duration renders when the caller
+/// offers the expand affordance.
+fn thought_label(ms: Option<u64>) -> String {
     let line = TranscriptLine::ThoughtFor {
-        secs: Some(0),
+        ms,
         reasoning: Some("considered the options".into()),
         tool_summary: None,
         turn_id: "f1".into(),
     };
-    let text = line
-        .thought_row_text(Some(ToggleHint::Expand))
-        .expect("a thought row has a label");
-    assert_eq!(text, "✻ Thought for <1s (ctrl+o to expand)", "got {text}");
-    assert!(!text.contains(" 0s"), "a sub-second turn claims no zero");
+    line.thought_row_text(Some(ToggleHint::Expand))
+        .expect("a thought row has a label")
+}
+
+/// A turn that recorded a span under a second states it in milliseconds.
+/// Whole seconds are the row's step, and rounding a measured span down to
+/// that step would print a turn that took time as one that took none.
+#[test]
+fn test_thought_row_millisecond_span() {
+    assert_eq!(
+        thought_label(Some(620)),
+        "✻ Thought for 620ms (ctrl+o to expand)"
+    );
+    assert_eq!(
+        thought_label(Some(999)),
+        "✻ Thought for 999ms (ctrl+o to expand)"
+    );
+    assert_eq!(
+        thought_label(Some(0)),
+        "✻ Thought for 0ms (ctrl+o to expand)"
+    );
 }
 
 /// A turn with no recorded duration keeps the bare label: the log carries no
 /// completion record for it, so no duration is claimed at all.
 #[test]
-fn test_thought_row_no_secs() {
-    let line = TranscriptLine::ThoughtFor {
-        secs: None,
-        reasoning: Some("considered the options".into()),
-        tool_summary: None,
-        turn_id: "f1".into(),
-    };
-    let text = line
-        .thought_row_text(Some(ToggleHint::Expand))
-        .expect("a thought row has a label");
-    assert_eq!(text, "✻ Thought (ctrl+o to expand)", "got {text}");
+fn test_thought_row_no_duration() {
+    assert_eq!(thought_label(None), "✻ Thought (ctrl+o to expand)");
 }
 
-/// A turn of a second or more keeps its duration in the label. One second,
-/// not a comfortable margin: the smallest value that must still show its
-/// number, so a rule that reads anything under two as sub-second fails here.
+/// A turn of a second or more reads in whole seconds, rounded to the nearest
+/// one. One second is the smallest span that still shows its number, and the
+/// values either side of the next half second pin the rounding.
 #[test]
 fn test_thought_row_keeps_secs() {
-    let line = TranscriptLine::ThoughtFor {
-        secs: Some(1),
-        reasoning: Some("considered the options".into()),
-        tool_summary: None,
-        turn_id: "f1".into(),
-    };
-    let text = line
-        .thought_row_text(Some(ToggleHint::Expand))
-        .expect("a thought row has a label");
-    assert_eq!(text, "✻ Thought for 1s (ctrl+o to expand)", "got {text}");
+    assert_eq!(
+        thought_label(Some(1_000)),
+        "✻ Thought for 1s (ctrl+o to expand)"
+    );
+    assert_eq!(
+        thought_label(Some(1_499)),
+        "✻ Thought for 1s (ctrl+o to expand)"
+    );
+    assert_eq!(
+        thought_label(Some(1_500)),
+        "✻ Thought for 2s (ctrl+o to expand)"
+    );
 }
 
 #[test]

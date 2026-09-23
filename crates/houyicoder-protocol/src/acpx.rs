@@ -91,11 +91,11 @@ pub enum AcpxMethod {
     ContextMetaUser,
     #[serde(rename = "acpx/context/permission_decision")]
     ContextPermissionDecision,
-    /// A run reached its terminal outcome. Carries secs in params: how long
-    /// the turn's drive legs ran, summed, which is the work it spent rather
-    /// than the wall clock it was open for. The host closes the turn's summary
-    /// row on this frame, so a replayed session shows the same row the live
-    /// one did.
+    /// A run reached its terminal outcome. The params carry the turn's
+    /// duration in ms, the sum of how long its drive legs ran, which is the
+    /// work it spent rather than the wall clock it was open for. The host
+    /// closes the turn's summary row on this frame, so a replayed session
+    /// shows the same row the live one did.
     #[serde(rename = "acpx/context/run_completed")]
     ContextRunCompleted,
     /// A message delivered into a running turn rather than one that opens it.

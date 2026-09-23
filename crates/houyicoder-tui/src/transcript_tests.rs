@@ -429,10 +429,10 @@ fn test_thought_chunk_becomes_thinking() {
     ));
 }
 
-fn run_completed(secs: Option<u32>) -> TranscriptFrame {
+fn run_completed(ms: Option<u64>) -> TranscriptFrame {
     TranscriptFrame::Acpx(AcpxNotification::new(
         AcpxMethod::ContextRunCompleted,
-        serde_json::json!({ "secs": secs }),
+        serde_json::json!({ "ms": ms }),
     ))
 }
 
@@ -476,7 +476,7 @@ fn interrupted_notice(text: &str) -> [TranscriptFrame; 2] {
 
 /// The parts of a turn's summary row a test reads.
 struct RowFacts {
-    secs: Option<u32>,
+    ms: Option<u64>,
     reasoning: Option<String>,
     tool_summary: Option<String>,
     turn_id: String,
@@ -485,12 +485,12 @@ struct RowFacts {
 fn thought_row(lines: &[TranscriptLine]) -> Option<RowFacts> {
     lines.iter().find_map(|l| match l {
         TranscriptLine::ThoughtFor {
-            secs,
+            ms,
             reasoning,
             tool_summary,
             turn_id,
         } => Some(RowFacts {
-            secs: *secs,
+            ms: *ms,
             reasoning: reasoning.clone(),
             tool_summary: tool_summary.clone(),
             turn_id: turn_id.clone(),
@@ -514,7 +514,7 @@ fn test_turn_row_folds_reasoning() {
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let row = thought_row(&lines).expect("a row for the turn");
     assert_eq!(row.reasoning.as_deref(), Some("pondering deeply"));
-    assert_eq!(row.secs, None, "a log with no record claims no duration");
+    assert_eq!(row.ms, None, "a log with no record claims no duration");
     assert_eq!(row.turn_id, "f4", "named by the frame that ended the turn");
     assert!(matches!(
         lines.last(),
@@ -585,23 +585,42 @@ fn test_plain_reply_no_row() {
 }
 
 #[test]
-fn test_row_uses_recorded_secs() {
+fn test_row_uses_recorded_ms() {
     // The record of a finished run names the duration that run took, so a
     // turn rebuilt from the log shows the duration the live turn showed.
     let frames = vec![
         user_msg("go"),
         thought("weighing"),
         agent_msg("answer"),
-        run_completed(Some(7)),
+        run_completed(Some(7_000)),
     ];
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let row = thought_row(&lines).expect("a row for the turn");
-    assert_eq!(row.secs, Some(7));
+    assert_eq!(row.ms, Some(7_000));
     assert_eq!(
         row.turn_id, "f3",
         "the record is the frame that ended the turn"
     );
     assert!(matches!(lines[3], TranscriptLine::ThoughtFor { .. }));
+}
+
+/// Both ends spell the duration key out by hand, so this decodes the bytes a
+/// peer sends rather than a fixture built with the reader's own spelling. A
+/// drift in either one loses every turn's duration and fails nothing else.
+#[test]
+fn test_row_reads_duration_key() {
+    let raw = r#"{"method":"acpx/context/run_completed","params":{"ms":620}}"#;
+    let n: AcpxNotification = serde_json::from_str(raw).expect("the peer's frame decodes");
+    let frames = vec![
+        user_msg("go"),
+        thought("weighing"),
+        TranscriptFrame::Acpx(n),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    assert_eq!(
+        thought_row(&lines).expect("a row for the turn").ms,
+        Some(620)
+    );
 }
 
 #[test]
@@ -625,7 +644,7 @@ fn test_record_unknown_duration_closes() {
         .count();
     assert_eq!(rows, 2, "one row per turn: {lines:?}");
     let row = thought_row(&lines).expect("a row");
-    assert_eq!(row.secs, None, "an unmeasured loop claims no duration");
+    assert_eq!(row.ms, None, "an unmeasured loop claims no duration");
     assert_eq!(row.reasoning.as_deref(), Some("weighing"));
     assert_eq!(row.turn_id, "f3");
 }
@@ -663,7 +682,7 @@ fn test_record_spans_mid_turn() {
     frames.extend(mid_turn_msg("queued note"));
     frames.push(tool_call("c1", "bash", Value::Null));
     frames.push(thought("second half"));
-    frames.push(run_completed(Some(3)));
+    frames.push(run_completed(Some(3_000)));
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let rows = lines
         .iter()
@@ -671,7 +690,7 @@ fn test_record_spans_mid_turn() {
         .count();
     assert_eq!(rows, 1, "one row for the one turn: {lines:?}");
     let row = thought_row(&lines).expect("a row");
-    assert_eq!(row.secs, Some(3));
+    assert_eq!(row.ms, Some(3_000));
     assert_eq!(row.reasoning.as_deref(), Some("first half second half"));
     assert_eq!(row.tool_summary.as_deref(), Some("ran 1 bash"));
     assert_eq!(row.turn_id, "f6");
@@ -695,7 +714,7 @@ fn test_frontend_row_between_mark() {
         serde_json::json!({}),
     )));
     frames.push(thought("second half"));
-    frames.push(run_completed(Some(3)));
+    frames.push(run_completed(Some(3_000)));
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let rows = lines
         .iter()
@@ -714,7 +733,7 @@ fn test_child_notice_no_split() {
     let mut frames = vec![user_msg("go"), thought("before ")];
     frames.extend(child_completed_msg("child found it"));
     frames.push(thought("after"));
-    frames.push(run_completed(Some(2)));
+    frames.push(run_completed(Some(2_000)));
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let rows = lines
         .iter()
@@ -723,7 +742,7 @@ fn test_child_notice_no_split() {
     assert_eq!(rows, 1, "one row for the one turn: {lines:?}");
     let row = thought_row(&lines).expect("a row");
     assert_eq!(row.reasoning.as_deref(), Some("before after"));
-    assert_eq!(row.secs, Some(2));
+    assert_eq!(row.ms, Some(2_000));
 }
 
 #[test]
@@ -737,7 +756,7 @@ fn test_interrupt_notice_keeps_turn() {
         "previous turn was interrupted, regenerated",
     ));
     frames.push(thought("after"));
-    frames.push(run_completed(Some(4)));
+    frames.push(run_completed(Some(4_000)));
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let rows = lines
         .iter()
@@ -746,7 +765,7 @@ fn test_interrupt_notice_keeps_turn() {
     assert_eq!(rows, 1, "one row for the one turn: {lines:?}");
     let row = thought_row(&lines).expect("a row");
     assert_eq!(row.reasoning.as_deref(), Some("before after"));
-    assert_eq!(row.secs, Some(4), "the run's record closes that row");
+    assert_eq!(row.ms, Some(4_000), "the run's record closes that row");
 }
 
 #[test]
@@ -759,7 +778,7 @@ fn test_window_starts_inside_turn() {
     let mut frames = vec![user_msg("go"), thought("first half ")];
     frames.extend(mid_turn_msg("queued note"));
     frames.push(thought("second half"));
-    frames.push(run_completed(Some(2)));
+    frames.push(run_completed(Some(2_000)));
     let lines = transcript_from_frames(&frames, 4..frames.len(), false);
     let rows = lines
         .iter()
@@ -772,7 +791,11 @@ fn test_window_starts_inside_turn() {
         Some("first half second half"),
         "the row summarizes the turn, not the part of it this window holds"
     );
-    assert_eq!(row.secs, Some(2), "the record inside the window closed it");
+    assert_eq!(
+        row.ms,
+        Some(2_000),
+        "the record inside the window closed it"
+    );
     assert_eq!(row.turn_id, "f5");
 }
 
@@ -784,7 +807,7 @@ fn test_window_short_of_record() {
     let mut frames = vec![user_msg("go"), thought("half ")];
     frames.extend(mid_turn_msg("queued note"));
     frames.push(thought("rest"));
-    frames.push(run_completed(Some(5)));
+    frames.push(run_completed(Some(5_000)));
     let windowed = transcript_from_frames(&frames, 0..5, false);
     assert!(
         thought_row(&windowed).is_none(),
@@ -793,7 +816,7 @@ fn test_window_short_of_record() {
     let whole = transcript_from_frames(&frames, 0..frames.len(), false);
     let row = thought_row(&whole).expect("the whole log carries the row");
     assert_eq!(row.reasoning.as_deref(), Some("half rest"));
-    assert_eq!(row.secs, Some(5));
+    assert_eq!(row.ms, Some(5_000));
 }
 
 #[test]
@@ -804,12 +827,12 @@ fn test_window_record_only() {
     // log renders, rather than dropping it for having nothing in view.
     let mut frames = vec![user_msg("go"), thought("half ")];
     frames.push(tool_call("c1", "bash", Value::Null));
-    frames.push(run_completed(Some(5)));
+    frames.push(run_completed(Some(5_000)));
     let lines = transcript_from_frames(&frames, 3..4, false);
     let row = thought_row(&lines).expect("a row for the turn the record ends");
     assert_eq!(row.reasoning.as_deref(), Some("half "));
     assert_eq!(row.tool_summary.as_deref(), Some("ran 1 bash"));
-    assert_eq!(row.secs, Some(5));
+    assert_eq!(row.ms, Some(5_000));
     assert_eq!(row.turn_id, "f3");
 }
 
@@ -826,25 +849,21 @@ fn test_upgraded_log_rows() {
         thought("b"),
         user_msg("three"),
         thought("c"),
-        run_completed(Some(9)),
+        run_completed(Some(9_000)),
         user_msg("four"),
         thought("d"),
-        run_completed(Some(1)),
+        run_completed(Some(1_000)),
     ];
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
-    let facts: Vec<(Option<u32>, String, String)> = lines
+    let facts: Vec<(Option<u64>, String, String)> = lines
         .iter()
         .filter_map(|l| match l {
             TranscriptLine::ThoughtFor {
-                secs,
+                ms,
                 reasoning,
                 turn_id,
                 ..
-            } => Some((
-                *secs,
-                reasoning.clone().unwrap_or_default(),
-                turn_id.clone(),
-            )),
+            } => Some((*ms, reasoning.clone().unwrap_or_default(), turn_id.clone())),
             _ => None,
         })
         .collect();
@@ -853,8 +872,8 @@ fn test_upgraded_log_rows() {
         vec![
             (None, "a".to_string(), "f1".to_string()),
             (None, "b".to_string(), "f3".to_string()),
-            (Some(9), "c".to_string(), "f6".to_string()),
-            (Some(1), "d".to_string(), "f9".to_string()),
+            (Some(9_000), "c".to_string(), "f6".to_string()),
+            (Some(1_000), "d".to_string(), "f9".to_string()),
         ],
         "one row per turn, each with its own reasoning: {lines:?}"
     );
@@ -874,12 +893,12 @@ fn test_interrupted_turn_after_input() {
     frames.push(thought("third"));
     frames.push(run_completed(None));
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
-    let facts: Vec<(Option<u32>, String)> = lines
+    let facts: Vec<(Option<u64>, String)> = lines
         .iter()
         .filter_map(|l| match l {
-            TranscriptLine::ThoughtFor {
-                secs, reasoning, ..
-            } => Some((*secs, reasoning.clone().unwrap_or_default())),
+            TranscriptLine::ThoughtFor { ms, reasoning, .. } => {
+                Some((*ms, reasoning.clone().unwrap_or_default()))
+            }
             _ => None,
         })
         .collect();
@@ -907,12 +926,12 @@ fn test_old_log_fallback_rows() {
         agent_msg("b"),
     ];
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
-    let secs: Vec<Option<u32>> = lines
+    let ms: Vec<Option<u64>> = lines
         .iter()
         .filter_map(|l| match l {
-            TranscriptLine::ThoughtFor { secs, .. } => Some(*secs),
+            TranscriptLine::ThoughtFor { ms, .. } => Some(*ms),
             _ => None,
         })
         .collect();
-    assert_eq!(secs, vec![None, None], "one row per turn: {lines:?}");
+    assert_eq!(ms, vec![None, None], "one row per turn: {lines:?}");
 }

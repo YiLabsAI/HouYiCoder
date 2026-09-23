@@ -256,7 +256,7 @@ fn test_click_thoughtfor_expands_one() {
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
-            secs: Some(2),
+            ms: Some(2_000),
             reasoning: Some(r1.clone()),
             tool_summary: None,
             turn_id: "t1".into(),
@@ -264,7 +264,7 @@ fn test_click_thoughtfor_expands_one() {
         TranscriptLine::User("q2".into()),
         TranscriptLine::Agent("a2".into()),
         TranscriptLine::ThoughtFor {
-            secs: Some(5),
+            ms: Some(5_000),
             reasoning: Some(r2.clone()),
             tool_summary: None,
             turn_id: "t2".into(),
@@ -322,7 +322,7 @@ fn test_click_thoughtfor_none_reasoning() {
         TranscriptLine::Agent("a1".into()),
         // No reasoning: renders as "Thought for 3s" with no (ctrl+o) hint.
         TranscriptLine::ThoughtFor {
-            secs: Some(3),
+            ms: Some(3_000),
             reasoning: None,
             tool_summary: None,
             turn_id: "t1".into(),
@@ -331,7 +331,7 @@ fn test_click_thoughtfor_none_reasoning() {
         TranscriptLine::Agent("a2".into()),
         // Has reasoning: renders with "(ctrl+o to expand)".
         TranscriptLine::ThoughtFor {
-            secs: Some(5),
+            ms: Some(5_000),
             reasoning: Some("real reasoning for turn two".into()),
             tool_summary: None,
             turn_id: "t2".into(),
@@ -381,13 +381,13 @@ fn test_click_thought_no_duration() {
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
-            secs: None,
+            ms: None,
             reasoning: Some("a turn whose duration was never measured".into()),
             tool_summary: None,
             turn_id: "t1".into(),
         },
         TranscriptLine::ThoughtFor {
-            secs: Some(4),
+            ms: Some(4_000),
             reasoning: None,
             tool_summary: None,
             turn_id: "t2".into(),
@@ -455,7 +455,7 @@ fn test_click_thoughtfor_scrolled_off() {
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
-            secs: Some(2),
+            ms: Some(2_000),
             reasoning: Some("off-screen reasoning turn one".into()),
             tool_summary: None,
             turn_id: "t1".into(),
@@ -468,7 +468,7 @@ fn test_click_thoughtfor_scrolled_off() {
         ));
     }
     transcript.push(TranscriptLine::ThoughtFor {
-        secs: Some(5),
+        ms: Some(5_000),
         reasoning: Some("visible reasoning turn two".into()),
         tool_summary: None,
         turn_id: "t2".into(),
@@ -523,7 +523,7 @@ fn test_same_reason_thoughts_independent() {
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
-            secs: Some(2),
+            ms: Some(2_000),
             reasoning: Some(shared.clone()),
             tool_summary: None,
             turn_id: "t1".into(),
@@ -531,7 +531,7 @@ fn test_same_reason_thoughts_independent() {
         TranscriptLine::User("q2".into()),
         TranscriptLine::Agent("a2".into()),
         TranscriptLine::ThoughtFor {
-            secs: Some(5),
+            ms: Some(5_000),
             reasoning: Some(shared.clone()),
             tool_summary: None,
             turn_id: "t2".into(),

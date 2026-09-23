@@ -325,9 +325,9 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            SessionEvent::RunCompleted { secs: Some(7) },
+            SessionEvent::RunCompleted { ms: Some(620) },
         ),
-        event(s, EventId::new(), SessionEvent::RunCompleted { secs: None }),
+        event(s, EventId::new(), SessionEvent::RunCompleted { ms: None }),
     ];
     for e in &cases {
         let json = serde_json::to_string(e).expect("serialize");
@@ -367,7 +367,7 @@ fn test_event_variants_round_trip() {
     // Both read as unknown, never as a turn that took no time.
     let untimed = cases
         .iter()
-        .find(|e| matches!(e.event, SessionEvent::RunCompleted { secs: None }))
+        .find(|e| matches!(e.event, SessionEvent::RunCompleted { ms: None }))
         .expect("unmeasured record case present");
     let json = serde_json::to_string(untimed).unwrap();
     assert!(
@@ -376,12 +376,23 @@ fn test_event_variants_round_trip() {
     );
     let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
     if let Some(serde_json::Value::Object(fields)) = v.get_mut("event") {
-        fields.remove("secs");
+        fields.remove("ms");
     }
     let older: SessionLogEntry = serde_json::from_value(v).expect("legacy deserialize");
     match older.event {
-        SessionEvent::RunCompleted { secs: None } => {}
+        SessionEvent::RunCompleted { ms: None } => {}
         other => panic!("expected RunCompleted with no duration, got {other:?}"),
+    }
+    // A line written while the field was still named secs. The stored bytes
+    // are spelled out rather than edited out of a current serialization, so
+    // this decodes an old line and not a mutated new one: a duration under a
+    // name this shape does not carry reads as unknown, losing the label
+    // rather than printing a figure that means something else now.
+    let legacy: SessionEvent =
+        serde_json::from_str(r#"{"type":"RunCompleted","secs":7}"#).expect("an old line decodes");
+    match legacy {
+        SessionEvent::RunCompleted { ms: None } => {}
+        other => panic!("expected a duration under the old name to read as unknown, got {other:?}"),
     }
 }
 

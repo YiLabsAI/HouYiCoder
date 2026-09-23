@@ -1651,7 +1651,7 @@ fn test_ctrl_o_expands_latest() {
         color: None,
     });
     app.transcript.push(TranscriptLine::ThoughtFor {
-        secs: Some(19),
+        ms: Some(19_000),
         reasoning: Some("a long train of reasoning".into()),
         tool_summary: None,
         turn_id: "t1".into(),
@@ -1682,7 +1682,7 @@ fn test_ctrl_o_expands_latest() {
 fn test_ctrl_o_follows_cursor() {
     let mut app = working_app();
     app.transcript.push(TranscriptLine::ThoughtFor {
-        secs: Some(19),
+        ms: Some(19_000),
         reasoning: Some("a long train of reasoning".into()),
         tool_summary: None,
         turn_id: "t1".into(),

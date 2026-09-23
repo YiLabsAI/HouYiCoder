@@ -387,7 +387,7 @@ fn test_flat_count_matches_render() {
             is_diff: false,
         },
         TranscriptLine::ThoughtFor {
-            secs: Some(3),
+            ms: Some(3_000),
             turn_id: "t1".into(),
             reasoning: Some(long_reason),
             tool_summary: None,

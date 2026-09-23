@@ -576,7 +576,7 @@ fn test_thought_keep_affordance() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript.push(TranscriptLine::ThoughtFor {
-        secs: Some(42),
+        ms: Some(42_000),
         reasoning: Some("a train of thought that expands inline".into()),
         tool_summary: None,
         turn_id: "t1".into(),

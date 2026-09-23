@@ -549,8 +549,8 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         SessionEvent::Summary { text } => {
             AcpxNotification::new(ContextSummary, serde_json::json!({ "text": text }))
         }
-        SessionEvent::RunCompleted { secs } => {
-            AcpxNotification::new(ContextRunCompleted, serde_json::json!({ "secs": secs }))
+        SessionEvent::RunCompleted { ms } => {
+            AcpxNotification::new(ContextRunCompleted, serde_json::json!({ "ms": ms }))
         }
         SessionEvent::PermissionDecision {
             call_id,

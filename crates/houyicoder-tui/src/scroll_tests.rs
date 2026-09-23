@@ -142,7 +142,7 @@ fn test_thinking_expand_pins() {
         app.system_line("a long line of transcript history");
     }
     app.push_transcript_line(TranscriptLine::ThoughtFor {
-        secs: Some(19),
+        ms: Some(19_000),
         reasoning: Some("a long train of reasoning".into()),
         tool_summary: None,
         turn_id: "t1".into(),

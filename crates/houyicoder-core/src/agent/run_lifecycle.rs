@@ -307,7 +307,7 @@ impl Runner {
     ) {
         let paused =
             matches!(result, Ok(run) if matches!(run.outcome, RunOutcome::Interruption(_)));
-        let secs = {
+        let ms = {
             let mut turn = self.user_turn.lock().expect("user_turn lock");
             if let Some(leg) = leg {
                 turn.account(leg.elapsed());
@@ -316,11 +316,11 @@ impl Runner {
                 return;
             }
             turn.take_worked()
-                .map(|worked| worked.as_secs().min(u32::MAX as u64) as u32)
+                .map(|worked| worked.as_millis().min(u64::MAX as u128) as u64)
         };
         if let Err(e) = self
             .store
-            .append(new_event(session, SessionEvent::RunCompleted { secs }))
+            .append(new_event(session, SessionEvent::RunCompleted { ms }))
             .await
         {
             tracing::warn!("run completion record failed: {e}");
