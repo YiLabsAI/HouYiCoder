@@ -45,6 +45,27 @@ impl Usage {
     pub fn visible_output_tokens(&self) -> u32 {
         self.output_tokens.saturating_sub(self.reasoning_tokens)
     }
+
+    /// Sum two usage records field by field, saturating at the u32 ceiling.
+    /// Used to combine a session's own provider calls with the usage its
+    /// delegated children reported.
+    pub fn saturating_add(&self, other: &Usage) -> Usage {
+        Usage {
+            input_tokens: self.input_tokens.saturating_add(other.input_tokens),
+            output_tokens: self.output_tokens.saturating_add(other.output_tokens),
+            total_tokens: self.total_tokens.saturating_add(other.total_tokens),
+            non_cached_input_tokens: self
+                .non_cached_input_tokens
+                .saturating_add(other.non_cached_input_tokens),
+            cache_read_input_tokens: self
+                .cache_read_input_tokens
+                .saturating_add(other.cache_read_input_tokens),
+            cache_write_input_tokens: self
+                .cache_write_input_tokens
+                .saturating_add(other.cache_write_input_tokens),
+            reasoning_tokens: self.reasoning_tokens.saturating_add(other.reasoning_tokens),
+        }
+    }
 }
 
 /// One normalized streaming event from a model provider. Tagged for wire

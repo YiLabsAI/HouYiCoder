@@ -97,23 +97,6 @@ impl UsageAccumulator {
         self.last_input_tokens = turn.input_tokens;
     }
 
-    /// Fold a delegated child's usage into the session tally.
-    ///
-    /// A child runs its own provider calls in its own context window, so its
-    /// tokens are real session cost and must count in the cumulative totals;
-    /// its input is not this model's occupancy, so the window footprint is
-    /// deliberately left alone. Folding the child into last_input_tokens would
-    /// make the context pane report a window the session is not using.
-    pub fn record_subagent(&mut self, child: &Usage) {
-        self.cumulative.input_tokens += child.input_tokens;
-        self.cumulative.output_tokens += child.output_tokens;
-        self.cumulative.total_tokens += child.total_tokens;
-        self.cumulative.non_cached_input_tokens += child.non_cached_input_tokens;
-        self.cumulative.cache_read_input_tokens += child.cache_read_input_tokens;
-        self.cumulative.cache_write_input_tokens += child.cache_write_input_tokens;
-        self.cumulative.reasoning_tokens += child.reasoning_tokens;
-    }
-
     /// Fold one tool execution's outcome into the session tally. ok = the
     /// tool returned a value (not an {"error": ..} payload). Called by
     /// resolve_turn after each tool runs.

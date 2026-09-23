@@ -3,7 +3,6 @@
 //! wall clock before the store sets prev_hash on append.
 
 mod hook;
-mod subagent_usage;
 mod timing;
 pub(crate) use hook::{emit_user_notice, record_hook_signals};
 
@@ -17,11 +16,6 @@ use serde_json::Value;
 use super::compaction::CompactionOutcome;
 use super::hook::{HookEvent, wire::HookOutcome};
 use super::{CompletionResponse, RunError, RunOutcome, RunResult, Runner};
-
-use crate::agent::tools::DELEGATION_TOOL_NAME;
-
-/// The tool a model delegation is issued through, from the tool's own name.
-const DELEGATION_TOOL: &str = DELEGATION_TOOL_NAME;
 
 /// Emit progress after a completed turn when the run will continue.
 pub(crate) fn emit_turn_progress(
@@ -382,16 +376,6 @@ impl Runner {
         duration_ms: u64,
     ) -> Result<(), RunError> {
         let output = self.isolate_large_output(tool, output).await;
-        // A delegation carries the child's own provider usage in its result.
-        // Fold it into the session tally so the session reports what it really
-        // spent; the child ran in its own window, so the window footprint is
-        // left alone.
-        if tool == DELEGATION_TOOL
-            && let Some(child) = subagent_usage::subagent_usage(&output)
-            && let Ok(mut acc) = self.usage.lock()
-        {
-            acc.record_subagent(&child);
-        }
         self.store
             .append(new_event(
                 session,
@@ -788,7 +772,3 @@ fn marker_upper_bound() -> serde_json::Value {
         "hint": "x".repeat(120),
     })
 }
-
-#[cfg(test)]
-#[path = "subagent_usage_tests.rs"]
-mod subagent_usage_tests;

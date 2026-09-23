@@ -11,6 +11,7 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnOutcome};
 use houyicoder_async::bus::MessageBus;
 use houyicoder_context::{SessionId, SessionLogEntry};
+use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, ChildDescriptor, ChildRunMode, completed_topic,
 };
@@ -18,7 +19,7 @@ use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
 use houyicoder_core::agent::multi_agent::concurrency_gate::AcquireResult;
 use houyicoder_core::agent::multi_agent::registry::{IsolationMode, PromptSource, ResolveCtx};
 use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
-use houyicoder_core::agent::multi_agent::{SpawnRequest, spawn_child};
+use houyicoder_core::agent::multi_agent::{SpawnRequest, aggregate_subagent_usage, spawn_child};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_protocol::llm::Usage;
@@ -71,15 +72,15 @@ pub(super) async fn finalize_child(
     // knows whether it owes one.
     let run_published = terminal.as_mut().is_some_and(|rx| rx.try_recv().is_ok());
     let child_log = store.trajectory_snapshot(child_sid);
-    let (status, summary, usage, payload) = match result {
+    let (status, summary, payload) = match result {
         Ok(Ok(r)) => {
-            let (status, summary, usage) = super::terminal_summary(r, &child_log);
-            (status, summary, usage, None)
+            let (status, summary) = super::terminal_summary(r, &child_log);
+            (status, summary, None)
         }
         Ok(Err(e)) => {
             let summary = failure_summary(&format!("run failed: {e}"), &child_log);
             report_failed_terminal(bus.as_ref(), &child, &summary, run_published);
-            ("failed".to_string(), summary, Usage::default(), None)
+            ("failed".to_string(), summary, None)
         }
         Err(payload) => {
             let summary = failure_summary(
@@ -89,14 +90,13 @@ pub(super) async fn finalize_child(
             let reason = panic_message(payload.as_ref());
             tracing::error!("child {child_str} run panicked: {reason}");
             report_failed_terminal(bus.as_ref(), &child, &summary, run_published);
-            (
-                "failed".to_string(),
-                summary,
-                Usage::default(),
-                Some(payload),
-            )
+            ("failed".to_string(), summary, Some(payload))
         }
     };
+    // The usage the parent records is read from durable state, not from the
+    // run's own result, so a failed, cancelled, or background child reports
+    // what it really spent instead of zeroes. See child_subtree_usage.
+    let usage = child_subtree_usage(&handle.runner, &child_log);
     if let (Some(cw), Some(ctrl)) = (handle.worktree, worktree_controller.as_ref()) {
         drop(ctrl.cleanup_child(cw).await);
     }
@@ -131,6 +131,27 @@ pub(super) async fn finalize_child(
         std::panic::resume_unwind(payload);
     }
     (status, summary, usage)
+}
+
+/// The usage a finished child reports to its parent: its own provider calls
+/// plus every descendant it delegated to.
+///
+/// A child's run result carries only its direct provider usage, so a
+/// grandchild's cost would be lost without the second term. The first term
+/// reads the child runner's accumulator, the second sums the returns the
+/// child's own log holds, and each of those returns was itself built this way,
+/// so the total covers the whole subtree. Reading durable state also means a
+/// failed, cancelled, or background child reports what it really spent rather
+/// than zeroes.
+///
+/// The subtree is read at the moment the child ends. A grandchild still
+/// running then is not in the child's log yet, and its return lands after this
+/// boundary is written, so its cost reaches no total. A child that finishes
+/// before its own children is a gap the delegation model accepts.
+pub(super) fn child_subtree_usage(runner: &Runner, child_log: &[SessionLogEntry]) -> Usage {
+    let own = runner.status_snapshot().cumulative_usage;
+    let descendants = aggregate_subagent_usage(child_log);
+    own.saturating_add(&descendants.to_usage())
 }
 
 /// The summary a failed child reports: the reason, plus whatever partial

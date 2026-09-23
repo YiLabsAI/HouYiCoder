@@ -1857,3 +1857,76 @@ async fn test_background_kill_publishes() {
         "the kill reaches the fleet: {message:?}"
     );
 }
+
+/// A verify failure reports its label, and an empty transcript yields no
+/// partial text rather than a fabricated one.
+#[test]
+fn test_terminal_verify_failed() {
+    let r = RunResult {
+        outcome: RunOutcome::VerifyFailed(houyicoder_core::agent::VerifyFailure::new()),
+        turns: 1,
+        usage: houyicoder_protocol::llm::Usage::default(),
+    };
+    let (status, summary) = super::terminal_summary(r, &[]);
+    assert_eq!(status, "verify_failed");
+    assert!(summary.is_empty(), "no assistant text means no partial");
+}
+
+/// A handoff reports its label with the same empty-transcript behavior.
+#[test]
+fn test_terminal_handoff() {
+    let r = RunResult {
+        outcome: RunOutcome::Handoff(houyicoder_context::AgentId("explore".into())),
+        turns: 1,
+        usage: houyicoder_protocol::llm::Usage::default(),
+    };
+    let (status, summary) = super::terminal_summary(r, &[]);
+    assert_eq!(status, "handoff");
+    assert!(summary.is_empty(), "no assistant text means no partial");
+}
+
+/// A child that delegated to a grandchild reports the whole subtree, not just
+/// its own provider calls: the return the parent records carries the child's
+/// own usage plus every return in the child's log.
+#[tokio::test]
+async fn test_return_usage_covers_subtree() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("x"));
+    let runner = Arc::new(Runner::new(
+        store.clone(),
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    ));
+    let child_sid = SessionId::new();
+    // The grandchild's return, as the child's own finalize would have written
+    // it into the child's log.
+    store
+        .append(houyicoder_context::SessionLogEntry {
+            id: EventId::new(),
+            session: child_sid,
+            ts: 0,
+            prev_hash: None,
+            event: SessionEvent::SubagentReturn {
+                child_session_id: "grandchild".into(),
+                status: "completed".into(),
+                summary: String::new(),
+                result_ref: "grandchild".into(),
+                input_tokens: 30,
+                output_tokens: 4,
+                cache_read_input_tokens: 10,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+            },
+        })
+        .await
+        .unwrap();
+    let child_log = store.trajectory_snapshot(child_sid);
+    let usage = super::spawn_exec::child_subtree_usage(&runner, &child_log);
+    assert_eq!(
+        usage.input_tokens, 30,
+        "the grandchild's input reaches the parent"
+    );
+    assert_eq!(usage.output_tokens, 4);
+    assert_eq!(usage.cache_read_input_tokens, 10);
+}

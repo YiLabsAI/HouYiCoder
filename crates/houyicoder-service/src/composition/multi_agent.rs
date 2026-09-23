@@ -30,7 +30,6 @@ use houyicoder_core::agent::multi_agent::{
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_core::agent::{RunOutcome, RunResult, Runner, ToolRegistry};
-use houyicoder_protocol::llm::Usage;
 
 mod drive;
 mod spawn_exec;
@@ -577,21 +576,22 @@ fn stamp_spawned_by(
 /// sees. FinalOutput carries the answer; other terminals fall back to the
 /// last assistant text in the child log (the partial result) so a max-turns
 /// or interrupted child is not silently empty.
+///
+/// The child's usage is not read here: the run result carries only its direct
+/// provider calls, so the parent records the subtree total instead, read from
+/// durable state after the run. See child_subtree_usage.
 fn terminal_summary(
     r: RunResult,
     child_log: &[houyicoder_context::SessionLogEntry],
-) -> (String, String, Usage) {
-    let usage = r.usage;
+) -> (String, String) {
     match r.outcome {
-        RunOutcome::FinalOutput(t) => ("completed".to_string(), t, usage),
-        RunOutcome::MaxTurnsReached { .. } => {
-            ("max_turns".to_string(), partial_of(child_log), usage)
-        }
+        RunOutcome::FinalOutput(t) => ("completed".to_string(), t),
+        RunOutcome::MaxTurnsReached { .. } => ("max_turns".to_string(), partial_of(child_log)),
         RunOutcome::Interrupted(_) | RunOutcome::Interruption(_) => {
-            ("interrupted".to_string(), partial_of(child_log), usage)
+            ("interrupted".to_string(), partial_of(child_log))
         }
-        RunOutcome::VerifyFailed(_) => ("verify_failed".to_string(), partial_of(child_log), usage),
-        RunOutcome::Handoff(_) => ("handoff".to_string(), partial_of(child_log), usage),
+        RunOutcome::VerifyFailed(_) => ("verify_failed".to_string(), partial_of(child_log)),
+        RunOutcome::Handoff(_) => ("handoff".to_string(), partial_of(child_log)),
     }
 }
 

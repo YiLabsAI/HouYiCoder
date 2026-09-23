@@ -269,8 +269,8 @@ impl SessionTiming {
 
 /// What delegated sub-agents spent, summed over the session's delegations.
 ///
-/// The session totals already include it: the runner folds a child's usage into
-/// the same cumulative tally the parent's calls go to. This type is the
+/// The session totals already include it: both the trajectory totals and the
+/// status tally read the durable SubagentReturn boundaries. This type is the
 /// breakdown, so a surface can say how much of the total the children
 /// contributed instead of only reporting one undivided number.
 #[derive(Clone, Copy, Default, PartialEq, Debug)]

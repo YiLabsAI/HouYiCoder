@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
 use houyicoder_tui::records::ToolOutcome;
 #[path = "trajectory_turns.rs"]
 mod turns;
@@ -136,14 +137,10 @@ fn build_summary(
     // The session's economic account is what the whole session spent: the
     // parent's own calls plus every delegated child's. A child that reported no
     // usage leaves the total unknown rather than understated.
-    let subagent_usage = (acc.subagent_calls > 0).then_some(SubagentUsage {
-        calls: acc.subagent_calls,
-        input: acc.subagent_input,
-        output: acc.subagent_output,
-        cache_read: acc.subagent_cache_read,
-    });
-    let subagent_unknown =
-        subagent_usage.is_some_and(|d| d.input == 0 && d.output == 0 && d.cache_read == 0);
+    let subagent_usage = (acc.subagent.calls > 0).then_some(acc.subagent);
+    // One child that never reported its usage leaves a hole in the sum, so the
+    // session total is unknown rather than short by that child.
+    let subagent_unknown = acc.subagent_unmeasured;
     // The totals are known only when every turn reported usage and no delegation
     // left its own usage unmeasured. A turn with no usage is a hole in the sum,
     // and a child's tokens do not fill it: they are the child's own spend.
@@ -161,7 +158,7 @@ fn build_summary(
         1 => distinct_models[0].to_string(),
         n => format!("{n} models"),
     };
-    let total_cache_read = acc.cache_read + acc.subagent_cache_read;
+    let total_cache_read = acc.cache_read + acc.subagent.cache_read;
     let (ttft_avg_ms, ttft_p95_ms, ttft_p99_ms) = if acc.ttfts.is_empty() {
         (None, None, None)
     } else {
@@ -196,12 +193,12 @@ fn build_summary(
         tokens_in: if any_unknown {
             None
         } else {
-            Some((acc.total_in + acc.subagent_input) as usize)
+            Some((acc.total_in + acc.subagent.input) as usize)
         },
         tokens_out: if any_unknown {
             None
         } else {
-            Some((acc.total_out + acc.subagent_output) as usize)
+            Some((acc.total_out + acc.subagent.output) as usize)
         },
         cache_read: if total_cache_read > 0 {
             Some(total_cache_read)
@@ -235,10 +232,11 @@ struct AccTotals {
     /// Whole-log counts, so a completeness check cannot be fooled by the page.
     usage_events: usize,
     turns: usize,
-    subagent_calls: usize,
-    subagent_input: u64,
-    subagent_output: u64,
-    subagent_cache_read: u64,
+    /// What the session's delegated children spent, from the shared aggregator.
+    subagent: SubagentUsage,
+    /// True when a child reached a terminal without reporting usage, so the
+    /// session total is a lower bound rather than a complete figure.
+    subagent_unmeasured: bool,
 }
 
 /// Fold one timing event into the session's latency samples. Tool durations are
@@ -331,19 +329,6 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
                 acc.usage_events += 1;
             }
             SessionEvent::UserInput { .. } => acc.turns += 1,
-            // A delegated child runs its own provider calls, so its usage is
-            // not in the parent's totals; it is reported on its own row.
-            SessionEvent::SubagentReturn {
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                ..
-            } => {
-                acc.subagent_calls += 1;
-                acc.subagent_input += *input_tokens;
-                acc.subagent_output += *output_tokens;
-                acc.subagent_cache_read += *cache_read_input_tokens;
-            }
             SessionEvent::ToolResult {
                 output,
                 call_id,
@@ -357,6 +342,16 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
             _ => {}
         }
     }
+    // Delegated usage comes from the one aggregator every surface shares, so
+    // the trajectory totals and the status tally cannot drift apart.
+    let delegated = aggregate_subagent_usage(events);
+    acc.subagent = SubagentUsage {
+        calls: delegated.calls,
+        input: delegated.input_tokens,
+        output: delegated.output_tokens,
+        cache_read: delegated.cache_read_input_tokens,
+    };
+    acc.subagent_unmeasured = delegated.unmeasured_calls > 0;
     // The session's wall time is the span of its own durable events, which is
     // what the user waited, and it does not depend on which page is loaded.
     if let (Some(first), Some(last)) = (events.first(), events.last()) {

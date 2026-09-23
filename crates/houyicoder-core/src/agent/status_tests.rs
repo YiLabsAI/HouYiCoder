@@ -1,5 +1,14 @@
 use super::*;
+use houyicoder_context::{SessionEvent, SessionId};
+use houyicoder_memory::InMemoryBackend;
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig, SpawnEvent};
+use houyicoder_session::SessionStore;
+
+use crate::agent::Runner;
+use crate::agent::ToolRegistry;
+use crate::agent::append::new_event;
+use crate::agent::runner_config::RunnerConfig;
+use crate::provider::test_support::FakeProvider;
 
 fn usage(input: u32, output: u32, cache_read: u32) -> Usage {
     Usage {
@@ -68,20 +77,68 @@ fn test_record_tool_batch_sums() {
     assert_eq!(acc.tool_errors(), 3);
 }
 
+/// A delegation tool result carries the child's usage, but it is written when
+/// the tool returns: before a background child has run, and without a block
+/// when an interrupted one gives up. Folding it into the tally therefore
+/// understates the session, so the append path leaves the tally alone and the
+/// durable return stays the one complete record.
+#[tokio::test]
+async fn test_delegation_result_not_folded() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    let session = SessionId::new();
+    store
+        .append(new_event(
+            session,
+            SessionEvent::ToolCall {
+                call_id: "c1".into(),
+                tool: "agent".into(),
+                input: serde_json::json!({}),
+            },
+        ))
+        .await
+        .unwrap();
+    let output = serde_json::json!({
+        "status": "completed",
+        "usage": {
+            "input_tokens": 500,
+            "output_tokens": 40,
+            "cache_read_input_tokens": 100,
+        },
+    });
+    runner
+        .append_tool_result(session, "c1".into(), "agent", output, 0)
+        .await
+        .unwrap();
+    let snap = runner.status_snapshot();
+    assert_eq!(
+        snap.cumulative_usage.input_tokens, 0,
+        "a delegation tool result must not move the session tally"
+    );
+    assert_eq!(snap.cumulative_usage.output_tokens, 0);
+    assert_eq!(
+        snap.last_input_tokens, 0,
+        "and it must not claim the parent window either"
+    );
+}
+
 /// redundancy_snapshot returns the tracker's flagged calls (empty for a
 /// fresh runner with no redundant calls flagged). Pins the /trajectory
 /// redundant-section data source.
 #[test]
 fn test_redundancy_snapshot_empty() {
-    let runner = crate::agent::Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::RunnerConfig {
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "stub-model".into(),
-            ..crate::agent::RunnerConfig::default()
+            ..RunnerConfig::default()
         },
     );
     assert!(
@@ -104,15 +161,13 @@ fn test_snapshot_reports_breaker() {
         exceeded_budget: false,
     });
     // Build a runner carrying the breaker + a primed accumulator.
-    let runner = crate::agent::Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::RunnerConfig {
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "stub-model".into(),
-            ..crate::agent::RunnerConfig::default()
+            ..RunnerConfig::default()
         },
     )
     .with_breaker(breaker);
@@ -141,13 +196,11 @@ fn test_snapshot_reports_breaker() {
 
 #[test]
 fn test_snapshot_omits_absent_breaker() {
-    let runner = crate::agent::Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::RunnerConfig::default(),
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
     let snap = runner.status_snapshot();
     assert!(snap.breaker_state.is_none());
@@ -161,15 +214,13 @@ fn test_snapshot_reflects_model_switch() {
     // the window that model resolves to, not the static config.model and
     // provider-caps values a pre-switch read would see. A switch to a
     // catalog model with a different window must surface both fields.
-    let runner = crate::agent::Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::RunnerConfig {
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "stub-model".into(),
-            ..crate::agent::RunnerConfig::default()
+            ..RunnerConfig::default()
         },
     );
     let before = runner.status_snapshot();
@@ -200,13 +251,11 @@ fn test_snapshot_reflects_model_switch() {
 #[test]
 fn test_set_effort_swaps_pick() {
     use houyicoder_protocol::llm::EffortLevel;
-    let runner = crate::agent::Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::RunnerConfig::default(),
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
     assert!(
         runner.active_effort().is_none(),
@@ -225,13 +274,11 @@ fn test_set_effort_swaps_pick() {
 /// common case for tests + stub runners).
 #[test]
 fn test_hooks_list_without_registry() {
-    let runner = crate::agent::Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::RunnerConfig::default(),
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
     assert!(runner.hooks_list().is_empty());
 }
@@ -241,13 +288,11 @@ fn test_hooks_list_without_registry() {
 /// an empty list rather than panicking on the None.
 #[test]
 fn test_skills_snapshot_without_registry() {
-    let runner = crate::agent::Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::RunnerConfig::default(),
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
     assert!(runner.skills_snapshot().is_empty());
 }
@@ -310,15 +355,13 @@ fn test_skills_snapshot_lists_registry() {
             Err(houyicoder_api::skill::SkillError::NotFound(String::new()))
         }
     }
-    let runner = crate::agent::Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::RunnerConfig::default(),
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     )
-    .with_skill_registry(std::sync::Arc::new(SnapshotStubRegistry));
+    .with_skill_registry(Arc::new(SnapshotStubRegistry));
     let snap = runner.skills_snapshot();
     assert_eq!(snap.len(), 2);
     assert_eq!(snap[0].descriptor.name, "pdf-export");
@@ -356,19 +399,17 @@ fn test_memory_forget_routes_scope() {
         }
     }
     let deletes = Arc::new(Mutex::new(Vec::new()));
-    let provider = std::sync::Arc::new(RecordingMemory {
+    let provider = Arc::new(RecordingMemory {
         deletes: deletes.clone(),
     });
     // Exercise the required trait methods so the mock has no dead code.
     drop(provider.recall("", 0, &HashSet::new()));
     drop(provider.add(MemoryEntry::new("k", "c", MemorySource::Project)));
-    let mut runner = crate::agent::Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::RunnerConfig::default(),
+    let mut runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
     runner.memory.install_provider(provider);
     runner.memory_forget("k", "project").unwrap();
