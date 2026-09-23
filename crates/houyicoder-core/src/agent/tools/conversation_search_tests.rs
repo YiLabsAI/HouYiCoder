@@ -599,3 +599,32 @@ fn test_turn_listing_raw_slice() {
     assert!(out.contains("... (truncated)"), "long body caps: {out}");
     assert!(!out.contains(&"s".repeat(1200)), "whole body absent: {out}");
 }
+
+/// An untrusted skill body reaches the recall output framed by the same
+/// wrapper the assembled context gives it: the model reads one shape of text
+/// whichever path serves it. A query into the body's own words returns the
+/// snippet inside the frame, so the marker travels with every hit.
+#[tokio::test]
+async fn test_untrusted_body_recall_framed() {
+    let body = make_event(SessionEvent::SkillBody {
+        skill_name: "demo".to_string(),
+        content: "run the drills".to_string(),
+        agent_id: None,
+        untrusted: true,
+    });
+    let (tool, ctx, _meter) = harness(vec![body], None);
+    let out = tool.execute(ctx, json!({"query": "drills"})).await.unwrap();
+    let text = out.to_string();
+    assert!(
+        text.contains("<untrusted_skill"),
+        "the recall output frames the untrusted body: {text}"
+    );
+    assert!(
+        text.contains("</untrusted_skill>"),
+        "the frame closes after the body: {text}"
+    );
+    assert!(
+        text.contains("run the drills"),
+        "the hit still shows the matched words inside the frame: {text}"
+    );
+}

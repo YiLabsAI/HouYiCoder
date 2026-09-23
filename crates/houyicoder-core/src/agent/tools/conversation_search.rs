@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::agent::model_window::span_for_lowercase_offsets;
+use crate::agent::skill_body::frame_untrusted_body;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
@@ -216,6 +217,12 @@ async fn folded_event_ids(store: &Arc<dyn SessionLog>, session: SessionId) -> Ve
 /// renders its input and a tool result renders its output. An assistant
 /// message builds one only when it joins non-empty thinking.
 ///
+/// An untrusted skill body enters framed by the same wrapper the assembled
+/// context gives it, so the model reads one shape of text whichever path
+/// serves it. The wrapper's words join the searchable text: a query on the
+/// marker matches every untrusted body, and a query on the body's own words
+/// still returns its snippet inside the frame.
+///
 /// None for events with nothing to recall. Deltas are subsumed by the
 /// authoritative message; usage, boundaries, permission, worktree, and turn
 /// markers are run bookkeeping. Child-completion notices, subagent return
@@ -228,7 +235,19 @@ fn transcript_item(event: &SessionLogEntry) -> Option<(&'static str, Cow<'_, str
         | SessionEvent::MetaUser { text } => ("User", Cow::Borrowed(text.as_str())),
         SessionEvent::MemoryRecall { text, .. } => ("Memory", Cow::Borrowed(text.as_str())),
         SessionEvent::SkillListing { text, .. } => ("Skill", Cow::Borrowed(text.as_str())),
-        SessionEvent::SkillBody { content, .. } => ("Skill", Cow::Borrowed(content.as_str())),
+        SessionEvent::SkillBody {
+            skill_name,
+            content,
+            untrusted,
+            ..
+        } => (
+            "Skill",
+            if *untrusted {
+                Cow::Owned(frame_untrusted_body(skill_name, content, true))
+            } else {
+                Cow::Borrowed(content.as_str())
+            },
+        ),
         SessionEvent::AssistantMessage { text, thinking } => (
             "Assistant",
             match thinking.as_deref().filter(|t| !t.is_empty()) {
