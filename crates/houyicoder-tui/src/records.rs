@@ -138,8 +138,8 @@ pub enum TranscriptLine {
         /// spent working, not the wall clock the turn was open for. A wait for
         /// an approval between legs is excluded, so a wait for the user does
         /// not read as thinking time. None when the log carries no completion
-        /// record for that turn (written before the record existed): the row
-        /// then shows no duration, rather than claiming zero seconds.
+        /// record for that turn; Some(0) when the worked time is under a
+        /// second, which the row reads as <1s rather than as no time at all.
         secs: Option<u32>,
         reasoning: Option<String>,
         /// One-line tool-call summary for this turn ("ran 3 bash" for one
@@ -331,11 +331,10 @@ impl TranscriptLine {
         self.render_with(true)
     }
 
-    /// The thought-row label for a given expand affordance: the flat render,
-    /// the search text, and the row emitter build it here so the index
-    /// matches what the transcript shows. hint is the toggle the caller
-    /// offers, None when the row carries no reasoning to expand or when an
-    /// enclosing block owns the toggle. None for any other line.
+    /// The thought-row label for a given expand affordance, built here so the
+    /// flat render, the search text, and the row emitter agree on the index.
+    /// hint is the toggle the caller offers, None when nothing can expand or
+    /// an enclosing block owns it. None for any other line.
     pub(crate) fn thought_row_text(&self, hint: Option<ToggleHint>) -> Option<String> {
         let Self::ThoughtFor {
             secs, tool_summary, ..
@@ -344,6 +343,7 @@ impl TranscriptLine {
             return None;
         };
         let mut text = match secs {
+            Some(0) => "Thought for <1s".to_string(),
             Some(s) => format!("Thought for {s}s"),
             None => "Thought".to_string(),
         };

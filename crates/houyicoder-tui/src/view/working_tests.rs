@@ -1122,3 +1122,38 @@ fn test_user_background_clears() {
             .is_some_and(|cell| cell.style().bg != Some(ratatui::style::Color::Indexed(238)))
     }));
 }
+
+/// A turn whose recorded duration is zero seconds must draw as under a
+/// second. The builder's text is the whole contract here, so the row is
+/// asserted through a real draw of the working surface rather than at the
+/// builder alone: a sub-second turn must not claim it took no time.
+#[test]
+fn test_thought_row_subsecond_draw() {
+    use crate::composition;
+    use crate::records::TranscriptLine;
+    use crate::state::Screen;
+    use crate::test_harness::render_text;
+
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.transcript = vec![
+        TranscriptLine::Agent("done".into()),
+        TranscriptLine::ThoughtFor {
+            secs: Some(0),
+            reasoning: Some("a turn that ran under a second".into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        },
+    ]
+    .into();
+
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("Thought for <1s"),
+        "a sub-second turn draws as under a second:\n{out}"
+    );
+    assert!(
+        !out.contains("Thought for 0s"),
+        "the row must not claim the turn took no time:\n{out}"
+    );
+}

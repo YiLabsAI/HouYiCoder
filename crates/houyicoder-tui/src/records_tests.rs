@@ -2,6 +2,7 @@
 //! so records.rs stays under the file-size gate.
 
 use crate::records::{ToolOutcome, TranscriptLine};
+use crate::toggle_hint::ToggleHint;
 
 // A non-zero exit is not always an error. grep exits 1 when no matches are
 // found; diff exits 1 when files differ. Both are the command succeeding at
@@ -280,6 +281,56 @@ fn test_thinking_collapses_multiline() {
     assert!(!r.contains("first line"), "content must not show, got {r}");
     // search_text returns the full text (not the collapsed render).
     assert_eq!(line.search_text(), "first line\nsecond\nthird");
+}
+
+/// A turn that recorded a duration under a second reads as under a second
+/// rather than as zero seconds, which would claim the turn took no time.
+#[test]
+fn test_thought_row_zero_secs() {
+    let line = TranscriptLine::ThoughtFor {
+        secs: Some(0),
+        reasoning: Some("considered the options".into()),
+        tool_summary: None,
+        turn_id: "f1".into(),
+    };
+    let text = line
+        .thought_row_text(Some(ToggleHint::Expand))
+        .expect("a thought row has a label");
+    assert_eq!(text, "✻ Thought for <1s (ctrl+o to expand)", "got {text}");
+    assert!(!text.contains(" 0s"), "a sub-second turn claims no zero");
+}
+
+/// A turn with no recorded duration keeps the bare label: the log carries no
+/// completion record for it, so no duration is claimed at all.
+#[test]
+fn test_thought_row_no_secs() {
+    let line = TranscriptLine::ThoughtFor {
+        secs: None,
+        reasoning: Some("considered the options".into()),
+        tool_summary: None,
+        turn_id: "f1".into(),
+    };
+    let text = line
+        .thought_row_text(Some(ToggleHint::Expand))
+        .expect("a thought row has a label");
+    assert_eq!(text, "✻ Thought (ctrl+o to expand)", "got {text}");
+}
+
+/// A turn of a second or more keeps its duration in the label. One second,
+/// not a comfortable margin: the smallest value that must still show its
+/// number, so a rule that reads anything under two as sub-second fails here.
+#[test]
+fn test_thought_row_keeps_secs() {
+    let line = TranscriptLine::ThoughtFor {
+        secs: Some(1),
+        reasoning: Some("considered the options".into()),
+        tool_summary: None,
+        turn_id: "f1".into(),
+    };
+    let text = line
+        .thought_row_text(Some(ToggleHint::Expand))
+        .expect("a thought row has a label");
+    assert_eq!(text, "✻ Thought for 1s (ctrl+o to expand)", "got {text}");
 }
 
 #[test]
