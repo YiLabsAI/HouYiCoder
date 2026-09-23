@@ -268,29 +268,47 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.discard_model_pick();
         }
         KeyCode::Esc if app.pane == Pane::Skills => {
-            if app.skill_level.get() > 0 {
-                app.skill_level.set(0);
+            if app.skills_pane.level.get() > 0 {
+                app.skills_pane.level.set(0);
             } else {
                 app.pane = Pane::Transcript;
             }
         }
-        KeyCode::Up if app.pane == Pane::Skills && app.skill_level.get() == 0 => {
-            let cur = app.skill_sel.get();
-            app.skill_sel.set(cur.saturating_sub(1));
+        KeyCode::Up if app.pane == Pane::Skills && app.skills_pane.level.get() == 0 => {
+            let cur = app.skills_pane.list_cursor.get();
+            app.skills_pane.list_cursor.set(cur.saturating_sub(1));
         }
-        KeyCode::Down if app.pane == Pane::Skills && app.skill_level.get() == 0 => {
+        KeyCode::Down if app.pane == Pane::Skills && app.skills_pane.level.get() == 0 => {
             let len = display_order(&app.skill_entries).len();
             if len > 0 {
-                let next = app.skill_sel.get() + 1;
-                app.skill_sel.set(next.min(len.saturating_sub(1)));
+                let next = app.skills_pane.list_cursor.get() + 1;
+                app.skills_pane
+                    .list_cursor
+                    .set(next.min(len.saturating_sub(1)));
             }
         }
-        KeyCode::Enter if app.pane == Pane::Skills && app.skill_level.get() == 0 => {
-            app.skill_level.set(1);
+        KeyCode::Enter if app.pane == Pane::Skills && app.skills_pane.level.get() == 0 => {
+            app.skills_pane.level.set(1);
+            // Detail scroll offset on the /skills pane state
+            // detail scroll offset; start at the top.
+            app.skills_pane.detail_scroll.set(0);
         }
-        KeyCode::Char('t') if app.pane == Pane::Skills && app.skill_level.get() == 1 => {
+        // Scroll the detail view when it holds more rows than the area.
+        KeyCode::Up if app.pane == Pane::Skills && app.skills_pane.level.get() == 1 => {
+            let cur = app.skills_pane.detail_scroll.get();
+            app.skills_pane.detail_scroll.set(cur.saturating_sub(1));
+        }
+        KeyCode::Down if app.pane == Pane::Skills && app.skills_pane.level.get() == 1 => {
+            let cur = app.skills_pane.detail_scroll.get();
+            app.skills_pane.detail_scroll.set(cur + 1);
+        }
+        KeyCode::Char('t') if app.pane == Pane::Skills && app.skills_pane.level.get() == 1 => {
             let ordered = display_order(&app.skill_entries);
-            let sel = app.skill_sel.get().min(ordered.len().saturating_sub(1));
+            let sel = app
+                .skills_pane
+                .list_cursor
+                .get()
+                .min(ordered.len().saturating_sub(1));
             // Toggle only if the skill is usable (user-invocable or
             // model-invocable). A skill that is neither cannot be toggled.
             if let Some(entry) = ordered.get(sel)

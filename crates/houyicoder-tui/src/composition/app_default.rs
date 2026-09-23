@@ -162,10 +162,10 @@ pub fn app() -> App {
         hook_entries: Vec::new(),
         tool_entries: Vec::new(),
         skill_entries: Vec::new(),
-        skill_level: Cell::new(0),
-        skill_sel: Cell::new(0),
+
         skill_disabled: HashSet::new(),
         skill_picker_open: false,
+        skills_pane: crate::state::SkillsPaneState::default(),
         skill_picker_sel: Cell::new(0),
         hooks_level: Cell::new(0),
         hooks_sel: Cell::new(0),

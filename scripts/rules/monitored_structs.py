@@ -39,8 +39,9 @@ ACTIVE_OWNERS = {
         # drilled row, the background-row flag) became one TrajectoryPaneState
         # owner, and the selected turn lives inside it rather than joining the
         # shell: the selection and the cursor that must agree are kept
-        # consistent by the same transitions.
-        "fields": 144,
+        # consistent by the same transitions. The skills pane's level and
+        # selection moved into SkillsPaneState in the same spirit.
+        "fields": 143,
         "mut_app": 44,
     },
 }

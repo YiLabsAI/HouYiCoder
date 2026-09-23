@@ -22,7 +22,7 @@ fn test_skills_pane_detail_renders() {
         user_invocable: true,
         usage: None,
     }];
-    app.skill_level.set(1);
+    app.skills_pane.level.set(1);
     let out = render(&app, 80, 24);
     assert!(out.contains("deep-review"), "name in detail: {out}");
     assert!(out.contains("the review standard"), "desc in detail: {out}");
@@ -73,7 +73,7 @@ fn test_detail_usage_invoked() {
             last_used_secs: 1,
         }),
     }];
-    app.skill_level.set(1);
+    app.skills_pane.level.set(1);
     let out = render(&app, 80, 24);
     assert!(out.contains("invoked 3"), "invocation count: {out}");
     assert!(out.contains("1 refused"), "refusal count: {out}");
@@ -96,7 +96,7 @@ fn test_detail_usage_never() {
         user_invocable: true,
         usage: Some(SkillUsage::default()),
     }];
-    app.skill_level.set(1);
+    app.skills_pane.level.set(1);
     let out = render(&app, 80, 24);
     assert!(
         out.contains("never invoked this session"),
@@ -128,7 +128,7 @@ fn test_user_only_skill_glyph() {
     assert!(out.contains("✓"), "usable glyph in listing: {out}");
     assert!(!out.contains("✗"), "must not show disabled glyph: {out}");
     // Detail view: also checkmark.
-    app.skill_level.set(1);
+    app.skills_pane.level.set(1);
     let out = render(&app, 80, 24);
     assert!(out.contains("✓"), "usable glyph in detail: {out}");
     assert!(

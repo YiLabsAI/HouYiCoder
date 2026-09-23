@@ -89,7 +89,7 @@ const ORIGIN_ORDER: &[OriginGroup] = &[
 ];
 
 /// The display order: entries grouped by origin (ORIGIN_ORDER), sorted by
-/// name within each group. Both render and key-dispatch resolve skill_sel
+/// name within each group. Both render and key-dispatch resolve the list cursor
 /// through this so the highlighted row and the acted-on entry match.
 pub(crate) fn display_order(
     entries: &[houyicoder_protocol::frontend::skills::SkillEntry],
@@ -138,12 +138,17 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         );
     } else {
         let ordered = display_order(&app.skill_entries);
-        let sel = app.skill_sel.get().min(ordered.len().saturating_sub(1));
-        if app.skill_level.get() == 1 {
+        let sel = app
+            .skills_pane
+            .list_cursor
+            .get()
+            .min(ordered.len().saturating_sub(1));
+        if app.skills_pane.level.get() == 1 {
             if let Some(entry) = ordered.get(sel) {
                 let disabled = app.skill_disabled.contains(&entry.name);
                 let lines = detail_lines(entry, disabled);
-                f.render_widget(Paragraph::new(lines), chunks[2]);
+                let scroll: u16 = app.skills_pane.detail_scroll.get();
+                f.render_widget(Paragraph::new(lines).scroll((scroll, 0)), chunks[2]);
             }
         } else {
             f.render_widget(
@@ -153,7 +158,7 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         }
     }
 
-    let footer = if app.skill_level.get() == 1 {
+    let footer = if app.skills_pane.level.get() == 1 {
         key_hint(&[("t", "toggle"), ("Esc", "back")])
     } else {
         key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])

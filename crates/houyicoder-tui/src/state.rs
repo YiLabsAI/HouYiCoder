@@ -124,6 +124,17 @@ pub(crate) struct CurrentTurnBoundary {
     pub(crate) line_index: usize,
 }
 
+/// The /skills pane view state: the drill-down level (0 = list, 1 = detail),
+/// the list cursor, and the detail scroll offset. The draw path and key
+/// handler read through these, and the offset is u16 to match ratatui's
+/// scroll coordinate without a cast.
+#[derive(Default, Debug)]
+pub(crate) struct SkillsPaneState {
+    pub level: Cell<u8>,
+    pub list_cursor: Cell<usize>,
+    pub detail_scroll: Cell<u16>,
+}
+
 /// Top-level state composed from session wiring and domain-owned UI state.
 pub struct App {
     pub screen: Screen,
@@ -504,11 +515,10 @@ pub struct App {
     /// the wire when the user opens /skills. Empty until the first
     /// reply.
     pub skill_entries: Vec<SkillEntry>,
-    /// The /skills pane drill-down level: 0 = list, 1 = selected skill
-    /// detail (body + usage + disable toggle). Mirrors the hooks pane pattern.
-    pub skill_level: Cell<u8>,
-    /// The selected skill index in the /skills Level-0 list.
-    pub skill_sel: Cell<usize>,
+    /// The /skills pane view state: the drill-down level (0 = list, 1 =
+    /// detail), the list cursor, and the detail scroll offset. Kept together
+    /// so the pane's view state is one owner, not three App fields.
+    pub(crate) skills_pane: SkillsPaneState,
     /// Session-scoped disabled skills (toggled via t in the detail view).
     /// Persisted disable is a follow-up (settings wire).
     pub skill_disabled: HashSet<String>,
