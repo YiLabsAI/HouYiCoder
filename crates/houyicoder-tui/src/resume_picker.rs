@@ -19,10 +19,10 @@ pub struct SessionRow {
     pub last_active: u64,
     /// Log file size in bytes (log.jsonl), for a compact size column.
     pub log_size: u64,
-    /// True when this row is a duplicate of a newer row (same resolved
-    /// title) and should not render. Set lazily by the poll-loop dedup
-    /// pass as resolve_detail fills real titles; the render + the query
-    /// filter skip hidden rows. Defaults false.
+    /// True when this row duplicates a newer row (same resolved title) and
+    /// should not render. Set as resolve_detail fills real titles, in both
+    /// the open-time batch and the poll loop; the render + the query filter
+    /// skip hidden rows. Defaults false.
     pub hidden: bool,
 }
 
@@ -36,11 +36,10 @@ pub struct SessionPickerState {
     pub query: String,
     pub rows: Vec<SessionRow>,
     pub resolved: std::collections::HashSet<usize>,
-    /// Titles already shown (newest-first resolution order). When
-    /// resolve_detail fills a row's real title and it matches a title in
-    /// this set, the row is an older duplicate -> hidden. Seeded at open
-    /// from the cheap titles (descriptor names + unique placeholders) so a
-    /// named session also suppresses same-slug unnamed ones.
+    /// Titles already claimed, in resolution order. When resolve_detail
+    /// fills a row's real title and it matches a title in this set, the row
+    /// is an older duplicate -> hidden. Empty at open: the first row to
+    /// claim a title keeps it.
     pub seen_titles: std::collections::HashSet<String>,
 }
 
@@ -128,13 +127,30 @@ impl SessionPickerState {
         self.sel = 0;
         self.resolved.clear();
         self.seen_titles.clear();
-        // Seed the dedup set from the cheap titles already on the rows
-        // (descriptor names + unique placeholders). sessions already
-        // deduped by these, so each is unique here; seeding lets the lazy
-        // slug-dedup suppress unnamed rows whose resolved slug collides
-        // with a named session too.
-        for r in &self.rows {
-            self.seen_titles.insert(r.title.clone());
+    }
+
+    /// Resolve detail for up to budget rows that have none yet. Rows arrive
+    /// newest-first and the first row to claim a title keeps it, so a row
+    /// whose resolved title duplicates a newer row's is hidden; a descriptor
+    /// name gives no precedence over an unnamed row resolved earlier. The
+    /// claim set holds only rows already resolved, so a row never hides on
+    /// its own title — a hide always means a collision with another row.
+    pub fn resolve_rows(&mut self, catalog: &dyn SessionCatalog, budget: usize) {
+        let mut done = 0;
+        for i in 0..self.rows.len() {
+            if done >= budget {
+                break;
+            }
+            if self.resolved.contains(&i) {
+                continue;
+            }
+            catalog.resolve_detail(&mut self.rows[i]);
+            self.resolved.insert(i);
+            done += 1;
+            let title = self.rows[i].title.clone();
+            if !self.seen_titles.insert(title) {
+                self.rows[i].hidden = true;
+            }
         }
     }
 

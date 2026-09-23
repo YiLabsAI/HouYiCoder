@@ -76,7 +76,7 @@ impl SessionCatalog for DescriptorSessionCatalog {
         // so the first occurrence of each title wins. Placeholder titles are
         // unique (short sid suffix), so unnamed sessions never dedup here --
         // their slug-dedup happens lazily in the picker after resolve_detail
-        // fills the real title (see run_control's hidden-row pass).
+        // fills the real title (SessionPickerState::resolve_rows).
         let mut seen_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
         rows.retain(|r| seen_titles.insert(r.title.clone()));
         rows

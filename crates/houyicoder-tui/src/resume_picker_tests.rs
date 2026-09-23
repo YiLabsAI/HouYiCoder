@@ -4,6 +4,7 @@
 
 use houyicoder_protocol::frontend::SlashCommand;
 
+use crate::resume_picker::{SessionCatalog, SessionPickerState, SessionRow};
 use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
@@ -19,10 +20,10 @@ fn render(app: &crate::state::App) -> String {
 /// A stub SessionCatalog: returns canned rows so the picker state + render +
 /// /resume switch can be exercised without a real disk store (the real
 /// catalog is the CLI implementation, covered by a bin unit test + a PTY test).
-struct StubCatalog(Vec<crate::resume_picker::SessionRow>);
+struct StubCatalog(Vec<SessionRow>);
 
-impl crate::resume_picker::SessionCatalog for StubCatalog {
-    fn sessions(&self, _current_sid: &str) -> Vec<crate::resume_picker::SessionRow> {
+impl SessionCatalog for StubCatalog {
+    fn sessions(&self, _current_sid: &str) -> Vec<SessionRow> {
         self.0.clone()
     }
 
@@ -30,11 +31,10 @@ impl crate::resume_picker::SessionCatalog for StubCatalog {
     // progressive detail resolution is a no-op here. The real catalog's
     // resolve_detail reads the log head + mtime; that path is covered by the
     // catalog's own tests, not here.
-    fn resolve_detail(&self, _row: &mut crate::resume_picker::SessionRow) {}
+    fn resolve_detail(&self, _row: &mut SessionRow) {}
 }
 
 fn stub_catalog_app() -> crate::state::App {
-    use crate::resume_picker::SessionRow;
     let mut app = working();
     app.session_catalog = Some(std::sync::Arc::new(StubCatalog(vec![
         SessionRow {
@@ -236,4 +236,120 @@ fn test_resume_picker_empty_list() {
         out.contains("no other sessions"),
         "empty list should report no other sessions:\n{out}"
     );
+}
+
+/// A catalog whose detail resolution rewrites an unnamed row's placeholder to
+/// the slug of its first prompt, so the lazy dedup has a collision to act on.
+struct SlugCatalog;
+impl SessionCatalog for SlugCatalog {
+    fn sessions(&self, _current_sid: &str) -> Vec<SessionRow> {
+        vec![
+            SessionRow {
+                sid_str: "newest".into(),
+                title: "fix login".into(),
+                last_active: 3000,
+                ..Default::default()
+            },
+            SessionRow {
+                sid_str: "older".into(),
+                title: "(session) aaaaaaaa".into(),
+                last_active: 2000,
+                ..Default::default()
+            },
+            SessionRow {
+                sid_str: "oldest".into(),
+                title: "(session) bbbbbbbb".into(),
+                last_active: 1000,
+                ..Default::default()
+            },
+        ]
+    }
+
+    fn resolve_detail(&self, row: &mut SessionRow) {
+        if row.sid_str == "older" {
+            row.title = "fix login".into();
+        } else if row.sid_str == "oldest" {
+            row.title = "port tui".into();
+        }
+    }
+}
+
+/// The lazy dedup hides an older row whose resolved slug repeats a newer
+/// row's title, and leaves the newer row and an unrelated slug listed.
+#[test]
+fn test_duplicate_title_hides_older() {
+    let mut p = SessionPickerState {
+        rows: SlugCatalog.sessions(""),
+        ..Default::default()
+    };
+    p.open();
+    p.resolve_rows(&SlugCatalog, 3);
+    assert!(!p.rows[0].hidden, "the newest row keeps its title");
+    assert!(p.rows[1].hidden, "the older row repeats the newest title");
+    assert!(!p.rows[2].hidden, "an unrelated slug stays listed");
+    assert_eq!(p.filtered().len(), 2, "the duplicate row is not listed");
+}
+
+/// The same collision through the real open path + the picker render: the
+/// duplicated title reaches the screen once, so the hidden row is not drawn.
+#[test]
+fn test_duplicate_title_renders_once() {
+    let mut app = working();
+    app.session_catalog = Some(std::sync::Arc::new(SlugCatalog));
+    app.run_command(SlashCommand::Resume);
+    let out = render(&app);
+    assert_eq!(
+        out.matches("fix login").count(),
+        1,
+        "the duplicated title is drawn once:\n{out}"
+    );
+    assert!(
+        out.contains("port tui"),
+        "the unrelated slug is drawn:\n{out}"
+    );
+}
+
+/// A catalog where the collision runs the other way: the newer row is the
+/// unnamed one and the older row already carries the name.
+struct NamedBelowCatalog;
+impl SessionCatalog for NamedBelowCatalog {
+    fn sessions(&self, _current_sid: &str) -> Vec<SessionRow> {
+        vec![
+            SessionRow {
+                sid_str: "newer-unnamed".into(),
+                title: "(session) cccccccc".into(),
+                last_active: 3000,
+                ..Default::default()
+            },
+            SessionRow {
+                sid_str: "older-named".into(),
+                title: "fix login".into(),
+                last_active: 2000,
+                ..Default::default()
+            },
+        ]
+    }
+
+    fn resolve_detail(&self, row: &mut SessionRow) {
+        if row.sid_str == "newer-unnamed" {
+            row.title = "fix login".into();
+        }
+    }
+}
+
+/// The title goes to the row resolved first, not to the row carrying a
+/// descriptor name, so an older named row yields to a newer row whose slug
+/// matches. Pins the precedence the picker shares with the catalog's own
+/// cheap-title dedup.
+#[test]
+fn test_older_named_row_hides() {
+    let mut p = SessionPickerState {
+        rows: NamedBelowCatalog.sessions(""),
+        ..Default::default()
+    };
+    p.open();
+    p.resolve_rows(&NamedBelowCatalog, 2);
+    assert!(!p.rows[0].hidden, "the newer row claims the title");
+    assert!(p.rows[1].hidden, "the older named row is the duplicate");
+    assert_eq!(p.filtered().len(), 1, "only the claiming row is listed");
 }

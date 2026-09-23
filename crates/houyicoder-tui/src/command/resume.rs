@@ -37,14 +37,7 @@ impl App {
                 // shows real titles + last-active times on the first render,
                 // not placeholders. Subsequent rows resolve a few per frame
                 // in the poll loop.
-                let visible = self.resume_picker.rows.len().min(20);
-                for i in 0..visible {
-                    if !self.resume_picker.resolved.contains(&i) {
-                        let catalog = self.session_catalog.clone().unwrap();
-                        catalog.resolve_detail(&mut self.resume_picker.rows[i]);
-                        self.resume_picker.resolved.insert(i);
-                    }
-                }
+                self.resume_picker.resolve_rows(catalog.as_ref(), 20);
             }
             Some(query) => {
                 if is_export_file_path(query) {
@@ -286,5 +279,44 @@ mod tests {
     fn test_missing_json_not_export() {
         assert!(!is_export_file_path("./nonexistent-export.json"));
         assert!(!is_export_file_path("abc123"));
+    }
+
+    /// A catalog of named sessions, so resolve_detail leaves every title as
+    /// the row already carries it.
+    struct ManyRowCatalog(usize);
+    impl crate::resume_picker::SessionCatalog for ManyRowCatalog {
+        fn sessions(&self, _current: &str) -> Vec<SessionRow> {
+            (0..self.0)
+                .map(|i| SessionRow {
+                    sid_str: format!("sid{i:04}"),
+                    title: format!("named {i}"),
+                    cwd_basename: "app".into(),
+                    last_active: i as u64,
+                    ..Default::default()
+                })
+                .collect()
+        }
+        fn resolve_detail(&self, _row: &mut SessionRow) {}
+    }
+
+    /// A store with more sessions than the picker resolves on open: the rows
+    /// past that first batch resolve in the poll loop and must stay listed.
+    /// A title that counts as its own duplicate would drop them, so this
+    /// pins that a named session keeps its own name.
+    #[test]
+    fn test_many_sessions_all_visible() {
+        let mut app = crate::test_harness::connected_app();
+        app.session_catalog = Some(Arc::new(ManyRowCatalog(25)));
+        app.run_resume(None);
+        assert_eq!(app.resume_picker.rows.len(), 25);
+        assert_eq!(app.resume_picker.filtered().len(), 25, "at open");
+        for _ in 0..4 {
+            app.poll_agent();
+        }
+        assert_eq!(
+            app.resume_picker.filtered().len(),
+            25,
+            "every named session stays listed after the poll loop resolves the rest"
+        );
     }
 }

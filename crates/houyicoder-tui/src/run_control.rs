@@ -451,22 +451,7 @@ impl App {
         if self.resume_picker.open
             && let Some(catalog) = self.session_catalog.as_ref()
         {
-            let mut resolved_count = 0;
-            for i in 0..self.resume_picker.rows.len() {
-                if resolved_count >= 3 {
-                    break;
-                }
-                if !self.resume_picker.resolved.contains(&i) {
-                    catalog.resolve_detail(&mut self.resume_picker.rows[i]);
-                    self.resume_picker.resolved.insert(i);
-                    resolved_count += 1;
-                    // Newest rows resolve first, so duplicate titles hide older rows.
-                    let title = self.resume_picker.rows[i].title.clone();
-                    if !self.resume_picker.seen_titles.insert(title) {
-                        self.resume_picker.rows[i].hidden = true;
-                    }
-                }
-            }
+            self.resume_picker.resolve_rows(catalog.as_ref(), 3);
         }
         // Refresh status while idle. Active runs and reverse requests retain
         // exclusive ownership of response frames.
