@@ -78,6 +78,50 @@ fn test_resume_sid_reopens_history() {
     );
 }
 
+/// A session directory named in the ULID spelling still resumes: the store
+/// keeps such a directory under its old name, so a --resume by the current
+/// display form must find it rather than report a missing session. The unit
+/// layer covers the id round-trip; this drives the real binary, the store
+/// lookup, and the replay that follows.
+#[test]
+#[ignore]
+fn test_resume_legacy_dir() {
+    let sessions_dir = fresh_temp_dir("sessions-legacy-name");
+    let uuid_str = "5f1c2b3a-9d4e-4a71-8c62-0e5b7d3f1a90";
+    let sid = SessionId::from_display_string(uuid_str).expect("sid parses");
+    // The store's own name for this id: a ULID, never the hyphenated display
+    // form, so the seeded directory differs from the id the launch passes.
+    let legacy_name = sid.ulid_name();
+    common::seed_session_on_disk(&sessions_dir, &legacy_name, "legacy-model", "legacy prompt");
+    assert!(
+        sessions_dir.join(&legacy_name).join("log.jsonl").is_file(),
+        "the seed must land in the legacy-named directory"
+    );
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), uuid_str.to_string()],
+        sessions_dir.clone(),
+    );
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "resuming a legacy-named session reaches the working screen:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for_plain("legacy-model", RENDER_TIMEOUT),
+        "the descriptor in the legacy-named directory is read:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for("legacy prompt", RENDER_TIMEOUT),
+        "the legacy-named session's history replays:\n{}",
+        s.output()
+    );
+}
+
 /// The file lock is released on a clean exit: binary 1 --resume <sid> holds
 /// the lock, quits cleanly (ctrl+D double-press on the working screen), then
 /// binary 2 --resume <sid> acquires the released lock. The lock-rejects-second
