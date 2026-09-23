@@ -14,6 +14,7 @@ pub(crate) mod counts;
 mod cursors;
 pub(crate) mod enums;
 mod expanded_keys;
+pub(crate) mod history_read;
 mod model_picker;
 mod scroll;
 mod search_view;

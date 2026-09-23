@@ -47,7 +47,13 @@ pub struct Transcript {
     /// The resident front the disk rows were read to sit above. A drain moves
     /// that front past them, and the frames between the two fronts are gone,
     /// so the rows no longer reach the view and are dropped.
-    disk_seam_frame: usize,
+    disk_rows_front: usize,
+    /// A history read in flight, when the draw path dispatched a disk read to
+    /// a background task instead of running it on the draw thread. At most
+    /// one: a second dispatch is skipped while this is set. Lives here rather
+    /// than on App so the App field count stays bounded and the state sits
+    /// beside the disk rows it governs.
+    history_read: Option<PendingHistoryRead>,
     current_turn: CurrentTurnBoundary,
     revision: Cell<u64>,
 }
@@ -69,6 +75,10 @@ pub(crate) enum DiskFront {
     Stopped,
 }
 
+pub(crate) use super::history_read::{
+    HistoryReadOutcome, HistoryReadPoll, HistoryReadResult, PendingHistoryRead,
+};
+
 /// Default ceiling on the resident frames' estimated bytes.
 const RESIDENT_BYTE_BUDGET: usize = 8 * 1024 * 1024;
 
@@ -84,7 +94,8 @@ impl Default for Transcript {
             fold_groups: Vec::new(),
             disk_rows: Vec::new(),
             disk_front: DiskFront::default(),
-            disk_seam_frame: 0,
+            disk_rows_front: 0,
+            history_read: None,
             current_turn: CurrentTurnBoundary::default(),
             revision: Cell::new(0),
         }
@@ -284,8 +295,26 @@ impl Transcript {
     }
 
     /// The resident front the disk rows sit above.
-    pub(crate) fn disk_seam_frame(&self) -> usize {
-        self.disk_seam_frame
+    pub(crate) fn disk_rows_front(&self) -> usize {
+        self.disk_rows_front
+    }
+
+    /// Whether a background history read is in flight.
+    pub(crate) fn history_read_pending(&self) -> bool {
+        self.history_read.is_some()
+    }
+
+    /// Take the pending read out for polling, returning None when none is in
+    /// flight. The caller polls and, on Ready or Disconnected, leaves the slot
+    /// empty by not putting it back; on Pending it must put it back to keep
+    /// the read alive.
+    pub(crate) fn take_history_read(&mut self) -> Option<PendingHistoryRead> {
+        self.history_read.take()
+    }
+
+    /// Put a pending read back after a Pending poll.
+    pub(crate) fn set_history_read(&mut self, read: PendingHistoryRead) {
+        self.history_read = Some(read);
     }
 
     /// Put older rows read from the session log in front of the rows the frame
@@ -302,7 +331,7 @@ impl Transcript {
         &mut self,
         rows: Vec<TranscriptLine>,
         anchor: u64,
-        seam_frame: usize,
+        front: usize,
     ) {
         if rows.is_empty() {
             return;
@@ -321,7 +350,7 @@ impl Transcript {
         self.lines = merged;
         self.disk_rows.splice(0..0, rows);
         self.disk_front = DiskFront::At(anchor);
-        self.disk_seam_frame = seam_frame;
+        self.disk_rows_front = front;
     }
 
     /// Drop the rows read back from the session log and the place they stood
@@ -337,7 +366,7 @@ impl Transcript {
         }
         self.disk_rows.clear();
         self.disk_front = DiskFront::Unloaded;
-        self.disk_seam_frame = 0;
+        self.disk_rows_front = 0;
         let cut = dropped.min(self.lines.len());
         self.lines.drain(0..cut);
         self.current_turn.line_index = self.current_turn.line_index.saturating_sub(cut);
@@ -377,7 +406,7 @@ impl Transcript {
         self.fold_groups.clear();
         self.disk_rows.clear();
         self.disk_front = DiskFront::default();
-        self.disk_seam_frame = 0;
+        self.disk_rows_front = 0;
         self.blocks.clear();
         self.current_turn = CurrentTurnBoundary::default();
     }
@@ -603,7 +632,7 @@ mod tests {
         t.prepend_disk_rows(older, 4096, 7);
         assert_eq!(t.disk_row_count(), 2);
         assert_eq!(t.disk_front(), DiskFront::At(4096));
-        assert_eq!(t.disk_seam_frame(), 7);
+        assert_eq!(t.disk_rows_front(), 7);
         assert_eq!(t.fold_groups().len(), 2, "the loaded pair folds too");
         assert_eq!(t.fold_groups()[0].start, 0, "the loaded group leads");
         assert_eq!(t.fold_groups()[1].start, 3, "the resident group shifted");

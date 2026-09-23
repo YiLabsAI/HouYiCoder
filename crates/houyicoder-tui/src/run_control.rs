@@ -23,6 +23,8 @@ const MAX_REBUILD_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;
 const MAX_AGENT_MESSAGES_PER_POLL: usize = 4096;
 
+#[path = "run_control/history_read.rs"]
+mod history_read;
 #[path = "run_control/transcript_rebuild.rs"]
 mod transcript_rebuild;
 

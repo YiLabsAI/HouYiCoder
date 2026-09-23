@@ -5,10 +5,11 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::time::{Duration, Instant};
 
 use crate::composition;
 use crate::records::{ContextSuggestion, SuggestionSeverity, TranscriptLine};
-use crate::state::transcript::DiskFront;
+use crate::state::transcript::{DiskFront, HistoryReadOutcome, PendingHistoryRead};
 use crate::state::{App, Screen};
 use crate::test_harness::MockSnapshot;
 use crate::todo_view::TodoStatus;
@@ -58,11 +59,31 @@ fn todo_write_frame(id: &str, todos: &[(&str, &str)]) -> TranscriptFrame {
     ))
 }
 
-/// Return an App with empty transcript state.
+/// Return an App with empty transcript state and the shared runtime so the
+/// history read dispatches to a background task the test then pumps.
 fn fresh_app() -> App {
     let mut app = composition::app();
     app.transcript.reset();
+    app.runtime = Some(crate::composition::shared_runtime());
     app
+}
+
+/// Pump the in-flight history read until it lands or times out. Mirrors what
+/// the app loop does each pass, but blocks the test thread so the result is
+/// applied before assertions run. Returns false at once when no read was
+/// dispatched (the resident-frame path or a no-op short-circuit).
+fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
+    if !app.transcript.history_read_pending() {
+        return false;
+    }
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if app.pump_history_read() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    false
 }
 
 fn pump(app: &mut App, frame: TranscriptFrame) {
@@ -502,6 +523,7 @@ fn test_prepend_loads_history() {
     let before = app.transcript.len();
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(app.transcript.len() > before);
     assert!(
         app.transcript
@@ -520,6 +542,7 @@ fn test_prepend_skips_tail() {
     app.rebuild_transcript();
     let before = app.transcript.len();
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript.len(), before);
 }
 
@@ -538,6 +561,7 @@ fn test_prepend_survives_rebuild() {
     assert!(app.loaded_from_frame.get() > 0);
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(
         app.transcript
             .iter()
@@ -575,6 +599,7 @@ fn test_prepend_keeps_echo_place() {
     app.rebuild_transcript();
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     let at = |app: &App, want: &str| {
         app.transcript
             .iter()
@@ -959,6 +984,7 @@ fn test_scrollback_survives_frame() {
     app.transcript_scroll.jump_to(0);
     while app.loaded_from_frame.get() > 0 {
         app.load_older_frames();
+        pump_history_read_blocking(&mut app, Duration::from_secs(5));
     }
     assert!(
         app.transcript.len() > VIEWABLE_SCROLLBACK_CAP,
@@ -1243,6 +1269,7 @@ fn test_scrollback_stops_at_front() {
     app.transcript_scroll.jump_to(0);
     app.loaded_from_frame.set(base + 1);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(
         app.loaded_from_frame.get(),
         base,
@@ -1306,6 +1333,7 @@ fn test_load_boundary_keeps_draining() {
     );
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(
         app.loaded_from_frame.get() < 100,
         "the load reaches below the frame cap: {}",
@@ -1416,7 +1444,7 @@ fn log_source(windows: Vec<WindowLoad>) -> Arc<MockSnapshot> {
     })
 }
 
-/// Every row the view holds prints once: a seam that kept the rows the tail
+/// Every row the view holds prints once: an overlap that kept the rows the tail
 /// read repeats would show them twice, one that cut short would lose them.
 fn assert_rows_print_once(app: &App) {
     let mut texts: Vec<String> = app.transcript.iter().map(|l| l.render()).collect();
@@ -1433,7 +1461,7 @@ fn assert_rows_print_once(app: &App) {
 
 /// The rows a scroll back to the resident front reads from the session log:
 /// the frames there were drained, so the log is the only source for them. The
-/// tail read carries the rows the view already shows, and the seam drops them.
+/// tail read carries the rows the view already shows, and the overlap drops them.
 #[test]
 fn test_scrollback_reads_log_rows() {
     let mut app = drained_app();
@@ -1446,6 +1474,7 @@ fn test_scrollback_reads_log_rows() {
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
     assert_eq!(
         app.transcript.disk_row_count(),
@@ -1492,7 +1521,9 @@ fn test_scrollback_chains_older_window() {
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
     assert_eq!(app.transcript.disk_row_count(), 7, "both windows landed");
     assert!(
@@ -1503,6 +1534,7 @@ fn test_scrollback_chains_older_window() {
     assert_rows_print_once(&app);
 
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(
         app.transcript.disk_row_count(),
         7,
@@ -1523,12 +1555,13 @@ fn test_scrollback_without_log_source() {
     let shown = app.transcript.len();
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript.len(), shown);
     assert_eq!(app.transcript.disk_front(), DiskFront::Unloaded);
 }
 
 /// A window holding no row the visible front matches is not shown: the rows
-/// cannot be placed against the view, and a guessed seam would print content
+/// cannot be placed against the view, and a guessed overlap would print content
 /// twice or lose it. The read is remembered as stopping, so standing at the
 /// front does not read the log again on every pass.
 #[test]
@@ -1543,6 +1576,7 @@ fn test_scrollback_stops_without_match() {
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
     assert_eq!(app.transcript.disk_row_count(), 0);
     assert_eq!(app.transcript.len(), shown, "the view is untouched");
@@ -1561,6 +1595,7 @@ fn test_rows_leave_at_end() {
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript.disk_row_count(), 1);
 
     app.transcript.push_frame(agent_msg("answer"));
@@ -1598,11 +1633,11 @@ fn test_rows_leave_at_end() {
 }
 
 /// A row text the log repeats must not cut the window at the wrong place: the
-/// window holds an older copy of the first rows the view shows, and the seam
+/// window holds an older copy of the first rows the view shows, and the overlap
 /// has to land where the match runs on rather than where the text first
 /// appears.
 #[test]
-fn test_seam_prefers_longest_run() {
+fn test_join_prefers_longest_run() {
     let mut app = drained_app();
     let view: Vec<TranscriptLine> = app.transcript.iter().cloned().collect();
     let mut lines: Vec<TranscriptLine> = vec![
@@ -1616,11 +1651,12 @@ fn test_seam_prefers_longest_run() {
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
     assert_eq!(
         app.transcript.disk_row_count(),
         4,
-        "the seam landed past the short match"
+        "the overlap landed past the short match"
     );
     assert_eq!(
         app.transcript.get(3).map(|l| l.render()),
@@ -1650,11 +1686,12 @@ fn test_walk_crosses_log_windows() {
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
     assert_eq!(
         app.transcript.disk_row_count(),
         2,
-        "the walk crossed into the older window and kept the rows above the seam"
+        "the walk crossed into the older window and kept the rows above the overlap"
     );
     assert!(
         matches!(app.transcript.first(), Some(TranscriptLine::User(t)) if t == "old 0"),
@@ -1676,6 +1713,7 @@ fn test_walk_stops_without_progress() {
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
     assert_eq!(app.transcript.disk_row_count(), 0, "no rows were read");
     assert_eq!(app.transcript.disk_front(), DiskFront::Stopped);
@@ -1702,7 +1740,7 @@ impl TranscriptSnapshot for GapSource {
 
 /// A window that does not end where the walk asked leaves a gap between it and
 /// the rows already read, so the walk stops rather than join rows that do not
-/// touch. The rows here do carry the seam, so a walk that took the window at
+/// touch. The rows here do carry the overlap, so a walk that took the window at
 /// its word would print them above a row they do not reach.
 #[test]
 fn test_walk_stops_on_gap() {
@@ -1722,6 +1760,7 @@ fn test_walk_stops_on_gap() {
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
     assert_eq!(
         app.transcript.disk_row_count(),
@@ -1729,6 +1768,108 @@ fn test_walk_stops_on_gap() {
         "the window does not reach the log tail, so no row is taken"
     );
     assert_eq!(app.transcript.disk_front(), DiskFront::Stopped);
+}
+
+/// The dispatch front is captured after the Unloaded branch's own rebuild, not
+/// before it. That rebuild can drain frames and advance the resident front, so
+/// a pre-rebuild capture would make the first read's own result look stale and
+/// drop it the moment the pump compares it to the current front.
+#[test]
+fn test_dispatch_front_after_drain() {
+    let mut app = drained_app();
+    // Push payload-heavy frames without rebuilding so the dispatch's own
+    // rebuild drains and advances the resident front.
+    let text = "z".repeat(2000);
+    for i in 0..40 {
+        app.transcript
+            .push_frame(user_msg(&format!("drain {i} {text}")));
+    }
+    let front_before = app.transcript.frame_window_start();
+    app.snapshot = Some(log_source(vec![log_window(
+        vec![TranscriptLine::User("x".into())],
+        100,
+        4096,
+    )]));
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+    let front_after = app.transcript.frame_window_start();
+    assert!(
+        front_after > front_before,
+        "the in-dispatch rebuild drained the resident front"
+    );
+    let pending = app
+        .transcript
+        .take_history_read()
+        .expect("a read was dispatched");
+    assert_eq!(
+        pending.dispatch_front, front_after,
+        "dispatch_front is the front after the rebuild, not before it"
+    );
+}
+
+/// against. If it did, the reader could not re-dispatch at the new front the
+/// user scrolled to. The pump compares the dispatch front to the current
+/// frame_window_start, not to the disk rows' join frame, so a first read
+/// whose join frame is still zero is not wrongly rejected either.
+#[test]
+fn test_stale_history_read_dropped() {
+    let mut app = drained_app();
+    // Window rows share no text with the view, so the walk finds no overlap
+    // and the read returns Exhausted.
+    let lines: Vec<TranscriptLine> = (0..8)
+        .map(|i| TranscriptLine::User(format!("unrelated {i}")))
+        .collect();
+    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+    app.transcript_scroll.jump_to(0);
+    app.load_older_frames();
+    // Move the resident front past the dispatch front before the result lands.
+    let text = "z".repeat(2000);
+    for i in 0..40 {
+        app.transcript
+            .push_frame(user_msg(&format!("drain {i} {text}")));
+    }
+    app.rebuild_transcript();
+    assert!(
+        app.transcript.frame_window_start() > 0,
+        "the budget drained the oldest frames"
+    );
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
+    assert_ne!(
+        app.transcript.disk_front(),
+        DiskFront::Stopped,
+        "stale Exhausted did not latch Stopped at the old front"
+    );
+    assert!(
+        !app.transcript.history_read_pending(),
+        "the slot released after the stale result was dropped"
+    );
+}
+
+/// A background task that died or dropped its sender without sending must not
+/// pin the slot forever and block every later read. The pump sees Disconnected
+/// (not Pending), clears the slot, and latches the front to Stopped so a dead
+/// worker cannot drive a re-dispatch storm.
+#[test]
+fn test_dead_worker_clears_slot() {
+    let mut app = fresh_app();
+    let (tx, rx) = std::sync::mpsc::channel::<HistoryReadOutcome>();
+    drop(tx);
+    app.transcript.set_history_read(PendingHistoryRead::new(
+        app.transcript.frame_window_start(),
+        rx,
+    ));
+    assert!(app.transcript.history_read_pending());
+    let landed = app.pump_history_read();
+    assert!(!landed, "a disconnected worker sets no dirty flag");
+    assert!(
+        !app.transcript.history_read_pending(),
+        "the slot released so a later dispatch can run"
+    );
+    assert_eq!(
+        app.transcript.disk_front(),
+        DiskFront::Stopped,
+        "the front latched to stop a re-dispatch storm"
+    );
 }
 
 /// The loaded rows reach the view only while the resident front they sit above
@@ -1741,15 +1882,16 @@ fn test_rows_leave_on_drain() {
     pump(&mut app, tool_call("c9", "glob"));
     pump(&mut app, tool_result("c9"));
     app.rebuild_transcript();
-    let seam = app.transcript.frame_window_start();
+    let front = app.transcript.frame_window_start();
     let mut lines: Vec<TranscriptLine> = vec![TranscriptLine::User("older 0".into())];
     lines.extend(app.transcript.iter().cloned());
     app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript.disk_row_count(), 1);
-    assert_eq!(app.transcript.disk_seam_frame(), seam);
+    assert_eq!(app.transcript.disk_rows_front(), front);
     assert_eq!(
         app.transcript_scroll.raw_top(),
         1,
@@ -1764,7 +1906,7 @@ fn test_rows_leave_on_drain() {
     app.rebuild_transcript();
 
     assert!(
-        app.transcript.frame_window_start() > seam,
+        app.transcript.frame_window_start() > front,
         "the budget drained past the front the rows were read above"
     );
     assert_eq!(
@@ -1812,6 +1954,7 @@ fn test_log_rows_capped() {
     )]));
 
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
     assert_eq!(
         app.transcript.disk_row_count(),
@@ -1838,6 +1981,7 @@ fn test_scrollback_without_rows() {
 
     app.transcript_scroll.jump_to(0);
     app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
     assert_eq!(app.transcript.disk_row_count(), 0);
     assert_eq!(app.transcript.disk_front(), DiskFront::Unloaded);

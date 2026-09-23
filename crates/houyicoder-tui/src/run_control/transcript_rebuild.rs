@@ -6,6 +6,7 @@
 
 use std::ops::Range;
 
+use super::history_read::{OVERLAP_FRONT_ROWS, ReadJob};
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::records::TranscriptLine;
 use crate::state::App;
@@ -13,28 +14,15 @@ use crate::state::transcript::DiskFront;
 use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
 };
-use crate::transcript::snapshot::TranscriptSnapshot;
-use crate::transcript::{TranscriptFrame, transcript_from_frames_at};
+use crate::state::transcript::{HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead};
+use crate::transcript::TranscriptFrame;
+use crate::transcript::transcript_from_frames_at;
 
-/// Byte budget of one older-row read from the session log, and of each window
-/// the first read walks back through.
-const LOG_WINDOW_BYTES: u64 = crate::scroll::WINDOW_MAX_BYTES;
 /// Rows the view holds from the session log before it stops reading older
 /// ones: the same bound the viewable transcript keeps. The bound is checked
 /// before a read rather than after, so one read can pass it, and by however
-/// many rows a window of LOG_WINDOW_BYTES holds, which no row count limits.
+/// many rows a window of the log byte budget holds, which no row count limits.
 const LOG_ROW_BUDGET: usize = crate::scroll::VIEWABLE_SCROLLBACK_CAP;
-/// How much log the first read walks back through before it gives up. The row
-/// the visible transcript starts at sits behind the resident window, and the
-/// log bytes that row sits behind are at least the bytes the resident rows
-/// took to render; the walk holds one window at a time, so this bounds how far
-/// it travels, not what it holds. Hitting the cap stops the read.
-const LOG_WALK_MAX_BYTES: u64 = 32 * 1024 * 1024;
-/// How many rows from the visible front a seam match is looked for in.
-const SEAM_FRONT_ROWS: usize = 32;
-/// How many rows a seam match must hold for, so a row text the log repeats (a
-/// one-word prompt) cannot cut the window at the wrong place.
-const SEAM_RUN_ROWS: usize = 3;
 
 impl App {
     /// Rebuild the transcript from the frame log. Each turn is one block whose
@@ -55,7 +43,7 @@ impl App {
         // read to sit above: the frames between the two fronts are drained, so
         // holding them would leave a hole in the scrollback.
         if self.transcript_scroll.is_following_tail()
-            || self.transcript.disk_seam_frame() != self.transcript.frame_window_start()
+            || self.transcript.disk_rows_front() != self.transcript.frame_window_start()
         {
             self.transcript.clear_disk_rows();
         }
@@ -113,7 +101,7 @@ impl App {
         // frames between the two fronts are gone, and rows above a front that
         // does not continue them would render a gap.
         if self.transcript.disk_row_count() > 0
-            && self.transcript.disk_seam_frame() != self.transcript.frame_window_start()
+            && self.transcript.disk_rows_front() != self.transcript.frame_window_start()
         {
             let released = self.transcript.clear_disk_rows();
             if !self.transcript_scroll.is_following_tail() {
@@ -351,9 +339,10 @@ impl App {
         }
         let from = self.visible_frame_start();
         if from <= self.transcript.frame_window_start() {
-            // The frames below the resident front are gone: read their rows
-            // back from the session log.
-            self.load_older_rows();
+            // The frames below the resident front are gone: dispatch a
+            // background read of their rows from the session log. The draw
+            // path never waits on disk; the result lands on a later pump.
+            self.dispatch_history_read();
             return;
         }
         // A batch reaching past the resident front can only load the frames that
@@ -393,62 +382,128 @@ impl App {
         self.bump_transcript_version();
     }
 
-    /// Read older rows back from the session log, which is where the rows of
-    /// the drained frames still live, and put them in front of the visible
-    /// transcript. Without a wired log source there is nothing to read and the
-    /// scroll stops at the resident front, as it did before.
-    fn load_older_rows(&mut self) {
+    /// Dispatch a background read of older rows from the session log, the
+    /// rows of the drained frames that still live on disk. The draw path
+    /// never blocks on this: the task ships the result over a channel the
+    /// pending slot holds, and a later pump applies it. Without a runtime or
+    /// a snapshot source there is nothing to dispatch and the scroll stops at
+    /// the resident front, as it did before; with a read already in flight a
+    /// second dispatch is skipped so at most one runs at a time.
+    fn dispatch_history_read(&mut self) {
         let Some(source) = self.snapshot.clone() else {
             return;
         };
-        // This runs on every draw pass while the reader stands at the front, so
-        // the states that end the read are settled before anything is derived
-        // or read.
+        let Some(runtime) = self.runtime.clone() else {
+            // No runtime: the bare or unwired path has no way to run a
+            // background task, so the read stays off the draw thread by not
+            // running at all, matching the no-source short-circuit.
+            return;
+        };
+        if self.transcript.history_read_pending() {
+            return;
+        }
         if self.transcript.disk_row_count() >= LOG_ROW_BUDGET {
             return;
         }
-        let read = match self.transcript.disk_front() {
+        let job = match self.transcript.disk_front() {
             DiskFront::Stopped => return,
             DiskFront::Unloaded => {
                 // The pass that drained frames still renders their rows.
-                // Re-derive the view first, so the rows the seam matches are
-                // the ones that stay: a match against a row on its way out
-                // would place the loaded rows above history the next rebuild
-                // drops.
+                // Re-derive the view first, so the rows the overlap matches
+                // are the ones that stay: a match against a row on its way
+                // out would place the loaded rows above history the next
+                // rebuild drops.
                 self.rebuild_transcript();
                 let front = self.front_row_texts();
                 if front.is_empty() {
                     return;
                 }
-                read_log_tail(&*source, &front)
+                ReadJob::Tail { source, front }
             }
             // The window ends where the loaded rows begin, so every row it
-            // carries is older than every row the view holds and the seam
+            // carries is older than every row the view holds and the overlap
             // needs no match.
-            DiskFront::At(anchor) => read_log_before(&*source, anchor),
+            DiskFront::At(anchor) => ReadJob::Before { source, anchor },
         };
-        let Some((rows, anchor)) = read else {
-            self.transcript.set_disk_front(DiskFront::Stopped);
-            return;
-        };
-        let count = rows.len();
+        // Capture the resident front after any rebuild the Unloaded branch ran,
+        // not before: that rebuild can drain frames and advance the front, so a
+        // pre-rebuild capture would make the first read's own result look stale
+        // and drop it. The sync path this replaced read the front after the
+        // rebuild too.
+        let dispatch_front = self.transcript.frame_window_start();
+        let (tx, rx) = std::sync::mpsc::channel();
+        runtime.spawn_blocking(move || {
+            job.run_and_send(tx);
+        });
         self.transcript
-            .prepend_disk_rows(rows, anchor, self.transcript.frame_window_start());
-        // Hold the viewport still: the rows landed above it.
-        let cur = self.transcript_scroll.raw_top();
-        self.transcript_scroll.set_raw_top(cur + count);
-        self.rebuild_transcript();
-        self.bump_transcript_version();
+            .set_history_read(PendingHistoryRead::new(dispatch_front, rx));
+    }
+
+    /// Drain the in-flight history read without blocking and apply it when
+    /// ready. Returns true when a result landed and the view must redraw.
+    /// Called from the loop body every pass, not inside the dirty gate, so an
+    /// idle loop still picks the result up.
+    pub(crate) fn pump_history_read(&mut self) -> bool {
+        let Some(pending) = self.transcript.take_history_read() else {
+            return false;
+        };
+        match pending.poll() {
+            HistoryReadPoll::Pending => {
+                self.transcript.set_history_read(pending);
+                false
+            }
+            HistoryReadPoll::Ready(outcome) => {
+                self.apply_history_read_result(outcome, pending.dispatch_front);
+                true
+            }
+            HistoryReadPoll::Disconnected => {
+                // The worker died or dropped its sender without sending. Drop
+                // the slot and stop re-reading, so a dead task cannot pin the
+                // scroll forever or block later dispatches.
+                self.transcript.set_disk_front(DiskFront::Stopped);
+                false
+            }
+        }
+    }
+
+    /// Apply a background read's result. Stale results are dropped rather than
+    /// applied: if the reader returned to the tail the rows are not wanted, and
+    /// if the resident front moved since dispatch the frames the rows were cut
+    /// against are gone and prepending them would leave a gap. This covers
+    /// tail-return and resident-front rejection; full view-generation rejection
+    /// (pane, parent/child, session switch) is a later concern.
+    fn apply_history_read_result(&mut self, outcome: HistoryReadOutcome, dispatch_front: usize) {
+        if self.transcript_scroll.is_following_tail() {
+            return;
+        }
+        if self.transcript.frame_window_start() != dispatch_front {
+            return;
+        }
+        match outcome {
+            HistoryReadOutcome::Exhausted => {
+                self.transcript.set_disk_front(DiskFront::Stopped);
+            }
+            HistoryReadOutcome::Rows(result) => {
+                let count = result.rows.len();
+                self.transcript
+                    .prepend_disk_rows(result.rows, result.anchor, dispatch_front);
+                // Hold the viewport still: the rows landed above it.
+                let cur = self.transcript_scroll.raw_top();
+                self.transcript_scroll.set_raw_top(cur + count);
+                self.rebuild_transcript();
+                self.bump_transcript_version();
+            }
+        }
     }
 
     /// The rendered text of the rows the visible transcript starts at. The
     /// rows read from the log are matched against them to find where the two
-    /// projections meet.
+    /// projections overlap.
     fn front_row_texts(&self) -> Vec<String> {
         self.transcript
             .lines()
             .iter()
-            .take(SEAM_FRONT_ROWS)
+            .take(OVERLAP_FRONT_ROWS)
             .map(|line| line.render())
             .collect()
     }
@@ -556,104 +611,4 @@ impl App {
             self.agent_busy(),
         );
     }
-}
-
-/// Read the rows the log holds older than the row the visible transcript
-/// starts at. The read walks back from the log tail one window at a time,
-/// since the row it looks for sits behind the resident window and the bytes
-/// crossed to reach it must not be held at once. The first window carrying
-/// that row ends the walk, and the rows older than it in that window are the
-/// result. None when no window within the walk carries it, or when it is the
-/// oldest row the walk reached.
-fn read_log_tail(
-    source: &dyn TranscriptSnapshot,
-    front: &[String],
-) -> Option<(Vec<TranscriptLine>, u64)> {
-    let mut anchor = source.log_size();
-    let mut walked: u64 = 0;
-    // The rows of the window read before this one that sit just after this
-    // window's newest row: a seam whose run reaches this window's end
-    // continues into them.
-    let mut newer: Vec<TranscriptLine> = Vec::new();
-    // Set once the walk has passed the seam row itself, so the next window's
-    // rows are all older than it and are the whole result.
-    let mut past_seam = false;
-    while walked < LOG_WALK_MAX_BYTES && anchor > 0 {
-        let window = source.window_before(anchor, LOG_WINDOW_BYTES);
-        // A window that does not end where it was asked to would leave a gap
-        // between it and the rows already read, so the walk stops instead. One
-        // that does not begin below the anchor would leave the walk standing
-        // still, so it stops too.
-        if window.lines.is_empty() || window.next_offset != anchor {
-            return None;
-        }
-        if window.start_offset >= anchor {
-            return None;
-        }
-        walked += anchor - window.start_offset;
-        if past_seam {
-            return Some((window.lines, window.start_offset));
-        }
-        if let Some(cut) = seam_cut(&window.lines, &newer, front) {
-            if cut > 0 {
-                let mut rows = window.lines;
-                rows.truncate(cut);
-                return Some((rows, window.start_offset));
-            }
-            past_seam = true;
-        }
-        newer = window.lines.iter().take(SEAM_FRONT_ROWS).cloned().collect();
-        anchor = window.start_offset;
-    }
-    None
-}
-
-/// Read the rows the log holds older than a byte offset, which the previous
-/// window's own start gives. None when the log holds nothing older, or when
-/// the window does not end at that offset or does not begin below it — the
-/// next read starts where this one did, which would read the same rows again.
-fn read_log_before(
-    source: &dyn TranscriptSnapshot,
-    anchor: u64,
-) -> Option<(Vec<TranscriptLine>, u64)> {
-    let window = source.window_before(anchor, LOG_WINDOW_BYTES);
-    if window.lines.is_empty() || window.next_offset != anchor || window.start_offset >= anchor {
-        return None;
-    }
-    Some((window.lines, window.start_offset))
-}
-
-/// How many of the rows read from the log to keep: the ones older than the row
-/// the visible transcript starts at. Keeping the rest would print rows the
-/// view already shows. The match is on that row alone, since a match further
-/// into the view says nothing about where the view begins. A row text the log
-/// repeats matches early, so the match must hold for the rows after it, into
-/// the rows just after this window, and the longest run wins. None when the
-/// window does not hold the row.
-fn seam_cut(
-    loaded: &[TranscriptLine],
-    newer: &[TranscriptLine],
-    front: &[String],
-) -> Option<usize> {
-    let row = front.first()?;
-    let mut texts: Vec<String> = loaded.iter().map(|line| line.render()).collect();
-    texts.extend(newer.iter().map(|line| line.render()));
-    let mut best: Option<(usize, usize)> = None;
-    for (j, text) in texts.iter().enumerate() {
-        if j >= loaded.len() {
-            break;
-        }
-        if text != row {
-            continue;
-        }
-        let run = front
-            .iter()
-            .zip(&texts[j..])
-            .take_while(|(want, got)| want == got)
-            .count();
-        if run >= SEAM_RUN_ROWS && best.is_none_or(|(best_run, _)| run > best_run) {
-            best = Some((run, j));
-        }
-    }
-    best.map(|(_, cut)| cut)
 }

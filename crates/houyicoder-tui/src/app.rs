@@ -86,6 +86,12 @@ pub fn run_with_runner(
         if app.todos.prune(now) {
             dirty = true;
         }
+        // Drain a background history read outside the dirty gate: an idle
+        // loop still picks the result up, and a landed result sets dirty so
+        // the redraw that renders the prepended rows follows immediately.
+        if app.pump_history_read() {
+            dirty = true;
+        }
         if dirty || app.agent_busy() {
             // Load older history before rendering its scroll position.
             app.load_older_frames();
