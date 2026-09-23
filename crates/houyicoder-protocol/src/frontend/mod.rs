@@ -605,6 +605,10 @@ pub enum FrontendRequest {
     ToolList,
     Hooks,
     Skills,
+    /// Fetch the body of one skill by name for the /skills detail view.
+    SkillBody {
+        name: String,
+    },
     ToolCall {
         tool: String,
         args: String,

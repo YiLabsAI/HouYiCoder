@@ -409,24 +409,18 @@ fn test_skills_pane_nav() {
             usage: None,
         },
     ];
-    assert_eq!(app.skills_pane.list_cursor.get(), 0);
+    assert_eq!(app.skills_pane.cursor(), 0);
     handle_working(&mut app, key(KeyCode::Down));
-    assert_eq!(
-        app.skills_pane.list_cursor.get(),
-        1,
-        "Down moves cursor to 1"
-    );
+    assert_eq!(app.skills_pane.cursor(), 1, "Down moves cursor to 1");
     handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(
-        app.skills_pane.list_cursor.get(),
-        0,
-        "Up moves cursor back to 0"
-    );
+    assert_eq!(app.skills_pane.cursor(), 0, "Up moves cursor back to 0");
     handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(app.skills_pane.list_cursor.get(), 0, "Up saturates at 0");
+    assert_eq!(app.skills_pane.cursor(), 0, "Up saturates at 0");
 }
 
-/// Enter opens the detail view; Esc returns to the list.
+/// Enter opens the detail view; Esc returns to the list. Without a session
+/// the body cannot be requested, so the detail opens with it unavailable
+/// rather than staying on a request that was never sent.
 #[test]
 fn test_skills_pane_detail() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
@@ -442,9 +436,12 @@ fn test_skills_pane_detail() {
         usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Enter));
-    assert_eq!(app.skills_pane.level.get(), 1, "Enter opens detail");
+    assert!(app.skills_pane.detail().is_some(), "Enter opens the detail");
     handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.skills_pane.level.get(), 0, "Esc returns to list");
+    assert!(
+        app.skills_pane.detail().is_none(),
+        "Esc returns to the list"
+    );
 }
 
 /// The t key toggles a skill disabled in the detail view.
@@ -462,7 +459,7 @@ fn test_skills_pane_toggle() {
         user_invocable: true,
         usage: None,
     }];
-    app.skills_pane.level.set(1);
+    app.skills_pane.open_unavailable("alpha".into());
     assert!(app.skill_disabled.is_empty(), "starts clean");
     handle_working(&mut app, key(KeyCode::Char('t')));
     assert!(app.skill_disabled.contains("alpha"), "t disables alpha");

@@ -6,9 +6,11 @@
 #![cfg(test)]
 
 use super::*;
+use crate::composition::SkillRegistryImpl;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::sandbox::{SandboxSession, WorktreeFenceGuard};
+use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError, SessionId};
@@ -26,6 +28,8 @@ use houyicoder_protocol::frontend::permission::{
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_session::SessionStore;
 use serde_json::Value;
+use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -138,6 +142,26 @@ fn plain_server() -> Server {
     )
 }
 
+/// A server whose runner carries a real skill registry over root, so a body
+/// request resolves a real SKILL.md instead of the stub registry's miss.
+fn server_with_skill(root: &Path) -> Server {
+    let registry: Arc<dyn SkillRegistry> =
+        Arc::new(SkillRegistryImpl::discover_with_home(Some(root), None));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::new(
+        store,
+        Arc::new(houyicoder_provider::FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    )
+    .with_skill_registry(registry);
+    Server::new(
+        Arc::new(runner),
+        SessionId::new(),
+        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+    )
+}
+
 fn send_line(tx: &mut mpsc::Sender<String>, frame: &impl serde::Serialize) {
     let mut s = houyicoder_protocol::framing::encode(frame).unwrap();
     if !s.ends_with('\n') {
@@ -201,6 +225,53 @@ async fn test_skills_returns_payload() {
         "expected Skills, got {:?}",
         payloads[0]
     );
+}
+
+/// SkillBody returns the body a discovered skill would inject, read from
+/// the real SKILL.md on disk, so the detail view shows the text the model
+/// reads rather than the listing's truncated description. A name the
+/// registry cannot resolve replies None, which the pane renders as an
+/// unavailable note instead of dropping the open view.
+#[tokio::test]
+async fn test_skill_body_reply() {
+    let tmp = env::temp_dir().join(format!("skill-body-{}-{}", std::process::id(), line!()));
+    drop(fs::remove_dir_all(&tmp));
+    let skill_dir = tmp.join(".houyicoder").join("skills").join("alpha");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: alpha\ndescription: alpha skill\n---\nrun the alpha step\n",
+    )
+    .unwrap();
+    let payloads = dispatch_responses(
+        server_with_skill(&tmp),
+        vec![
+            FrontendRequest::SkillBody {
+                name: "alpha".into(),
+            },
+            FrontendRequest::SkillBody {
+                name: "ghost".into(),
+            },
+        ],
+    )
+    .await;
+    match &payloads[0] {
+        ResponsePayload::SkillBody(Some(body)) => assert!(
+            body.contains("run the alpha step"),
+            "the body text read from disk: {body}"
+        ),
+        other => panic!("expected a resolved SkillBody, got {other:?}"),
+    }
+    match &payloads[1] {
+        ResponsePayload::SkillBody(body) => {
+            assert!(
+                body.is_none(),
+                "an unresolvable name replies None: {body:?}"
+            );
+        }
+        other => panic!("expected SkillBody, got {other:?}"),
+    }
+    drop(fs::remove_dir_all(&tmp));
 }
 
 /// Status builds a full snapshot and attaches the running build version,

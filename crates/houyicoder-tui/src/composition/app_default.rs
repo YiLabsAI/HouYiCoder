@@ -19,6 +19,7 @@ use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
+use crate::skills_state::SkillsPaneState;
 use crate::state::transcript::Transcript;
 use crate::state::{ModelPickerState, ParkedKeys, QueueViewState, StatusTab, TrajectoryPaneState};
 
@@ -165,7 +166,7 @@ pub fn app() -> App {
 
         skill_disabled: HashSet::new(),
         skill_picker_open: false,
-        skills_pane: crate::state::SkillsPaneState::default(),
+        skills_pane: SkillsPaneState::default(),
         skill_picker_sel: Cell::new(0),
         hooks_level: Cell::new(0),
         hooks_sel: Cell::new(0),

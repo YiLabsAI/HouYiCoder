@@ -287,6 +287,19 @@ fn rebuild_spans(row: Vec<WrapCell>) -> Line<'static> {
     Line::from(spans)
 }
 
+/// The largest scroll offset a wrapped body needs to bring its last row
+/// into a viewport of height rows: the wrapped row count minus the viewport,
+/// or zero when the body fits. Shared by the detail views so the offset a
+/// key press clamps against matches the rows the renderer produced.
+pub(crate) fn max_scroll_offset(body: &[Line<'static>], width: u16, height: u16) -> u16 {
+    let rendered_rows: usize = body
+        .iter()
+        .cloned()
+        .map(|line| wrap_styled_line(line, width as usize).len())
+        .sum();
+    u16::try_from(rendered_rows.saturating_sub(height as usize)).unwrap_or(u16::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

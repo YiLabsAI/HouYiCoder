@@ -74,6 +74,7 @@ impl Server {
             }
             FrontendRequest::Hooks => self.dispatch_hooks(io, req_id).await,
             FrontendRequest::Skills => self.dispatch_skills(io, req_id).await,
+            FrontendRequest::SkillBody { name } => self.dispatch_skill_body(io, req_id, name).await,
             FrontendRequest::Undo => self.dispatch_undo(io, req_id).await,
             FrontendRequest::ModelInfo => self.handle_model_info(io, req_id).await,
             FrontendRequest::ModelSet {
@@ -97,6 +98,31 @@ impl Server {
             FrontendRequest::MemoryToggle { which } => {
                 self.handle_memory_toggle(io, req_id, which).await
             }
+            FrontendRequest::PermissionMode
+            | FrontendRequest::PermissionRules
+            | FrontendRequest::PermissionCycleMode
+            | FrontendRequest::PermissionAddRule { .. }
+            | FrontendRequest::PermissionRemoveRule { .. }
+            | FrontendRequest::PermissionAddWorkingDir { .. }
+            | FrontendRequest::PermissionRemoveWorkingDir { .. }
+            | FrontendRequest::PermissionAskBeforeGit { .. } => {
+                self.dispatch_permission(io, req_id, payload).await
+            }
+            _ => self.send_response(io, req_id, ResponsePayload::Ack).await,
+        }
+    }
+
+    /// Route a permission-management request: the mode, the durable rule
+    /// set, the working-dir widening, and the git ask toggle. Kept apart
+    /// from the read-only queries so each router stays a readable dispatch
+    /// table.
+    async fn dispatch_permission(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        payload: FrontendRequest,
+    ) -> Result<(), ProtocolError> {
+        match payload {
             FrontendRequest::PermissionMode => self.handle_permission_mode(io, req_id).await,
             FrontendRequest::PermissionRules => self.handle_permission_rules(io, req_id).await,
             FrontendRequest::PermissionCycleMode => {
@@ -193,6 +219,33 @@ impl Server {
     ) -> Result<(), ProtocolError> {
         let skills = pa::skills::skill_entries(self.runner.skills_snapshot());
         self.send_response(io, req_id, ResponsePayload::Skills(skills))
+            .await
+    }
+
+    /// The body one skill would inject, for the /skills detail view. A
+    /// registry that cannot resolve the name, or a body file that cannot be
+    /// read, replies None: the pane renders the detail with an unavailable
+    /// note rather than dropping the open view.
+    async fn dispatch_skill_body(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        name: String,
+    ) -> Result<(), ProtocolError> {
+        let body = match self.runner.skill_registry() {
+            Some(registry) => match registry.prepare_body(&name, None, None) {
+                Ok(body) => Some(body),
+                Err(err) => {
+                    tracing::warn!(skill = %name, error = %err, "skill body unavailable");
+                    None
+                }
+            },
+            None => {
+                tracing::warn!(skill = %name, "no skill registry to read the body from");
+                None
+            }
+        };
+        self.send_response(io, req_id, ResponsePayload::SkillBody(body))
             .await
     }
 

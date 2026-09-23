@@ -54,12 +54,172 @@ fn test_skills_result_stored() {
     assert!(app.skill_entries[0].invocable);
 }
 
+/// A body reply for the request the detail waits on fills it with the text
+/// the model would read on invocation.
+#[test]
+fn test_skill_body_fills_detail() {
+    let mut app = crate::composition::app();
+    app.skills_pane
+        .request_detail(RequestId(21), "alpha".into());
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(21),
+        response: ServerResponse::SkillBody {
+            body: Some("run the alpha step".into()),
+        },
+    });
+    assert_eq!(app.skills_pane.detail_body(), Some("run the alpha step"));
+}
+
+/// A reply for a superseded request leaves the current detail loading: the
+/// body it carries belongs to a detail the user already replaced.
+#[test]
+fn test_stale_skill_body_dropped() {
+    let mut app = crate::composition::app();
+    app.skills_pane.request_detail(RequestId(22), "beta".into());
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(21),
+        response: ServerResponse::SkillBody {
+            body: Some("stale".into()),
+        },
+    });
+    assert!(matches!(
+        app.skills_pane.detail(),
+        Some(crate::skills_state::SkillDetail::Loading { .. })
+    ));
+    assert!(app.skills_pane.detail_body().is_none());
+}
+
+/// A session-less App cannot request a body, so Enter opens the detail with
+/// the body unavailable rather than leaving it loading forever.
+#[test]
+fn test_open_detail_without_session() {
+    let mut app = crate::composition::app();
+    app.pane = Pane::Skills;
+    app.skill_entries = vec![skill_entry("alpha")];
+    app.open_skill_detail();
+    assert!(matches!(
+        app.skills_pane.detail(),
+        Some(crate::skills_state::SkillDetail::Open { .. })
+    ));
+    assert!(app.skills_pane.detail_body().is_none());
+}
+
+/// A send the lost connection refuses settles the detail it opened, so the
+/// pane never waits on a reply that cannot arrive.
+#[test]
+fn test_lost_send_settles_detail() {
+    let mut app = crate::test_harness::connection_lost_app();
+    app.pane = Pane::Skills;
+    app.skill_entries = vec![skill_entry("alpha")];
+    app.open_skill_detail();
+    assert!(matches!(
+        app.skills_pane.detail(),
+        Some(crate::skills_state::SkillDetail::Open { .. })
+    ));
+    assert!(app.skills_pane.detail_body().is_none());
+}
+
+/// A connection loss settles a loading detail, because no reply is coming.
+#[test]
+fn test_loss_settles_skill_detail() {
+    let (mut app, _events) = crate::test_harness::connected_app_with_events();
+    app.skills_pane
+        .request_detail(RequestId(31), "alpha".into());
+    assert!(app.apply_connection_loss("connect failed: no server".into(), Vec::new()));
+    assert!(matches!(
+        app.skills_pane.detail(),
+        Some(crate::skills_state::SkillDetail::Open { .. })
+    ));
+    assert!(app.skills_pane.detail_body().is_none());
+}
+
+/// An error reply for the request the detail waits on settles it as
+/// unavailable, the same way a connection loss does, so the pane never waits
+/// on a reply that cannot arrive.
+#[test]
+fn test_error_settles_skill_detail() {
+    let (mut app, _events) = crate::test_harness::connected_app_with_events();
+    app.skills_pane
+        .request_detail(RequestId(41), "alpha".into());
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(41),
+        response: ServerResponse::Error {
+            message: "body read failed".into(),
+        },
+    });
+    assert!(matches!(
+        app.skills_pane.detail(),
+        Some(crate::skills_state::SkillDetail::Open { .. })
+    ));
+    assert!(app.skills_pane.detail_body().is_none());
+    use crate::records::TranscriptLine;
+    assert!(
+        app.transcript.iter().any(
+            |l| matches!(l, TranscriptLine::System(s) if s.contains("error: body read failed"))
+        ),
+        "the error still reaches the transcript"
+    );
+}
+
+/// An error reply for a different request leaves a loading detail alone: the
+/// reply it waits on is still to come.
+#[test]
+fn test_error_keeps_detail_loading() {
+    let (mut app, _events) = crate::test_harness::connected_app_with_events();
+    app.skills_pane
+        .request_detail(RequestId(42), "alpha".into());
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(41),
+        response: ServerResponse::Error {
+            message: "body read failed".into(),
+        },
+    });
+    assert!(matches!(
+        app.skills_pane.detail(),
+        Some(crate::skills_state::SkillDetail::Loading { .. })
+    ));
+}
+
+/// t flips the session disable for the invocable skill the cursor points at.
+#[test]
+fn test_toggle_skill_at_cursor() {
+    let mut app = crate::composition::app();
+    app.pane = Pane::Skills;
+    app.skill_entries = vec![skill_entry("alpha")];
+    app.toggle_skill_at_cursor();
+    assert!(
+        app.skill_disabled.contains("alpha"),
+        "the first press disables"
+    );
+    app.toggle_skill_at_cursor();
+    assert!(
+        !app.skill_disabled.contains("alpha"),
+        "the second press re-enables"
+    );
+}
+
+/// A skill the frontmatter blocks has no session state to flip, so t leaves
+/// it blocked until its file changes.
+#[test]
+fn test_toggle_blocked_skill_noop() {
+    let mut app = crate::composition::app();
+    app.pane = Pane::Skills;
+    let mut blocked = skill_entry("alpha");
+    blocked.user_invocable = false;
+    blocked.invocable = false;
+    app.skill_entries = vec![blocked];
+    app.toggle_skill_at_cursor();
+    assert!(
+        app.skill_disabled.is_empty(),
+        "a blocked skill stays blocked"
+    );
+}
+
 /// The /skills pane renders the discovered list with name, description,
 /// source tag, and body token estimate per row. A populated list never
 /// shows the empty placeholder.
 #[test]
 fn test_skills_pane_renders_entries() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Skills;
@@ -103,7 +263,6 @@ fn test_skills_pane_renders_entries() {
 /// eyeballed. Run with --nocapture to view.
 #[test]
 fn test_skills_pane_showcase() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Skills;

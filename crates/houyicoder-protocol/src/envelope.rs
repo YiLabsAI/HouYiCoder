@@ -154,6 +154,11 @@ pub enum ResponsePayload {
     /// The /skills reply: the discovered skills (name, description,
     /// source, body token estimate).
     Skills(Vec<crate::frontend::skills::SkillEntry>),
+    /// The /skills detail reply: the body text of one skill as prepared
+    /// for injection (frontmatter stripped, base-dir header, substituted
+    /// variables, resource manifest), or None when the skill is no longer
+    /// discoverable or its body could not be read.
+    SkillBody(Option<String>),
     /// The /undo reply: a description of what was undone, or None when the
     /// undo stack was empty.
     UndoResult(Option<String>),

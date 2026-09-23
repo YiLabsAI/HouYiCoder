@@ -101,6 +101,7 @@ impl App {
         let run_req = self.active_run_req_id();
         let run_not_sent = run_req.is_some_and(|r| not_sent.contains(&r));
         self.memory.clear_pending();
+        self.skills_pane.clear_pending();
         let run_line = if run_not_sent {
             "run not sent — connection failed before the request reached the transport"
         } else {
@@ -464,6 +465,9 @@ impl App {
             ServerResponse::Skills { skills } => {
                 self.skill_entries = skills;
             }
+            ServerResponse::SkillBody { body } => {
+                self.skills_pane.apply_detail(request, body);
+            }
             ServerResponse::Model { result } => {
                 self.apply_model_result(request, result);
             }
@@ -513,6 +517,10 @@ impl App {
             // value — nothing was applied.
             self.system_line(Self::memory_failure_line(action, &message));
         } else {
+            // An error for the request the skills detail waits on settles it
+            // as unavailable rather than leaving it loading on a reply that
+            // cannot arrive; any other request id leaves the detail alone.
+            self.skills_pane.fail_detail(request);
             self.system_line(format!("error: {message}"));
         }
     }

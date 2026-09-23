@@ -620,8 +620,8 @@ async fn test_drive_forwards_admin_commands() {
 }
 
 /// The remaining permission and skill queries forward with their identity
-/// fields: the rules list, the skills list, and a working-dir removal that
-/// must carry the exact path.
+/// fields: the rules list, the skills list, a body request that must carry
+/// the skill name, and a working-dir removal that must carry the exact path.
 #[tokio::test]
 async fn test_drive_forwards_config_queries() {
     use houyicoder_protocol::frontend::FrontendRequest;
@@ -634,8 +634,12 @@ async fn test_drive_forwards_config_queries() {
             ClientCommand::SkillsQuery {
                 req_id: RequestId(2),
             },
-            ClientCommand::PermissionRemoveDirQuery {
+            ClientCommand::SkillBodyQuery {
                 req_id: RequestId(3),
+                name: "deploy".into(),
+            },
+            ClientCommand::PermissionRemoveDirQuery {
+                req_id: RequestId(4),
                 path: "/work".into(),
             },
         ])
@@ -651,14 +655,21 @@ async fn test_drive_forwards_config_queries() {
     assert!(
         run.has_request(
             3,
+            |p| matches!(p, FrontendRequest::SkillBody { name } if name == "deploy")
+        ),
+        "body query lost its skill name in dispatch: {run:?}"
+    );
+    assert!(
+        run.has_request(
+            4,
             |p| matches!(p, FrontendRequest::PermissionRemoveWorkingDir { path } if path == "/work")
         ),
         "dir removal lost its path in dispatch: {run:?}"
     );
     assert_eq!(
         run.requests().len(),
-        3,
-        "exactly the three config queries: {run:?}"
+        4,
+        "exactly the four config queries: {run:?}"
     );
 }
 
@@ -933,7 +944,8 @@ async fn test_drive_translates_permission_responses() {
 }
 
 /// Tool, agent, child, hook, and skill listings translate with their
-/// entries intact.
+/// entries intact, and a skill body reply carries its text onto the
+/// response the pane fills its open detail from.
 #[tokio::test]
 async fn test_drive_translates_catalog_responses() {
     use houyicoder_protocol::frontend::SessionId;
@@ -968,6 +980,7 @@ async fn test_drive_translates_catalog_responses() {
         body_token_estimate: 12,
         usage: None,
     }]));
+    engine.response(ResponsePayload::SkillBody(Some("ship it".into())));
     engine.close();
     let run = engine.drive(Vec::new()).await;
 
@@ -992,10 +1005,14 @@ async fn test_drive_translates_catalog_responses() {
         |m| matches!(m, SessionMessage::Response { response: ServerResponse::Skills { skills }, .. }
             if skills.len() == 1 && skills[0].name == "deploy")
     ));
+    assert!(run.msgs.iter().any(
+        |m| matches!(m, SessionMessage::Response { response: ServerResponse::SkillBody { body }, .. }
+            if body.as_deref() == Some("ship it"))
+    ));
     assert_eq!(
         run.msgs.len(),
-        5 + 1 + 1,
-        "five listings plus readiness and the death: {run:?}"
+        6 + 1 + 1,
+        "six replies plus readiness and the death: {run:?}"
     );
 }
 

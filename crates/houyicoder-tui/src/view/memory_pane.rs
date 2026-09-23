@@ -19,7 +19,7 @@ use ratatui::{
 use crate::memory_state::{MemoryDetailState, MemoryPaneState, toggle_label};
 use crate::state::enums::MemoryScopeTab;
 use crate::state::{App, MemoryEntry};
-use crate::view::line_wrap::{truncate_width, wrap_styled_line};
+use crate::view::line_wrap::{max_scroll_offset, truncate_width, wrap_styled_line};
 use crate::view::navigation::{key_hint, tab_header};
 
 /// Render the memory list or the selected memory detail.
@@ -153,7 +153,7 @@ fn draw_detail(
             .lines()
             .map(|line| Line::from(line.to_string())),
     );
-    let max_offset = detail_max_offset(&body, rows[1].width, rows[1].height);
+    let max_offset = max_scroll_offset(&body, rows[1].width, rows[1].height);
     memory.set_detail_max_offset(max_offset);
     f.render_widget(
         Paragraph::new(body)
@@ -165,16 +165,6 @@ fn draw_detail(
         Paragraph::new(key_hint(&[("Up/Down", "scroll"), ("Esc", "back")])),
         rows[2],
     );
-}
-
-/// Return the largest scroll offset after display-width wrapping.
-pub(crate) fn detail_max_offset(body: &[Line<'static>], width: u16, height: u16) -> u16 {
-    let rendered_rows: usize = body
-        .iter()
-        .cloned()
-        .map(|line| wrap_styled_line(line, width as usize).len())
-        .sum();
-    u16::try_from(rendered_rows.saturating_sub(height as usize)).unwrap_or(u16::MAX)
 }
 
 fn memory_header(app: &App, tab: MemoryScopeTab, n: usize) -> Vec<Line<'static>> {

@@ -412,6 +412,8 @@ pub enum ServerResponse {
     Skills {
         skills: Vec<houyicoder_protocol::frontend::skills::SkillEntry>,
     },
+    /// One skill's body for the detail view, None when it does not resolve.
+    SkillBody { body: Option<String> },
     /// The /undo reply: a description of what was undone, or None when the
     /// undo stack was empty.
     Undo { description: Option<String> },
@@ -521,6 +523,11 @@ pub enum ClientCommand {
     /// estimate.
     SkillsQuery {
         req_id: RequestId,
+    },
+    /// Request one skill's body for the detail view (None when unreadable).
+    SkillBodyQuery {
+        req_id: RequestId,
+        name: String,
     },
     /// Request the stored-memory list over the wire (the /memory command). The
     /// reply carries frontmatter-only summaries (no body); a /memory <key>

@@ -142,7 +142,7 @@ fn test_memory_pane_keys_route() {
 #[test]
 fn test_detail_soft_wrap_max() {
     let body = vec![ratatui::text::Line::from("x".repeat(25))];
-    assert_eq!(crate::view::memory_pane::detail_max_offset(&body, 10, 2), 1);
+    assert_eq!(crate::view::line_wrap::max_scroll_offset(&body, 10, 2), 1);
 }
 
 #[test]

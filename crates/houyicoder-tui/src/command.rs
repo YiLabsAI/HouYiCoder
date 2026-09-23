@@ -17,6 +17,7 @@ mod debug;
 mod memory;
 mod model;
 mod resume;
+mod skills;
 mod status_name;
 
 mod compact;

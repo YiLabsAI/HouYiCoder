@@ -147,6 +147,21 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         return;
     }
+    // The /skills detail owns Esc, the scroll keys, and the disable toggle.
+    // The list stays behind it, so Esc returns to the list rather than
+    // leaving the pane.
+    if app.pane == Pane::Skills && app.skills_pane.detail().is_some() {
+        match k.code {
+            KeyCode::Esc => app.skills_pane.close_detail(),
+            KeyCode::Up => app.skills_pane.scroll_detail(-1),
+            KeyCode::Down => app.skills_pane.scroll_detail(1),
+            KeyCode::PageUp => app.skills_pane.scroll_detail(-10),
+            KeyCode::PageDown => app.skills_pane.scroll_detail(10),
+            KeyCode::Char('t') => app.toggle_skill_at_cursor(),
+            _ => {}
+        }
+        return;
+    }
     if app.pane == Pane::Trajectory && trajectory::handle(app, k) {
         return;
     }
@@ -267,58 +282,21 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Esc if app.pane == Pane::Model => {
             app.discard_model_pick();
         }
+        // The /skills list view. The open detail is handled above, so these
+        // arms only see the list.
         KeyCode::Esc if app.pane == Pane::Skills => {
-            if app.skills_pane.level.get() > 0 {
-                app.skills_pane.level.set(0);
-            } else {
-                app.pane = Pane::Transcript;
-            }
+            app.pane = Pane::Transcript;
         }
-        KeyCode::Up if app.pane == Pane::Skills && app.skills_pane.level.get() == 0 => {
-            let cur = app.skills_pane.list_cursor.get();
-            app.skills_pane.list_cursor.set(cur.saturating_sub(1));
+        KeyCode::Up if app.pane == Pane::Skills => {
+            app.skills_pane
+                .move_cursor(-1, display_order(&app.skill_entries).len());
         }
-        KeyCode::Down if app.pane == Pane::Skills && app.skills_pane.level.get() == 0 => {
-            let len = display_order(&app.skill_entries).len();
-            if len > 0 {
-                let next = app.skills_pane.list_cursor.get() + 1;
-                app.skills_pane
-                    .list_cursor
-                    .set(next.min(len.saturating_sub(1)));
-            }
+        KeyCode::Down if app.pane == Pane::Skills => {
+            app.skills_pane
+                .move_cursor(1, display_order(&app.skill_entries).len());
         }
-        KeyCode::Enter if app.pane == Pane::Skills && app.skills_pane.level.get() == 0 => {
-            app.skills_pane.level.set(1);
-            // Detail scroll offset on the /skills pane state
-            // detail scroll offset; start at the top.
-            app.skills_pane.detail_scroll.set(0);
-        }
-        // Scroll the detail view when it holds more rows than the area.
-        KeyCode::Up if app.pane == Pane::Skills && app.skills_pane.level.get() == 1 => {
-            let cur = app.skills_pane.detail_scroll.get();
-            app.skills_pane.detail_scroll.set(cur.saturating_sub(1));
-        }
-        KeyCode::Down if app.pane == Pane::Skills && app.skills_pane.level.get() == 1 => {
-            let cur = app.skills_pane.detail_scroll.get();
-            app.skills_pane.detail_scroll.set(cur + 1);
-        }
-        KeyCode::Char('t') if app.pane == Pane::Skills && app.skills_pane.level.get() == 1 => {
-            let ordered = display_order(&app.skill_entries);
-            let sel = app
-                .skills_pane
-                .list_cursor
-                .get()
-                .min(ordered.len().saturating_sub(1));
-            // Toggle only if the skill is usable (user-invocable or
-            // model-invocable). A skill that is neither cannot be toggled.
-            if let Some(entry) = ordered.get(sel)
-                && (entry.user_invocable || entry.invocable)
-            {
-                let name = entry.name.clone();
-                if !app.skill_disabled.insert(name.clone()) {
-                    app.skill_disabled.remove(&name);
-                }
-            }
+        KeyCode::Enter if app.pane == Pane::Skills => {
+            app.open_skill_detail();
         }
         // /agents pane: same close-to-transcript as the other slash panes.
         // Without this arm the key fell through to the recall/abort arms --

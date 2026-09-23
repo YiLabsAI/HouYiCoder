@@ -8,6 +8,7 @@ use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::session_update::{
     SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
+use houyicoder_protocol::frontend::skills::SkillEntry;
 
 #[path = "tests/frames.rs"]
 mod frames;
@@ -23,6 +24,20 @@ mod subagent_render;
 mod teammate_esc;
 #[path = "tests/teammate_view.rs"]
 mod teammate_view;
+
+/// An invocable user skill, so a pane test needs only a name to build the
+/// list row it acts on.
+fn skill_entry(name: &str) -> SkillEntry {
+    SkillEntry {
+        name: name.into(),
+        description: "a skill".into(),
+        origin: "user".into(),
+        invocable: true,
+        body_token_estimate: 12,
+        user_invocable: true,
+        usage: None,
+    }
+}
 
 fn tool_call_frame(id: &str, title: &str, status: ToolCallStatus) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::ToolCall(

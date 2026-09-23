@@ -44,6 +44,7 @@ use crate::run_state::{RunProgress, RunState};
 use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::SessionConnection;
+use crate::skills_state::SkillsPaneState;
 use crate::todo_view::TodoState;
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
@@ -122,17 +123,6 @@ impl QueueViewState {
 #[derive(Default, Debug)]
 pub(crate) struct CurrentTurnBoundary {
     pub(crate) line_index: usize,
-}
-
-/// The /skills pane view state: the drill-down level (0 = list, 1 = detail),
-/// the list cursor, and the detail scroll offset. The draw path and key
-/// handler read through these, and the offset is u16 to match ratatui's
-/// scroll coordinate without a cast.
-#[derive(Default, Debug)]
-pub(crate) struct SkillsPaneState {
-    pub level: Cell<u8>,
-    pub list_cursor: Cell<usize>,
-    pub detail_scroll: Cell<u16>,
 }
 
 /// Top-level state composed from session wiring and domain-owned UI state.
@@ -515,9 +505,9 @@ pub struct App {
     /// the wire when the user opens /skills. Empty until the first
     /// reply.
     pub skill_entries: Vec<SkillEntry>,
-    /// The /skills pane view state: the drill-down level (0 = list, 1 =
-    /// detail), the list cursor, and the detail scroll offset. Kept together
-    /// so the pane's view state is one owner, not three App fields.
+    /// The /skills pane view state: the list cursor and the open detail
+    /// (body request, body text, scroll position). Kept together so the
+    /// pane's view state is one owner, not a scatter of App fields.
     pub(crate) skills_pane: SkillsPaneState,
     /// Session-scoped disabled skills (toggled via t in the detail view).
     /// Persisted disable is a follow-up (settings wire).

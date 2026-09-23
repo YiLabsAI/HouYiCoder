@@ -226,6 +226,12 @@ async fn drive_connection(
                         payload: FrontendRequest::Hooks,
                     });
                 }
+                Some(ClientCommand::SkillBodyQuery { req_id, name }) => {
+                    outbound.push_back(Outbound::Request {
+                        req_id,
+                        payload: FrontendRequest::SkillBody { name },
+                    });
+                }
                 Some(ClientCommand::SkillsQuery { req_id }) => {
                     outbound.push_back(Outbound::Request {
                         req_id,
@@ -619,6 +625,9 @@ async fn drive_connection(
                         ResponsePayload::Hooks(hooks) => Some(ServerResponse::Hooks { hooks }),
                         ResponsePayload::Skills(skills) => {
                             Some(ServerResponse::Skills { skills })
+                        }
+                        ResponsePayload::SkillBody(body) => {
+                            Some(ServerResponse::SkillBody { body })
                         }
                         ResponsePayload::MemoryList(entries) => {
                             Some(ServerResponse::MemoryList { entries })
