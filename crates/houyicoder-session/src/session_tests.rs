@@ -273,6 +273,54 @@ async fn test_clear_resets_head() {
     assert_eq!(head.summary.usage.input_tokens, 0);
 }
 
+/// The head is read once a second by status and once a frame by the pane, so
+/// its construction must not allocate. The model id is interned, so two reads
+/// share one instance rather than rebuilding the string.
+#[tokio::test]
+async fn test_head_model_interned() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let session = SessionId::new();
+    appended_event(
+        &store,
+        session,
+        SessionEvent::UserInput { text: "a".into() },
+    )
+    .await;
+    appended_event(
+        &store,
+        session,
+        SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 1,
+            input_tokens: 10,
+            output_tokens: 1,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "qwen".into(),
+            recovery: false,
+            effort: None,
+        },
+    )
+    .await;
+
+    let first = store
+        .trajectory_head(session)
+        .summary
+        .single_model
+        .expect("one model");
+    let second = store
+        .trajectory_head(session)
+        .summary
+        .single_model
+        .expect("one model");
+    assert_eq!(&*first, "qwen");
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &second),
+        "a read shares the interned id instead of rebuilding it"
+    );
+}
+
 #[tokio::test]
 async fn test_last_id_tracks_mirror() {
     let store = SessionStore::new(Box::new(InMemoryBackend::new()));

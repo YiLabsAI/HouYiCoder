@@ -365,21 +365,89 @@ fn test_evicted_call_plain_rule() {
     assert_eq!(state.snapshot().usage.failures, 1);
 }
 
-/// A call that carried a whole file body must not keep it: only the field the
-/// failure rule reads is held.
+/// A call keeps only the command word the failure rule reduces a command to,
+/// so a call carrying a large body does not hold it.
 #[test]
-fn test_call_facts_keep_command() {
+fn test_call_facts_keep_word() {
     let mut state = TrajectorySummaryState::default();
     state.record(&entry(
         0,
         SessionEvent::ToolCall {
             call_id: "c1".into(),
             tool: "bash".into(),
-            input: serde_json::json!({"command": "grep x", "body": "x".repeat(4096)}),
+            input: serde_json::json!({"command": "grep foo", "body": "x".repeat(1 << 20)}),
         },
     ));
     let facts = state.pending_calls.get("c1").expect("the call is held");
-    assert_eq!(facts.command.as_deref(), Some("grep x"));
+    assert_eq!(facts.command_word.as_deref(), Some("grep"));
+
+    // A compound command has no command word, so nothing is exempted later.
+    let mut compound = TrajectorySummaryState::default();
+    compound.record(&entry(
+        0,
+        SessionEvent::ToolCall {
+            call_id: "c2".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "grep x | head"}),
+        },
+    ));
+    let facts = compound.pending_calls.get("c2").expect("the call is held");
+    assert_eq!(facts.command_word, None);
+}
+
+/// A repeated call id replaces its facts, so it must not also leave its old
+/// place in the order queue: the queue would grow past the cap while the map
+/// stayed small.
+#[test]
+fn test_duplicate_call_id_bounded() {
+    let mut state = TrajectorySummaryState::default();
+    for _ in 0..(PENDING_CALLS_CAP * 10) {
+        state.record(&entry(
+            1,
+            SessionEvent::ToolCall {
+                call_id: "same".into(),
+                tool: "bash".into(),
+                input: serde_json::json!({"command": "grep x"}),
+            },
+        ));
+    }
+    assert_eq!(state.pending_calls.len(), 1);
+    assert_eq!(
+        state.pending_order.len(),
+        1,
+        "the queue holds one entry per live call, not one per event"
+    );
+}
+
+/// A child that reached a terminal without reporting usage leaves the session
+/// total incomplete even when every parent turn reported its own usage.
+#[test]
+fn test_unmeasured_child_breaks_totals() {
+    let events = vec![
+        entry(0, SessionEvent::UserInput { text: "a".into() }),
+        usage(10, 100, 20, "m"),
+        entry(
+            20,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child".into(),
+                status: "completed".into(),
+                summary: String::new(),
+                result_ref: "child".into(),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+            },
+        ),
+        entry(30, SessionEvent::RunCompleted { secs: Some(1) }),
+    ];
+    let summary = fold(&events);
+    assert!(summary.usage.subagent_unmeasured);
+    assert!(
+        !summary.usage.totals_known,
+        "the parent is complete, but a child reported nothing"
+    );
 }
 
 #[test]

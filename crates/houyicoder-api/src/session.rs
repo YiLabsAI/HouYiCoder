@@ -5,6 +5,8 @@
 //! engine depends on this trait so it does not depend on the session crate
 //! directly.
 
+use std::sync::Arc;
+
 use houyicoder_async::PFut;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
@@ -156,9 +158,10 @@ pub struct TrajectorySummary {
     pub timing: TrajectoryTimingSummary,
     /// Distinct model ids across the session, not across the loaded page.
     pub models_used: usize,
-    /// The one model the session used, when exactly one appears. The only
-    /// allocation in a read; a renderer names the model from it.
-    pub single_model: Option<String>,
+    /// The one model the session used, when exactly one appears. The append
+    /// path interns it, so a read only clones an Arc and allocates nothing:
+    /// this is read once a second by status and once a frame by the pane.
+    pub single_model: Option<Arc<str>>,
     /// The span of the session's own events, which is what the user waited.
     pub duration_ms: u64,
 }

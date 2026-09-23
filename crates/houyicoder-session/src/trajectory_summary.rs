@@ -7,12 +7,13 @@
 //! than a scan of the log.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use houyicoder_api::session::{
     SubagentUsage, TrajectorySummary, TrajectoryTimingSummary, TrajectoryUsageSummary,
 };
 use houyicoder_context::{SessionEvent, SessionLogEntry};
-use houyicoder_protocol::tool::tool_result_failed;
+use houyicoder_protocol::tool::{simple_command_word, tool_result_failed};
 use serde_json::Value;
 
 /// Buckets for the fine range, 50 ms each up to 10 s.
@@ -115,12 +116,12 @@ fn bucket_upper_bound(index: usize) -> u64 {
 
 /// What a tool call carried, so a later result can be judged against it.
 ///
-/// Only the field the failure rule reads is kept: a write call carries a whole
-/// file body in its input, and holding that for the life of the session would
-/// cost more than the rule is worth.
+/// Only the command word is kept: the failure rule reduces a command to its
+/// first word anyway, and a call can carry a heredoc or an inline script whose
+/// body would cost far more to hold than the decision it serves.
 struct ToolCallFacts {
     tool: String,
-    command: Option<String>,
+    command_word: Option<String>,
 }
 
 /// How many call facts are held. A result normally lands before the turn that
@@ -161,7 +162,7 @@ pub(crate) struct TrajectorySummaryState {
     decode_ms: u64,
     ttft: TtftHistogram,
 
-    models: HashSet<String>,
+    models: HashSet<Arc<str>>,
     /// Calls whose result has not arrived, and the order they were issued in,
     /// so the oldest can be retired once the map is at its cap.
     pending_calls: HashMap<String, ToolCallFacts>,
@@ -250,7 +251,7 @@ impl TrajectorySummaryState {
         // which is what the output count reports.
         self.decode_tokens = self.decode_tokens.saturating_add(output);
         if !model.is_empty() {
-            self.models.insert(model.to_string());
+            self.models.insert(Arc::from(model));
         }
     }
 
@@ -266,6 +267,14 @@ impl TrajectorySummaryState {
     }
 
     fn fold_tool_call(&mut self, call_id: &str, tool: &str, input: &Value) {
+        // A repeated id replaces its facts, so its place in the order queue
+        // must go with it: leaving the old entry would let the queue grow past
+        // the cap while the map stays small.
+        if self.pending_calls.contains_key(call_id)
+            && let Some(index) = self.pending_order.iter().position(|id| id == call_id)
+        {
+            self.pending_order.remove(index);
+        }
         if self.pending_calls.len() >= PENDING_CALLS_CAP
             && let Some(oldest) = self.pending_order.pop_front()
         {
@@ -275,9 +284,10 @@ impl TrajectorySummaryState {
             call_id.to_string(),
             ToolCallFacts {
                 tool: tool.to_string(),
-                command: input
+                command_word: input
                     .get("command")
                     .and_then(|c| c.as_str())
+                    .and_then(simple_command_word)
                     .map(str::to_string),
             },
         );
@@ -289,15 +299,16 @@ impl TrajectorySummaryState {
         if let Some(index) = self.pending_order.iter().position(|id| id == call_id) {
             self.pending_order.remove(index);
         }
-        // Only the command is rebuilt, so the rule reads the same shape it
-        // does everywhere else.
+        // Only the command word is rebuilt. It is already a simple command
+        // word, so re-reading it yields the same word, and the rule sees the
+        // shape it does everywhere else.
         let command_input;
         let (tool, input) = match &facts {
             Some(facts) => {
                 command_input = facts
-                    .command
+                    .command_word
                     .as_ref()
-                    .map(|c| serde_json::json!({ "command": c }));
+                    .map(|word| serde_json::json!({ "command": word }));
                 (
                     facts.tool.as_str(),
                     command_input.as_ref().unwrap_or(&Value::Null),
@@ -346,16 +357,21 @@ impl TrajectorySummaryState {
         };
         let (ttft_p95_ms, p95_capped) = split(self.ttft.percentile(0.95));
         let (ttft_p99_ms, p99_capped) = split(self.ttft.percentile(0.99));
+        // A child that reached a terminal without reporting usage leaves a
+        // hole in the session total just as a turn does, so the one definition
+        // of completeness covers both. A reader that had to combine the two
+        // fields itself would eventually read the total as complete.
+        let subagent_unmeasured = self.subagent.unmeasured_calls > 0;
         TrajectorySummary {
             total_turns: self.numbered_turns(),
             usage: TrajectoryUsageSummary {
                 input_tokens: self.input_tokens,
                 output_tokens: self.output_tokens,
                 cache_read_tokens: self.cache_read_tokens,
-                totals_known: self.totals_known(),
+                totals_known: self.totals_known() && !subagent_unmeasured,
                 failures: self.failures,
                 subagent: self.subagent,
-                subagent_unmeasured: self.subagent.unmeasured_calls > 0,
+                subagent_unmeasured,
             },
             timing: TrajectoryTimingSummary {
                 ttft_samples: self.ttft.samples as usize,
