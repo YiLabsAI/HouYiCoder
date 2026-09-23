@@ -541,7 +541,7 @@ impl App {
                         ));
                     }
                     Ok(None) => self.system_line(
-                        "natural-language proposer needs an LLM (not wired); use c/o/d for direct edits",
+                        "natural-language proposer needs an LLM (not connected); use c/o/d for direct edits",
                     ),
                     Err(_) => self.system_line("artifact: proposer error (stub)"),
                 }

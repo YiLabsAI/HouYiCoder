@@ -592,7 +592,7 @@ pub(crate) fn render_sandbox(snap: &StatusSnapshot, sandbox: &str) -> String {
             s.push_str(&format!("breaker: {}", state));
         }
         (None, _, _) => {
-            s.push_str("breaker: (none wired — fence enforced by the seatbelt path)");
+            s.push_str("breaker: (none connected — fence enforced by the seatbelt path)");
         }
     }
     s
@@ -618,7 +618,7 @@ pub(crate) fn render_breaker_line(snap: &StatusSnapshot) -> String {
             )
         }
         (Some(state), _, _) => state.to_string(),
-        (None, _, _) => "(none wired)".to_string(),
+        (None, _, _) => "(none connected)".to_string(),
     }
 }
 
