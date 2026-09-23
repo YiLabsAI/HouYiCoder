@@ -151,7 +151,6 @@ fn build_summary(
     // and a child's tokens do not fill it: they are the child's own spend.
     let any_unknown = acc.usage_events == 0 || acc.usage_events < acc.turns || subagent_unknown;
     let total_turns = rows.len() + hidden_turns;
-    let duration_secs = acc.duration_ms / 1000;
     let distinct_models: Vec<&str> = acc.models.iter().map(String::as_str).collect();
     let header_model = match distinct_models.len() {
         0 => model.to_string(),
@@ -208,7 +207,7 @@ fn build_summary(
         },
         failures: acc.failures,
         tool_calls: acc.tool_calls,
-        duration_secs,
+        duration_ms: acc.duration_ms,
         timing: session_timing,
         hidden_turns,
         // A whole-log projection ends at the newest turn, so nothing newer is
@@ -240,7 +239,9 @@ struct AccTotals {
     model_ms: u64,
     tool_ms: u64,
     cache_read: u64,
-    duration_ms: u64,
+    /// The span between the log's first and last event. None when the log
+    /// carried no event to measure between.
+    duration_ms: Option<u64>,
     /// Whole-log counts, so a completeness check cannot be fooled by the page.
     usage_events: usize,
     turns: usize,
@@ -524,9 +525,10 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
     acc.subagent_unmeasured = delegated.unmeasured_calls > 0;
     // The session's wall time is the span of its own durable events, which is
     // what the user waited, and it does not depend on which page is loaded.
-    if let (Some(first), Some(last)) = (events.first(), events.last()) {
-        acc.duration_ms = last.ts.saturating_sub(first.ts);
-    }
+    acc.duration_ms = match (events.first(), events.last()) {
+        (Some(first), Some(last)) => Some(last.ts.saturating_sub(first.ts)),
+        _ => None,
+    };
 }
 
 /// The newest turns of a log, and the number the first of them carries.

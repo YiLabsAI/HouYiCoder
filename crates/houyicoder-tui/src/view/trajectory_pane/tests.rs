@@ -678,7 +678,7 @@ fn test_timing_and_cache_render() {
         tokens_in: Some(1000),
         tokens_out: Some(200),
         cache_read: Some(500),
-        duration_secs: 10,
+        duration_ms: Some(10_000),
         timing: SessionTiming {
             ttft_samples: 1,
             ttft_avg_ms: Some(250),
@@ -984,7 +984,7 @@ fn test_turn_list_degrades() {
         tokens_in: Some(2_400),
         tokens_out: Some(1_000),
         failures: 2,
-        duration_secs: 24,
+        duration_ms: Some(24_000),
         cache_read: Some(2_000),
         ..view(vec![
             TrajectoryRow::Turn(turn(12, "宽的标题会让列错位", "qwen3.7-max")),

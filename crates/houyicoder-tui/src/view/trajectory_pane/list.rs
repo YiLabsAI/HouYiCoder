@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::command::render::format_tokens;
-use crate::view::relative_time::{format_span_ms, format_span_secs};
+use crate::view::relative_time::{format_span_ms, session_span_label};
 
 // Rendering
 
@@ -212,7 +212,7 @@ pub(super) fn draw_turn_list(
             Color::Red,
         ),
         sp(
-            format!(" · total {}", format_span_secs(traj.duration_secs)),
+            format!(" · total {}", session_span_label(traj.duration_ms)),
             Color::Gray,
         ),
     ])];

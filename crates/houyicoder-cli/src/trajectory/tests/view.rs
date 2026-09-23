@@ -415,10 +415,14 @@ fn test_tokens_none_no_usage() {
 }
 
 #[test]
-fn test_project_empty_zero_view() {
+fn test_project_empty_view() {
     let view = project(&[], "test", 0);
     assert_eq!(view.total_turns, 0);
     assert!(view.rows.is_empty());
+    assert_eq!(
+        view.duration_ms, None,
+        "a log with no event has no span to measure"
+    );
 }
 
 #[test]

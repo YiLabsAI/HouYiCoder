@@ -2,6 +2,7 @@
 //! latency summary, delegated work, and the per-model breakdown.
 
 use super::*;
+use crate::view::relative_time::span_label;
 
 /// The Usage tab's latency rows, read from the same typed summary the
 /// trajectory pane reads: one computation, two surfaces, so the two cannot
@@ -17,9 +18,9 @@ fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut St
         s.push_str(&f(
             "model / tool time",
             &format!(
-                "{:.1}s / {:.1}s",
-                timing.model_ms as f64 / 1000.0,
-                timing.tool_ms as f64 / 1000.0
+                "{} / {}",
+                span_label(timing.model_ms),
+                span_label(timing.tool_ms)
             ),
         ));
     }
@@ -29,10 +30,10 @@ fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut St
         s.push_str(&f(
             "ttft",
             &format!(
-                "{:.1}s avg · {:.1}s p95 · {:.1}s p99 ({} samples)",
-                avg as f64 / 1000.0,
-                p95 as f64 / 1000.0,
-                p99 as f64 / 1000.0,
+                "{} avg · {} p95 · {} p99 ({} samples)",
+                span_label(avg),
+                span_label(p95),
+                span_label(p99),
                 timing.ttft_samples
             ),
         ));
@@ -155,3 +156,7 @@ pub(super) fn render_usage(app: &App) -> String {
     }
     s.trim_end().to_string()
 }
+
+#[cfg(test)]
+#[path = "usage_tests.rs"]
+mod usage_tests;

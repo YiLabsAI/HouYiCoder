@@ -2,6 +2,41 @@
 //! a span for a duration. Pure functions (now passed in, not read from
 //! SystemTime) so tests are deterministic and the display does not drift
 //! between redraws. The caller computes now from SystemTime at its call site.
+//!
+//! The span labels come in two steps on purpose: the turn and event rows print
+//! tenths of a second, and a one-line summary row reads at whole seconds.
+
+/// A measured span as the status pane's latency rows print it: milliseconds
+/// below a second, tenths at or above one.
+pub(crate) fn span_label(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    }
+}
+
+/// The session's wall time as the summary header prints it: the shared span
+/// label, and an em dash when the log carried no event to measure between.
+pub(crate) fn session_span_label(ms: Option<u64>) -> String {
+    match ms {
+        None => "—".to_string(),
+        Some(ms) => format_span_secs(ms / 1000),
+    }
+}
+
+/// A turn's span as the transcript's summary row prints it. Below a second the
+/// label is in milliseconds; at or above one it rounds to the nearest whole
+/// second. A one-line record reads at a coarser step than the turn rows'
+/// tenths, and a span below that step states its milliseconds rather than
+/// rounding to a second the turn never took.
+pub(crate) fn turn_span_label(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format!("{}s", ms.saturating_add(500) / 1000)
+    }
+}
 
 /// Format an epoch-second timestamp as a short relative string: "just
 /// now", "5m ago", "3h ago", "2d ago", "1w ago". saturating_sub guards
@@ -135,5 +170,31 @@ mod tests {
         // now < epoch (clock set before 1970): saturating_sub yields 0,
         // which reads as "just now" — no panic, no underflow.
         assert_eq!(relative_time(0, 1000), "just now");
+    }
+
+    #[test]
+    fn test_session_span_label() {
+        assert_eq!(session_span_label(None), "—");
+        assert_eq!(session_span_label(Some(0)), "0s");
+        assert_eq!(session_span_label(Some(620)), "0s");
+        assert_eq!(session_span_label(Some(999)), "0s");
+        assert_eq!(session_span_label(Some(1000)), "1s");
+        assert_eq!(
+            session_span_label(Some(91_400)),
+            "1m 31s",
+            "a session past a minute reads as minutes and seconds"
+        );
+    }
+
+    /// The summary row rounds to the nearest second above its step instead of
+    /// truncating, and the values either side of a half second pin it.
+    #[test]
+    fn test_turn_span_label_rounds() {
+        assert_eq!(turn_span_label(0), "0ms");
+        assert_eq!(turn_span_label(620), "620ms");
+        assert_eq!(turn_span_label(999), "999ms");
+        assert_eq!(turn_span_label(1000), "1s");
+        assert_eq!(turn_span_label(1499), "1s");
+        assert_eq!(turn_span_label(1500), "2s");
     }
 }
