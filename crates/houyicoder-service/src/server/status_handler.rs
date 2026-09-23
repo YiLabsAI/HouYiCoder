@@ -98,10 +98,16 @@ impl Server {
     ) -> houyicoder_protocol::frontend::status::StatusSnapshot {
         let snap = self.runner.status_snapshot();
         let mut snapshot = pa::map_status_snapshot(&snap);
-        // The append owner projects durable child returns once. Status is
-        // polled every second while idle, so reading that projection must stay
-        // constant time rather than clone and scan the growing event mirror.
-        let delegated = self.runner.store().subagent_usage(self.session);
+        // The append owner folds the whole-session figures once. Status is
+        // polled every second while idle, so reading them must stay constant
+        // time rather than clone and scan the growing event mirror.
+        let delegated = self
+            .runner
+            .store()
+            .trajectory_head(self.session)
+            .summary
+            .usage
+            .subagent;
         snapshot.cumulative_usage = snapshot
             .cumulative_usage
             .saturating_add(&delegated.to_usage());

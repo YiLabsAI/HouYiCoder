@@ -90,6 +90,86 @@ pub fn aggregate_subagent_usage(events: &[SessionLogEntry]) -> SubagentUsage {
     total
 }
 
+/// How far the session's mirror has advanced. Ids are monotonic within a
+/// process, so a caller that kept the last count can ask for exactly what was
+/// appended since; the id is a cross-check that the mirror was not replaced
+/// under a smaller count.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrajectoryRevision {
+    /// Events in the mirror, streaming deltas included, because a caller
+    /// resumes its own cursor in that same index space.
+    pub event_count: usize,
+    /// The newest event's id, or None for an empty mirror.
+    pub last_event_id: Option<EventId>,
+}
+
+/// The session's token account.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrajectoryUsageSummary {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    /// False when any turn reached its end without reporting usage, so the
+    /// token figures are a lower bound rather than the session's cost.
+    pub totals_known: bool,
+    pub failures: usize,
+    /// What the session's delegated children spent.
+    pub subagent: SubagentUsage,
+    /// True when a child reached a terminal without reporting usage.
+    pub subagent_unmeasured: bool,
+}
+
+/// The session's latency facts.
+///
+/// The average is exact. The percentiles are bucket upper bounds: the samples
+/// are counted into a fixed set of buckets so recording stays constant time
+/// and a read stays bounded, which means a percentile is reported to the width
+/// of its bucket rather than to the millisecond. A renderer must not print one
+/// as if it were exact.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TrajectoryTimingSummary {
+    pub ttft_samples: usize,
+    pub ttft_avg_ms: Option<u64>,
+    pub ttft_p95_ms: Option<u64>,
+    pub ttft_p99_ms: Option<u64>,
+    /// True when a percentile fell in the overflow bucket, so the reported
+    /// value is a floor rather than a bucket bound.
+    pub ttft_percentile_capped: bool,
+    pub decode_samples: usize,
+    pub decode_tok_per_sec: Option<f64>,
+    pub model_ms: u64,
+    pub tool_ms: u64,
+}
+
+/// The whole-session figures the trajectory header and the status pane report.
+///
+/// These cannot come from a loaded window: a session's turn count, its token
+/// account, and its latency distribution are facts about every turn it ran,
+/// including the ones a page has not read. The store folds them as it appends,
+/// so a read copies small numbers instead of scanning the log.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrajectorySummary {
+    /// Turns as the pane numbers them, which counts a log that opens mid-run
+    /// as carrying one more turn than it has user inputs.
+    pub total_turns: usize,
+    pub usage: TrajectoryUsageSummary,
+    pub timing: TrajectoryTimingSummary,
+    /// Distinct model ids across the session, not across the loaded page.
+    pub models_used: usize,
+    /// The one model the session used, when exactly one appears. The only
+    /// allocation in a read; a renderer names the model from it.
+    pub single_model: Option<String>,
+    /// The span of the session's own events, which is what the user waited.
+    pub duration_ms: u64,
+}
+
+/// One consistent read of a session's trajectory state.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrajectoryHead {
+    pub revision: TrajectoryRevision,
+    pub summary: TrajectorySummary,
+}
+
 /// The engine-facing session log. Object-safe (PFut) so the engine holds
 /// Arc<dyn SessionLog> and the concrete session facade swaps behind it. The
 /// facade layers the hash chain, delta-persistence counter, and trajectory
@@ -127,11 +207,13 @@ pub trait SessionLog: Send + Sync {
             .collect()
     }
 
-    /// The delegated usage folded from the durable returns in the session's
-    /// current view. Required rather than defaulted: a status poll reads this
-    /// every second, so an implementation that silently inherited a scan of
-    /// the whole log would turn a constant-time read into linear work.
-    fn subagent_usage(&self, session: SessionId) -> SubagentUsage;
+    /// The session's trajectory revision and its whole-session summary, read
+    /// under one lock so the two describe the same moment.
+    ///
+    /// Required rather than defaulted: a status poll and every pane draw read
+    /// this, so an implementation that silently inherited a scan of the log
+    /// would turn a constant-time read into linear work.
+    fn trajectory_head(&self, session: SessionId) -> TrajectoryHead;
 
     /// Drop the in-memory trajectory mirror for a session. The backend log
     /// is untouched.

@@ -28,22 +28,37 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use houyicoder_api::session::{SubagentUsage, aggregate_subagent_usage};
+use houyicoder_api::session::{TrajectoryHead, TrajectoryRevision};
 use houyicoder_async::PFut;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
     PrevHash, SessionEvent, SessionId, SessionLogEntry,
 };
 use sha2::{Digest, Sha256};
+
+mod trajectory_summary;
 use tokio::sync::Notify;
+use trajectory_summary::TrajectorySummaryState;
 
 /// The in-process mirror of one session's durable facts: the finalized events
-/// and the delegated usage folded from them. Both move under one lock, so a
-/// reader cannot see a total from a different revision than the events.
+/// and the whole-session summary folded from them. Both move under one lock, so
+/// a reader cannot see figures from a different revision than the events.
 #[derive(Default)]
 struct SessionMirror {
     events: Vec<SessionLogEntry>,
-    subagent_usage: SubagentUsage,
+    summary: TrajectorySummaryState,
+}
+
+impl SessionMirror {
+    fn head(&self) -> TrajectoryHead {
+        TrajectoryHead {
+            revision: TrajectoryRevision {
+                event_count: self.events.len(),
+                last_event_id: self.events.last().map(|event| event.id),
+            },
+            summary: self.summary.snapshot(),
+        }
+    }
 }
 
 /// The engine-facing session facade. Owns a ContextBackend and layers the
@@ -178,13 +193,13 @@ impl SessionStore {
         if matches!(event.event, SessionEvent::AssistantTextDelta { .. }) {
             // Delta path: mirror + notify only. No backend, no chain, no cache.
             let id = event.id;
-            self.mirrors
-                .lock()
-                .expect("session mirrors mutex poisoned")
-                .entry(session)
-                .or_default()
-                .events
-                .push(event);
+            let mut mirrors = self.mirrors.lock().expect("session mirrors mutex poisoned");
+            let mirror = mirrors.entry(session).or_default();
+            // A delta carries no durable fact, so it moves no counter. It does
+            // extend the session's span, which is what the old whole-log fold
+            // reported while a generation was still streaming.
+            mirror.summary.record(&event);
+            mirror.events.push(event);
             if let Some(n) = &self.append_notify {
                 n.notify_one();
             }
@@ -215,7 +230,7 @@ impl SessionStore {
             .insert(session, new_hash);
         let mut mirrors = self.mirrors.lock().expect("session mirrors mutex poisoned");
         let mirror = mirrors.entry(session).or_default();
-        mirror.subagent_usage.record(&finalized.event);
+        mirror.summary.record(&finalized);
         mirror.events.push(finalized);
         // Retain one wake permit when the host is polling the run future, so
         // the durable event cannot remain invisible until the run completes.
@@ -262,13 +277,14 @@ impl SessionStore {
             .unwrap_or_default()
     }
 
-    /// Read the delegated usage folded into the session mirror.
-    pub fn subagent_usage(&self, session: SessionId) -> SubagentUsage {
+    /// Read the session's trajectory revision and whole-session summary under
+    /// one lock, so the two describe the same revision.
+    pub fn trajectory_head(&self, session: SessionId) -> TrajectoryHead {
         self.mirrors
             .lock()
             .expect("session mirrors mutex poisoned")
             .get(&session)
-            .map(|mirror| mirror.subagent_usage)
+            .map(SessionMirror::head)
             .unwrap_or_default()
     }
 
@@ -317,7 +333,7 @@ impl SessionStore {
             return Ok(0);
         }
         let mirror = SessionMirror {
-            subagent_usage: aggregate_subagent_usage(&events),
+            summary: Self::fold_summary(&events),
             events,
         };
         self.mirrors
@@ -325,6 +341,16 @@ impl SessionStore {
             .expect("session mirrors mutex poisoned")
             .insert(session, mirror);
         Ok(count)
+    }
+
+    /// Fold a replayed log into a summary in one pass, so a resume does not
+    /// read the log once per figure.
+    fn fold_summary(events: &[SessionLogEntry]) -> TrajectorySummaryState {
+        let mut summary = TrajectorySummaryState::default();
+        for event in events {
+            summary.record(event);
+        }
+        summary
     }
 
     /// Compute the prev_hash for the next event: the cached hash of the last
@@ -645,8 +671,8 @@ impl houyicoder_api::session::SessionLog for SessionStore {
     fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
         Self::trajectory_since(self, session, start)
     }
-    fn subagent_usage(&self, session: SessionId) -> SubagentUsage {
-        Self::subagent_usage(self, session)
+    fn trajectory_head(&self, session: SessionId) -> TrajectoryHead {
+        Self::trajectory_head(self, session)
     }
     fn reset_trajectory(&self, session: SessionId) {
         Self::reset_trajectory(self, session);

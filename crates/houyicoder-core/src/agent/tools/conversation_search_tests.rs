@@ -3,7 +3,7 @@
 //! recall meter, and the statistics view.
 
 use super::*;
-use houyicoder_api::session::{SubagentUsage, aggregate_subagent_usage};
+use houyicoder_api::session::TrajectoryHead;
 use houyicoder_context::{
     CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId, SessionId,
     SessionLogEntry, TurnGroup,
@@ -60,8 +60,10 @@ impl SessionLog for InMemoryLog {
     fn trajectory_snapshot(&self, _session: SessionId) -> Vec<SessionLogEntry> {
         self.events.lock().unwrap().clone()
     }
-    fn subagent_usage(&self, session: SessionId) -> SubagentUsage {
-        aggregate_subagent_usage(&self.trajectory_snapshot(session))
+    fn trajectory_head(&self, session: SessionId) -> TrajectoryHead {
+        // This double keeps no summary; the store that appends maintains one.
+        let _ = session;
+        TrajectoryHead::default()
     }
     fn reset_trajectory(&self, _session: SessionId) {}
     fn write_checkpoint(
@@ -120,30 +122,6 @@ fn test_default_last_id_tail() {
         Some(last),
         "the default answers the snapshot tail"
     );
-}
-
-/// This test log keeps no append-time fold, so it answers by scanning its
-/// mirror. The scan is fine here: the log is a handful of events, and the
-/// production store carries the fold instead.
-#[test]
-fn test_in_memory_usage_folds() {
-    let log = InMemoryLog::new();
-    let session = make_session();
-    log.push(make_event(SessionEvent::SubagentReturn {
-        child_session_id: "child".into(),
-        status: "completed".into(),
-        summary: String::new(),
-        result_ref: "child".into(),
-        input_tokens: 100,
-        output_tokens: 20,
-        cache_read_input_tokens: 80,
-        cache_write_input_tokens: 0,
-        reasoning_tokens: 0,
-    }));
-    let usage = log.subagent_usage(session);
-    assert_eq!(usage.calls, 1);
-    assert_eq!(usage.input_tokens, 100);
-    assert_eq!(usage.output_tokens, 20);
 }
 
 fn make_manifest_summarized(ids: Vec<EventId>) -> CheckpointManifest {

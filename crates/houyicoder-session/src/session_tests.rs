@@ -157,16 +157,16 @@ async fn test_subagent_usage_tracks_view() {
     .await;
     appended_event(&store, session, child_return(100, 20, 80)).await;
     appended_event(&store, session, child_return(50, 5, 0)).await;
-    let usage = store.subagent_usage(session);
+    let usage = store.trajectory_head(session).summary.usage.subagent;
     assert_eq!(usage.calls, 2);
     assert_eq!(usage.input_tokens, 150);
     assert_eq!(usage.output_tokens, 25);
     assert_eq!(usage.cache_read_input_tokens, 80);
     store.reset_trajectory(session);
     assert_eq!(
-        store.subagent_usage(session),
-        SubagentUsage::default(),
-        "clear resets the projection with the view"
+        store.trajectory_head(session).summary.usage.subagent,
+        houyicoder_api::session::SubagentUsage::default(),
+        "clear resets the summary with the view"
     );
 }
 
@@ -181,12 +181,12 @@ async fn test_subagent_usage_restores() {
     }
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
     assert_eq!(
-        store.subagent_usage(session).calls,
+        store.trajectory_head(session).summary.usage.subagent.calls,
         0,
         "cold store is empty"
     );
     assert_eq!(store.restore_trajectory(session).await.unwrap(), 1);
-    let usage = store.subagent_usage(session);
+    let usage = store.trajectory_head(session).summary.usage.subagent;
     assert_eq!(usage.calls, 1);
     assert_eq!(usage.input_tokens, 200);
     assert_eq!(usage.output_tokens, 30);
@@ -201,10 +201,76 @@ async fn test_usage_through_trait() {
     let session = SessionId::new();
     appended_event(&store, session, child_return(70, 8, 30)).await;
     let log: Arc<dyn SessionLog> = Arc::new(store);
-    let usage = log.subagent_usage(session);
+    let usage = log.trajectory_head(session).summary.usage.subagent;
     assert_eq!(usage.calls, 1);
     assert_eq!(usage.input_tokens, 70);
     assert_eq!(usage.output_tokens, 8);
+}
+
+/// The head reports how far the mirror has advanced, so a caller can ask for
+/// exactly what was appended since it last read.
+#[tokio::test]
+async fn test_head_tracks_revision() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let session = SessionId::new();
+    let empty = store.trajectory_head(session);
+    assert_eq!(empty.revision.event_count, 0);
+    assert_eq!(empty.revision.last_event_id, None);
+
+    let first = appended_event(
+        &store,
+        session,
+        SessionEvent::UserInput { text: "a".into() },
+    )
+    .await;
+    let head = store.trajectory_head(session);
+    assert_eq!(head.revision.event_count, 1);
+    assert_eq!(head.revision.last_event_id, Some(first.id));
+    assert_eq!(head.summary.total_turns, 1);
+
+    // A streaming delta advances the revision but not the summary: it is not
+    // durable, so counting it would make a live session differ from the same
+    // session read back.
+    let before = store.trajectory_head(session).summary;
+    // The helper stamps ts 0, so give the delta a later stamp: the span it
+    // extends is then observable.
+    let mut delta = evt(
+        session,
+        EventId::new(),
+        SessionEvent::AssistantTextDelta { text: "hi".into() },
+    );
+    delta.ts = 500;
+    store.append(delta).await.expect("append the delta");
+    let after = store.trajectory_head(session);
+    assert_eq!(after.revision.event_count, 2, "the delta is in the mirror");
+    assert_eq!(
+        after.summary.usage, before.usage,
+        "and outside the counters"
+    );
+    assert!(
+        after.summary.duration_ms > before.duration_ms,
+        "but it extends the span, as the whole-log fold reported while streaming"
+    );
+}
+
+/// A clear drops the mirror and the summary together, so a reader cannot see
+/// figures from before it.
+#[tokio::test]
+async fn test_clear_resets_head() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let session = SessionId::new();
+    appended_event(
+        &store,
+        session,
+        SessionEvent::UserInput { text: "a".into() },
+    )
+    .await;
+    assert_eq!(store.trajectory_head(session).summary.total_turns, 1);
+    store.reset_trajectory(session);
+    let head = store.trajectory_head(session);
+    assert_eq!(head.revision.event_count, 0);
+    assert_eq!(head.summary.total_turns, 0);
+    assert_eq!(head.summary.usage.input_tokens, 0);
 }
 
 #[tokio::test]

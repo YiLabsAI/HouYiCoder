@@ -1613,6 +1613,7 @@ dependencies = [
  "houyicoder-async",
  "houyicoder-context",
  "houyicoder-memory",
+ "houyicoder-protocol",
  "serde_json",
  "sha2 0.11.0",
  "tokio",
