@@ -107,5 +107,44 @@ fn fold_scan_bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, append_frame_bench, rebuild_bench, fold_scan_bench);
+/// Quantify the fold cache: the draw path reads the maintained cache (cached),
+/// where the pre-cache path recomputed groups on every draw (scan). The two
+/// share a rebuilt App so the cache is warm for the cached read and the scan
+/// runs over the same lines. The delta is the fold work saved per draw; the
+/// cached read stays flat as the session grows while the scan follows the
+/// viewable window (capped, so 10K and 100K sit at the same ceiling).
+fn fold_access_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fold_access");
+    let (_, builder) = support::CLASSES
+        .iter()
+        .copied()
+        .find(|(c, _)| *c == "tool")
+        .expect("tool class");
+    for &size in SIZES {
+        let app = bench_api::rebuild_transcript(bench_api::app_with_frames(builder(size)));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("cached-tool-{size}")),
+            &size,
+            |b, _| {
+                b.iter(|| black_box(bench_api::cached_fold_group_count(&app)));
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("scan-tool-{size}")),
+            &size,
+            |b, _| {
+                b.iter(|| black_box(bench_api::recompute_fold_group_count(&app)));
+            },
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    append_frame_bench,
+    rebuild_bench,
+    fold_scan_bench,
+    fold_access_bench
+);
 criterion_main!(benches);

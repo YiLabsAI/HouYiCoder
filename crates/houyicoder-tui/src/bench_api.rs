@@ -53,3 +53,10 @@ pub fn resident_frame_front(app: &App) -> usize {
 pub fn recompute_fold_group_count(app: &App) -> usize {
     crate::fold::compute_fold_groups(app.transcript.lines(), app.agent_busy()).len()
 }
+
+/// The fold groups the draw path reads: the cache the rebuild maintains.
+/// Mirrors the main-view draw call, which borrows this slice rather than
+/// rescanning, so the bench measures the cached read rather than the scan.
+pub fn cached_fold_group_count(app: &App) -> usize {
+    app.active_fold_groups().len()
+}
