@@ -282,13 +282,15 @@ fn test_orphan_result_plain_rule() {
     assert_eq!(fold(&events).usage.failures, 2);
 }
 
-/// A turn's calls are retired when the turn ends, so an interrupted turn's
-/// calls do not accumulate for the rest of the session.
+/// A call's facts are held only until its result arrives, and the map is
+/// capped so a long session's memory stays flat. A result whose call has been
+/// evicted is judged on its output alone, the same rule a windowed read
+/// applies.
 #[test]
-fn test_pending_calls_retired() {
+fn test_pending_calls_capped() {
     let mut state = TrajectorySummaryState::default();
     state.record(&entry(0, SessionEvent::UserInput { text: "a".into() }));
-    for i in 0..50 {
+    for i in 0..(PENDING_CALLS_CAP + 50) {
         state.record(&entry(
             1,
             SessionEvent::ToolCall {
@@ -298,13 +300,86 @@ fn test_pending_calls_retired() {
             },
         ));
     }
-    assert_eq!(state.pending_calls.len(), 50);
-    state.record(&entry(2, SessionEvent::UserInput { text: "b".into() }));
     assert_eq!(
         state.pending_calls.len(),
-        0,
-        "the previous turn's calls are gone"
+        PENDING_CALLS_CAP,
+        "the oldest calls are retired once the cap is reached"
     );
+    // The most recent call is still resolvable, so a late result keeps its
+    // semantic-exit exemption.
+    let latest = format!("c{}", PENDING_CALLS_CAP + 49);
+    assert!(state.pending_calls.contains_key(&latest));
+}
+
+/// A result landing after its turn ended still resolves its call, so a
+/// semantic exit keeps its exemption: the facts are held until the result
+/// arrives rather than dropped at the turn boundary.
+#[test]
+fn test_late_result_keeps_exemption() {
+    let mut state = TrajectorySummaryState::default();
+    state.record(&entry(0, SessionEvent::UserInput { text: "a".into() }));
+    state.record(&entry(
+        1,
+        SessionEvent::ToolCall {
+            call_id: "c1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "grep x"}),
+        },
+    ));
+    // The turn closes before the result lands.
+    state.record(&entry(2, SessionEvent::RunCompleted { secs: Some(1) }));
+    state.record(&result(
+        "c1",
+        serde_json::json!({"success": false, "exit_code": 1}),
+        0,
+    ));
+    assert_eq!(
+        state.snapshot().usage.failures,
+        0,
+        "grep finding no match succeeded even though its turn already ended"
+    );
+}
+
+/// A result whose call has been evicted is judged on its output alone, the
+/// same rule a windowed read applies.
+#[test]
+fn test_evicted_call_plain_rule() {
+    let mut state = TrajectorySummaryState::default();
+    for i in 0..(PENDING_CALLS_CAP + 1) {
+        state.record(&entry(
+            1,
+            SessionEvent::ToolCall {
+                call_id: format!("c{i}"),
+                tool: "bash".into(),
+                input: serde_json::json!({"command": "grep x"}),
+            },
+        ));
+    }
+    // c0 was evicted, so its semantic exit no longer resolves and the result
+    // counts as a failure by the plain rule.
+    state.record(&result(
+        "c0",
+        serde_json::json!({"success": false, "exit_code": 1}),
+        0,
+    ));
+    assert_eq!(state.snapshot().usage.failures, 1);
+}
+
+/// A call that carried a whole file body must not keep it: only the field the
+/// failure rule reads is held.
+#[test]
+fn test_call_facts_keep_command() {
+    let mut state = TrajectorySummaryState::default();
+    state.record(&entry(
+        0,
+        SessionEvent::ToolCall {
+            call_id: "c1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "grep x", "body": "x".repeat(4096)}),
+        },
+    ));
+    let facts = state.pending_calls.get("c1").expect("the call is held");
+    assert_eq!(facts.command.as_deref(), Some("grep x"));
 }
 
 #[test]

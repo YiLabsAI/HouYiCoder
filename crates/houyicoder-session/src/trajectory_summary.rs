@@ -6,7 +6,7 @@
 //! the store takes it, which keeps a read to a copy of small numbers rather
 //! than a scan of the log.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use houyicoder_api::session::{
     SubagentUsage, TrajectorySummary, TrajectoryTimingSummary, TrajectoryUsageSummary,
@@ -114,10 +114,20 @@ fn bucket_upper_bound(index: usize) -> u64 {
 }
 
 /// What a tool call carried, so a later result can be judged against it.
+///
+/// Only the field the failure rule reads is kept: a write call carries a whole
+/// file body in its input, and holding that for the life of the session would
+/// cost more than the rule is worth.
 struct ToolCallFacts {
     tool: String,
-    input: Value,
+    command: Option<String>,
 }
+
+/// How many call facts are held. A result normally lands before the turn that
+/// issued its call ends, so a small window covers every real ordering while
+/// keeping a session's memory flat. A result whose call has been evicted is
+/// judged on its output alone, the same rule a windowed read applies.
+const PENDING_CALLS_CAP: usize = 512;
 
 /// The session-wide trajectory summary, folded one event at a time.
 #[derive(Default)]
@@ -152,9 +162,10 @@ pub(crate) struct TrajectorySummaryState {
     ttft: TtftHistogram,
 
     models: HashSet<String>,
-    /// Calls whose result has not arrived. Retired when the turn that issued
-    /// them ends, so a long session does not accumulate them.
+    /// Calls whose result has not arrived, and the order they were issued in,
+    /// so the oldest can be retired once the map is at its cap.
     pending_calls: HashMap<String, ToolCallFacts>,
+    pending_order: VecDeque<String>,
 }
 
 impl TrajectorySummaryState {
@@ -175,81 +186,46 @@ impl TrajectorySummaryState {
             self.first_ts = Some(entry.ts);
         }
         self.last_ts = Some(entry.ts);
+        self.fold(&entry.event);
+    }
 
-        match &entry.event {
+    /// Fold one durable event into the counters. Each kind owns its own facts,
+    /// so a new event type adds a branch rather than a longer match.
+    fn fold(&mut self, event: &SessionEvent) {
+        match event {
+            // Deltas are not durable, so they move no counter; the span they
+            // extend is taken above.
             SessionEvent::AssistantTextDelta { .. } => {}
-            SessionEvent::UserInput { .. } => {
-                self.close_turn();
-                self.user_inputs = self.user_inputs.saturating_add(1);
-                self.turn_open = true;
-                self.open_turn_has_usage = false;
-            }
+            SessionEvent::UserInput { .. } => self.open_turn(),
             SessionEvent::TurnUsage {
                 input_tokens,
                 output_tokens,
                 cache_read_input_tokens,
                 model,
                 ..
-            } => {
-                self.open_turn_has_usage = true;
-                self.input_tokens = self.input_tokens.saturating_add(*input_tokens);
-                self.output_tokens = self.output_tokens.saturating_add(*output_tokens);
-                self.cache_read_tokens = self
-                    .cache_read_tokens
-                    .saturating_add(*cache_read_input_tokens);
-                // Decode speed is measured against the tokens the model
-                // produced, which is what the output count reports.
-                self.decode_tokens = self.decode_tokens.saturating_add(*output_tokens);
-                if !model.is_empty() {
-                    self.models.insert(model.clone());
-                }
-            }
+            } => self.fold_usage(
+                *input_tokens,
+                *output_tokens,
+                *cache_read_input_tokens,
+                model,
+            ),
             SessionEvent::ModelStepTiming {
                 total_ms,
                 ttft_ms,
                 decode_ms,
                 ..
-            } => {
-                if let Some(ttft) = ttft_ms {
-                    self.ttft.record(*ttft);
-                }
-                if let Some(decode) = decode_ms {
-                    self.decode_ms = self.decode_ms.saturating_add(*decode);
-                    self.decode_samples = self.decode_samples.saturating_add(1);
-                }
-                self.model_ms = self.model_ms.saturating_add(*total_ms);
-            }
+            } => self.fold_timing(*total_ms, *ttft_ms, *decode_ms),
             SessionEvent::ToolCall {
                 call_id,
                 tool,
                 input,
-            } => {
-                self.pending_calls.insert(
-                    call_id.clone(),
-                    ToolCallFacts {
-                        tool: tool.clone(),
-                        input: input.clone(),
-                    },
-                );
-            }
+            } => self.fold_tool_call(call_id, tool, input),
             SessionEvent::ToolResult {
                 call_id,
                 output,
                 duration_ms,
-            } => {
-                let facts = self.pending_calls.remove(call_id);
-                let (tool, input) = match &facts {
-                    Some(facts) => (facts.tool.as_str(), &facts.input),
-                    // A result whose call sits outside what this fold has
-                    // seen: the plain error-or-success rule still applies.
-                    None => ("", &Value::Null),
-                };
-                if tool_result_failed(output, tool, input) {
-                    self.failures = self.failures.saturating_add(1);
-                }
-                self.tool_ms = self.tool_ms.saturating_add(*duration_ms);
-            }
-            SessionEvent::SubagentReturn { .. } => self.subagent.record(&entry.event),
+            } => self.fold_tool_result(call_id, output, *duration_ms),
+            SessionEvent::SubagentReturn { .. } => self.subagent.record(event),
             SessionEvent::TurnAborted { .. }
             | SessionEvent::RunCompleted { .. }
             | SessionEvent::ContextCleared { .. } => self.close_turn(),
@@ -257,15 +233,95 @@ impl TrajectorySummaryState {
         }
     }
 
-    /// End the open turn: a turn that reported no usage leaves a hole in the
-    /// session total, and its calls can no longer receive a result.
+    /// A new user input ends the previous turn and opens the next.
+    fn open_turn(&mut self) {
+        self.close_turn();
+        self.user_inputs = self.user_inputs.saturating_add(1);
+        self.turn_open = true;
+        self.open_turn_has_usage = false;
+    }
+
+    fn fold_usage(&mut self, input: u64, output: u64, cache_read: u64, model: &str) {
+        self.open_turn_has_usage = true;
+        self.input_tokens = self.input_tokens.saturating_add(input);
+        self.output_tokens = self.output_tokens.saturating_add(output);
+        self.cache_read_tokens = self.cache_read_tokens.saturating_add(cache_read);
+        // Decode speed is measured against the tokens the model produced,
+        // which is what the output count reports.
+        self.decode_tokens = self.decode_tokens.saturating_add(output);
+        if !model.is_empty() {
+            self.models.insert(model.to_string());
+        }
+    }
+
+    fn fold_timing(&mut self, total_ms: u64, ttft_ms: Option<u64>, decode_ms: Option<u64>) {
+        if let Some(ttft) = ttft_ms {
+            self.ttft.record(ttft);
+        }
+        if let Some(decode) = decode_ms {
+            self.decode_ms = self.decode_ms.saturating_add(decode);
+            self.decode_samples = self.decode_samples.saturating_add(1);
+        }
+        self.model_ms = self.model_ms.saturating_add(total_ms);
+    }
+
+    fn fold_tool_call(&mut self, call_id: &str, tool: &str, input: &Value) {
+        if self.pending_calls.len() >= PENDING_CALLS_CAP
+            && let Some(oldest) = self.pending_order.pop_front()
+        {
+            self.pending_calls.remove(&oldest);
+        }
+        self.pending_calls.insert(
+            call_id.to_string(),
+            ToolCallFacts {
+                tool: tool.to_string(),
+                command: input
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .map(str::to_string),
+            },
+        );
+        self.pending_order.push_back(call_id.to_string());
+    }
+
+    fn fold_tool_result(&mut self, call_id: &str, output: &Value, duration_ms: u64) {
+        let facts = self.pending_calls.remove(call_id);
+        if let Some(index) = self.pending_order.iter().position(|id| id == call_id) {
+            self.pending_order.remove(index);
+        }
+        // Only the command is rebuilt, so the rule reads the same shape it
+        // does everywhere else.
+        let command_input;
+        let (tool, input) = match &facts {
+            Some(facts) => {
+                command_input = facts
+                    .command
+                    .as_ref()
+                    .map(|c| serde_json::json!({ "command": c }));
+                (
+                    facts.tool.as_str(),
+                    command_input.as_ref().unwrap_or(&Value::Null),
+                )
+            }
+            // A result whose call sits outside what this fold has seen: the
+            // plain error-or-success rule still applies.
+            None => ("", &Value::Null),
+        };
+        if tool_result_failed(output, tool, input) {
+            self.failures = self.failures.saturating_add(1);
+        }
+        self.tool_ms = self.tool_ms.saturating_add(duration_ms);
+    }
+
+    /// End the open turn: a turn that reached its end without reporting usage
+    /// leaves a hole in the session total. Its calls stay held, because a
+    /// result can still arrive for one.
     fn close_turn(&mut self) {
         if self.turn_open && !self.open_turn_has_usage {
             self.closed_turns_without_usage = self.closed_turns_without_usage.saturating_add(1);
         }
         self.turn_open = false;
         self.open_turn_has_usage = false;
-        self.pending_calls.clear();
     }
 
     /// Turns as the pane numbers them. A log that opens mid-run carries one
