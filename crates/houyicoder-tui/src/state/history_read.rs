@@ -1,4 +1,4 @@
-//! The in-flight history read: a background task reads older rows from the
+//! The running history read: a background task reads older rows from the
 //! session log while the draw path stays off disk, and ships the result over
 //! a channel this slot holds. The types live apart from the Transcript struct
 //! so the struct file stays under its size floor; Transcript owns the slot.
@@ -21,7 +21,7 @@ pub(crate) enum HistoryReadOutcome {
     Exhausted,
 }
 
-/// A history read in flight. The dispatch captures the resident front at
+/// A history read while its task runs. The dispatch captures the resident front at
 /// dispatch time so a drain that moves it before the result lands makes the
 /// result stale. The receiver is the channel the background task sends the
 /// outcome over; the task owns the sender and drops it on exit.

@@ -394,7 +394,7 @@ impl App {
     /// never blocks on this: the task ships the result over a channel the
     /// pending slot holds, and a later pump applies it. Without a runtime or
     /// a snapshot source there is nothing to dispatch and the scroll stops at
-    /// the resident front, as it did before; with a read already in flight a
+    /// the resident front, as it did before; with a read already running a
     /// second dispatch is skipped so at most one runs at a time.
     fn dispatch_history_read(&mut self) {
         let Some(source) = self.snapshot.clone() else {
@@ -446,7 +446,7 @@ impl App {
             .set_history_read(PendingHistoryRead::new(dispatch_front, rx));
     }
 
-    /// Drain the in-flight history read without blocking and apply it when
+    /// Drain the running history read without blocking and apply it when
     /// ready. Returns true when a result landed and the view must redraw.
     /// Called from the loop body every pass, not inside the dirty gate, so an
     /// idle loop still picks the result up.

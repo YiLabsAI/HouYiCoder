@@ -48,7 +48,7 @@ pub struct Transcript {
     /// that front past them, and the frames between the two fronts are gone,
     /// so the rows no longer reach the view and are dropped.
     disk_rows_front: usize,
-    /// A history read in flight, when the draw path dispatched a disk read to
+    /// A running history read, when the draw path dispatched a disk read to
     /// a background task instead of running it on the draw thread. At most
     /// one: a second dispatch is skipped while this is set. Lives here rather
     /// than on App so the App field count stays bounded and the state sits
@@ -299,7 +299,7 @@ impl Transcript {
         self.disk_rows_front
     }
 
-    /// Whether a background history read is in flight.
+    /// Whether a background history read is running.
     pub(crate) fn history_read_pending(&self) -> bool {
         self.history_read.is_some()
     }
