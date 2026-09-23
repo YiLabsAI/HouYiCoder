@@ -38,6 +38,7 @@ mod export_view;
 mod housekeeping;
 mod resume_bundle;
 mod session_catalog;
+mod session_history;
 mod session_lock;
 mod session_log_snapshot;
 mod trajectory_view;
