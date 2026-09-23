@@ -40,9 +40,9 @@ fn test_skills_pane_detail_renders() {
     assert!(out.contains("Esc to back"), "back hint in detail: {out}");
 }
 
-/// A description wider than the pane wraps onto the following rows. The
-/// detail previously rendered it as one logical line, so everything past
-/// the right edge was clipped and the tail was unreachable.
+/// A description wider than the pane wraps onto the following rows. A row
+/// rendered as one logical line clips everything past the right edge, so the
+/// tail never becomes reachable by scrolling.
 #[test]
 fn test_detail_wraps_long_description() {
     let mut app = composition::app();

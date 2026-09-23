@@ -1,4 +1,5 @@
 use super::*;
+use crate::skills_state::SkillDetail;
 
 #[test]
 fn test_agents_result_stores_directory() {
@@ -84,7 +85,7 @@ fn test_stale_skill_body_dropped() {
     });
     assert!(matches!(
         app.skills_pane.detail(),
-        Some(crate::skills_state::SkillDetail::Loading { .. })
+        Some(SkillDetail::Loading { .. })
     ));
     assert!(app.skills_pane.detail_body().is_none());
 }
@@ -99,7 +100,7 @@ fn test_open_detail_without_session() {
     app.open_skill_detail();
     assert!(matches!(
         app.skills_pane.detail(),
-        Some(crate::skills_state::SkillDetail::Open { .. })
+        Some(SkillDetail::Open { .. })
     ));
     assert!(app.skills_pane.detail_body().is_none());
 }
@@ -114,7 +115,7 @@ fn test_lost_send_settles_detail() {
     app.open_skill_detail();
     assert!(matches!(
         app.skills_pane.detail(),
-        Some(crate::skills_state::SkillDetail::Open { .. })
+        Some(SkillDetail::Open { .. })
     ));
     assert!(app.skills_pane.detail_body().is_none());
 }
@@ -128,7 +129,7 @@ fn test_loss_settles_skill_detail() {
     assert!(app.apply_connection_loss("connect failed: no server".into(), Vec::new()));
     assert!(matches!(
         app.skills_pane.detail(),
-        Some(crate::skills_state::SkillDetail::Open { .. })
+        Some(SkillDetail::Open { .. })
     ));
     assert!(app.skills_pane.detail_body().is_none());
 }
@@ -149,7 +150,7 @@ fn test_error_settles_skill_detail() {
     });
     assert!(matches!(
         app.skills_pane.detail(),
-        Some(crate::skills_state::SkillDetail::Open { .. })
+        Some(SkillDetail::Open { .. })
     ));
     assert!(app.skills_pane.detail_body().is_none());
     use crate::records::TranscriptLine;
@@ -176,7 +177,7 @@ fn test_error_keeps_detail_loading() {
     });
     assert!(matches!(
         app.skills_pane.detail(),
-        Some(crate::skills_state::SkillDetail::Loading { .. })
+        Some(SkillDetail::Loading { .. })
     ));
 }
 
