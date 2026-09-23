@@ -28,6 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use houyicoder_api::session::{SubagentUsage, aggregate_subagent_usage};
 use houyicoder_async::PFut;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
@@ -35,6 +36,15 @@ use houyicoder_context::{
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
+
+/// The in-process mirror of one session's durable facts: the finalized events
+/// and the delegated usage folded from them. Both move under one lock, so a
+/// reader cannot see a total from a different revision than the events.
+#[derive(Default)]
+struct SessionMirror {
+    events: Vec<SessionLogEntry>,
+    subagent_usage: SubagentUsage,
+}
 
 /// The engine-facing session facade. Owns a ContextBackend and layers the
 /// hash-chain, delta counter, and view assembly on top. Construct with any
@@ -53,12 +63,11 @@ pub struct SessionStore {
     /// Per-session delta-persistence counter (the interrupted-turn rewind
     /// pattern).
     persisted: Mutex<HashMap<SessionId, u32>>,
-    /// Per-session in-memory mirror of finalized events (prev_hash set), the
-    /// /trajectory command's sync substrate. The raw append-only log in the
-    /// backend stays the source of truth; this mirror lets /trajectory read
-    /// without an async replay. A resumed session starts with an empty mirror
-    /// until restore_trajectory backfills it from the durable log.
-    trajectory: Mutex<HashMap<SessionId, Vec<SessionLogEntry>>>,
+    /// Per-session in-memory mirror of finalized events and their delegated
+    /// usage. The raw append-only log stays the source of truth; this gives
+    /// trajectory a sync mirror and status a constant-time aggregate. Resume
+    /// backfills both from the same durable revision.
+    mirrors: Mutex<HashMap<SessionId, SessionMirror>>,
     /// Optional Notify fired on each append so a host draining mid-run wakes
     /// to push the new durable event without waiting for the run future to
     /// resolve. None when no host wires the mid-run drain; behavior is then
@@ -117,7 +126,7 @@ impl SessionStore {
             last_hashes: Mutex::new(HashMap::new()),
             append_lock: tokio::sync::Mutex::new(()),
             persisted: Mutex::new(HashMap::new()),
-            trajectory: Mutex::new(HashMap::new()),
+            mirrors: Mutex::new(HashMap::new()),
             append_notify: None,
             first_durable: None,
             first_durable_fired: Mutex::new(HashSet::new()),
@@ -168,16 +177,18 @@ impl SessionStore {
         let session = event.session;
         if matches!(event.event, SessionEvent::AssistantTextDelta { .. }) {
             // Delta path: mirror + notify only. No backend, no chain, no cache.
-            self.trajectory
+            let id = event.id;
+            self.mirrors
                 .lock()
-                .expect("trajectory mutex poisoned")
+                .expect("session mirrors mutex poisoned")
                 .entry(session)
                 .or_default()
-                .push(event.clone());
+                .events
+                .push(event);
             if let Some(n) = &self.append_notify {
                 n.notify_one();
             }
-            return Ok(event.id);
+            return Ok(id);
         }
         // Durable path.
         let prev_hash = self.compute_prev_hash(session).await?;
@@ -202,12 +213,10 @@ impl SessionStore {
             .lock()
             .expect("last_hashes mutex poisoned")
             .insert(session, new_hash);
-        self.trajectory
-            .lock()
-            .expect("trajectory mutex poisoned")
-            .entry(session)
-            .or_default()
-            .push(finalized);
+        let mut mirrors = self.mirrors.lock().expect("session mirrors mutex poisoned");
+        let mirror = mirrors.entry(session).or_default();
+        mirror.subagent_usage.record(&finalized.event);
+        mirror.events.push(finalized);
         // Retain one wake permit when the host is polling the run future, so
         // the durable event cannot remain invisible until the run completes.
         // Notify coalesces surplus permits; draining from a cursor publishes
@@ -224,32 +233,42 @@ impl SessionStore {
     /// projects this directly — SessionLogEntry already carries the id, ts, prev_hash,
     /// and kind a trajectory row needs, so no separate record type is introduced.
     pub fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
-        self.trajectory
+        self.mirrors
             .lock()
-            .expect("trajectory mutex poisoned")
+            .expect("session mirrors mutex poisoned")
             .get(&session)
-            .cloned()
+            .map(|mirror| mirror.events.clone())
             .unwrap_or_default()
     }
 
     /// The id of the latest mirrored event, or None when the session has no
     /// mirror entries. Reads the tail in place — no clone of the log.
     pub fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
-        self.trajectory
+        self.mirrors
             .lock()
-            .expect("trajectory mutex poisoned")
+            .expect("session mirrors mutex poisoned")
             .get(&session)
-            .and_then(|events| events.last())
-            .map(|e| e.id)
+            .and_then(|mirror| mirror.events.last())
+            .map(|event| event.id)
     }
 
     /// Clone only the finalized suffix beginning at start.
     pub fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
-        self.trajectory
+        self.mirrors
             .lock()
-            .expect("trajectory mutex poisoned")
+            .expect("session mirrors mutex poisoned")
             .get(&session)
-            .map(|events| events.get(start..).unwrap_or_default().to_vec())
+            .map(|mirror| mirror.events.get(start..).unwrap_or_default().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Read the delegated usage folded into the session mirror.
+    pub fn subagent_usage(&self, session: SessionId) -> SubagentUsage {
+        self.mirrors
+            .lock()
+            .expect("session mirrors mutex poisoned")
+            .get(&session)
+            .map(|mirror| mirror.subagent_usage)
             .unwrap_or_default()
     }
 
@@ -271,9 +290,9 @@ impl SessionStore {
     /// The backend's append-only log is untouched — this only frees the
     /// viewable mirror so /trajectory reads fresh after a clear.
     pub fn reset_trajectory(&self, session: SessionId) {
-        self.trajectory
+        self.mirrors
             .lock()
-            .expect("trajectory mutex poisoned")
+            .expect("session mirrors mutex poisoned")
             .remove(&session);
     }
 
@@ -288,17 +307,23 @@ impl SessionStore {
     /// last event would re-serialize it and link the next append to a hash
     /// that drifts from the on-disk bytes under a schema change; the next
     /// append's compute_prev_hash reverse-reads the last disk line's raw
-    /// bytes instead.
+    /// bytes instead. The whole mirror is replaced, so this must run before
+    /// any append for the session: one landing mid-replay is dropped by the
+    /// insert that follows.
     pub async fn restore_trajectory(&self, session: SessionId) -> Result<usize, ContextError> {
         let events = self.backend.replay(session).await?;
         let count = events.len();
         if count == 0 {
             return Ok(0);
         }
-        {
-            let mut traj = self.trajectory.lock().expect("trajectory mutex poisoned");
-            traj.insert(session, events);
-        }
+        let mirror = SessionMirror {
+            subagent_usage: aggregate_subagent_usage(&events),
+            events,
+        };
+        self.mirrors
+            .lock()
+            .expect("session mirrors mutex poisoned")
+            .insert(session, mirror);
         Ok(count)
     }
 
@@ -619,6 +644,9 @@ impl houyicoder_api::session::SessionLog for SessionStore {
     }
     fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
         Self::trajectory_since(self, session, start)
+    }
+    fn subagent_usage(&self, session: SessionId) -> SubagentUsage {
+        Self::subagent_usage(self, session)
     }
     fn reset_trajectory(&self, session: SessionId) {
         Self::reset_trajectory(self, session);

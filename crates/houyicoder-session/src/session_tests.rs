@@ -1,7 +1,29 @@
+use std::env::temp_dir;
+use std::fs::{OpenOptions, create_dir_all, metadata, read_to_string, remove_dir_all, write};
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use super::*;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{EventId, SessionEvent};
 use houyicoder_memory::{InMemoryBackend, LocalFileBackend};
+
+fn child_return(input: u64, output: u64, cache_read: u64) -> SessionEvent {
+    SessionEvent::SubagentReturn {
+        child_session_id: "child".into(),
+        status: "completed".into(),
+        summary: String::new(),
+        result_ref: "child".into(),
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_input_tokens: cache_read,
+        cache_write_input_tokens: 0,
+        reasoning_tokens: 0,
+    }
+}
 
 fn evt(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -72,7 +94,7 @@ async fn test_wakeup_retained() {
         ))
         .await
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_millis(20), signal.notified())
+    tokio::time::timeout(Duration::from_millis(20), signal.notified())
         .await
         .expect("an append remains observable when the receiver polls after it");
 }
@@ -124,6 +146,68 @@ async fn test_trajectory_keeps_order() {
 }
 
 #[tokio::test]
+async fn test_subagent_usage_tracks_view() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let session = SessionId::new();
+    appended_event(
+        &store,
+        session,
+        SessionEvent::UserInput { text: "a".into() },
+    )
+    .await;
+    appended_event(&store, session, child_return(100, 20, 80)).await;
+    appended_event(&store, session, child_return(50, 5, 0)).await;
+    let usage = store.subagent_usage(session);
+    assert_eq!(usage.calls, 2);
+    assert_eq!(usage.input_tokens, 150);
+    assert_eq!(usage.output_tokens, 25);
+    assert_eq!(usage.cache_read_input_tokens, 80);
+    store.reset_trajectory(session);
+    assert_eq!(
+        store.subagent_usage(session),
+        SubagentUsage::default(),
+        "clear resets the projection with the view"
+    );
+}
+
+#[tokio::test]
+async fn test_subagent_usage_restores() {
+    let root = temp_dir().join(format!("usage-restore-{}-{}", id(), EventId::new()));
+    create_dir_all(&root).expect("mkdir root");
+    let session = SessionId::new();
+    {
+        let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+        appended_event(&store, session, child_return(200, 30, 120)).await;
+    }
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
+    assert_eq!(
+        store.subagent_usage(session).calls,
+        0,
+        "cold store is empty"
+    );
+    assert_eq!(store.restore_trajectory(session).await.unwrap(), 1);
+    let usage = store.subagent_usage(session);
+    assert_eq!(usage.calls, 1);
+    assert_eq!(usage.input_tokens, 200);
+    assert_eq!(usage.output_tokens, 30);
+    assert_eq!(usage.cache_read_input_tokens, 120);
+}
+
+#[tokio::test]
+async fn test_usage_through_trait() {
+    // The status handler holds Arc<dyn SessionLog>, so it reaches the trait
+    // method; the inherent method is not the path it takes.
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let session = SessionId::new();
+    appended_event(&store, session, child_return(70, 8, 30)).await;
+    let log: Arc<dyn SessionLog> = Arc::new(store);
+    let usage = log.subagent_usage(session);
+    assert_eq!(usage.calls, 1);
+    assert_eq!(usage.input_tokens, 70);
+    assert_eq!(usage.output_tokens, 8);
+}
+
+#[tokio::test]
 async fn test_last_id_tracks_mirror() {
     let store = SessionStore::new(Box::new(InMemoryBackend::new()));
     let s = SessionId::new();
@@ -141,10 +225,11 @@ async fn test_last_id_tracks_mirror() {
         None,
         "the mirror is per-session"
     );
-    // Through the port: the override answers what the inherent read answers.
-    let port: Arc<dyn SessionLog> = Arc::new(store);
-    assert_eq!(port.last_trajectory_id(s), Some(e2.id));
-    assert_eq!(port.last_trajectory_id(other), None);
+    // Through the trait object: the override answers what the inherent read
+    // answers.
+    let log: Arc<dyn SessionLog> = Arc::new(store);
+    assert_eq!(log.last_trajectory_id(s), Some(e2.id));
+    assert_eq!(log.last_trajectory_id(other), None);
 }
 
 #[tokio::test]
@@ -313,13 +398,12 @@ fn verify_source_chain_inline(events: &[SessionLogEntry]) -> SourceChain {
 #[cfg(test)]
 mod disk_verify {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    fn temp_root() -> std::path::PathBuf {
+    fn temp_root() -> PathBuf {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!("verify-disk-lib-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&p).expect("mkdir root");
+        let p = temp_dir().join(format!("verify-disk-lib-{}-{n}", id()));
+        create_dir_all(&p).expect("mkdir root");
         p
     }
 
@@ -357,7 +441,7 @@ mod disk_verify {
             .await
             .expect("append 2");
         assert_eq!(store.verify_disk_chain(sid), SourceChain::Verified);
-        std::fs::remove_dir_all(&root).ok();
+        remove_dir_all(&root).ok();
     }
 
     /// Tampering a line's text on disk breaks the chain at the next event
@@ -388,13 +472,13 @@ mod disk_verify {
             .expect("append 2");
         assert_eq!(store.verify_disk_chain(sid), SourceChain::Verified);
         let log = root.join(sid.to_string()).join("log.jsonl");
-        let body = std::fs::read_to_string(&log).expect("read");
-        std::fs::write(&log, body.replacen("orig", "TAMPERED", 1)).expect("write");
+        let body = read_to_string(&log).expect("read");
+        write(&log, body.replacen("orig", "TAMPERED", 1)).expect("write");
         match store.verify_disk_chain(sid) {
             SourceChain::Unverified { at_index, .. } => assert_eq!(at_index, 1),
             other => panic!("tamper must break the chain: {other:?}"),
         }
-        std::fs::remove_dir_all(&root).ok();
+        remove_dir_all(&root).ok();
     }
 
     /// A line that fails to parse (corrupt JSON) yields Unverified at that
@@ -410,14 +494,13 @@ mod disk_verify {
             .expect("append");
         // Append a garbage line after the valid one.
         let log = root.join(sid.to_string()).join("log.jsonl");
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        let mut f = OpenOptions::new().append(true).open(&log).unwrap();
         f.write_all(b"not-json\n").unwrap();
         match store.verify_disk_chain(sid) {
             SourceChain::Unverified { .. } => {}
             other => panic!("a corrupt line must yield Unverified, got {other:?}"),
         }
-        std::fs::remove_dir_all(&root).ok();
+        remove_dir_all(&root).ok();
     }
 
     /// After seeding a session from an export (the resume-from-export path),
@@ -463,7 +546,7 @@ mod disk_verify {
             SourceChain::Verified,
             "chain must stay verified after a post-seed append"
         );
-        std::fs::remove_dir_all(&root).ok();
+        remove_dir_all(&root).ok();
     }
 }
 
@@ -592,8 +675,8 @@ async fn test_seed_roundtrip_preserves_history() {
 /// degrades to empty.
 #[tokio::test]
 async fn test_read_child_result() {
-    let root = std::env::temp_dir().join(format!("child-result-unit-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("mkdir");
+    let root = temp_dir().join(format!("child-result-unit-{}", id()));
+    create_dir_all(&root).expect("mkdir");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let child = SessionId::new();
     store
@@ -607,7 +690,7 @@ async fn test_read_child_result() {
     let result = store.read_child_result(child);
     assert!(!result.is_empty(), "child result should have events");
     assert!(store.read_child_result(SessionId::new()).is_empty());
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// Cold prev_hash (cache miss) hashes the raw last disk line via reverse-read,
@@ -616,15 +699,15 @@ async fn test_read_child_result() {
 /// the fallback).
 #[tokio::test]
 async fn test_prev_hash_reads_raw() {
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "cold-prev-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(&root).unwrap();
+    create_dir_all(&root).unwrap();
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
     drop(appended_event(&store, sid, SessionEvent::UserInput { text: "a".into() }).await);
@@ -651,7 +734,7 @@ async fn test_prev_hash_reads_raw() {
         Some(SessionStore::hash_event(&e2).unwrap()),
         "within one binary, raw line bytes match re-serialization",
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The cold prev_hash stays byte-stable under a serde schema drift: a line
@@ -660,15 +743,15 @@ async fn test_prev_hash_reads_raw() {
 /// raw line bytes, not the re-serialized reparsed event.
 #[tokio::test]
 async fn test_prev_hash_survives_drift() {
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "cold-drift-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(&root).unwrap();
+    create_dir_all(&root).unwrap();
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
     drop(appended_event(&store, sid, SessionEvent::UserInput { text: "a".into() }).await);
@@ -679,7 +762,7 @@ async fn test_prev_hash_survives_drift() {
     let brace = orig_line.rfind('}').unwrap();
     let drifted_line = format!("{},\"zz_future_drift\":0}}", &orig_line[..brace]);
     let log_path = root.join(sid.to_string()).join("log.jsonl");
-    std::fs::write(&log_path, format!("{drifted_line}\n")).unwrap();
+    write(&log_path, format!("{drifted_line}\n")).unwrap();
     store.last_hashes.lock().unwrap().clear();
     let cold = store.compute_prev_hash(sid).await.unwrap();
     assert_eq!(
@@ -694,7 +777,7 @@ async fn test_prev_hash_survives_drift() {
         Some(drifted_hash),
         "cold path must not use re-serialization of the reparsed event",
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A newest entry wide enough to span several reverse walks: the read reaches
@@ -703,15 +786,15 @@ async fn test_prev_hash_survives_drift() {
 /// stopped on.
 #[tokio::test]
 async fn test_wide_last_line_hash() {
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "cold-wide-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(&root).unwrap();
+    create_dir_all(&root).unwrap();
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
     drop(appended_event(&store, sid, SessionEvent::UserInput { text: "a".into() }).await);
@@ -725,7 +808,7 @@ async fn test_wide_last_line_hash() {
     )
     .await;
     let log_path = root.join(sid.to_string()).join("log.jsonl");
-    let raw = std::fs::read_to_string(&log_path).unwrap();
+    let raw = read_to_string(&log_path).unwrap();
     let last_line = raw.lines().last().expect("the log holds lines").to_string();
     store.last_hashes.lock().unwrap().clear();
     let cold = store.compute_prev_hash(sid).await.unwrap();
@@ -744,7 +827,7 @@ async fn test_wide_last_line_hash() {
         Some(SessionStore::hash_line_bytes(first_line_bytes(&raw))),
         "cold path must not fall back to the first line of the log",
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The bytes of the log's first line, for probing which line a hash came from.
@@ -759,15 +842,15 @@ fn first_line_bytes(raw: &str) -> &[u8] {
 /// breaks with every later entry still chaining.
 #[tokio::test]
 async fn test_wide_over_budget_hash() {
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "cold-over-budget-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(&root).unwrap();
+    create_dir_all(&root).unwrap();
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
     drop(appended_event(&store, sid, SessionEvent::UserInput { text: "a".into() }).await);
@@ -781,7 +864,7 @@ async fn test_wide_over_budget_hash() {
     )
     .await;
     let log_path = root.join(sid.to_string()).join("log.jsonl");
-    let raw = std::fs::read_to_string(&log_path).unwrap();
+    let raw = read_to_string(&log_path).unwrap();
     store.last_hashes.lock().unwrap().clear();
     let cold = store.compute_prev_hash(sid).await.unwrap();
     assert_eq!(
@@ -794,7 +877,7 @@ async fn test_wide_over_budget_hash() {
         Some(SessionStore::hash_line_bytes(first_line_bytes(&raw))),
         "cold path must not fall back to the line before the last",
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A log torn mid-write: the trailing bytes no terminator follows hold no
@@ -804,15 +887,15 @@ async fn test_wide_over_budget_hash() {
 /// session unable to append at all.
 #[tokio::test]
 async fn test_torn_tail_hash() {
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "cold-torn-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(&root).unwrap();
+    create_dir_all(&root).unwrap();
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
     drop(
@@ -836,13 +919,10 @@ async fn test_torn_tail_hash() {
         .await,
     );
     let log_path = root.join(sid.to_string()).join("log.jsonl");
-    let size = std::fs::metadata(&log_path).unwrap().len();
-    let f = std::fs::OpenOptions::new()
-        .write(true)
-        .open(&log_path)
-        .unwrap();
+    let size = metadata(&log_path).unwrap().len();
+    let f = OpenOptions::new().write(true).open(&log_path).unwrap();
     f.set_len(size - 5).unwrap();
-    let raw = std::fs::read_to_string(&log_path).unwrap();
+    let raw = read_to_string(&log_path).unwrap();
     store.last_hashes.lock().unwrap().clear();
     let cold = store.compute_prev_hash(sid).await.unwrap();
     assert_eq!(
@@ -863,5 +943,5 @@ async fn test_torn_tail_hash() {
         ))
         .await
         .unwrap();
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

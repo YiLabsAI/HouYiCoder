@@ -1,6 +1,5 @@
 //! Status snapshot assembly, session rename, and title derivation.
 
-use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::SessionId;
@@ -99,18 +98,10 @@ impl Server {
     ) -> houyicoder_protocol::frontend::status::StatusSnapshot {
         let snap = self.runner.status_snapshot();
         let mut snapshot = pa::map_status_snapshot(&snap);
-        // The session's economic account includes what its delegated children
-        // spent: their provider calls ran in their own windows, so they are not
-        // in the parent runner's tally. Summed from the durable returns the
-        // children left, the same source the trajectory totals read, so the two
-        // surfaces cannot diverge. The context pane still reads the parent's
-        // own window footprint, which this leaves untouched.
-        //
-        // Reading it clones the mirror. That is acceptable while status is a
-        // command rather than a per-frame draw; a bounded read would be the fix
-        // if it ever becomes one.
-        let delegated =
-            aggregate_subagent_usage(&self.runner.store().trajectory_snapshot(self.session));
+        // The append owner projects durable child returns once. Status is
+        // polled every second while idle, so reading that projection must stay
+        // constant time rather than clone and scan the growing event mirror.
+        let delegated = self.runner.store().subagent_usage(self.session);
         snapshot.cumulative_usage = snapshot
             .cumulative_usage
             .saturating_add(&delegated.to_usage());
