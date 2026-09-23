@@ -124,11 +124,14 @@ fn test_queue_drains_without_keys() {
     );
     // The strip is gone and the input box cleared at submit, so the token can
     // only be the transcript echo of the drained message: the drain carried
-    // the text into the next turn rather than starting a run without it.
-    assert!(
-        s.screen().contents().contains(QUEUED_TOKEN),
-        "the queued text became the second turn's input:\n{}",
-        s.screen().contents()
+    // the text into the next turn rather than starting a run without it. The
+    // count is pinned, not just presence: a stale queue row rendered under
+    // some other head label would satisfy a presence check through the strip.
+    let screen = s.screen().contents();
+    assert_eq!(
+        screen.matches(QUEUED_TOKEN).count(),
+        1,
+        "the queued text became the second turn's input, once:\n{screen}"
     );
     // The notice's own wording, taken past the glyph and indent the renderer
     // emits as separate cells, so a reworded notice cannot leave this absence
