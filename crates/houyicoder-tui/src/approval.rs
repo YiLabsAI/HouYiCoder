@@ -47,8 +47,8 @@ impl App {
     /// anchor row is scrolled out of the viewport.
     pub(crate) fn anchor_visible_row(&self) -> Option<usize> {
         let (_, content_row) = self.selection.anchor?;
-        let total = self.transcript_scroll.total.get();
-        let top = self.transcript_scroll.top_offset(total);
+        let total = self.active_scroll().total.get();
+        let top = self.active_scroll().top_offset(total);
         let ri = content_row.checked_sub(top)?;
         (ri < self.transcript_rect.get().height as usize).then_some(ri)
     }

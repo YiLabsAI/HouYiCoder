@@ -326,6 +326,13 @@ impl App {
     /// now starts further back, so the block list is re-derived for the
     /// enlarged range.
     pub(crate) fn load_older_frames(&mut self) {
+        // The parent's history loads only while the parent is on view. A child
+        // view hides the parent, and loading hidden history would spend disk
+        // reads and mutate parent scroll state the reader cannot see; the gate
+        // lives here, not at the call site, so a later caller cannot bypass it.
+        if self.teammate_view.is_some() {
+            return;
+        }
         // Don't prepend when following the tail (user is at the bottom).
         if self.transcript_scroll.is_following_tail() {
             return;

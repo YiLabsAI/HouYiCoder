@@ -92,10 +92,10 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     let live = build_tail_rows(area, app, total_slots > 0);
 
     let cap = area.height as usize;
-    app.transcript_scroll.cap.set(cap);
+    app.active_scroll().cap.set(cap);
     let total = total_slots + live.rows.len();
-    app.transcript_scroll.total.set(total);
-    let top = app.transcript_scroll.top_offset(total);
+    app.active_scroll().total.set(total);
+    let top = app.active_scroll().top_offset(total);
 
     // Slice the visible window [top, top+cap) over (slots ++ live) WITHOUT
     // cloning the full slots cache — only the viewport rows are cloned.
@@ -282,7 +282,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // The hit rect is the label span, not the full row, so a click beside the
     // label falls through to the transcript surface and starts a drag-select.
     let label_visible = app.viewport != ViewportMode::Scroll
-        && !app.transcript_scroll.is_following_tail()
+        && !app.active_scroll().is_following_tail()
         && !app.search.active;
     if label_visible {
         let new = app.new_turn_count();

@@ -424,7 +424,8 @@ pub struct App {
     /// and back restores what the user had open.
     pub(crate) parked_keys: ParkedKeys,
     /// Drilled-in teammate transcript; when Some, active_transcript swaps to
-    /// the child's turns with a banner. Enter opens, Esc closes.
+    /// the child's turns with a banner. Enter opens, Shift+Up/Down closes;
+    /// Esc interrupts the viewed child's turn.
     pub teammate_view: Option<TeammateView>,
     /// Footer fleet state: the child snapshots + the Shift-arrow selection.
     pub fleet: FleetState,

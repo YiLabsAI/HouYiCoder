@@ -133,9 +133,9 @@ impl App {
             if let Some(view) = self.teammate_view.as_mut() {
                 view.transcript.push(TranscriptLine::User(input.clone()));
                 view.pending_echo = Some(input);
-                // Follow the child tail without trimming the parent: this
-                // scroll tracks the child transcript, not the parent live vec.
-                self.transcript_scroll.follow_tail();
+                // The child's own scroll follows its tail so the echo lands in
+                // view; the parent's scroll keeps its position untouched.
+                view.scroll.follow_tail();
             }
             // Invalidate cached rows after the optimistic echo.
             self.bump_transcript_version();
@@ -504,20 +504,23 @@ impl App {
         applied
     }
 
-    /// Env-gated render diagnostic at each turn boundary.
+    /// Env-gated render diagnostic at each turn boundary. Reads the parent's
+    /// own published total, not the active surface's count: the frames and
+    /// transcript lengths are the parent's, and a child view on screen would
+    /// otherwise mix parent state with a child-derived top.
     fn debug_render_done<F: AsRef<TranscriptFrame>>(&self, frames: &[F]) {
         if std::env::var("HICODER_DEBUG_RENDER").is_err() {
             return;
         }
+        let total = self.transcript_scroll.total.get();
         tracing::warn!(
             "[done] frames={} transcript={} cap={} total={} follow={} top={} approval={} busy={}",
             frames.len(),
             self.transcript.len(),
             self.transcript_scroll.cap.get(),
-            self.transcript_scroll.total.get(),
+            total,
             self.transcript_scroll.is_following_tail(),
-            self.transcript_scroll
-                .top_offset(self.transcript_display_rows()),
+            self.transcript_scroll.top_offset(total),
             self.approval().is_some(),
             self.agent_busy(),
         );

@@ -74,7 +74,7 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
             if app.window_mode {
                 app.window_scroll.jump_to(0);
             } else {
-                app.transcript_scroll.jump_to(0);
+                app.active_scroll_mut().jump_to(0);
             }
         }
         KeyCode::Char('G') => {

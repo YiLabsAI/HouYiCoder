@@ -451,6 +451,8 @@ pub enum Key {
     /// emits these as CSI sequences with the Shift modifier byte (2).
     ShiftUp,
     ShiftDown,
+    /// PageUp — the transcript page-back key.
+    PageUp,
 }
 
 impl Key {
@@ -480,6 +482,7 @@ impl Key {
             // parser decodes the modifier byte (2 = Shift) + KeyEventModifiers.
             Key::ShiftUp => b"\x1b[1;2A".to_vec(),
             Key::ShiftDown => b"\x1b[1;2B".to_vec(),
+            Key::PageUp => b"\x1b[5~".to_vec(),
         }
     }
 }

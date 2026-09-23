@@ -7,6 +7,7 @@ use houyicoder_protocol::frontend::context::ContextBreakdown;
 
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
+use crate::scroll::TranscriptScroll;
 use crate::toggle_hint::ToggleHint;
 
 /// Drill-down rows under the /context grid: per-file memory and per-skill
@@ -241,7 +242,8 @@ pub(crate) fn subagent_line(
 /// turns instead of the parent's, with a banner naming the agent. The child
 /// transcript is the same projection the inline fold-group fetch fills, so the
 /// drilled-in view is isomorphic with the expanded fold, not a simplified
-/// list. Opened by Enter on a Subagent line, closed by Esc.
+/// list. Opened by Enter on a Subagent line, closed by Shift+Up/Down; Esc
+/// interrupts the viewed child's turn.
 #[derive(Debug, Clone, Default)]
 pub struct TeammateView {
     /// The child session id, keying the fetch.
@@ -256,6 +258,10 @@ pub struct TeammateView {
     pub color: Option<String>,
     /// The child's projected transcript. Empty until the fetch returns.
     pub transcript: Vec<TranscriptLine>,
+    /// The child viewport's scroll state, owned here so the parent's scroll
+    /// keeps its position across the visit. Entering starts it at the tail;
+    /// leaving the view destroys it with the view.
+    pub scroll: TranscriptScroll,
     /// The turn number of the last live re-fetch, so a Progress for a turn
     /// already fetched does not refire the query. Reset on each enter.
     pub last_fetched_turn: Option<u32>,

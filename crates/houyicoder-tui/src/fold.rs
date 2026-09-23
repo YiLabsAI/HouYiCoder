@@ -571,10 +571,12 @@ impl crate::state::App {
     /// rows, a blank spacer precedes each message but the first, and a
     /// collapsed group contributes its summary row instead of its lines.
     ///
-    /// Reads the value the last render published, which is the count==render
-    /// single source; the walk is the fallback before the first render.
+    /// Reads the value the last render of the surface on view published,
+    /// which is the count==render single source; the walk is the fallback
+    /// before the first render. The active scroll switches with the surface,
+    /// so a child view reads the child's published total, not the parent's.
     pub fn transcript_display_rows(&self) -> usize {
-        let t = self.transcript_scroll.total.get();
+        let t = self.active_scroll().total.get();
         if t > 0 { t } else { self.fold_aware_rows(None) }
     }
 

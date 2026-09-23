@@ -3,46 +3,81 @@
 //! transcript_scroll field; the debug_scroll helper is private to this impl
 //! block and only these methods call it.
 
-use crate::scroll::{NewTurnCount, ScrollTransition};
+use crate::scroll::{NewTurnCount, ScrollTransition, TranscriptScroll};
 use crate::state::{App, EventCursor};
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 impl App {
-    /// Page the transcript up by one viewport (older rows).
+    /// The scroll state of the surface on view: the teammate's own while its
+    /// view is open, the parent's otherwise. Presentation paths (draw, keys,
+    /// mouse, status) read this; parent-only domain work (rebuild, trim,
+    /// history reads) reads transcript_scroll directly and never this.
+    pub(crate) fn active_scroll(&self) -> &TranscriptScroll {
+        match &self.teammate_view {
+            Some(view) => &view.scroll,
+            None => &self.transcript_scroll,
+        }
+    }
+
+    /// The mutable form of active_scroll, for the page and line scroll
+    /// commands. Callers must not run parent-only side effects
+    /// (snapshot_scroll_away, resume_tail_trim) off this when a child is on
+    /// view; the scroll commands below branch those by surface instead.
+    pub(crate) fn active_scroll_mut(&mut self) -> &mut TranscriptScroll {
+        match &mut self.teammate_view {
+            Some(view) => &mut view.scroll,
+            None => &mut self.transcript_scroll,
+        }
+    }
+
+    /// Page the transcript on view up by one viewport (older rows). Only the
+    /// parent's scroll breaks follow-tail into a new-message count; the
+    /// child's scroll moves alone.
     pub fn scroll_transcript_up(&mut self) {
         let total = self.transcript_display_rows();
-        let before = self.transcript_scroll.top_offset(total);
-        let was_following = self.transcript_scroll.is_following_tail();
-        self.transcript_scroll.page_up(total);
-        self.snapshot_scroll_away(was_following);
-        let after = self.transcript_scroll.top_offset(total);
+        let viewing_child = self.teammate_view.is_some();
+        let before = self.active_scroll().top_offset(total);
+        let was_following = self.active_scroll().is_following_tail();
+        self.active_scroll_mut().page_up(total);
+        if !viewing_child {
+            self.snapshot_scroll_away(was_following);
+        }
+        let after = self.active_scroll().top_offset(total);
         self.debug_scroll("up", total, before, after);
     }
 
-    /// Page the transcript down by one viewport (newer rows). A step that
-    /// crosses to the tail trims the live transcript and clears the
+    /// Page the transcript on view down by one viewport (newer rows). A step
+    /// that crosses to the tail trims the live transcript and clears the
     /// scroll-away snapshot so the cap stays aligned and the new-message label
-    /// dismisses.
+    /// dismisses. Only the parent trims: the child surface owns no trim, so a
+    /// child step to the tail must not cut parent history the reader never
+    /// scrolled away from.
     pub fn scroll_transcript_down(&mut self) {
         let total = self.transcript_display_rows();
-        let before = self.transcript_scroll.top_offset(total);
-        if self.transcript_scroll.page_down(total) == ScrollTransition::ReachedTail {
+        let viewing_child = self.teammate_view.is_some();
+        let before = self.active_scroll().top_offset(total);
+        let transition = self.active_scroll_mut().page_down(total);
+        if !viewing_child && transition == ScrollTransition::ReachedTail {
             self.resume_tail_trim();
         }
-        let after = self.transcript_scroll.top_offset(total);
+        let after = self.active_scroll().top_offset(total);
         self.debug_scroll("down", total, before, after);
     }
 
-    /// Return the transcript scroll to following the tail. Also clears the
-    /// scroll-away snapshot so the next scroll-back starts a fresh "new
-    /// messages" count (an on-repin clears the unseen divider), and trims the
-    /// live transcript so the cap holds at the tail. Called by the
-    /// jump-to-bottom label click, a new user submission, End, Ctrl+End, and
-    /// PageDown-to-bottom.
+    /// Return the transcript on view to following the tail. On the parent
+    /// this also clears the scroll-away snapshot so the next scroll-back
+    /// starts a fresh "new messages" count (an on-repin clears the unseen
+    /// divider), and trims the live transcript so the cap holds at the tail.
+    /// On the child only the child's scroll follows; the parent keeps its
+    /// position and its cap. Called by the jump-to-bottom label click, a new
+    /// user submission, End, Ctrl+End, and PageDown-to-bottom.
     pub fn scroll_transcript_follow_tail(&mut self) {
-        self.transcript_scroll.follow_tail();
-        self.resume_tail_trim();
+        let viewing_child = self.teammate_view.is_some();
+        self.active_scroll_mut().follow_tail();
+        if !viewing_child {
+            self.resume_tail_trim();
+        }
     }
 
     /// Break follow-tail while keeping the current top row on screen. Callers
@@ -50,9 +85,9 @@ impl App {
     /// falls back to the last pinned offset, which is 0 on a session that
     /// never scrolled, so the view jumps to the top of the transcript.
     pub fn pin_transcript_top(&mut self) {
-        let total = self.transcript_scroll.total.get();
-        let top = self.transcript_scroll.top_offset(total);
-        self.transcript_scroll.jump_to(top);
+        let total = self.active_scroll().total.get();
+        let top = self.active_scroll().top_offset(total);
+        self.active_scroll_mut().jump_to(top);
     }
 
     /// Capture the frame index the first time a scroll breaks follow-tail
@@ -160,36 +195,44 @@ impl App {
         }
     }
 
-    /// Step the transcript up by n lines (wheel = 3, edge auto-scroll = 1).
-    /// A line step keeps continuity with the prior viewport, unlike a full
-    /// page jump.
+    /// Step the transcript on view up by n lines (wheel = 3, edge
+    /// auto-scroll = 1). A line step keeps continuity with the prior
+    /// viewport, unlike a full page jump. Only the parent's scroll breaks
+    /// follow-tail into a new-message count.
     pub fn scroll_transcript_line_up(&mut self, n: usize) {
         let total = self.transcript_display_rows();
-        let before = self.transcript_scroll.top_offset(total);
-        let was_following = self.transcript_scroll.is_following_tail();
-        self.transcript_scroll.line_up(n, total);
-        self.snapshot_scroll_away(was_following);
-        let after = self.transcript_scroll.top_offset(total);
+        let viewing_child = self.teammate_view.is_some();
+        let before = self.active_scroll().top_offset(total);
+        let was_following = self.active_scroll().is_following_tail();
+        self.active_scroll_mut().line_up(n, total);
+        if !viewing_child {
+            self.snapshot_scroll_away(was_following);
+        }
+        let after = self.active_scroll().top_offset(total);
         self.debug_scroll("line-up", total, before, after);
     }
 
-    /// Step the transcript down by n lines. See scroll_transcript_line_up.
-    /// A step that crosses to the tail trims and clears the scroll-away
-    /// snapshot, matching page_down.
+    /// Step the transcript on view down by n lines. See
+    /// scroll_transcript_line_up. A parent step that crosses to the tail
+    /// trims and clears the scroll-away snapshot, matching page_down; a
+    /// child step to the tail moves the child scroll alone.
     pub fn scroll_transcript_line_down(&mut self, n: usize) {
         let total = self.transcript_display_rows();
-        let before = self.transcript_scroll.top_offset(total);
-        if self.transcript_scroll.line_down(n, total) == ScrollTransition::ReachedTail {
+        let viewing_child = self.teammate_view.is_some();
+        let before = self.active_scroll().top_offset(total);
+        let transition = self.active_scroll_mut().line_down(n, total);
+        if !viewing_child && transition == ScrollTransition::ReachedTail {
             self.resume_tail_trim();
         }
-        let after = self.transcript_scroll.top_offset(total);
+        let after = self.active_scroll().top_offset(total);
         self.debug_scroll("line-down", total, before, after);
     }
 
     /// Env-gated (HOUYICODER_DEBUG_LOG file) scroll trace: the step delta
     /// tells whether a wheel event pages a full viewport (delta == cap, the
     /// "full replace" experience) or steps a few lines (native continuity).
-    /// When the env is unset this is a no-op.
+    /// When the env is unset this is a no-op. Traces the surface the user is
+    /// scrolling, not the parent.
     fn debug_scroll(&self, dir: &str, total: usize, before: usize, after: usize) {
         let delta = after
             .saturating_sub(before)
@@ -200,7 +243,7 @@ impl App {
             before,
             after,
             delta,
-            follow = self.transcript_scroll.is_following_tail(),
+            follow = self.active_scroll().is_following_tail(),
             "scroll"
         );
     }

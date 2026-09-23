@@ -386,8 +386,8 @@ fn in_rect(r: Rect, x: u16, y: u16) -> bool {
 /// Transcript coordinates include scroll offset; pane coordinates are local.
 pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
     let buf = f.buffer_mut();
-    let total = app.transcript_scroll.total.get();
-    let scroll_top = app.transcript_scroll.top_offset(total);
+    let total = app.active_scroll().total.get();
+    let scroll_top = app.active_scroll().top_offset(total);
     {
         let rows = app.last_transcript_rows.borrow();
         paint_overlay(

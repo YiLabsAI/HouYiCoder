@@ -317,3 +317,65 @@ fn test_teammate_chars_route_parent() {
         s.output()
     );
 }
+
+/// A page parked mid-history keeps its rows on screen across a visit into the
+/// teammate view: entering the child must not reset the parent scroll and
+/// leaving must not force it back to the tail. The reply is long enough that
+/// its head row is out of the tail window, so the marker only renders while
+/// the park holds.
+#[test]
+#[ignore]
+fn test_parent_park_survives_child() {
+    // One script message per model call: the parent opens the delegation, the
+    // child answers, then the parent's single reply is long enough that PageUp
+    // has real rows to park above the tail window.
+    let fill = "lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(200);
+    let script = format!(
+        r#"[[{{"type":"ToolCall","id":"toolu_1","name":"agent","input":{{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}}}],[{{"type":"Text","text":"child done"}}],[{{"type":"Text","text":"PARK ROW EARLY {fill} END SENTINEL"}}]]"#
+    );
+    let mut s = pty_session_scripted(&script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("ENDSENTINEL", RENDER_TIMEOUT * 2),
+        "the turn finished streaming:\n{}",
+        s.output()
+    );
+    // The first PageUp only switches to the scroll view (it publishes the
+    // scroll cap there); the rest page with that cap until the head row
+    // comes into view.
+    s.send_key(&Key::PageUp);
+    for _ in 0..8 {
+        s.send_key(&Key::PageUp);
+    }
+    assert!(
+        s.wait_for_screen("PARK ROW EARLY", RENDER_TIMEOUT),
+        "the second PageUp parks the viewport on the head row:\n{}",
+        s.screen().contents()
+    );
+    // Leave scroll mode without paging: a graphic key exits the scroll view
+    // back to input, keeping the offset where it stands. The keypress itself
+    // is consumed by the exit, so the input box stays empty for Enter to
+    // drill into the child.
+    s.send_str("x");
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert!(
+        s.screen().contents().contains("PARK ROW EARLY"),
+        "leaving the scroll view keeps the parked rows:\n{}",
+        s.screen().contents()
+    );
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("Viewing@explore", RENDER_TIMEOUT),
+        "Enter opens the teammate view:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::ShiftDown);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert!(
+        s.screen().contents().contains("PARK ROW EARLY"),
+        "the exit repaints the parent at the parked rows:\n{}",
+        s.screen().contents()
+    );
+}
