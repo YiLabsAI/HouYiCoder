@@ -34,30 +34,26 @@ pub(crate) fn permission_effect_label(effect: PermissionEffect) -> &'static str 
     }
 }
 
-/// A safe percentage (None when the denominator is zero, so /context never
-/// divides by zero on a provider that reports no window).
-#[cfg(test)]
-fn pct(numerator: u32, denominator: u32) -> Option<f64> {
-    if denominator == 0 {
-        None
-    } else {
-        Some(100.0 * numerator as f64 / denominator as f64)
-    }
-}
-
 /// /context: the precise 7-field cumulative usage from the provider (no
 /// chars/4 estimate), the current window footprint, and the model. Cache and
 /// reasoning breakdowns are first-class so the cache hit rate and the visible
 /// vs reasoning split are visible at a glance.
+///
+/// The footprint is the assembled context, the same measurement the pane
+/// draws, so the text form and the pane agree. A provider that reports no
+/// window still gets the token count, without a share.
 #[cfg(test)]
 pub(crate) fn render_context(snap: &StatusSnapshot) -> String {
     let u = &snap.cumulative_usage;
-    let window = match pct(snap.last_input_tokens, snap.context_window) {
-        Some(p) => format!(
-            "{}/{} ({:.1}%)",
-            snap.last_input_tokens, snap.context_window, p
-        ),
-        None => "0 (no provider window)".to_string(),
+    let window = match (snap.context_used_tokens, snap.context_window) {
+        (Some(used), window) if window > 0 => {
+            format!(
+                "{used}/{window} ({:.1}%)",
+                100.0 * used as f64 / window as f64
+            )
+        }
+        (Some(used), _) => format!("{used} (no provider window)"),
+        (None, _) => "not measured".to_string(),
     };
     let mut s = String::new();
     s.push_str(&format!("model: {}\n", snap.model));

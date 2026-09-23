@@ -7,8 +7,8 @@
 //! breaker state directly.
 //!
 //! The snapshot is cheap to build: one breaker lock, one accumulator lock,
-//! one provider capability call. No await, no channel. The host may call it
-//! on every command dispatch without throttling.
+//! one measurement lock, one provider capability call. No await, no channel.
+//! The host may call it on every command dispatch without throttling.
 
 use std::sync::{Arc, Mutex};
 
@@ -45,9 +45,14 @@ pub struct StatusSnapshot {
     /// driven (since the accumulator was last reset). 7-field inclusive totals
     /// plus the non-overlapping breakdown; see the protocol layer's Usage doc.
     pub cumulative_usage: Usage,
-    /// The input_tokens of the last response — a proxy for how full the model
-    /// context window is right now (the agent footprint at the last call).
+    /// The input_tokens of the last response: the provider's own count for the
+    /// last call, kept as the billing fact. Occupancy is not derived from it.
     pub last_input_tokens: u32,
+    /// The token count of the latest assembled context, from the same
+    /// measurement the context pane renders. None until a turn has assembled
+    /// one. This is the occupancy figure: the provider's reported input is a
+    /// billing fact and must not stand in for what the request is made of.
+    pub context_used_tokens: Option<u32>,
     /// The resolved context window for the active model — the value
     /// resolve_capabilities returns (a learned enforced limit, the catalog,
     /// or the provider caps fallback). Surfaced so the host can render
@@ -124,13 +129,12 @@ impl UsageAccumulator {
         self.cumulative.clone()
     }
 
-    /// The last response's input_tokens (current window footprint proxy). The
-    /// status bar divides this by the context window for its fill %. The
-    /// observability log's context_pct is the SAME formula + source (per-turn
-    /// input_tokens / window); they stay separate fields so the status bar
-    /// reads the live snapshot while the log records the per-turn delta, but
-    /// the two numbers must not diverge — a future "fix" to one must apply to
-    /// both.
+    /// The last response's input_tokens: the provider's own count for the last
+    /// call. This is a billing fact, not the occupancy figure — the status bar
+    /// and the context pane both read the assembled-context measurement
+    /// instead. The observability log's context_pct tracks this provider count
+    /// per turn, so the two legitimately differ and neither should be made to
+    /// follow the other.
     pub fn last_input_tokens(&self) -> u32 {
         self.last_input_tokens
     }
@@ -212,6 +216,7 @@ impl crate::agent::Runner {
             breaker_cool_down,
             cumulative_usage,
             last_input_tokens,
+            context_used_tokens: self.last_measurement().map(|m| m.token_count()),
             context_window: resolved_caps.context_window,
             tool_calls,
             tool_success,
@@ -243,6 +248,13 @@ impl crate::agent::Runner {
         if let Ok(mut g) = self.usage.lock() {
             g.reset();
         }
+    }
+
+    /// Drop the cached context measurement, so the occupancy a surface reports
+    /// after a clear is absent rather than the size of a context that no longer
+    /// exists. The next turn assembles one.
+    pub fn reset_measurement(&self) {
+        self.context_builder.clear_measurement();
     }
 
     /// Drain the queued startup warnings (bad settings fields, network-policy
@@ -483,7 +495,6 @@ fn breaker_label(state: BreakerState) -> &'static str {
     }
 }
 
-#[cfg(test)]
 #[cfg(test)]
 #[path = "status_tests.rs"]
 mod tests;

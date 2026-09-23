@@ -82,10 +82,26 @@ async fn test_compress_writes_checkpoint() {
     assert!(!snap.rewind_points.is_empty(), "rewind points exist");
     // The log now has CompactionBoundary + Summary events.
     let events = runner.store().replay(session).await.unwrap();
+    let boundary = events
+        .iter()
+        .find_map(|e| match &e.event {
+            SessionEvent::CompactionBoundary {
+                pre_tokens,
+                post_tokens,
+                ..
+            } => Some((*pre_tokens, *post_tokens)),
+            _ => None,
+        })
+        .expect("a compaction boundary lands when compress folds events");
+    // Both counts are recorded. The direction depends on the summarizer: a
+    // fold whose summary is longer than the span it replaced can leave a
+    // larger estimate, which is a fact about that fold, not a failure.
+    assert!(boundary.0 > 0, "the boundary records what was there");
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e.event, SessionEvent::CompactionBoundary { .. }))
+        boundary.1 > 0,
+        "and what remained: {} → {}",
+        boundary.0,
+        boundary.1
     );
     assert!(
         events

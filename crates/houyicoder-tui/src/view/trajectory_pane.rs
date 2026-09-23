@@ -130,10 +130,14 @@ pub struct ModelSwitchBoundary {
     pub at_secs: u64,
 }
 
-/// Facts for a compaction boundary between turns.
+/// Facts for a compaction boundary between turns. The token counts bracket
+/// the fold, so the separator shows what it reclaimed. Both are zero on a log
+/// written before the counts were recorded.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CompactedBoundary {
     pub checkpoint_id: String,
+    pub pre_tokens: u64,
+    pub post_tokens: u64,
     pub at_secs: u64,
 }
 

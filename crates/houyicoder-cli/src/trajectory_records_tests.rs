@@ -173,6 +173,16 @@ fn test_mid_turn_input_context() {
         .filter(|r| r.kind == TrajectoryRecordKind::Context)
         .collect();
     assert_eq!(contexts.len(), 2, "the prompt and the update");
+    assert_eq!(
+        contexts[1].name.as_deref(),
+        Some("User update"),
+        "the update is labelled on the context lane"
+    );
+    assert!(
+        contexts[1].summary.contains("User update:"),
+        "the summary names the interjection: {}",
+        contexts[1].summary
+    );
     assert!(
         contexts[1]
             .input
@@ -215,11 +225,15 @@ fn test_memory_recall_is_record() {
         .find(|r| r.kind == TrajectoryRecordKind::Memory)
         .expect("the recall is a record");
     assert!(
-        memory.summary.contains("2 keys"),
-        "the row counts the recalled keys: {}",
+        memory.summary.contains("Recall 2 items"),
+        "the row names the recall and counts its items: {}",
         memory.summary
     );
-    assert!(memory.summary.contains("2.0KB"), "and their size");
+    assert!(
+        memory.input.as_deref().unwrap_or("").contains("2.0KB"),
+        "the injected size is on the drill-down: {:?}",
+        memory.input
+    );
     assert!(
         memory
             .output

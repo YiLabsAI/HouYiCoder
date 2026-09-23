@@ -156,6 +156,25 @@ fn test_tool_schema_tokens_counted() {
 }
 
 #[test]
+fn test_clear_drops_measurement() {
+    // A cleared session has no assembled context, so the cached figure must go
+    // with it. Leaving it would report the size of a context that no longer
+    // exists as the current occupancy.
+    let mut scratch = std::env::temp_dir();
+    scratch.push(format!("ctx-test-clear-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let b = ContextBuilder::new().with_cwd(scratch);
+    let v = b.build_for_turn(&[], None, None, &[], None);
+    assert!(v.measurement.token_count() > 0, "a turn measures something");
+    assert!(b.last_measurement().is_some(), "and caches it");
+    b.clear_measurement();
+    assert!(
+        b.last_measurement().is_none(),
+        "clearing drops the cached measurement"
+    );
+}
+
+#[test]
 fn test_bare_build_skips_cache() {
     // Bare assembly must leave the cache alone: a prospective /context on a
     // fresh session must not masquerade as a served turn measurement.

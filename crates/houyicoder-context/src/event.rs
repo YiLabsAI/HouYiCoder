@@ -310,8 +310,16 @@ pub enum SessionEvent {
         text: String,
     },
     /// Marks a context boundary; the checkpoint holds the plan + summary.
+    /// The token counts bracket the fold: what the selected transcript
+    /// measured before it and what it measures after, so a reader can see how
+    /// much the compaction actually reclaimed. Old logs carry neither and
+    /// deserialize to zero.
     CompactionBoundary {
         checkpoint: CheckpointId,
+        #[serde(default)]
+        pre_tokens: u64,
+        #[serde(default)]
+        post_tokens: u64,
     },
     /// A compaction summary of the Summarized events (raw events stay in log).
     Summary {

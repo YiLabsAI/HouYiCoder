@@ -32,9 +32,16 @@ pub struct StatusSnapshot {
     /// Cumulative provider-reported usage across every turn this runner
     /// has driven since the accumulator was last reset.
     pub cumulative_usage: Usage,
-    /// The input_tokens of the last response (a proxy for how full the
-    /// model context window is right now).
+    /// The input_tokens of the last response: the provider's own count for the
+    /// last call. A billing fact, not the occupancy figure.
     pub last_input_tokens: u32,
+    /// The token count of the latest assembled context, from the same
+    /// measurement the context pane renders. None until a turn has assembled
+    /// one — the pane previews what the first turn would cost instead of
+    /// showing nothing, and that preview is not this field. Occupancy renders
+    /// from here so the status bar and the context pane cannot disagree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_used_tokens: Option<u32>,
     /// The provider-reported context window, from ModelCapabilities.
     pub context_window: u32,
     /// Total tool executions across the session (success + error).

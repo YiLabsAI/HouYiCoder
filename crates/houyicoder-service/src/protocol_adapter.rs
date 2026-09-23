@@ -134,6 +134,7 @@ pub(crate) fn map_status_snapshot(
         breaker_cool_down_secs: s.breaker_cool_down.map(|d| d.as_secs()),
         cumulative_usage: s.cumulative_usage.clone(),
         last_input_tokens: s.last_input_tokens,
+        context_used_tokens: s.context_used_tokens,
         context_window: s.context_window,
         tool_calls: s.tool_calls,
         tool_success: s.tool_success,
@@ -533,9 +534,17 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         SessionEvent::MetaUser { text } => {
             AcpxNotification::new(ContextMetaUser, serde_json::json!({ "text": text }))
         }
-        SessionEvent::CompactionBoundary { checkpoint } => AcpxNotification::new(
+        SessionEvent::CompactionBoundary {
+            checkpoint,
+            pre_tokens,
+            post_tokens,
+        } => AcpxNotification::new(
             ContextCompactionBoundary,
-            serde_json::json!({ "checkpoint": checkpoint.to_string() }),
+            serde_json::json!({
+                "checkpoint": checkpoint.to_string(),
+                "preTokens": pre_tokens,
+                "postTokens": post_tokens,
+            }),
         ),
         SessionEvent::Summary { text } => {
             AcpxNotification::new(ContextSummary, serde_json::json!({ "text": text }))

@@ -50,10 +50,8 @@ impl Server {
                 .unwrap_or(0);
         bd.cache_prefix_tokens = Some(prefix);
         let usage = &snap.cumulative_usage;
-        if usage.input_tokens > 0 {
-            bd.cache_hit_rate =
-                Some(usage.cache_read_input_tokens as f64 / usage.input_tokens as f64);
-        }
+        // The same ratio the status Usage rows render, from one definition.
+        bd.cache_hit_rate = usage.cache_hit_rate();
         let context = pa::map_context_breakdown(&bd);
         self.send_response(io, req_id, ResponsePayload::Context(context))
             .await

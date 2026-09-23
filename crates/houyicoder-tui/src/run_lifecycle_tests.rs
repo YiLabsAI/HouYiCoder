@@ -427,6 +427,14 @@ fn test_status_snapshot_accumulates_live() {
     assert_eq!(snap.cumulative_usage.cache_read_input_tokens, 10_000);
     assert_eq!(snap.last_input_tokens, 12_400);
     assert_eq!(snap.context_window, 200_000);
+    // Occupancy is the assembled context's own size, so a session that has run
+    // carries one. This is the figure the status bar and the context pane both
+    // read.
+    assert!(
+        snap.context_used_tokens.is_some_and(|used| used > 0),
+        "a measured context reports its size: {:?}",
+        snap.context_used_tokens
+    );
     // /context now renders an inline grid block (canned breakdown for now);
     // the live accumulator is verified above via status_snapshot. The block
     // is pushed as a ContextGrid transcript line, not a System text line.

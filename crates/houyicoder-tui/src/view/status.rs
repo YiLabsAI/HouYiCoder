@@ -130,16 +130,21 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         // totals + cache hit rate stay in the /context view and the
         // /trajectory pane, where they carry detail, not the bar.
         // Right-aligned context gauge (persistent — a right-side
-        // footprint read). Before the first run last_input is 0 so
-        // 0% — honest, not a stale per-run tally. Colored by load. Above 90%
-        // (the red zone) append a /compact hint so the user knows the action
-        // to free space — "Context low · Run /compact".
+        // footprint read). The figure is the assembled context, the same
+        // measurement the context pane renders, so the two surfaces cannot
+        // disagree. Before a turn has assembled one the gauge holds a dash
+        // rather than a zero that would read as an empty window. Colored by
+        // load; above 90% (the red zone) the label appends a /compact hint so
+        // the user knows the action to free space.
         if snap.context_window > 0 {
-            let pct = 100.0 * snap.last_input_tokens as f64 / snap.context_window as f64;
-            right = Some(Line::from(Span::styled(
-                context_gauge_label(pct),
-                context_gauge_color(pct),
-            )));
+            let (label, style) = match snap.context_used_tokens {
+                Some(used) => {
+                    let pct = 100.0 * used as f64 / snap.context_window as f64;
+                    (context_gauge_label(pct), context_gauge_color(pct))
+                }
+                None => (" context — ".to_string(), Style::new().fg(Color::DarkGray)),
+            };
+            right = Some(Line::from(Span::styled(label, style)));
         }
     }
     match right {
@@ -608,6 +613,7 @@ mod tests {
                 ..Default::default()
             },
             last_input_tokens: 16100,
+            context_used_tokens: Some(16100),
             context_window: 200_000,
             ..Default::default()
         });
@@ -634,5 +640,39 @@ mod tests {
             text.contains("context") || text.contains("%"),
             "context gauge missing: {text}"
         );
+    }
+
+    #[test]
+    fn test_bar_gauge_needs_measurement() {
+        // Before a turn has assembled a context there is no occupancy to
+        // report. The gauge holds a dash rather than a percentage, which would
+        // claim the window is a known amount full.
+        use houyicoder_protocol::frontend::status::StatusSnapshot;
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut app = crate::composition::app();
+        app.model_picker.snapshot.applied.id = "test-model".into();
+        app.status_cache = Some(StatusSnapshot {
+            model: "test-model".into(),
+            context_used_tokens: None,
+            context_window: 200_000,
+            ..Default::default()
+        });
+        let backend = TestBackend::new(80, 3);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_agent_status_bar(f, f.area(), &app))
+            .unwrap();
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("test-model"), "model id shown: {text}");
+        assert!(
+            text.contains("context —"),
+            "an unmeasured context says so: {text}"
+        );
+        assert!(!text.contains('%'), "and claims no percentage: {text}");
     }
 }

@@ -245,7 +245,11 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            SessionEvent::CompactionBoundary { checkpoint: cp },
+            SessionEvent::CompactionBoundary {
+                checkpoint: cp,
+                pre_tokens: 0,
+                post_tokens: 0,
+            },
         ),
         event(
             s,

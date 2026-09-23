@@ -435,6 +435,14 @@ impl ContextBuilder {
         self.last_measurement.lock().ok().and_then(|g| g.clone())
     }
 
+    /// Drop the cached measurement so the next build recomputes it, keeping a
+    /// cleared session from reporting the size of a context that is gone.
+    pub fn clear_measurement(&self) {
+        if let Ok(mut g) = self.last_measurement.lock() {
+            *g = None;
+        }
+    }
+
     /// The tokenizer used for section sizing (shared with /context).
     pub fn tokenizer(&self) -> &Tokenizer {
         &self.tokenizer

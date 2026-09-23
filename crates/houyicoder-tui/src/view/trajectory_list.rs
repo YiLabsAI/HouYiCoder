@@ -6,6 +6,7 @@
 //! the detail submodule.
 
 use super::*;
+use crate::command::render::format_tokens;
 
 /// The display title for a turn: the user input when present, otherwise the
 /// first event's summary so a turn whose prompt sits outside the loaded window
@@ -42,14 +43,29 @@ fn boundary_line(boundary: &TurnBoundary, now_secs: u64) -> Line<'static> {
             ),
             Color::DarkGray,
         )]),
-        TurnBoundary::Compacted(b) => line(vec![sp(
-            format!(
-                "  ── context compacted (checkpoint {}) · {} ──",
-                b.checkpoint_id,
-                relative_time(now_secs, b.at_secs)
-            ),
-            Color::DarkGray,
-        )]),
+        TurnBoundary::Compacted(b) => {
+            // The bracket is the point of the row: a compaction that reclaimed
+            // nothing is worth seeing. A log written before the counts were
+            // recorded carries zeroes, so the bracket is omitted there rather
+            // than printed as a fold from nothing to nothing.
+            let bracket = if b.pre_tokens > 0 || b.post_tokens > 0 {
+                format!(
+                    " {} → {}",
+                    format_tokens(b.pre_tokens),
+                    format_tokens(b.post_tokens)
+                )
+            } else {
+                String::new()
+            };
+            line(vec![sp(
+                format!(
+                    "  ── context compacted{bracket} (checkpoint {}) · {} ──",
+                    b.checkpoint_id,
+                    relative_time(now_secs, b.at_secs)
+                ),
+                Color::DarkGray,
+            )])
+        }
     }
 }
 

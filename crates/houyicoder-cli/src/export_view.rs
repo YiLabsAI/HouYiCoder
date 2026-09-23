@@ -257,11 +257,13 @@ fn collect_checkpoints_and_errors(
     let mut errors: Vec<ErrorEntry> = Vec::new();
     for ev in events {
         match &ev.event {
-            SessionEvent::CompactionBoundary { checkpoint } => checkpoints.push(CheckpointEntry {
-                ts: ev.ts,
-                checkpoint: Some(format!("{checkpoint:?}")),
-                summary: None,
-            }),
+            SessionEvent::CompactionBoundary { checkpoint, .. } => {
+                checkpoints.push(CheckpointEntry {
+                    ts: ev.ts,
+                    checkpoint: Some(format!("{checkpoint:?}")),
+                    summary: None,
+                })
+            }
             SessionEvent::Summary { text } => checkpoints.push(CheckpointEntry {
                 ts: ev.ts,
                 checkpoint: None,
@@ -540,6 +542,8 @@ mod tests {
                 100,
                 SessionEvent::CompactionBoundary {
                     checkpoint: CheckpointId::new(),
+                    pre_tokens: 0,
+                    post_tokens: 0,
                 },
             ),
             ev(

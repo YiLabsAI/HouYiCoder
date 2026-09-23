@@ -278,6 +278,7 @@ impl Server {
             tracing::warn!("before-clear extraction failed: {e}");
         }
         self.runner.reset_usage();
+        self.runner.reset_measurement();
         self.runner.reset_trajectory(self.session).await;
         self.runner.clear_input_queue();
         self.runner.clear_notifications();

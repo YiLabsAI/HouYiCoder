@@ -1526,6 +1526,8 @@ fn test_turn_list_other_boundaries() {
                 2,
                 TurnBoundary::Compacted(Box::new(CompactedBoundary {
                     checkpoint_id: "ck-1".into(),
+                    pre_tokens: 128_000,
+                    post_tokens: 32_000,
                     at_secs: 0,
                 })),
             )),
@@ -1542,7 +1544,68 @@ fn test_turn_list_other_boundaries() {
         "the model switch is named: {text}"
     );
     assert!(
+        text.contains("context compacted 128k → 32k (checkpoint ck-1)"),
+        "the compaction names its checkpoint and what it reclaimed: {text}"
+    );
+}
+
+#[test]
+fn test_compaction_without_counts() {
+    // A log written before the boundary carried token counts deserializes to
+    // zeroes. The row then names the checkpoint without a bracket, rather than
+    // printing a fold from nothing to nothing.
+    let mk = |n: usize, boundary: TurnBoundary| TrajectoryTurn {
+        n,
+        boundary_before: vec![boundary],
+        user_input: format!("turn {n}"),
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: Some(0),
+        cache_write: None,
+        models: Vec::new(),
+        efforts: Vec::new(),
+        reasoning_tokens: None,
+        tool_count: 0,
+        tool_fail: 0,
+        retries: 0,
+        duration_ms: 100,
+        success: true,
+        records: vec![],
+    };
+    let view = TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        failures: 0,
+        duration_secs: 0,
+        cache_read: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: None,
+        rows: vec![TrajectoryRow::Turn(mk(
+            1,
+            TurnBoundary::Compacted(Box::new(CompactedBoundary {
+                checkpoint_id: "ck-1".into(),
+                pre_tokens: 0,
+                post_tokens: 0,
+                at_secs: 0,
+            })),
+        ))],
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
         text.contains("context compacted (checkpoint ck-1)"),
-        "the compaction names its checkpoint: {text}"
+        "an old boundary keeps its checkpoint label: {text}"
+    );
+    assert!(
+        !text.contains("→"),
+        "and claims no fold it cannot show: {text}"
     );
 }

@@ -372,7 +372,9 @@ fn test_estimate_counts_each_kind() {
     assert_eq!(
         estimate_event_tokens(
             &mk(CompactionBoundary {
-                checkpoint: houyicoder_context::CheckpointId::new()
+                checkpoint: houyicoder_context::CheckpointId::new(),
+                pre_tokens: 0,
+                post_tokens: 0,
             }),
             &tokenizer
         ),

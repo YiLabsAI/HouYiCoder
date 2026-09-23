@@ -583,6 +583,35 @@ mod tests {
         assert!(!s.contains("delegated usage:"), "no row: {s}");
     }
 
+    /// The cached row divides only when input was reported. With input it
+    /// shows the share; without it the count stands alone rather than reading
+    /// as a cache miss.
+    #[test]
+    fn test_usage_cache_share() {
+        use houyicoder_protocol::llm::Usage;
+        let mut app = crate::test_harness::working_app();
+        let mut snap = app.status_cache.take().unwrap_or_default();
+        snap.model = "m".into();
+        snap.cumulative_usage = Usage {
+            input_tokens: 1000,
+            total_tokens: 1000,
+            cache_read_input_tokens: 500,
+            ..Default::default()
+        };
+        app.status_cache = Some(snap.clone());
+        let s = render_usage(&app);
+        assert!(s.contains("50.0% of input"), "the share is shown: {s}");
+        snap.cumulative_usage = Usage {
+            cache_read_input_tokens: 500,
+            ..Default::default()
+        };
+        app.status_cache = Some(snap);
+        let s = render_usage(&app);
+        assert!(s.contains("cached input"), "the row is present: {s}");
+        assert!(s.contains("500"), "the count stands: {s}");
+        assert!(!s.contains("% of input"), "no share to divide by: {s}");
+    }
+
     /// A child that returned before reporting usage leaves the row saying so,
     /// rather than printing zeroes for a cost that was never measured.
     #[test]

@@ -23,11 +23,15 @@ pub struct RecordedCompaction {
     pub made_progress: bool,
 }
 
-/// Persist the manifest and its boundary events.
+/// Persist the manifest and its boundary events. The token counts bracket the
+/// fold and are carried on the boundary so a reader sees what it reclaimed
+/// without re-measuring the span.
 pub(super) async fn record_compaction(
     store: &dyn SessionLog,
     session: SessionId,
     manifest: &CheckpointManifest,
+    pre_tokens: u64,
+    post_tokens: u64,
 ) -> Result<RecordedCompaction, ContextError> {
     let folded_count = manifest
         .plan
@@ -50,6 +54,8 @@ pub(super) async fn record_compaction(
                 prev_hash: None,
                 event: SessionEvent::CompactionBoundary {
                     checkpoint: manifest.id,
+                    pre_tokens,
+                    post_tokens,
                 },
             })
             .await?;
@@ -114,7 +120,12 @@ mod tests {
         policy: &CompressPolicy,
     ) -> RecordedCompaction {
         let manifest = build_manifest(events, policy, &HeuristicSummarizer, None).await;
-        record_compaction(store, session, &manifest).await.unwrap()
+        // The counts are the boundary's own evidence, written verbatim, so a
+        // distinctive pair proves the wiring without depending on what a
+        // summarizer happens to produce.
+        record_compaction(store, session, &manifest, 111, 222)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -143,11 +154,22 @@ mod tests {
         assert_eq!(back.summary, result.manifest.summary);
         assert_eq!(back.plan.len(), result.manifest.plan.len());
         let replay = store.replay(s).await.unwrap();
-        let boundary_count = replay
+        let boundary: Vec<(u64, u64)> = replay
             .iter()
-            .filter(|e| matches!(e.event, SessionEvent::CompactionBoundary { .. }))
-            .count();
-        assert_eq!(boundary_count, 1, "one compaction boundary");
+            .filter_map(|e| match &e.event {
+                SessionEvent::CompactionBoundary {
+                    pre_tokens,
+                    post_tokens,
+                    ..
+                } => Some((*pre_tokens, *post_tokens)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            boundary,
+            vec![(111, 222)],
+            "one boundary, carrying the fold"
+        );
         let summary_count = replay
             .iter()
             .filter(|e| matches!(e.event, SessionEvent::Summary { .. }))

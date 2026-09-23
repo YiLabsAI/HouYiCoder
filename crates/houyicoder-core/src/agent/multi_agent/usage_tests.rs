@@ -14,7 +14,7 @@ fn entry(event: SessionEvent) -> SessionLogEntry {
     }
 }
 
-fn ret(input: u64, output: u64, cache_read: u64) -> SessionEvent {
+fn child_return(input: u64, output: u64, cache_read: u64) -> SessionEvent {
     SessionEvent::SubagentReturn {
         child_session_id: "child".into(),
         status: "completed".into(),
@@ -37,7 +37,10 @@ fn test_no_children_is_empty() {
 
 #[test]
 fn test_sums_every_return() {
-    let events = vec![entry(ret(100, 20, 80)), entry(ret(50, 5, 0))];
+    let events = vec![
+        entry(child_return(100, 20, 80)),
+        entry(child_return(50, 5, 0)),
+    ];
     let usage = aggregate_subagent_usage(&events);
     assert_eq!(usage.calls, 2);
     assert_eq!(usage.input_tokens, 150);
@@ -48,7 +51,7 @@ fn test_sums_every_return() {
 
 #[test]
 fn test_unmeasured_child_counts() {
-    let events = vec![entry(ret(0, 0, 0))];
+    let events = vec![entry(child_return(0, 0, 0))];
     let usage = aggregate_subagent_usage(&events);
     assert_eq!(usage.calls, 1);
     assert_eq!(usage.unmeasured_calls, 1);
@@ -58,7 +61,7 @@ fn test_unmeasured_child_counts() {
 fn test_partial_measurement_kept() {
     // A child that reported only output is measured; the count must not claim
     // its cost is unknown.
-    let events = vec![entry(ret(0, 7, 0))];
+    let events = vec![entry(child_return(0, 7, 0))];
     let usage = aggregate_subagent_usage(&events);
     assert_eq!(usage.calls, 1);
     assert_eq!(usage.unmeasured_calls, 0);
@@ -75,7 +78,7 @@ fn test_other_events_are_ignored() {
 
 #[test]
 fn test_to_usage_maps_totals() {
-    let events = vec![entry(ret(100, 20, 80))];
+    let events = vec![entry(child_return(100, 20, 80))];
     let usage = aggregate_subagent_usage(&events).to_usage();
     assert_eq!(usage.input_tokens, 100);
     assert_eq!(usage.output_tokens, 20);

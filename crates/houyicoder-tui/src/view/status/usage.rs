@@ -86,14 +86,9 @@ pub(super) fn render_usage(app: &App) -> String {
         ));
     }
     let cache_read = u.cache_read_input_tokens as u64;
-    let cache_value = if u.input_tokens > 0 {
-        format!(
-            "{} ({:.1}% of input)",
-            ft(cache_read),
-            100.0 * cache_read as f64 / u.input_tokens as f64
-        )
-    } else {
-        ft(cache_read)
+    let cache_value = match u.cache_hit_pct() {
+        Some(pct) => format!("{} ({pct:.1}% of input)", ft(cache_read)),
+        None => ft(cache_read),
     };
     s.push_str(&f("cached input", &cache_value));
     // Not every provider reports cache creation. A zero cannot distinguish

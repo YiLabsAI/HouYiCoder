@@ -187,7 +187,19 @@ impl Runner {
 
         let summary = manifest.summary.clone().unwrap_or_default();
         let manifest_id = manifest.id;
-        let result = match record_compaction(&*self.store, session, &manifest).await {
+        // Measured before the boundary is written so the event can carry both
+        // counts: the estimate depends only on the events and the manifest,
+        // not on the store writes.
+        let post_compact_tokens = estimate_selected_transcript(&events, Some(&manifest));
+        let result = match record_compaction(
+            &*self.store,
+            session,
+            &manifest,
+            pre_compact_tokens,
+            post_compact_tokens,
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 // Manual failures must not suppress later automatic recovery.
@@ -212,8 +224,6 @@ impl Runner {
         // the frozen memory index at the same natural cache break.
         self.cached_prefix.invalidate();
         self.memory.invalidate_index_snapshot();
-
-        let post_compact_tokens = estimate_selected_transcript(&events, Some(&manifest));
 
         let compression_ratio = if pre_compact_tokens > 0 {
             post_compact_tokens as f64 / pre_compact_tokens as f64

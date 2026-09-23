@@ -1099,7 +1099,14 @@ fn test_compaction_boundary_attached() {
                 call_in_turn: 0,
             },
         ),
-        ev(150, SessionEvent::CompactionBoundary { checkpoint: ck }),
+        ev(
+            150,
+            SessionEvent::CompactionBoundary {
+                checkpoint: ck,
+                pre_tokens: 0,
+                post_tokens: 0,
+            },
+        ),
         ev(200, SessionEvent::UserInput { text: "t2".into() }),
         ev(
             205,
@@ -1119,6 +1126,8 @@ fn test_compaction_boundary_attached() {
         second.boundary_before,
         vec![TurnBoundary::Compacted(Box::new(CompactedBoundary {
             checkpoint_id: ck.to_string(),
+            pre_tokens: 0,
+            post_tokens: 0,
             at_secs: 0,
         }))]
     );
@@ -1158,7 +1167,14 @@ fn test_two_boundaries_kept() {
             },
         ),
         usage(110, "qwen"),
-        ev(150, SessionEvent::CompactionBoundary { checkpoint: ck }),
+        ev(
+            150,
+            SessionEvent::CompactionBoundary {
+                checkpoint: ck,
+                pre_tokens: 0,
+                post_tokens: 0,
+            },
+        ),
         ev(200, SessionEvent::UserInput { text: "t2".into() }),
         ev(
             205,

@@ -18,6 +18,7 @@ fn snap_with_data() -> StatusSnapshot {
             reasoning_tokens: 30,
         },
         last_input_tokens: 1000,
+        context_used_tokens: Some(1000),
         context_window: 8000,
         tool_calls: 15,
         tool_success: 12,
@@ -50,6 +51,7 @@ fn test_context_zero_stub() {
         breaker_cool_down_secs: None,
         cumulative_usage: Usage::default(),
         last_input_tokens: 0,
+        context_used_tokens: None,
         context_window: 0,
         tool_calls: 0,
         tool_success: 0,
@@ -60,7 +62,19 @@ fn test_context_zero_stub() {
     assert!(s.contains("0 calls"), "{s}");
     assert!(s.contains("0 ok"), "{s}");
     assert!(s.contains("0 errored"), "{s}");
-    assert!(s.contains("no provider window"), "{s}");
+    // Nothing has been assembled yet, so the window line says so rather than
+    // reporting an empty context as a measured zero.
+    assert!(s.contains("not measured"), "{s}");
+}
+
+#[test]
+fn test_context_no_window() {
+    // A provider that reports no window still gets the token count, without a
+    // share: there is no denominator to divide by.
+    let mut snap = snap_with_data();
+    snap.context_window = 0;
+    let s = render_context(&snap);
+    assert!(s.contains("1000 (no provider window)"), "{s}");
 }
 
 #[test]

@@ -49,6 +49,8 @@ fn test_every_kind_maps() {
         (
             SessionEvent::CompactionBoundary {
                 checkpoint: Default::default(),
+                pre_tokens: 0,
+                post_tokens: 0,
             },
             false,
             true,

@@ -501,9 +501,15 @@ pub(super) fn apply_turn_boundary(
                 at_secs: ev.ts / 1000,
             });
         }
-        SessionEvent::CompactionBoundary { checkpoint } => {
+        SessionEvent::CompactionBoundary {
+            checkpoint,
+            pre_tokens,
+            post_tokens,
+        } => {
             pending_boundary.push(TurnBoundary::Compacted(Box::new(CompactedBoundary {
                 checkpoint_id: checkpoint.to_string(),
+                pre_tokens: *pre_tokens,
+                post_tokens: *post_tokens,
                 at_secs: ev.ts / 1000,
             })));
         }
@@ -543,7 +549,13 @@ pub(super) fn apply_turn_boundary(
         }
         SessionEvent::MidTurnInput { text, .. } => {
             builder.touch(ev.ts);
-            let record = builder.record(TrajectoryRecordKind::Context, None, preview(text), ev.ts);
+            let summary = format!("User update: {}", preview(text));
+            let record = builder.record(
+                TrajectoryRecordKind::Context,
+                Some("User update".into()),
+                summary,
+                ev.ts,
+            );
             let index = builder.push(record);
             builder.records[index].input = Some(text.clone());
         }
@@ -630,13 +642,21 @@ pub(super) fn apply_turn_content(
         }
         SessionEvent::MemoryRecall { keys, bytes, .. } => {
             builder.touch(ev.ts);
+            // The row names the recall and its count; the size and the keys
+            // themselves belong to the drill-down, where there is room for
+            // them.
             let summary = if keys.is_empty() {
-                "recall".to_string()
+                "Recall".to_string()
             } else {
-                format!("{} keys ({})", keys.len(), fmt_bytes(*bytes))
+                format!("Recall {} items", keys.len())
             };
             let record = builder.record(TrajectoryRecordKind::Memory, None, summary, ev.ts);
             let index = builder.push(record);
+            // A log written before the size was recorded carries zero, which
+            // is an absent measurement rather than an empty recall.
+            if *bytes > 0 {
+                builder.records[index].input = Some(format!("{} injected", fmt_bytes(*bytes)));
+            }
             builder.records[index].output = Some(keys.join("\n"));
         }
         SessionEvent::HookSignal {
@@ -652,7 +672,7 @@ pub(super) fn apply_turn_content(
         SessionEvent::Summary { text } => {
             builder.push_signal(TrajectoryRecordKind::Compaction, None, text, ev.ts);
         }
-        SessionEvent::CompactionBoundary { checkpoint } => {
+        SessionEvent::CompactionBoundary { checkpoint, .. } => {
             builder.push_signal(
                 TrajectoryRecordKind::Compaction,
                 None,

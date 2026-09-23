@@ -46,6 +46,22 @@ impl Usage {
         self.output_tokens.saturating_sub(self.reasoning_tokens)
     }
 
+    /// The share of this usage's input that came from the prompt cache, as a
+    /// rate in 0..1. None when no input was reported: a caller then shows the
+    /// value as unknown rather than as a 0% that reads like a cache miss. A
+    /// provider whose cache-read count exceeds its input would push this above
+    /// one, so the rate is clamped to the range it documents.
+    pub fn cache_hit_rate(&self) -> Option<f64> {
+        (self.input_tokens > 0)
+            .then(|| (self.cache_read_input_tokens as f64 / self.input_tokens as f64).min(1.0))
+    }
+
+    /// The same share as a percentage, the unit the panes render. One formula
+    /// behind both, so a surface cannot round or floor it differently.
+    pub fn cache_hit_pct(&self) -> Option<f64> {
+        self.cache_hit_rate().map(|rate| rate * 100.0)
+    }
+
     /// Sum two usage records field by field, saturating at the u32 ceiling.
     /// Used to combine a session's own provider calls with the usage its
     /// delegated children reported.
