@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
-use houyicoder_tui::records::ToolOutcome;
 #[path = "trajectory_turns.rs"]
 mod turns;
 
@@ -114,18 +113,17 @@ fn spawned_call_ids(events: &[SessionLogEntry]) -> HashSet<&str> {
 /// failure, not a command that ran and failed). Under the error-key test a
 /// failed command was counted as a success here while the transcript painted
 /// it red, and the pane's failure total could read zero for a session in
-/// which every command failed. Routing through ToolOutcome also carries the
-/// semantic-exit exception, so grep finding no matches stays a success in
-/// both places.
+/// which every command failed. The shared rule also carries the semantic-exit
+/// exception, so grep finding no matches stays a success in both places.
 fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -> bool {
     let (tool, input) = match calls.get(call_id) {
         Some(&(t, i)) => (t, i),
         // No matching call (a result whose call frame is outside this log
-        // slice): judge on the output alone. from_output_with with an empty
-        // tool name applies the plain error-or-success rule.
+        // slice): judge on the output alone, which the shared rule reads as
+        // the plain error-or-success case.
         None => ("", &serde_json::Value::Null),
     };
-    ToolOutcome::from_output_with(output, tool, input) == ToolOutcome::Error
+    houyicoder_protocol::tool::tool_result_failed(output, tool, input)
 }
 
 fn build_summary(

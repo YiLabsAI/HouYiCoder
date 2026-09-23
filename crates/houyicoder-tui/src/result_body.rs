@@ -221,7 +221,7 @@ pub(crate) fn command_is_silent_success(call_input: Option<&Value>, output: &Val
     let Some(command) = input.get("command").and_then(|c| c.as_str()) else {
         return false;
     };
-    let Some(word) = crate::bash_command::simple_command_word(command) else {
+    let Some(word) = houyicoder_protocol::tool::simple_command_word(command) else {
         return false;
     };
     SILENT_SUCCESS_COMMANDS.contains(&word)

@@ -302,49 +302,14 @@ impl ToolOutcome {
         tool_name: &str,
         call_input: &serde_json::Value,
     ) -> Self {
-        let has_error = output.get("error").is_some();
-        let success_false = output.get("success").and_then(|v| v.as_bool()) == Some(false);
-        if !has_error && !success_false {
-            return Self::Success;
+        // One failure rule, shared through the tool protocol: the trajectory
+        // header counts failures by the same definition, so a chip cannot
+        // disagree with the header about one result.
+        if houyicoder_protocol::tool::tool_result_failed(output, tool_name, call_input) {
+            Self::Error
+        } else {
+            Self::Success
         }
-        // bash with a non-zero exit: check whether the command is one whose
-        // non-zero exit is semantic success, not a failure.
-        if tool_name == "bash" && !has_error {
-            let exit_code = output
-                .get("exit_code")
-                .and_then(|c| c.as_i64())
-                .unwrap_or(0);
-            let command = call_input
-                .get("command")
-                .and_then(|c| c.as_str())
-                .unwrap_or("");
-            if exit_code != 0 && command_is_semantic_success(command, exit_code) {
-                return Self::Success;
-            }
-        }
-        Self::Error
-    }
-}
-
-/// Whether a bash command's non-zero exit is a semantic success (the command
-/// did its job), not a failure. grep exits 1 when no matches are found; diff
-/// exits 1 when files differ; both are the command reporting a result, not
-/// failing. A non-zero exit is not always an error — the exit code is the
-/// command's verdict, and some commands use non-zero to mean "I found
-/// something" or "the inputs differ", which is the whole point of running
-/// them.
-fn command_is_semantic_success(command: &str, exit_code: i64) -> bool {
-    // Only the common, unambiguous cases. A compound command yields no
-    // command word (its exit code belongs to the last stage), so it stays
-    // an error on non-zero.
-    let Some(word) = crate::bash_command::simple_command_word(command) else {
-        return false;
-    };
-    match (word, exit_code) {
-        ("grep", 1) => true, // no matches — the command succeeded
-        ("rg", 1) => true,   // ripgrep — same
-        ("diff", 1) => true, // files differ — the command succeeded
-        _ => false,
     }
 }
 

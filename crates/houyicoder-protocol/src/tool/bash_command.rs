@@ -1,11 +1,10 @@
-//! Shell command-line inspection shared by the two render-layer decisions
-//! that key off which command ran: the semantic-exit judgment (a non-zero
-//! exit that is not a failure) and the silent-success judgment (an empty
-//! output that means done). Both need the same thing — the command word of
-//! a simple command — and both must refuse the same thing: a compound
-//! command, whose exit code and output belong to the last stage rather than
-//! the first word. One implementation so the two judgments cannot disagree
-//! about what command a line ran.
+//! Shell command-line inspection shared by the decisions that key off which
+//! command ran: the semantic-exit judgment (a non-zero exit that is not a
+//! failure) and the silent-success judgment (an empty output that means done).
+//! Both need the same thing — the command word of a simple command — and both
+//! must refuse the same thing: a compound command, whose exit code and output
+//! belong to the last stage rather than the first word. One implementation so
+//! the two judgments cannot disagree about what command a line ran.
 
 /// The command word of a simple command, or None when the line is compound.
 ///
@@ -16,7 +15,7 @@
 ///
 /// Leading environment assignments are stripped, so FOO=bar mv a b reports
 /// mv. POSIX allows any number of them before the command word.
-pub(crate) fn simple_command_word(command: &str) -> Option<&str> {
+pub fn simple_command_word(command: &str) -> Option<&str> {
     let trimmed = command.trim();
     if trimmed.contains('|')
         || trimmed.contains(';')

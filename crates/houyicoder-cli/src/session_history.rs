@@ -1,11 +1,9 @@
-//! The one typed reader of a session's durable log.
+//! The typed reader of a session's durable log: byte-anchored windows, a lazy
+//! offset index, and a bounded turn lookback.
 //!
-//! The transcript snapshot and the trajectory view share the byte windows,
-//! the lazy offset index, and the bounded turn lookback through this type,
-//! rather than each growing its own copy. A consumer projects the events it
-//! receives into its own view types; this layer never renders, and it never
-//! holds the whole log: every read is anchored to a byte offset and bounded by
-//! a budget.
+//! A consumer projects the events it receives into its own view types. This
+//! layer never renders, and it never holds the whole log: every read is
+//! anchored to a byte offset and bounded by a budget.
 
 use std::sync::{Arc, Mutex};
 

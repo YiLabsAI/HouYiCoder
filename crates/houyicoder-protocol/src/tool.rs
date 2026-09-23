@@ -1,3 +1,6 @@
+//! The tool domain as the wire layer reads it: the untruncated invocation
+//! text a call carries, and whether a result reports a failure.
+//!
 //! Untruncated tool-call invocation text, shared by the verbose transcript
 //! render and the search index. A single projection for both is what makes
 //! index-equals-render a structural guarantee rather than a convention: the
@@ -14,6 +17,11 @@
 //! of a long command with no signal to the user.
 
 use serde_json::Value;
+
+mod bash_command;
+mod failure;
+pub use bash_command::simple_command_word;
+pub use failure::tool_result_failed;
 
 /// The untruncated call-line argument for a tool call. Known tools pick the
 /// scalar field the chip already shows; unknown tools keep the full input so
