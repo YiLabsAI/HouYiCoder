@@ -3,7 +3,7 @@
 //! Proves the cross-ecosystem compatibility path works end-to-end.
 
 use crate::common::{
-    self, RENDER_TIMEOUT, fresh_temp_dir, pty_session_with_home, run_skill_command,
+    self, Key, RENDER_TIMEOUT, fresh_temp_dir, pty_session_with_home, run_skill_command,
 };
 
 /// Build a PTY session with a temp HOME (containing a .claude/skills/
@@ -66,6 +66,49 @@ fn test_ecosystem_skill_invoke() {
         s.output().contains("@skill:mock-eco"),
         "user echo has skill prefix: {}",
         s.output()
+    );
+    drop(s);
+}
+
+/// A session whose only skill carries a description longer than the pane, so
+/// the detail has to wrap it rather than stop at the right edge.
+fn long_description_session() -> common::PtySession {
+    let home = fresh_temp_dir("wrap-home");
+    let repo = fresh_temp_dir("wrap-repo");
+    let dir = home.join(".houyicoder").join("skills").join("mock-long");
+    std::fs::create_dir_all(&dir).unwrap();
+    // Long enough that an unwrapped row clips the tail at any harness width,
+    // so the assertion cannot pass on a clipped row.
+    let filler = "wrap ".repeat(usize::from(common::COLS));
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: mock-long\ndescription: {filler}zzwrap-tail\n---\nlong body\n"),
+    )
+    .unwrap();
+    let script = r#"[[{"type":"Text","text":"wrap-done"}]]"#;
+    pty_session_with_home(repo, home, script)
+}
+
+/// The detail wraps a description longer than the pane instead of clipping it
+/// at the right edge, so the tail of the text stays readable. A row clipped at
+/// the edge drops its tail entirely, so the tail token is what separates a
+/// wrapped row from a clipped one.
+#[test]
+#[ignore]
+fn test_long_skill_description_wraps() {
+    let mut s = long_description_session();
+    s.wait_for("let's build", RENDER_TIMEOUT);
+    common::run_slash_command(&mut s, "skills");
+    assert!(
+        s.wait_for("mock-long", RENDER_TIMEOUT),
+        "the skill is listed: {}",
+        s.output()
+    );
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_screen("zzwrap-tail", RENDER_TIMEOUT),
+        "the description tail renders past the pane edge:\n{}",
+        s.screen().contents()
     );
     drop(s);
 }

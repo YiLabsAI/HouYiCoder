@@ -34,7 +34,7 @@ pub struct PtySession {
 
 const ROWS: u16 = 24;
 /// Wide viewport for stable path and layout assertions.
-const COLS: u16 = 200;
+pub const COLS: u16 = 200;
 
 #[derive(Clone, Copy)]
 struct LaunchOptions {
