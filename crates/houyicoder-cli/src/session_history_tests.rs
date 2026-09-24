@@ -782,10 +782,12 @@ fn test_head_page_cancelled() {
     );
 }
 
-/// A superseded head read stops at its next chunk rather than walking the whole
-/// log for a page nobody will take. The epoch sits behind many chunks, so a
+/// A cancelled head read stops at the walk's next check rather than reading the
+/// log for a page nobody will take: the epoch sits behind many chunks, so a
 /// walk that ignored the flag would read to the beginning of the file and come
-/// back with the head instead of nothing.
+/// back with the head instead of nothing. The flag is set before the call, so
+/// this proves the check inside the chunk walk exists, not that a flag set by
+/// another thread mid-walk is observed at a particular chunk.
 #[test]
 fn test_head_page_cancel_walk() {
     let (history, clear_id) = far_clear_history();

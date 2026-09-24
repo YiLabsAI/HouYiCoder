@@ -135,6 +135,27 @@ pub(super) fn draw_turn_detail(
     }
 }
 
+/// What the drill levels show when the turn they were about is no longer in
+/// the window: the history was cleared, or the window moved past it. Saying so
+/// is the honest answer, because the row the drill froze now names another
+/// turn.
+pub(super) fn draw_drill_gone() -> (
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    usize,
+) {
+    (
+        vec![blank()],
+        vec![line(vec![sp(
+            "  the turn this detail was about is no longer loaded",
+            Color::DarkGray,
+        )])],
+        vec![blank(), key_hint(&[("Esc", "back")])],
+        0,
+    )
+}
+
 /// One Level 1 timeline row: the kind and name of the record, its bar on the
 /// turn's time axis, its duration, and its summary with any measured latency
 /// appended.

@@ -516,3 +516,87 @@ fn test_down_before_first_page() {
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.trajectory.cursor(), 0);
 }
+
+/// A turn the drill named can leave the window: the window moves past it, and
+/// the index the drill froze then names another turn. Rendering that turn as
+/// this one would present a different turn's detail as the user's.
+#[test]
+fn test_drill_gone_when_evicted() {
+    let log = Arc::new(ScriptedLog::new(vec![
+        window_view(401, 500, 500, 1),
+        window_view(402, 501, 501, 1),
+    ]));
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_log = Some(log.clone());
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+
+    // The user opens the oldest turn of the window.
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.selected_turn(), 401);
+    // The window moves past it.
+    log.advance();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+    let screen = screen_text(&terminal);
+    assert!(
+        !screen.contains("T402"),
+        "the drill does not render the turn its old index names now: {screen}"
+    );
+    assert!(
+        screen.contains("no longer loaded"),
+        "and it says why it is empty: {screen}"
+    );
+}
+
+/// A clear starts a new history whose turn numbers begin again, so a drill made
+/// in the old one must not resolve onto a turn of the new one that shares the
+/// number.
+#[test]
+fn test_drill_drops_across_history() {
+    let log = Arc::new(ScriptedLog::new(vec![
+        window_view(1, 10, 10, 1),
+        window_view(1, 10, 10, 2),
+    ]));
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_log = Some(log.clone());
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+
+    for _ in 0..4 {
+        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.selected_turn(), 5);
+
+    // The history is cleared under the drill and the new one numbers its turns
+    // from the start.
+    log.advance();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+    let screen = screen_text(&terminal);
+    assert!(
+        !screen.contains("T5"),
+        "the drill does not resolve onto the new history's turn 5: {screen}"
+    );
+    assert!(
+        screen.contains("no longer loaded"),
+        "and it says why it is empty: {screen}"
+    );
+}

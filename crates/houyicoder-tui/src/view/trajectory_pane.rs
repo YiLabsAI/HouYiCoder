@@ -410,24 +410,30 @@ pub(crate) fn note_selected_turn(state: &TrajectoryPaneState, view: &TrajectoryV
     }
 }
 
-/// The row the drill is about, found in the window in hand.
+/// The row the drill is about, when the window in hand still holds it.
 ///
 /// A row index names a different turn once a page arrives under it, and the
 /// window can move while the user reads one turn, so the drill follows the
-/// turn it named. The index is the fallback for a drill whose turn is gone
-/// from the window, or whose history was cleared under it.
-fn resolve_drilled_row(state: &TrajectoryPaneState, view: &TrajectoryView) -> usize {
+/// turn it named. None means the turn is not in the window: the window moved
+/// past it, or the history it belonged to was cleared. The frozen index is
+/// not a fallback there, because it names another turn by then.
+///
+/// A background row has no turn number to follow, so it keeps the row the
+/// drill froze and its own level-1 only contract.
+fn drilled_row(state: &TrajectoryPaneState, view: &TrajectoryView) -> Option<usize> {
     let selected = state.selected_turn();
-    if selected > 0
-        && let Some(index) = view
-            .rows
-            .iter()
-            .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.n == selected))
-    {
-        state.set_turn_idx(index);
-        return index;
+    if selected == 0 {
+        return Some(state.turn_idx());
     }
-    state.turn_idx()
+    if state.selected_generation() != view.history_generation {
+        return None;
+    }
+    let index = view
+        .rows
+        .iter()
+        .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.n == selected))?;
+    state.set_turn_idx(index);
+    Some(index)
 }
 
 /// Main entry: dispatch on the drill level. Each level builder returns the
@@ -454,20 +460,22 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
     // The drill levels render the turn the drill named, not the row index it
     // had when the drill started: a page can arrive under that index while the
     // user reads.
-    let turn_idx = if level == 0 {
-        app.trajectory.turn_idx()
-    } else {
-        resolve_drilled_row(&app.trajectory, &traj)
+    let drilled = match level {
+        0 => None,
+        _ => drilled_row(&app.trajectory, &traj),
     };
-    let (header, body, footer, sel_line) = match level {
-        1 => detail::draw_turn_detail(&traj, turn_idx, cursor, area, app),
-        2 => detail::draw_event_detail(&traj, turn_idx, cursor, area),
+    let (header, body, footer, sel_line) = match (level, drilled) {
+        (1, Some(turn_idx)) => detail::draw_turn_detail(&traj, turn_idx, cursor, area, app),
+        (2, Some(turn_idx)) => detail::draw_event_detail(&traj, turn_idx, cursor, area),
+        // The drill's turn is not in the window any more. Saying so is the
+        // honest answer: the row the frozen index names now is another turn.
+        (_, None) if level != 0 => detail::draw_drill_gone(),
         _ => list::draw_turn_list(&traj, cursor, area),
     };
     // Stash the body length so the Up/Down handler can clamp the cursor in
     // [0, len-1] — without this Down past the last row drops the selection.
-    let active_len = match level {
-        1 => traj
+    let active_len = match (level, drilled) {
+        (1, Some(turn_idx)) => traj
             .rows
             .get(turn_idx)
             .map(|r| match r {
@@ -475,8 +483,8 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
                 TrajectoryRow::Bg(_) => 0,
             })
             .unwrap_or(0),
-        2 => 0,
-        _ => traj.rows.len(),
+        (0, _) => traj.rows.len(),
+        _ => 0,
     };
     if active_len > 0 && cursor >= active_len {
         app.trajectory.set_cursor(active_len.saturating_sub(1));
