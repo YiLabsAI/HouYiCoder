@@ -5,6 +5,7 @@ use super::super::reader::{
     DELTA_MAX_BYTES, RESIDENT_PAGES, SessionLogTrajectory, TRAJECTORY_PAGE_TURNS,
 };
 use super::super::view::project;
+use super::fixtures::gated_range_backend;
 use crate::session_history::SessionHistory;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
@@ -1602,87 +1603,14 @@ fn gated_disk_reader(
     std::sync::mpsc::Receiver<()>,
     std::sync::mpsc::Sender<()>,
 ) {
-    use houyicoder_context::{
-        CheckpointId, CheckpointManifest, ContextBackend, ContextError, LogRangeRead, ReverseRead,
-    };
-
-    type PFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-
-    struct Gated {
-        inner: LocalFileBackend,
-        entered: std::sync::mpsc::Sender<()>,
-        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
-        held: std::sync::atomic::AtomicBool,
-    }
-
-    impl ContextBackend for Gated {
-        fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
-            self.inner.append(event)
-        }
-        fn read_range(
-            &self,
-            session: SessionId,
-            from: Option<EventId>,
-            to: Option<EventId>,
-        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
-            self.inner.read_range(session, from, to)
-        }
-        fn replay(
-            &self,
-            session: SessionId,
-        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
-            self.inner.replay(session)
-        }
-        fn write_checkpoint(
-            &self,
-            manifest: CheckpointManifest,
-        ) -> PFut<'_, Result<CheckpointId, ContextError>> {
-            self.inner.write_checkpoint(manifest)
-        }
-        fn read_checkpoint(
-            &self,
-            id: CheckpointId,
-        ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
-            self.inner.read_checkpoint(id)
-        }
-        fn list_checkpoints(
-            &self,
-            session: SessionId,
-        ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
-            self.inner.list_checkpoints(session)
-        }
-        fn supports_log_windows(&self) -> bool {
-            true
-        }
-        fn log_size(&self, session: SessionId) -> u64 {
-            self.inner.log_size(session)
-        }
-        fn read_lines_reverse(&self, session: SessionId, from: u64, max: u64) -> ReverseRead {
-            self.inner.read_lines_reverse(session, from, max)
-        }
-        fn read_log_range(&self, session: SessionId, from: u64, max: u64) -> LogRangeRead {
-            if !self.held.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                self.entered.send(()).ok();
-                self.release.lock().expect("release lock").recv().ok();
-            }
-            self.inner.read_log_range(session, from, max)
-        }
-    }
-
     let root = std::env::temp_dir().join(format!(
         "houyi_gate_{tag}_{}_{}",
         SessionId::new(),
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create temp root");
-    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let store = Arc::new(SessionStore::new(Box::new(Gated {
-        inner: LocalFileBackend::new(root),
-        entered: entered_tx,
-        release: std::sync::Mutex::new(release_rx),
-        held: std::sync::atomic::AtomicBool::new(false),
-    })));
+    let (backend, entered_rx, release_tx) = gated_range_backend(root);
+    let store = Arc::new(SessionStore::new(Box::new(backend)));
     let sid = SessionId::new();
     let rt = tokio::runtime::Runtime::new().expect("test runtime");
     for i in 0..turns as u64 {

@@ -3,6 +3,7 @@
 
 use super::super::reader::SessionLogTrajectory;
 use super::super::view::records_of;
+use super::fixtures::gated_range_backend;
 use super::paging::{disk_reader, disk_reader_at, pump, reader_of};
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_session::SessionStore;
@@ -527,96 +528,15 @@ fn test_detail_stale_anchor_refused() {
 /// bytes were captured when the drill asked, and the answer carries the turn
 /// the drill named.
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "a port delegate plus the test that drives it"
-)]
 fn test_detail_in_flight_eviction() {
-    use houyicoder_context::{
-        CheckpointId, CheckpointManifest, ContextBackend, ContextError, LogRangeRead, ReverseRead,
-    };
-
-    type PFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-
-    /// A backend whose detail reads wait for the test, so the window can move
-    /// while one is in flight.
-    struct Gated {
-        inner: houyicoder_memory::LocalFileBackend,
-        entered: std::sync::mpsc::Sender<()>,
-        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
-        gated: std::sync::atomic::AtomicBool,
-    }
-
-    impl ContextBackend for Gated {
-        fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
-            self.inner.append(event)
-        }
-        fn read_range(
-            &self,
-            session: SessionId,
-            from: Option<EventId>,
-            to: Option<EventId>,
-        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
-            self.inner.read_range(session, from, to)
-        }
-        fn replay(
-            &self,
-            session: SessionId,
-        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
-            self.inner.replay(session)
-        }
-        fn write_checkpoint(
-            &self,
-            manifest: CheckpointManifest,
-        ) -> PFut<'_, Result<CheckpointId, ContextError>> {
-            self.inner.write_checkpoint(manifest)
-        }
-        fn read_checkpoint(
-            &self,
-            id: CheckpointId,
-        ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
-            self.inner.read_checkpoint(id)
-        }
-        fn list_checkpoints(
-            &self,
-            session: SessionId,
-        ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
-            self.inner.list_checkpoints(session)
-        }
-        fn supports_log_windows(&self) -> bool {
-            true
-        }
-        fn log_size(&self, session: SessionId) -> u64 {
-            self.inner.log_size(session)
-        }
-        fn read_lines_reverse(&self, session: SessionId, from: u64, max: u64) -> ReverseRead {
-            self.inner.read_lines_reverse(session, from, max)
-        }
-        fn read_log_range(&self, session: SessionId, from: u64, max: u64) -> LogRangeRead {
-            // Only the first read waits: that is the drill's read, and the
-            // window's own reads have to go through so it can move meanwhile.
-            if !self.gated.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                self.entered.send(()).ok();
-                self.release.lock().expect("release lock").recv().ok();
-            }
-            self.inner.read_log_range(session, from, max)
-        }
-    }
-
     let root = std::env::temp_dir().join(format!(
         "houyi_detail_gate_{}_{}",
         SessionId::new(),
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create temp root");
-    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let store = Arc::new(SessionStore::new(Box::new(Gated {
-        inner: houyicoder_memory::LocalFileBackend::new(root),
-        entered: entered_tx,
-        release: std::sync::Mutex::new(release_rx),
-        gated: std::sync::atomic::AtomicBool::new(false),
-    })));
+    let (backend, entered_rx, release_tx) = gated_range_backend(root);
+    let store = Arc::new(SessionStore::new(Box::new(backend)));
     let sid = SessionId::new();
     let rt = tokio::runtime::Runtime::new().expect("test runtime");
     for i in 0..300u64 {

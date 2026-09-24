@@ -2,6 +2,7 @@
 //! into the pane's view types, the record grouping, and the paged window.
 
 mod detail;
+mod fixtures;
 mod paging;
 mod records;
 mod view;

@@ -14,21 +14,25 @@ use super::{
 
 /// A page as the window keeps it: the fragment before its first turn dropped,
 /// and its rows folded once.
-fn resident_page(
-    #[cfg_attr(not(test), allow(unused))] state: &mut TrajectoryState,
-    mut source: TurnPage,
-) -> ResidentPage {
+fn resident_page(mut source: TurnPage) -> ResidentPage {
     source.drop_leading_fragment();
     let accumulator = PageAccumulator::from_events(&events_of(&source), 1, FoldMode::Summary);
-    #[cfg(test)]
-    {
-        state.pages_built += 1;
-    }
     ResidentPage {
         source,
         accumulator,
     }
 }
+
+/// Count a page the window built, for the test that proves an append extends
+/// the page it lands in instead of folding the window again.
+#[cfg(test)]
+fn note_page_built(state: &mut TrajectoryState) {
+    state.pages_built += 1;
+}
+
+/// Count a page the window built; nothing in a build counts itself.
+#[cfg(not(test))]
+fn note_page_built(_state: &mut TrajectoryState) {}
 
 /// A page's events, in log order.
 fn events_of(page: &TurnPage) -> Vec<houyicoder_context::SessionLogEntry> {
@@ -91,7 +95,8 @@ impl SessionLogTrajectory {
                 }
                 let reached_start = arrived.oldest_anchor.is_none();
                 let arrived_turns = arrived.turn_count();
-                let page = resident_page(state, arrived);
+                note_page_built(state);
+                let page = resident_page(arrived);
                 state.pages.push_front(page);
                 if reached_start {
                     // The walk reached the log's first turn, so nothing
@@ -120,7 +125,8 @@ impl SessionLogTrajectory {
                     Self::drop_view(state);
                     return false;
                 }
-                let page = resident_page(state, outcome);
+                note_page_built(state);
+                let page = resident_page(outcome);
                 state.pages.clear();
                 state.pages.push_back(page);
                 state.older_hidden = 0;
@@ -171,7 +177,8 @@ impl SessionLogTrajectory {
                     return false;
                 }
                 state.follow_tail = true;
-                let page = resident_page(state, outcome);
+                note_page_built(state);
+                let page = resident_page(outcome);
                 state.pages.clear();
                 state.pages.push_back(page);
             }
