@@ -126,10 +126,14 @@ impl SessionHistory {
     /// flag: a walk nobody waits for stops at the next chunk rather than
     /// reading a whole long log for a page that will be dropped.
     fn epoch_start_offset(&self, epoch: Option<EventId>, cancel: &AtomicBool) -> Option<u64> {
-        // The scan the search index runs passes over the clears, so a history
-        // whose start it has already seen is answered from there: the walk
-        // below is the fallback for what the index has not reached yet.
-        if let Some(offset) = self.indexed_epoch_start(epoch) {
+        // A start the index has scanned, or one an earlier walk remembered, is
+        // answered without reading the log. The offset alone is not enough to
+        // trust: the bytes at it must still be the event that began the
+        // history, since a log rewritten under it would otherwise answer with
+        // another history's start.
+        if let Some(offset) = self.known_epoch_start(epoch)
+            && self.offset_holds(offset, epoch)
+        {
             return Some(offset);
         }
         let first = self.first_event()?;
@@ -154,6 +158,11 @@ impl SessionHistory {
                 .find(|event| Some(event.entry.id) == epoch)
                 .map(|event| event.byte_offset)
             {
+                // The walk has paid for the answer, so the next reader of this
+                // history does not have to walk again.
+                if let Some(id) = epoch {
+                    self.remember_epoch_start(id, found);
+                }
                 return Some(found);
             }
             match rev.next_from {
@@ -162,6 +171,23 @@ impl SessionHistory {
             }
         }
         None
+    }
+
+    /// Whether the bytes at an offset still hold the event a caller expects.
+    ///
+    /// A byte offset alone cannot say: the log is append-only, so only a
+    /// truncation or a rewrite moves the bytes, and an offset read as if it
+    /// were the event it named would start a page in another history. The
+    /// check is one bounded read, which is what makes an offset worth keeping.
+    fn offset_holds(&self, offset: u64, epoch: Option<EventId>) -> bool {
+        let Some(id) = epoch else {
+            // The first history begins at the first byte, whatever follows.
+            return offset == 0;
+        };
+        self.window(offset, PAGE_STEP_BYTES)
+            .events
+            .first()
+            .is_some_and(|event| event.entry.id == id)
     }
 
     /// The log's first complete event, read without walking the whole line.

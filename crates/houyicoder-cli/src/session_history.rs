@@ -544,21 +544,29 @@ impl SessionHistory {
 
     /// Build the next chunk of the event-byte-offset index. Called per frame
     /// while a full scan is asked for; a no-op once complete.
-    /// The byte where a history began, if the index has seen its start.
+    /// Remember where a history began, once a walk has found it.
+    ///
+    /// A walk that finds the clear has paid for the answer, so the next reader
+    /// of the same history is answered from here instead of walking again. The
+    /// entry is a byte offset with the id that makes it meaningful, so a log
+    /// rewritten under it is refused rather than read as another history.
+    pub(crate) fn remember_epoch_start(&self, epoch: EventId, offset: u64) {
+        let Ok(mut idx) = self.index.lock() else {
+            return;
+        };
+        if idx.epoch_starts.iter().any(|(event, _)| *event == epoch) {
+            return;
+        }
+        idx.epoch_starts.push((epoch, offset));
+    }
+
+    /// The byte where a history began, if it is known.
     ///
     /// The event that began an epoch is the newest clear before it, and a clear
-    /// is where the walk stops: an index that has scanned past it can answer
-    /// where the history starts without reading the log again.
-    fn indexed_epoch_start(&self, epoch: Option<EventId>) -> Option<u64> {
+    /// is where a walk stops. A start the index has seen, or one a walk has
+    /// remembered, is answered from here: the walk is for what neither knows.
+    fn known_epoch_start(&self, epoch: Option<EventId>) -> Option<u64> {
         let idx = self.index.lock().ok()?;
-        // The index describes the log it was built over. A log that was
-        // truncated or rewritten since is not that log, and an offset from the
-        // old one would point into bytes that are now something else.
-        if idx.total_bytes == 0
-            || idx.total_bytes != self.session_log.backend().log_size(self.session_id)
-        {
-            return None;
-        }
         match epoch {
             // The history the log itself began in starts at the first byte.
             None => idx.offsets.first().map(|_| 0),

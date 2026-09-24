@@ -840,3 +840,56 @@ fn test_indexed_epoch_start() {
         after - before
     );
 }
+
+/// A history is walked once and then remembered: the first Home pays for the
+/// walk, and the next reader of the same history is answered without it.
+#[test]
+fn test_home_remembers_after_walk() {
+    let (history, clear_id) = far_clear_history();
+    let (_, _, first_before) = history.read_stats();
+    let first = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &live());
+    let (_, _, first_after) = history.read_stats();
+    assert!(
+        first_after - first_before > PAGE_MAX_BYTES,
+        "the first Home walks to the clear: {} bytes",
+        first_after - first_before
+    );
+    assert_eq!(first.events.first().map(|e| e.entry.id), Some(clear_id));
+
+    let (_, _, second_before) = history.read_stats();
+    let second = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &live());
+    let (_, _, second_after) = history.read_stats();
+    assert!(
+        second_after - second_before < PAGE_MAX_BYTES,
+        "the second Home is answered from what the walk remembered: {} bytes",
+        second_after - second_before
+    );
+    assert_eq!(second.events.first().map(|e| e.entry.id), Some(clear_id));
+}
+
+/// A remembered offset is only trusted when the bytes at it still hold the
+/// event that began the history: an offset that names something else is
+/// refused and the walk answers instead, rather than starting a page in
+/// another history.
+#[test]
+fn test_home_refuses_stale() {
+    let (history, clear_id) = far_clear_history();
+    // A start remembered at the wrong byte: the log's first event is not the
+    // clear, so the offset must not be trusted.
+    history.remember_epoch_start(clear_id, 0);
+
+    let (_, _, before) = history.read_stats();
+    let page = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &live());
+    let (_, _, after) = history.read_stats();
+
+    assert_eq!(
+        page.events.first().map(|e| e.entry.id),
+        Some(clear_id),
+        "the head still starts at the clear"
+    );
+    assert!(
+        after - before > PAGE_MAX_BYTES,
+        "and the walk ran, because the remembered offset was refused: {} bytes",
+        after - before
+    );
+}
