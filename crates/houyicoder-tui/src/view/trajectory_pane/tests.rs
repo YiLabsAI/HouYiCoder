@@ -312,7 +312,7 @@ fn test_level2_renders_projection_kinds() {
 /// level: unicode block bars render (█), the selection glyph pins the
 /// focused row (▸), and the mock's content (a "cargo test" call) shows.
 /// The sample is the only data with non-zero duration_ms (hardcoded in
-/// sample_trajectory.rs); the real binary always wires a real SessionLog
+/// the sample fixture); the real binary always wires a real SessionLog
 /// whose fresh session has zero turns, so the bars are unreachable on the
 /// real-binary PTY path — this unit test holds the bar invariants where
 /// they are reachable, and dumps the rendered level to a temp file for

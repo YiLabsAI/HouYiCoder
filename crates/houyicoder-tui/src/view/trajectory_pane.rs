@@ -363,13 +363,8 @@ pub struct TrajectoryView {
     pub rows: Vec<TrajectoryRow>,
 }
 
-#[path = "trajectory_detail.rs"]
 mod detail;
-
-#[path = "trajectory_list.rs"]
 mod list;
-
-#[path = "sample_trajectory.rs"]
 mod sample;
 use sample::sample_trajectory;
 
