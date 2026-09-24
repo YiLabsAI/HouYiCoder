@@ -47,10 +47,10 @@ pub(crate) async fn recall(
             _ => None,
         })
         .unwrap_or("");
-    // Single-word queries carry too little signal to recall against.
-    if query.split_whitespace().count() <= 1 {
-        return Ok(());
-    }
+    // The provider's tokenizer drops a no-signal query to zero keywords and
+    // returns empty, so the gate lives there. A whitespace word count would
+    // reject a no-space CJK query that carries real signal, so it is not used
+    // here.
     let entries = memory.recall(query, context::MEMORY_RECALL_BUDGET, &surfaced);
     if entries.is_empty() {
         return Ok(());
