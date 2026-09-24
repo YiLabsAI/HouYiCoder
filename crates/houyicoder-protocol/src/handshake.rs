@@ -15,8 +15,13 @@ use serde::{Deserialize, Serialize};
 /// run-completion notification carries its duration as ms in place of secs.
 /// The old field is gone rather than supplemented, so a mixed pair would
 /// handshake through and then silently drop every turn's duration label; an
-/// added variant can degrade on its own, a renamed field cannot.
-pub const PROTOCOL_VERSION: u16 = 6;
+/// added variant can degrade on its own, a renamed field cannot. v7: the
+/// memory-operation tag Stored was replaced by Created and Updated. A
+/// same-version peer without the operation enum's catch-all would drop every
+/// memory-change frame at decode; the version gate keeps the pair from
+/// half-working, and a new receiver still reads a legacy stored tag as
+/// Unknown.
+pub const PROTOCOL_VERSION: u16 = 7;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.
@@ -146,7 +151,7 @@ mod tests {
         let json = serde_json::to_string(&Hello::local()).expect("serialize");
         assert_eq!(
             json,
-            r#"{"protocol_version":6,"capabilities":{"streaming":true,"cas":false,"detach":false},"last_event_seq":null}"#
+            r#"{"protocol_version":7,"capabilities":{"streaming":true,"cas":false,"detach":false},"last_event_seq":null}"#
         );
     }
 
@@ -161,6 +166,20 @@ mod tests {
             last_event_seq: None,
         };
         let err = negotiate(&Hello::local(), &v4).expect_err("v4 must fail");
+        assert_eq!(err.category, ErrorCategory::ProtocolVersion);
+    }
+
+    /// A peer on the pre-split version is refused: it has no operation
+    /// catch-all, so a mixed pair would drop every memory-change frame at
+    /// decode rather than failing at the handshake.
+    #[test]
+    fn test_v6_peer_refused() {
+        let v6 = Hello {
+            protocol_version: 6,
+            capabilities: Capabilities::default(),
+            last_event_seq: None,
+        };
+        let err = negotiate(&Hello::local(), &v6).expect_err("v6 must fail");
         assert_eq!(err.category, ErrorCategory::ProtocolVersion);
     }
 }

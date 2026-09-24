@@ -269,6 +269,15 @@ mod tests {
     }
 
     #[test]
+    fn test_legacy_stored_reads_unknown() {
+        // The Stored tag predates the Created/Updated split. A receiver must
+        // still decode a legacy stored tag as Unknown so the key reaches the
+        // notice rather than dropping the change.
+        let op: MemoryOperation = serde_json::from_str("\"stored\"").expect("decode legacy tag");
+        assert_eq!(op, MemoryOperation::Unknown);
+    }
+
+    #[test]
     fn test_change_round_trips_scope() {
         let change = MemoryChange {
             key: "build-gate".into(),
