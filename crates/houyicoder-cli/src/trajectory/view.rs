@@ -287,24 +287,11 @@ pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec
     fold_rows(events, first_turn).0
 }
 
-/// One turn's records, folded from its events.
-///
-/// The list's rows carry a turn's facts; a drill asks for the records, and this
-/// is where they come from. The events are one turn's, so the fold opens one.
-pub(crate) fn project_records(events: &[SessionLogEntry]) -> Vec<TrajectoryRecord> {
-    fold_rows(events, 1)
-        .1
-        .into_iter()
-        .next()
-        .map(|(_, records)| records)
-        .unwrap_or_default()
-}
-
 /// Fold a slice of events into rows, and each turn's records by key.
 ///
 /// A paged read keeps the rows and drops the records: the window holds what the
 /// list draws, and a drill reads the records it asks for.
-fn fold_rows(
+pub(crate) fn fold_rows(
     events: &[SessionLogEntry],
     first_turn: usize,
 ) -> (

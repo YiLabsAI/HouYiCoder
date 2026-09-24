@@ -121,6 +121,12 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                 // another turn once the window moves.
                 if let Some(log) = app.trajectory_log.as_ref() {
                     trajectory_pane::note_drilled_row(&app.trajectory, &log.trajectory());
+                    // Ask now: the source captures the bytes the turn starts at,
+                    // so the read survives the window moving past the turn
+                    // before the next draw.
+                    if let Some(drill) = app.trajectory.drill() {
+                        log.request_detail(&drill);
+                    }
                 }
                 app.trajectory.set_level(1);
                 app.trajectory.set_cursor(0);

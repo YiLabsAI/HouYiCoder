@@ -180,7 +180,7 @@ use usage::render_usage;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::TrajectoryTurnKey;
+    use crate::state::{TrajectoryDrill, TrajectoryTurnKey};
     use crate::view::trajectory_pane::{
         SessionTiming, SubagentUsage, TrajectoryDetailView, TrajectoryLog, TrajectoryView,
         TrajectoryViewState,
@@ -440,7 +440,7 @@ mod tests {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
             }
-            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn request_detail(&self, _drill: &TrajectoryDrill) {}
             fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
                 std::sync::Arc::new(TrajectoryDetailView::default())
             }
@@ -504,7 +504,7 @@ mod tests {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
             }
-            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn request_detail(&self, _drill: &TrajectoryDrill) {}
             fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
                 std::sync::Arc::new(TrajectoryDetailView::default())
             }
@@ -547,7 +547,7 @@ mod tests {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
             }
-            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn request_detail(&self, _drill: &TrajectoryDrill) {}
             fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
                 std::sync::Arc::new(TrajectoryDetailView::default())
             }
@@ -599,7 +599,7 @@ mod tests {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
             }
-            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn request_detail(&self, _drill: &TrajectoryDrill) {}
             fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
                 std::sync::Arc::new(TrajectoryDetailView::default())
             }
@@ -669,7 +669,7 @@ mod tests {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
             }
-            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn request_detail(&self, _drill: &TrajectoryDrill) {}
             fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
                 std::sync::Arc::new(TrajectoryDetailView::default())
             }

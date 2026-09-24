@@ -28,6 +28,11 @@ pub enum TrajectoryDetailState {
 #[derive(Clone, Default)]
 pub struct TrajectoryDetailView {
     pub state: TrajectoryDetailState,
+    /// The turn's own facts, folded with its records. The row the drill came
+    /// from is only the window's copy of them: once the records are in hand the
+    /// drill renders from here, so a window that moves past the turn does not
+    /// take the detail with it.
+    pub turn: Option<TrajectoryTurn>,
     /// The turn's records in log order.
     pub records: Vec<TrajectoryRecord>,
     /// True when the turn was wider than one detail read, so the records shown
@@ -52,7 +57,7 @@ fn outcome_color(outcome: RecordOutcome) -> Color {
 /// same columns and the latency hot-spots are visible at a glance. A ruler line
 /// orients the scale, and the kind and name columns say what each row was.
 pub(super) fn draw_turn_detail(
-    row: &TrajectoryRow,
+    turn: &TrajectoryTurn,
     detail: &TrajectoryDetailView,
     cursor: usize,
     area: Rect,
@@ -65,11 +70,11 @@ pub(super) fn draw_turn_detail(
 ) {
     let mut header = Vec::new();
     let mut body = Vec::new();
-    match row.clone() {
-        TrajectoryRow::Turn(turn) => {
+    {
+        {
             app.trajectory.set_at_bg(false);
             let clamped = cursor.min(detail.records.len().saturating_sub(1));
-            let cache_str = format_turn_cache(&turn);
+            let cache_str = format_turn_cache(turn);
             header.push(line(vec![
                 sp(
                     format!(" T{}  \"{}\"", turn.n, truncate_width(&turn.title, 30)),
@@ -135,9 +140,26 @@ pub(super) fn draw_turn_detail(
             ];
             (header, body, footer, clamped)
         }
-        TrajectoryRow::Bg(bg) => {
-            // A [bg] row drilled from L0 has no event timeline — show its
-            // detail directly at L1 and flag it so Enter does not drill to L2.
+    }
+}
+
+/// A [bg] row drilled from L0 has no event timeline: show its detail directly
+/// at L1 and flag it so Enter does not drill to L2.
+pub(super) fn draw_bg_detail(
+    bg: &TrajectoryBg,
+    _cursor: usize,
+    _area: Rect,
+    app: &crate::state::App,
+) -> (
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    Vec<Line<'static>>,
+    usize,
+) {
+    let mut header = Vec::new();
+    let mut body = Vec::new();
+    {
+        {
             app.trajectory.set_at_bg(true);
             let mut bg_head = vec![
                 sp(format!(" [bg] {} ", bg.kind), Color::Cyan),
@@ -286,7 +308,7 @@ fn record_row(
 /// the view is stable, not a switcher). Shows the full thinking text, tool
 /// input, and tool output (multi-line) rather than the one-line L1 summary.
 pub(super) fn draw_event_detail(
-    row: &TrajectoryRow,
+    _turn: &TrajectoryTurn,
     detail: &TrajectoryDetailView,
     cursor: usize,
     _area: Rect,
@@ -298,9 +320,6 @@ pub(super) fn draw_event_detail(
 ) {
     let mut header = Vec::new();
     let mut body = Vec::new();
-    let TrajectoryRow::Turn(_turn) = row else {
-        return (header, body, vec![], 0);
-    };
     match detail.state {
         TrajectoryDetailState::Loading => {
             body.push(line(vec![sp(

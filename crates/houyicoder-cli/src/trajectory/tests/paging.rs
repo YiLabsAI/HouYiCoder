@@ -7,10 +7,10 @@ use crate::session_history::SessionHistory;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
-use houyicoder_tui::state::TrajectoryTurnKey;
+use houyicoder_tui::state::{TrajectoryDrill, TrajectoryTurnKey};
 use houyicoder_tui::view::trajectory_pane::{
-    TrajectoryDetailState, TrajectoryDetailView, TrajectoryLog as _, TrajectoryRow, TrajectoryView,
-    TrajectoryViewState,
+    TrajectoryDetailState, TrajectoryDetailView, TrajectoryLog as _, TrajectoryRow, TrajectoryTurn,
+    TrajectoryView, TrajectoryViewState,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1398,7 +1398,7 @@ fn test_detail_matches_projection() {
         })
         .expect("a turn row");
 
-    reader.request_detail(&turn.key);
+    reader.request_detail(&drill_of(&turn));
     let detail = pump_detail(&reader, &turn.key);
     assert_eq!(
         detail.state,
@@ -1438,6 +1438,15 @@ fn test_detail_matches_projection() {
     );
 }
 
+/// The identity a drill holds for a turn of the window.
+fn drill_of(turn: &TrajectoryTurn) -> TrajectoryDrill {
+    TrajectoryDrill {
+        key: turn.key.clone(),
+        number: turn.n,
+        history_generation: 1,
+    }
+}
+
 /// A detail read in flight, or one the source answers at once, is polled the
 /// way a draw polls it.
 fn pump_detail(
@@ -1452,4 +1461,87 @@ fn pump_detail(
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     panic!("the detail never landed");
+}
+
+/// Asking for another turn's records never serves the one before: a draw while
+/// the new read is in flight shows the turn it asked for, or that it is still
+/// reading, but not the previous turn's output under the new turn's header.
+#[test]
+fn test_detail_switch_keeps_none() {
+    let (_store, reader, _sid, _history, _root) = disk_reader_at(4);
+    let view = pump(&reader);
+    let turns: Vec<TrajectoryTurn> = view
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(turns.len() >= 2, "the window holds turns to switch between");
+    let (first, second) = (turns[0].clone(), turns[1].clone());
+
+    reader.request_detail(&drill_of(&first));
+    let ready = pump_detail(&reader, &first.key);
+    assert_eq!(ready.state, TrajectoryDetailState::Ready);
+    assert_eq!(ready.turn.as_ref().map(|turn| turn.n), Some(first.n));
+
+    reader.request_detail(&drill_of(&second));
+    let switched = reader.detail(&second.key);
+    if let Some(turn) = switched.turn.as_ref() {
+        assert_eq!(
+            turn.n, second.n,
+            "a view for the turn before is never served for this one"
+        );
+    }
+    let landed = pump_detail(&reader, &second.key);
+    assert_eq!(
+        landed.turn.as_ref().map(|turn| turn.n),
+        Some(second.n),
+        "and the read lands on the turn that was asked for"
+    );
+}
+
+/// A turn whose opening event is wider than one page read is still read: the
+/// detail read is bounded by its own budget, and a turn that fits in it comes
+/// back whole however wide its opening event is.
+#[test]
+fn test_detail_wide_opening_reads() {
+    let (store, reader, sid) = disk_reader(3);
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    rt.block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "x".repeat(1100 * 1024),
+        },
+    }))
+    .expect("append a wide opening event");
+    drop(pump(&reader));
+
+    let view = reader.trajectory();
+    let wide = view
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.clone()),
+            _ => None,
+        })
+        .next()
+        .expect("a turn row");
+    reader.request_detail(&drill_of(&wide));
+    let detail = pump_detail(&reader, &wide.key);
+    assert_eq!(
+        detail.state,
+        TrajectoryDetailState::Ready,
+        "a wide opening event does not stop the turn being read: {:?}",
+        detail.state
+    );
+    assert_eq!(
+        detail.turn.as_ref().map(|turn| turn.n),
+        Some(wide.n),
+        "and the turn it read carries the number the drill named"
+    );
 }

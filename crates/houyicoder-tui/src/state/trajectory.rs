@@ -47,6 +47,9 @@ impl TrajectoryTurnKey {
 pub struct TrajectoryDrill {
     /// The turn the drill is about.
     pub key: TrajectoryTurnKey,
+    /// The number the turn carries in this history. The records are read from
+    /// bytes, which do not know it, so the drill carries it for the header.
+    pub number: usize,
     /// The history the key was read in.
     pub history_generation: u64,
 }

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use houyicoder_api::session::{SessionLog, TrajectoryHead};
 use houyicoder_context::{EventId, SessionId};
-use houyicoder_tui::state::TrajectoryTurnKey;
+use houyicoder_tui::state::{TrajectoryDrill, TrajectoryTurnKey};
 use houyicoder_tui::view::trajectory_pane::{
     TrajectoryDetailView, TrajectoryLog, TrajectoryView, TrajectoryViewState,
 };
@@ -594,19 +594,19 @@ impl TrajectoryLog for SessionLogTrajectory {
         );
     }
 
-    fn request_detail(&self, key: &TrajectoryTurnKey) {
+    fn request_detail(&self, drill: &TrajectoryDrill) {
         detail::request(
             &self.detail,
             &self.state,
             &self.history,
             &self.session_log,
             self.session_id,
-            key,
+            drill,
         );
     }
 
     fn detail(&self, key: &TrajectoryTurnKey) -> Arc<TrajectoryDetailView> {
-        detail::detail(&self.detail, &self.state, key)
+        detail::detail(&self.detail, &self.state, &self.history, key)
     }
 
     fn return_to_tail(&self) {

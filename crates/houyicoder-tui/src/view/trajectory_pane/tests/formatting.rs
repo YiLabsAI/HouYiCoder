@@ -4,7 +4,7 @@
 use super::super::list;
 use super::super::*;
 use super::fixtures::turn;
-use super::fixtures::{detail_of, lines_text, record_of, turn_row, view_of};
+use super::fixtures::{detail_of, lines_text, record_of, view_of};
 
 /// The session total reads as a duration: twelve days of wall time is a span,
 /// not a six-figure second count.
@@ -49,9 +49,9 @@ fn test_fail_count_agrees() {
 fn test_detail_omits_unmeasured_latency() {
     let mut record = record_of(TrajectoryRecordKind::Context, None);
     record.duration_ms = 0;
-    let row = turn_row(1, "ask");
+    let unmeasured = turn(1, "ask");
     let detail = detail_of(record);
-    let (_, body, _, _) = detail::draw_event_detail(&row, &detail, 0, Rect::ZERO);
+    let (_, body, _, _) = detail::draw_event_detail(&unmeasured, &detail, 0, Rect::ZERO);
     let text = lines_text(&body);
     assert!(!text.contains("latency"), "no unmeasured latency: {text}");
     assert!(
@@ -59,9 +59,9 @@ fn test_detail_omits_unmeasured_latency() {
         "the offset is still shown: {text}"
     );
 
-    let row = turn_row(1, "ask");
+    let measured = turn(1, "ask");
     let detail = detail_of(record_of(TrajectoryRecordKind::Tool, None));
-    let (_, body, _, _) = detail::draw_event_detail(&row, &detail, 0, Rect::ZERO);
+    let (_, body, _, _) = detail::draw_event_detail(&measured, &detail, 0, Rect::ZERO);
     let text = lines_text(&body);
     assert!(text.contains("latency: 10ms"), "a measured one is: {text}");
 }
@@ -78,9 +78,9 @@ fn test_detail_names_reasoning() {
         cache_write: None,
         reasoning: Some(107),
     });
-    let row = turn_row(1, "ask");
+    let turn = turn(1, "ask");
     let detail = detail_of(record);
-    let (_, body, _, _) = detail::draw_event_detail(&row, &detail, 0, Rect::ZERO);
+    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO);
     let text = lines_text(&body);
     assert!(
         text.contains("reasoning: 107 tokens (part of output)"),
@@ -95,9 +95,9 @@ fn test_detail_separates_fields() {
     let mut record = record_of(TrajectoryRecordKind::Tool, Some("done"));
     record.thinking = Some("a thought".into());
     record.input = Some("a command".into());
-    let row = turn_row(1, "ask");
+    let turn = turn(1, "ask");
     let detail = detail_of(record);
-    let (_, body, _, _) = detail::draw_event_detail(&row, &detail, 0, Rect::ZERO);
+    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO);
     let lines: Vec<String> = body
         .iter()
         .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -120,18 +120,18 @@ fn test_detail_separates_fields() {
 fn test_detail_header_omits_span() {
     let mut record = record_of(TrajectoryRecordKind::Context, None);
     record.duration_ms = 0;
-    let row = turn_row(1, "ask");
+    let unmeasured = turn(1, "ask");
     let detail = detail_of(record);
-    let (header, _, _, _) = detail::draw_event_detail(&row, &detail, 0, Rect::ZERO);
+    let (header, _, _, _) = detail::draw_event_detail(&unmeasured, &detail, 0, Rect::ZERO);
     let text = lines_text(&header);
     assert!(
         !text.contains("0ms"),
         "no unmeasured span in the header: {text}"
     );
 
-    let row = turn_row(1, "ask");
+    let measured = turn(1, "ask");
     let detail = detail_of(record_of(TrajectoryRecordKind::Tool, None));
-    let (header, _, _, _) = detail::draw_event_detail(&row, &detail, 0, Rect::ZERO);
+    let (header, _, _, _) = detail::draw_event_detail(&measured, &detail, 0, Rect::ZERO);
     let text = lines_text(&header);
     assert!(text.contains("10ms"), "a measured one is stated: {text}");
 }

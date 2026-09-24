@@ -469,6 +469,13 @@ fn sample_records_3() -> Vec<TrajectoryRecord> {
 /// The records of a demonstration turn, or a detail that says the key is not
 /// one of them.
 pub(crate) fn sample_detail(key: &TrajectoryTurnKey) -> TrajectoryDetailView {
+    let turn = sample_trajectory()
+        .rows
+        .into_iter()
+        .find_map(|row| match row {
+            TrajectoryRow::Turn(turn) if &turn.key == key => Some(turn),
+            _ => None,
+        });
     for (n, records) in [
         ("sample-1", sample_records_1()),
         ("sample-2", sample_records_2()),
@@ -477,6 +484,7 @@ pub(crate) fn sample_detail(key: &TrajectoryTurnKey) -> TrajectoryDetailView {
         if key.as_str() == n {
             return TrajectoryDetailView {
                 state: TrajectoryDetailState::Ready,
+                turn: turn.clone(),
                 records,
                 truncated: false,
             };
@@ -484,7 +492,6 @@ pub(crate) fn sample_detail(key: &TrajectoryTurnKey) -> TrajectoryDetailView {
     }
     TrajectoryDetailView {
         state: TrajectoryDetailState::Stale,
-        records: Vec::new(),
-        truncated: false,
+        ..TrajectoryDetailView::default()
     }
 }

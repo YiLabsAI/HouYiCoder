@@ -3,7 +3,7 @@
 
 use super::super::list;
 use super::super::*;
-use super::fixtures::{selected_number, window_view};
+use super::fixtures::{detail_of_all, record_of, selected_number, window_view};
 use crate::view::working;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
@@ -19,6 +19,8 @@ struct ScriptedLog {
     earliest: AtomicUsize,
     older: AtomicUsize,
     tail: AtomicUsize,
+    /// What a drill is answered with, when the test sets one.
+    detail: Mutex<Option<TrajectoryDetailView>>,
 }
 
 impl ScriptedLog {
@@ -28,7 +30,13 @@ impl ScriptedLog {
             earliest: AtomicUsize::new(0),
             older: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
+            detail: Mutex::new(None),
         }
+    }
+
+    /// Answer drills with these records from now on.
+    fn set_detail(&self, detail: TrajectoryDetailView) {
+        *self.detail.lock().unwrap() = Some(detail);
     }
 
     /// Move to the next scripted view; the last one is served from then on.
@@ -63,10 +71,10 @@ impl TrajectoryLog for ScriptedLog {
         self.tail.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+    fn request_detail(&self, _drill: &TrajectoryDrill) {}
 
     fn detail(&self, _key: &TrajectoryTurnKey) -> Arc<TrajectoryDetailView> {
-        Arc::new(TrajectoryDetailView::default())
+        Arc::new(self.detail.lock().unwrap().clone().unwrap_or_default())
     }
 }
 
@@ -587,5 +595,49 @@ fn test_drill_holds_key() {
         app.trajectory.drill(),
         None,
         "stepping back drops the drill"
+    );
+}
+
+/// Once the records are in hand the drill renders from them: a window that
+/// moves past the turn does not take the detail with it, and the pane does not
+/// fall back to saying the turn is gone.
+#[test]
+fn test_drill_survives_eviction() {
+    let log = Arc::new(ScriptedLog::new(vec![
+        window_view(401, 500, 500, 1),
+        window_view(402, 501, 501, 1),
+    ]));
+    log.set_detail(detail_of_all(vec![record_of(
+        TrajectoryRecordKind::Tool,
+        None,
+    )]));
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_log = Some(log.clone());
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+
+    // The user opens the oldest turn of the window, then the window moves past
+    // it.
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    log.advance();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+
+    let screen = screen_text(&terminal);
+    assert!(
+        screen.contains("preview"),
+        "the drill renders the records it read: {screen}"
+    );
+    assert!(
+        !screen.contains("no longer loaded"),
+        "and does not say the turn is gone while its records are in hand: {screen}"
     );
 }

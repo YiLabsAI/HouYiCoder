@@ -182,7 +182,7 @@ pub trait TrajectoryLog: Send + Sync {
     /// Ask for one turn's records, by the key its row carries. Called when the
     /// user opens a turn; an implementation reads them off the draw path and
     /// answers from its cache after that.
-    fn request_detail(&self, key: &TrajectoryTurnKey);
+    fn request_detail(&self, drill: &TrajectoryDrill);
 
     /// What is known about a turn's records. A draw calls this, so it must not
     /// read the log: it serves what the read has produced so far.
@@ -257,6 +257,7 @@ pub(crate) fn note_drilled_row(state: &TrajectoryPaneState, view: &TrajectoryVie
     match view.rows.get(state.cursor()) {
         Some(TrajectoryRow::Turn(turn)) => state.set_drill(TrajectoryDrill {
             key: turn.key.clone(),
+            number: turn.n,
             history_generation: view.history_generation,
         }),
         _ => state.clear_drill(),
@@ -265,20 +266,22 @@ pub(crate) fn note_drilled_row(state: &TrajectoryPaneState, view: &TrajectoryVie
 
 /// The records of the turn the drill is on, asked for once and then served from
 /// the source's cache.
-fn detail_for(app: &crate::state::App, row: Option<&TrajectoryRow>) -> Arc<TrajectoryDetailView> {
-    // The row knows its own key, so a drill is not needed to name the turn: the
-    // drill is what keeps the pane on it across frames.
-    let Some(TrajectoryRow::Turn(turn)) = row else {
+fn detail_for(
+    app: &crate::state::App,
+    drill: Option<&TrajectoryDrill>,
+) -> Arc<TrajectoryDetailView> {
+    let Some(drill) = drill else {
         return Arc::new(TrajectoryDetailView::default());
     };
-    let key = turn.key.clone();
     match app.trajectory_log.as_ref() {
         Some(log) => {
-            log.request_detail(&key);
-            log.detail(&key)
+            // Asking again is how a draw polls; the source answers from what it
+            // has and asks the disk once per drill.
+            log.request_detail(drill);
+            log.detail(&drill.key)
         }
         // Unwired: the demonstration answers, the same way it serves the rows.
-        None => Arc::new(sample::sample_detail(&key)),
+        None => Arc::new(sample::sample_detail(&drill.key)),
     }
 }
 
@@ -310,29 +313,43 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         0 => None,
         _ => drilled_row(&app.trajectory, &traj),
     };
-    // The records come from the detail seam: a draw serves what the read has
-    // produced, and asks for the turn's records once per drill.
-    let detail = detail_for(app, drilled.map(|index| &traj.rows[index]));
-    let (header, body, footer, sel_line) = match (level, drilled) {
-        (1, Some(turn_idx)) => {
-            detail::draw_turn_detail(&traj.rows[turn_idx], &detail, cursor, area, app)
-        }
-        (2, Some(turn_idx)) => {
-            detail::draw_event_detail(&traj.rows[turn_idx], &detail, cursor, area)
-        }
-        // The drill's turn is not in the window any more. Saying so is the
-        // honest answer: the row the frozen index names now is another turn.
-        (_, None) if level != 0 => detail::draw_drill_gone(),
+    // The records come from the detail seam, asked for by the key the drill
+    // holds: a draw serves what the read has produced.
+    let row = drilled.map(|index| &traj.rows[index]);
+    // The drill names the turn; a row in hand names it too, which is what the
+    // level renders from before the drill is recorded.
+    let drill = app.trajectory.drill().or_else(|| match row {
+        Some(TrajectoryRow::Turn(turn)) => Some(TrajectoryDrill {
+            key: turn.key.clone(),
+            number: turn.n,
+            history_generation: traj.history_generation,
+        }),
+        _ => None,
+    });
+    let detail = detail_for(app, drill.as_ref());
+    // The turn's own facts come from the detail once it is in hand: the row it
+    // came from may have left the window by then.
+    let turn = detail.turn.clone().or_else(|| match row {
+        Some(TrajectoryRow::Turn(turn)) => Some(turn.clone()),
+        _ => None,
+    });
+    let (header, body, footer, sel_line) = match level {
+        1 => match (turn.as_ref(), row) {
+            (Some(turn), _) => detail::draw_turn_detail(turn, &detail, cursor, area, app),
+            (None, Some(TrajectoryRow::Bg(bg))) => detail::draw_bg_detail(bg, cursor, area, app),
+            _ => detail::draw_drill_gone(),
+        },
+        2 => match turn.as_ref() {
+            Some(turn) => detail::draw_event_detail(turn, &detail, cursor, area),
+            None => detail::draw_drill_gone(),
+        },
         _ => list::draw_turn_list(&traj, cursor, area),
     };
     // Stash the body length so the Up/Down handler can clamp the cursor in
     // [0, len-1] — without this Down past the last row drops the selection.
-    let active_len = match (level, drilled) {
-        (1, Some(turn_idx)) => match &traj.rows[turn_idx] {
-            TrajectoryRow::Turn(_) => detail.records.len(),
-            TrajectoryRow::Bg(_) => 0,
-        },
-        (0, _) => traj.rows.len(),
+    let active_len = match level {
+        1 => detail.records.len(),
+        0 => traj.rows.len(),
         _ => 0,
     };
     if active_len > 0 && cursor >= active_len {

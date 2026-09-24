@@ -150,7 +150,7 @@ impl TrajectoryLog for StubLog {
         })
     }
 
-    fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+    fn request_detail(&self, _drill: &TrajectoryDrill) {}
 
     fn detail(&self, _key: &TrajectoryTurnKey) -> Arc<TrajectoryDetailView> {
         Arc::new(TrajectoryDetailView::default())
@@ -261,14 +261,14 @@ fn test_level2_renders_projection_kinds() {
             retries: 0,
         }
     }
-    let row = TrajectoryRow::Turn(TrajectoryTurn {
+    let turn = TrajectoryTurn {
         tokens_in: Some(0),
         tokens_out: Some(0),
         cache_read: Some(0),
         cache_write: Some(0),
         tool_count: 2,
         ..turn(1, "real kinds")
-    });
+    };
     let detail = detail_of_all(vec![
         ev(
             TrajectoryRecordKind::Model,
@@ -287,7 +287,7 @@ fn test_level2_renders_projection_kinds() {
     ]);
     let body_text = |cursor: usize| {
         let (_, body, _, _) =
-            detail::draw_event_detail(&row, &detail, cursor, ratatui::layout::Rect::ZERO);
+            detail::draw_event_detail(&turn, &detail, cursor, ratatui::layout::Rect::ZERO);
         body.iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
             .collect::<String>()
@@ -352,14 +352,14 @@ fn test_trajectory_bar_invariants_mock() {
 #[test]
 fn test_event_detail_redacts_secrets() {
     let secret = "sk-abcd1234efgh5678ijkl9012mnop3456qrst";
-    let row = TrajectoryRow::Turn(TrajectoryTurn {
+    let turn = TrajectoryTurn {
         tokens_in: Some(0),
         tokens_out: Some(0),
         cache_read: Some(0),
         cache_write: Some(0),
         tool_count: 1,
         ..turn(1, "show keys")
-    });
+    };
     let detail = detail_of_all(vec![TrajectoryRecord {
         kind: TrajectoryRecordKind::Tool,
         name: Some("read".into()),
@@ -375,7 +375,7 @@ fn test_event_detail_redacts_secrets() {
         timing: None,
         retries: 0,
     }]);
-    let (_, body, _, _) = detail::draw_event_detail(&row, &detail, 0, ratatui::layout::Rect::ZERO);
+    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, ratatui::layout::Rect::ZERO);
     let text = body
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
@@ -770,7 +770,7 @@ fn test_detail_shows_model_facts() {
         reasoning: Some(90),
     });
     record.retries = 1;
-    let row = TrajectoryRow::Turn(TrajectoryTurn {
+    let turn = TrajectoryTurn {
         tokens_in: Some(1200),
         tokens_out: Some(340),
         cache_read: Some(1000),
@@ -779,9 +779,9 @@ fn test_detail_shows_model_facts() {
         retries: 1,
         duration_ms: 620,
         ..turn(1, "ask")
-    });
+    };
     let detail = detail_of_all(vec![record]);
-    let (header, body, _, _) = detail::draw_event_detail(&row, &detail, 0, Rect::ZERO);
+    let (header, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO);
     let text: String = header
         .iter()
         .chain(body.iter())
@@ -809,17 +809,17 @@ fn test_detail_shows_model_facts() {
 /// tool it ran rather than as a generic row.
 #[test]
 fn test_timeline_shows_record_names() {
-    let row = TrajectoryRow::Turn(TrajectoryTurn {
+    let turn = TrajectoryTurn {
         tokens_in: Some(0),
         tokens_out: Some(0),
         tool_count: 1,
         duration_ms: 100,
         ..turn(1, "go")
-    });
+    };
     let detail = detail_of_all(vec![record_of(TrajectoryRecordKind::Tool, None)]);
     let app = crate::composition::app();
     let (_, body, _, _) =
-        detail::draw_turn_detail(&row, &detail, 0, Rect::new(0, 0, 120, 20), &app);
+        detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 120, 20), &app);
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -923,17 +923,17 @@ fn test_turn_detail_latency_split() {
         cache_write: None,
         reasoning: None,
     });
-    let row = TrajectoryRow::Turn(TrajectoryTurn {
+    let turn = TrajectoryTurn {
         tokens_in: Some(10),
         tokens_out: Some(400),
         models: vec!["qwen3.7-max".into()],
         duration_ms: 620,
         ..turn(1, "ask")
-    });
+    };
     let detail = detail_of_all(vec![record]);
     let app = crate::composition::app();
     let (_, body, _, _) =
-        detail::draw_turn_detail(&row, &detail, 0, Rect::new(0, 0, 140, 20), &app);
+        detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 140, 20), &app);
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
