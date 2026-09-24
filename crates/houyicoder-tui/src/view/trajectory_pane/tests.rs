@@ -150,6 +150,9 @@ impl TrajectoryLog for StubLog {
         })
     }
 
+    fn load_older(&self) {}
+    fn load_earliest(&self) {}
+    fn return_to_tail(&self) {}
     fn request_detail(&self, _drill: &TrajectoryDrill) {}
 
     fn detail(&self, _key: &TrajectoryTurnKey) -> Arc<TrajectoryDetailView> {

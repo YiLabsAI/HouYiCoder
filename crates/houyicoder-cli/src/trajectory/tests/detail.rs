@@ -14,7 +14,7 @@ use std::sync::Arc;
 /// A drill reads the same records the list used to carry: the detail is the
 /// turn's records, read from the bytes its key names.
 #[test]
-fn test_detail_matches_projection() {
+fn test_detail_matches_the_list() {
     let (store, reader, sid, _history, _root) = disk_reader_at(4);
     let view = pump(&reader);
     let turn = view

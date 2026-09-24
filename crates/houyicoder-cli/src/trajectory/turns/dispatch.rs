@@ -26,7 +26,7 @@ pub(in crate::trajectory) fn apply_turn_boundary(
     turns: &mut Vec<TrajectoryTurn>,
     n: &mut usize,
     pending_boundary: &mut Vec<TurnBoundary>,
-    last_model: &mut Option<String>,
+    last_usage: &mut Option<(String, u64)>,
     records: &mut Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)>,
 ) -> bool {
     match &ev.event {
@@ -50,7 +50,7 @@ pub(in crate::trajectory) fn apply_turn_boundary(
         }
         SessionEvent::TurnUsage { model, .. } => {
             if !model.is_empty() {
-                if let Some(prev) = last_model.as_ref()
+                if let Some((prev, _)) = last_usage.as_ref()
                     && prev != model
                 {
                     let boundary = TurnBoundary::ModelSwitch(Box::new(ModelSwitchBoundary {
@@ -68,7 +68,7 @@ pub(in crate::trajectory) fn apply_turn_boundary(
                         builder.boundary_before.push(boundary);
                     }
                 }
-                *last_model = Some(model.clone());
+                *last_usage = Some((model.clone(), ev.ts));
             }
             return false;
         }
@@ -208,14 +208,6 @@ pub(in crate::trajectory) fn apply_turn_content(
         }
         SessionEvent::Summary { text } => {
             builder.push_signal(TrajectoryRecordKind::Compaction, None, text, ev.ts);
-        }
-        SessionEvent::CompactionBoundary { checkpoint, .. } => {
-            builder.push_signal(
-                TrajectoryRecordKind::Compaction,
-                None,
-                &format!("checkpoint {checkpoint}"),
-                ev.ts,
-            );
         }
         SessionEvent::RunCompleted { secs: Some(secs) } => {
             builder.run_completed_ms = (*secs as u64) * 1000;

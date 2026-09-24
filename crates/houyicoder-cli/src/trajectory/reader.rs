@@ -17,12 +17,12 @@ use houyicoder_tui::view::trajectory_pane::{
     TrajectoryDetailView, TrajectoryLog, TrajectoryView, TrajectoryViewState,
 };
 
-use super::view::PageProjection;
+use super::view::PageAccumulator;
 use crate::session_history::{PAGE_MAX_BYTES, SessionHistory, TurnAnchor, TurnPage};
 
 mod detail;
 mod drain;
-mod window_view;
+pub(super) mod window_view;
 
 use super::view::project;
 
@@ -110,14 +110,14 @@ struct PendingPageRead {
     cancel: Arc<AtomicBool>,
 }
 
-/// One resident page and the rows it projected.
+/// One resident page and the rows it folded.
 ///
 /// The rows are kept with the page rather than folded from the window on every
 /// build: an append extends one page, and the pages behind it keep the rows
 /// they already had.
 pub(super) struct ResidentPage {
     pub(super) source: TurnPage,
-    pub(super) projection: PageProjection,
+    pub(super) accumulator: PageAccumulator,
 }
 
 /// The pane's read state: the resident pages, the view projected from them, and
@@ -184,7 +184,7 @@ struct TrajectoryState {
     /// rows. A test reads these to assert that an append extends the page it
     /// lands in rather than folding the window again.
     #[cfg(test)]
-    page_seeds: usize,
+    pages_built: usize,
     #[cfg(test)]
     delta_events_applied: usize,
     failed: bool,
@@ -246,11 +246,11 @@ impl SessionLogTrajectory {
     /// A page fold is a cost that cannot be seen from the rows it produced, so
     /// a test asserts on what the reader did rather than on wall-clock time.
     #[cfg(test)]
-    pub(crate) fn projection_stats(&self) -> (usize, usize) {
+    pub(crate) fn page_stats(&self) -> (usize, usize) {
         let Ok(state) = self.state.lock() else {
             return (0, 0);
         };
-        (state.page_seeds, state.delta_events_applied)
+        (state.pages_built, state.delta_events_applied)
     }
 
     fn max_turns(&self) -> usize {

@@ -310,18 +310,19 @@ pub(crate) fn fold_rows(
     Vec<TrajectoryRow>,
     Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)>,
 ) {
-    let mut projection = PageProjection::seed(events, first_turn, mode);
-    let rows = projection.finish();
-    (rows, projection.into_records())
+    let mut accumulator = PageAccumulator::from_events(events, first_turn, mode);
+    let rows = accumulator.finish();
+    (rows, accumulator.into_records())
 }
 
-/// The rows a page projected, and the state a later read extends them with.
+/// The rows one page's events accumulate to, and the state a later read
+/// extends them with.
 ///
-/// A page is folded once, when it lands. An append extends the page that
+/// A page is accumulated once, when it lands. An append extends the page that
 /// received it by applying the new events to this state, so the turns already
-/// closed are never folded again: what an append costs is the events it
+/// closed are never accumulated again: what an append costs is the events it
 /// brought, not the page it lands in.
-pub(crate) struct PageProjection {
+pub(crate) struct PageAccumulator {
     /// The turns already closed, in order.
     turns: Vec<TrajectoryTurn>,
     /// The turn still being appended to, if any.
@@ -329,7 +330,11 @@ pub(crate) struct PageProjection {
     /// The number the next turn opened here carries.
     next_number: usize,
     pending_boundaries: Vec<TurnBoundary>,
-    last_model: Option<String>,
+    /// The model the page's first call used, and when it landed: what the page
+    /// before this one needs to name a switch across their seam.
+    first_usage: Option<(String, u64)>,
+    /// The model the page's last call used, and when it landed.
+    last_usage: Option<(String, u64)>,
     /// The tool calls this page has seen, and the delegations they spawned.
     ///
     /// Carried rather than rebuilt: a read's tool result names a call that may
@@ -343,22 +348,28 @@ pub(crate) struct PageProjection {
     records: Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)>,
 }
 
-impl PageProjection {
-    /// Fold a page's events into rows, numbering the first turn as first_turn.
-    pub(crate) fn seed(events: &[SessionLogEntry], first_turn: usize, mode: FoldMode) -> Self {
-        let mut projection = Self {
+impl PageAccumulator {
+    /// Accumulate a page's events into rows, numbering the first turn as
+    /// first_turn.
+    pub(crate) fn from_events(
+        events: &[SessionLogEntry],
+        first_turn: usize,
+        mode: FoldMode,
+    ) -> Self {
+        let mut accumulator = Self {
             turns: Vec::new(),
             open: turns::TurnBuilder::new(mode),
             next_number: first_turn.saturating_sub(1),
             pending_boundaries: Vec::new(),
-            last_model: None,
+            first_usage: None,
+            last_usage: None,
             calls: CallIndex::new(),
             spawned: HashSet::new(),
             unclaimed: Vec::new(),
             records: Vec::new(),
         };
-        projection.apply(events);
-        projection
+        accumulator.apply(events);
+        accumulator
     }
 
     /// Apply the events a read brought, extending what this page already holds.
@@ -384,7 +395,7 @@ impl PageProjection {
                 &mut self.turns,
                 &mut self.next_number,
                 &mut self.pending_boundaries,
-                &mut self.last_model,
+                &mut self.last_usage,
                 &mut self.records,
             ) {
                 continue;
@@ -397,8 +408,28 @@ impl PageProjection {
                 let boundaries = std::mem::take(&mut self.pending_boundaries);
                 self.open.open(ev, boundaries);
             }
+            if self.first_usage.is_none()
+                && let SessionEvent::TurnUsage { model, .. } = &ev.event
+                && !model.is_empty()
+            {
+                self.first_usage = Some((model.clone(), ev.ts));
+            }
             turns::dispatch::apply_turn_content(&mut self.open, ev, &self.calls, &self.spawned);
         }
+    }
+
+    /// The model the page's first call used, and when it landed.
+    pub(crate) fn first_usage(&self) -> Option<&(String, u64)> {
+        self.first_usage.as_ref()
+    }
+
+    /// What the page leaves for whatever follows it.
+    ///
+    /// A boundary the log recorded between two turns, or the model the last
+    /// call used, can sit at a page seam: the page that follows needs both to
+    /// name its first turn the way a fold over the two would.
+    pub(crate) fn trailing(&self) -> (Vec<TurnBoundary>, Option<(String, u64)>) {
+        (self.pending_boundaries.clone(), self.last_usage.clone())
     }
 
     /// The rows as they stand, with the open turn's own row last.

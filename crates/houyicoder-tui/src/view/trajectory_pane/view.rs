@@ -168,7 +168,7 @@ pub enum TrajectoryViewState {
     Failed,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TrajectoryView {
     pub session_id: String,
     /// Derived: one model when every turn's model field matches (or is

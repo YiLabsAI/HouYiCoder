@@ -182,9 +182,26 @@ mod tests {
     use super::*;
     use crate::state::{TrajectoryDrill, TrajectoryTurnKey};
     use crate::view::trajectory_pane::{
-        SessionTiming, SubagentUsage, TrajectoryDetailView, TrajectoryLog, TrajectoryView,
-        TrajectoryViewState,
+        SessionTiming, SubagentUsage, TrajectoryDetailState, TrajectoryDetailView, TrajectoryLog,
+        TrajectoryView, TrajectoryViewState,
     };
+
+    /// A trajectory source that answers a fixed view and does not page: the
+    /// status pane reads the session's figures from it and never walks.
+    struct Fixed(std::sync::Arc<TrajectoryView>);
+
+    impl TrajectoryLog for Fixed {
+        fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
+            self.0.clone()
+        }
+        fn load_older(&self) {}
+        fn load_earliest(&self) {}
+        fn return_to_tail(&self) {}
+        fn request_detail(&self, _drill: &TrajectoryDrill) {}
+        fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
+            std::sync::Arc::new(TrajectoryDetailView::default())
+        }
+    }
 
     /// The sub-tab header renders Status / Config / Usage, with the active one
     /// marked (the active title appears in the header).
@@ -435,16 +452,6 @@ mod tests {
     /// trajectory pane reads, and omits a row the session has no sample for.
     #[test]
     fn test_usage_tab_latency_rows() {
-        struct Fixed(std::sync::Arc<TrajectoryView>);
-        impl TrajectoryLog for Fixed {
-            fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
-                self.0.clone()
-            }
-            fn request_detail(&self, _drill: &TrajectoryDrill) {}
-            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
-                std::sync::Arc::new(TrajectoryDetailView::default())
-            }
-        }
         let view = TrajectoryView {
             state: TrajectoryViewState::Ready,
             skipped_records: 0,
@@ -499,39 +506,34 @@ mod tests {
     /// unmeasured session must not read as instant.
     #[test]
     fn test_usage_tab_no_timing() {
-        struct Fixed(std::sync::Arc<TrajectoryView>);
-        impl TrajectoryLog for Fixed {
-            fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
-                self.0.clone()
-            }
-            fn request_detail(&self, _drill: &TrajectoryDrill) {}
-            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
-                std::sync::Arc::new(TrajectoryDetailView::default())
-            }
-        }
         let mut app = crate::test_harness::working_app();
         app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
             TrajectoryView {
                 state: TrajectoryViewState::Ready,
-                skipped_records: 0,
                 models_used: 2,
-                tool_calls: 0,
                 session_id: "s".into(),
                 model: "m".into(),
-                total_turns: 0,
-                tokens_in: None,
-                tokens_out: None,
-                cache_read: None,
-                failures: 0,
-                duration_secs: 0,
-                timing: SessionTiming::default(),
-                hidden_turns: 0,
-                newer_hidden: 0,
-                history_generation: 0,
-                subagent_usage: None,
-                rows: Vec::new(),
+                ..TrajectoryView::default()
             },
         ))));
+        // A source that does not page is a legal source: the walk asks it for
+        // more and gets nothing, and a drill answers that it holds nothing.
+        let log = app.trajectory_log.clone().expect("the source is attached");
+        log.load_older();
+        log.load_earliest();
+        log.return_to_tail();
+        let key = TrajectoryTurnKey::from_opening_event("01J0");
+        log.request_detail(&TrajectoryDrill {
+            key: key.clone(),
+            number: 1,
+            history_generation: 0,
+        });
+        assert_eq!(
+            log.detail(&key).state,
+            TrajectoryDetailState::Loading,
+            "a source with no records says so rather than answering a turn"
+        );
+
         let s = render_usage(&app);
         assert!(!s.contains("ttft:"), "no ttft row without samples: {s}");
         assert!(!s.contains("decode speed:"), "no decode row: {s}");
@@ -542,16 +544,6 @@ mod tests {
     /// token rows above already include it.
     #[test]
     fn test_usage_tab_delegated() {
-        struct Fixed(std::sync::Arc<TrajectoryView>);
-        impl TrajectoryLog for Fixed {
-            fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
-                self.0.clone()
-            }
-            fn request_detail(&self, _drill: &TrajectoryDrill) {}
-            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
-                std::sync::Arc::new(TrajectoryDetailView::default())
-            }
-        }
         let mut app = crate::test_harness::working_app();
         app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
             TrajectoryView {
@@ -594,16 +586,6 @@ mod tests {
     /// A session with no delegation shows no delegated row.
     #[test]
     fn test_usage_tab_no_delegated() {
-        struct Fixed(std::sync::Arc<TrajectoryView>);
-        impl TrajectoryLog for Fixed {
-            fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
-                self.0.clone()
-            }
-            fn request_detail(&self, _drill: &TrajectoryDrill) {}
-            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
-                std::sync::Arc::new(TrajectoryDetailView::default())
-            }
-        }
         let mut app = crate::test_harness::working_app();
         app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
             TrajectoryView {
@@ -664,16 +646,6 @@ mod tests {
     /// rather than printing zeroes for a cost that was never measured.
     #[test]
     fn test_usage_tab_delegated_unreported() {
-        struct Fixed(std::sync::Arc<TrajectoryView>);
-        impl TrajectoryLog for Fixed {
-            fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
-                self.0.clone()
-            }
-            fn request_detail(&self, _drill: &TrajectoryDrill) {}
-            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
-                std::sync::Arc::new(TrajectoryDetailView::default())
-            }
-        }
         let mut app = crate::test_harness::working_app();
         app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
             TrajectoryView {

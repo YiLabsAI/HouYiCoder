@@ -1705,7 +1705,7 @@ fn gated_disk_reader(
 fn test_append_extends_page() {
     let (store, reader, sid, _history, _root) = disk_reader_at(300);
     drop(pump(&reader));
-    let (seeds_before, applied_before) = reader.projection_stats();
+    let (built_before, applied_before) = reader.page_stats();
 
     let rt = tokio::runtime::Runtime::new().expect("test runtime");
     for i in 0..3u64 {
@@ -1721,10 +1721,10 @@ fn test_append_extends_page() {
         .expect("append");
     }
     let view = pump(&reader);
-    let (seeds_after, applied_after) = reader.projection_stats();
+    let (built_after, applied_after) = reader.page_stats();
 
     assert_eq!(
-        seeds_after, seeds_before,
+        built_after, built_before,
         "no page is folded from scratch for an append"
     );
     assert!(

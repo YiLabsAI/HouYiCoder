@@ -169,15 +169,18 @@ pub trait TrajectoryLog: Send + Sync {
     /// Widen the loaded window by one page of older turns. Called when the user
     /// walks past the oldest loaded turn; an implementation with nothing older
     /// to load does nothing.
-    fn load_older(&self) {}
+    ///
+    /// Required rather than defaulted: a source that cannot page would otherwise
+    /// compile while the user's walk silently did nothing.
+    fn load_older(&self);
 
     /// Replace the window with the session's oldest turns. Called when the user
     /// asks for the head; an implementation with nothing to page does nothing.
-    fn load_earliest(&self) {}
+    fn load_earliest(&self);
 
     /// Replace the window with the newest turns. Called when the user asks to
     /// return to the tail; an implementation that already shows it does nothing.
-    fn return_to_tail(&self) {}
+    fn return_to_tail(&self);
 
     /// Ask for one turn's records, by the key its row carries. Called when the
     /// user opens a turn; an implementation reads them off the draw path and

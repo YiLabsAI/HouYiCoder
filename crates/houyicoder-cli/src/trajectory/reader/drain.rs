@@ -6,7 +6,7 @@
 //! applied as a window the session does not have.
 
 use super::super::turns::FoldMode;
-use super::super::view::PageProjection;
+use super::super::view::PageAccumulator;
 use super::{
     DurableWatermark, MAX_READ_RETRIES, PageRead, RESIDENT_PAGES, ResidentPage,
     SessionLogTrajectory, TrajectoryState, TurnPage,
@@ -19,12 +19,15 @@ fn resident_page(
     mut source: TurnPage,
 ) -> ResidentPage {
     source.drop_leading_fragment();
-    let projection = PageProjection::seed(&events_of(&source), 1, FoldMode::Summary);
+    let accumulator = PageAccumulator::from_events(&events_of(&source), 1, FoldMode::Summary);
     #[cfg(test)]
     {
-        state.page_seeds += 1;
+        state.pages_built += 1;
     }
-    ResidentPage { source, projection }
+    ResidentPage {
+        source,
+        accumulator,
+    }
 }
 
 /// A page's events, in log order.
@@ -152,7 +155,7 @@ impl SessionLogTrajectory {
                     {
                         state.delta_events_applied += arrived.len();
                     }
-                    back.projection.apply(&arrived);
+                    back.accumulator.apply(&arrived);
                     back.source.end_offset = outcome.end_offset;
                     back.source.skipped += outcome.skipped;
                     back.source.events.extend(outcome.events);

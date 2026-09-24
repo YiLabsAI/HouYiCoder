@@ -2,14 +2,19 @@
 //!
 //! The window is the resident pages; the view is what the pane renders from
 //! them. It is built once and then served from the cache, because the pane draws
-//! every frame and re-projecting a page per frame would put a fold on the draw
+//! every frame and folding a page per frame would put a fold on the draw
 //! path. The head's summary supplies the session's own figures: a page holds the
 //! newest turns, and its totals would report the page as the session.
 
 use super::{DELTA_MAX_BYTES, PageRead, SessionHistory};
-use super::{DurableWatermark, SessionLogTrajectory, TrajectoryHead, TrajectoryState};
-use houyicoder_tui::view::trajectory_pane::{SessionTiming, SubagentUsage};
+use super::{
+    DurableWatermark, ResidentPage, SessionLogTrajectory, TrajectoryHead, TrajectoryState,
+};
+use houyicoder_tui::view::trajectory_pane::{
+    ModelSwitchBoundary, SessionTiming, SubagentUsage, TurnBoundary,
+};
 use houyicoder_tui::view::trajectory_pane::{TrajectoryRow, TrajectoryView, TrajectoryViewState};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 impl SessionLogTrajectory {
@@ -32,14 +37,7 @@ impl SessionLogTrajectory {
             state.view = Some(Arc::clone(&view));
             return view;
         }
-        // The window is the pages' own rows, concatenated: each page folded
-        // once when it landed, and an append extends only the page it landed
-        // in, so no page is folded again for a frame that draws the window.
-        let mut rows: Vec<TrajectoryRow> = state
-            .pages
-            .iter()
-            .flat_map(|page| page.projection.rows())
-            .collect();
+        let mut rows = seam_rows(&state.pages);
         let visible = rows.len();
         // While the window ends at the tail it hides only what is behind it, so
         // the count is derived, from the total the window was read at: the
@@ -159,6 +157,48 @@ impl SessionLogTrajectory {
             rows: Vec::new(),
         })
     }
+}
+
+/// The pages' rows stitched into the window, carrying what each page leaves for
+/// the one after it across the seam.
+///
+/// A boundary the log recorded between two turns, and the model the last call
+/// used, can sit between two pages: only reading the two together names the
+/// turn that follows them the way a fold over both would.
+pub(in crate::trajectory) fn seam_rows(pages: &VecDeque<ResidentPage>) -> Vec<TrajectoryRow> {
+    let mut rows: Vec<TrajectoryRow> = Vec::new();
+    let mut carried_boundaries: Vec<TurnBoundary> = Vec::new();
+    let mut carried_model: Option<String> = None;
+    for page in pages.iter() {
+        let mut page_rows = page.accumulator.rows();
+        if let Some(TrajectoryRow::Turn(first)) = page_rows.first_mut() {
+            if !carried_boundaries.is_empty() {
+                let mut boundaries = std::mem::take(&mut carried_boundaries);
+                boundaries.append(&mut first.boundary_before);
+                first.boundary_before = boundaries;
+            }
+            // A switch across the seam is dated by the call that shows it.
+            if let (Some(prev), Some((next, ts))) =
+                (carried_model.as_ref(), page.accumulator.first_usage())
+                && prev != next
+            {
+                first
+                    .boundary_before
+                    .push(TurnBoundary::ModelSwitch(Box::new(ModelSwitchBoundary {
+                        from: prev.clone(),
+                        to: next.clone(),
+                        at_secs: ts / 1000,
+                    })));
+            }
+        }
+        let (trailing, last_usage) = page.accumulator.trailing();
+        carried_boundaries = trailing;
+        if let Some((model, _)) = last_usage {
+            carried_model = Some(model);
+        }
+        rows.extend(page_rows);
+    }
+    rows
 }
 
 /// Which read a window that follows the tail needs when the history moved.

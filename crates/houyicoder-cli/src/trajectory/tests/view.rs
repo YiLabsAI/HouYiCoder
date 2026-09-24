@@ -1,13 +1,17 @@
 //! Tests for the turn fold: grouping, per-turn totals, records, and the
 //! timing and boundary facts it derives from the durable log.
 
+use super::super::reader::ResidentPage;
+use super::super::reader::window_view::seam_rows;
 use super::super::turns::FoldMode;
 use super::super::view::*;
+use crate::session_history::TurnPage;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{
     CompactedBoundary, ModelSwitchBoundary, RecordOutcome, TrajectoryRecordKind, TrajectoryRow,
     TrajectoryTurn, TurnBoundary,
 };
+use std::collections::VecDeque;
 
 fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -1501,7 +1505,8 @@ fn test_delegation_split_across_batches() {
     );
 
     // The call lands in one batch; the spawn that claims it lands in the next.
-    let mut split = PageProjection::seed(&[input.clone(), call.clone()], 1, FoldMode::Summary);
+    let mut split =
+        PageAccumulator::from_events(&[input.clone(), call.clone()], 1, FoldMode::Summary);
     split.apply(&[spawn.clone(), result.clone()]);
     let split_rows = split.finish();
 
@@ -1525,5 +1530,104 @@ fn test_delegation_split_across_batches() {
         counts(&split_rows),
         vec![(0, 0)],
         "the delegation's tool call is not counted as a plain tool call"
+    );
+}
+
+/// The facts between two turns survive a page seam: a boundary the log recorded
+/// and a model switch can sit between two pages, and the window must name the
+/// turn that follows them the way an accumulation over both pages would.
+#[test]
+fn test_seam_keeps_boundaries() {
+    use houyicoder_context::CheckpointId;
+
+    let ck = CheckpointId::new();
+    let usage = |ts: u64, model: &str| {
+        ev(
+            ts,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 10,
+                output_tokens: 2,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: model.into(),
+                recovery: false,
+                effort: None,
+            },
+        )
+    };
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "t1".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        usage(110, "qwen"),
+        ev(
+            150,
+            SessionEvent::CompactionBoundary {
+                checkpoint: ck,
+                pre_tokens: 0,
+                post_tokens: 0,
+            },
+        ),
+        ev(200, SessionEvent::UserInput { text: "t2".into() }),
+        ev(
+            205,
+            SessionEvent::TurnStarted {
+                turn: 2,
+                call_in_turn: 0,
+            },
+        ),
+        usage(210, "deepseek"),
+    ];
+
+    // The whole log in one accumulation, and the same log split into two pages
+    // at the second input.
+    let (whole, _) = fold_rows(&events, 1, FoldMode::Summary);
+    let pages: VecDeque<ResidentPage> = [&events[..4], &events[4..]]
+        .into_iter()
+        .map(|slice| ResidentPage {
+            source: TurnPage::default(),
+            accumulator: PageAccumulator::from_events(slice, 1, FoldMode::Summary),
+        })
+        .collect();
+    let stitched = seam_rows(&pages);
+
+    assert_eq!(stitched.len(), 2, "two turns");
+    let boundaries = |rows: &[TrajectoryRow]| -> Vec<Vec<TurnBoundary>> {
+        rows.iter()
+            .filter_map(|row| match row {
+                TrajectoryRow::Turn(turn) => Some(turn.boundary_before.clone()),
+                TrajectoryRow::Bg(_) => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        boundaries(&stitched),
+        boundaries(&whole),
+        "the seam names the turn after it the way one accumulation does"
+    );
+    assert_eq!(
+        boundaries(&stitched)[1],
+        vec![
+            TurnBoundary::Compacted(Box::new(CompactedBoundary {
+                checkpoint_id: ck.to_string(),
+                pre_tokens: 0,
+                post_tokens: 0,
+                at_secs: 0,
+            })),
+            TurnBoundary::ModelSwitch(Box::new(ModelSwitchBoundary {
+                from: "qwen".into(),
+                to: "deepseek".into(),
+                at_secs: 0,
+            })),
+        ],
+        "and both the boundary and the switch survive it"
     );
 }
