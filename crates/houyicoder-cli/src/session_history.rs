@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{LenientRead, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{EventId, LenientRead, SessionEvent, SessionId, SessionLogEntry};
 
 mod head;
 
@@ -34,6 +34,13 @@ const LOOKBACK_MAX_BYTES: u64 = 512 * 1024;
 struct OffsetIndex {
     /// Byte offsets of events in FORWARD order (oldest first).
     offsets: Vec<u64>,
+    /// Where each history began, by the event that began it, newest first.
+    ///
+    /// A clear starts a new history, and the walk that finds it reads the log
+    /// backwards a chunk at a time. The scan the index already runs passes over
+    /// those events, so it records them: a caller that asks where a history
+    /// began can look here instead of walking the log again.
+    epoch_starts: Vec<(EventId, u64)>,
     /// How many bytes from the tail have been read.
     built_from_tail: u64,
     /// Total log file size.
@@ -537,6 +544,24 @@ impl SessionHistory {
 
     /// Build the next chunk of the event-byte-offset index. Called per frame
     /// while a full scan is asked for; a no-op once complete.
+    /// The byte where a history began, if the index has seen its start.
+    ///
+    /// The event that began an epoch is the newest clear before it, and a clear
+    /// is where the walk stops: an index that has scanned past it can answer
+    /// where the history starts without reading the log again.
+    fn indexed_epoch_start(&self, epoch: Option<EventId>) -> Option<u64> {
+        let idx = self.index.lock().ok()?;
+        match epoch {
+            // The history the log itself began in starts at the first byte.
+            None => idx.offsets.first().map(|_| 0),
+            Some(id) => idx
+                .epoch_starts
+                .iter()
+                .find(|(event, _)| *event == id)
+                .map(|(_, offset)| *offset),
+        }
+    }
+
     pub(crate) fn index_chunk(&self) -> HistoryIndexProgress {
         let mut idx = self.index.lock().expect("index mutex poisoned");
         let backend = self.session_log.backend();
@@ -555,11 +580,17 @@ impl SessionHistory {
         // Collect event byte offsets from the reverse batch (newest-first),
         // then prepend so the index stays in forward order.
         let mut batch_offsets: Vec<u64> = Vec::new();
+        let mut batch_epochs: Vec<(EventId, u64)> = Vec::new();
         for (offset, line) in &rev.lines {
-            if parse_event(line).is_some() {
+            if let Some(entry) = parse_event(line) {
                 batch_offsets.push(*offset);
+                if matches!(entry.event, SessionEvent::ContextCleared { .. }) {
+                    batch_epochs.push((entry.id, *offset));
+                }
             }
         }
+        // The scan is newest-first, so the batch's own finds are too.
+        idx.epoch_starts.extend(batch_epochs);
         batch_offsets.reverse();
         let mut offsets = std::mem::take(&mut idx.offsets);
         batch_offsets.extend_from_slice(&offsets);

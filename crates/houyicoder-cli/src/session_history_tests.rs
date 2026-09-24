@@ -806,3 +806,37 @@ fn test_head_page_cancel_walk() {
         after - before
     );
 }
+
+/// A history whose start the search index has already scanned is answered from
+/// the index: Home reaches it without walking the log again. The walk is the
+/// fallback for what the index has not reached, not the only way to answer.
+#[test]
+fn test_indexed_epoch_start() {
+    let (history, clear_id) = far_clear_history();
+    while !history.index_chunk().done {}
+
+    let (_, _, before) = history.read_stats();
+    let page = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &live());
+    let (_, _, after) = history.read_stats();
+
+    let prompts: Vec<String> = page
+        .events
+        .iter()
+        .filter_map(|e| match &e.entry.event {
+            SessionEvent::UserInput { text } => {
+                Some(text.split(' ').nth(1).unwrap_or("").to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        vec!["0", "1", "2"],
+        "the head is still the first turns after the clear"
+    );
+    assert!(
+        after - before < PAGE_MAX_BYTES,
+        "and the walk did not run for it: {} bytes read",
+        after - before
+    );
+}

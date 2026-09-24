@@ -126,6 +126,12 @@ impl SessionHistory {
     /// flag: a walk nobody waits for stops at the next chunk rather than
     /// reading a whole long log for a page that will be dropped.
     fn epoch_start_offset(&self, epoch: Option<EventId>, cancel: &AtomicBool) -> Option<u64> {
+        // The scan the search index runs passes over the clears, so a history
+        // whose start it has already seen is answered from there: the walk
+        // below is the fallback for what the index has not reached yet.
+        if let Some(offset) = self.indexed_epoch_start(epoch) {
+            return Some(offset);
+        }
         let first = self.first_event()?;
         if epoch.is_none_or(|id| id == first.entry.id) {
             return Some(first.byte_offset);
