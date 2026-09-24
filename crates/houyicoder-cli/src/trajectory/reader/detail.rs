@@ -13,6 +13,7 @@ use houyicoder_tui::view::trajectory_pane::{
     TrajectoryDetailState, TrajectoryDetailView, TrajectoryRow, TrajectoryTurn,
 };
 
+use super::super::turns::FoldMode;
 use super::super::view::fold_rows;
 use super::TrajectoryState;
 
@@ -111,7 +112,7 @@ pub(super) fn read_detail(
     }
     let (events, reached_end) = one_turn(window.events.iter().map(|event| &event.entry));
     let truncated = !reached_end && window.next_offset < history.log_size();
-    let (rows, records) = fold_rows(&events, drill.number);
+    let (rows, records) = fold_rows(&events, drill.number, FoldMode::Records);
     let mut turn = first_turn_of(rows);
     if let Some(turn) = turn.as_mut() {
         // The bytes do not know which turn of the session they are, so the
@@ -152,7 +153,7 @@ pub(super) fn mirror_detail(
         return stale_detail();
     };
     let (events, _) = one_turn(events[start..].iter());
-    let (rows, records) = fold_rows(&events, drill.number);
+    let (rows, records) = fold_rows(&events, drill.number, FoldMode::Records);
     let mut turn = first_turn_of(rows);
     if let Some(turn) = turn.as_mut() {
         turn.n = drill.number;

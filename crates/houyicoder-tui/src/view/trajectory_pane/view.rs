@@ -52,10 +52,10 @@ pub struct TrajectoryTurn {
     /// slot: a single slot would drop one of them without saying so. Data only;
     /// the pane decides how to draw them.
     pub boundary_before: Vec<TurnBoundary>,
-    pub user_input: String,
-    /// What the turn's row is titled: the user input, or the first record's
-    /// summary for a turn whose prompt sits outside the loaded window. Derived
-    /// where the records are, so the list needs no detail to name a row.
+    /// What the turn's row is titled: a preview of the prompt, or of the first
+    /// record's summary for a turn whose prompt sits outside the loaded window.
+    /// Derived where the records are, so the list needs no detail to name a row,
+    /// and a preview because the row draws one line.
     pub title: String,
     pub tokens_in: Option<usize>,
     pub tokens_out: Option<usize>,
@@ -89,16 +89,6 @@ pub struct TrajectoryBg {
 }
 
 #[derive(Clone)]
-// A turn is wider than a background row because it carries the turn's own
-// facts: its prompt, its title, the models and efforts it used, its boundaries.
-// Boxing the variant would trade that for an allocation per row and an
-// indirection on every draw, for a vector that holds a window of turns rather
-// than the whole history. The cost is the element size times that window, which
-// is why the window is bounded.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the turn's own facts are the point of the row"
-)]
 pub enum TrajectoryRow {
     Turn(TrajectoryTurn),
     Bg(TrajectoryBg),

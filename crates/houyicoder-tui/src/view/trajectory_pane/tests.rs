@@ -956,7 +956,6 @@ fn test_turn_list_degrades() {
         n,
         key: TrajectoryTurnKey::from_opening_event(&format!("t{n}")),
         boundary_before: Vec::new(),
-        user_input: title.into(),
         title: title.into(),
         tokens_in: Some(1_200),
         tokens_out: Some(500),

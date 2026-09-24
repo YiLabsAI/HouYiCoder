@@ -18,11 +18,27 @@ use houyicoder_tui::view::trajectory_pane::{
 
 pub(super) mod dispatch;
 
+/// What a fold keeps of each record.
+///
+/// The list draws one line per turn: it needs the turn's own facts and the
+/// records' one-line summaries, not the thinking, input, and output a drill
+/// shows. Keeping those for the list would hold a second copy of every tool
+/// result and prompt in the window, so a fold says which of the two it is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FoldMode {
+    /// The list: the turn's facts and the records' summaries.
+    Summary,
+    /// A drill: the records whole, with their thinking, input, and output.
+    Records,
+}
+
 /// Accumulates one user turn: its records, its summed totals, and the
 /// open model call, tool call, and delegation its later events attach to.
 /// Reset at each turn boundary; flushed into the turn list when the next
 /// user input arrives.
 pub(super) struct TurnBuilder {
+    /// Whether this fold keeps the record bodies.
+    mode: FoldMode,
     /// The event that opened this turn, kept as the turn's durable identity.
     /// None until an event opens the turn, so a builder that never opened
     /// cannot be flushed as a turn with no identity.
@@ -56,8 +72,9 @@ pub(super) struct TurnBuilder {
 }
 
 impl TurnBuilder {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(mode: FoldMode) -> Self {
         Self {
+            mode,
             key: None,
             records: Vec::new(),
             boundary_before: Vec::new(),
@@ -223,7 +240,9 @@ impl TurnBuilder {
         let record = &mut self.records[index];
         if !text.is_empty() {
             record.summary = preview(text);
-            record.output = Some(text.to_string());
+            if self.mode == FoldMode::Records {
+                record.output = Some(text.to_string());
+            }
             // A reply means the call completed; without this a call that never
             // recorded timing would stay pending forever.
             record.outcome = RecordOutcome::Ok;
@@ -231,7 +250,9 @@ impl TurnBuilder {
         if let Some(t) = thinking
             && !t.is_empty()
         {
-            record.thinking = Some(t.clone());
+            if self.mode == FoldMode::Records {
+                record.thinking = Some(t.clone());
+            }
             if record.summary.is_empty() {
                 record.summary = preview(t);
             }
@@ -245,7 +266,11 @@ impl TurnBuilder {
         let record = &mut self.records[index];
         match &mut record.thinking {
             Some(existing) => existing.push_str(text),
-            None => record.thinking = Some(text.to_string()),
+            None => {
+                if self.mode == FoldMode::Records {
+                    record.thinking = Some(text.to_string());
+                }
+            }
         }
         if record.summary.is_empty() {
             record.summary = preview(text);
@@ -341,7 +366,9 @@ impl TurnBuilder {
             ts,
         ));
         self.records[index].ordinal = ordinal as u32;
-        self.records[index].input = Some(input.to_string());
+        if self.mode == FoldMode::Records {
+            self.records[index].input = Some(input.to_string());
+        }
         self.open_tools.insert(call_id.to_string(), index);
     }
 
@@ -369,7 +396,9 @@ impl TurnBuilder {
         };
         let record = &mut self.records[index];
         record.summary = preview(&body);
-        record.output = Some(body);
+        if self.mode == FoldMode::Records {
+            record.output = Some(body);
+        }
         record.duration_ms = duration_ms;
         record.outcome = if failed {
             RecordOutcome::Failed
@@ -455,8 +484,22 @@ impl TurnBuilder {
             }
         }
         record.usage = usage;
-        if !summary.is_empty() {
+        if !summary.is_empty() && self.mode == FoldMode::Records {
             record.output = Some(summary.to_string());
+        }
+    }
+
+    /// Set a record's input, when this fold keeps the record bodies.
+    pub(super) fn set_input(&mut self, index: usize, text: String) {
+        if self.mode == FoldMode::Records {
+            self.records[index].input = Some(text);
+        }
+    }
+
+    /// Set a record's output, when this fold keeps the record bodies.
+    pub(super) fn set_output(&mut self, index: usize, text: String) {
+        if self.mode == FoldMode::Records {
+            self.records[index].output = Some(text);
         }
     }
 
@@ -478,13 +521,15 @@ impl TurnBuilder {
     /// turn whose prompt is not in the log. Derived where the records are, so
     /// the list needs no detail to name a row.
     fn title(&self) -> String {
-        if !self.user_input.trim().is_empty() {
-            return self.user_input.clone();
-        }
-        match self.records.first() {
-            Some(first) if !first.summary.trim().is_empty() => first.summary.clone(),
-            _ => "(no input)".to_string(),
-        }
+        let text = if !self.user_input.trim().is_empty() {
+            self.user_input.clone()
+        } else {
+            match self.records.first() {
+                Some(first) if !first.summary.trim().is_empty() => first.summary.clone(),
+                _ => return "(no input)".to_string(),
+            }
+        };
+        preview(&text)
     }
 
     /// Flush the open turn into the list, and hand back its records.
@@ -509,7 +554,6 @@ impl TurnBuilder {
             key: key.clone(),
             title,
             boundary_before: std::mem::take(&mut self.boundary_before),
-            user_input: std::mem::take(&mut self.user_input),
             tokens_in: self.tokens_in.map(|v| v as usize),
             tokens_out: self.tokens_out.map(|v| v as usize),
             cache_read: self.cache_read,

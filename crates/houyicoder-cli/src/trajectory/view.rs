@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::turns;
+use super::turns::{self, FoldMode};
 
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
@@ -284,23 +284,24 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str, max_turns: usize)
 /// comes from the caller rather than from the slice: numbering from the slice
 /// would restart every page at the session's first turn.
 pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec<TrajectoryRow> {
-    fold_rows(events, first_turn).0
+    fold_rows(events, first_turn, FoldMode::Summary).0
 }
 
 /// Fold a slice of events into rows, and each turn's records by key.
 ///
-/// A paged read keeps the rows and drops the records: the window holds what the
-/// list draws, and a drill reads the records it asks for.
+/// The mode decides what a record keeps: a paged read draws one line per turn
+/// and keeps summaries, and a drill keeps the bodies it shows.
 pub(crate) fn fold_rows(
     events: &[SessionLogEntry],
     first_turn: usize,
+    mode: FoldMode,
 ) -> (
     Vec<TrajectoryRow>,
     Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)>,
 ) {
     let mut turn_rows: Vec<TrajectoryTurn> = Vec::new();
     let mut records: Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)> = Vec::new();
-    let mut builder = turns::TurnBuilder::new();
+    let mut builder = turns::TurnBuilder::new(mode);
     let mut n: usize = first_turn.saturating_sub(1);
     let calls = index_calls(events);
     let spawned = spawned_call_ids(events);
@@ -344,7 +345,7 @@ pub(crate) fn fold_rows(
 /// test that reads a turn's records directly.
 #[cfg(test)]
 pub(crate) fn records_of(events: &[SessionLogEntry], turn: usize) -> Vec<TrajectoryRecord> {
-    fold_rows(events, 1)
+    fold_rows(events, 1, FoldMode::Records)
         .1
         .into_iter()
         .nth(turn.saturating_sub(1))

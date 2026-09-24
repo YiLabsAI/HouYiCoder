@@ -128,7 +128,7 @@ fn test_turn_groups_by_input() {
         _ => unreachable!(),
     };
     assert_eq!(t1.n, 1);
-    assert_eq!(t1.user_input, "hello");
+    assert_eq!(t1.title, "hello");
     assert_eq!(
         t1.tokens_in,
         Some(3000),
@@ -267,7 +267,7 @@ fn test_multi_iteration_produces_turns() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    assert_eq!(t1.user_input, "fix the bug");
+    assert_eq!(t1.title, "fix the bug");
     let models = records_of(&events, t1.n)
         .into_iter()
         .filter(|e| e.kind == TrajectoryRecordKind::Model)
@@ -761,7 +761,7 @@ fn test_meta_user_excluded() {
         _ => unreachable!(),
     };
     assert_eq!(
-        turn.user_input, "hello",
+        turn.title, "hello",
         "the title is the real prompt, not the MetaUser reminder"
     );
     assert_eq!(
@@ -816,7 +816,7 @@ fn test_memory_recall_excluded() {
         _ => unreachable!(),
     };
     assert_eq!(
-        turn.user_input, "fix the bug",
+        turn.title, "fix the bug",
         "MemoryRecall must not overwrite user_input"
     );
     for ev in &records_of(&events, turn.n) {

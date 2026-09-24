@@ -82,7 +82,7 @@ pub(in crate::trajectory) fn apply_turn_boundary(
             builder.reset(ev, text.clone(), std::mem::take(pending_boundary));
             let record = builder.record(TrajectoryRecordKind::Context, None, preview(text), ev.ts);
             let index = builder.push(record);
-            builder.records[index].input = Some(text.clone());
+            builder.set_input(index, text.clone());
         }
         SessionEvent::MidTurnInput { text, .. } => {
             builder.touch(ev.ts);
@@ -94,7 +94,7 @@ pub(in crate::trajectory) fn apply_turn_boundary(
                 ev.ts,
             );
             let index = builder.push(record);
-            builder.records[index].input = Some(text.clone());
+            builder.set_input(index, text.clone());
         }
         SessionEvent::TurnStarted { .. } => {
             // A log that opens mid-run has model calls before any user input;
@@ -192,9 +192,9 @@ pub(in crate::trajectory) fn apply_turn_content(
             // A log written before the size was recorded carries zero, which
             // is an absent measurement rather than an empty recall.
             if *bytes > 0 {
-                builder.records[index].input = Some(format!("{} injected", fmt_bytes(*bytes)));
+                builder.set_input(index, format!("{} injected", fmt_bytes(*bytes)));
             }
-            builder.records[index].output = Some(keys.join("\n"));
+            builder.set_output(index, keys.join("\n"));
         }
         SessionEvent::HookSignal {
             verdict,

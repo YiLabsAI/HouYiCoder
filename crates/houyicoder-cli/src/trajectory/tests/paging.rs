@@ -50,7 +50,7 @@ fn test_tail_window_limits() {
         _ => unreachable!(),
     };
     assert_eq!(
-        first.user_input, "prompt 3",
+        first.title, "prompt 3",
         "the window starts at the oldest turn it keeps"
     );
     assert_eq!(
@@ -74,7 +74,7 @@ fn turn_rows(view: &TrajectoryView) -> Vec<(usize, String)> {
     view.rows
         .iter()
         .filter_map(|row| match row {
-            TrajectoryRow::Turn(turn) => Some((turn.n, turn.user_input.clone())),
+            TrajectoryRow::Turn(turn) => Some((turn.n, turn.title.clone())),
             TrajectoryRow::Bg(_) => None,
         })
         .collect()
@@ -721,7 +721,7 @@ fn test_clear_drops_old_epoch() {
             .rows
             .iter()
             .filter_map(|row| match row {
-                TrajectoryRow::Turn(turn) => Some(turn.user_input.clone()),
+                TrajectoryRow::Turn(turn) => Some(turn.title.clone()),
                 TrajectoryRow::Bg(_) => None,
             })
             .collect();
@@ -1327,7 +1327,7 @@ fn test_clear_drops_older_walk() {
             .rows
             .iter()
             .filter_map(|row| match row {
-                TrajectoryRow::Turn(turn) => Some(turn.user_input.clone()),
+                TrajectoryRow::Turn(turn) => Some(turn.title.clone()),
                 TrajectoryRow::Bg(_) => None,
             })
             .collect();
