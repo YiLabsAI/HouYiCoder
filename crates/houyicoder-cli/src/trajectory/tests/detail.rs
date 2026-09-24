@@ -3,8 +3,8 @@
 
 use super::super::reader::SessionLogTrajectory;
 use super::super::view::records_of;
-use super::fixtures::gated_range_backend;
 use super::paging::{disk_reader, disk_reader_at, pump, reader_of};
+use super::test_support::gated_range_backend;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_session::SessionStore;
 use houyicoder_tui::state::{TrajectoryDrill, TrajectoryTurnKey};

@@ -5,7 +5,7 @@ use super::super::reader::{
     DELTA_MAX_BYTES, RESIDENT_PAGES, SessionLogTrajectory, TRAJECTORY_PAGE_TURNS,
 };
 use super::super::view::project;
-use super::fixtures::gated_range_backend;
+use super::test_support::gated_range_backend;
 use crate::session_history::SessionHistory;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;

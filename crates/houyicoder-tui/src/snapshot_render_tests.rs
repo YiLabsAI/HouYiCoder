@@ -5,7 +5,7 @@
 
 use crate::records::TranscriptLine;
 use crate::test_harness::render_text;
-use crate::transcript::snapshot::{SnapshotLoad, TranscriptSnapshot, WindowLoad};
+use crate::transcript::snapshot::{TranscriptSnapshot, WindowLoad};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::sync::Arc;
 
@@ -294,37 +294,28 @@ fn test_exit_clears_snapshot() {
     assert_eq!(app.search_skipped, 0, "skipped count cleared");
 }
 
-/// The default window/index methods on TranscriptSnapshot return empty
-/// when not overridden. Uses a bare mock that only overrides log_size + load
-/// so every other method falls through to the trait's default body, covering
-/// those defaults so the diff-cov gate passes.
+/// A source with no on-disk log answers every window empty and holds no index:
+/// the type says so by name, which is what a reader needs, since log_size alone
+/// can route an implementation into the windowed path.
 #[test]
-fn test_snapshot_defaults_return_empty() {
-    /// Bare mock: only log_size + load; window/tail_window/window_before/
-    /// index_chunk/byte_at/event_count all use the trait defaults.
-    struct Bare {
-        log_bytes: u64,
-    }
-    impl TranscriptSnapshot for Bare {
-        fn log_size(&self) -> u64 {
-            self.log_bytes
-        }
-        fn load(&self, _max_bytes: u64) -> SnapshotLoad {
-            SnapshotLoad::default()
-        }
-    }
-    let mock = Bare { log_bytes: 1024 };
-    let w = mock.window(0, 1024);
-    assert!(w.lines.is_empty(), "default window is empty");
-    let tw = mock.tail_window(1024);
-    assert!(tw.lines.is_empty(), "default tail_window is empty");
-    let wb = mock.window_before(512, 1024);
-    assert!(wb.lines.is_empty(), "default window_before is empty");
-    let p = mock.index_chunk();
-    assert_eq!(p.indexed_bytes, 0, "default progress is zero");
-    assert!(!p.done, "default progress not done");
-    assert!(mock.byte_at(0).is_none(), "default byte_at is None");
-    assert!(mock.event_count().is_none(), "default event_count is None");
+fn test_no_snapshot_answers_empty() {
+    let source = crate::transcript::snapshot::NoTranscriptSnapshot;
+    assert_eq!(source.log_size(), 0);
+    assert!(source.load(1024).lines.is_empty(), "load is empty");
+    assert!(source.window(0, 1024).lines.is_empty(), "window is empty");
+    assert!(
+        source.tail_window(1024).lines.is_empty(),
+        "tail_window is empty"
+    );
+    assert!(
+        source.window_before(512, 1024).lines.is_empty(),
+        "window_before is empty"
+    );
+    let progress = source.index_chunk();
+    assert_eq!(progress.indexed_bytes, 0, "nothing is indexed");
+    assert!(!progress.done, "and the build is not claimed done");
+    assert!(source.byte_at(0).is_none(), "no event offset is known");
+    assert!(source.event_count().is_none(), "and no count either");
 }
 
 /// Flat count==render invariant for the byte-window view: history_display_rows
@@ -767,4 +758,25 @@ fn test_esc_interrupts_full_index() {
         app.search.active,
         "Esc during indexing stays in the view (does not exit)"
     );
+}
+
+/// The shared mock drives the windowed path from prebuilt windows and models no
+/// event-to-offset index, so it reports none: a caller that needs an event
+/// offset is told the source cannot name one rather than being handed a wrong
+/// byte.
+#[test]
+fn test_mock_has_no_index() {
+    let mock = crate::test_harness::MockSnapshot {
+        lines: Vec::new(),
+        log_bytes: 4096,
+        truncated: false,
+        skipped: 0,
+        window_lines: Vec::new(),
+        window_start: 0,
+        windows: Vec::new(),
+        index_steps: 1,
+        index_calls: std::sync::atomic::AtomicU32::new(0),
+    };
+    assert!(mock.byte_at(0).is_none(), "the mock names no event offset",);
+    assert!(mock.event_count().is_none(), "and no event count");
 }

@@ -161,6 +161,14 @@ impl TranscriptSnapshot for MockSnapshot {
             done,
         }
     }
+    fn byte_at(&self, _event_idx: usize) -> Option<u64> {
+        // The mock drives the windowed path from prebuilt windows; it models no
+        // event-to-offset index, so no offset is known.
+        None
+    }
+    fn event_count(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// A working-screen App for tests (no runner, disconnected).

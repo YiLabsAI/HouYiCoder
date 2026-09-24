@@ -1,9 +1,10 @@
-//! Doubles the trajectory read tests share.
+//! Backends the trajectory read tests drive.
 //!
-//! A test that needs a read to hang while something else happens builds the
-//! same delegate over a real backend: only the one method it wants to hold is
-//! replaced, and every other call passes through. That delegate lives here so
-//! the detail and window tests hold their reads the same way.
+//! A read test needs the log to be real and the timing to be the test's: the
+//! window must be able to move, or an append must be able to land, while one
+//! read is still in flight. Each backend here is a real one with a single
+//! method replaced, so everything except the held call behaves as it does in a
+//! session.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, mpsc};

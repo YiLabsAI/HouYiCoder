@@ -14,7 +14,7 @@ use crate::state::{App, Screen};
 use crate::test_harness::MockSnapshot;
 use crate::todo_view::TodoStatus;
 use crate::transcript::TranscriptFrame;
-use crate::transcript::snapshot::{SnapshotLoad, TranscriptSnapshot, WindowLoad};
+use crate::transcript::snapshot::WindowLoad;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
@@ -1719,25 +1719,6 @@ fn test_walk_stops_without_progress() {
     assert_eq!(app.transcript.disk_front(), DiskFront::Stopped);
 }
 
-/// A read port whose window does not end where the walk asked it to. The walk
-/// joins each window to the rows it already read on that offset, so a window
-/// that breaks it would print a gap; the walk stops instead.
-struct GapSource {
-    window: WindowLoad,
-}
-
-impl TranscriptSnapshot for GapSource {
-    fn log_size(&self) -> u64 {
-        self.window.bytes_total
-    }
-    fn load(&self, _max_bytes: u64) -> SnapshotLoad {
-        SnapshotLoad::default()
-    }
-    fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> WindowLoad {
-        self.window.clone()
-    }
-}
-
 /// A window that does not end where the walk asked leaves a gap between it and
 /// the rows already read, so the walk stops rather than join rows that do not
 /// touch. The rows here do carry the overlap, so a walk that took the window at
@@ -1748,14 +1729,22 @@ fn test_walk_stops_on_gap() {
     let view: Vec<TranscriptLine> = app.transcript.iter().cloned().collect();
     let mut older: Vec<TranscriptLine> = vec![TranscriptLine::User("old 0".into())];
     older.extend(view);
-    app.snapshot = Some(Arc::new(GapSource {
-        window: WindowLoad {
+    app.snapshot = Some(Arc::new(MockSnapshot {
+        lines: Vec::new(),
+        log_bytes: 5000,
+        truncated: false,
+        skipped: 0,
+        window_lines: Vec::new(),
+        window_start: 0,
+        windows: vec![WindowLoad {
             lines: older,
             start_offset: 100,
             next_offset: 5005,
             skipped: 0,
             bytes_total: 5000,
-        },
+        }],
+        index_steps: 0,
+        index_calls: AtomicU32::new(0),
     }));
 
     app.transcript_scroll.jump_to(0);
