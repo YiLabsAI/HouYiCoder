@@ -13,6 +13,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
     // positions each event on the shared time axis (mostly sequential, as the
     // agent runs tools per-completion; the axis still shows where time went).
     let t1 = TrajectoryTurn {
+        key: TrajectoryTurnKey::from_opening_event("sample-1"),
         n: 1,
         boundary_before: Vec::new(),
         user_input: "fix the permission pipeline crash".into(),
@@ -175,6 +176,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
         ],
     };
     let t2 = TrajectoryTurn {
+        key: TrajectoryTurnKey::from_opening_event("sample-2"),
         n: 2,
         boundary_before: Vec::new(),
         user_input: "wire the trajectory pane 3-level drill".into(),
@@ -294,6 +296,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
         ],
     };
     let t3 = TrajectoryTurn {
+        key: TrajectoryTurnKey::from_opening_event("sample-3"),
         n: 3,
         boundary_before: Vec::new(),
         user_input: "pty test the drill journey".into(),

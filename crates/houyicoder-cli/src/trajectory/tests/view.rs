@@ -1271,3 +1271,61 @@ fn test_switch_inside_turn() {
         "a switch inside the previous turn is not a boundary above this one"
     );
 }
+
+/// A turn names itself by the event that opened it, so a caller can ask for
+/// that turn's detail later without holding a row index or a turn number.
+#[test]
+fn test_turn_key_opening_event() {
+    let first = ev(
+        100,
+        SessionEvent::UserInput {
+            text: "hello".into(),
+        },
+    );
+    let second = ev(
+        200,
+        SessionEvent::UserInput {
+            text: "again".into(),
+        },
+    );
+    let first_id = first.id.to_string();
+    let second_id = second.id.to_string();
+    let view = project(&[first, second], "m", 0);
+
+    let keys: Vec<&str> = view
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.key.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        keys,
+        vec![first_id.as_str(), second_id.as_str()],
+        "each turn carries the id of the event that opened it"
+    );
+}
+
+/// A log that opens mid-run has no user input to name its first turn, so that
+/// turn takes the id of the event that did open it.
+#[test]
+fn test_turn_key_without_input() {
+    let opening = ev(
+        100,
+        SessionEvent::TurnStarted {
+            turn: 1,
+            call_in_turn: 0,
+        },
+    );
+    let opening_id = opening.id.to_string();
+    let view = project(&[opening], "m", 0);
+    match view.rows.first() {
+        Some(TrajectoryRow::Turn(turn)) => assert_eq!(
+            turn.key.as_str(),
+            opening_id,
+            "a turn with no user input still names itself"
+        ),
+        _ => panic!("a leading turn row"),
+    }
+}

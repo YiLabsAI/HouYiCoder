@@ -1058,6 +1058,7 @@ fn test_turn_detail_latency_split() {
 fn test_turn_list_degrades() {
     let turn = |n: usize, title: &str, model: &str| TrajectoryTurn {
         n,
+        key: TrajectoryTurnKey::from_opening_event(&format!("t{n}")),
         boundary_before: Vec::new(),
         user_input: title.into(),
         tokens_in: Some(1_200),
@@ -1299,4 +1300,13 @@ fn test_loading_older_keeps_rows() {
         "the loaded rows are still rendered: {} lines for {rows_before} rows",
         body.len()
     );
+}
+
+/// A turn's key is the durable id it was built from, unchanged: the pane only
+/// compares keys, and the composition root resolves one back to the bytes.
+#[test]
+fn test_turn_key_round_trips() {
+    let key = TrajectoryTurnKey::from_opening_event("01J0-opened-the-turn");
+    assert_eq!(key.as_str(), "01J0-opened-the-turn");
+    assert_eq!(key, key.clone(), "a key compares by the id it holds");
 }

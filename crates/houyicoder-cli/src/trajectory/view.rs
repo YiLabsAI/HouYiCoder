@@ -292,7 +292,7 @@ pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec
     let mut last_model: Option<String> = None;
 
     for ev in events {
-        if turns::apply_turn_boundary(
+        if turns::dispatch::apply_turn_boundary(
             &mut builder,
             ev,
             &mut turn_rows,
@@ -302,7 +302,7 @@ pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec
         ) {
             continue;
         }
-        turns::apply_turn_content(&mut builder, ev, &calls, &spawned);
+        turns::dispatch::apply_turn_content(&mut builder, ev, &calls, &spawned);
     }
     if builder.is_open() {
         // A turn opened by a non-boundary event (a windowed read that starts

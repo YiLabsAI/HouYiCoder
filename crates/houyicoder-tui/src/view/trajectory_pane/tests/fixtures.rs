@@ -11,6 +11,7 @@ use super::super::*;
 pub(super) fn turn(n: usize, user_input: &str) -> TrajectoryTurn {
     TrajectoryTurn {
         n,
+        key: TrajectoryTurnKey::from_opening_event(&format!("t{n}")),
         boundary_before: Vec::new(),
         user_input: user_input.into(),
         tokens_in: None,

@@ -173,9 +173,34 @@ pub struct TrajectoryRecord {
     pub retries: usize,
 }
 
+/// A turn's identity in the durable log: the event that opened it.
+///
+/// Opaque on purpose. The pane compares keys to know which turn a row is, and
+/// the composition root resolves one back to the bytes it came from; neither
+/// needs the other's view of it. A turn number cannot do this, because numbers
+/// begin again when a session is cleared.
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+pub struct TrajectoryTurnKey(String);
+
+impl TrajectoryTurnKey {
+    /// The key of the event that opened a turn, as its durable id reads.
+    pub fn from_opening_event(id: &str) -> Self {
+        Self(id.to_string())
+    }
+
+    /// The durable id this key was built from.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone)]
 pub struct TrajectoryTurn {
     pub n: usize,
+    /// The durable identity of the turn: the event that opened it. A turn
+    /// number names a turn within one history; this names it across a clear,
+    /// and it is what a detail read is asked for by.
+    pub key: TrajectoryTurnKey,
     /// Boundaries the log recorded between the previous turn and this one, in
     /// the order they happened. Several durable facts can land in one gap (a
     /// compaction and then a model switch), so this is a list rather than a
@@ -216,6 +241,14 @@ pub struct TrajectoryBg {
 }
 
 #[derive(Clone)]
+// The turn is far larger than a background row because it carries the turn's
+// whole summary. Boxing it would trade that for an allocation per row, and the
+// rows are already heap-backed; the size goes away when the detail leaves the
+// summary, which is the split this type is waiting for.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the turn summary is the point of the row"
+)]
 pub enum TrajectoryRow {
     Turn(TrajectoryTurn),
     Bg(TrajectoryBg),
