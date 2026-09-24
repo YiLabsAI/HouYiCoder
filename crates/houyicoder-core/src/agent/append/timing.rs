@@ -23,23 +23,31 @@ pub(crate) struct BlockSpans {
 }
 
 impl BlockSpans {
+    /// Note an event, reading the clock now.
     pub(crate) fn note(&mut self, ev: &LlmEvent) {
+        self.note_at(ev, std::time::Instant::now());
+    }
+
+    /// Note an event at a given instant, so a test can state exact spans.
+    pub(crate) fn note_at(&mut self, ev: &LlmEvent, now: std::time::Instant) {
         match ev {
             LlmEvent::ReasoningStart { .. } => {
-                self.open_reasoning = Some(std::time::Instant::now());
+                self.open_reasoning = Some(now);
             }
             LlmEvent::ReasoningEnd { .. } => {
                 if let Some(started) = self.open_reasoning.take() {
-                    self.reasoning_ms += started.elapsed().as_millis() as u64;
+                    // Measured against the instant the caller passed, so a test
+                    // states exact spans and the stream measures real ones.
+                    self.reasoning_ms += now.saturating_duration_since(started).as_millis() as u64;
                     self.closed_reasoning = true;
                 }
             }
             LlmEvent::TextStart { .. } => {
-                self.open_reply = Some(std::time::Instant::now());
+                self.open_reply = Some(now);
             }
             LlmEvent::TextEnd { .. } => {
                 if let Some(started) = self.open_reply.take() {
-                    self.response_ms += started.elapsed().as_millis() as u64;
+                    self.response_ms += now.saturating_duration_since(started).as_millis() as u64;
                     self.closed_reply = true;
                 }
             }

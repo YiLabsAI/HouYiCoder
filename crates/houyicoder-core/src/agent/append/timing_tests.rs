@@ -21,6 +21,8 @@ struct ModelStepTiming {
     total_ms: u64,
     ttft_ms: Option<u64>,
     decode_ms: Option<u64>,
+    reasoning_ms: Option<u64>,
+    response_ms: Option<u64>,
 }
 
 fn test_runner(provider: FakeProvider) -> Arc<Runner> {
@@ -49,8 +51,8 @@ fn timing_events(events: &[SessionLogEntry]) -> Vec<ModelStepTiming> {
         .iter()
         .filter_map(|e| match e.event {
             SessionEvent::ModelStepTiming {
-                reasoning_ms: _,
-                response_ms: _,
+                reasoning_ms,
+                response_ms,
                 turn,
                 step,
                 total_ms,
@@ -62,6 +64,8 @@ fn timing_events(events: &[SessionLogEntry]) -> Vec<ModelStepTiming> {
                 total_ms,
                 ttft_ms,
                 decode_ms,
+                reasoning_ms,
+                response_ms,
             }),
             _ => None,
         })
@@ -174,30 +178,37 @@ async fn test_clear_appends_marker() {
 
 /// A stream that closed its reasoning and reply blocks reports both spans, and
 /// two blocks are summed rather than measured end to end.
+///
+/// The clock is handed in, so the test states exact durations instead of
+/// sleeping for them.
 #[test]
 fn test_spans_sum_closed_blocks() {
     use houyicoder_protocol::llm::LlmEvent;
+    use std::time::{Duration, Instant};
 
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
     let mut spans = super::BlockSpans::default();
     assert_eq!(spans.reasoning_ms(), None, "nothing closed yet");
     assert_eq!(spans.response_ms(), None, "nothing closed yet");
 
-    spans.note(&LlmEvent::ReasoningStart { id: "r".into() });
-    std::thread::sleep(std::time::Duration::from_millis(5));
-    spans.note(&LlmEvent::ReasoningEnd { id: "r".into() });
-    spans.note(&LlmEvent::TextStart { id: "t".into() });
-    std::thread::sleep(std::time::Duration::from_millis(5));
-    spans.note(&LlmEvent::TextEnd { id: "t".into() });
+    spans.note_at(&LlmEvent::ReasoningStart { id: "r".into() }, at(0));
+    spans.note_at(&LlmEvent::ReasoningEnd { id: "r".into() }, at(10));
+    spans.note_at(&LlmEvent::TextStart { id: "t".into() }, at(10));
+    spans.note_at(&LlmEvent::TextEnd { id: "t".into() }, at(35));
 
-    assert!(spans.reasoning_ms().is_some(), "a closed block is measured");
-    assert!(spans.response_ms().is_some(), "and so is the reply");
+    assert_eq!(
+        spans.reasoning_ms(),
+        Some(10),
+        "the closed block's own span"
+    );
+    assert_eq!(spans.response_ms(), Some(25), "and the reply's");
 
-    let first = spans.reasoning_ms().expect("measured");
-    spans.note(&LlmEvent::ReasoningStart { id: "r".into() });
-    std::thread::sleep(std::time::Duration::from_millis(5));
-    spans.note(&LlmEvent::ReasoningEnd { id: "r".into() });
-    assert!(
-        spans.reasoning_ms().expect("measured") > first,
+    spans.note_at(&LlmEvent::ReasoningStart { id: "r".into() }, at(40));
+    spans.note_at(&LlmEvent::ReasoningEnd { id: "r".into() }, at(45));
+    assert_eq!(
+        spans.reasoning_ms(),
+        Some(15),
         "a second block adds to the first rather than replacing it"
     );
 }
@@ -210,7 +221,6 @@ fn test_spans_open_block_unknown() {
 
     let mut spans = super::BlockSpans::default();
     spans.note(&LlmEvent::ReasoningStart { id: "r".into() });
-    std::thread::sleep(std::time::Duration::from_millis(5));
     assert_eq!(
         spans.reasoning_ms(),
         None,
@@ -224,5 +234,70 @@ fn test_spans_open_block_unknown() {
     assert!(
         reply.response_ms().is_some(),
         "and the reply that closed is measured"
+    );
+}
+
+/// The spans a stream closed reach the durable event: a call that reasoned and
+/// then answered records both, and a call that only answered records the reply
+/// alone rather than a reasoning span of zero.
+#[tokio::test]
+async fn test_spans_reach_the_event() {
+    use houyicoder_protocol::llm::{OutputItem, Usage};
+
+    let runner = test_runner(FakeProvider::new(vec![CompletionResponse {
+        output: vec![
+            OutputItem::Reasoning {
+                text: "let me think".into(),
+            },
+            OutputItem::Text {
+                text: "done".into(),
+            },
+        ],
+        usage: Usage::default(),
+        model: "test".into(),
+    }]));
+    let session = SessionId::new();
+    runner
+        .run(session, "hi".into())
+        .await
+        .expect("run completes");
+
+    let timings = timing_events(&runner.store().trajectory_snapshot(session));
+    assert_eq!(timings.len(), 1, "one model call appends one timing event");
+    let first = &timings[0];
+    assert!(
+        first.reasoning_ms.is_some(),
+        "the reasoning block the stream closed is recorded: {first:?}"
+    );
+    assert!(
+        first.response_ms.is_some(),
+        "and so is the reply block: {first:?}"
+    );
+    assert!(
+        first.ttft_ms.is_some() && first.decode_ms.is_some(),
+        "the split the header already read is unchanged: {first:?}"
+    );
+}
+
+/// A call that never reasoned records no reasoning span: the field stays
+/// unknown, which is not the same as a model that thought for no time.
+#[tokio::test]
+async fn test_no_reasoning_stays_unknown() {
+    let runner = test_runner(FakeProvider::text("done"));
+    let session = SessionId::new();
+    runner
+        .run(session, "hi".into())
+        .await
+        .expect("run completes");
+
+    let timings = timing_events(&runner.store().trajectory_snapshot(session));
+    let first = &timings[0];
+    assert_eq!(
+        first.reasoning_ms, None,
+        "no reasoning block was opened, so the span is unknown"
+    );
+    assert!(
+        first.response_ms.is_some(),
+        "the reply that closed is measured: {first:?}"
     );
 }
