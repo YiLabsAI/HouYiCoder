@@ -205,8 +205,8 @@ pub(crate) fn edit_diff_summary(added: u32, removed: u32) -> String {
 /// entry body in its JSON; the label names the key only, mirroring the Read
 /// tool (content reaches the model via the tool result, not the transcript).
 fn memory_result_label(tool: &str, output: &Value) -> Option<String> {
-    let (field, verb) = match tool {
-        "save_memory" => ("saved", "stored"),
+    let (key_field, label) = match tool {
+        "save_memory" => ("saved", save_memory_label(output)),
         "delete_memory" => ("deleted", "deleted"),
         "promote_memory" => ("promoted", "promoted"),
         "demote_memory" => ("demoted", "demoted"),
@@ -214,18 +214,32 @@ fn memory_result_label(tool: &str, output: &Value) -> Option<String> {
         _ => return None,
     };
     let key = output
-        .get(field)
+        .get(key_field)
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())?;
-    if tool == "save_memory"
-        && output
-            .get("unchanged")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    {
-        Some(format!("unchanged {key}"))
-    } else {
-        Some(format!("{verb} {key}"))
+    Some(format!("{label} {key}"))
+}
+
+/// The save_memory outcome drives the verb: a fresh key is created, a
+/// rewrite is updated, and a no-op refresh is unchanged. Legacy tool
+/// records predate the outcome field; the old unchanged boolean still
+/// marks a no-op, and a bare saved key defaults to stored.
+fn save_memory_label(output: &Value) -> &'static str {
+    match output.get("outcome").and_then(|v| v.as_str()) {
+        Some("created") => "created",
+        Some("updated") => "updated",
+        Some("unchanged") => "unchanged",
+        _ => {
+            if output
+                .get("unchanged")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                "unchanged"
+            } else {
+                "stored"
+            }
+        }
     }
 }
 
@@ -336,8 +350,35 @@ mod tests {
 
     #[test]
     fn test_memory_result_labels() {
-        // The three memory write labels: a fresh store, a no-op refresh, and a
-        // delete. The unchanged case must not claim a write happened.
+        // The outcome field drives the save label: a fresh store, a rewrite,
+        // and a no-op refresh. The unchanged case must not claim a write.
+        assert_eq!(
+            result_summary(
+                "save_memory",
+                &serde_json::json!({"saved": "k", "outcome": "created"})
+            )
+            .as_deref(),
+            Some("created k")
+        );
+        assert_eq!(
+            result_summary(
+                "save_memory",
+                &serde_json::json!({"saved": "k", "outcome": "updated"})
+            )
+            .as_deref(),
+            Some("updated k")
+        );
+        assert_eq!(
+            result_summary(
+                "save_memory",
+                &serde_json::json!({"saved": "k", "outcome": "unchanged"})
+            )
+            .as_deref(),
+            Some("unchanged k")
+        );
+        // Legacy tool records predate the outcome field: a bare saved key
+        // defaults to stored, the old unchanged boolean still maps to
+        // unchanged.
         assert_eq!(
             result_summary("save_memory", &serde_json::json!({"saved": "k"})).as_deref(),
             Some("stored k")

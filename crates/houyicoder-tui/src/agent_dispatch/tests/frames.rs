@@ -440,7 +440,7 @@ fn test_notice_shows_memory_changes() {
     // and reveals when the notice is expanded (mg#1 = the second notice).
     let single = vec![MemoryChange {
         key: "gamma".into(),
-        operation: MemoryOperation::Stored,
+        operation: MemoryOperation::Created,
     }];
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-2".into()),
@@ -449,13 +449,13 @@ fn test_notice_shows_memory_changes() {
     }));
     let out = render_text(&app, 100, 24);
     assert!(
-        !out.contains("⎿  stored gamma"),
+        !out.contains("⎿  created gamma"),
         "a second single-change notice is collapsed too: {out}"
     );
     app.expanded_fold_groups.insert("mg#1".into());
     let out = render_text(&app, 100, 24);
     assert!(
-        out.contains("⎿  stored gamma"),
+        out.contains("⎿  created gamma"),
         "expanding the notice reveals its key: {out}"
     );
 }
@@ -467,7 +467,7 @@ fn test_notice_summarizes_many_changes() {
     let changes = (0..4)
         .map(|index| MemoryChange {
             key: format!("project-memory-with-a-deliberately-long-key-{index}"),
-            operation: MemoryOperation::Stored,
+            operation: MemoryOperation::Created,
         })
         .collect();
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
@@ -502,7 +502,7 @@ fn test_notice_single_change_wraps() {
     app.screen = Screen::Working;
     let changes = vec![MemoryChange {
         key: "a-single-memory-with-a-long-key-for-a-narrow-notice".into(),
-        operation: MemoryOperation::Stored,
+        operation: MemoryOperation::Created,
     }];
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-wrap".into()),
@@ -542,7 +542,7 @@ fn test_notice_click_toggles_fold() {
         origin: MemoryChangeOrigin::AutoMemory,
         changes: vec![MemoryChange {
             key: "alpha".into(),
-            operation: MemoryOperation::Stored,
+            operation: MemoryOperation::Created,
         }],
     }));
     // Render to publish last_row_fold_keys, what a click resolves against.
@@ -564,7 +564,7 @@ fn test_notice_click_toggles_fold() {
     );
     let out = render_text(&app, 100, 24);
     assert!(
-        out.contains("⎿  stored alpha"),
+        out.contains("⎿  created alpha"),
         "the opened notice shows its key: {out}"
     );
 }
@@ -608,7 +608,7 @@ fn test_notice_hint_matches_state() {
     let mut app = app_with_notice(
         "hint-1",
         MemoryChangeOrigin::AutoMemory,
-        &[("alpha", MemoryOperation::Stored)],
+        &[("alpha", MemoryOperation::Created)],
     );
     let out = render_text(&app, 100, 24);
     assert!(
@@ -618,7 +618,7 @@ fn test_notice_hint_matches_state() {
     app.expanded_fold_groups.insert("mg#0".into());
     let out = render_text(&app, 100, 24);
     assert!(
-        out.contains("⎿  stored alpha"),
+        out.contains("⎿  created alpha"),
         "the opened notice shows its key: {out}"
     );
     assert!(
@@ -639,7 +639,7 @@ fn test_notice_rows_fit_pane() {
     let app = app_with_notice(
         "narrow-1",
         MemoryChangeOrigin::AutoMemory,
-        &[("alpha", MemoryOperation::Stored)],
+        &[("alpha", MemoryOperation::Created)],
     );
     let _out = render_text(&app, 24, 40);
     let rows = app.last_all_rows.borrow();
@@ -663,7 +663,7 @@ fn test_notice_count_matches_render() {
         "count-1",
         MemoryChangeOrigin::AutoMemory,
         &[
-            ("alpha", MemoryOperation::Stored),
+            ("alpha", MemoryOperation::Created),
             ("beta", MemoryOperation::Deleted),
         ],
     );
@@ -701,7 +701,7 @@ fn test_notice_walk_matches_render() {
     let mut app = app_with_notice(
         "cursor-1",
         MemoryChangeOrigin::AutoMemory,
-        &[("alpha", MemoryOperation::Stored)],
+        &[("alpha", MemoryOperation::Created)],
     );
     app.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
@@ -737,7 +737,7 @@ fn test_notice_ctrl_o_latest() {
         origin: MemoryChangeOrigin::AutoMemory,
         changes: vec![MemoryChange {
             key: "alpha".into(),
-            operation: MemoryOperation::Stored,
+            operation: MemoryOperation::Created,
         }],
     }));
     assert!(app.selection.anchor.is_none(), "no cursor");

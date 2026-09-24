@@ -653,7 +653,7 @@ fn test_dream_reports_memory_operations() {
     dream.emit_changes(vec![
         MemoryChange {
             key: "stored-key".into(),
-            operation: MemoryOperation::Stored,
+            operation: MemoryOperation::Created,
         },
         MemoryChange {
             key: "deleted-key".into(),
@@ -668,7 +668,7 @@ fn test_dream_reports_memory_operations() {
         vec![
             MemoryChange {
                 key: "stored-key".into(),
-                operation: MemoryOperation::Stored,
+                operation: MemoryOperation::Created,
             },
             MemoryChange {
                 key: "deleted-key".into(),

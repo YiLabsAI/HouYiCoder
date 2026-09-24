@@ -188,7 +188,7 @@ fn test_non_todo_orphan_dropped() {
 #[test]
 fn test_save_memory_label() {
     // save_memory collapses to a human label: the chip shows the key (never
-    // the content field), and the result body is "stored <key>" — the raw
+    // the content field), and the result body is the outcome label — the raw
     // {"saved":...} JSON and the passed content both stay out of the
     // readable transcript.
     let frames = vec![
@@ -202,7 +202,10 @@ fn test_save_memory_label() {
                 "content": "secret content must not leak"
             }),
         ),
-        tool_result("c1", serde_json::json!({"saved": "proj-status"})),
+        tool_result(
+            "c1",
+            serde_json::json!({"saved": "proj-status", "outcome": "created"}),
+        ),
     ];
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     assert_eq!(lines.len(), 2, "one chip + one result, got {lines:?}");
@@ -219,9 +222,9 @@ fn test_save_memory_label() {
         matches!(
             &lines[1],
             TranscriptLine::Tool { name, body, .. }
-                if name == "result" && body == "stored proj-status"
+                if name == "result" && body == "created proj-status"
         ),
-        "result must be the stored label, got {:?}",
+        "result must be the created label, got {:?}",
         lines[1]
     );
     let joined = format!("{lines:?}");

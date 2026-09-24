@@ -95,7 +95,8 @@ impl App {
         let mut notice = format!("Memory {source}: {count} {noun} · /memory");
         for change in changes {
             let operation = match change.operation {
-                MemoryOperation::Stored => "stored",
+                MemoryOperation::Created => "created",
+                MemoryOperation::Updated => "updated",
                 MemoryOperation::Deleted => "deleted",
                 MemoryOperation::Promoted => "promoted",
                 MemoryOperation::Demoted => "demoted",

@@ -692,7 +692,7 @@ async fn test_drive_translates_events() {
         origin: MemoryChangeOrigin::AutoMemory,
         changes: vec![MemoryChange {
             key: "topic".into(),
-            operation: MemoryOperation::Stored,
+            operation: MemoryOperation::Created,
         }],
     });
     engine.event(FrontendEvent::SystemLine {

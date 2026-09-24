@@ -113,16 +113,31 @@ mod tests {
             origin: MemoryChangeOrigin::AutoMemory,
             changes: vec![MemoryChange {
                 key: "build-gate".into(),
-                operation: MemoryOperation::Stored,
+                operation: MemoryOperation::Created,
             }],
         };
         let json = serde_json::to_string(&event).expect("serialize memory event");
+        assert!(
+            json.contains("\"operation\":\"created\""),
+            "Created serializes as kebab-case created: {json}"
+        );
+        assert!(
+            !json.contains("\"stored\""),
+            "no Stored variant leaks to the wire: {json}"
+        );
         let decoded = serde_json::from_str::<FrontendEvent>(&json).expect("decode memory event");
         assert!(matches!(
             decoded,
             FrontendEvent::MemoryChanged { id, changes, .. }
-                if id.0 == "change-1" && changes[0].key == "build-gate"
+                if id.0 == "change-1"
+                    && changes[0].key == "build-gate"
+                    && changes[0].operation == MemoryOperation::Created
         ));
+        // Updated round-trips byte-exact too.
+        let updated = serde_json::to_string(&MemoryOperation::Updated).expect("serialize Updated");
+        assert_eq!(updated, "\"updated\"");
+        let back: MemoryOperation = serde_json::from_str(&updated).expect("decode Updated");
+        assert_eq!(back, MemoryOperation::Updated);
     }
 
     #[test]

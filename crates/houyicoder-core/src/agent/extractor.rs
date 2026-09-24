@@ -323,10 +323,32 @@ fn primary_writes(tail: &[SessionLogEntry]) -> Vec<MemoryChange> {
             SessionEvent::ToolResult {
                 call_id, output, ..
             } if pending_calls.remove(call_id.as_str()) => {
-                if let Some(key) = output.get("saved").and_then(serde_json::Value::as_str) {
+                let Some(key) = output.get("saved").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let operation = match output.get("outcome").and_then(serde_json::Value::as_str) {
+                    Some("created") => Some(MemoryOperation::Created),
+                    Some("updated") => Some(MemoryOperation::Updated),
+                    Some("unchanged") => None,
+                    // Legacy records predate the outcome field. The old
+                    // shape carried an unchanged flag for no-op saves; a
+                    // missing flag means a changed write.
+                    _ => {
+                        let unchanged = output
+                            .get("unchanged")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+                        if unchanged {
+                            None
+                        } else {
+                            Some(MemoryOperation::Created)
+                        }
+                    }
+                };
+                if let Some(operation) = operation {
                     changes.push(MemoryChange {
                         key: key.to_string(),
-                        operation: MemoryOperation::Stored,
+                        operation,
                     });
                 }
             }

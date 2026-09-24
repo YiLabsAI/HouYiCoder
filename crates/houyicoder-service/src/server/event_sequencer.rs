@@ -125,7 +125,8 @@ fn to_protocol_memory_origin(origin: agent_event::MemoryChangeOrigin) -> MemoryC
 
 fn to_protocol_memory_operation(operation: agent_event::MemoryOperation) -> MemoryOperation {
     match operation {
-        agent_event::MemoryOperation::Stored => MemoryOperation::Stored,
+        agent_event::MemoryOperation::Created => MemoryOperation::Created,
+        agent_event::MemoryOperation::Updated => MemoryOperation::Updated,
         agent_event::MemoryOperation::Deleted => MemoryOperation::Deleted,
         agent_event::MemoryOperation::Promoted => MemoryOperation::Promoted,
         agent_event::MemoryOperation::Demoted => MemoryOperation::Demoted,

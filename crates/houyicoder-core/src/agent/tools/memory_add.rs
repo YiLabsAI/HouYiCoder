@@ -26,7 +26,7 @@
 
 use std::sync::Arc;
 
-use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
 use houyicoder_async::PFut;
 use houyicoder_context::{
     MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource, SessionEvent,
@@ -239,13 +239,19 @@ impl Tool for MemoryAddTool {
                     if outcome.changed()
                         && let Some(recorder) = &recorder
                     {
-                        recorder.record(&key, MemoryOperation::Stored);
+                        let op = match outcome {
+                            MemoryWriteOutcome::Created => MemoryOperation::Created,
+                            MemoryWriteOutcome::Updated => MemoryOperation::Updated,
+                            MemoryWriteOutcome::Unchanged => MemoryOperation::Updated,
+                        };
+                        recorder.record(&key, op);
                     }
-                    if outcome.changed() {
-                        Ok(json!({"saved": key}))
-                    } else {
-                        Ok(json!({"saved": key, "unchanged": true}))
-                    }
+                    let label = match outcome {
+                        MemoryWriteOutcome::Created => "created",
+                        MemoryWriteOutcome::Updated => "updated",
+                        MemoryWriteOutcome::Unchanged => "unchanged",
+                    };
+                    Ok(json!({"saved": key, "outcome": label}))
                 }
                 Err(e) => Err(map_memory_error(e)),
             }

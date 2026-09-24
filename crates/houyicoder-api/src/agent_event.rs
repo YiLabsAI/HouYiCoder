@@ -102,8 +102,10 @@ pub enum MemoryChangeOrigin {
 /// The operation applied to one memory key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryOperation {
-    /// A memory was stored.
-    Stored,
+    /// A memory was stored for a key with no prior record.
+    Created,
+    /// A memory was stored for a key whose prior record differed.
+    Updated,
     /// A memory was deleted.
     Deleted,
     /// A memory moved to a broader scope.

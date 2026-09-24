@@ -98,7 +98,7 @@ fn test_memory_change_refreshes_pane() {
         origin: MemoryChangeOrigin::AutoMemory,
         changes: vec![MemoryChange {
             key: "alpha".into(),
-            operation: MemoryOperation::Stored,
+            operation: MemoryOperation::Created,
         }],
     }));
     let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::MemoryList));

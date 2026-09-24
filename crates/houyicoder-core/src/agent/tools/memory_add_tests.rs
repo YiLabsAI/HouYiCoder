@@ -92,7 +92,10 @@ async fn test_save_lands_structured_entry() {
         "content": "Keep responses terse.\n**Why:** the user said the long intros waste their time.\n**How to apply:** drop preamble, lead with the answer."
     });
     let out = run(&tool, input).await.expect("save succeeds");
-    assert_eq!(out, json!({"saved": "user-prefers-terse"}));
+    assert_eq!(
+        out,
+        json!({"saved": "user-prefers-terse", "outcome": "created"})
+    );
     let writes = p.writes.lock().expect("writes").clone();
     assert_eq!(writes.len(), 1, "exactly one entry landed");
     let e = &writes[0];
@@ -148,8 +151,40 @@ async fn test_repeat_save_emits_once() {
     run(&tool, input.clone()).await.expect("first save");
     assert_eq!(recorder.take().len(), 1, "the first save is observable");
     let second = run(&tool, input).await.expect("repeated save");
-    assert_eq!(second, json!({"saved": "stable", "unchanged": true}));
+    assert_eq!(second, json!({"saved": "stable", "outcome": "unchanged"}));
     assert!(recorder.take().is_empty(), "the repeated save is silent");
+    std::fs::remove_dir_all(root).ok();
+}
+
+/// A fresh key records Created; rewriting the same key with new content
+/// records Updated. The recorder must carry the provider outcome, not a
+/// flat Stored label, so the notification distinguishes a new memory from
+/// an update.
+#[tokio::test]
+async fn test_save_maps_outcome() {
+    let root = std::env::temp_dir().join(format!("memory-outcome-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("create memory root");
+    let store = Arc::new(houyicoder_memory::MarkdownMemoryProvider::new(root.clone()));
+    let recorder = Arc::new(MutationLog::new());
+    let tool = MemoryAddTool::new(store).with_recorder(recorder.clone());
+    let base =
+        json!({ "key": "outcome-key", "description": "d", "source": "user", "content": "v1" });
+    run(&tool, base).await.expect("first save");
+    let updated =
+        json!({ "key": "outcome-key", "description": "d", "source": "user", "content": "v2" });
+    run(&tool, updated).await.expect("rewrite with new content");
+    let changes = recorder.take();
+    assert_eq!(changes.len(), 2, "both saves notify");
+    assert_eq!(
+        changes[0].operation,
+        MemoryOperation::Created,
+        "fresh key records Created"
+    );
+    assert_eq!(
+        changes[1].operation,
+        MemoryOperation::Updated,
+        "changed existing key records Updated"
+    );
     std::fs::remove_dir_all(root).ok();
 }
 
@@ -159,7 +194,7 @@ async fn test_unchanged_save_is_silent() {
     let tool = MemoryAddTool::new(Arc::new(UnchangedMemory)).with_recorder(recorder.clone());
     let input = json!({ "key": "k", "description": "d", "source": "user", "content": "c" });
     let output = run(&tool, input).await.expect("unchanged save succeeds");
-    assert_eq!(output, json!({"saved": "k", "unchanged": true}));
+    assert_eq!(output, json!({"saved": "k", "outcome": "unchanged"}));
     assert!(recorder.take().is_empty(), "unchanged writes do not notify");
 }
 
@@ -171,7 +206,7 @@ async fn test_save_memory_works_untracked() {
     let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     let input = json!({ "key": "k", "description": "d", "source": "user", "content": "c" });
     let out = run(&tool, input).await.expect("save succeeds");
-    assert_eq!(out, json!({"saved": "k"}));
+    assert_eq!(out, json!({"saved": "k", "outcome": "created"}));
 }
 
 #[tokio::test]
@@ -333,7 +368,7 @@ async fn test_extraction_pin_ignores_input() {
     )
     .await
     .expect("a grounded save succeeds");
-    assert_eq!(out, json!({"saved": "k"}));
+    assert_eq!(out, json!({"saved": "k", "outcome": "created"}));
     let scopes = p.scopes.lock().expect("scopes").clone();
     assert_eq!(
         scopes,
@@ -447,7 +482,7 @@ async fn test_extraction_accepts_normalized_quote() {
     )
     .await
     .expect("a whitespace-drifted quote still matches");
-    assert_eq!(out, json!({"saved": "terse"}));
+    assert_eq!(out, json!({"saved": "terse", "outcome": "created"}));
     assert_eq!(recorder.take().len(), 1, "a grounded save notifies once");
 }
 
@@ -532,7 +567,7 @@ async fn test_extraction_quotes_tool_bodies() {
     )
     .await
     .expect("quotes from a tool call and its result both ground the save");
-    assert_eq!(out, json!({"saved": "build-gate"}));
+    assert_eq!(out, json!({"saved": "build-gate", "outcome": "created"}));
     assert_eq!(
         recorder.take().len(),
         1,
@@ -666,7 +701,7 @@ async fn test_save_bad_scope_fallback() {
     )
     .await
     .expect("bad scope falls back to auto");
-    assert_eq!(out, json!({"saved": "k"}));
+    assert_eq!(out, json!({"saved": "k", "outcome": "created"}));
     let scopes = p.scopes.lock().expect("scopes").clone();
     assert_eq!(scopes, vec![MemoryScope::Auto], "bad scope -> auto");
 }

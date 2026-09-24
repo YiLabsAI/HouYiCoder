@@ -543,7 +543,84 @@ fn test_primary_writes_pairs_calls() {
     let changes = primary_writes(&msgs);
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].key, "exact-key");
-    assert_eq!(changes[0].operation, MemoryOperation::Stored);
+    assert_eq!(changes[0].operation, MemoryOperation::Created);
+}
+
+/// primary_writes reads the outcome field on the save_memory tool result:
+/// created maps to Created, updated to Updated, unchanged is dropped. A
+/// legacy result without the outcome field defaults to Created.
+#[test]
+fn test_primary_writes_reads_outcome() {
+    let mut msgs = conversation();
+    append_event(
+        &mut msgs,
+        SessionEvent::ToolCall {
+            call_id: "created".into(),
+            tool: "save_memory".into(),
+            input: serde_json::json!({}),
+        },
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::tool_result(
+            "created",
+            serde_json::json!({"saved": "k1", "outcome": "created"}),
+        ),
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::ToolCall {
+            call_id: "updated".into(),
+            tool: "save_memory".into(),
+            input: serde_json::json!({}),
+        },
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::tool_result(
+            "updated",
+            serde_json::json!({"saved": "k2", "outcome": "updated"}),
+        ),
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::ToolCall {
+            call_id: "unchanged".into(),
+            tool: "save_memory".into(),
+            input: serde_json::json!({}),
+        },
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::tool_result(
+            "unchanged",
+            serde_json::json!({"saved": "k3", "outcome": "unchanged"}),
+        ),
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::ToolCall {
+            call_id: "legacy".into(),
+            tool: "save_memory".into(),
+            input: serde_json::json!({}),
+        },
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::tool_result("legacy", serde_json::json!({"saved": "k4"})),
+    );
+    let changes = primary_writes(&msgs);
+    assert_eq!(changes.len(), 3, "unchanged is dropped, the rest notify");
+    assert_eq!(changes[0].key, "k1");
+    assert_eq!(changes[0].operation, MemoryOperation::Created);
+    assert_eq!(changes[1].key, "k2");
+    assert_eq!(changes[1].operation, MemoryOperation::Updated);
+    assert_eq!(changes[2].key, "k4");
+    assert_eq!(
+        changes[2].operation,
+        MemoryOperation::Created,
+        "legacy result without outcome defaults to Created"
+    );
 }
 
 /// extract_memories is fire-and-forget: it returns immediately and the

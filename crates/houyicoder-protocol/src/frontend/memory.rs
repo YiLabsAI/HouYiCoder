@@ -27,8 +27,10 @@ pub enum MemoryChangeOrigin {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MemoryOperation {
-    /// A memory was stored.
-    Stored,
+    /// A memory was stored for a key with no prior record.
+    Created,
+    /// A memory was stored for a key whose prior record differed.
+    Updated,
     /// A memory was deleted.
     Deleted,
     /// A memory moved to a broader scope.
