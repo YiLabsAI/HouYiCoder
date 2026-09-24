@@ -12,12 +12,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use houyicoder_api::agent_event::{
-    EventHandler, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent,
+    EventHandler, MemoryChange, MemoryChangeCausality, MemoryChangeOrigin, MemoryChangedEvent,
 };
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{EventId, MemoryChangeId, SessionEvent, SessionLogEntry};
+use houyicoder_context::{EventId, MemoryChangeId, SessionEvent, SessionId, SessionLogEntry};
 use tokio::task::JoinHandle;
 
 use super::extract::run_forked_extract;
@@ -50,8 +50,21 @@ pub enum ExtractSkip {
     CursorLost,
 }
 
+/// The two logs an extraction pass reads and writes: the durable session
+/// whose turn frontier labels the change, and the forked run's own log.
+/// Named fields keep a construction site stating which handle is which
+/// instead of relying on argument order; transposing them leaves the frontier
+/// read unanswerable and every notice reading as an earlier turn.
+pub struct ExtractionLogs {
+    /// The durable session log; the frontier read runs against it.
+    pub session: Arc<dyn SessionLog>,
+    /// The forked run's log. Isolated from the durable log so a pass never
+    /// appends to the user's history.
+    pub fork: Arc<dyn SessionLog>,
+}
+
 /// The memory extractor: cursor and mutex gate around the forked run. Holds
-/// the shared provider, memory, store, and config so it can drive a forked
+/// the shared provider, memory, logs, and config so it can drive a forked
 /// extraction on demand. The cursor is an in-memory Option of the last
 /// consumed message id; it advances on a successful run and on a
 /// mutual-exclusion skip, but NOT on error (errored messages are reconsidered
@@ -62,7 +75,7 @@ pub struct MemoryExtractor {
     in_progress: Mutex<bool>,
     pending_context: Mutex<Option<Vec<SessionLogEntry>>>,
     in_flight: Mutex<Vec<JoinHandle<()>>>,
-    store: Arc<dyn SessionLog>,
+    logs: ExtractionLogs,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: PathBuf,
@@ -71,11 +84,11 @@ pub struct MemoryExtractor {
 }
 
 impl MemoryExtractor {
-    /// Construct with the shared handles. The store, provider, and memory
-    /// are shared with the main runner so prompt caching and the in-process
-    /// write lock carry over.
+    /// Construct with the shared handles. The provider and memory are shared
+    /// with the main runner so prompt caching and the in-process write lock
+    /// carry over.
     pub fn new(
-        store: Arc<dyn SessionLog>,
+        logs: ExtractionLogs,
         provider: Arc<dyn ModelProvider>,
         memory: Arc<dyn MemoryProvider>,
         cwd: PathBuf,
@@ -86,7 +99,7 @@ impl MemoryExtractor {
             in_progress: Mutex::new(false),
             pending_context: Mutex::new(None),
             in_flight: Mutex::new(Vec::new()),
-            store,
+            logs,
             provider,
             memory,
             cwd,
@@ -119,7 +132,12 @@ impl MemoryExtractor {
         *self.memory_changed.lock().expect("memory handler lock") = handler;
     }
 
-    fn emit_changes(&self, origin: MemoryChangeOrigin, changes: Vec<MemoryChange>) {
+    fn emit_changes(
+        &self,
+        origin: MemoryChangeOrigin,
+        causality: MemoryChangeCausality,
+        changes: Vec<MemoryChange>,
+    ) {
         if changes.is_empty() {
             return;
         }
@@ -132,8 +150,30 @@ impl MemoryExtractor {
             handler.handle(MemoryChangedEvent {
                 id: MemoryChangeId::new(),
                 origin,
+                causality,
                 changes,
             });
+        }
+    }
+
+    /// The latest durable user input for a session, or None when the session
+    /// holds none. A pass classifies its trigger against this, so the read
+    /// must reach the durable log rather than the forked run's own log.
+    pub fn turn_frontier(&self, session: SessionId) -> Option<EventId> {
+        self.logs.session.last_user_input_id(session)
+    }
+
+    /// Classify a pass against the durable user-input frontier: while the
+    /// pass's trigger is still the latest prompt, its changes belong to the
+    /// turn that just completed. A newer prompt means the user moved on, and
+    /// the notice must not read as the turn now on screen. An unreadable
+    /// frontier is reported as an earlier turn rather than claiming the
+    /// current one.
+    fn causality_for(&self, session: SessionId, trigger: EventId) -> MemoryChangeCausality {
+        if self.turn_frontier(session) == Some(trigger) {
+            MemoryChangeCausality::ThisTurn
+        } else {
+            MemoryChangeCausality::PreviousTurn
         }
     }
 
@@ -181,7 +221,7 @@ impl MemoryExtractor {
         );
         let recorder = Arc::new(MutationLog::new());
         let result = run_forked_extract(
-            Arc::clone(&self.store),
+            Arc::clone(&self.logs.fork),
             Arc::clone(&self.provider),
             Arc::clone(&self.memory),
             &self.cwd,
@@ -194,7 +234,8 @@ impl MemoryExtractor {
         // the errored messages are reconsidered next pass.
         if result.is_ok() {
             advance_cursor(&self.cursor, messages);
-            self.emit_changes(MemoryChangeOrigin::AutoMemory, recorder.take());
+            let causality = self.causality_for(window.session(), window.trigger_user_event());
+            self.emit_changes(MemoryChangeOrigin::AutoMemory, causality, recorder.take());
         }
         result.map(ExtractOutcome::Extracted)
     }

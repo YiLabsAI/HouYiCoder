@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use houyicoder_api::session::{TrajectoryHead, TrajectoryRevision};
+use houyicoder_api::session::{TrajectoryHead, TrajectoryRevision, last_user_input_id};
 use houyicoder_async::PFut;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
@@ -280,6 +280,17 @@ impl SessionStore {
             .get(&session)
             .and_then(|mirror| mirror.events.last())
             .map(|event| event.id)
+    }
+
+    /// The id of the latest durable user input for a session, or None when
+    /// the session holds none yet. Scans the mirrored events under the lock,
+    /// so it costs no clone of the log.
+    pub fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
+        self.mirrors
+            .lock()
+            .expect("session mirrors mutex poisoned")
+            .get(&session)
+            .and_then(|mirror| last_user_input_id(&mirror.events))
     }
 
     /// Clone only the finalized suffix beginning at start.
@@ -702,6 +713,9 @@ impl houyicoder_api::session::SessionLog for SessionStore {
     }
     fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
         Self::last_trajectory_id(self, session)
+    }
+    fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
+        Self::last_user_input_id(self, session)
     }
     fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
         Self::trajectory_since(self, session, start)

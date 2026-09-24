@@ -27,15 +27,17 @@ pub(super) fn memory_provider_for(
     provider
 }
 
-/// Build an isolated, bounded memory extractor.
+/// Build an isolated, bounded memory extractor. The durable store is the one
+/// the pass classifies its changes against; the ephemeral store is where the
+/// forked run writes, so a pass never appends to the user's history.
 fn build_memory_extractor(
+    session_log: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: std::path::PathBuf,
     model: String,
 ) -> Arc<MemoryExtractor> {
-    let ephemeral: Arc<dyn SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let fork: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let max_output_tokens = model_window::resolve_max_output_tokens(&model);
     let config = RunnerConfig {
         model,
@@ -45,7 +47,14 @@ fn build_memory_extractor(
         ..RunnerConfig::default()
     };
     Arc::new(MemoryExtractor::new(
-        ephemeral, provider, memory, cwd, config,
+        ExtractionLogs {
+            session: session_log,
+            fork,
+        },
+        provider,
+        memory,
+        cwd,
+        config,
     ))
 }
 
@@ -62,6 +71,7 @@ pub(super) fn build_memory_runtime(
     let (toggles, settings_warnings) = houyicoder_config::load_toggles();
     let gates = MemoryGates::new(toggles.auto_memory, toggles.auto_dream);
     let extractor = build_memory_extractor(
+        Arc::clone(&store),
         Arc::clone(&model_provider),
         Arc::clone(&provider),
         cwd.clone(),
@@ -224,6 +234,42 @@ mod tests {
         );
         drop(std::fs::remove_dir_all(&root));
         drop(std::fs::remove_dir_all(&root2));
+    }
+
+    #[tokio::test]
+    async fn test_extractor_reads_durable_frontier() {
+        let store: Arc<dyn SessionLog> =
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        let session = SessionId::new();
+        let prompt = EventId::new();
+        store
+            .append(SessionLogEntry {
+                id: prompt,
+                session,
+                ts: 0,
+                prev_hash: None,
+                event: SessionEvent::UserInput { text: "hi".into() },
+            })
+            .await
+            .expect("append");
+        let root = temp_root();
+        let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
+        let model: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+        let (runtime, _warnings) = build_memory_runtime(
+            Arc::clone(&store),
+            session,
+            memory,
+            model,
+            std::env::temp_dir(),
+            "test-model".into(),
+            None,
+        );
+        assert_eq!(
+            runtime.extractor_frontier(session),
+            Some(prompt),
+            "the pass classifies against the durable log, not the forked run's log"
+        );
+        drop(std::fs::remove_dir_all(&root));
     }
 
     #[cfg(unix)]

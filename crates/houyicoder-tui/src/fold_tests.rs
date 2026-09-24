@@ -620,7 +620,8 @@ fn test_slots_active_multi_call() {
 #[test]
 fn test_memory_notice_slots() {
     let notice = TranscriptLine::System(
-        "Memory auto-memory: 2 changes · /memory\n  ⎿  stored alpha\n  ⎿  stored beta".to_string(),
+        "Memory updated from this turn: 2 changes · /memory\n  ⎿  updated alpha\n  ⎿  updated beta"
+            .to_string(),
     );
     let t = vec![notice.clone()];
     // Collapsed by default: one NoticeCollapsed slot, keyed by occurrence.
@@ -653,16 +654,16 @@ fn test_memory_notice_slots() {
 /// collapsed row offers expand, an open row offers collapse.
 #[test]
 fn test_notice_summary_toggle() {
-    let text = "Memory auto-memory: 2 changes · /memory\n  ⎿  stored alpha";
+    let text = "Memory updated from this turn: 2 changes · /memory\n  ⎿  updated alpha";
     assert_eq!(
         notice_lines(text, false, 200),
-        vec!["✻ Memory auto-memory: 2 changes · /memory (ctrl+o to expand)".to_string()]
+        vec!["✻ Memory updated from this turn: 2 changes · /memory (ctrl+o to expand)".to_string()]
     );
     assert_eq!(
         notice_lines(text, true, 200),
         vec![
-            "✻ Memory auto-memory: 2 changes · /memory (ctrl+o to collapse)".to_string(),
-            "  ⎿  stored alpha".to_string(),
+            "✻ Memory updated from this turn: 2 changes · /memory (ctrl+o to collapse)".to_string(),
+            "  ⎿  updated alpha".to_string(),
         ]
     );
 }
@@ -684,7 +685,7 @@ fn test_notice_slot_rows_fallback() {
 /// lines shifts every row below it and clips the transcript tail.
 #[test]
 fn test_notice_rows_fit_width() {
-    let text = "Memory auto-memory: 2 changes · /memory\n  ⎿  stored alpha\n  ⎿  deleted a-key-that-outgrows-the-pane";
+    let text = "Memory updated from this turn: 2 changes · /memory\n  ⎿  updated alpha\n  ⎿  deleted a-key-that-outgrows-the-pane";
     for expanded in [false, true] {
         for width in [16usize, 24, 40, 80] {
             for row in notice_lines(text, expanded, width) {
@@ -701,10 +702,10 @@ fn test_notice_rows_fit_width() {
 #[test]
 fn test_notice_shape_matches() {
     assert!(is_memory_notice(&TranscriptLine::System(
-        "Memory auto-memory: 2 changes · /memory".to_string()
+        "Memory updated from this turn: 2 changes · /memory".to_string()
     )));
     assert!(is_memory_notice(&TranscriptLine::System(
-        "Memory primary agent: 1 change · /memory\n  ⎿  stored alpha".to_string()
+        "Memory created from previous turn: 1 change · /memory\n  ⎿  created alpha".to_string()
     )));
     assert!(!is_memory_notice(&TranscriptLine::System(
         "forgot alpha".to_string()

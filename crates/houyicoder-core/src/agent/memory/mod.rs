@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use houyicoder_api::agent_event::{
-    AgentEventHandlers, EventHandler, MemoryChangeOrigin, MemoryChangedEvent,
+    AgentEventHandlers, EventHandler, MemoryChangeCausality, MemoryChangeOrigin, MemoryChangedEvent,
 };
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::session::SessionLog;
@@ -96,6 +96,16 @@ impl MemoryRuntime {
     /// with no extractor configured or nothing consumed yet.
     pub fn extractor_cursor(&self) -> Option<EventId> {
         self.background.extractor.as_ref().and_then(|e| e.cursor())
+    }
+
+    /// The turn frontier the wired extractor classifies a pass against: the
+    /// session's latest durable user input, or None with no extractor
+    /// configured or no user input yet.
+    pub fn extractor_frontier(&self, session: SessionId) -> Option<EventId> {
+        self.background
+            .extractor
+            .as_ref()
+            .and_then(|e| e.turn_frontier(session))
     }
 
     /// Return the configured provider.
@@ -324,6 +334,9 @@ impl MemoryRuntime {
             handler.handle(MemoryChangedEvent {
                 id: houyicoder_context::MemoryChangeId::new(),
                 origin: MemoryChangeOrigin::PrimaryAgent,
+                // The drain runs at the boundary of the run that saved, so
+                // these changes belong to the turn that just completed.
+                causality: MemoryChangeCausality::ThisTurn,
                 changes,
             });
         }

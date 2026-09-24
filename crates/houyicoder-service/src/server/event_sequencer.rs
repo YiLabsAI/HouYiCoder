@@ -12,7 +12,7 @@ use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::envelope::{EventEnvelope, EventSeq};
 use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_protocol::frontend::memory::{
-    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
 };
 use tokio::sync::Notify;
 
@@ -92,9 +92,18 @@ impl EventHandler<ToolExecutionEvent> for EventSequencer {
 
 impl EventHandler<MemoryChangedEvent> for EventSequencer {
     fn handle(&self, event: MemoryChangedEvent) {
+        // The notice names the turn, not the producer, so the producer is
+        // recorded here rather than shown.
+        tracing::debug!(
+            origin = ?event.origin,
+            causality = ?event.causality,
+            changes = event.changes.len(),
+            "memory change notice"
+        );
         self.enqueue_reliable(FrontendEvent::MemoryChanged {
             id: MemoryChangeId(event.id.to_string()),
             origin: to_protocol_memory_origin(event.origin),
+            causality: to_protocol_memory_causality(event.causality),
             changes: event
                 .changes
                 .into_iter()
@@ -120,6 +129,15 @@ fn to_protocol_memory_origin(origin: agent_event::MemoryChangeOrigin) -> MemoryC
         agent_event::MemoryChangeOrigin::PrimaryAgent => MemoryChangeOrigin::PrimaryAgent,
         agent_event::MemoryChangeOrigin::AutoMemory => MemoryChangeOrigin::AutoMemory,
         agent_event::MemoryChangeOrigin::AutoDream => MemoryChangeOrigin::AutoDream,
+    }
+}
+
+fn to_protocol_memory_causality(
+    causality: agent_event::MemoryChangeCausality,
+) -> MemoryChangeCausality {
+    match causality {
+        agent_event::MemoryChangeCausality::ThisTurn => MemoryChangeCausality::ThisTurn,
+        agent_event::MemoryChangeCausality::PreviousTurn => MemoryChangeCausality::PreviousTurn,
     }
 }
 
@@ -381,6 +399,7 @@ mod tests {
             MemoryChangedEvent {
                 id,
                 origin: agent_event::MemoryChangeOrigin::AutoDream,
+                causality: agent_event::MemoryChangeCausality::PreviousTurn,
                 changes: vec![agent_event::MemoryChange {
                     key: "build-gate".into(),
                     operation: agent_event::MemoryOperation::Promoted,
@@ -390,8 +409,9 @@ mod tests {
         let pending = sequencer.sequence_pending_for_test();
         assert!(matches!(
             &pending[0].payload,
-            FrontendEvent::MemoryChanged { id: projected, origin: MemoryChangeOrigin::AutoDream, changes }
+            FrontendEvent::MemoryChanged { id: projected, origin: MemoryChangeOrigin::AutoDream, causality, changes }
                 if projected.0 == id.to_string()
+                    && *causality == MemoryChangeCausality::PreviousTurn
                     && changes[0].operation == MemoryOperation::Promoted
         ));
     }

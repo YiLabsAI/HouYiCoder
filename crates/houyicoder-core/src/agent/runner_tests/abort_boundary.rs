@@ -9,7 +9,7 @@
 //! must still end the run interrupted.
 
 use super::runner_with;
-use crate::agent::extractor::MemoryExtractor;
+use crate::agent::extractor::{ExtractionLogs, MemoryExtractor};
 use crate::agent::memory::{MemoryGates, MemoryRuntime};
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::tool::ToolRegistry;
@@ -261,7 +261,10 @@ fn tail_extractor(provider: Arc<dyn ModelProvider>) -> (Arc<MemoryExtractor>, Pa
     std::fs::create_dir_all(&root).expect("mkdir");
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let extractor = Arc::new(MemoryExtractor::new(
-        store,
+        ExtractionLogs {
+            session: Arc::clone(&store),
+            fork: store,
+        },
         provider,
         Arc::new(MarkdownMemoryProvider::new(root.clone())),
         root.clone(),

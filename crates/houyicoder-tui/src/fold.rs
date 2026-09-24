@@ -483,10 +483,11 @@ pub(crate) enum DisplaySlot {
 }
 
 /// Whether a transcript line is a memory-change notice: a System line whose
-/// first logical row is the memory summary ("Memory <source>: N change(s) ·
-/// /memory"). The fold layer treats it as a fold group so several changes
-/// collapse to the summary instead of flooding the transcript. Other System
-/// feedback (forgot, no-such-key, a toggle, an entry body) never matches.
+/// first logical row is the memory summary ("Memory <operation> from
+/// <turn>: N change(s) · /memory"). The fold layer treats it as a fold group
+/// so several changes collapse to the summary instead of flooding the
+/// transcript. Other System feedback (forgot, no-such-key, a toggle, an entry
+/// body) never matches.
 pub(crate) fn is_memory_notice(line: &TranscriptLine) -> bool {
     let TranscriptLine::System(text) = line else {
         return false;

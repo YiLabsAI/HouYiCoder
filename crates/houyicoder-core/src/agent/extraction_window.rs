@@ -1,5 +1,6 @@
 //! The evidence boundary one background extraction pass may read.
 
+use houyicoder_api::session::last_user_input_id;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 /// The durable history one extraction pass may read, cut at query boundaries
@@ -67,12 +68,8 @@ impl<'a> ExactExtractionWindow<'a> {
             .iter()
             .position(|e| matches!(e.event, SessionEvent::UserInput { .. }))?;
         let events = &tail[offset..];
-        let trigger_user_event = events
-            .iter()
-            .rev()
-            .find(|e| matches!(e.event, SessionEvent::UserInput { .. }))
-            .expect("a window starting on a user input has at least one")
-            .id;
+        let trigger_user_event =
+            last_user_input_id(events).expect("a window starting on a user input has at least one");
         let last = events
             .last()
             .expect("a window with a user input is non-empty");

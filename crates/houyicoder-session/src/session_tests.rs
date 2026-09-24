@@ -457,6 +457,82 @@ async fn test_last_id_tracks_mirror() {
 }
 
 #[tokio::test]
+async fn test_last_user_input_mirror() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let s = SessionId::new();
+    assert_eq!(store.last_user_input_id(s), None, "no mirror, no frontier");
+    let first = appended_event(&store, s, SessionEvent::UserInput { text: "a".into() }).await;
+    assert_eq!(store.last_user_input_id(s), Some(first.id));
+    // A mid-turn input continues the turn it arrived in, so it does not move
+    // the frontier a notice is classified against.
+    appended_event(
+        &store,
+        s,
+        SessionEvent::MidTurnInput {
+            text: "b".into(),
+            pending_input_id: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        store.last_user_input_id(s),
+        Some(first.id),
+        "a mid-turn input is not a new turn"
+    );
+    let second = appended_event(&store, s, SessionEvent::UserInput { text: "c".into() }).await;
+    assert_eq!(
+        store.last_user_input_id(s),
+        Some(second.id),
+        "the frontier follows the append"
+    );
+    let other = SessionId::new();
+    assert_eq!(
+        store.last_user_input_id(other),
+        None,
+        "the mirror is per-session"
+    );
+    // Through the trait object: the override answers what the inherent read
+    // answers.
+    let log: Arc<dyn SessionLog> = Arc::new(store);
+    assert_eq!(log.last_user_input_id(s), Some(second.id));
+    assert_eq!(log.last_user_input_id(other), None);
+}
+
+/// A resumed session backfills the frontier with the durable log, so a
+/// background pass on a restored session classifies against the real last
+/// prompt rather than reading an empty mirror as "no user input ever".
+#[tokio::test]
+async fn test_last_user_input_restores() {
+    let root = temp_dir().join(format!("user-input-restore-{}-{}", id(), EventId::new()));
+    create_dir_all(&root).expect("mkdir root");
+    let session = SessionId::new();
+    let restored;
+    {
+        let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+        appended_event(
+            &store,
+            session,
+            SessionEvent::UserInput { text: "a".into() },
+        )
+        .await;
+        restored = appended_event(
+            &store,
+            session,
+            SessionEvent::UserInput { text: "b".into() },
+        )
+        .await;
+    }
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
+    assert_eq!(
+        store.last_user_input_id(session),
+        None,
+        "cold store is empty"
+    );
+    assert_eq!(store.restore_trajectory(session).await.unwrap(), 2);
+    assert_eq!(store.last_user_input_id(session), Some(restored.id));
+}
+
+#[tokio::test]
 async fn test_view_returns_replay() {
     let store = SessionStore::new(Box::new(InMemoryBackend::new()));
     let s = SessionId::new();

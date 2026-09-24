@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use super::memory::MutationLog;
 use houyicoder_api::agent_event::{
-    EventHandler, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent,
+    EventHandler, MemoryChange, MemoryChangeCausality, MemoryChangeOrigin, MemoryChangedEvent,
 };
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
@@ -513,6 +513,9 @@ impl DreamRunner {
             handler.handle(MemoryChangedEvent {
                 id: MemoryChangeId::new(),
                 origin: MemoryChangeOrigin::AutoDream,
+                // A dream runs on a session of its own, so it never belongs
+                // to the turn on screen.
+                causality: MemoryChangeCausality::PreviousTurn,
                 changes,
             });
         }

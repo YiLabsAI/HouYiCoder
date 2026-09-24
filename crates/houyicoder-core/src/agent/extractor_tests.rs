@@ -2,7 +2,9 @@ use super::*;
 use crate::agent::memory::{MemoryGates, MemoryRuntime, MutationLog};
 use crate::agent::reward_snapshot::RewardSnapshot;
 use crate::agent::{Runner, ToolRegistry};
-use houyicoder_api::agent_event::{AgentEventHandlers, MemoryChangeOrigin, MemoryChangedEvent};
+use houyicoder_api::agent_event::{
+    AgentEventHandlers, MemoryChangeCausality, MemoryChangeOrigin, MemoryChangedEvent,
+};
 use houyicoder_context::{MemoryEntry, MemorySummary, SessionId};
 use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
 use houyicoder_protocol::llm::{
@@ -48,6 +50,15 @@ impl RecordingChanges {
             .expect("changes")
             .iter()
             .map(|event| (event.changes.len(), event.origin))
+            .collect()
+    }
+
+    fn causalities(&self) -> Vec<MemoryChangeCausality> {
+        self.0
+            .lock()
+            .expect("changes")
+            .iter()
+            .map(|event| event.causality)
             .collect()
     }
 }
@@ -211,10 +222,17 @@ fn scripted_main(n: usize, quote: &str) -> CompletionResponse {
 }
 
 fn extractor(provider: Arc<dyn ModelProvider>) -> (Arc<MemoryExtractor>, Arc<RecordingMemory>) {
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    extractor_on(provider, store)
+}
+
+fn extractor_on(
+    provider: Arc<dyn ModelProvider>,
+    store: Arc<dyn SessionLog>,
+) -> (Arc<MemoryExtractor>, Arc<RecordingMemory>) {
     let memory = Arc::new(RecordingMemory {
         written: StdMutex::new(Vec::new()),
     });
-    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let cwd = std::env::temp_dir().join(format!("extractor-{}", std::process::id()));
     std::fs::create_dir_all(&cwd).expect("mkdir");
     let config = RunnerConfig {
@@ -222,7 +240,10 @@ fn extractor(provider: Arc<dyn ModelProvider>) -> (Arc<MemoryExtractor>, Arc<Rec
         ..RunnerConfig::default()
     };
     let ext = Arc::new(MemoryExtractor::new(
-        store,
+        ExtractionLogs {
+            session: Arc::clone(&store),
+            fork: store,
+        },
         provider,
         Arc::clone(&memory) as Arc<dyn MemoryProvider>,
         cwd,
@@ -323,6 +344,96 @@ async fn test_extract_advances_cursor_success() {
     );
 }
 
+/// A pass whose trigger is still the session's latest prompt belongs to the
+/// turn that just completed. Once the user has prompted again while the fork
+/// ran, the same pass covers an earlier turn and must say so, or the notice
+/// reads as a result of the turn now on screen.
+#[tokio::test]
+async fn test_extract_labels_change_causality() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let (ext, _memory) = extractor_on(
+        Arc::new(FakeProvider {
+            calls: StdMutex::new(0),
+        }),
+        Arc::clone(&store) as Arc<dyn SessionLog>,
+    );
+    let (sink, recording) = RecordingChanges::new();
+    ext.set_memory_changed_handler(sink.memory_changed_handler());
+    let mut msgs = conversation();
+    // The durable log holds the prompt the window triggers on.
+    let opening = msgs[0].clone();
+    store.append(opening).await.expect("append the prompt");
+    ext.run_extraction_once(&msgs).await.expect("run ok");
+    assert_eq!(
+        recording.causalities(),
+        vec![MemoryChangeCausality::ThisTurn],
+        "the trigger is still the latest prompt"
+    );
+
+    // A second turn the pass has not consumed yet.
+    append_event(
+        &mut msgs,
+        SessionEvent::UserInput {
+            text: "and keep the tests fast".into(),
+        },
+    );
+    append_event(
+        &mut msgs,
+        SessionEvent::AssistantMessage {
+            text: "noted".into(),
+            thinking: None,
+        },
+    );
+    // The user prompts again while the fork runs: the frontier moves past
+    // this pass's trigger.
+    store
+        .append(SessionLogEntry {
+            id: EventId::new(),
+            session: msgs[0].session,
+            ts: 0,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: "one more thing".into(),
+            },
+        })
+        .await
+        .expect("append the newer prompt");
+    ext.run_extraction_once(&msgs).await.expect("run ok");
+    assert_eq!(
+        recording.causalities(),
+        vec![
+            MemoryChangeCausality::ThisTurn,
+            MemoryChangeCausality::PreviousTurn
+        ],
+        "a newer prompt moves the notice to an earlier turn"
+    );
+}
+
+/// A frontier the store cannot answer is reported as an earlier turn rather
+/// than claiming the turn on screen.
+#[tokio::test]
+async fn test_unreadable_frontier_reads_earlier() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let (ext, _memory) = extractor_on(
+        Arc::new(FakeProvider {
+            calls: StdMutex::new(0),
+        }),
+        Arc::clone(&store) as Arc<dyn SessionLog>,
+    );
+    let (sink, recording) = RecordingChanges::new();
+    ext.set_memory_changed_handler(sink.memory_changed_handler());
+    // The store holds no user input for the window's session, so the
+    // comparison has nothing to match.
+    ext.run_extraction_once(&conversation())
+        .await
+        .expect("run ok");
+    assert_eq!(
+        recording.causalities(),
+        vec![MemoryChangeCausality::PreviousTurn],
+        "an unreadable frontier never claims the turn on screen"
+    );
+}
+
 #[tokio::test]
 async fn test_unrelated_turn_stays_silent() {
     let provider = Arc::new(FakeProvider {
@@ -333,7 +444,10 @@ async fn test_unrelated_turn_stays_silent() {
     let memory = Arc::new(MarkdownMemoryProvider::new(memory_root.clone()));
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let extractor = MemoryExtractor::new(
-        store,
+        ExtractionLogs {
+            session: Arc::clone(&store),
+            fork: store,
+        },
         provider,
         memory,
         memory_root.clone(),
@@ -568,7 +682,10 @@ async fn test_runner_fires_extractor_final() {
     let cwd = std::env::temp_dir().join(format!("runner-fire-{}", std::process::id()));
     std::fs::create_dir_all(&cwd).expect("mkdir");
     let ext = Arc::new(MemoryExtractor::new(
-        ephemeral,
+        ExtractionLogs {
+            session: Arc::clone(&ephemeral),
+            fork: ephemeral,
+        },
         Arc::clone(&provider) as Arc<dyn ModelProvider>,
         Arc::clone(&memory) as Arc<dyn MemoryProvider>,
         cwd.clone(),
@@ -638,7 +755,10 @@ async fn test_extractor_fires_reward_off() {
     let cwd = std::env::temp_dir().join(format!("reward-off-{}", std::process::id()));
     std::fs::create_dir_all(&cwd).expect("mkdir");
     let ext = Arc::new(MemoryExtractor::new(
-        ephemeral,
+        ExtractionLogs {
+            session: Arc::clone(&ephemeral),
+            fork: ephemeral,
+        },
         Arc::clone(&provider) as Arc<dyn ModelProvider>,
         Arc::clone(&memory) as Arc<dyn MemoryProvider>,
         cwd.clone(),

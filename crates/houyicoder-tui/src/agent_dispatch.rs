@@ -246,9 +246,9 @@ impl App {
             }
             ServerEvent::MemoryChanged {
                 id,
-                origin,
+                causality,
                 changes,
-            } => self.show_memory_changes(&id, origin, &changes),
+            } => self.show_memory_changes(&id, causality, &changes),
             ServerEvent::SystemLine { text } => {
                 // A runtime notice the agent loop surfaced (e.g. an overflow
                 // the catalog could not self-heal). Render verbatim as a

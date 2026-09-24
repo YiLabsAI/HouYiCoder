@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::memory::{MemoryChange, MemoryChangeId, MemoryChangeOrigin};
+use super::memory::{MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin};
 use super::queue::QueuedInput;
 use super::session_update::SessionUpdate;
 
@@ -76,6 +76,11 @@ pub enum FrontendEvent {
         id: MemoryChangeId,
         /// Producer responsible for the changes.
         origin: MemoryChangeOrigin,
+        /// Which turn the changes belong to. A frame from a producer that
+        /// predates the field still delivers its changes, read as an earlier
+        /// turn.
+        #[serde(default)]
+        causality: MemoryChangeCausality,
         /// Exact successful operations in append order.
         changes: Vec<MemoryChange>,
     },
@@ -111,6 +116,7 @@ mod tests {
         let event = FrontendEvent::MemoryChanged {
             id: MemoryChangeId("change-1".into()),
             origin: MemoryChangeOrigin::AutoMemory,
+            causality: MemoryChangeCausality::PreviousTurn,
             changes: vec![MemoryChange {
                 key: "build-gate".into(),
                 operation: MemoryOperation::Created,
@@ -120,6 +126,10 @@ mod tests {
         assert!(
             json.contains("\"operation\":\"created\""),
             "Created serializes as kebab-case created: {json}"
+        );
+        assert!(
+            json.contains("\"causality\":\"previous-turn\""),
+            "causality serializes kebab-case: {json}"
         );
         assert!(
             !json.contains("\"stored\""),
@@ -141,6 +151,29 @@ mod tests {
     }
 
     #[test]
+    fn test_missing_causality_keeps_event() {
+        // A producer that predates the field sends no causality tag. The
+        // event must still deliver its changes, read as an earlier turn
+        // rather than dropping the whole notice.
+        let payload = serde_json::json!({
+            "MemoryChanged": {
+                "id": "change-3",
+                "origin": "auto-memory",
+                "changes": [{"key": "older", "operation": "created"}],
+            }
+        });
+        let decoded: FrontendEvent =
+            serde_json::from_value(payload).expect("a missing causality must not drop the event");
+        assert!(matches!(
+            decoded,
+            FrontendEvent::MemoryChanged { id, causality, changes, .. }
+                if id.0 == "change-3"
+                    && causality == MemoryChangeCausality::PreviousTurn
+                    && changes[0].key == "older"
+        ));
+    }
+
+    #[test]
     fn test_unknown_operation_survives() {
         // A tag a future producer emits that this build does not name lands
         // on Unknown instead of failing the whole change, so the key still
@@ -152,6 +185,7 @@ mod tests {
             "MemoryChanged": {
                 "id": "change-2",
                 "origin": "auto-memory",
+                "causality": "this-turn",
                 "changes": [{"key": "future", "operation": "merged"}],
             }
         });
@@ -180,6 +214,7 @@ mod tests {
             "MemoryChanged": {
                 "id": "change-3",
                 "origin": "future-producer",
+                "causality": "this-turn",
                 "changes": [{"key": "k", "operation": "created"}],
             }
         });
@@ -191,6 +226,28 @@ mod tests {
                 if id.0 == "change-3"
                     && origin == MemoryChangeOrigin::Unknown
                     && changes[0].key == "k"
+        ));
+        // Symmetric forward-compat on causality: an unrecognized tag also
+        // lands on Unknown rather than dropping the notice.
+        let unknown_causality: MemoryChangeCausality =
+            serde_json::from_str("\"since-restart\"").expect("decode unknown causality");
+        assert_eq!(unknown_causality, MemoryChangeCausality::Unknown);
+        let causality_payload = serde_json::json!({
+            "MemoryChanged": {
+                "id": "change-4",
+                "origin": "auto-memory",
+                "causality": "since-restart",
+                "changes": [{"key": "k4", "operation": "created"}],
+            }
+        });
+        let decoded_causality: FrontendEvent = serde_json::from_value(causality_payload)
+            .expect("an unknown causality must not drop the event");
+        assert!(matches!(
+            decoded_causality,
+            FrontendEvent::MemoryChanged { id, causality, changes, .. }
+                if id.0 == "change-4"
+                    && causality == MemoryChangeCausality::Unknown
+                    && changes[0].key == "k4"
         ));
     }
 

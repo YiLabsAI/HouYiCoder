@@ -1,7 +1,7 @@
 use super::*;
 
 use houyicoder_protocol::frontend::memory::{
-    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryOperation,
 };
 
 use crate::composition;
@@ -13,12 +13,16 @@ use crate::view::line_wrap::wrap_line;
 
 /// A working-screen app holding one memory-change notice: the shape every
 /// notice test starts from, so the broadcast setup lives here once.
-fn app_with_notice(id: &str, origin: MemoryChangeOrigin, keys: &[(&str, MemoryOperation)]) -> App {
+fn app_with_notice(
+    id: &str,
+    causality: MemoryChangeCausality,
+    keys: &[(&str, MemoryOperation)],
+) -> App {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId(id.into()),
-        origin,
+        causality,
         changes: keys
             .iter()
             .map(|(key, operation)| MemoryChange {
@@ -409,28 +413,29 @@ fn test_notice_shows_memory_changes() {
     ];
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-1".into()),
-        origin: MemoryChangeOrigin::AutoDream,
+        causality: MemoryChangeCausality::PreviousTurn,
         changes: changes.clone(),
     }));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-1".into()),
-        origin: MemoryChangeOrigin::AutoDream,
+        causality: MemoryChangeCausality::PreviousTurn,
         changes,
     }));
     assert_eq!(
         app.transcript
             .iter()
-            .filter(
-                |line| matches!(line, TranscriptLine::System(text) if text.contains("auto-dream"))
-            )
+            .filter(|line| matches!(line, TranscriptLine::System(text) if text.contains("Memory")))
             .count(),
         1
     );
     let out = render_text(&app, 100, 24);
-    assert!(out.contains("auto-dream"), "origin should render: {out}");
     assert!(
-        out.contains("Memory auto-dream: 2 changes · /memory"),
-        "the summary still names the count: {out}"
+        out.contains("Memory changed from previous turn: 2 changes · /memory"),
+        "a batch of mixed operations takes the neutral verb and the turn label: {out}"
+    );
+    assert!(
+        !out.contains("auto-dream") && !out.contains("primary agent"),
+        "the producer is not an object name in the notice: {out}"
     );
     assert!(
         !out.contains("⎿  promoted alpha") && !out.contains("⎿  deleted beta"),
@@ -444,7 +449,7 @@ fn test_notice_shows_memory_changes() {
     }];
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-2".into()),
-        origin: MemoryChangeOrigin::PrimaryAgent,
+        causality: MemoryChangeCausality::ThisTurn,
         changes: single,
     }));
     let out = render_text(&app, 100, 24);
@@ -461,6 +466,22 @@ fn test_notice_shows_memory_changes() {
 }
 
 #[test]
+fn test_unknown_causality_reads_earlier() {
+    // A causality this build does not name must never claim the turn in
+    // front of the user.
+    let app = app_with_notice(
+        "change-u",
+        MemoryChangeCausality::Unknown,
+        &[("alpha", MemoryOperation::Updated)],
+    );
+    let out = render_text(&app, 100, 24);
+    assert!(
+        out.contains("Memory updated from previous turn: 1 change · /memory"),
+        "an unrecognized causality reads as an earlier turn: {out}"
+    );
+}
+
+#[test]
 fn test_notice_summarizes_many_changes() {
     let mut app = composition::app();
     app.screen = Screen::Working;
@@ -472,13 +493,13 @@ fn test_notice_summarizes_many_changes() {
         .collect();
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-long".into()),
-        origin: MemoryChangeOrigin::AutoMemory,
+        causality: MemoryChangeCausality::ThisTurn,
         changes,
     }));
     let out = render_text(&app, 54, 36);
     assert!(
-        out.contains("Memory auto-memory: 4 changes · /memory"),
-        "the summary names the count: {out}"
+        out.contains("Memory created from this turn: 4 changes · /memory"),
+        "a batch sharing one operation takes its verb: {out}"
     );
     assert_eq!(
         out.matches('⎿').count(),
@@ -506,14 +527,14 @@ fn test_notice_single_change_wraps() {
     }];
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-wrap".into()),
-        origin: MemoryChangeOrigin::PrimaryAgent,
+        causality: MemoryChangeCausality::ThisTurn,
         changes,
     }));
     // Collapsed by default: the summary shows, the key stays behind the fold.
     let out = render_text(&app, 24, 40);
     assert!(
-        out.contains("primary agent"),
-        "the single change still renders its summary origin: {out}"
+        out.contains("Memory created from"),
+        "a single change takes its own operation as the summary verb: {out}"
     );
     assert!(
         !out.contains("for-a-narrow-notice"),
@@ -539,7 +560,7 @@ fn test_notice_click_toggles_fold() {
     app.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("click-1".into()),
-        origin: MemoryChangeOrigin::AutoMemory,
+        causality: MemoryChangeCausality::ThisTurn,
         changes: vec![MemoryChange {
             key: "alpha".into(),
             operation: MemoryOperation::Created,
@@ -607,7 +628,7 @@ fn test_thought_keep_affordance() {
 fn test_notice_hint_matches_state() {
     let mut app = app_with_notice(
         "hint-1",
-        MemoryChangeOrigin::AutoMemory,
+        MemoryChangeCausality::ThisTurn,
         &[("alpha", MemoryOperation::Created)],
     );
     let out = render_text(&app, 100, 24);
@@ -638,7 +659,7 @@ fn test_notice_hint_matches_state() {
 fn test_notice_rows_fit_pane() {
     let app = app_with_notice(
         "narrow-1",
-        MemoryChangeOrigin::AutoMemory,
+        MemoryChangeCausality::ThisTurn,
         &[("alpha", MemoryOperation::Created)],
     );
     let _out = render_text(&app, 24, 40);
@@ -661,7 +682,7 @@ fn test_notice_rows_fit_pane() {
 fn test_notice_count_matches_render() {
     let mut app = app_with_notice(
         "count-1",
-        MemoryChangeOrigin::AutoMemory,
+        MemoryChangeCausality::ThisTurn,
         &[
             ("alpha", MemoryOperation::Created),
             ("beta", MemoryOperation::Deleted),
@@ -700,7 +721,7 @@ fn test_notice_count_matches_render() {
 fn test_notice_walk_matches_render() {
     let mut app = app_with_notice(
         "cursor-1",
-        MemoryChangeOrigin::AutoMemory,
+        MemoryChangeCausality::ThisTurn,
         &[("alpha", MemoryOperation::Created)],
     );
     app.transcript.push(TranscriptLine::Subagent {
@@ -734,7 +755,7 @@ fn test_notice_ctrl_o_latest() {
     app.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("k1".into()),
-        origin: MemoryChangeOrigin::AutoMemory,
+        causality: MemoryChangeCausality::ThisTurn,
         changes: vec![MemoryChange {
             key: "alpha".into(),
             operation: MemoryOperation::Created,

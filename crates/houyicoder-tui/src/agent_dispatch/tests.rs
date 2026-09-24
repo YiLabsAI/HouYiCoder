@@ -89,13 +89,13 @@ fn todo_frame(items: &[(&str, &str)]) -> TranscriptFrame {
 #[test]
 fn test_memory_change_refreshes_pane() {
     use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryOperation,
     };
     let (mut app, events) = connected_app_events();
     app.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-1".into()),
-        origin: MemoryChangeOrigin::AutoMemory,
+        causality: MemoryChangeCausality::ThisTurn,
         changes: vec![MemoryChange {
             key: "alpha".into(),
             operation: MemoryOperation::Created,
@@ -113,13 +113,13 @@ fn test_memory_change_refreshes_pane() {
 fn test_open_pane_skips_notice() {
     use crate::records::TranscriptLine;
     use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryOperation,
     };
     let (mut app, _events) = connected_app_events();
     app.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("c1".into()),
-        origin: MemoryChangeOrigin::AutoMemory,
+        causality: MemoryChangeCausality::ThisTurn,
         changes: vec![MemoryChange {
             key: "k".into(),
             operation: MemoryOperation::Created,
@@ -135,7 +135,7 @@ fn test_open_pane_skips_notice() {
     app.pane = Pane::Transcript;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("c2".into()),
-        origin: MemoryChangeOrigin::AutoMemory,
+        causality: MemoryChangeCausality::ThisTurn,
         changes: vec![MemoryChange {
             key: "k2".into(),
             operation: MemoryOperation::Created,

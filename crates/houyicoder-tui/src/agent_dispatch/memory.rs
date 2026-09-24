@@ -5,7 +5,7 @@
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::{
-    MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryDetail, MemoryOperation,
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryDetail, MemoryOperation,
     MemorySummaryEntry, MemoryToggleWhich, ToggleState,
 };
 
@@ -79,35 +79,31 @@ impl App {
     pub(super) fn show_memory_changes(
         &mut self,
         id: &MemoryChangeId,
-        origin: MemoryChangeOrigin,
+        causality: MemoryChangeCausality,
         changes: &[MemoryChange],
     ) {
         if !self.memory.register_change(id) {
             return;
         }
-        let source = match origin {
-            MemoryChangeOrigin::PrimaryAgent => "primary agent",
-            MemoryChangeOrigin::AutoMemory => "auto-memory",
-            MemoryChangeOrigin::AutoDream => "auto-dream",
-            // A future producer this build does not name; label the notice
-            // rather than dropping it.
-            MemoryChangeOrigin::Unknown => "unknown source",
+        // The turn label carries the causal link the notice needs: a pass
+        // that finished after the user moved on says so, instead of reading
+        // as a result of whatever is on screen now. An unrecognized
+        // classification is reported as an earlier turn — never claim the
+        // turn in front of the user.
+        let turn = match causality {
+            MemoryChangeCausality::ThisTurn => "this turn",
+            MemoryChangeCausality::PreviousTurn | MemoryChangeCausality::Unknown => "previous turn",
         };
         let count = changes.len();
         let noun = if count == 1 { "change" } else { "changes" };
-        let mut notice = format!("Memory {source}: {count} {noun} · /memory");
+        let verb = summary_verb(changes);
+        let mut notice = format!("Memory {verb} from {turn}: {count} {noun} · /memory");
         for change in changes {
-            let operation = match change.operation {
-                MemoryOperation::Created => "created",
-                MemoryOperation::Updated => "updated",
-                MemoryOperation::Deleted => "deleted",
-                MemoryOperation::Promoted => "promoted",
-                MemoryOperation::Demoted => "demoted",
-                // A future operation this build does not name; show the key
-                // with a neutral verb rather than dropping the row.
-                MemoryOperation::Unknown => "changed",
-            };
-            notice.push_str(&format!("\n  ⎿  {operation} {}", change.key));
+            notice.push_str(&format!(
+                "\n  ⎿  {} {}",
+                operation_verb(change.operation),
+                change.key
+            ));
         }
         // When the /memory pane is open, the pane refresh below is the live
         // view of the same changes; a transcript notice would duplicate it.
@@ -138,5 +134,31 @@ impl App {
                 format!("couldn't forget {key} — {message}")
             }
         }
+    }
+}
+
+/// The verb for one operation in the notice's child rows.
+fn operation_verb(operation: MemoryOperation) -> &'static str {
+    match operation {
+        MemoryOperation::Created => "created",
+        MemoryOperation::Updated => "updated",
+        MemoryOperation::Deleted => "deleted",
+        MemoryOperation::Promoted => "promoted",
+        MemoryOperation::Demoted => "demoted",
+        // A future operation this build does not name; show the key with a
+        // neutral verb rather than dropping the row.
+        MemoryOperation::Unknown => "changed",
+    }
+}
+
+/// The verb for the summary line: the shared operation when every change
+/// carries one, otherwise the neutral verb, so a mixed batch never claims a
+/// single operation.
+fn summary_verb(changes: &[MemoryChange]) -> &'static str {
+    match changes.first() {
+        Some(first) if changes.iter().all(|c| c.operation == first.operation) => {
+            operation_verb(first.operation)
+        }
+        _ => "changed",
     }
 }

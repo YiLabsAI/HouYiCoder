@@ -194,6 +194,17 @@ pub struct TrajectoryHead {
     pub summary: TrajectorySummary,
 }
 
+/// The id of the latest durable user input in a finalized event slice, or
+/// None when the slice holds none. Only a fresh prompt counts: a mid-turn
+/// input continues the turn it arrived in, so it does not move the frontier.
+pub fn last_user_input_id(events: &[SessionLogEntry]) -> Option<EventId> {
+    events
+        .iter()
+        .rev()
+        .find(|entry| matches!(entry.event, SessionEvent::UserInput { .. }))
+        .map(|entry| entry.id)
+}
+
 /// The engine-facing session log. Object-safe (PFut) so the engine holds
 /// Arc<dyn SessionLog> and the concrete session facade swaps behind it. The
 /// facade layers the hash chain, delta-persistence counter, and trajectory
@@ -220,6 +231,15 @@ pub trait SessionLog: Send + Sync {
     /// mirror overrides it to answer without cloning the log.
     fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
         self.trajectory_snapshot(session).pop().map(|e| e.id)
+    }
+
+    /// The id of the latest durable user input for a session, or None when
+    /// the session holds none yet. A background pass compares this against its
+    /// own trigger to tell a change of the turn that just completed from one
+    /// the user has already moved past. Defaults to scanning the snapshot; a
+    /// store that mirrors the events in memory scans them in place.
+    fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
+        last_user_input_id(&self.trajectory_snapshot(session))
     }
 
     /// Clone the finalized suffix beginning at start from the in-memory mirror.

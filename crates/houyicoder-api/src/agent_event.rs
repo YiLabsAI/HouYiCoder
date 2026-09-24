@@ -123,6 +123,18 @@ pub struct MemoryChange {
     pub operation: MemoryOperation,
 }
 
+/// Which turn a memory change belongs to, so a notice names it rather than
+/// reading as whatever turn is on screen when the notice lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryChangeCausality {
+    /// The change belongs to the turn that just completed.
+    ThisTurn,
+    /// The change does not belong to the turn now on screen, either because
+    /// the session holds a newer user input or because the frontier could
+    /// not be read.
+    PreviousTurn,
+}
+
 /// Successful memory changes emitted together by one producer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryChangedEvent {
@@ -130,6 +142,8 @@ pub struct MemoryChangedEvent {
     pub id: MemoryChangeId,
     /// Producer responsible for the changes.
     pub origin: MemoryChangeOrigin,
+    /// Which turn the changes belong to.
+    pub causality: MemoryChangeCausality,
     /// Exact successful operations in append order.
     pub changes: Vec<MemoryChange>,
 }

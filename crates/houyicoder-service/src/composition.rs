@@ -51,7 +51,7 @@ use houyicoder_context::ContextBackend;
 use houyicoder_context::SessionDescriptorStore;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::auto_dream::{DEFAULT_DREAM_MAX_TURNS, DreamRunner};
-use houyicoder_core::agent::extractor::MemoryExtractor;
+use houyicoder_core::agent::extractor::{ExtractionLogs, MemoryExtractor};
 use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{

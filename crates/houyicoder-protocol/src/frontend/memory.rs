@@ -66,6 +66,37 @@ pub struct MemoryChange {
     pub operation: MemoryOperation,
 }
 
+/// Which turn a memory change belongs to, so a notice that lands after the
+/// user has already moved on can say so instead of reading as the turn on
+/// screen.
+///
+/// Forward-compatible: a future producer may classify a change under a
+/// causality this enum does not yet name. An unrecognized tag deserializes
+/// to Unknown so the event survives rather than being dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MemoryChangeCausality {
+    /// The change belongs to the turn that just completed.
+    ThisTurn,
+    /// The change does not belong to the turn now on screen, either because
+    /// the session holds a newer user input or because the frontier could
+    /// not be read.
+    PreviousTurn,
+    /// A causality the receiver does not yet name. Only produced by
+    /// deserialization of an unrecognized tag; the producer never emits it.
+    #[serde(other)]
+    Unknown,
+}
+
+/// An absent tag reads as an earlier turn: a frame from a producer that
+/// predates the field must still deliver its changes, and claiming the turn
+/// now on screen would be the stronger claim of the two.
+impl Default for MemoryChangeCausality {
+    fn default() -> Self {
+        Self::PreviousTurn
+    }
+}
+
 /// One stored memory's frontmatter: key, one-line description, source label,
 /// and modification time (seconds since the UNIX epoch). No body content —
 /// the listing path reads no full bodies, so a /memory browse stays cheap
@@ -153,6 +184,20 @@ mod tests {
         assert!(json.contains("\"mtimeSecs\":99"), "{json}");
         let back: MemoryDetail = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, entry);
+    }
+
+    #[test]
+    fn test_causality_serializes_kebab_case() {
+        for (value, expect) in [
+            (MemoryChangeCausality::ThisTurn, "\"this-turn\""),
+            (MemoryChangeCausality::PreviousTurn, "\"previous-turn\""),
+            (MemoryChangeCausality::Unknown, "\"unknown\""),
+        ] {
+            let json = serde_json::to_string(&value).expect("serialize");
+            assert_eq!(json, expect);
+            let back: MemoryChangeCausality = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, value);
+        }
     }
 
     #[test]
