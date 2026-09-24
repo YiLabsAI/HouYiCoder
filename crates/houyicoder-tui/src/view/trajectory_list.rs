@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::command::render::format_tokens;
+use crate::view::relative_time::{format_span_ms, format_span_secs};
 
 /// The display title for a turn: the user input when present, otherwise the
 /// first event's summary so a turn whose prompt sits outside the loaded window
@@ -124,7 +125,11 @@ pub(super) fn turn_row(
     // Only a turn that had a failure states one; a zero would be noise on every
     // clean row.
     let fails = if t.tool_fail > 0 {
-        format!("{} fail", t.tool_fail)
+        format!(
+            "{} fail{}",
+            t.tool_fail,
+            if t.tool_fail == 1 { "" } else { "s" }
+        )
     } else {
         String::new()
     };
@@ -158,7 +163,7 @@ pub(super) fn turn_row(
         ));
     }
     spans.push(sp(
-        format!("{:>6.1}s ", t.duration_ms as f64 / 1000.0),
+        format!("{:>7} ", format_span_ms(t.duration_ms)),
         Color::Gray,
     ));
     spans.push(sp(glyph, gc));
@@ -212,8 +217,18 @@ pub(super) fn draw_turn_list(
         sp(tokens_summary, Color::Gray),
         sp(cache_hit_str, Color::Indexed(208)),
         sp(format!(" · {} calls", traj.tool_calls), Color::Gray),
-        sp(format!(" · {} fail", traj.failures), Color::Red),
-        sp(format!(" · total {}s", traj.duration_secs), Color::Gray),
+        sp(
+            format!(
+                " · {} fail{}",
+                traj.failures,
+                if traj.failures == 1 { "" } else { "s" }
+            ),
+            Color::Red,
+        ),
+        sp(
+            format!(" · total {}", format_span_secs(traj.duration_secs)),
+            Color::Gray,
+        ),
     ])];
     if traj.skipped_records > 0 {
         header.push(line(vec![sp(
@@ -228,7 +243,7 @@ pub(super) fn draw_turn_list(
     let mut timing_spans = Vec::new();
     if let Some(avg) = traj.timing.ttft_avg_ms {
         timing_spans.push(sp(
-            format!("TTFT avg {:.1}s", avg as f64 / 1000.0),
+            format!("TTFT avg {}", format_span_ms(avg)),
             Color::DarkGray,
         ));
     }
@@ -236,19 +251,13 @@ pub(super) fn draw_turn_list(
         if !timing_spans.is_empty() {
             timing_spans.push(sp(" · ", Color::DarkGray));
         }
-        timing_spans.push(sp(
-            format!("p95 {:.1}s", p95 as f64 / 1000.0),
-            Color::DarkGray,
-        ));
+        timing_spans.push(sp(format!("p95 {}", format_span_ms(p95)), Color::DarkGray));
     }
     if let Some(p99) = traj.timing.ttft_p99_ms {
         if !timing_spans.is_empty() {
             timing_spans.push(sp(" · ", Color::DarkGray));
         }
-        timing_spans.push(sp(
-            format!("p99 {:.1}s", p99 as f64 / 1000.0),
-            Color::DarkGray,
-        ));
+        timing_spans.push(sp(format!("p99 {}", format_span_ms(p99)), Color::DarkGray));
     }
     if let Some(tps) = traj.timing.decode_tok_per_sec {
         if !timing_spans.is_empty() {
@@ -323,7 +332,7 @@ pub(super) fn draw_turn_list(
                     sp(format!("{:8} ", bg.kind), Color::DarkGray),
                     sp(truncate_width(&bg.summary, 50), Color::DarkGray),
                     sp(
-                        format!("  {:.1}s", bg.duration_ms as f64 / 1000.0),
+                        format!("  {}", format_span_ms(bg.duration_ms)),
                         Color::DarkGray,
                     ),
                 ]));
@@ -340,16 +349,4 @@ pub(super) fn draw_turn_list(
         ]),
     ];
     (header, body, footer, sel_line)
-}
-
-/// Pad a string to a display width, counting columns rather than characters
-/// so a wide glyph cannot shift the columns after it.
-pub(super) fn pad(text: &str, width: usize) -> String {
-    let w = UnicodeWidthStr::width(text);
-    if w >= width {
-        return text.to_string();
-    }
-    let mut out = text.to_string();
-    out.push_str(&" ".repeat(width - w));
-    out
 }

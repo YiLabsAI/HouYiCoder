@@ -1020,9 +1020,12 @@ fn test_timing_and_cache_render() {
         .flat_map(|l| l.spans.iter())
         .map(|s| s.content.as_ref())
         .collect();
-    assert!(head_text.contains("TTFT avg 0.2s"));
-    assert!(head_text.contains("p95 0.4s"));
-    assert!(head_text.contains("p99 0.6s"));
+    assert!(
+        head_text.contains("TTFT avg 250ms"),
+        "a sub-second sample reads in milliseconds: {head_text}"
+    );
+    assert!(head_text.contains("p95 400ms"), "{head_text}");
+    assert!(head_text.contains("p99 600ms"), "{head_text}");
     assert!(head_text.contains("decode 45.2 tok/s"));
     assert!(head_text.contains("cache hit 50%"));
 
@@ -1762,5 +1765,228 @@ fn test_loading_older_keeps_rows() {
         body.len() > rows_before,
         "the loaded rows are still rendered: {} lines for {rows_before} rows",
         body.len()
+    );
+}
+
+/// A one-turn session view holding one record, with nothing measured beyond
+/// what the test sets. For tests that read a rendered body rather than the
+/// projection.
+fn detail_view(record: TrajectoryRecord) -> TrajectoryView {
+    TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 1,
+        tool_calls: 0,
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: None,
+        tokens_out: None,
+        failures: 0,
+        duration_secs: 0,
+        cache_read: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
+        subagent_usage: None,
+        rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
+            n: 1,
+            boundary_before: Vec::new(),
+            user_input: "ask".into(),
+            tokens_in: None,
+            tokens_out: None,
+            cache_read: None,
+            cache_write: None,
+            models: Vec::new(),
+            efforts: Vec::new(),
+            reasoning_tokens: None,
+            tool_count: 0,
+            tool_fail: 0,
+            retries: 0,
+            duration_ms: 0,
+            success: true,
+            records: vec![record],
+        })],
+    }
+}
+
+/// A rendered line group's text, spans joined.
+fn lines_text(lines: &[Line<'static>]) -> String {
+    lines
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect()
+}
+
+/// The session total reads as a duration: twelve days of wall time is a span,
+/// not a six-figure second count.
+#[test]
+fn test_header_total_is_span() {
+    let mut view = detail_view(record_of(TrajectoryRecordKind::Tool, None));
+    view.duration_secs = 1_032_337;
+    let (header, _, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 120, 25));
+    let text = lines_text(&header);
+    assert!(text.contains("total 11d 22h"), "{text}");
+    assert!(!text.contains("1032337"), "no bare second count: {text}");
+}
+
+/// A failure count agrees with its number, in the header and in the row.
+#[test]
+fn test_fail_count_agrees() {
+    let mut view = detail_view(record_of(TrajectoryRecordKind::Tool, None));
+    view.failures = 1;
+    let (header, _, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 120, 25));
+    let text = lines_text(&header);
+    assert!(text.contains("1 fail"), "{text}");
+    assert!(!text.contains("1 fails"), "{text}");
+
+    view.failures = 19;
+    let (header, _, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 120, 25));
+    let text = lines_text(&header);
+    assert!(text.contains("19 fails"), "{text}");
+
+    if let TrajectoryRow::Turn(turn) = &mut view.rows[0] {
+        turn.tool_count = 1;
+        turn.tool_fail = 1;
+    }
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 25));
+    let text = lines_text(&body);
+    assert!(text.contains("1 fail"), "the row agrees too: {text}");
+    assert!(!text.contains("1 fails"), "{text}");
+}
+
+/// A record whose span was never measured states no latency: a 0ms line would
+/// claim a measurement the log does not have.
+#[test]
+fn test_detail_omits_unmeasured_latency() {
+    let mut record = record_of(TrajectoryRecordKind::Context, None);
+    record.duration_ms = 0;
+    let view = detail_view(record);
+    let (_, body, _, _) = detail::draw_event_detail(&view, 0, 0, Rect::ZERO);
+    let text = lines_text(&body);
+    assert!(!text.contains("latency"), "no unmeasured latency: {text}");
+    assert!(
+        text.contains("start: 0ms"),
+        "the offset is still shown: {text}"
+    );
+
+    let view = detail_view(record_of(TrajectoryRecordKind::Tool, None));
+    let (_, body, _, _) = detail::draw_event_detail(&view, 0, 0, Rect::ZERO);
+    let text = lines_text(&body);
+    assert!(text.contains("latency: 10ms"), "a measured one is: {text}");
+}
+
+/// Reasoning tokens are named as a component of the output, with their unit: a
+/// bare count reads as something the pane did not name.
+#[test]
+fn test_detail_names_reasoning() {
+    let mut record = record_of(TrajectoryRecordKind::Model, None);
+    record.usage = Some(EventUsage {
+        input: Some(1200),
+        output: Some(340),
+        cache_read: None,
+        cache_write: None,
+        reasoning: Some(107),
+    });
+    let view = detail_view(record);
+    let (_, body, _, _) = detail::draw_event_detail(&view, 0, 0, Rect::ZERO);
+    let text = lines_text(&body);
+    assert!(
+        text.contains("reasoning: 107 tokens (part of output)"),
+        "{text}"
+    );
+}
+
+/// The detail's content fields are separate blocks: running the thinking, the
+/// input, and the output together makes the reader find the boundary.
+#[test]
+fn test_detail_separates_fields() {
+    let mut record = record_of(TrajectoryRecordKind::Tool, Some("done"));
+    record.thinking = Some("a thought".into());
+    record.input = Some("a command".into());
+    let view = detail_view(record);
+    let (_, body, _, _) = detail::draw_event_detail(&view, 0, 0, Rect::ZERO);
+    let lines: Vec<String> = body
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    let thinking = lines
+        .iter()
+        .position(|l| l.contains("thinking:"))
+        .expect("a thinking block");
+    let input = lines
+        .iter()
+        .position(|l| l.contains("input:"))
+        .expect("an input block");
+    assert_eq!(input, thinking + 2, "one blank line between: {lines:?}");
+    assert!(lines[thinking + 1].trim().is_empty(), "{lines:?}");
+}
+
+/// The level 1 timeline as rendered: the ruler line, a row's text, and the
+/// display column a bar starts at.
+fn timeline_text(record: TrajectoryRecord) -> (String, String) {
+    let mut view = detail_view(record);
+    if let TrajectoryRow::Turn(turn) = &mut view.rows[0] {
+        turn.duration_ms = 1000;
+    }
+    let app = crate::composition::app();
+    let (header, body, _, _) =
+        detail::draw_turn_detail(&view, 0, 0, Rect::new(0, 0, 140, 20), &app);
+    let ruler = header
+        .iter()
+        .map(|l| lines_text(std::slice::from_ref(l)))
+        .find(|l| l.matches('·').count() > 4)
+        .expect("a ruler line");
+    let row = body
+        .iter()
+        .map(|l| lines_text(std::slice::from_ref(l)))
+        .find(|l| l.contains('█'))
+        .expect("a bar row");
+    (ruler, row)
+}
+
+/// The bar's first display column in a rendered timeline row.
+fn bar_column(row: &str) -> usize {
+    let start = row.find('█').expect("a bar");
+    UnicodeWidthStr::width(&row[..start])
+}
+
+/// The ruler's axis spans exactly the columns the bars are drawn in: a ruler
+/// offset from the bars reads as a measurement that is not there.
+#[test]
+fn test_timeline_ruler_aligns() {
+    let mut record = record_of(TrajectoryRecordKind::Tool, None);
+    record.start_ms = 0;
+    record.duration_ms = 1000;
+    let (ruler, row) = timeline_text(record);
+    let zero = ruler.chars().take_while(|c| *c == ' ').count();
+    assert_eq!(
+        zero,
+        bar_column(&row),
+        "the ruler's zero sits at the bar's first column: {ruler:?} / {row:?}"
+    );
+    assert_eq!(
+        ruler.chars().count(),
+        zero + row.matches('█').count(),
+        "and it spans the bar's columns: {ruler:?} / {row:?}"
+    );
+}
+
+/// The name column counts display columns, so a wide glyph in a record's name
+/// does not shift the bar or the columns after it.
+#[test]
+fn test_timeline_name_aligns() {
+    let mut ascii = record_of(TrajectoryRecordKind::Tool, None);
+    ascii.name = Some("bash".into());
+    let mut wide = record_of(TrajectoryRecordKind::Tool, None);
+    wide.name = Some("读文件".into());
+    let (_, ascii_row) = timeline_text(ascii);
+    let (_, wide_row) = timeline_text(wide);
+    assert_eq!(
+        bar_column(&ascii_row),
+        bar_column(&wide_row),
+        "a wide name does not move the bar: {ascii_row:?} / {wide_row:?}"
     );
 }

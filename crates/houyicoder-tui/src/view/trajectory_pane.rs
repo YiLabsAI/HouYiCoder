@@ -21,7 +21,7 @@ use ratatui::widgets::Paragraph;
 use crate::state::TrajectoryPaneState;
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
-use crate::view::relative_time::{now_epoch_secs, relative_time};
+use crate::view::relative_time::{format_span_ms, now_epoch_secs, relative_time};
 use unicode_width::UnicodeWidthStr;
 
 // Data types
@@ -509,6 +509,18 @@ fn fmt_k(n: usize) -> String {
     }
 }
 
+/// Pad a string to a display width, counting columns rather than characters
+/// so a wide glyph cannot shift the columns after it.
+fn pad(text: &str, width: usize) -> String {
+    let w = UnicodeWidthStr::width(text);
+    if w >= width {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    out.push_str(&" ".repeat(width - w));
+    out
+}
+
 /// Format an optional token count: a real value via fmt_k, or "—" for None
 /// (unknown — the turn had no TurnUsage, e.g. cancelled mid-stream). Never
 /// renders 0 for an unknown count: a 0% display would read as "confirmed
@@ -527,6 +539,23 @@ fn bar_width(ms: u64, total: u64, max_w: usize) -> usize {
         ((ms as f64 / total as f64) * max_w as f64).round() as usize
     }
 }
+
+/// The columns a level 1 timeline row spends before its bar: the selection
+/// prefix, the kind, a gap, and the name. The ruler above the rows starts its
+/// axis at this column, so the two are read as one scale.
+const TIMELINE_PREFIX_W: usize = 2 + 7 + 1 + TIMELINE_NAME_W;
+
+/// The name column inside the prefix, in display columns.
+const TIMELINE_NAME_W: usize = 11;
+
+/// The duration column, in display columns.
+const TIMELINE_DUR_W: usize = 7;
+
+/// The summary column's floor, so a narrow terminal shrinks the bar first.
+const TIMELINE_SUMMARY_MIN_W: usize = 32;
+
+/// The outcome glyph a row ends with, and the space before it.
+const TIMELINE_MARK_W: usize = 2;
 
 /// A fixed-width string (exactly width chars) with the event bar positioned
 /// at its start offset on the shared turn time axis. Parallel events overlap
@@ -564,12 +593,15 @@ fn positioned_bar(start_ms: u64, dur_ms: u64, total_ms: u64, width: usize) -> St
 /// the turn total right, a dotted axis between. Orients the eye to the time
 /// scale so positioned bars read as a real timeline.
 fn ruler_line(total_ms: u64, width: usize) -> Line<'static> {
-    let pre = 10; // align with the bar start (prefix 2 + kind 7 + gap 1)
     let left = "0s".to_string();
-    let right = format!("{:.1}s", total_ms as f64 / 1000.0);
-    let mut s = " ".repeat(pre);
+    let right = format_span_ms(total_ms);
+    // The axis spans exactly the bar's columns, so a bar's position on the
+    // ruler is its position in the turn.
+    let mut s = " ".repeat(TIMELINE_PREFIX_W);
     s.push_str(&left);
-    let fill = width.saturating_sub(s.chars().count() + right.chars().count());
+    let fill = width.saturating_sub(
+        UnicodeWidthStr::width(left.as_str()) + UnicodeWidthStr::width(right.as_str()),
+    );
     s.push_str(&"·".repeat(fill));
     s.push_str(&right);
     line(vec![sp(s, Color::DarkGray)])

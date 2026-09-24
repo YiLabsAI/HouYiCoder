@@ -4,6 +4,7 @@
 //! the selected record. Both share the pane's line helpers and view types.
 
 use super::*;
+use crate::view::relative_time::format_span_ms;
 
 /// The colour a record's outcome is drawn in.
 fn outcome_color(outcome: RecordOutcome) -> Color {
@@ -58,20 +59,32 @@ pub(super) fn draw_turn_detail(
                 ),
                 sp(
                     format!(
-                        "  {} in {} out{} · total {:.1}s",
+                        "  {} in {} out{} · total {}",
                         fmt_k_opt(turn.tokens_in),
                         fmt_k_opt(turn.tokens_out),
                         cache_str,
-                        turn.duration_ms as f64 / 1000.0
+                        format_span_ms(turn.duration_ms)
                     ),
                     Color::Gray,
                 ),
             ]));
             header.push(blank());
-            // Layout: prefix(2) + kind(7) + gap(1) + name(11) + bar(bar_area)
-            // + gap(1) + dur(7) + gap(1) + summary.
-            let bar_area = (area.width as usize).saturating_sub(62).max(8);
-            let summary_w = (area.width as usize).saturating_sub(32 + bar_area).max(8);
+            // Layout, in display columns: the prefix, the bar, a gap, the
+            // duration, the summary, and the outcome glyph. The bar takes what
+            // is left after the fixed columns, so a narrow terminal shrinks
+            // the timeline rather than the numbers.
+            let bar_area = (area.width as usize)
+                .saturating_sub(
+                    TIMELINE_PREFIX_W
+                        + 1
+                        + TIMELINE_DUR_W
+                        + TIMELINE_SUMMARY_MIN_W
+                        + TIMELINE_MARK_W,
+                )
+                .max(8);
+            let summary_w = (area.width as usize)
+                .saturating_sub(TIMELINE_PREFIX_W + bar_area + 1 + TIMELINE_DUR_W + TIMELINE_MARK_W)
+                .max(8);
             header.push(ruler_line(turn.duration_ms, bar_area));
             for (i, ev) in turn.records.iter().enumerate() {
                 body.push(record_row(
@@ -95,10 +108,7 @@ pub(super) fn draw_turn_detail(
             header.push(line(vec![
                 sp(format!(" [bg] {} ", bg.kind), Color::Cyan),
                 sp(truncate_width(&bg.summary, 50), Color::White),
-                sp(
-                    format!("  {:.1}s", bg.duration_ms as f64 / 1000.0),
-                    Color::Gray,
-                ),
+                sp(format!("  {}", format_span_ms(bg.duration_ms)), Color::Gray),
             ]));
             header.push(blank());
             body.push(line(vec![
@@ -110,10 +120,14 @@ pub(super) fn draw_turn_detail(
                 sp(bg.summary.clone(), Color::White),
             ]));
             body.push(blank());
-            body.push(line(vec![
-                sp(" latency: ", Color::DarkGray),
-                sp(format!("{}ms", bg.duration_ms), Color::Gray),
-            ]));
+            // A span the log did not measure is absent rather than zero: a
+            // latency of 0ms would claim a measurement that never happened.
+            if bg.duration_ms > 0 {
+                body.push(line(vec![
+                    sp(" latency: ", Color::DarkGray),
+                    sp(format_span_ms(bg.duration_ms), Color::Gray),
+                ]));
+            }
             let footer = vec![blank(), key_hint(&[("Esc", "back")])];
             (header, body, footer, 0)
         }
@@ -174,11 +188,22 @@ fn record_row(
         sp(prefix, Color::Cyan),
         sp(format!("{:7}", ev.kind.label()), Color::DarkGray),
         sp(" ", Color::DarkGray),
-        sp(format!("{:<11}", truncate_width(&label, 11)), Color::Cyan),
+        // Padded by display columns, not characters: a wide glyph in the name
+        // would otherwise shift the bar and everything after it.
+        // Padded by display columns, not characters: a wide glyph in the name
+        // would otherwise shift the bar and everything after it.
+        sp(
+            pad(&truncate_width(&label, TIMELINE_NAME_W), TIMELINE_NAME_W),
+            Color::Cyan,
+        ),
         sp(bar, bc),
         sp(" ", Color::DarkGray),
         sp(
-            format!("{:>5.1}s", ev.duration_ms as f64 / 1000.0),
+            format!(
+                "{:>width$} ",
+                format_span_ms(ev.duration_ms),
+                width = TIMELINE_DUR_W - 1
+            ),
             Color::Gray,
         ),
         sp(" ", Color::DarkGray),
@@ -228,7 +253,7 @@ pub(super) fn draw_event_detail(
         sp(format!(" {}{} ", ev.kind.label(), name), Color::Cyan),
         sp(truncate_width(&ev.summary, 48), Color::White),
         sp(
-            format!("  {:.1}s ", ev.duration_ms as f64 / 1000.0),
+            format!("  {} ", format_span_ms(ev.duration_ms)),
             Color::Gray,
         ),
         sp(mark, mc),
@@ -267,26 +292,36 @@ pub(super) fn draw_event_detail(
     // surface (screen-share / recording / scrollback), and tool I/O + reasoning
     // can carry real secrets (an .env cat, a credentials read). The durable
     // log stays full-fidelity; only the display is filtered. See redaction.rs.
+    // Each content field is its own block, so the boundary is not the reader's job.
     if let Some(thinking) = &ev.thinking {
         let r = crate::redaction::redact(thinking);
         push_field(&mut body, "thinking", &r, Color::Gray);
+        body.push(blank());
     }
     if let Some(input) = &ev.input {
         let r = crate::redaction::redact(input);
         push_field(&mut body, "input", &r, Color::Gray);
+        body.push(blank());
     }
     if let Some(output) = &ev.output {
         let r = crate::redaction::redact(output);
         push_field(&mut body, "output", &r, mc);
+        body.push(blank());
     }
     push_model_facts(&mut body, ev, &push_field);
     body.push(blank());
-    body.push(line(vec![
-        sp(" latency: ", Color::DarkGray),
-        sp(format!("{}ms", ev.duration_ms), Color::Gray),
-        sp("  · start: ", Color::DarkGray),
-        sp(format!("{}ms", ev.start_ms), Color::Gray),
-    ]));
+    // The record's own span and where it started in the turn. An unmeasured
+    // span is absent rather than zero: a latency of 0ms would claim a
+    // measurement the log does not have.
+    let mut tail = vec![sp(" ", Color::DarkGray)];
+    if ev.duration_ms > 0 {
+        tail.push(sp("latency: ", Color::DarkGray));
+        tail.push(sp(format_span_ms(ev.duration_ms), Color::Gray));
+        tail.push(sp("  · ", Color::DarkGray));
+    }
+    tail.push(sp("start: ", Color::DarkGray));
+    tail.push(sp(format!("{}ms", ev.start_ms), Color::Gray));
+    body.push(line(tail));
     let footer = vec![key_hint(&[("Esc", "back")])];
     (header, body, footer, idx)
 }
@@ -345,13 +380,22 @@ fn push_model_facts(
             usage.cache_read.map(|v| format!("cache read {v}")),
             usage.cache_write.map(|v| format!("cache write {v}")),
             usage.output.map(|v| format!("output {v}")),
-            usage.reasoning.map(|v| format!("reasoning {v}")),
         ]
         .into_iter()
         .flatten()
         .collect();
         if !parts.is_empty() {
             push_field(body, "tokens", &parts.join(" · "), Color::Gray);
+        }
+        // Reasoning tokens are a component of the output above, not a count of
+        // their own: the line says so instead of leaving the number bare.
+        if let Some(reasoning) = usage.reasoning {
+            push_field(
+                body,
+                "reasoning",
+                &format!("{reasoning} tokens (part of output)"),
+                Color::Gray,
+            );
         }
     }
     if ev.retries > 0 {
