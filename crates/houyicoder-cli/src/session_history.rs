@@ -551,6 +551,14 @@ impl SessionHistory {
     /// where the history starts without reading the log again.
     fn indexed_epoch_start(&self, epoch: Option<EventId>) -> Option<u64> {
         let idx = self.index.lock().ok()?;
+        // The index describes the log it was built over. A log that was
+        // truncated or rewritten since is not that log, and an offset from the
+        // old one would point into bytes that are now something else.
+        if idx.total_bytes == 0
+            || idx.total_bytes != self.session_log.backend().log_size(self.session_id)
+        {
+            return None;
+        }
         match epoch {
             // The history the log itself began in starts at the first byte.
             None => idx.offsets.first().map(|_| 0),

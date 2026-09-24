@@ -171,6 +171,7 @@ pub(in crate::trajectory) fn seam_rows(pages: &VecDeque<ResidentPage>) -> Vec<Tr
     let mut carried_model: Option<String> = None;
     for page in pages.iter() {
         let mut page_rows = page.accumulator.rows();
+        let drew_rows = !page_rows.is_empty();
         if let Some(TrajectoryRow::Turn(first)) = page_rows.first_mut() {
             if !carried_boundaries.is_empty() {
                 let mut boundaries = std::mem::take(&mut carried_boundaries);
@@ -191,8 +192,15 @@ pub(in crate::trajectory) fn seam_rows(pages: &VecDeque<ResidentPage>) -> Vec<Tr
                     })));
             }
         }
+        // A page that drew no rows carries nothing of its own: what the page
+        // before it left must not be dropped by an empty page between them, so
+        // the two are merged rather than replaced.
         let (trailing, last_usage) = page.accumulator.trailing();
-        carried_boundaries = trailing;
+        if drew_rows {
+            carried_boundaries = trailing;
+        } else {
+            carried_boundaries.extend(trailing);
+        }
         if let Some((model, _)) = last_usage {
             carried_model = Some(model);
         }

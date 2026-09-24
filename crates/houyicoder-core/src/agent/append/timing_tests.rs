@@ -171,3 +171,58 @@ async fn test_clear_appends_marker() {
         "the marker records the turn count at the clear"
     );
 }
+
+/// A stream that closed its reasoning and reply blocks reports both spans, and
+/// two blocks are summed rather than measured end to end.
+#[test]
+fn test_spans_sum_closed_blocks() {
+    use houyicoder_protocol::llm::LlmEvent;
+
+    let mut spans = super::BlockSpans::default();
+    assert_eq!(spans.reasoning_ms(), None, "nothing closed yet");
+    assert_eq!(spans.response_ms(), None, "nothing closed yet");
+
+    spans.note(&LlmEvent::ReasoningStart { id: "r".into() });
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    spans.note(&LlmEvent::ReasoningEnd { id: "r".into() });
+    spans.note(&LlmEvent::TextStart { id: "t".into() });
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    spans.note(&LlmEvent::TextEnd { id: "t".into() });
+
+    assert!(spans.reasoning_ms().is_some(), "a closed block is measured");
+    assert!(spans.response_ms().is_some(), "and so is the reply");
+
+    let first = spans.reasoning_ms().expect("measured");
+    spans.note(&LlmEvent::ReasoningStart { id: "r".into() });
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    spans.note(&LlmEvent::ReasoningEnd { id: "r".into() });
+    assert!(
+        spans.reasoning_ms().expect("measured") > first,
+        "a second block adds to the first rather than replacing it"
+    );
+}
+
+/// A stream that ended inside a block reports neither span: an unfinished span
+/// is unknown, and zero would claim the model thought for no time.
+#[test]
+fn test_spans_open_block_unknown() {
+    use houyicoder_protocol::llm::LlmEvent;
+
+    let mut spans = super::BlockSpans::default();
+    spans.note(&LlmEvent::ReasoningStart { id: "r".into() });
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    assert_eq!(
+        spans.reasoning_ms(),
+        None,
+        "a block the call ended inside is not a measurement"
+    );
+
+    let mut reply = super::BlockSpans::default();
+    reply.note(&LlmEvent::TextStart { id: "t".into() });
+    reply.note(&LlmEvent::TextEnd { id: "t".into() });
+    assert_eq!(reply.reasoning_ms(), None, "no reasoning block was opened");
+    assert!(
+        reply.response_ms().is_some(),
+        "and the reply that closed is measured"
+    );
+}

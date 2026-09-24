@@ -1635,3 +1635,67 @@ fn test_seam_keeps_boundaries() {
         "and both the boundary and the switch survive it"
     );
 }
+
+/// A page that drew no rows carries nothing of its own: the facts the page
+/// before it left must survive the empty page between them.
+#[test]
+fn test_seam_survives_empty_page() {
+    use houyicoder_context::CheckpointId;
+
+    let ck = CheckpointId::new();
+    let older = [
+        ev(100, SessionEvent::UserInput { text: "t1".into() }),
+        ev(
+            150,
+            SessionEvent::CompactionBoundary {
+                checkpoint: ck,
+                pre_tokens: 0,
+                post_tokens: 0,
+            },
+        ),
+    ];
+    // A page that holds only a boundary opens no turn, so it draws nothing.
+    let second_ck = CheckpointId::new();
+    let empty = [ev(
+        160,
+        SessionEvent::CompactionBoundary {
+            checkpoint: second_ck,
+            pre_tokens: 0,
+            post_tokens: 0,
+        },
+    )];
+    let newer = [ev(200, SessionEvent::UserInput { text: "t2".into() })];
+
+    let pages: VecDeque<ResidentPage> = [&older[..], &empty[..], &newer[..]]
+        .into_iter()
+        .map(|slice| ResidentPage {
+            source: TurnPage::default(),
+            accumulator: PageAccumulator::from_events(slice, 1, FoldMode::Summary),
+        })
+        .collect();
+    let stitched = seam_rows(&pages);
+
+    assert_eq!(stitched.len(), 2, "two turns");
+    let second = match &stitched[1] {
+        TrajectoryRow::Turn(turn) => turn,
+        _ => panic!("a turn row"),
+    };
+    assert_eq!(
+        second.boundary_before,
+        vec![
+            TurnBoundary::Compacted(Box::new(CompactedBoundary {
+                checkpoint_id: ck.to_string(),
+                pre_tokens: 0,
+                post_tokens: 0,
+                at_secs: 0,
+            })),
+            TurnBoundary::Compacted(Box::new(CompactedBoundary {
+                checkpoint_id: second_ck.to_string(),
+                pre_tokens: 0,
+                post_tokens: 0,
+                at_secs: 0,
+            })),
+        ],
+        "both boundaries reach the turn after them, in the order they happened"
+    );
+}
