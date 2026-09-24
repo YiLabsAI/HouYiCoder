@@ -119,10 +119,16 @@ mod tests {
 
     #[test]
     fn test_tokenize_cjk_run() {
-        // A two-character CJK run yields its bigram plus the full run.
+        // A two-character CJK run yields one bigram (which equals the full
+        // run, so the full token is not emitted twice).
         let run = "\u{90E8}\u{7F72}";
         let kw = tokenize(run);
         assert!(kw.contains(&run.to_string()));
+        assert_eq!(
+            kw.iter().filter(|k| *k == run).count(),
+            1,
+            "the bigram and full run are not double-counted"
+        );
     }
 
     #[test]

@@ -253,4 +253,67 @@ mod tests {
             "an old memory-recall must take Summarized so compaction folds it"
         );
     }
+
+    /// A no-space CJK query must reach the provider and produce a MemoryRecall
+    /// event. A whitespace word-count gate would reject it before the provider;
+    /// this test goes red if that gate returns.
+    #[tokio::test]
+    async fn test_cjk_query_reaches_recall() {
+        use houyicoder_api::memory::MemoryProvider;
+        use houyicoder_context::{MemoryEntry, MemoryError, MemorySource};
+        use houyicoder_memory::InMemoryBackend;
+        struct CjkProvider;
+        impl MemoryProvider for CjkProvider {
+            fn recall(&self, _q: &str, _b: usize, _s: &HashSet<String>) -> Vec<MemoryEntry> {
+                vec![
+                    MemoryEntry::new(
+                        String::from("\u{90E8}\u{7F72}"),
+                        String::from("body"),
+                        MemorySource::Feedback,
+                    )
+                    .with_meta("desc", 0),
+                ]
+            }
+            fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
+                Ok(())
+            }
+            fn update(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
+                Ok(())
+            }
+            fn memory_root(&self) -> String {
+                String::new()
+            }
+        }
+        let store: Arc<dyn houyicoder_api::session::SessionLog> = Arc::new(
+            houyicoder_session::SessionStore::new(Box::new(InMemoryBackend::new())),
+        );
+        let session = SessionId::new();
+        store
+            .append(new_event(
+                session,
+                SessionEvent::UserInput {
+                    text: "\u{90E8}\u{7F72}\u{670D}\u{52A1}".into(),
+                },
+            ))
+            .await
+            .expect("append user input");
+        let provider: Arc<dyn MemoryProvider> = Arc::new(CjkProvider);
+        let dummy = MemoryEntry::new("x", "y", MemorySource::Feedback);
+        let _added = provider.add(dummy.clone());
+        let _updated = provider.update(dummy);
+        let _root = provider.memory_root();
+        let gates = MemoryGates::new(true, false);
+        super::recall(&store, Some(&provider), &gates, session)
+            .await
+            .expect("recall ok");
+        let view = store.current_view(session).await.expect("view");
+        let has_recall = view
+            .events
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::MemoryRecall { .. }));
+        assert!(
+            has_recall,
+            "a no-space CJK query must reach the provider, not be dropped by a whitespace gate"
+        );
+    }
 }
