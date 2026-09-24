@@ -5,8 +5,8 @@
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::{
-    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryDetail, MemoryOperation,
-    MemorySummaryEntry, MemoryToggleWhich, ToggleState,
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryDetail,
+    MemoryOperation, MemorySummaryEntry, MemoryToggleWhich, ToggleState,
 };
 
 use crate::agent_message::ClientCommand;
@@ -79,44 +79,37 @@ impl App {
     pub(super) fn show_memory_changes(
         &mut self,
         id: &MemoryChangeId,
-        causality: MemoryChangeCausality,
+        origin: MemoryChangeOrigin,
+        _causality: MemoryChangeCausality,
         changes: &[MemoryChange],
     ) {
         if !self.memory.register_change(id) {
             return;
         }
-        // The turn label carries the causal link the notice needs: a pass
-        // that finished after the user moved on says so, instead of reading
-        // as a result of whatever is on screen now. An unrecognized
-        // classification is reported as an earlier turn — never claim the
-        // turn in front of the user.
-        let turn = match causality {
-            MemoryChangeCausality::ThisTurn => "this turn",
-            MemoryChangeCausality::PreviousTurn | MemoryChangeCausality::Unknown => "previous turn",
-        };
         let count = changes.len();
         let noun = if count == 1 { "change" } else { "changes" };
-        let verb = summary_verb(changes);
-        let mut notice = format!("Memory {verb} from {turn}: {count} {noun} · /memory");
+        let producer = match origin {
+            MemoryChangeOrigin::PrimaryAgent => "saved by the agent",
+            MemoryChangeOrigin::AutoMemory => "extracted in background",
+            MemoryChangeOrigin::AutoDream => "consolidated in background",
+            MemoryChangeOrigin::Unknown => "changed",
+        };
+        let mut notice = format!("Memory {producer}: {count} {noun} · /memory");
         for change in changes {
             notice.push_str(&format!(
                 "\n  ⎿  {} {}",
                 operation_verb(change.operation),
                 change.key
             ));
-            // The scope the change was addressed to, when the frame said so.
-            // An unknown scope stays off the row rather than naming a root
-            // the producer never claimed.
             if let Some(scope) = change.scope.label() {
-                notice.push_str(&format!(" · {scope}"));
+                notice.push_str(&format!(" · scope: {scope}"));
             }
         }
-        // When the /memory pane is open, the pane refresh below is the live
-        // view of the same changes; a transcript notice would duplicate it.
-        // Land the notice only when the pane is closed.
-        if self.pane != Pane::Memory {
-            self.system_line(notice);
-        }
+        // The transcript is the durable record of what happened; the pane is
+        // the live view of what exists now. A memory change is permanent, so
+        // the notice always lands in the transcript, and the open pane also
+        // refreshes to show the new state.
+        self.system_line(notice);
         if self.pane == Pane::Memory
             && let Some(s) = self.session.as_ref()
         {
@@ -151,20 +144,6 @@ fn operation_verb(operation: MemoryOperation) -> &'static str {
         MemoryOperation::Deleted => "deleted",
         MemoryOperation::Promoted => "promoted",
         MemoryOperation::Demoted => "demoted",
-        // A future operation this build does not name; show the key with a
-        // neutral verb rather than dropping the row.
         MemoryOperation::Unknown => "changed",
-    }
-}
-
-/// The verb for the summary line: the shared operation when every change
-/// carries one, otherwise the neutral verb, so a mixed batch never claims a
-/// single operation.
-fn summary_verb(changes: &[MemoryChange]) -> &'static str {
-    match changes.first() {
-        Some(first) if changes.iter().all(|c| c.operation == first.operation) => {
-            operation_verb(first.operation)
-        }
-        _ => "changed",
     }
 }

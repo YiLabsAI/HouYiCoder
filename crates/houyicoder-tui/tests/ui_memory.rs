@@ -262,10 +262,10 @@ fn test_esc_closes_pane() {
 }
 
 /// A scripted save_memory call in the main run drains at the run boundary
-/// into a PrimaryAgent notice. The notice summary carries the causal label
-/// (from this turn) and the count; the expanded per-change row carries the
-/// scope the write was addressed to. Pins the H3b causal label and the H3c
-/// scope row through the real binary, not a TestBackend.
+/// into a PrimaryAgent notice. The notice summary carries the producer label
+/// (saved by the agent) and the count; the expanded per-change row carries
+/// the scope the write was addressed to. Pins the producer-label summary and
+/// the scope row through the real binary, not a TestBackend.
 #[test]
 #[ignore]
 fn test_notice_label_and_scope() {
@@ -281,8 +281,8 @@ fn test_notice_label_and_scope() {
     s.send_str("note the deploy gate");
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for("from this turn", RENDER_TIMEOUT),
-        "the notice summary should carry the causal label:\n{}",
+        s.wait_for("saved by the agent", RENDER_TIMEOUT),
+        "the notice summary should carry the producer label:\n{}",
         s.output()
     );
     assert!(
@@ -299,7 +299,7 @@ fn test_notice_label_and_scope() {
         s.output()
     );
     assert!(
-        s.wait_for("· project", RENDER_TIMEOUT),
+        s.wait_for("scope: project", RENDER_TIMEOUT),
         "the expanded row should name the scope the write was addressed to:\n{}",
         s.output()
     );
@@ -308,11 +308,11 @@ fn test_notice_label_and_scope() {
 }
 
 /// A background extractor notice lands in the transcript after the run that
-/// triggered it, with the causal label and the auto scope the extractor's
-/// pinned save carries. Covers the real order the design names (a background
-/// notice arriving after the user's turn) end-to-end through the real binary,
-/// not a synthetic TestBackend injection. The pane-open skip path is covered
-/// by the unit tests; this test pins the live notice itself.
+/// triggered it, with the producer label and the auto scope the extractor's
+/// pinned save carries. Covers the real order a background notice arrives in
+/// after the user's turn, end-to-end through the real binary, not a synthetic
+/// TestBackend injection. The pane-open path is covered by the unit tests;
+/// this test pins the live notice itself.
 #[test]
 #[ignore]
 fn test_extractor_notice_lands() {
@@ -335,16 +335,16 @@ fn test_extractor_notice_lands() {
         "the main run should finish before the extractor fires:\n{}",
         s.output()
     );
-    // The extractor's notice lands after the run with the causal label and
+    // The extractor's notice lands after the run with the producer label and
     // the auto scope the pinned save carries.
     assert!(
-        s.wait_for("from this turn", RENDER_TIMEOUT),
-        "the background notice should carry the causal label:\n{}",
+        s.wait_for("extracted in background", RENDER_TIMEOUT),
+        "the background notice should carry the producer label:\n{}",
         s.output()
     );
     s.send_key(&Key::Ctrl('o'));
     assert!(
-        s.wait_for("created gate-fact · auto", RENDER_TIMEOUT),
+        s.wait_for("created gate-fact · scope: auto", RENDER_TIMEOUT),
         "the expanded row should name the key and the auto scope:\n{}",
         s.output()
     );

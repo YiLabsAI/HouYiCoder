@@ -89,12 +89,14 @@ fn todo_frame(items: &[(&str, &str)]) -> TranscriptFrame {
 #[test]
 fn test_memory_change_refreshes_pane() {
     use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeScope, MemoryOperation,
+        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
+        MemoryOperation,
     };
     let (mut app, events) = connected_app_events();
     app.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-1".into()),
+        origin: MemoryChangeOrigin::PrimaryAgent,
         causality: MemoryChangeCausality::ThisTurn,
         changes: vec![MemoryChange {
             key: "alpha".into(),
@@ -106,20 +108,22 @@ fn test_memory_change_refreshes_pane() {
     assert_eq!(req.req_id.0, 0, "first request on a fresh session");
 }
 
-/// With the /memory pane open, a broadcast refreshes the pane and adds no
-/// transcript notice line (design H3: do not duplicate the notice as a
-/// transcript line while the pane shows the live list). A closed pane still
-/// lands the notice.
+/// A memory change is a permanent event, so the transcript always records the
+/// notice — whether or not the /memory pane is open. With the pane open the
+/// notice lands and the pane also refreshes; with the pane closed the notice
+/// lands alone. Dedup keeps the same change id from writing twice.
 #[test]
-fn test_open_pane_skips_notice() {
+fn test_open_pane_keeps_notice() {
     use crate::records::TranscriptLine;
     use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeScope, MemoryOperation,
+        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
+        MemoryOperation,
     };
-    let (mut app, _events) = connected_app_events();
+    let (mut app, events) = connected_app_events();
     app.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("c1".into()),
+        origin: MemoryChangeOrigin::PrimaryAgent,
         causality: MemoryChangeCausality::ThisTurn,
         changes: vec![MemoryChange {
             key: "k".into(),
@@ -132,11 +136,13 @@ fn test_open_pane_skips_notice() {
         .iter()
         .filter(|l| matches!(l, TranscriptLine::System(t) if t.contains("Memory")))
         .count();
-    assert_eq!(open_lines, 0, "an open pane adds no transcript notice line");
+    assert_eq!(open_lines, 1, "an open pane still records the notice");
+    let _req = wait_for_request(&events, |p| matches!(p, FrontendRequest::MemoryList));
 
     app.pane = Pane::Transcript;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("c2".into()),
+        origin: MemoryChangeOrigin::PrimaryAgent,
         causality: MemoryChangeCausality::ThisTurn,
         changes: vec![MemoryChange {
             key: "k2".into(),
@@ -149,5 +155,5 @@ fn test_open_pane_skips_notice() {
         .iter()
         .filter(|l| matches!(l, TranscriptLine::System(t) if t.contains("Memory")))
         .count();
-    assert_eq!(closed_lines, 1, "a closed pane still lands the notice");
+    assert_eq!(closed_lines, 2, "a closed pane also lands the notice");
 }

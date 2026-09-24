@@ -3,8 +3,8 @@
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::{
-    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryDetail, MemorySummaryEntry,
-    ToggleState,
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryDetail,
+    MemorySummaryEntry, ToggleState,
 };
 use houyicoder_protocol::frontend::model::{ModelApplyResult, SpeedMode};
 use houyicoder_protocol::frontend::run::{
@@ -274,9 +274,10 @@ pub enum ServerEvent {
     /// Each acknowledgement removes only the matching pending item, so delayed
     /// delivery cannot remove a newer input with the same text.
     QueuedInputCommitted { inputs: Vec<QueuedInput> },
-    /// Successful memory changes, with the turn they belong to.
+    /// Successful memory changes, with the producer that made them.
     MemoryChanged {
         id: MemoryChangeId,
+        origin: MemoryChangeOrigin,
         causality: MemoryChangeCausality,
         changes: Vec<MemoryChange>,
     },

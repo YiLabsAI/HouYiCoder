@@ -620,7 +620,7 @@ fn test_slots_active_multi_call() {
 #[test]
 fn test_memory_notice_slots() {
     let notice = TranscriptLine::System(
-        "Memory updated from this turn: 2 changes · /memory\n  ⎿  updated alpha · auto\n  ⎿  updated beta · auto"
+        "Memory saved by the agent: 2 changes · /memory\n  ⎿  updated alpha · scope: auto\n  ⎿  updated beta · scope: auto"
             .to_string(),
     );
     let t = vec![notice.clone()];
@@ -654,16 +654,16 @@ fn test_memory_notice_slots() {
 /// collapsed row offers expand, an open row offers collapse.
 #[test]
 fn test_notice_summary_toggle() {
-    let text = "Memory updated from this turn: 2 changes · /memory\n  ⎿  updated alpha · auto";
+    let text = "Memory saved by the agent: 2 changes · /memory\n  ⎿  updated alpha · scope: auto";
     assert_eq!(
         notice_lines(text, false, 200),
-        vec!["✻ Memory updated from this turn: 2 changes · /memory (ctrl+o to expand)".to_string()]
+        vec!["✻ Memory saved by the agent: 2 changes · /memory (ctrl+o to expand)".to_string()]
     );
     assert_eq!(
         notice_lines(text, true, 200),
         vec![
-            "✻ Memory updated from this turn: 2 changes · /memory (ctrl+o to collapse)".to_string(),
-            "  ⎿  updated alpha · auto".to_string(),
+            "✻ Memory saved by the agent: 2 changes · /memory (ctrl+o to collapse)".to_string(),
+            "  ⎿  updated alpha · scope: auto".to_string(),
         ]
     );
 }
@@ -685,7 +685,7 @@ fn test_notice_slot_rows_fallback() {
 /// lines shifts every row below it and clips the transcript tail.
 #[test]
 fn test_notice_rows_fit_width() {
-    let text = "Memory updated from this turn: 2 changes · /memory\n  ⎿  updated alpha · auto\n  ⎿  deleted a-key-that-outgrows-the-pane · auto";
+    let text = "Memory saved by the agent: 2 changes · /memory\n  ⎿  updated alpha · scope: auto\n  ⎿  deleted a-key-that-outgrows-the-pane · scope: auto";
     for expanded in [false, true] {
         for width in [16usize, 24, 40, 80] {
             for row in notice_lines(text, expanded, width) {
@@ -702,10 +702,10 @@ fn test_notice_rows_fit_width() {
 #[test]
 fn test_notice_shape_matches() {
     assert!(is_memory_notice(&TranscriptLine::System(
-        "Memory updated from this turn: 2 changes · /memory".to_string()
+        "Memory saved by the agent: 2 changes · /memory".to_string()
     )));
     assert!(is_memory_notice(&TranscriptLine::System(
-        "Memory created from previous turn: 1 change · /memory\n  ⎿  created alpha · project"
+        "Memory extracted in background: 1 change · /memory\n  ⎿  created alpha · scope: project"
             .to_string()
     )));
     assert!(!is_memory_notice(&TranscriptLine::System(

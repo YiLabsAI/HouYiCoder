@@ -511,14 +511,12 @@ async fn drive_connection(
                     }
                     FrontendEvent::MemoryChanged {
                         id,
+                        origin,
                         causality,
                         changes,
-                        ..
                     } => {
                         let _send = agent_tx.send(SessionMessage::Event(ServerEvent::MemoryChanged {
-                            id,
-                            causality,
-                            changes,
+                            id, origin, causality, changes,
                         }));
                     }
                     FrontendEvent::SystemLine { text } => {
