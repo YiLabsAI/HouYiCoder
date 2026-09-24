@@ -69,10 +69,17 @@ struct DurableWatermark {
 enum PageRead {
     /// The newest turns, read backwards from EOF.
     Tail,
-    /// What the log appended after the byte the window ends at, read forward
-    /// from it. A delta is only ever taken for a window that follows the tail:
-    /// a window the user walked away from counts an append as newer instead.
-    Append(u64),
+    /// What the log appended between two bytes, read forward from the first.
+    ///
+    /// The end is the log size when the read was dispatched, not the size at
+    /// the moment the worker runs: a session that appends while a delta is in
+    /// flight would otherwise come back with events past the watermark the
+    /// delta is applied under, and the window would hold bytes its own
+    /// watermark does not describe.
+    ///
+    /// A delta is only ever taken for a window that follows the tail: a window
+    /// the user walked away from counts an append as newer instead.
+    Append { from: u64, to: u64 },
     /// The complete turns older than a durable anchor.
     Older(TurnAnchor),
     /// The oldest turns, read forward from the start of the log.
@@ -231,8 +238,8 @@ impl SessionLogTrajectory {
         std::thread::spawn(move || {
             let page = match read {
                 PageRead::Tail => history.tail_turns(page_turns, PAGE_MAX_BYTES),
-                PageRead::Append(from) => {
-                    let window = history.window(from, DELTA_MAX_BYTES);
+                PageRead::Append { from, to } => {
+                    let window = history.window(from, to.saturating_sub(from));
                     TurnPage {
                         events: window.events,
                         oldest_anchor: None,
@@ -391,7 +398,7 @@ impl SessionLogTrajectory {
                     // the window ends at. A read that starts anywhere else is
                     // not that, so it is dropped rather than spliced into the
                     // wrong place.
-                    PageRead::Append(from) => {
+                    PageRead::Append { from, to } => {
                         if state
                             .pages
                             .back()
@@ -400,10 +407,20 @@ impl SessionLogTrajectory {
                             Self::drop_view(state);
                             return;
                         }
+                        // A delta whose budget stopped short of the byte it
+                        // was dispatched for leaves a line unread: the window
+                        // keeps what arrived and its watermark stays where it
+                        // was, so the next frame reads the rest rather than
+                        // reporting a history it does not hold.
+                        let reached = outcome.end_offset >= to;
                         if let Some(back) = state.pages.back_mut() {
                             back.end_offset = outcome.end_offset;
                             back.skipped += outcome.skipped;
                             back.events.extend(outcome.events);
+                        }
+                        if !reached {
+                            Self::drop_view(state);
+                            return;
                         }
                     }
                     PageRead::Tail => {

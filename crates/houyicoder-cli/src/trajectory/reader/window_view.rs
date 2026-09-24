@@ -199,7 +199,10 @@ pub(super) fn append_or_tail(history: &SessionHistory, state: &TrajectoryState) 
     let end = back.end_offset;
     let size = history.log_size();
     if end > 0 && size > end && size - end <= DELTA_MAX_BYTES {
-        PageRead::Append(end)
+        PageRead::Append {
+            from: end,
+            to: size,
+        }
     } else {
         PageRead::Tail
     }

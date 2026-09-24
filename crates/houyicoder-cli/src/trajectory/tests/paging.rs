@@ -1463,3 +1463,213 @@ fn test_burst_reads_tail() {
         "and the burst is in the window"
     );
 }
+
+/// An append that lands while a delta is in flight is read by the next delta
+/// rather than folded into the first: the read is bounded by the byte it was
+/// dispatched for, so the window never holds bytes its own watermark does not
+/// describe, and no frame falls back to walking the tail page again.
+#[test]
+fn test_append_delta_stays_bounded() {
+    // The first delta read is held open, so the second append certainly lands
+    // while it is in flight rather than racing it.
+    let (store, reader, sid, history, entered, release) = gated_disk_reader(300, "append");
+    drop(pump(&reader));
+
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let append = |text: &str, ts: u64| {
+        let entry = SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts,
+            prev_hash: None,
+            event: SessionEvent::UserInput { text: text.into() },
+        };
+        rt.block_on(store.append(entry)).expect("append");
+    };
+
+    let (_, reads_before, bytes_before) = history.read_stats();
+    append("first", 900_000);
+    drop(reader.trajectory());
+    entered
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the delta read starts");
+    append("second", 901_000);
+    release.send(()).ok();
+
+    let view = pump(&reader);
+    let (_, reads_after, bytes_after) = history.read_stats();
+
+    let titles: Vec<String> = turn_rows(&view)
+        .into_iter()
+        .map(|(_, title)| title)
+        .collect();
+    assert_eq!(
+        titles.iter().filter(|title| *title == "first").count(),
+        1,
+        "the first append is in the window once: {titles:?}"
+    );
+    assert_eq!(
+        titles.iter().filter(|title| *title == "second").count(),
+        1,
+        "and so is the one that landed while the read was in flight"
+    );
+    assert_eq!(reads_after - reads_before, 2, "one range read per append");
+    // A delta that ran past the byte it was dispatched for would leave the
+    // window's end at EOF with a watermark that describes less, and the next
+    // frame would read a whole page behind it.
+    assert!(
+        bytes_after - bytes_before < DELTA_MAX_BYTES,
+        "and both are deltas rather than a page read behind them: {} bytes",
+        bytes_after - bytes_before
+    );
+}
+
+/// A range read never returns bytes past the count it was asked for, which is
+/// what lets a delta be applied under the watermark it was dispatched with.
+#[test]
+fn test_range_read_bounded() {
+    let (store, _reader, sid, history, _root) = disk_reader_at(50);
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    for i in 0..20u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: 1_000_000 + i,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: format!("later {i}"),
+            },
+        }))
+        .expect("append");
+    }
+    let size = history.log_size();
+    assert!(size > 0, "the log has bytes");
+
+    for budget in [1u64, 64, 512, 4096] {
+        let window = history.window(0, budget);
+        for event in &window.events {
+            assert!(
+                event.byte_offset < budget,
+                "an event at {} was returned for a {budget}-byte read",
+                event.byte_offset
+            );
+        }
+        assert!(
+            window.next_offset <= budget,
+            "the read stopped at {} for a {budget}-byte budget",
+            window.next_offset
+        );
+    }
+}
+
+/// A file-backed reader whose first range read waits for the test, so an append
+/// can land while a delta is in flight.
+fn gated_disk_reader(
+    turns: usize,
+    tag: &str,
+) -> (
+    Arc<SessionStore>,
+    SessionLogTrajectory,
+    SessionId,
+    Arc<SessionHistory>,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    use houyicoder_context::{
+        CheckpointId, CheckpointManifest, ContextBackend, ContextError, LogRangeRead, ReverseRead,
+    };
+
+    type PFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+    struct Gated {
+        inner: LocalFileBackend,
+        entered: std::sync::mpsc::Sender<()>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        held: std::sync::atomic::AtomicBool,
+    }
+
+    impl ContextBackend for Gated {
+        fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
+            self.inner.append(event)
+        }
+        fn read_range(
+            &self,
+            session: SessionId,
+            from: Option<EventId>,
+            to: Option<EventId>,
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+            self.inner.read_range(session, from, to)
+        }
+        fn replay(
+            &self,
+            session: SessionId,
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+            self.inner.replay(session)
+        }
+        fn write_checkpoint(
+            &self,
+            manifest: CheckpointManifest,
+        ) -> PFut<'_, Result<CheckpointId, ContextError>> {
+            self.inner.write_checkpoint(manifest)
+        }
+        fn read_checkpoint(
+            &self,
+            id: CheckpointId,
+        ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
+            self.inner.read_checkpoint(id)
+        }
+        fn list_checkpoints(
+            &self,
+            session: SessionId,
+        ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
+            self.inner.list_checkpoints(session)
+        }
+        fn supports_log_windows(&self) -> bool {
+            true
+        }
+        fn log_size(&self, session: SessionId) -> u64 {
+            self.inner.log_size(session)
+        }
+        fn read_lines_reverse(&self, session: SessionId, from: u64, max: u64) -> ReverseRead {
+            self.inner.read_lines_reverse(session, from, max)
+        }
+        fn read_log_range(&self, session: SessionId, from: u64, max: u64) -> LogRangeRead {
+            if !self.held.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                self.entered.send(()).ok();
+                self.release.lock().expect("release lock").recv().ok();
+            }
+            self.inner.read_log_range(session, from, max)
+        }
+    }
+
+    let root = std::env::temp_dir().join(format!(
+        "houyi_gate_{tag}_{}_{}",
+        SessionId::new(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let store = Arc::new(SessionStore::new(Box::new(Gated {
+        inner: LocalFileBackend::new(root),
+        entered: entered_tx,
+        release: std::sync::Mutex::new(release_rx),
+        held: std::sync::atomic::AtomicBool::new(false),
+    })));
+    let sid = SessionId::new();
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    for i in 0..turns as u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: i * 1000,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: format!("prompt {i}"),
+            },
+        }))
+        .expect("append");
+    }
+    let (reader, history) = reader_of(&store, sid);
+    (store, reader, sid, history, entered_rx, release_tx)
+}
