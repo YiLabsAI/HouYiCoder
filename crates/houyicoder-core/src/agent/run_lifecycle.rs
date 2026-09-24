@@ -167,6 +167,11 @@ impl Runner {
         self.reset_user_turn();
         let started = Instant::now();
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
+        // Drain the primary recorder on every terminal outcome, not only the
+        // final-output path: an interrupted, max-turns, or errored run that
+        // saved mid-flight must still emit its notice so the change is not
+        // carried into the next run and mis-attributed.
+        self.memory.drain_primary_changes();
         self.record_run_completion(session, Some(started), &result)
             .await;
         self.emit_run_result(&result);
@@ -340,13 +345,12 @@ impl Runner {
         );
     }
 
-    /// Fire background memory at the run boundary. Drain the primary
-    /// recorder so a main-agent save emits its notice now, then run the
-    /// extractor and dream. Reward capture is withheld when the operator
-    /// sets HOUYICODER_REWARD_OFF, which suppresses the dream reward signal
-    /// only.
+    /// Fire background memory at the run boundary: the extractor and dream
+    /// workers run only on a final-output outcome. The primary recorder is
+    /// drained in the run settlement (run) on every terminal outcome, not
+    /// here. Reward capture is withheld when the operator sets
+    /// HOUYICODER_REWARD_OFF, which suppresses the dream reward signal only.
     pub(crate) async fn fire_background_memory(&self, session: SessionId) {
-        self.memory.drain_primary_changes();
         let reward_off = std::env::var("HOUYICODER_REWARD_OFF").is_ok();
         let reward = if reward_off {
             None

@@ -1,6 +1,8 @@
 use super::*;
+use crate::agent::ToolRegistry;
 use crate::agent::auto_dream::DreamRunner;
 use crate::agent::memory::{MemoryGates, MemoryRuntime};
+use crate::agent::runner_config::RunnerConfig;
 use houyicoder_api::agent_event::{
     AgentEventHandlers, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent, MemoryOperation,
 };
@@ -122,13 +124,62 @@ async fn test_fire_background_drives_dream() {
 }
 
 /// fire_background_memory is the run-boundary call site that drains the
-/// primary recorder before firing the background extractor. With no
-/// extractor or dream wired the drain still runs: a recorded save lands
-/// as one PrimaryAgent event. Guards the drain call site in
-/// fire_background_memory (a mutation dropping the drain call turns this red).
+/// fire_background_memory no longer drains the primary recorder — the drain
+/// moved to the run settlement so a non-final-output terminal still emits.
+/// With a recorded save, fire_background_memory leaves the recorder full.
 #[tokio::test]
-async fn test_fire_background_drains_primary() {
+async fn test_fire_background_keeps_recorder() {
     let mut runner = runner_with_empty_dream();
+    let captured = Arc::new(StdMutex::new(Vec::<MemoryChangedEvent>::new()));
+    let sink = Arc::clone(&captured);
+    let mut handlers = AgentEventHandlers::default();
+    handlers.set_memory_changed(Arc::new(move |event| {
+        sink.lock().expect("captured").push(event);
+    }));
+    runner.memory.set_event_handlers(&handlers);
+    let recorder = runner.memory.install_primary_recorder();
+    recorder.record("alpha", MemoryOperation::Created, MemoryScope::Auto);
+    runner.fire_background_memory(SessionId::new()).await;
+    assert!(
+        captured.lock().expect("captured").is_empty(),
+        "fire_background_memory must not drain; the run settlement does"
+    );
+    assert_eq!(
+        recorder.take().len(),
+        1,
+        "the recorder still holds the save for the settlement"
+    );
+}
+
+/// A run that ends on a non-final-output terminal still drains the primary
+/// recorder at the settlement. max_turns=0 ends the run at MaxTurnsReached
+/// before any model call, so fire_background_memory never runs; only the
+/// settlement drain can emit. A pre-recorded save in the runtime's recorder
+/// proves the drain fires.
+#[tokio::test]
+async fn test_run_drains_on_cap() {
+    let store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
+        houyicoder_memory::InMemoryBackend::new(),
+    )));
+    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
+        Arc::new(crate::provider::test_support::FakeProvider::text("x"));
+    let runtime = MemoryRuntime::from_parts(
+        store.clone(),
+        None,
+        MemoryGates::new(false, false),
+        None,
+        None,
+    );
+    let mut runner = Runner::new(
+        store,
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig {
+            max_turns: 0,
+            ..Default::default()
+        },
+    )
+    .install_memory(runtime);
     let recorder = runner.memory.install_primary_recorder();
     let captured = Arc::new(StdMutex::new(Vec::<MemoryChangedEvent>::new()));
     let sink = Arc::clone(&captured);
@@ -137,16 +188,15 @@ async fn test_fire_background_drains_primary() {
         sink.lock().expect("captured").push(event);
     }));
     runner.memory.set_event_handlers(&handlers);
-    recorder.record("alpha", MemoryOperation::Created, MemoryScope::Auto);
-    runner.fire_background_memory(SessionId::new()).await;
+    recorder.record("cap-save", MemoryOperation::Created, MemoryScope::Auto);
+    let _result = runner.run(SessionId::new(), "remember x".into()).await;
     let events = captured.lock().expect("captured").clone();
     assert_eq!(
         events.len(),
         1,
-        "fire_background_memory drained the recorder"
+        "the settlement drains on a max-turns terminal"
     );
     assert_eq!(events[0].origin, MemoryChangeOrigin::PrimaryAgent);
-    assert_eq!(events[0].changes.len(), 1);
 }
 
 /// The main runner records primary saves at call time and drains at the run
