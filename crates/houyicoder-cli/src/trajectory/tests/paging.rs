@@ -1697,3 +1697,47 @@ fn gated_disk_reader(
     let (reader, history) = reader_of(&store, sid);
     (store, reader, sid, history, entered_rx, release_tx)
 }
+
+/// An append extends the page it lands in: the pages already resident are not
+/// folded again, and the work the append costs is the events it brought rather
+/// than the window it lands in.
+#[test]
+fn test_append_extends_page() {
+    let (store, reader, sid, _history, _root) = disk_reader_at(300);
+    drop(pump(&reader));
+    let (seeds_before, applied_before) = reader.projection_stats();
+
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    for i in 0..3u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: 900_000 + i,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: format!("appended {i}"),
+            },
+        }))
+        .expect("append");
+    }
+    let view = pump(&reader);
+    let (seeds_after, applied_after) = reader.projection_stats();
+
+    assert_eq!(
+        seeds_after, seeds_before,
+        "no page is folded from scratch for an append"
+    );
+    assert!(
+        applied_after > applied_before,
+        "the events the append brought are applied to the page they landed in: \
+         {applied_before} then {applied_after}"
+    );
+    let titles: Vec<String> = turn_rows(&view)
+        .into_iter()
+        .map(|(_, title)| title)
+        .collect();
+    assert!(
+        titles.iter().any(|title| title == "appended 2"),
+        "and the window shows them: {titles:?}"
+    );
+}

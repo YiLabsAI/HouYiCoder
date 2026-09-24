@@ -537,29 +537,29 @@ impl TurnBuilder {
     /// The rows carry the turn's facts; the records are what a drill asks for,
     /// so the caller decides whether to keep them. A builder that never opened
     /// holds no turn to flush.
-    pub(super) fn flush(
-        &mut self,
-        turns: &mut Vec<TrajectoryTurn>,
-        n: usize,
-    ) -> Option<(TrajectoryTurnKey, Vec<TrajectoryRecord>)> {
-        let key = self.key.take()?;
+    /// The open turn as it stands, without closing it.
+    ///
+    /// A fold that keeps drawing a turn while more events arrive needs the
+    /// turn's facts without giving up the accumulators that more events will
+    /// attach to.
+    pub(super) fn snapshot(&self, n: usize) -> Option<TrajectoryTurn> {
+        let key = self.key.as_ref()?;
         // A delegation with no return in this window stays open: keep it
         // visible with no duration rather than inventing an end.
         let wall_ms = self
             .last_ts
             .saturating_sub(self.first_ts.unwrap_or(self.last_ts));
-        let title = self.title();
-        turns.push(TrajectoryTurn {
+        Some(TrajectoryTurn {
             n,
             key: key.clone(),
-            title,
-            boundary_before: std::mem::take(&mut self.boundary_before),
+            title: self.title(),
+            boundary_before: self.boundary_before.clone(),
             tokens_in: self.tokens_in.map(|v| v as usize),
             tokens_out: self.tokens_out.map(|v| v as usize),
             cache_read: self.cache_read,
             cache_write: self.cache_write,
-            models: std::mem::take(&mut self.models),
-            efforts: std::mem::take(&mut self.efforts),
+            models: self.models.clone(),
+            efforts: self.efforts.clone(),
             reasoning_tokens: self.reasoning_tokens.map(|v| v as usize),
             tool_count: self.tool_count,
             tool_fail: self.tool_fail,
@@ -569,9 +569,30 @@ impl TurnBuilder {
             // from the run leg, used only when it reaches further.
             duration_ms: wall_ms.max(self.run_completed_ms),
             success: self.success,
-        });
+        })
+    }
+
+    /// Close the open turn: hand back what it holds and leave the builder
+    /// unopened, so the next event opens the next turn.
+    pub(super) fn finalize(
+        &mut self,
+        n: usize,
+    ) -> Option<(TrajectoryTurn, TrajectoryTurnKey, Vec<TrajectoryRecord>)> {
+        let turn = self.snapshot(n)?;
+        let key = self.key.take()?;
         let records = std::mem::take(&mut self.records);
         self.first_ts = None;
+        Some((turn, key, records))
+    }
+
+    /// Close the open turn into a list, the way a one-shot fold does.
+    pub(super) fn flush(
+        &mut self,
+        turns: &mut Vec<TrajectoryTurn>,
+        n: usize,
+    ) -> Option<(TrajectoryTurnKey, Vec<TrajectoryRecord>)> {
+        let (turn, key, records) = self.finalize(n)?;
+        turns.push(turn);
         Some((key, records))
     }
 }

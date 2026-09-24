@@ -89,7 +89,7 @@ pub(super) fn anchor_of(state: &TrajectoryState, key: &TrajectoryTurnKey) -> Opt
     state
         .pages
         .iter()
-        .flat_map(|page| page.events.iter())
+        .flat_map(|page| page.source.events.iter())
         .find(|event| event.entry.id.to_string() == key.as_str())
         .map(|event| event.byte_offset)
 }

@@ -115,7 +115,7 @@ pub(in crate::trajectory) fn apply_turn_content(
     builder: &mut TurnBuilder,
     ev: &SessionLogEntry,
     calls: &CallIndex,
-    spawned: &HashSet<&str>,
+    spawned: &HashSet<String>,
 ) {
     match &ev.event {
         SessionEvent::ModelStepTiming {
@@ -136,7 +136,7 @@ pub(in crate::trajectory) fn apply_turn_content(
             tool,
             input,
         } => {
-            if !spawned.contains(call_id.as_str()) {
+            if !spawned.contains(call_id) {
                 builder.begin_tool(call_id, tool, input, ev.ts);
             }
         }
@@ -145,7 +145,7 @@ pub(in crate::trajectory) fn apply_turn_content(
             output,
             duration_ms,
         } => {
-            if spawned.contains(call_id.as_str()) {
+            if spawned.contains(call_id) {
                 return;
             }
             let failed = result_failed(output, call_id, calls);

@@ -6,37 +6,13 @@
 //! path. The head's summary supplies the session's own figures: a page holds the
 //! newest turns, and its totals would report the page as the session.
 
-use super::super::view::project_rows;
 use super::{DELTA_MAX_BYTES, PageRead, SessionHistory};
 use super::{DurableWatermark, SessionLogTrajectory, TrajectoryHead, TrajectoryState};
-use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{SessionTiming, SubagentUsage};
 use houyicoder_tui::view::trajectory_pane::{TrajectoryRow, TrajectoryView, TrajectoryViewState};
 use std::sync::Arc;
 
 impl SessionLogTrajectory {
-    /// The window's events in log order: older pages first, the tail last.
-    ///
-    /// A page whose oldest turn was cut short by the byte budget carries a
-    /// fragment of a turn, so everything before the window's first user input
-    /// is dropped: rendering it would invent a turn the session never had.
-    fn window_events(state: &TrajectoryState) -> Vec<SessionLogEntry> {
-        let mut events: Vec<SessionLogEntry> = state
-            .pages
-            .iter()
-            .flat_map(|page| page.events.iter())
-            .map(|located| located.entry.clone())
-            .collect();
-        if state.pages.front().is_some_and(|page| page.oldest_partial)
-            && let Some(cut) = events
-                .iter()
-                .position(|entry| matches!(entry.event, SessionEvent::UserInput { .. }))
-        {
-            events.drain(..cut);
-        }
-        events
-    }
-
     /// Build the view for the window in hand: rows from the page, every
     /// session figure from the head's summary.
     ///
@@ -56,16 +32,15 @@ impl SessionLogTrajectory {
             state.view = Some(Arc::clone(&view));
             return view;
         }
-        let events = Self::window_events(state);
-        // Number from the rows the projection actually produced, not from the
-        // user inputs in the events: a window that opens mid-run yields a turn
-        // the fold numbers but no user input counts, and subtracting that turn
-        // as if it were hidden would overstate what is behind the window.
-        let mut rows = project_rows(&events, 1);
-        let visible = rows
+        // The window is the pages' own rows, concatenated: each page folded
+        // once when it landed, and an append extends only the page it landed
+        // in, so no page is folded again for a frame that draws the window.
+        let mut rows: Vec<TrajectoryRow> = state
+            .pages
             .iter()
-            .filter(|row| matches!(row, TrajectoryRow::Turn(_)))
-            .count();
+            .flat_map(|page| page.projection.rows())
+            .collect();
+        let visible = rows.len();
         // While the window ends at the tail it hides only what is behind it, so
         // the count is derived, from the total the window was read at: the
         // session's total moves on every append, and numbering a page still in
@@ -93,7 +68,7 @@ impl SessionLogTrajectory {
         let value = Arc::make_mut(&mut view);
         value.hidden_turns = older_hidden;
         value.newer_hidden = newer_hidden;
-        value.skipped_records = state.pages.iter().map(|page| page.skipped).sum();
+        value.skipped_records = state.pages.iter().map(|page| page.source.skipped).sum();
         value.rows = rows;
         state.view = Some(Arc::clone(&view));
         view
@@ -197,7 +172,7 @@ pub(super) fn append_or_tail(history: &SessionHistory, state: &TrajectoryState) 
     let Some(back) = state.pages.back() else {
         return PageRead::Tail { to: size };
     };
-    let end = back.end_offset;
+    let end = back.source.end_offset;
     if end > 0 && size > end && size - end <= DELTA_MAX_BYTES {
         PageRead::Append {
             from: end,

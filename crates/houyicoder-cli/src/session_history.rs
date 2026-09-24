@@ -139,6 +139,25 @@ pub(crate) struct TurnPage {
 }
 
 impl TurnPage {
+    /// Drop the fragment before the page's first turn.
+    ///
+    /// A page whose oldest turn was cut short by the byte budget starts inside
+    /// a turn. What is left of it belongs to a turn the page does not hold, so
+    /// it is dropped rather than drawn as a turn the session never had.
+    pub(crate) fn drop_leading_fragment(&mut self) {
+        if !self.oldest_partial {
+            return;
+        }
+        if let Some(cut) = self
+            .events
+            .iter()
+            .position(|event| is_user_input(&event.entry))
+        {
+            self.events.drain(..cut);
+        }
+        self.oldest_partial = false;
+    }
+
     /// How many turns this page opens. A page is read as a count of turns, so
     /// this is the unit a caller moves a window by: the tail page's count says
     /// what it hides, and an older page's count says how far back it reached.

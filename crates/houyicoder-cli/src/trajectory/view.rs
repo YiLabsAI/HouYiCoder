@@ -24,7 +24,7 @@ use houyicoder_tui::view::trajectory_pane::{
 /// whole payload the model sent (a write call carries the entire file body),
 /// and the index exists only during view assembly, so copying
 /// them would duplicate the session's writes for no gain.
-pub(super) type CallIndex<'a> = HashMap<&'a str, (&'a str, &'a serde_json::Value)>;
+pub(super) type CallIndex = HashMap<String, (String, serde_json::Value)>;
 
 /// One line of preview text for an event (truncated so the L1 row stays one
 /// line). The L2 detail carries the full content separately.
@@ -43,19 +43,52 @@ pub(super) fn preview(s: &str) -> String {
 /// own rather than while walking the turns: a result is judged against the
 /// call that produced it, and the two events need not sit in the same turn,
 /// so the index must be complete before the first result is judged.
-fn index_calls(events: &[SessionLogEntry]) -> CallIndex<'_> {
+fn index_calls(events: &[SessionLogEntry]) -> CallIndex {
     let mut calls = CallIndex::new();
     for ev in events {
-        if let SessionEvent::ToolCall {
-            call_id,
-            tool,
-            input,
-        } = &ev.event
-        {
-            calls.insert(call_id.as_str(), (tool.as_str(), input));
-        }
+        note_call(&mut calls, ev);
     }
     calls
+}
+
+/// Note a tool call in the index, so a later result can name the tool it
+/// answers and the input it was given.
+fn note_call(calls: &mut CallIndex, ev: &SessionLogEntry) {
+    if let SessionEvent::ToolCall {
+        call_id,
+        tool,
+        input,
+    } = &ev.event
+    {
+        calls.insert(call_id.clone(), (tool.clone(), input.clone()));
+    }
+}
+
+/// Note a delegation's trigger call.
+///
+/// A spawn claims the delegation call it was issued from, so the row that call
+/// opened is not also drawn as a plain tool call. The unclaimed stack carries
+/// across events: a spawn answers a call that may sit in an earlier one.
+fn note_spawned(spawned: &mut HashSet<String>, unclaimed: &mut Vec<String>, ev: &SessionLogEntry) {
+    match &ev.event {
+        SessionEvent::ToolCall { call_id, tool, .. } if tool == DELEGATION_TOOL => {
+            unclaimed.push(call_id.clone());
+        }
+        SessionEvent::SubagentSpawn { trigger_source, .. } => {
+            match trigger_source.strip_prefix("model:") {
+                Some(id) => {
+                    spawned.insert(id.to_string());
+                    unclaimed.retain(|c| c != id);
+                }
+                None => {
+                    if let Some(id) = unclaimed.pop() {
+                        spawned.insert(id);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The tool a model delegation is issued through.
@@ -72,33 +105,7 @@ const DELEGATION_TOOL: &str = "agent";
 /// which a replay reads as a model trigger. Those spawns are matched by
 /// position instead: a spawn immediately follows the call it came from, so it
 /// claims the newest delegation call not already claimed by another spawn.
-fn spawned_call_ids(events: &[SessionLogEntry]) -> HashSet<&str> {
-    let mut suppressed = HashSet::new();
-    let mut unclaimed: Vec<&str> = Vec::new();
-    for ev in events {
-        match &ev.event {
-            SessionEvent::ToolCall { call_id, tool, .. } if tool == DELEGATION_TOOL => {
-                unclaimed.push(call_id.as_str());
-            }
-            SessionEvent::SubagentSpawn { trigger_source, .. } => {
-                match trigger_source.strip_prefix("model:") {
-                    Some(id) => {
-                        suppressed.insert(id);
-                        unclaimed.retain(|c| *c != id);
-                    }
-                    None => {
-                        if let Some(id) = unclaimed.pop() {
-                            suppressed.insert(id);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    suppressed
-}
-
+///
 /// Whether a tool result records a failure, decided by the same judgment the
 /// transcript chip uses.
 ///
@@ -112,12 +119,13 @@ fn spawned_call_ids(events: &[SessionLogEntry]) -> HashSet<&str> {
 /// which every command failed. The shared rule also carries the semantic-exit
 /// exception, so grep finding no matches stays a success in both places.
 pub(super) fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -> bool {
+    let null = serde_json::Value::Null;
     let (tool, input) = match calls.get(call_id) {
-        Some(&(t, i)) => (t, i),
+        Some((t, i)) => (t.as_str(), i),
         // No matching call (a result whose call frame is outside this log
         // slice): judge on the output alone, which the shared rule reads as
         // the plain error-or-success case.
-        None => ("", &serde_json::Value::Null),
+        None => ("", &null),
     };
     houyicoder_protocol::tool::tool_result_failed(output, tool, input)
 }
@@ -299,46 +307,119 @@ pub(crate) fn fold_rows(
     Vec<TrajectoryRow>,
     Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)>,
 ) {
-    let mut turn_rows: Vec<TrajectoryTurn> = Vec::new();
-    let mut records: Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)> = Vec::new();
-    let mut builder = turns::TurnBuilder::new(mode);
-    let mut n: usize = first_turn.saturating_sub(1);
-    let calls = index_calls(events);
-    let spawned = spawned_call_ids(events);
-    let mut pending: Vec<TurnBoundary> = Vec::new();
-    let mut last_model: Option<String> = None;
+    let mut projection = PageProjection::seed(events, first_turn, mode);
+    let rows = projection.finish();
+    (rows, projection.into_records())
+}
 
-    for ev in events {
-        if turns::dispatch::apply_turn_boundary(
-            &mut builder,
-            ev,
-            &mut turn_rows,
-            &mut n,
-            &mut pending,
-            &mut last_model,
-            &mut records,
-        ) {
-            continue;
-        }
-        // A window can start mid-run, where the first event is content: the
-        // turn it belongs to is opened here, so it is numbered and it takes
-        // that event's id as its identity.
-        if !builder.is_open() {
-            n += 1;
-            builder.open(ev, std::mem::take(&mut pending));
-        }
-        turns::dispatch::apply_turn_content(&mut builder, ev, &calls, &spawned);
+/// The rows a page projected, and the state a later read extends them with.
+///
+/// A page is folded once, when it lands. An append extends the page that
+/// received it by applying the new events to this state, so the turns already
+/// closed are never folded again: what an append costs is the events it
+/// brought, not the page it lands in.
+pub(crate) struct PageProjection {
+    /// The turns already closed, in order.
+    turns: Vec<TrajectoryTurn>,
+    /// The turn still being appended to, if any.
+    open: turns::TurnBuilder,
+    /// The number the next turn opened here carries.
+    next_number: usize,
+    pending_boundaries: Vec<TurnBoundary>,
+    last_model: Option<String>,
+    /// The tool calls this page has seen, and the delegations they spawned.
+    ///
+    /// Carried rather than rebuilt: a read's tool result names a call that may
+    /// sit in an event the page read earlier.
+    calls: CallIndex,
+    spawned: HashSet<String>,
+    /// Delegation calls a spawn has not claimed yet, in the order they were
+    /// issued.
+    unclaimed: Vec<String>,
+    /// Each closed turn's records, for a fold that keeps them.
+    records: Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)>,
+}
+
+impl PageProjection {
+    /// Fold a page's events into rows, numbering the first turn as first_turn.
+    pub(crate) fn seed(events: &[SessionLogEntry], first_turn: usize, mode: FoldMode) -> Self {
+        let mut projection = Self {
+            turns: Vec::new(),
+            open: turns::TurnBuilder::new(mode),
+            next_number: first_turn.saturating_sub(1),
+            pending_boundaries: Vec::new(),
+            last_model: None,
+            calls: CallIndex::new(),
+            spawned: HashSet::new(),
+            unclaimed: Vec::new(),
+            records: Vec::new(),
+        };
+        projection.apply(events);
+        projection
     }
-    if builder.is_open()
-        && let Some(entry) = builder.flush(&mut turn_rows, n)
-    {
-        records.push(entry);
+
+    /// Apply the events a read brought, extending what this page already holds.
+    ///
+    /// The batch is indexed before it is folded. A delegation's trigger call is
+    /// drawn as the delegation rather than as a plain tool call, and only the
+    /// spawn that answers it says so: indexing as the fold went would draw the
+    /// call before the spawn that claims it had been seen.
+    pub(crate) fn apply(&mut self, events: &[SessionLogEntry]) {
+        for ev in events {
+            note_call(&mut self.calls, ev);
+            note_spawned(&mut self.spawned, &mut self.unclaimed, ev);
+        }
+        for ev in events {
+            if turns::dispatch::apply_turn_boundary(
+                &mut self.open,
+                ev,
+                &mut self.turns,
+                &mut self.next_number,
+                &mut self.pending_boundaries,
+                &mut self.last_model,
+                &mut self.records,
+            ) {
+                continue;
+            }
+            // A page can start mid-run, where the first event is content: the
+            // turn it belongs to is opened here, so it is numbered and it takes
+            // that event's id as its identity.
+            if !self.open.is_open() {
+                self.next_number += 1;
+                let boundaries = std::mem::take(&mut self.pending_boundaries);
+                self.open.open(ev, boundaries);
+            }
+            turns::dispatch::apply_turn_content(&mut self.open, ev, &self.calls, &self.spawned);
+        }
     }
-    let rows = turn_rows
-        .into_iter()
-        .map(TrajectoryRow::Turn)
-        .collect::<Vec<_>>();
-    (rows, records)
+
+    /// The rows as they stand, with the open turn's own row last.
+    pub(crate) fn rows(&self) -> Vec<TrajectoryRow> {
+        let mut rows: Vec<TrajectoryRow> = self
+            .turns
+            .iter()
+            .cloned()
+            .map(TrajectoryRow::Turn)
+            .collect();
+        if let Some(turn) = self.open.snapshot(self.next_number) {
+            rows.push(TrajectoryRow::Turn(turn));
+        }
+        rows
+    }
+
+    /// Close the open turn, for a fold nothing will append to.
+    pub(crate) fn finish(&mut self) -> Vec<TrajectoryRow> {
+        if let Some((turn, key, records)) = self.open.finalize(self.next_number) {
+            self.turns.push(turn);
+            self.records.push((key, records));
+        }
+        self.rows()
+    }
+
+    /// The records this fold kept, by key.
+    pub(crate) fn into_records(self) -> Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)> {
+        self.records
+    }
 }
 
 /// One turn's records, folded from the whole log: what a drill asks for, in a

@@ -5,10 +5,35 @@
 //! the byte it was dispatched for, is refused and read again rather than
 //! applied as a window the session does not have.
 
+use super::super::turns::FoldMode;
+use super::super::view::PageProjection;
 use super::{
-    DurableWatermark, MAX_READ_RETRIES, PageRead, RESIDENT_PAGES, SessionLogTrajectory,
-    TrajectoryState, TurnPage,
+    DurableWatermark, MAX_READ_RETRIES, PageRead, RESIDENT_PAGES, ResidentPage,
+    SessionLogTrajectory, TrajectoryState, TurnPage,
 };
+
+/// A page as the window keeps it: the fragment before its first turn dropped,
+/// and its rows folded once.
+fn resident_page(
+    #[cfg_attr(not(test), allow(unused))] state: &mut TrajectoryState,
+    mut source: TurnPage,
+) -> ResidentPage {
+    source.drop_leading_fragment();
+    let projection = PageProjection::seed(&events_of(&source), 1, FoldMode::Summary);
+    #[cfg(test)]
+    {
+        state.page_seeds += 1;
+    }
+    ResidentPage { source, projection }
+}
+
+/// A page's events, in log order.
+fn events_of(page: &TurnPage) -> Vec<houyicoder_context::SessionLogEntry> {
+    page.events
+        .iter()
+        .map(|located| located.entry.clone())
+        .collect()
+}
 
 impl SessionLogTrajectory {
     /// Whether a page's last event is the one its read was dispatched for.
@@ -63,7 +88,8 @@ impl SessionLogTrajectory {
                 }
                 let reached_start = arrived.oldest_anchor.is_none();
                 let arrived_turns = arrived.turn_count();
-                state.pages.push_front(arrived);
+                let page = resident_page(state, arrived);
+                state.pages.push_front(page);
                 if reached_start {
                     // The walk reached the log's first turn, so nothing
                     // sits before the window however the counts read.
@@ -91,8 +117,9 @@ impl SessionLogTrajectory {
                     Self::drop_view(state);
                     return false;
                 }
+                let page = resident_page(state, outcome);
                 state.pages.clear();
-                state.pages.push_back(outcome);
+                state.pages.push_back(page);
                 state.older_hidden = 0;
                 state.follow_tail = false;
             }
@@ -104,7 +131,7 @@ impl SessionLogTrajectory {
                 if state
                     .pages
                     .back()
-                    .is_none_or(|page| page.end_offset != from)
+                    .is_none_or(|page| page.source.end_offset != from)
                 {
                     Self::drop_view(state);
                     return false;
@@ -118,9 +145,17 @@ impl SessionLogTrajectory {
                     return false;
                 }
                 if let Some(back) = state.pages.back_mut() {
-                    back.end_offset = outcome.end_offset;
-                    back.skipped += outcome.skipped;
-                    back.events.extend(outcome.events);
+                    // The delta extends the page's own rows: the turns already
+                    // folded are not folded again.
+                    let arrived = events_of(&outcome);
+                    #[cfg(test)]
+                    {
+                        state.delta_events_applied += arrived.len();
+                    }
+                    back.projection.apply(&arrived);
+                    back.source.end_offset = outcome.end_offset;
+                    back.source.skipped += outcome.skipped;
+                    back.source.events.extend(outcome.events);
                 }
             }
             PageRead::Tail { .. } => {
@@ -133,8 +168,9 @@ impl SessionLogTrajectory {
                     return false;
                 }
                 state.follow_tail = true;
+                let page = resident_page(state, outcome);
                 state.pages.clear();
-                state.pages.push_back(outcome);
+                state.pages.push_back(page);
             }
         }
         true

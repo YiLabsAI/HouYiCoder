@@ -17,6 +17,7 @@ use houyicoder_tui::view::trajectory_pane::{
     TrajectoryDetailView, TrajectoryLog, TrajectoryView, TrajectoryViewState,
 };
 
+use super::view::PageProjection;
 use crate::session_history::{PAGE_MAX_BYTES, SessionHistory, TurnAnchor, TurnPage};
 
 mod detail;
@@ -109,6 +110,16 @@ struct PendingPageRead {
     cancel: Arc<AtomicBool>,
 }
 
+/// One resident page and the rows it projected.
+///
+/// The rows are kept with the page rather than folded from the window on every
+/// build: an append extends one page, and the pages behind it keep the rows
+/// they already had.
+pub(super) struct ResidentPage {
+    pub(super) source: TurnPage,
+    pub(super) projection: PageProjection,
+}
+
 /// The pane's read state: the resident pages, the view projected from them, and
 /// the read in flight, if any.
 ///
@@ -120,7 +131,7 @@ struct TrajectoryState {
     /// Oldest first: the resident pages in log order. The window is their
     /// concatenation, so a page can be dropped from either end without moving
     /// the rows the other end holds.
-    pages: VecDeque<TurnPage>,
+    pages: VecDeque<ResidentPage>,
     /// Session turn numbers that sit before the window's first turn. Derived
     /// while the window ends at the tail; frozen once the user walks away from
     /// it and moved by each page that arrives.
@@ -169,6 +180,13 @@ struct TrajectoryState {
     /// them means the reads are not working, so the pane says so instead of
     /// dispatching a worker per frame forever.
     read_failures: usize,
+    /// Pages folded from scratch, and events applied to a page that already had
+    /// rows. A test reads these to assert that an append extends the page it
+    /// lands in rather than folding the window again.
+    #[cfg(test)]
+    page_seeds: usize,
+    #[cfg(test)]
+    delta_events_applied: usize,
     failed: bool,
     /// The history the failure belongs to. A failure is a fact about one read,
     /// not about the session: when the durable history moves on, the pane tries
@@ -220,6 +238,19 @@ impl SessionLogTrajectory {
             detail: Mutex::new(detail::TrajectoryDetailRead::default()),
             loaded_turns: AtomicUsize::new(TRAJECTORY_PAGE_TURNS),
         }
+    }
+
+    /// How many pages were folded from scratch, and how many events were
+    /// applied to a page that already had rows.
+    ///
+    /// A page fold is a cost that cannot be seen from the rows it produced, so
+    /// a test asserts on what the reader did rather than on wall-clock time.
+    #[cfg(test)]
+    pub(crate) fn projection_stats(&self) -> (usize, usize) {
+        let Ok(state) = self.state.lock() else {
+            return (0, 0);
+        };
+        (state.page_seeds, state.delta_events_applied)
     }
 
     fn max_turns(&self) -> usize {
@@ -445,7 +476,11 @@ impl TrajectoryLog for SessionLogTrajectory {
         };
         // The oldest resident page carries the anchor that continues behind
         // the window; the newest page's would re-fetch a page already held.
-        let Some(anchor) = state.pages.front().and_then(|page| page.oldest_anchor) else {
+        let Some(anchor) = state
+            .pages
+            .front()
+            .and_then(|page| page.source.oldest_anchor)
+        else {
             return;
         };
         let head = self.session_log.trajectory_head(self.session_id);
