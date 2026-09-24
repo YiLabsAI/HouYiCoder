@@ -44,10 +44,11 @@ pub(crate) const RESIDENT_PAGES: usize = 2;
 /// so taking a delta never asks the disk for more than the page it extends.
 pub(crate) const DELTA_MAX_BYTES: u64 = 64 * 1024;
 
-/// How many reads may end without a page before the pane reports failure
-/// rather than retrying. One is a transient; a run of them is a broken read,
-/// and retrying it every frame would spawn a worker per frame.
-const READ_FAILURES_BEFORE_FAILED: usize = 3;
+/// How many times a read that ended without a page is tried again before the
+/// pane reports the failure. A read that fails once is usually a transient; a
+/// run of them means the reads are not working, and retrying every frame would
+/// dispatch a worker per frame.
+const MAX_READ_RETRIES: usize = 2;
 
 /// Which durable history a page was read for.
 ///

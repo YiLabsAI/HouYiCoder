@@ -6,7 +6,7 @@
 //! applied as a window the session does not have.
 
 use super::{
-    DurableWatermark, PageRead, READ_FAILURES_BEFORE_FAILED, RESIDENT_PAGES, SessionLogTrajectory,
+    DurableWatermark, MAX_READ_RETRIES, PageRead, RESIDENT_PAGES, SessionLogTrajectory,
     TrajectoryState, TurnPage,
 };
 
@@ -144,7 +144,7 @@ impl SessionLogTrajectory {
     /// a run of them is reported rather than dispatching a worker per frame.
     fn refuse(state: &mut TrajectoryState, dispatched: DurableWatermark) {
         state.read_failures += 1;
-        if state.read_failures >= READ_FAILURES_BEFORE_FAILED {
+        if state.read_failures > MAX_READ_RETRIES {
             state.failed = true;
             state.failed_watermark = Some(dispatched);
         }
@@ -201,7 +201,7 @@ impl SessionLogTrajectory {
                 // A read that never arrived leaves no view to serve: dropping
                 // it is what lets the next frame dispatch the retry.
                 Self::drop_view(state);
-                if state.read_failures >= READ_FAILURES_BEFORE_FAILED {
+                if state.read_failures > MAX_READ_RETRIES {
                     state.failed = true;
                     state.failed_watermark = Some(dispatched);
                 }

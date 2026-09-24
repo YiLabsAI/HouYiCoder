@@ -45,14 +45,16 @@ pub(super) struct TrajectoryDetailRead {
     /// The bytes the requested turn starts at, kept so a read whose worker died
     /// can be asked for again without a new request.
     pub(super) anchor: Option<u64>,
-    /// Reads that ended without an answer. One is a transient; a run of them is
-    /// a broken read, and the pane says so rather than asking again forever.
-    pub(super) failures: usize,
+    /// Reads that ended without an answer. One is retried; a run of them means
+    /// the reads are not working, and the pane says so rather than asking again
+    /// forever.
+    pub(super) read_failures: usize,
 }
 
-/// How many reads may end without an answer before the pane reports failure
-/// rather than asking again. One is a transient; a run of them is a broken read.
-const READ_FAILURES_BEFORE_FAILED: usize = 3;
+/// How many times a read that ended without an answer is asked for again before
+/// the pane reports the failure. A read that fails once is usually a transient;
+/// a run of them means the reads are not working.
+const MAX_READ_RETRIES: usize = 2;
 
 /// A detail read in flight.
 pub(super) struct PendingDetailRead {
@@ -218,7 +220,7 @@ pub(super) fn request(
         state.drill = Some(drill.clone());
         state.epoch = epoch;
         state.anchor = None;
-        state.failures = 0;
+        state.read_failures = 0;
         state.view = Some(Arc::new(view));
         state.pending = None;
         return;
@@ -231,7 +233,7 @@ pub(super) fn request(
     state.drill = Some(drill.clone());
     state.epoch = epoch;
     state.anchor = anchor;
-    state.failures = 0;
+    state.read_failures = 0;
     // A view for the turn the user just left is not the turn they are on: it is
     // dropped here, so a draw while the new read is in flight cannot show it.
     state.view = None;
@@ -303,8 +305,8 @@ pub(super) fn detail(
             // a run of them means the reads are not working, and the pane says
             // so rather than serving a loading state nothing will fill.
             state.pending = None;
-            state.failures += 1;
-            if state.failures < READ_FAILURES_BEFORE_FAILED
+            state.read_failures += 1;
+            if state.read_failures <= MAX_READ_RETRIES
                 && let (Some(offset), Some(drill)) = (state.anchor, state.drill.clone())
             {
                 state.pending = Some(dispatch_read(history, drill, offset));
