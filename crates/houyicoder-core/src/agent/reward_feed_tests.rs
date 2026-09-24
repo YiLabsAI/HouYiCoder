@@ -68,12 +68,15 @@ async fn test_reward_feeds_into_dream() {
     let session = SessionId::new();
     runner
         .memory
-        .fire_background(session, || {
-            crate::agent::reward_snapshot::capture_reward_snapshot(
-                &runner.observability,
-                &runner.redundancy,
-            )
-        })
+        .fire_background(
+            session,
+            Some(|| {
+                crate::agent::reward_snapshot::capture_reward_snapshot(
+                    &runner.observability,
+                    &runner.redundancy,
+                )
+            }),
+        )
         .await;
 }
 
@@ -101,8 +104,17 @@ async fn test_join_dreams_no_inflight() {
         .await;
     runner_no_dream
         .memory
-        .fire_background(SessionId::new(), || panic!("reward must stay lazy"))
+        .fire_background(SessionId::new(), Some(|| panic!("reward must stay lazy")))
         .await;
+}
+
+/// fire_background_memory builds the reward closure (env unset) and drives
+/// the dream; the extractor is a no-op when none is wired. Covers the env
+/// read and the Some branch of the run-boundary helper.
+#[tokio::test]
+async fn test_fire_background_drives_dream() {
+    let runner = runner_with_empty_dream();
+    runner.fire_background_memory(SessionId::new()).await;
 }
 
 #[tokio::test]

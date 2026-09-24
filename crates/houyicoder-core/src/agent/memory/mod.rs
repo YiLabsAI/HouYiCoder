@@ -243,13 +243,17 @@ impl MemoryRuntime {
     }
 
     /// Start enabled background memory work after a final output.
-    pub(crate) async fn fire_background<F>(&self, session: SessionId, reward: F)
+    ///
+    /// reward is Some(closure) when reward capture is on and None when an
+    /// operator suppressed it (the HOUYICODER_REWARD_OFF switch). Reward
+    /// capture feeds only the dream reward-driven gate; the extractor is a
+    /// memory function and always runs. The closure is evaluated only when
+    /// the dream block fires (auto-dream on and a dream worker wired), ahead
+    /// of execute_dream running.
+    pub(crate) async fn fire_background<F>(&self, session: SessionId, reward: Option<F>)
     where
         F: FnOnce() -> RewardSnapshot,
     {
-        if std::env::var("HOUYICODER_REWARD_OFF").is_ok() {
-            return;
-        }
         if self.gates.auto_memory_enabled()
             && let Some(extractor) = self.background.extractor.as_ref()
         {
@@ -261,7 +265,7 @@ impl MemoryRuntime {
         if self.gates.auto_dream_enabled()
             && let Some(dream) = self.background.dream.as_ref()
         {
-            dream.execute_dream(Some(reward()), Some(&session.to_string()));
+            dream.execute_dream(reward.map(|f| f()), Some(&session.to_string()));
         }
     }
 

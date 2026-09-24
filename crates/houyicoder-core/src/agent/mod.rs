@@ -678,17 +678,10 @@ impl Runner {
                     {
                         return Ok(ended);
                     }
-                    // Background memory at query-loop end: extractor + dream,
-                    // both fire-and-forget and neither reads the run token, so
-                    // the stop is read again after them.
-                    self.memory
-                        .fire_background(session, || {
-                            reward_snapshot::capture_reward_snapshot(
-                                &self.observability,
-                                &self.redundancy,
-                            )
-                        })
-                        .await;
+                    // Background memory at query-loop end: extractor + dream.
+                    // Reward withheld when HOUYICODER_REWARD_OFF suppresses the
+                    // dream reward signal only — the extractor always fires.
+                    self.fire_background_memory(session).await;
                     if token.is_cancelled() {
                         return self.interrupted_at_boundary(session, turn, usage).await;
                     }

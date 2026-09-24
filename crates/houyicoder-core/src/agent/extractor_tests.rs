@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent::memory::{MemoryGates, MemoryRuntime, MutationLog};
+use crate::agent::reward_snapshot::RewardSnapshot;
 use crate::agent::{Runner, ToolRegistry};
 use houyicoder_api::agent_event::{AgentEventHandlers, MemoryChangeOrigin, MemoryChangedEvent};
 use houyicoder_context::{MemoryEntry, MemorySummary, SessionId};
@@ -706,6 +707,59 @@ async fn test_runner_fires_extractor_final() {
         memory.written.lock().expect("w").len(),
         1,
         "forked extraction wrote a memory after FinalOutput"
+    );
+    std::fs::remove_dir_all(&cwd).ok();
+}
+
+/// Reward capture off (None) must not skip the extractor. The reward switch
+/// suppresses reward only — memory extraction is a memory function, not a
+/// reward signal, so it fires regardless. The provider call counter starts
+/// at 1 so the fork's first call lands on the save_memory script (n=2),
+/// mirroring the main-run-then-fork ordering without running the main loop.
+#[tokio::test]
+async fn test_extractor_fires_reward_off() {
+    let provider = Arc::new(MainFinalProvider {
+        calls: StdMutex::new(1),
+    });
+    let memory = Arc::new(RecordingMemory {
+        written: StdMutex::new(Vec::new()),
+    });
+    let main_store: Arc<dyn SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let ephemeral: Arc<dyn SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let conv = conversation();
+    let session = conv[0].session;
+    for entry in conv {
+        main_store.append(entry).await.expect("append");
+    }
+    let cwd = std::env::temp_dir().join(format!("reward-off-{}", std::process::id()));
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+    let ext = Arc::new(MemoryExtractor::new(
+        ephemeral,
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::clone(&memory) as Arc<dyn MemoryProvider>,
+        cwd.clone(),
+        RunnerConfig {
+            max_turns: 5,
+            ..RunnerConfig::default()
+        },
+    ));
+    let runtime = MemoryRuntime::from_parts(
+        Arc::clone(&main_store),
+        Some(Arc::clone(&memory) as Arc<dyn MemoryProvider>),
+        MemoryGates::new(true, true),
+        Some(Arc::clone(&ext)),
+        None,
+    );
+    runtime
+        .fire_background::<fn() -> RewardSnapshot>(session, None)
+        .await;
+    ext.drain_pending(Duration::from_secs(5)).await;
+    assert_eq!(
+        memory.written.lock().expect("w").len(),
+        1,
+        "extractor fires even when reward capture is off"
     );
     std::fs::remove_dir_all(&cwd).ok();
 }
