@@ -109,7 +109,12 @@ impl App {
             };
             notice.push_str(&format!("\n  ⎿  {operation} {}", change.key));
         }
-        self.system_line(notice);
+        // When the /memory pane is open, the pane refresh below is the live
+        // view of the same changes; a transcript notice would duplicate it.
+        // Land the notice only when the pane is closed.
+        if self.pane != Pane::Memory {
+            self.system_line(notice);
+        }
         if self.pane == Pane::Memory
             && let Some(s) = self.session.as_ref()
         {

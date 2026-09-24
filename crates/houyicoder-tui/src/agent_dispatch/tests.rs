@@ -104,3 +104,47 @@ fn test_memory_change_refreshes_pane() {
     let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::MemoryList));
     assert_eq!(req.req_id.0, 0, "first request on a fresh session");
 }
+
+/// With the /memory pane open, a broadcast refreshes the pane and adds no
+/// transcript notice line (design H3: do not duplicate the notice as a
+/// transcript line while the pane shows the live list). A closed pane still
+/// lands the notice.
+#[test]
+fn test_open_pane_skips_notice() {
+    use crate::records::TranscriptLine;
+    use houyicoder_protocol::frontend::memory::{
+        MemoryChange, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    };
+    let (mut app, _events) = connected_app_events();
+    app.pane = Pane::Memory;
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
+        id: MemoryChangeId("c1".into()),
+        origin: MemoryChangeOrigin::AutoMemory,
+        changes: vec![MemoryChange {
+            key: "k".into(),
+            operation: MemoryOperation::Created,
+        }],
+    }));
+    let open_lines = app
+        .transcript
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::System(t) if t.contains("Memory")))
+        .count();
+    assert_eq!(open_lines, 0, "an open pane adds no transcript notice line");
+
+    app.pane = Pane::Transcript;
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
+        id: MemoryChangeId("c2".into()),
+        origin: MemoryChangeOrigin::AutoMemory,
+        changes: vec![MemoryChange {
+            key: "k2".into(),
+            operation: MemoryOperation::Created,
+        }],
+    }));
+    let closed_lines = app
+        .transcript
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::System(t) if t.contains("Memory")))
+        .count();
+    assert_eq!(closed_lines, 1, "a closed pane still lands the notice");
+}
