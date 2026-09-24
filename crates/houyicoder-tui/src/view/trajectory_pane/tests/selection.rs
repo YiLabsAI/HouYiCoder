@@ -391,3 +391,128 @@ fn test_level1_up_keeps_window() {
         "the turn list loads the older page"
     );
 }
+
+/// The pane's rendered screen text, cells joined row by row.
+fn screen_text(terminal: &Terminal<TestBackend>) -> String {
+    let buffer = terminal.backend().buffer();
+    let width = buffer.area().width as usize;
+    let mut out = String::new();
+    for (i, cell) in buffer.content().iter().enumerate() {
+        if i > 0 && i % width == 0 {
+            out.push('\n');
+        }
+        out.push_str(cell.symbol());
+    }
+    out
+}
+
+/// The drill follows the turn it named, not the row index it had: a page that
+/// arrives while the user reads one turn must not swap the turn under them, and
+/// leaving the detail must return to that same turn.
+#[test]
+fn test_esc_survives_window_move() {
+    let log = Arc::new(ScriptedLog::new(vec![
+        window_view(401, 500, 500, 1),
+        window_view(402, 501, 501, 1),
+    ]));
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_log = Some(log.clone());
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+
+    for _ in 0..4 {
+        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.selected_turn(), 405);
+
+    // The tail page refreshes under the drill while the user reads it.
+    log.advance();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+    let screen = screen_text(&terminal);
+    assert!(
+        screen.contains("T405"),
+        "the drill still shows the turn it named: {screen}"
+    );
+
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+    assert_eq!(app.trajectory.level(), 0, "Esc returns to the turn list");
+    assert_eq!(
+        app.trajectory.selected_turn(),
+        405,
+        "and the turn it named is not rewritten by the moved window"
+    );
+    let view = log.trajectory();
+    match &view.rows[app.trajectory.cursor()] {
+        TrajectoryRow::Turn(turn) => assert_eq!(
+            turn.n, 405,
+            "the cursor sits on the turn the drill was about"
+        ),
+        _ => panic!("the cursor sits on a turn row"),
+    }
+}
+
+/// A background row is not a turn, so moving onto one drops the turn selection
+/// rather than leaving a page free to restore the cursor onto it.
+#[test]
+fn test_bg_row_clears_selection() {
+    let mut view = window_view(401, 403, 500, 1);
+    view.rows.push(TrajectoryRow::Bg(TrajectoryBg {
+        kind: "hook".into(),
+        summary: "denied".into(),
+        duration_ms: 5,
+    }));
+    let log = Arc::new(ScriptedLog::new(vec![view]));
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_log = Some(log.clone());
+    let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.selected_turn(), 402, "a turn is selected");
+    for _ in 0..2 {
+        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    assert_eq!(app.trajectory.cursor(), 3, "the background row");
+    assert_eq!(
+        app.trajectory.selected_turn(),
+        0,
+        "moving onto it drops the turn selection"
+    );
+}
+
+/// The pane opens asking for its last row, and the first page may not have
+/// landed yet. A key before that render must not overflow the cursor: there is
+/// no row to clamp it against until the window arrives.
+#[test]
+fn test_down_before_first_page() {
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    // What opening the pane leaves behind: no rows loaded yet.
+    app.trajectory.set_cursor(usize::MAX);
+    app.trajectory.set_list_len(0);
+
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.cursor(), 0, "the cursor stays on a real row");
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.cursor(), 0);
+}

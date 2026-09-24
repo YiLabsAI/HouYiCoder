@@ -54,7 +54,10 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             if app.trajectory.level() < 2 {
                 let c = app.trajectory.cursor();
                 let last = app.trajectory.list_len().saturating_sub(1);
-                app.trajectory.set_cursor((c + 1).min(last));
+                // Saturating: the pane opens with a cursor that asks for the
+                // last row, and before the first page lands there is no row to
+                // clamp it against.
+                app.trajectory.set_cursor(c.saturating_add(1).min(last));
                 note_selected_turn(app);
             }
             true
@@ -153,8 +156,12 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                 // arrived during the drill still lands on the same turn.
                 1 => {
                     app.trajectory.set_level(0);
+                    // The row index is only a fallback for a drill whose turn
+                    // the window no longer holds. The selection the drill
+                    // recorded is what the draw restores the cursor from, so
+                    // recording it again here would rewrite it from whatever
+                    // turn the index happens to name now.
                     app.trajectory.set_cursor(app.trajectory.turn_idx());
-                    note_selected_turn(app);
                 }
                 // The record levels keep their cursor: the user was looking at
                 // one record, and stepping back shows the list it came from.

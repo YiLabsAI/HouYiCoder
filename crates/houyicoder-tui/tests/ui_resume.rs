@@ -1002,3 +1002,82 @@ fn test_trajectory_older_loads_page() {
     );
     drop(s);
 }
+
+/// Leaving the turn detail returns to the turn the drill opened, and Up at the
+/// record list stays on the record list instead of loading older history behind
+/// the drill. Driven through the real terminal, so the pane's own key routing
+/// and its focus are what is under test.
+#[test]
+#[ignore]
+fn test_trajectory_esc_restores_turn() {
+    let sessions_dir = fresh_temp_dir("sessions-traj-esc");
+    let sid = "18181818-1818-1818-1818-181818181818";
+    common::seed_session_turns_on_disk(
+        &sessions_dir,
+        sid,
+        "traj-model",
+        &["first prompt", "second prompt", "third prompt"],
+    );
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), sid.to_string()],
+        sessions_dir.clone(),
+    );
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen after sid resume:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    run_slash_command(&mut s, "trajectory");
+    assert!(
+        s.wait_for_plain("3 turns", RENDER_TIMEOUT),
+        "trajectory header must report the three seeded turns:\n{}",
+        s.output_plain()
+    );
+    // The pane opens on the tail with the newest turn selected, which is also
+    // how the test knows the first page has landed.
+    assert!(
+        s.wait_for("▸ T3", RENDER_TIMEOUT),
+        "the pane opens on the newest turn:\n{}",
+        s.screen().contents()
+    );
+
+    // Walk up to the second turn and open it.
+    s.send_key(&Key::Up);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        s.screen().contents().contains("▸ T2"),
+        "Up selects the second turn:\n{}",
+        s.screen().contents()
+    );
+    s.send_key(&Key::Enter);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let detail = s.screen().contents();
+    assert!(
+        detail.contains("T2"),
+        "Enter opens the selected turn:\n{detail}"
+    );
+
+    // Up at the record list must not move the turn list behind the drill.
+    s.send_key(&Key::Up);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let detail = s.screen().contents();
+    assert!(
+        detail.contains("T2") && !detail.contains("older not loaded"),
+        "Up at the record list stays on the record list:\n{detail}"
+    );
+
+    // Esc returns to the list with the turn the drill opened still selected.
+    s.send_key(&Key::Esc);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let back = s.screen().contents();
+    assert!(
+        back.contains("▸ T2"),
+        "Esc returns to the turn the drill opened:\n{back}"
+    );
+    drop(s);
+}

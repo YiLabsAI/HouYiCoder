@@ -74,17 +74,12 @@ pub(super) fn draw_turn_detail(
             // is left after the fixed columns, so a narrow terminal shrinks
             // the timeline rather than the numbers.
             let bar_area = (area.width as usize)
-                .saturating_sub(
-                    TIMELINE_PREFIX_W
-                        + 1
-                        + TIMELINE_DUR_W
-                        + TIMELINE_SUMMARY_MIN_W
-                        + TIMELINE_MARK_W,
-                )
+                .saturating_sub(TIMELINE_PREFIX_W + TIMELINE_SUFFIX_W + TIMELINE_SUMMARY_MIN_W)
                 .max(8);
+            // No floor: on a narrow terminal the summary is what gives way, so
+            // the row still ends with the duration and the outcome glyph.
             let summary_w = (area.width as usize)
-                .saturating_sub(TIMELINE_PREFIX_W + bar_area + 1 + TIMELINE_DUR_W + TIMELINE_MARK_W)
-                .max(8);
+                .saturating_sub(TIMELINE_PREFIX_W + bar_area + TIMELINE_SUFFIX_W);
             header.push(ruler_line(turn.duration_ms, bar_area));
             for (i, ev) in turn.records.iter().enumerate() {
                 body.push(record_row(
@@ -105,11 +100,17 @@ pub(super) fn draw_turn_detail(
             // A [bg] row drilled from L0 has no event timeline — show its
             // detail directly at L1 and flag it so Enter does not drill to L2.
             app.trajectory.set_at_bg(true);
-            header.push(line(vec![
+            let mut bg_head = vec![
                 sp(format!(" [bg] {} ", bg.kind), Color::Cyan),
                 sp(truncate_width(&bg.summary, 50), Color::White),
-                sp(format!("  {}", format_span_ms(bg.duration_ms)), Color::Gray),
-            ]));
+            ];
+            if bg.duration_ms > 0 {
+                bg_head.push(sp(
+                    format!("  {}", format_span_ms(bg.duration_ms)),
+                    Color::Gray,
+                ));
+            }
+            header.push(line(bg_head));
             header.push(blank());
             body.push(line(vec![
                 sp(" kind: ", Color::DarkGray),
@@ -183,13 +184,21 @@ fn record_row(
         }
         _ => String::new(),
     };
+    // The measured-latency suffix keeps its own columns and the summary takes
+    // what is left, so a row never runs past the width it is drawn in. On a
+    // terminal too narrow for both, the suffix is what goes: the summary is
+    // what the row is about.
+    let timing = if UnicodeWidthStr::width(timing.as_str()) < summary_w {
+        timing
+    } else {
+        String::new()
+    };
+    let summary_w = summary_w.saturating_sub(UnicodeWidthStr::width(timing.as_str()));
     let summary = format!("{}{}", truncate_width(&ev.summary, summary_w), timing);
     line(vec![
         sp(prefix, Color::Cyan),
         sp(format!("{:7}", ev.kind.label()), Color::DarkGray),
         sp(" ", Color::DarkGray),
-        // Padded by display columns, not characters: a wide glyph in the name
-        // would otherwise shift the bar and everything after it.
         // Padded by display columns, not characters: a wide glyph in the name
         // would otherwise shift the bar and everything after it.
         sp(
@@ -249,19 +258,24 @@ pub(super) fn draw_event_detail(
         (ordinal, Some(n)) => format!(" {ordinal} {n}"),
         (ordinal, None) => format!(" {ordinal}"),
     };
-    header.push(line(vec![
+    let mut ev_head = vec![
         sp(format!(" {}{} ", ev.kind.label(), name), Color::Cyan),
         sp(truncate_width(&ev.summary, 48), Color::White),
-        sp(
+    ];
+    // An unmeasured span is absent here too: a header that printed 0ms would
+    // state a measurement the log does not have, however the body reads.
+    if ev.duration_ms > 0 {
+        ev_head.push(sp(
             format!("  {} ", format_span_ms(ev.duration_ms)),
             Color::Gray,
-        ),
-        sp(mark, mc),
-        sp(
-            format!("  · Record {} of {}", idx + 1, turn.records.len()),
-            Color::DarkGray,
-        ),
-    ]));
+        ));
+    }
+    ev_head.push(sp(mark, mc));
+    ev_head.push(sp(
+        format!("  · Record {} of {}", idx + 1, turn.records.len()),
+        Color::DarkGray,
+    ));
+    header.push(line(ev_head));
     header.push(blank());
 
     // Push a labeled field; multi-line strings split into one line per row so

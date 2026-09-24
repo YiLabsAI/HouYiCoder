@@ -400,10 +400,34 @@ pub(crate) fn restore_selected_cursor(state: &TrajectoryPaneState, view: &Trajec
 
 /// Record the turn the L0 cursor sits on, so a page that arrives under it can
 /// put the cursor back on the same turn instead of the same row index.
+///
+/// A background row is not a turn, so nothing is selected there: keeping the
+/// turn the user moved off would let a later page restore the cursor onto it.
 pub(crate) fn note_selected_turn(state: &TrajectoryPaneState, view: &TrajectoryView) {
-    if let Some(TrajectoryRow::Turn(turn)) = view.rows.get(state.cursor()) {
-        state.select_turn(turn.n, view.history_generation);
+    match view.rows.get(state.cursor()) {
+        Some(TrajectoryRow::Turn(turn)) => state.select_turn(turn.n, view.history_generation),
+        _ => state.clear_selection(),
     }
+}
+
+/// The row the drill is about, found in the window in hand.
+///
+/// A row index names a different turn once a page arrives under it, and the
+/// window can move while the user reads one turn, so the drill follows the
+/// turn it named. The index is the fallback for a drill whose turn is gone
+/// from the window, or whose history was cleared under it.
+fn resolve_drilled_row(state: &TrajectoryPaneState, view: &TrajectoryView) -> usize {
+    let selected = state.selected_turn();
+    if selected > 0
+        && let Some(index) = view
+            .rows
+            .iter()
+            .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.n == selected))
+    {
+        state.set_turn_idx(index);
+        return index;
+    }
+    state.turn_idx()
 }
 
 /// Main entry: dispatch on the drill level. Each level builder returns the
@@ -427,7 +451,14 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         restore_selected_cursor(&app.trajectory, &traj);
     }
     let cursor = app.trajectory.cursor();
-    let turn_idx = app.trajectory.turn_idx();
+    // The drill levels render the turn the drill named, not the row index it
+    // had when the drill started: a page can arrive under that index while the
+    // user reads.
+    let turn_idx = if level == 0 {
+        app.trajectory.turn_idx()
+    } else {
+        resolve_drilled_row(&app.trajectory, &traj)
+    };
     let (header, body, footer, sel_line) = match level {
         1 => detail::draw_turn_detail(&traj, turn_idx, cursor, area, app),
         2 => detail::draw_event_detail(&traj, turn_idx, cursor, area),
@@ -548,7 +579,10 @@ const TIMELINE_PREFIX_W: usize = 2 + 7 + 1 + TIMELINE_NAME_W;
 /// The name column inside the prefix, in display columns.
 const TIMELINE_NAME_W: usize = 11;
 
-/// The duration column, in display columns.
+/// The gap between two columns.
+const TIMELINE_GAP_W: usize = 1;
+
+/// The duration column, including the space after it.
 const TIMELINE_DUR_W: usize = 7;
 
 /// The summary column's floor, so a narrow terminal shrinks the bar first.
@@ -556,6 +590,10 @@ const TIMELINE_SUMMARY_MIN_W: usize = 32;
 
 /// The outcome glyph a row ends with, and the space before it.
 const TIMELINE_MARK_W: usize = 2;
+
+/// The columns a row spends after its bar: a gap, the duration, a gap, and the
+/// mark.
+const TIMELINE_SUFFIX_W: usize = TIMELINE_GAP_W + TIMELINE_DUR_W + TIMELINE_GAP_W + TIMELINE_MARK_W;
 
 /// A fixed-width string (exactly width chars) with the event bar positioned
 /// at its start offset on the shared turn time axis. Parallel events overlap
