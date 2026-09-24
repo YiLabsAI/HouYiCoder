@@ -62,6 +62,7 @@ fn window_view(first: usize, last: usize, total: usize, generation: u64) -> Traj
 struct ScriptedLog {
     views: Mutex<VecDeque<TrajectoryView>>,
     earliest: AtomicUsize,
+    older: AtomicUsize,
     tail: AtomicUsize,
 }
 
@@ -70,6 +71,7 @@ impl ScriptedLog {
         Self {
             views: Mutex::new(views.into()),
             earliest: AtomicUsize::new(0),
+            older: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
         }
     }
@@ -92,6 +94,10 @@ impl TrajectoryLog for ScriptedLog {
                 .cloned()
                 .unwrap_or_else(|| window_view(1, 0, 0, 1)),
         )
+    }
+
+    fn load_older(&self) {
+        self.older.fetch_add(1, Ordering::Relaxed);
     }
 
     fn load_earliest(&self) {
@@ -300,4 +306,88 @@ fn test_home_end_stay_local() {
     assert_eq!(app.trajectory.cursor(), 0, "an event detail does not move");
     assert_eq!(log.tail.load(Ordering::Relaxed), 0);
     assert_eq!(log.earliest.load(Ordering::Relaxed), 0);
+}
+
+/// Leaving the turn detail returns to the turn the drill started from, not to
+/// the first row: the drill is a look at one turn, and stepping back must not
+/// move the user elsewhere in the history.
+#[test]
+fn test_esc_restores_turn() {
+    let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_log = Some(log.clone());
+    let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+
+    // The user walks to turn 405 and opens it.
+    for _ in 0..4 {
+        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    assert_eq!(app.trajectory.cursor(), 4);
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.level(), 1);
+    assert_eq!(
+        app.trajectory.selected_turn(),
+        405,
+        "the drill is about 405"
+    );
+
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.level(), 0, "Esc returns to the turn list");
+    assert_eq!(
+        app.trajectory.cursor(),
+        4,
+        "and the cursor is back on the turn it left"
+    );
+    assert_eq!(app.trajectory.selected_turn(), 405);
+}
+
+/// Leaving the event detail returns to the record list with the record still
+/// selected: the user was looking at one record, not at the top of the list.
+#[test]
+fn test_esc_keeps_record() {
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory.set_level(2);
+    app.trajectory.set_cursor(3);
+
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.level(), 1, "Esc returns to the record list");
+    assert_eq!(app.trajectory.cursor(), 3, "with the record still selected");
+}
+
+/// Up at the top of the record list stays there. Only the turn list widens its
+/// window, because loading older history while the user is reading one turn
+/// would move that turn out from under the drill.
+#[test]
+fn test_level1_up_keeps_window() {
+    let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_log = Some(log.clone());
+    app.trajectory.set_level(1);
+    app.trajectory.set_list_len(4);
+    app.trajectory.set_cursor(0);
+
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.trajectory.cursor(), 0, "the top of the record list");
+    assert_eq!(
+        log.older.load(Ordering::Relaxed),
+        0,
+        "and the window did not load behind the drill"
+    );
+
+    // At the turn list the same key does widen the window.
+    app.trajectory.set_level(0);
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(
+        log.older.load(Ordering::Relaxed),
+        1,
+        "the turn list loads the older page"
+    );
 }

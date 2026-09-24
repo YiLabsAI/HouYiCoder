@@ -34,10 +34,13 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
         KeyCode::Up => {
             if app.trajectory.level() < 2 {
                 let c = app.trajectory.cursor();
-                if c == 0 {
-                    // At the top of the loaded window there is nowhere to move,
-                    // so widen it: the pane loads the tail first and older
-                    // history arrives a page at a time.
+                if c == 0 && app.trajectory.level() == 0 {
+                    // At the top of the loaded turn list there is nowhere to
+                    // move, so widen it: the pane loads the tail first and
+                    // older history arrives a page at a time. Only the turn
+                    // list widens: at the record levels the window is not what
+                    // the user is moving in, and loading behind it would
+                    // re-point the drilled turn under them.
                     if let Some(log) = app.trajectory_log.as_ref() {
                         log.load_older();
                     }
@@ -108,6 +111,9 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                 // drilling into no rows rendered "no row data" at the
                 // turn-detail level, which read as a crash.
                 app.trajectory.set_turn_idx(app.trajectory.cursor());
+                // Record the turn the drill is about, so stepping back returns
+                // to it even if a page arrives under the row index meanwhile.
+                note_selected_turn(app);
                 app.trajectory.set_level(1);
                 app.trajectory.set_cursor(0);
             } else if level == 1 {
@@ -134,12 +140,25 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
         }
         KeyCode::Esc => {
             let level = app.trajectory.level();
-            if level == 0 {
-                app.pane = Pane::Transcript;
-                app.fold_to_working();
-            } else {
-                app.trajectory.set_level(level - 1);
-                app.trajectory.set_cursor(0);
+            match level {
+                0 => {
+                    app.pane = Pane::Transcript;
+                    app.fold_to_working();
+                }
+                // Back at the turn list, the cursor returns to the turn the
+                // drill started from rather than the first row: the drill is a
+                // look at one turn, and leaving it must not move the user
+                // elsewhere in the history. The row index is the fallback; the
+                // selection is what the draw restores from, so a page that
+                // arrived during the drill still lands on the same turn.
+                1 => {
+                    app.trajectory.set_level(0);
+                    app.trajectory.set_cursor(app.trajectory.turn_idx());
+                    note_selected_turn(app);
+                }
+                // The record levels keep their cursor: the user was looking at
+                // one record, and stepping back shows the list it came from.
+                _ => app.trajectory.set_level(level - 1),
             }
             true
         }
