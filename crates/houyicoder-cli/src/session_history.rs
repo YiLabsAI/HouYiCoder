@@ -148,12 +148,17 @@ impl TurnPage {
         if !self.oldest_partial {
             return;
         }
-        if let Some(cut) = self
+        match self
             .events
             .iter()
             .position(|event| is_user_input(&event.entry))
         {
-            self.events.drain(..cut);
+            Some(cut) => {
+                self.events.drain(..cut);
+            }
+            // No turn opens in the page at all: everything it holds belongs to
+            // a turn it does not, so there is nothing left to draw.
+            None => self.events.clear(),
         }
         self.oldest_partial = false;
     }

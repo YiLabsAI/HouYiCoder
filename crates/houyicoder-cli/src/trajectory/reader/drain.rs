@@ -213,11 +213,12 @@ impl SessionLogTrajectory {
                     Self::refuse(state, dispatched);
                     return;
                 }
-                // Only an applied page clears the run: a refused one is what
-                // the run is counting.
-                state.failed = false;
-                state.read_failures = 0;
                 if Self::apply_page(state, read, outcome, dispatched) {
+                    // Only a page the window took clears the run: a refused one
+                    // is what the run is counting, so a read that keeps being
+                    // refused reaches the retry budget instead of resetting it.
+                    state.failed = false;
+                    state.read_failures = 0;
                     state.window_watermark = Some(dispatched);
                     state.window_total = total_turns;
                 }

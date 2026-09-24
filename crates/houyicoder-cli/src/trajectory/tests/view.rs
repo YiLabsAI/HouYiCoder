@@ -1460,3 +1460,70 @@ fn test_fold_modes_agree() {
         "the two folds describe the same turns, field for field"
     );
 }
+
+/// A delegation's trigger call is drawn as the delegation even when a batch
+/// boundary falls between the call and the spawn that claims it: the same work
+/// must not appear twice, once as the mechanism and once as the delegation.
+#[test]
+fn test_delegation_split_across_batches() {
+    let input = ev(
+        100,
+        SessionEvent::UserInput {
+            text: "delegate".into(),
+        },
+    );
+    let call = ev(
+        110,
+        SessionEvent::ToolCall {
+            call_id: "c1".into(),
+            tool: "agent".into(),
+            input: serde_json::json!({"prompt": "go"}),
+        },
+    );
+    let spawn = ev(
+        120,
+        SessionEvent::SubagentSpawn {
+            child_session_id: "child".into(),
+            subagent_type: "worker".into(),
+            prompt_summary: "go".into(),
+            isolation: String::new(),
+            policy: String::new(),
+            trigger_source: "model:c1".into(),
+        },
+    );
+    let result = ev(
+        130,
+        SessionEvent::ToolResult {
+            call_id: "c1".into(),
+            output: serde_json::json!({"text": "done"}),
+            duration_ms: 5,
+        },
+    );
+
+    // The call lands in one batch; the spawn that claims it lands in the next.
+    let mut split = PageProjection::seed(&[input.clone(), call.clone()], 1, FoldMode::Summary);
+    split.apply(&[spawn.clone(), result.clone()]);
+    let split_rows = split.finish();
+
+    // A fold that saw the whole turn at once must agree with it.
+    let (whole_rows, _) = fold_rows(&[input, call, spawn, result], 1, FoldMode::Summary);
+
+    let counts = |rows: &[TrajectoryRow]| -> Vec<(usize, usize)> {
+        rows.iter()
+            .filter_map(|row| match row {
+                TrajectoryRow::Turn(turn) => Some((turn.tool_count, turn.tool_fail)),
+                TrajectoryRow::Bg(_) => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        counts(&split_rows),
+        counts(&whole_rows),
+        "a split batch counts the delegation the way a whole fold does"
+    );
+    assert_eq!(
+        counts(&split_rows),
+        vec![(0, 0)],
+        "the delegation's tool call is not counted as a plain tool call"
+    );
+}

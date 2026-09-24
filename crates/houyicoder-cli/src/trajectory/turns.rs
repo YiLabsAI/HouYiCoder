@@ -489,6 +489,38 @@ impl TurnBuilder {
         }
     }
 
+    /// Drop the record a delegation's trigger call opened.
+    ///
+    /// A spawn claims the call it was issued from, and a batch boundary can
+    /// fall between the two, so the call may already have been folded. Removing
+    /// its record keeps the same work from being drawn twice: once as the
+    /// mechanism and once as the delegation. True when a record was removed.
+    pub(super) fn drop_tool(&mut self, call_id: &str) -> bool {
+        let Some(index) = self.open_tools.remove(call_id) else {
+            return false;
+        };
+        self.records.remove(index);
+        self.tool_count = self.tool_count.saturating_sub(1);
+        // The records after it move down, so the indices held for the calls
+        // still open move with them.
+        for other in self.open_tools.values_mut() {
+            if *other > index {
+                *other -= 1;
+            }
+        }
+        for other in self.open_agents.values_mut() {
+            if *other > index {
+                *other -= 1;
+            }
+        }
+        if let Some(open) = self.open_model.as_mut()
+            && *open > index
+        {
+            *open -= 1;
+        }
+        true
+    }
+
     /// Set a record's input, when this fold keeps the record bodies.
     pub(super) fn set_input(&mut self, index: usize, text: String) {
         if self.mode == FoldMode::Records {

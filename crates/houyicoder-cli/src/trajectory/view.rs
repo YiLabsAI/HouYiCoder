@@ -69,25 +69,28 @@ fn note_call(calls: &mut CallIndex, ev: &SessionLogEntry) {
 /// A spawn claims the delegation call it was issued from, so the row that call
 /// opened is not also drawn as a plain tool call. The unclaimed stack carries
 /// across events: a spawn answers a call that may sit in an earlier one.
-fn note_spawned(spawned: &mut HashSet<String>, unclaimed: &mut Vec<String>, ev: &SessionLogEntry) {
+fn note_spawned(
+    spawned: &mut HashSet<String>,
+    unclaimed: &mut Vec<String>,
+    ev: &SessionLogEntry,
+) -> Option<String> {
     match &ev.event {
         SessionEvent::ToolCall { call_id, tool, .. } if tool == DELEGATION_TOOL => {
             unclaimed.push(call_id.clone());
+            None
         }
         SessionEvent::SubagentSpawn { trigger_source, .. } => {
-            match trigger_source.strip_prefix("model:") {
-                Some(id) => {
-                    spawned.insert(id.to_string());
-                    unclaimed.retain(|c| c != id);
-                }
-                None => {
-                    if let Some(id) = unclaimed.pop() {
-                        spawned.insert(id);
-                    }
-                }
+            let claimed = match trigger_source.strip_prefix("model:") {
+                Some(id) => Some(id.to_string()),
+                None => unclaimed.pop(),
+            };
+            if let Some(id) = claimed.as_ref() {
+                spawned.insert(id.clone());
+                unclaimed.retain(|c| c != id);
             }
+            claimed
         }
-        _ => {}
+        _ => None,
     }
 }
 
@@ -367,7 +370,12 @@ impl PageProjection {
     pub(crate) fn apply(&mut self, events: &[SessionLogEntry]) {
         for ev in events {
             note_call(&mut self.calls, ev);
-            note_spawned(&mut self.spawned, &mut self.unclaimed, ev);
+            if let Some(claimed) = note_spawned(&mut self.spawned, &mut self.unclaimed, ev) {
+                // The call the spawn answers may sit in an earlier batch, where
+                // it was already folded: its record is dropped so the turn does
+                // not draw the same work twice.
+                self.open.drop_tool(&claimed);
+            }
         }
         for ev in events {
             if turns::dispatch::apply_turn_boundary(
