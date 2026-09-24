@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 pub struct MemoryChangeId(pub String);
 
 /// The producer responsible for memory changes emitted together.
+///
+/// Forward-compatible: a future producer may emit an origin this enum does
+/// not yet name. An unrecognized tag deserializes to Unknown so the event
+/// survives rather than being dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MemoryChangeOrigin {
@@ -21,9 +25,18 @@ pub enum MemoryChangeOrigin {
     AutoMemory,
     /// Automatic memory consolidation.
     AutoDream,
+    /// A producer the receiver does not yet name. Only produced by
+    /// deserialization of an unrecognized tag; the producer never emits it.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The operation applied to one memory key.
+///
+/// Forward-compatible: a future producer may emit an operation this enum
+/// does not yet name. An unrecognized tag deserializes to Unknown rather
+/// than failing the whole event, so the notice still lands with its key
+/// and the unknown operation is shown rather than dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MemoryOperation {
@@ -37,6 +50,10 @@ pub enum MemoryOperation {
     Promoted,
     /// A memory moved to a narrower scope.
     Demoted,
+    /// An operation the receiver does not yet name. Only produced by
+    /// deserialization of an unrecognized tag; the producer never emits it.
+    #[serde(other)]
+    Unknown,
 }
 
 /// One successful memory operation projected onto the wire.

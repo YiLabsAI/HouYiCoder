@@ -141,6 +141,60 @@ mod tests {
     }
 
     #[test]
+    fn test_unknown_operation_survives() {
+        // A tag a future producer emits that this build does not name lands
+        // on Unknown instead of failing the whole change, so the key still
+        // reaches the notice rather than being silently dropped.
+        let op: MemoryOperation = serde_json::from_str("\"merged\"").expect("decode unknown tag");
+        assert_eq!(op, MemoryOperation::Unknown);
+        // The full event survives with the key intact.
+        let payload = serde_json::json!({
+            "MemoryChanged": {
+                "id": "change-2",
+                "origin": "auto-memory",
+                "changes": [{"key": "future", "operation": "merged"}],
+            }
+        });
+        let decoded: FrontendEvent =
+            serde_json::from_value(payload).expect("an unknown operation must not drop the event");
+        assert!(matches!(
+            decoded,
+            FrontendEvent::MemoryChanged { id, changes, .. }
+                if id.0 == "change-2"
+                    && changes[0].key == "future"
+                    && changes[0].operation == MemoryOperation::Unknown
+        ));
+        // Unknown round-trips as its own kebab-case tag.
+        let wire = serde_json::to_string(&MemoryOperation::Unknown).expect("serialize Unknown");
+        assert_eq!(wire, "\"unknown\"");
+        assert_eq!(
+            serde_json::from_str::<MemoryOperation>(&wire).expect("decode unknown"),
+            MemoryOperation::Unknown
+        );
+        // Symmetric forward-compat on origin: an unrecognized producer tag
+        // also lands on Unknown rather than dropping the event.
+        let unknown_origin: MemoryChangeOrigin =
+            serde_json::from_str("\"future-producer\"").expect("decode unknown origin");
+        assert_eq!(unknown_origin, MemoryChangeOrigin::Unknown);
+        let origin_payload = serde_json::json!({
+            "MemoryChanged": {
+                "id": "change-3",
+                "origin": "future-producer",
+                "changes": [{"key": "k", "operation": "created"}],
+            }
+        });
+        let decoded_origin: FrontendEvent = serde_json::from_value(origin_payload)
+            .expect("an unknown origin must not drop the event");
+        assert!(matches!(
+            decoded_origin,
+            FrontendEvent::MemoryChanged { id, origin, changes, .. }
+                if id.0 == "change-3"
+                    && origin == MemoryChangeOrigin::Unknown
+                    && changes[0].key == "k"
+        ));
+    }
+
+    #[test]
     fn test_commit_wire_compat() {
         let event = FrontendEvent::QueuedInputCommitted {
             inputs: vec![QueuedInput::new("next")],

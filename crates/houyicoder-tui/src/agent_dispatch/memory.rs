@@ -89,6 +89,9 @@ impl App {
             MemoryChangeOrigin::PrimaryAgent => "primary agent",
             MemoryChangeOrigin::AutoMemory => "auto-memory",
             MemoryChangeOrigin::AutoDream => "auto-dream",
+            // A future producer this build does not name; label the notice
+            // rather than dropping it.
+            MemoryChangeOrigin::Unknown => "unknown source",
         };
         let count = changes.len();
         let noun = if count == 1 { "change" } else { "changes" };
@@ -100,6 +103,9 @@ impl App {
                 MemoryOperation::Deleted => "deleted",
                 MemoryOperation::Promoted => "promoted",
                 MemoryOperation::Demoted => "demoted",
+                // A future operation this build does not name; show the key
+                // with a neutral verb rather than dropping the row.
+                MemoryOperation::Unknown => "changed",
             };
             notice.push_str(&format!("\n  ⎿  {operation} {}", change.key));
         }
