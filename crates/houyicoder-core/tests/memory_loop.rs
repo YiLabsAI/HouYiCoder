@@ -426,11 +426,13 @@ async fn test_no_memory_no_change() {
     );
 }
 
-/// A single-word query ("hi", "thanks") carries too little signal to recall
-/// against, so the turn-entry gate skips recall entirely — no recall call, no
-/// memory attachment. A multi-word query on a fresh session still recalls.
+/// No word-count gate sits between the turn and the provider, single words
+/// included — a whitespace word count would reject a no-space CJK query, so
+/// a no-signal query is the provider tokenizer's to drop. The stub reports
+/// every seeded entry, so the attachment assertion shows a provider answer
+/// reaching the turn's user text.
 #[tokio::test]
-async fn test_single_word_skips_recall() {
+async fn test_single_word_reaches_provider() {
     let memory = Arc::new(RecordingMemory::new());
     memory.seed(MemoryEntry::new(
         "rust-conventions",
@@ -445,17 +447,17 @@ async fn test_single_word_skips_recall() {
     let _result = runner.run(session, "hi".into()).await;
     assert_eq!(
         memory.recall_count(),
-        0,
-        "single-word query must skip recall"
+        1,
+        "a single-word query must reach the provider"
     );
     let captured = seen.lock().expect("seen").clone();
     assert!(
-        !captured[0].user_text.contains("Prefer let chains"),
-        "no memory attachment for a single-word query: {}",
+        captured[0].user_text.contains("Prefer let chains"),
+        "a provider answer reaches the model as the recall attachment: {}",
         captured[0].user_text
     );
-    // A multi-word query on a fresh session recalls.
+    // A multi-word query on a fresh session recalls once too.
     let session2 = SessionId::new();
     let _result = runner.run(session2, "help with rust".into()).await;
-    assert!(memory.recall_count() > 0, "multi-word query must recall");
+    assert_eq!(memory.recall_count(), 2, "each turn recalls once");
 }

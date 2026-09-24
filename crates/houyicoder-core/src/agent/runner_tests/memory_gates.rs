@@ -84,9 +84,9 @@ async fn test_byte_cap_skips_recall() {
     let mut runner = runner_with(provider, ToolRegistry::new());
     runner.memory.install_provider(memory);
     let session = SessionId::new();
-    // A multi-word user input (so the single-word gate would NOT skip) plus
-    // a memory-recall event over the 60KB cap. The byte-cap gate fires
-    // before the query/single-word gate, so recall is skipped.
+    // A user input that matches the seeded entry, plus a memory-recall
+    // event over the 60KB cap. The byte-cap gate fires before the query
+    // reaches the provider, so recall is skipped.
     for kind in [
         SessionEvent::UserInput {
             text: "matching fact query".into(),
