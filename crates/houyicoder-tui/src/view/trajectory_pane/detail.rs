@@ -103,17 +103,21 @@ pub(super) fn draw_turn_detail(
             // the row still ends with the duration and the outcome glyph.
             let summary_w = (area.width as usize)
                 .saturating_sub(TIMELINE_PREFIX_W + bar_area + TIMELINE_SUFFIX_W);
-            header.push(ruler_line(turn.duration_ms, bar_area));
+            // A terminal too narrow to place a bar gets the row without it: a
+            // bar drawn into columns the terminal does not have is a bar the
+            // reader cannot use.
+            let compact = (area.width as usize) < TIMELINE_MIN_W;
+            if !compact {
+                header.push(ruler_line(turn.duration_ms, bar_area));
+            }
             match detail.state {
                 TrajectoryDetailState::Ready => {
                     for (i, ev) in detail.records.iter().enumerate() {
-                        body.push(record_row(
-                            ev,
-                            i == clamped,
-                            turn.duration_ms,
-                            bar_area,
-                            summary_w,
-                        ));
+                        body.push(if compact {
+                            compact_record_row(ev, i == clamped, area.width as usize)
+                        } else {
+                            record_row(ev, i == clamped, turn.duration_ms, bar_area, summary_w)
+                        });
                     }
                 }
                 TrajectoryDetailState::Loading => body.push(line(vec![sp(
@@ -220,6 +224,44 @@ pub(super) fn draw_drill_gone() -> (
 /// One Level 1 timeline row: the kind and name of the record, its bar on the
 /// turn's time axis, its duration, and its summary with any measured latency
 /// appended.
+/// A record row without the time axis, for a terminal too narrow to place one.
+///
+/// The selection, the duration, and the outcome stay: they are what a row is
+/// read for. The summary takes what is left, then the name gives way, and the
+/// kind last.
+fn compact_record_row(ev: &TrajectoryRecord, selected: bool, width: usize) -> Line<'static> {
+    let prefix = if selected { "▸ " } else { "  " };
+    let bc = outcome_color(ev.outcome);
+    // The tail is measured rather than assumed: what it costs is what the rest
+    // of the row has to fit in.
+    let tail = format!(" {} {}", format_span_ms(ev.duration_ms), ev.outcome.glyph());
+    let mut left = width.saturating_sub(2 + UnicodeWidthStr::width(tail.as_str()));
+    let kind = ev.kind.label();
+    let kind = if left > UnicodeWidthStr::width(kind) {
+        left -= UnicodeWidthStr::width(kind) + 1;
+        format!("{kind} ")
+    } else {
+        String::new()
+    };
+    // A name field carries its own separator, so it takes one column more than
+    // the text it holds.
+    let name = ev.name.as_deref().unwrap_or("");
+    let name = if left >= 5 {
+        let taken = left.min(TIMELINE_NAME_W + 1);
+        left -= taken;
+        format!("{} ", pad(&truncate_width(name, taken - 1), taken - 1))
+    } else {
+        String::new()
+    };
+    line(vec![
+        sp(prefix, Color::Cyan),
+        sp(kind, Color::DarkGray),
+        sp(name, Color::Cyan),
+        sp(truncate_width(&ev.summary, left), Color::White),
+        sp(tail, bc),
+    ])
+}
+
 fn record_row(
     ev: &TrajectoryRecord,
     selected: bool,

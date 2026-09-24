@@ -462,6 +462,12 @@ const TIMELINE_DUR_W: usize = 7;
 /// The summary column's floor, so a narrow terminal shrinks the bar first.
 const TIMELINE_SUMMARY_MIN_W: usize = 32;
 
+/// The narrowest width a positioned timeline row is drawn in. Below it the bar
+/// has no columns left to say anything, so the row drops the axis rather than
+/// drawing one the terminal would cut: what a row is read for is what it did,
+/// how long it took, and how it ended.
+const TIMELINE_MIN_W: usize = 40;
+
 /// The outcome glyph a row ends with, and the space before it.
 const TIMELINE_MARK_W: usize = 2;
 
