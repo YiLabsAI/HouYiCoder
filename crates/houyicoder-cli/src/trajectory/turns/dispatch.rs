@@ -6,9 +6,10 @@
 use std::collections::HashSet;
 
 use houyicoder_context::{HookVerdictKind, SessionEvent, SessionLogEntry};
+use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
-    CompactedBoundary, EventUsage, ModelSwitchBoundary, TrajectoryRecordKind, TrajectoryTurn,
-    TurnBoundary,
+    CompactedBoundary, EventUsage, ModelSwitchBoundary, TrajectoryRecord, TrajectoryRecordKind,
+    TrajectoryTurn, TurnBoundary,
 };
 
 use super::super::view::{CallIndex, fmt_bytes, preview, result_failed};
@@ -26,6 +27,7 @@ pub(in crate::trajectory) fn apply_turn_boundary(
     n: &mut usize,
     pending_boundary: &mut Vec<TurnBoundary>,
     last_model: &mut Option<String>,
+    records: &mut Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)>,
 ) -> bool {
     match &ev.event {
         SessionEvent::ContextCleared { prior_turn } => {
@@ -71,8 +73,10 @@ pub(in crate::trajectory) fn apply_turn_boundary(
             return false;
         }
         SessionEvent::UserInput { text } => {
-            if builder.is_open() {
-                builder.flush(turns, *n);
+            if builder.is_open()
+                && let Some(entry) = builder.flush(turns, *n)
+            {
+                records.push(entry);
             }
             *n += 1;
             builder.reset(ev, text.clone(), std::mem::take(pending_boundary));

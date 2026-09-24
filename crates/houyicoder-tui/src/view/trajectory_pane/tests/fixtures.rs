@@ -14,6 +14,7 @@ pub(super) fn turn(n: usize, user_input: &str) -> TrajectoryTurn {
         key: TrajectoryTurnKey::from_opening_event(&format!("t{n}")),
         boundary_before: Vec::new(),
         user_input: user_input.into(),
+        title: user_input.into(),
         tokens_in: None,
         tokens_out: None,
         cache_read: None,
@@ -26,7 +27,6 @@ pub(super) fn turn(n: usize, user_input: &str) -> TrajectoryTurn {
         retries: 0,
         duration_ms: 0,
         success: true,
-        records: Vec::new(),
     }
 }
 
@@ -79,12 +79,23 @@ pub(super) fn view_of(turns: Vec<TrajectoryTurn>) -> TrajectoryView {
     view(turns.into_iter().map(TrajectoryRow::Turn).collect())
 }
 
-/// A settled view holding one record, for tests that read a rendered body
-/// rather than the projection.
-pub(super) fn detail_view(record: TrajectoryRecord) -> TrajectoryView {
-    let mut t = turn(1, "ask");
-    t.records = vec![record];
-    view_of(vec![t])
+/// A detail holding the given records, ready to render.
+pub(super) fn detail_of_all(records: Vec<TrajectoryRecord>) -> TrajectoryDetailView {
+    TrajectoryDetailView {
+        state: TrajectoryDetailState::Ready,
+        records,
+        truncated: false,
+    }
+}
+
+/// A detail holding one record.
+pub(super) fn detail_of(record: TrajectoryRecord) -> TrajectoryDetailView {
+    detail_of_all(vec![record])
+}
+
+/// A row holding one turn, for tests that read a rendered body.
+pub(super) fn turn_row(n: usize, title: &str) -> TrajectoryRow {
+    TrajectoryRow::Turn(turn(n, title))
 }
 
 /// A window of turn rows numbered first..=last, over a session of total turns.

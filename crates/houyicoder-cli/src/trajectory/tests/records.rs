@@ -42,9 +42,8 @@ fn test_tool_without_result_pending() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let tool = turn
-        .records
-        .iter()
+    let tool = records_of(&events, turn.n)
+        .into_iter()
         .find(|r| r.kind == TrajectoryRecordKind::Tool)
         .expect("the call is a record");
     assert_eq!(tool.outcome, RecordOutcome::Pending);
@@ -104,9 +103,8 @@ fn test_agent_merges_spawn_return() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let agents: Vec<_> = turn
-        .records
-        .iter()
+    let agents: Vec<_> = records_of(&events, turn.n)
+        .into_iter()
         .filter(|r| r.kind == TrajectoryRecordKind::Agent)
         .collect();
     assert_eq!(agents.len(), 1, "spawn and return are one record");
@@ -168,9 +166,8 @@ fn test_mid_turn_input_context() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let contexts: Vec<_> = turn
-        .records
-        .iter()
+    let contexts: Vec<_> = records_of(&events, turn.n)
+        .into_iter()
         .filter(|r| r.kind == TrajectoryRecordKind::Context)
         .collect();
     assert_eq!(contexts.len(), 2, "the prompt and the update");
@@ -220,9 +217,8 @@ fn test_memory_recall_is_record() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let memory = turn
-        .records
-        .iter()
+    let memory = records_of(&events, turn.n)
+        .into_iter()
         .find(|r| r.kind == TrajectoryRecordKind::Memory)
         .expect("the recall is a record");
     assert!(
@@ -305,7 +301,7 @@ fn test_delegation_hides_tool_call() {
         _ => unreachable!(),
     };
     assert_eq!(
-        turn.records
+        records_of(&events, turn.n)
             .iter()
             .filter(|r| r.kind == TrajectoryRecordKind::Tool)
             .count(),
@@ -313,7 +309,7 @@ fn test_delegation_hides_tool_call() {
         "the delegation's tool call is not a separate record"
     );
     assert_eq!(
-        turn.records
+        records_of(&events, turn.n)
             .iter()
             .filter(|r| r.kind == TrajectoryRecordKind::Agent)
             .count(),
@@ -366,9 +362,8 @@ fn test_direct_tool_call_shows() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let tools: Vec<_> = turn
-        .records
-        .iter()
+    let tools: Vec<_> = records_of(&events, turn.n)
+        .into_iter()
         .filter(|r| r.kind == TrajectoryRecordKind::Tool)
         .collect();
     assert_eq!(tools.len(), 1);
@@ -423,9 +418,8 @@ fn test_hook_verdict_neutral() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let observed = turn
-        .records
-        .iter()
+    let observed = records_of(&events, turn.n)
+        .into_iter()
         .find(|r| r.name.as_deref() == Some("audit"))
         .expect("the observation is recorded");
     assert_eq!(
@@ -434,9 +428,8 @@ fn test_hook_verdict_neutral() {
         "an observation is not an error"
     );
     assert_eq!(observed.outcome, RecordOutcome::Ok);
-    let denied = turn
-        .records
-        .iter()
+    let denied = records_of(&events, turn.n)
+        .into_iter()
         .find(|r| r.name.as_deref() == Some("style"))
         .expect("the denial is recorded");
     assert_eq!(denied.kind, TrajectoryRecordKind::Error);
@@ -502,7 +495,7 @@ fn test_delegation_legacy_hides_tool() {
         _ => unreachable!(),
     };
     assert_eq!(
-        turn.records
+        records_of(&events, turn.n)
             .iter()
             .filter(|r| r.kind == TrajectoryRecordKind::Tool)
             .count(),
@@ -510,7 +503,7 @@ fn test_delegation_legacy_hides_tool() {
         "the delegation's tool call is suppressed by position"
     );
     assert_eq!(
-        turn.records
+        records_of(&events, turn.n)
             .iter()
             .filter(|r| r.kind == TrajectoryRecordKind::Agent)
             .count(),
@@ -551,9 +544,8 @@ fn test_agent_return_shown() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let agents: Vec<_> = turn
-        .records
-        .iter()
+    let agents: Vec<_> = records_of(&events, turn.n)
+        .into_iter()
         .filter(|r| r.kind == TrajectoryRecordKind::Agent)
         .collect();
     assert_eq!(agents.len(), 1, "the return is not dropped");
@@ -603,9 +595,8 @@ fn test_agent_unknown_status() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let agent = turn
-        .records
-        .iter()
+    let agent = records_of(&events, turn.n)
+        .into_iter()
         .find(|r| r.kind == TrajectoryRecordKind::Agent)
         .expect("the delegation is a record");
     assert_eq!(
@@ -655,9 +646,8 @@ fn test_model_calls_are_numbered() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let ordinals: Vec<u32> = turn
-        .records
-        .iter()
+    let ordinals: Vec<u32> = records_of(&events, turn.n)
+        .into_iter()
         .filter(|r| r.kind == TrajectoryRecordKind::Model)
         .map(|r| r.ordinal)
         .collect();
@@ -690,9 +680,8 @@ fn test_reply_completes_model_call() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let model = turn
-        .records
-        .iter()
+    let model = records_of(&events, turn.n)
+        .into_iter()
         .find(|r| r.kind == TrajectoryRecordKind::Model)
         .expect("the call is a record");
     assert_eq!(model.outcome, RecordOutcome::Ok);

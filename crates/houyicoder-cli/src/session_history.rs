@@ -599,7 +599,7 @@ fn anchor_of(event: &LocatedEvent) -> Option<TurnAnchor> {
 }
 
 /// Whether an event opens a user turn, the boundary a page counts.
-fn is_user_input(entry: &SessionLogEntry) -> bool {
+pub(crate) fn is_user_input(entry: &SessionLogEntry) -> bool {
     matches!(entry.event, SessionEvent::UserInput { .. })
 }
 

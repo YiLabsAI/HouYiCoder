@@ -10,8 +10,9 @@ use super::turns;
 
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
+use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
-    SessionTiming, SubagentUsage, TrajectoryRow, TrajectoryTurn, TrajectoryView,
+    SessionTiming, SubagentUsage, TrajectoryRecord, TrajectoryRow, TrajectoryTurn, TrajectoryView,
     TrajectoryViewState, TurnBoundary,
 };
 
@@ -283,7 +284,35 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str, max_turns: usize)
 /// comes from the caller rather than from the slice: numbering from the slice
 /// would restart every page at the session's first turn.
 pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec<TrajectoryRow> {
+    fold_rows(events, first_turn).0
+}
+
+/// One turn's records, folded from its events.
+///
+/// The list's rows carry a turn's facts; a drill asks for the records, and this
+/// is where they come from. The events are one turn's, so the fold opens one.
+pub(crate) fn project_records(events: &[SessionLogEntry]) -> Vec<TrajectoryRecord> {
+    fold_rows(events, 1)
+        .1
+        .into_iter()
+        .next()
+        .map(|(_, records)| records)
+        .unwrap_or_default()
+}
+
+/// Fold a slice of events into rows, and each turn's records by key.
+///
+/// A paged read keeps the rows and drops the records: the window holds what the
+/// list draws, and a drill reads the records it asks for.
+fn fold_rows(
+    events: &[SessionLogEntry],
+    first_turn: usize,
+) -> (
+    Vec<TrajectoryRow>,
+    Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)>,
+) {
     let mut turn_rows: Vec<TrajectoryTurn> = Vec::new();
+    let mut records: Vec<(TrajectoryTurnKey, Vec<TrajectoryRecord>)> = Vec::new();
     let mut builder = turns::TurnBuilder::new();
     let mut n: usize = first_turn.saturating_sub(1);
     let calls = index_calls(events);
@@ -299,6 +328,7 @@ pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec
             &mut n,
             &mut pending,
             &mut last_model,
+            &mut records,
         ) {
             continue;
         }
@@ -311,13 +341,28 @@ pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec
         }
         turns::dispatch::apply_turn_content(&mut builder, ev, &calls, &spawned);
     }
-    if builder.is_open() {
-        builder.flush(&mut turn_rows, n);
+    if builder.is_open()
+        && let Some(entry) = builder.flush(&mut turn_rows, n)
+    {
+        records.push(entry);
     }
-    turn_rows
+    let rows = turn_rows
         .into_iter()
         .map(TrajectoryRow::Turn)
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>();
+    (rows, records)
+}
+
+/// One turn's records, folded from the whole log: what a drill asks for, in a
+/// test that reads a turn's records directly.
+#[cfg(test)]
+pub(crate) fn records_of(events: &[SessionLogEntry], turn: usize) -> Vec<TrajectoryRecord> {
+    fold_rows(events, 1)
+        .1
+        .into_iter()
+        .nth(turn.saturating_sub(1))
+        .map(|(_, records)| records)
+        .unwrap_or_default()
 }
 
 /// Fold the whole log's token, failure, duration, and timing totals. This is

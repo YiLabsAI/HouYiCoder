@@ -1,9 +1,40 @@
-//! Level 1 and Level 2 drill-down renderers for the trajectory pane.
+//! Level 1 and Level 2 drill-down renderers for the trajectory pane, and what
+//! the pane knows about the turn it is showing.
 //!
 //! Level 1 draws one turn's record timeline; Level 2 draws the full detail of
 //! the selected record. Both share the pane's line helpers and view types.
 
 use super::*;
+
+/// What the pane knows about the turn its drill is on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TrajectoryDetailState {
+    /// Asked for, not answered yet.
+    #[default]
+    Loading,
+    /// The turn's records are in hand.
+    Ready,
+    /// The read failed, and the pane says so rather than showing an empty turn.
+    Failed,
+    /// The turn's history was cleared, so the key names a turn of a history
+    /// that is no longer the session's.
+    Stale,
+}
+
+/// One turn's records, as the drill levels render them.
+///
+/// The turn's own facts stay on its row: a drill asks for the records, and the
+/// row it came from already answers what the turn was and what it spent.
+#[derive(Clone, Default)]
+pub struct TrajectoryDetailView {
+    pub state: TrajectoryDetailState,
+    /// The turn's records in log order.
+    pub records: Vec<TrajectoryRecord>,
+    /// True when the turn was wider than one detail read, so the records shown
+    /// are its beginning. A silent truncation would present part of a turn as
+    /// the whole of it.
+    pub truncated: bool,
+}
 use crate::view::relative_time::format_span_ms;
 
 /// The colour a record's outcome is drawn in.
@@ -21,8 +52,8 @@ fn outcome_color(outcome: RecordOutcome) -> Color {
 /// same columns and the latency hot-spots are visible at a glance. A ruler line
 /// orients the scale, and the kind and name columns say what each row was.
 pub(super) fn draw_turn_detail(
-    traj: &TrajectoryView,
-    turn_idx: usize,
+    row: &TrajectoryRow,
+    detail: &TrajectoryDetailView,
     cursor: usize,
     area: Rect,
     app: &crate::state::App,
@@ -34,27 +65,14 @@ pub(super) fn draw_turn_detail(
 ) {
     let mut header = Vec::new();
     let mut body = Vec::new();
-    let Some(row) = traj.rows.get(turn_idx) else {
-        return (
-            vec![line(vec![sp("no row data", Color::DarkGray)])],
-            vec![],
-            vec![],
-            0,
-        );
-    };
-    let row = row.clone();
-    match row {
+    match row.clone() {
         TrajectoryRow::Turn(turn) => {
             app.trajectory.set_at_bg(false);
-            let clamped = cursor.min(turn.records.len().saturating_sub(1));
+            let clamped = cursor.min(detail.records.len().saturating_sub(1));
             let cache_str = format_turn_cache(&turn);
             header.push(line(vec![
                 sp(
-                    format!(
-                        " T{}  \"{}\"",
-                        turn.n,
-                        truncate_width(&super::list::turn_title(&turn), 30)
-                    ),
+                    format!(" T{}  \"{}\"", turn.n, truncate_width(&turn.title, 30)),
                     Color::Cyan,
                 ),
                 sp(
@@ -81,14 +99,35 @@ pub(super) fn draw_turn_detail(
             let summary_w = (area.width as usize)
                 .saturating_sub(TIMELINE_PREFIX_W + bar_area + TIMELINE_SUFFIX_W);
             header.push(ruler_line(turn.duration_ms, bar_area));
-            for (i, ev) in turn.records.iter().enumerate() {
-                body.push(record_row(
-                    ev,
-                    i == clamped,
-                    turn.duration_ms,
-                    bar_area,
-                    summary_w,
-                ));
+            match detail.state {
+                TrajectoryDetailState::Ready => {
+                    for (i, ev) in detail.records.iter().enumerate() {
+                        body.push(record_row(
+                            ev,
+                            i == clamped,
+                            turn.duration_ms,
+                            bar_area,
+                            summary_w,
+                        ));
+                    }
+                }
+                TrajectoryDetailState::Loading => body.push(line(vec![sp(
+                    "  reading this turn's records...",
+                    Color::DarkGray,
+                )])),
+                TrajectoryDetailState::Failed => body.push(line(vec![sp(
+                    "  could not read this turn's records",
+                    Color::Red,
+                )])),
+                // The history was cleared under the drill: the key names a turn
+                // that is not this session's to show.
+                TrajectoryDetailState::Stale => return draw_drill_gone(),
+            }
+            if detail.truncated {
+                body.push(line(vec![sp(
+                    "  … this turn is longer than one read, showing its beginning",
+                    Color::Yellow,
+                )]));
             }
             let footer = vec![
                 blank(),
@@ -247,8 +286,8 @@ fn record_row(
 /// the view is stable, not a switcher). Shows the full thinking text, tool
 /// input, and tool output (multi-line) rather than the one-line L1 summary.
 pub(super) fn draw_event_detail(
-    traj: &TrajectoryView,
-    turn_idx: usize,
+    row: &TrajectoryRow,
+    detail: &TrajectoryDetailView,
     cursor: usize,
     _area: Rect,
 ) -> (
@@ -259,18 +298,35 @@ pub(super) fn draw_event_detail(
 ) {
     let mut header = Vec::new();
     let mut body = Vec::new();
-    let turn = traj.rows.get(turn_idx).and_then(|r| match r {
-        TrajectoryRow::Turn(t) => Some(t),
-        _ => None,
-    });
-    let Some(turn) = turn else {
+    let TrajectoryRow::Turn(_turn) = row else {
         return (header, body, vec![], 0);
     };
-    let ev = turn.records.get(cursor).or_else(|| turn.records.first());
+    match detail.state {
+        TrajectoryDetailState::Loading => {
+            body.push(line(vec![sp(
+                "  reading this turn's records...",
+                Color::DarkGray,
+            )]));
+            return (header, body, vec![key_hint(&[("Esc", "back")])], 0);
+        }
+        TrajectoryDetailState::Failed => {
+            body.push(line(vec![sp(
+                "  could not read this turn's records",
+                Color::Red,
+            )]));
+            return (header, body, vec![key_hint(&[("Esc", "back")])], 0);
+        }
+        TrajectoryDetailState::Stale => return draw_drill_gone(),
+        TrajectoryDetailState::Ready => {}
+    }
+    let ev = detail
+        .records
+        .get(cursor)
+        .or_else(|| detail.records.first());
     let Some(ev) = ev else {
         return (header, body, vec![], 0);
     };
-    let idx = cursor.min(turn.records.len().saturating_sub(1));
+    let idx = cursor.min(detail.records.len().saturating_sub(1));
     let mark = ev.outcome.glyph();
     let mc = outcome_color(ev.outcome);
     let name = match (ev.ordinal, ev.name.as_deref()) {
@@ -293,7 +349,7 @@ pub(super) fn draw_event_detail(
     }
     ev_head.push(sp(mark, mc));
     ev_head.push(sp(
-        format!("  · Record {} of {}", idx + 1, turn.records.len()),
+        format!("  · Record {} of {}", idx + 1, detail.records.len()),
         Color::DarkGray,
     ));
     header.push(line(ev_head));

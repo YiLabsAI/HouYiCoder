@@ -142,9 +142,8 @@ fn test_turn_groups_by_input() {
         "the turn spans its own events (100 to 240), not just its tools"
     );
     // Each tool call is one record carrying both its input and its result.
-    let tools: Vec<_> = t1
-        .records
-        .iter()
+    let tools: Vec<_> = records_of(&events, t1.n)
+        .into_iter()
         .filter(|e| e.kind == TrajectoryRecordKind::Tool)
         .collect();
     assert_eq!(tools.len(), 2, "call and result merge into one record");
@@ -162,9 +161,8 @@ fn test_turn_groups_by_input() {
         "the error result marks its record failed"
     );
     // Two model calls inside the turn, each with its own usage.
-    let models: Vec<_> = t1
-        .records
-        .iter()
+    let models: Vec<_> = records_of(&events, t1.n)
+        .into_iter()
         .filter(|e| e.kind == TrajectoryRecordKind::Model)
         .collect();
     assert_eq!(models.len(), 2, "each model call is its own record");
@@ -175,8 +173,11 @@ fn test_turn_groups_by_input() {
     );
     assert_eq!(models[1].usage.and_then(|u| u.input), Some(2000));
     // The user input is the turn's first record, offset zero.
-    assert_eq!(t1.records[0].kind, TrajectoryRecordKind::Context);
-    assert_eq!(t1.records[0].start_ms, 0);
+    assert_eq!(
+        records_of(&events, t1.n)[0].kind,
+        TrajectoryRecordKind::Context
+    );
+    assert_eq!(records_of(&events, t1.n)[0].start_ms, 0);
 }
 
 #[test]
@@ -267,9 +268,8 @@ fn test_multi_iteration_produces_turns() {
         _ => unreachable!(),
     };
     assert_eq!(t1.user_input, "fix the bug");
-    let models = t1
-        .records
-        .iter()
+    let models = records_of(&events, t1.n)
+        .into_iter()
         .filter(|e| e.kind == TrajectoryRecordKind::Model)
         .count();
     assert_eq!(models, 3, "the three calls are visible inside the turn");
@@ -361,9 +361,8 @@ fn test_recovery_retry_same_turn() {
     assert_eq!(t.tokens_in, Some(5000));
     assert_eq!(t.tokens_out, Some(1100));
     // The retry is attributed to the model call it belongs to.
-    let retried: Vec<_> = t
-        .records
-        .iter()
+    let retried: Vec<_> = records_of(&events, t.n)
+        .into_iter()
         .filter(|e| e.kind == TrajectoryRecordKind::Model && e.retries > 0)
         .collect();
     assert_eq!(retried.len(), 1, "the recovery call carries the retry");
@@ -458,15 +457,13 @@ fn test_project_reasoning_carries_thinking() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let reasoning = turn
-        .records
-        .iter()
+    let reasoning = records_of(&events, turn.n)
+        .into_iter()
         .find(|e| e.kind == TrajectoryRecordKind::Model)
         .expect("reasoning event projects to a row");
     assert_eq!(reasoning.thinking.as_deref(), Some("let me think..."));
-    let llm = turn
-        .records
-        .iter()
+    let llm = records_of(&events, turn.n)
+        .into_iter()
         .find(|e| e.kind == TrajectoryRecordKind::Model)
         .expect("assistant message projects to an llm row");
     assert_eq!(
@@ -557,9 +554,8 @@ fn test_tool_result_extracts_body() {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let tr = turn
-        .records
-        .iter()
+    let tr = records_of(&events, turn.n)
+        .into_iter()
         .find(|e| e.kind == TrajectoryRecordKind::Tool)
         .expect("tool_result event");
     let body = tr.output.as_deref().unwrap_or("");
@@ -623,9 +619,8 @@ fn test_failed_bash_counted() {
     };
     assert_eq!(view.failures, 1, "header failure total counts the failure");
     assert_eq!(turn.tool_fail, 1, "per-turn failure count");
-    let tr = turn
-        .records
-        .iter()
+    let tr = records_of(&events, turn.n)
+        .into_iter()
         .find(|e| e.kind == TrajectoryRecordKind::Tool)
         .expect("tool_result event");
     assert_eq!(
@@ -676,9 +671,8 @@ fn test_grep_nomatch_ok() {
     };
     assert_eq!(view.failures, 0, "no matches is not a failure");
     assert_eq!(turn.tool_fail, 0, "per-turn count agrees");
-    let tr = turn
-        .records
-        .iter()
+    let tr = records_of(&events, turn.n)
+        .into_iter()
         .find(|e| e.kind == TrajectoryRecordKind::Tool)
         .expect("tool_result event");
     assert_eq!(
@@ -771,14 +765,14 @@ fn test_meta_user_excluded() {
         "the title is the real prompt, not the MetaUser reminder"
     );
     assert_eq!(
-        turn.records
+        records_of(&events, turn.n)
             .iter()
             .filter(|e| e.kind == TrajectoryRecordKind::Model)
             .count(),
         2,
         "both model calls are records in the turn"
     );
-    for record in &turn.records {
+    for record in &records_of(&events, turn.n) {
         assert!(
             !record.summary.contains("Note: you just called"),
             "MetaUser leaked into trajectory records: {}",
@@ -825,7 +819,7 @@ fn test_memory_recall_excluded() {
         turn.user_input, "fix the bug",
         "MemoryRecall must not overwrite user_input"
     );
-    for ev in &turn.records {
+    for ev in &records_of(&events, turn.n) {
         assert!(
             !ev.summary.contains("remembered:"),
             "MemoryRecall leaked into trajectory events: {}",
@@ -1328,4 +1322,63 @@ fn test_turn_key_without_input() {
         ),
         _ => panic!("a leading turn row"),
     }
+}
+
+/// A row is titled by its prompt, by the first record's summary when the prompt
+/// is not in the loaded window, and by a placeholder when there is neither — a
+/// row is never blank. The title is derived where the records are, so the list
+/// names a row without asking for a turn's detail.
+#[test]
+fn test_turn_title_derivation() {
+    let with_input = ev(
+        100,
+        SessionEvent::UserInput {
+            text: "fix the bug".into(),
+        },
+    );
+    let view = project(&[with_input], "m", 0);
+    match &view.rows[0] {
+        TrajectoryRow::Turn(turn) => assert_eq!(turn.title, "fix the bug"),
+        _ => panic!("a turn row"),
+    }
+
+    // A turn whose prompt sits outside the window: the first record names it.
+    let mid_run = ev(
+        100,
+        SessionEvent::TurnStarted {
+            turn: 1,
+            call_in_turn: 0,
+        },
+    );
+    let call = ev(
+        110,
+        SessionEvent::ToolCall {
+            call_id: "c1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "ls -la"}),
+        },
+    );
+    let view = project(&[mid_run.clone(), call.clone()], "m", 0);
+    match &view.rows[0] {
+        TrajectoryRow::Turn(turn) => {
+            // The rule the list used to apply: the prompt, or the first
+            // record's summary when that is not blank, or the placeholder.
+            let expected = records_of(&[mid_run.clone(), call.clone()], turn.n)
+                .first()
+                .map(|record| record.summary.clone())
+                .filter(|summary| !summary.trim().is_empty())
+                .unwrap_or_else(|| "(no input)".to_string());
+            assert_eq!(turn.title, expected, "the row is named by its first record");
+        }
+        _ => panic!("a turn row"),
+    }
+
+    // Nothing to derive from: the placeholder, never a blank row.
+    let only_boundary = ev(100, SessionEvent::ContextCleared { prior_turn: 1 });
+    let view = project(&[only_boundary], "m", 0);
+    assert!(
+        view.rows.is_empty()
+            || matches!(&view.rows[0], TrajectoryRow::Turn(t) if !t.title.trim().is_empty()),
+        "a row is never blank"
+    );
 }

@@ -474,19 +474,40 @@ impl TurnBuilder {
         self.push(record);
     }
 
-    pub(super) fn flush(&mut self, turns: &mut Vec<TrajectoryTurn>, n: usize) {
-        // A builder that never opened holds no turn to flush.
-        let Some(key) = self.key.take() else {
-            return;
-        };
+    /// What the row is titled: the prompt, or the first record's summary for a
+    /// turn whose prompt is not in the log. Derived where the records are, so
+    /// the list needs no detail to name a row.
+    fn title(&self) -> String {
+        if !self.user_input.trim().is_empty() {
+            return self.user_input.clone();
+        }
+        match self.records.first() {
+            Some(first) if !first.summary.trim().is_empty() => first.summary.clone(),
+            _ => "(no input)".to_string(),
+        }
+    }
+
+    /// Flush the open turn into the list, and hand back its records.
+    ///
+    /// The rows carry the turn's facts; the records are what a drill asks for,
+    /// so the caller decides whether to keep them. A builder that never opened
+    /// holds no turn to flush.
+    pub(super) fn flush(
+        &mut self,
+        turns: &mut Vec<TrajectoryTurn>,
+        n: usize,
+    ) -> Option<(TrajectoryTurnKey, Vec<TrajectoryRecord>)> {
+        let key = self.key.take()?;
         // A delegation with no return in this window stays open: keep it
         // visible with no duration rather than inventing an end.
         let wall_ms = self
             .last_ts
             .saturating_sub(self.first_ts.unwrap_or(self.last_ts));
+        let title = self.title();
         turns.push(TrajectoryTurn {
             n,
-            key,
+            key: key.clone(),
+            title,
             boundary_before: std::mem::take(&mut self.boundary_before),
             user_input: std::mem::take(&mut self.user_input),
             tokens_in: self.tokens_in.map(|v| v as usize),
@@ -504,8 +525,9 @@ impl TurnBuilder {
             // from the run leg, used only when it reaches further.
             duration_ms: wall_ms.max(self.run_completed_ms),
             success: self.success,
-            records: std::mem::take(&mut self.records),
         });
+        let records = std::mem::take(&mut self.records);
         self.first_ts = None;
+        Some((key, records))
     }
 }

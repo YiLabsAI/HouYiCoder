@@ -2,13 +2,15 @@
 //! session-level totals that the window must not narrow.
 
 use super::super::reader::{RESIDENT_PAGES, SessionLogTrajectory, TRAJECTORY_PAGE_TURNS};
-use super::super::view::project;
+use super::super::view::{project, records_of};
 use crate::session_history::SessionHistory;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
+use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
-    TrajectoryLog as _, TrajectoryRow, TrajectoryView, TrajectoryViewState,
+    TrajectoryDetailState, TrajectoryDetailView, TrajectoryLog as _, TrajectoryRow, TrajectoryView,
+    TrajectoryViewState,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1379,4 +1381,75 @@ fn test_home_before_first_page() {
         "and the tail is what it has to show: {:?}",
         turn_numbers(&view)
     );
+}
+
+/// A drill reads the same records the list used to carry: the detail is the
+/// turn's records, read from the bytes its key names.
+#[test]
+fn test_detail_matches_projection() {
+    let (store, reader, sid, _history, _root) = disk_reader_at(4);
+    let view = pump(&reader);
+    let turn = view
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.clone()),
+            _ => None,
+        })
+        .expect("a turn row");
+
+    reader.request_detail(&turn.key);
+    let detail = pump_detail(&reader, &turn.key);
+    assert_eq!(
+        detail.state,
+        TrajectoryDetailState::Ready,
+        "the read landed"
+    );
+
+    let events = store.trajectory_snapshot(sid);
+    let expected = records_of(&events, turn.n);
+    assert!(!expected.is_empty(), "the turn has records to compare");
+    let shown: Vec<(String, String, u64, u64)> = detail
+        .records
+        .iter()
+        .map(|r| {
+            (
+                r.kind.label().to_string(),
+                r.summary.clone(),
+                r.start_ms,
+                r.duration_ms,
+            )
+        })
+        .collect();
+    let want: Vec<(String, String, u64, u64)> = expected
+        .iter()
+        .map(|r| {
+            (
+                r.kind.label().to_string(),
+                r.summary.clone(),
+                r.start_ms,
+                r.duration_ms,
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown, want,
+        "the detail is the turn's records, field for field"
+    );
+}
+
+/// A detail read in flight, or one the source answers at once, is polled the
+/// way a draw polls it.
+fn pump_detail(
+    reader: &SessionLogTrajectory,
+    key: &TrajectoryTurnKey,
+) -> Arc<TrajectoryDetailView> {
+    for _ in 0..400 {
+        let detail = reader.detail(key);
+        if detail.state != TrajectoryDetailState::Loading {
+            return detail;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the detail never landed");
 }

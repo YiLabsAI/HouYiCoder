@@ -180,8 +180,10 @@ use usage::render_usage;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::TrajectoryTurnKey;
     use crate::view::trajectory_pane::{
-        SessionTiming, SubagentUsage, TrajectoryLog, TrajectoryView, TrajectoryViewState,
+        SessionTiming, SubagentUsage, TrajectoryDetailView, TrajectoryLog, TrajectoryView,
+        TrajectoryViewState,
     };
 
     /// The sub-tab header renders Status / Config / Usage, with the active one
@@ -438,6 +440,10 @@ mod tests {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
             }
+            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
+                std::sync::Arc::new(TrajectoryDetailView::default())
+            }
         }
         let view = TrajectoryView {
             state: TrajectoryViewState::Ready,
@@ -498,6 +504,10 @@ mod tests {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
             }
+            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
+                std::sync::Arc::new(TrajectoryDetailView::default())
+            }
         }
         let mut app = crate::test_harness::working_app();
         app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
@@ -536,6 +546,10 @@ mod tests {
         impl TrajectoryLog for Fixed {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
+            }
+            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
+                std::sync::Arc::new(TrajectoryDetailView::default())
             }
         }
         let mut app = crate::test_harness::working_app();
@@ -584,6 +598,10 @@ mod tests {
         impl TrajectoryLog for Fixed {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
+            }
+            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
+                std::sync::Arc::new(TrajectoryDetailView::default())
             }
         }
         let mut app = crate::test_harness::working_app();
@@ -650,6 +668,10 @@ mod tests {
         impl TrajectoryLog for Fixed {
             fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
                 self.0.clone()
+            }
+            fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+            fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
+                std::sync::Arc::new(TrajectoryDetailView::default())
             }
         }
         let mut app = crate::test_harness::working_app();

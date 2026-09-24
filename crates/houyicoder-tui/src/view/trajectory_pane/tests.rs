@@ -11,7 +11,7 @@ mod timeline;
 use super::*;
 use crate::view::working;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use fixtures::{record_of, turn, view};
+use fixtures::{detail_of_all, record_of, turn, view};
 use ratatui::{Terminal, backend::TestBackend};
 use std::sync::{Arc, Mutex};
 
@@ -19,10 +19,13 @@ use std::sync::{Arc, Mutex};
 fn test_sample_has_turns_events() {
     let t = sample_trajectory();
     assert!(t.total_turns > 0 && t.failures > 0);
+    let key = match t.rows.first() {
+        Some(TrajectoryRow::Turn(turn)) => turn.key.clone(),
+        _ => panic!("a turn row"),
+    };
     assert!(
-        t.rows
-            .iter()
-            .any(|r| matches!(r, TrajectoryRow::Turn(t) if !t.records.is_empty()))
+        !super::sample::sample_detail(&key).records.is_empty(),
+        "the demonstration turn has records to drill into"
     );
 }
 
@@ -146,6 +149,12 @@ impl TrajectoryLog for StubLog {
             ..view(Vec::new())
         })
     }
+
+    fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+
+    fn detail(&self, _key: &TrajectoryTurnKey) -> Arc<TrajectoryDetailView> {
+        Arc::new(TrajectoryDetailView::default())
+    }
 }
 
 #[test]
@@ -252,38 +261,33 @@ fn test_level2_renders_projection_kinds() {
             retries: 0,
         }
     }
-    let view = TrajectoryView {
-        models_used: 2,
+    let row = TrajectoryRow::Turn(TrajectoryTurn {
         tokens_in: Some(0),
         tokens_out: Some(0),
-        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
-            tokens_in: Some(0),
-            tokens_out: Some(0),
-            cache_read: Some(0),
-            cache_write: Some(0),
-            tool_count: 2,
-            records: vec![
-                ev(
-                    TrajectoryRecordKind::Model,
-                    Some("let me think"),
-                    None,
-                    None,
-                ),
-                ev(TrajectoryRecordKind::Tool, None, Some("echo hi"), None),
-                ev(TrajectoryRecordKind::Tool, None, None, Some("hi")),
-                ev(
-                    TrajectoryRecordKind::Model,
-                    Some("decided"),
-                    None,
-                    Some("the full reply"),
-                ),
-            ],
-            ..turn(1, "real kinds")
-        })])
-    };
+        cache_read: Some(0),
+        cache_write: Some(0),
+        tool_count: 2,
+        ..turn(1, "real kinds")
+    });
+    let detail = detail_of_all(vec![
+        ev(
+            TrajectoryRecordKind::Model,
+            Some("let me think"),
+            None,
+            None,
+        ),
+        ev(TrajectoryRecordKind::Tool, None, Some("echo hi"), None),
+        ev(TrajectoryRecordKind::Tool, None, None, Some("hi")),
+        ev(
+            TrajectoryRecordKind::Model,
+            Some("decided"),
+            None,
+            Some("the full reply"),
+        ),
+    ]);
     let body_text = |cursor: usize| {
         let (_, body, _, _) =
-            detail::draw_event_detail(&view, 0, cursor, ratatui::layout::Rect::ZERO);
+            detail::draw_event_detail(&row, &detail, cursor, ratatui::layout::Rect::ZERO);
         body.iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
             .collect::<String>()
@@ -348,35 +352,30 @@ fn test_trajectory_bar_invariants_mock() {
 #[test]
 fn test_event_detail_redacts_secrets() {
     let secret = "sk-abcd1234efgh5678ijkl9012mnop3456qrst";
-    let view = TrajectoryView {
-        models_used: 2,
+    let row = TrajectoryRow::Turn(TrajectoryTurn {
         tokens_in: Some(0),
         tokens_out: Some(0),
-        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
-            tokens_in: Some(0),
-            tokens_out: Some(0),
-            cache_read: Some(0),
-            cache_write: Some(0),
-            tool_count: 1,
-            records: vec![TrajectoryRecord {
-                kind: TrajectoryRecordKind::Tool,
-                name: Some("read".into()),
-                ordinal: 0,
-                summary: "creds".into(),
-                start_ms: 0,
-                duration_ms: 10,
-                outcome: RecordOutcome::Ok,
-                thinking: None,
-                input: None,
-                output: Some(format!("token={secret}")),
-                usage: None,
-                timing: None,
-                retries: 0,
-            }],
-            ..turn(1, "show keys")
-        })])
-    };
-    let (_, body, _, _) = detail::draw_event_detail(&view, 0, 0, ratatui::layout::Rect::ZERO);
+        cache_read: Some(0),
+        cache_write: Some(0),
+        tool_count: 1,
+        ..turn(1, "show keys")
+    });
+    let detail = detail_of_all(vec![TrajectoryRecord {
+        kind: TrajectoryRecordKind::Tool,
+        name: Some("read".into()),
+        ordinal: 0,
+        summary: "creds".into(),
+        start_ms: 0,
+        duration_ms: 10,
+        outcome: RecordOutcome::Ok,
+        thinking: None,
+        input: None,
+        output: Some(format!("token={secret}")),
+        usage: None,
+        timing: None,
+        retries: 0,
+    }]);
+    let (_, body, _, _) = detail::draw_event_detail(&row, &detail, 0, ratatui::layout::Rect::ZERO);
     let text = body
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
@@ -456,7 +455,6 @@ fn test_thinking_tokens_render_nonzero() {
             cache_read: Some(0),
             cache_write: Some(0),
             reasoning_tokens: Some(20),
-            records: vec![],
             ..turn(1, "hi")
         })])
     };
@@ -482,7 +480,6 @@ fn test_thinking_tokens_hidden_zero() {
             tokens_out: Some(50),
             cache_read: Some(0),
             cache_write: Some(0),
-            records: vec![],
             ..turn(1, "hi")
         })])
     };
@@ -515,7 +512,6 @@ fn test_per_turn_model_two() {
                 cache_write: Some(0),
                 models: vec!["qwen3.7-max".into()],
                 efforts: vec!["high".into()],
-                records: vec![],
                 ..turn(1, "a")
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
@@ -524,7 +520,6 @@ fn test_per_turn_model_two() {
                 cache_read: Some(0),
                 cache_write: Some(0),
                 models: vec!["glm-5.2".into()],
-                records: vec![],
                 ..turn(2, "b")
             }),
         ])
@@ -556,7 +551,6 @@ fn test_per_turn_model_one() {
                 cache_read: Some(0),
                 cache_write: Some(0),
                 models: vec!["qwen3.7-max".into()],
-                records: vec![],
                 ..turn(1, "a")
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
@@ -565,7 +559,6 @@ fn test_per_turn_model_one() {
                 cache_read: Some(0),
                 cache_write: Some(0),
                 models: vec!["qwen3.7-max".into()],
-                records: vec![],
                 ..turn(2, "b")
             }),
         ])
@@ -596,7 +589,6 @@ fn test_turn_row_cached_ratio() {
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
-                records: vec![],
                 ..turn(2, "first")
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
@@ -606,7 +598,6 @@ fn test_turn_row_cached_ratio() {
                 cache_write: Some(0),
                 tool_count: 1,
                 duration_ms: 500,
-                records: vec![],
                 ..turn(1, "second")
             }),
         ])
@@ -625,60 +616,6 @@ fn test_turn_row_cached_ratio() {
         !text.contains('─'),
         "turn numbering is monotonic, so no boundary separator is drawn: {text}"
     );
-}
-
-/// A turn with a user input uses it as the title.
-#[test]
-fn test_turn_title_user_input() {
-    let turn = TrajectoryTurn {
-        records: vec![],
-        ..turn(1, "fix the bug")
-    };
-    assert_eq!(list::turn_title(&turn), "fix the bug");
-}
-
-/// A turn with no user input (a tool-continuation turn) derives a fallback
-/// title from the first event's summary so the row is not blank.
-#[test]
-fn test_turn_title_falls_back() {
-    let turn = TrajectoryTurn {
-        tool_count: 1,
-        records: vec![TrajectoryRecord {
-            kind: TrajectoryRecordKind::Tool,
-            name: Some("bash".into()),
-            ordinal: 0,
-            summary: "Bash: ls -la".into(),
-            start_ms: 0,
-            duration_ms: 10,
-            outcome: RecordOutcome::Ok,
-            thinking: None,
-            input: None,
-            output: None,
-            usage: None,
-            timing: None,
-            retries: 0,
-        }],
-        ..turn(2, "")
-    };
-    let title = list::turn_title(&turn);
-    assert!(
-        title.contains("Bash: ls -la"),
-        "fallback title carries the first record summary: {title}"
-    );
-    assert!(
-        !title.contains("(continued)"),
-        "a turn is no longer marked as a continuation: {title}"
-    );
-}
-
-/// A turn with no user input and no events shows "(no input)" — never blank.
-#[test]
-fn test_turn_title_empty() {
-    let turn = TrajectoryTurn {
-        records: vec![],
-        ..turn(3, "")
-    };
-    assert_eq!(list::turn_title(&turn), "(no input)");
 }
 
 /// Entering trajectory initializes cursor to tail, and draw clamps and persists it.
@@ -754,7 +691,6 @@ fn test_timing_and_cache_render() {
             tokens_out: Some(200),
             cache_read: Some(500),
             duration_ms: 1000,
-            records: vec![],
             ..turn(1, "test")
         })])
     };
@@ -834,36 +770,18 @@ fn test_detail_shows_model_facts() {
         reasoning: Some(90),
     });
     record.retries = 1;
-    let view = TrajectoryView {
-        models_used: 2,
-        model: "qwen3.7-max".into(),
+    let row = TrajectoryRow::Turn(TrajectoryTurn {
         tokens_in: Some(1200),
         tokens_out: Some(340),
-        duration_secs: 1,
         cache_read: Some(1000),
-        timing: SessionTiming {
-            ttft_samples: 1,
-            ttft_avg_ms: Some(210),
-            ttft_p95_ms: Some(210),
-            ttft_p99_ms: Some(210),
-            decode_samples: 1,
-            decode_tok_per_sec: Some(30.0),
-            model_ms: 620,
-            tool_ms: 0,
-        },
-        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
-            tokens_in: Some(1200),
-            tokens_out: Some(340),
-            cache_read: Some(1000),
-            models: vec!["qwen3.7-max".into()],
-            reasoning_tokens: Some(90),
-            retries: 1,
-            duration_ms: 620,
-            records: vec![record],
-            ..turn(1, "ask")
-        })])
-    };
-    let (header, body, _, _) = detail::draw_event_detail(&view, 0, 0, Rect::ZERO);
+        models: vec!["qwen3.7-max".into()],
+        reasoning_tokens: Some(90),
+        retries: 1,
+        duration_ms: 620,
+        ..turn(1, "ask")
+    });
+    let detail = detail_of_all(vec![record]);
+    let (header, body, _, _) = detail::draw_event_detail(&row, &detail, 0, Rect::ZERO);
     let text: String = header
         .iter()
         .chain(body.iter())
@@ -891,22 +809,17 @@ fn test_detail_shows_model_facts() {
 /// tool it ran rather than as a generic row.
 #[test]
 fn test_timeline_shows_record_names() {
-    let view = TrajectoryView {
-        models_used: 2,
+    let row = TrajectoryRow::Turn(TrajectoryTurn {
         tokens_in: Some(0),
         tokens_out: Some(0),
-        duration_secs: 1,
-        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
-            tokens_in: Some(0),
-            tokens_out: Some(0),
-            tool_count: 1,
-            duration_ms: 100,
-            records: vec![record_of(TrajectoryRecordKind::Tool, None)],
-            ..turn(1, "go")
-        })])
-    };
+        tool_count: 1,
+        duration_ms: 100,
+        ..turn(1, "go")
+    });
+    let detail = detail_of_all(vec![record_of(TrajectoryRecordKind::Tool, None)]);
     let app = crate::composition::app();
-    let (_, body, _, _) = detail::draw_turn_detail(&view, 0, 0, Rect::new(0, 0, 120, 20), &app);
+    let (_, body, _, _) =
+        detail::draw_turn_detail(&row, &detail, 0, Rect::new(0, 0, 120, 20), &app);
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -932,7 +845,6 @@ fn test_turn_list_boundary() {
         tokens_out: Some(5),
         cache_read: Some(0),
         duration_ms: 100,
-        records: vec![],
         ..turn(2, "after clear")
     };
     let view = TrajectoryView {
@@ -1011,33 +923,17 @@ fn test_turn_detail_latency_split() {
         cache_write: None,
         reasoning: None,
     });
-    let view = TrajectoryView {
-        models_used: 2,
-        model: "qwen3.7-max".into(),
+    let row = TrajectoryRow::Turn(TrajectoryTurn {
         tokens_in: Some(10),
         tokens_out: Some(400),
-        duration_secs: 1,
-        timing: SessionTiming {
-            ttft_samples: 1,
-            ttft_avg_ms: Some(210),
-            ttft_p95_ms: Some(210),
-            ttft_p99_ms: Some(210),
-            decode_samples: 1,
-            decode_tok_per_sec: Some(975.6),
-            model_ms: 620,
-            tool_ms: 0,
-        },
-        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
-            tokens_in: Some(10),
-            tokens_out: Some(400),
-            models: vec!["qwen3.7-max".into()],
-            duration_ms: 620,
-            records: vec![record],
-            ..turn(1, "ask")
-        })])
-    };
+        models: vec!["qwen3.7-max".into()],
+        duration_ms: 620,
+        ..turn(1, "ask")
+    });
+    let detail = detail_of_all(vec![record]);
     let app = crate::composition::app();
-    let (_, body, _, _) = detail::draw_turn_detail(&view, 0, 0, Rect::new(0, 0, 140, 20), &app);
+    let (_, body, _, _) =
+        detail::draw_turn_detail(&row, &detail, 0, Rect::new(0, 0, 140, 20), &app);
     let text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -1061,6 +957,7 @@ fn test_turn_list_degrades() {
         key: TrajectoryTurnKey::from_opening_event(&format!("t{n}")),
         boundary_before: Vec::new(),
         user_input: title.into(),
+        title: title.into(),
         tokens_in: Some(1_200),
         tokens_out: Some(500),
         cache_read: Some(1_000),
@@ -1073,7 +970,6 @@ fn test_turn_list_degrades() {
         retries: 0,
         duration_ms: 12_400,
         success: false,
-        records: vec![],
     };
     // Two distinct models, so the per-turn model column is drawn at all.
     let view = TrajectoryView {

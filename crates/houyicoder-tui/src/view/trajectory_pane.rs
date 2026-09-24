@@ -22,7 +22,21 @@ use crate::state::{TrajectoryDrill, TrajectoryPaneState, TrajectoryTurnKey};
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::{format_span_ms, now_epoch_secs, relative_time};
+use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
+
+mod detail;
+mod list;
+mod sample;
+mod view;
+
+use sample::sample_trajectory;
+
+pub use detail::{TrajectoryDetailState, TrajectoryDetailView};
+pub use view::{
+    SessionTiming, SubagentUsage, TrajectoryBg, TrajectoryRecord, TrajectoryRow, TrajectoryTurn,
+    TrajectoryView, TrajectoryViewState,
+};
 
 // Data types
 
@@ -141,98 +155,6 @@ pub struct CompactedBoundary {
     pub at_secs: u64,
 }
 
-#[derive(Clone)]
-pub struct TrajectoryRecord {
-    pub kind: TrajectoryRecordKind,
-    /// The record's own name: tool name, agent type, or model id. None when the
-    /// log does not name it (an unnamed context row, an old record).
-    pub name: Option<String>,
-    /// The record's ordinal among the calls of its kind in this turn, so a
-    /// multi-call turn reads as Model 1, Tool 2, Model 3 rather than as
-    /// interchangeable rows. Zero when the kind is not numbered.
-    pub ordinal: u32,
-    pub summary: String,
-    /// Offset from the turn start, in ms. Positions the event on the shared
-    /// time axis so parallel events overlap on the same columns and sequence
-    /// is visible at a glance — not just duration.
-    pub start_ms: u64,
-    pub duration_ms: u64,
-    pub outcome: RecordOutcome,
-    /// Full text for the Level 2 detail view: the model's thinking, a tool's
-    /// input, a tool's result or the model's reply. Held separate from summary
-    /// (the one-line L1 preview) so L2 shows full content without
-    /// re-truncating.
-    pub thinking: Option<String>,
-    pub input: Option<String>,
-    pub output: Option<String>,
-    /// Model calls only.
-    pub usage: Option<EventUsage>,
-    /// Model calls only.
-    pub timing: Option<EventTiming>,
-    /// Model calls only: length-recovery retries folded into this call.
-    pub retries: usize,
-}
-
-#[derive(Clone)]
-pub struct TrajectoryTurn {
-    pub n: usize,
-    /// The durable identity of the turn: the event that opened it. A turn
-    /// number names a turn within one history; this names it across a clear,
-    /// and it is what a detail read is asked for by.
-    pub key: TrajectoryTurnKey,
-    /// Boundaries the log recorded between the previous turn and this one, in
-    /// the order they happened. Several durable facts can land in one gap (a
-    /// compaction and then a model switch), so this is a list rather than a
-    /// slot: a single slot would drop one of them without saying so. Data only;
-    /// the pane decides how to draw them.
-    pub boundary_before: Vec<TurnBoundary>,
-    pub user_input: String,
-    pub tokens_in: Option<usize>,
-    pub tokens_out: Option<usize>,
-    pub cache_read: Option<u64>,
-    pub cache_write: Option<u64>,
-    /// Every model id this turn called, in first-use order and de-duplicated.
-    /// A turn can switch models mid-flight, so this is a list rather than a
-    /// single id; empty when no TurnUsage landed or the log predates the field
-    /// — unknown, not blank.
-    pub models: Vec<String>,
-    /// Every effort level this turn sent, in first-use order and
-    /// de-duplicated. Empty when no effort parameter was sent (model
-    /// unsupported, auto, or old log) — unknown, not auto.
-    pub efforts: Vec<String>,
-    /// Reasoning tokens across this turn's calls (a component of
-    /// output_tokens, not a separate total). None when no TurnUsage landed or
-    /// the log predates the field — unknown, not zero.
-    pub reasoning_tokens: Option<usize>,
-    pub tool_count: usize,
-    pub tool_fail: usize,
-    pub retries: usize,
-    pub duration_ms: u64,
-    pub success: bool,
-    pub records: Vec<TrajectoryRecord>,
-}
-
-#[derive(Clone)]
-pub struct TrajectoryBg {
-    pub kind: String,
-    pub summary: String,
-    pub duration_ms: u64,
-}
-
-#[derive(Clone)]
-// The turn is far larger than a background row because it carries the turn's
-// whole summary. Boxing it would trade that for an allocation per row, and the
-// rows are already heap-backed; the size goes away when the detail leaves the
-// summary, which is the split this type is waiting for.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the turn summary is the point of the row"
-)]
-pub enum TrajectoryRow {
-    Turn(TrajectoryTurn),
-    Bg(TrajectoryBg),
-}
-
 /// The trajectory-data seam the render path calls. Matches the disk-search
 /// pattern: the TUI owns the contract + the plain-data view; the
 /// composition root injects an impl that holds the session id + reads the
@@ -256,129 +178,16 @@ pub trait TrajectoryLog: Send + Sync {
     /// Replace the window with the newest turns. Called when the user asks to
     /// return to the tail; an implementation that already shows it does nothing.
     fn return_to_tail(&self) {}
-}
 
-/// Session-wide latency and work-time facts, computed once from the durable
-/// timing events and read by both the trajectory pane and the status pane. One
-/// value, two renderers: neither surface recomputes a percentile or a rate, so
-/// they cannot disagree about the session they describe.
-#[derive(Clone, Copy, Default, PartialEq, Debug)]
-pub struct SessionTiming {
-    /// Time-to-first-token samples and their nearest-rank percentiles. None
-    /// when the session recorded no first token at all.
-    pub ttft_samples: usize,
-    pub ttft_avg_ms: Option<u64>,
-    pub ttft_p95_ms: Option<u64>,
-    pub ttft_p99_ms: Option<u64>,
-    /// Decode samples: how many calls reported a decode span.
-    pub decode_samples: usize,
-    pub decode_tok_per_sec: Option<f64>,
-    /// Wall time spent inside model calls, and inside tool executions. The two
-    /// can overlap (a delegation runs while its parent waits), so they are
-    /// reported separately and never added into a single total.
-    pub model_ms: u64,
-    pub tool_ms: u64,
-}
+    /// Ask for one turn's records, by the key its row carries. Called when the
+    /// user opens a turn; an implementation reads them off the draw path and
+    /// answers from its cache after that.
+    fn request_detail(&self, key: &TrajectoryTurnKey);
 
-impl SessionTiming {
-    /// True when the session recorded no timing at all, so a caller hides the
-    /// rows rather than printing zeroes.
-    pub fn is_empty(&self) -> bool {
-        self.ttft_samples == 0
-            && self.decode_samples == 0
-            && self.model_ms == 0
-            && self.tool_ms == 0
-    }
+    /// What is known about a turn's records. A draw calls this, so it must not
+    /// read the log: it serves what the read has produced so far.
+    fn detail(&self, key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView>;
 }
-
-/// What delegated sub-agents spent, summed over the session's delegations.
-///
-/// The session totals already include it: both the trajectory totals and the
-/// status tally read the durable SubagentReturn boundaries. This type is the
-/// breakdown, so a surface can say how much of the total the children
-/// contributed instead of only reporting one undivided number.
-#[derive(Clone, Copy, Default, PartialEq, Debug)]
-pub struct SubagentUsage {
-    pub calls: usize,
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-}
-
-impl SubagentUsage {
-    /// The share of the delegated input that came from cache, when any input
-    /// was reported at all.
-    pub fn cache_hit_pct(&self) -> Option<f64> {
-        (self.input > 0).then(|| 100.0 * self.cache_read as f64 / self.input as f64)
-    }
-}
-
-/// What the pane can say about its data right now.
-///
-/// The rows come from a bounded page read, so the first frame after a session
-/// is opened has nothing to show yet. That is a state of its own: a pane that
-/// rendered an empty list, or fell back to the demonstration rows, would tell
-/// the user the session has no turns when the read simply has not landed.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub enum TrajectoryViewState {
-    /// The first page is being read.
-    Loading,
-    /// A page is loaded and the rows below it are real.
-    #[default]
-    Ready,
-    /// Older turns are being read; the rows already shown stay.
-    LoadingOlder,
-    /// The read failed, so there is nothing truthful to show.
-    Failed,
-}
-
-#[derive(Clone)]
-pub struct TrajectoryView {
-    pub session_id: String,
-    /// Derived: one model when every turn's model field matches (or is
-    /// None); "N models" when ≥2 distinct ids appear. Replaces the
-    /// construction-time string snapshot so a mid-session model switch
-    /// surfaces immediately.
-    pub model: String,
-    /// Distinct model ids the session used, so a row can decide whether to
-    /// name its own model from a session fact rather than from the window.
-    pub models_used: usize,
-    pub total_turns: usize,
-    pub tokens_in: Option<usize>,
-    pub tokens_out: Option<usize>,
-    pub cache_read: Option<u64>,
-    pub failures: usize,
-    /// Tool calls the session issued, from the session summary rather than
-    /// from the rows the window happens to hold.
-    pub tool_calls: usize,
-    pub duration_secs: u64,
-    pub timing: SessionTiming,
-    /// How many turns sit before the loaded window. Non-zero means older
-    /// history exists and has not been read yet.
-    pub hidden_turns: usize,
-    /// How many turns sit after the loaded window. Non-zero means the window
-    /// has been walked back from the tail and newer turns are not loaded; End
-    /// returns to them.
-    pub newer_hidden: usize,
-    /// Which history these rows belong to. It changes when a clear starts a
-    /// new one, and the turn numbers of a new history name different turns,
-    /// so a selection made under the old one must not be restored.
-    pub history_generation: u64,
-    /// What delegated sub-agents spent, when the session delegated any work.
-    pub subagent_usage: Option<SubagentUsage>,
-    /// Whether the rows below are loaded, still loading, or unavailable.
-    pub state: TrajectoryViewState,
-    /// Log lines in the loaded window that could not be read. The rest of the
-    /// window is still shown; a surface that stayed silent about them would
-    /// report a session as smaller than it is.
-    pub skipped_records: usize,
-    pub rows: Vec<TrajectoryRow>,
-}
-
-mod detail;
-mod list;
-mod sample;
-use sample::sample_trajectory;
 
 /// Put the cursor on the turn the selection names, when the window in hand
 /// holds that turn.
@@ -423,7 +232,6 @@ pub(crate) fn note_selected_turn(state: &TrajectoryPaneState, view: &TrajectoryV
 /// turn it named. None means the turn is not in the window: the window moved
 /// past it, or the history it belonged to was cleared. The frozen index is
 /// not a fallback there, because it names another turn by then.
-///
 fn drilled_row(state: &TrajectoryPaneState, view: &TrajectoryView) -> Option<usize> {
     let Some(drill) = state.drill() else {
         // A background row has no turn to follow, so it keeps the row the
@@ -455,6 +263,25 @@ pub(crate) fn note_drilled_row(state: &TrajectoryPaneState, view: &TrajectoryVie
     }
 }
 
+/// The records of the turn the drill is on, asked for once and then served from
+/// the source's cache.
+fn detail_for(app: &crate::state::App, row: Option<&TrajectoryRow>) -> Arc<TrajectoryDetailView> {
+    // The row knows its own key, so a drill is not needed to name the turn: the
+    // drill is what keeps the pane on it across frames.
+    let Some(TrajectoryRow::Turn(turn)) = row else {
+        return Arc::new(TrajectoryDetailView::default());
+    };
+    let key = turn.key.clone();
+    match app.trajectory_log.as_ref() {
+        Some(log) => {
+            log.request_detail(&key);
+            log.detail(&key)
+        }
+        // Unwired: the demonstration answers, the same way it serves the rows.
+        None => Arc::new(sample::sample_detail(&key)),
+    }
+}
+
 /// Main entry: dispatch on the drill level. Each level builder returns the
 /// header and footer to pin plus a scrollable body and the body line the
 /// selection sits on; header + footer stay pinned so the key hints never scroll
@@ -483,9 +310,16 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         0 => None,
         _ => drilled_row(&app.trajectory, &traj),
     };
+    // The records come from the detail seam: a draw serves what the read has
+    // produced, and asks for the turn's records once per drill.
+    let detail = detail_for(app, drilled.map(|index| &traj.rows[index]));
     let (header, body, footer, sel_line) = match (level, drilled) {
-        (1, Some(turn_idx)) => detail::draw_turn_detail(&traj, turn_idx, cursor, area, app),
-        (2, Some(turn_idx)) => detail::draw_event_detail(&traj, turn_idx, cursor, area),
+        (1, Some(turn_idx)) => {
+            detail::draw_turn_detail(&traj.rows[turn_idx], &detail, cursor, area, app)
+        }
+        (2, Some(turn_idx)) => {
+            detail::draw_event_detail(&traj.rows[turn_idx], &detail, cursor, area)
+        }
         // The drill's turn is not in the window any more. Saying so is the
         // honest answer: the row the frozen index names now is another turn.
         (_, None) if level != 0 => detail::draw_drill_gone(),
@@ -494,14 +328,10 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
     // Stash the body length so the Up/Down handler can clamp the cursor in
     // [0, len-1] — without this Down past the last row drops the selection.
     let active_len = match (level, drilled) {
-        (1, Some(turn_idx)) => traj
-            .rows
-            .get(turn_idx)
-            .map(|r| match r {
-                TrajectoryRow::Turn(t) => t.records.len(),
-                TrajectoryRow::Bg(_) => 0,
-            })
-            .unwrap_or(0),
+        (1, Some(turn_idx)) => match &traj.rows[turn_idx] {
+            TrajectoryRow::Turn(_) => detail.records.len(),
+            TrajectoryRow::Bg(_) => 0,
+        },
         (0, _) => traj.rows.len(),
         _ => 0,
     };

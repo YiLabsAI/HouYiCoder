@@ -62,6 +62,12 @@ impl TrajectoryLog for ScriptedLog {
     fn return_to_tail(&self) {
         self.tail.fetch_add(1, Ordering::Relaxed);
     }
+
+    fn request_detail(&self, _key: &TrajectoryTurnKey) {}
+
+    fn detail(&self, _key: &TrajectoryTurnKey) -> Arc<TrajectoryDetailView> {
+        Arc::new(TrajectoryDetailView::default())
+    }
 }
 
 /// The cursor is a position in a window that slides, so it cannot be the

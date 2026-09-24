@@ -12,10 +12,14 @@ use std::sync::{Arc, Mutex};
 
 use houyicoder_api::session::{SessionLog, TrajectoryHead};
 use houyicoder_context::{EventId, SessionId};
-use houyicoder_tui::view::trajectory_pane::{TrajectoryLog, TrajectoryView, TrajectoryViewState};
+use houyicoder_tui::state::TrajectoryTurnKey;
+use houyicoder_tui::view::trajectory_pane::{
+    TrajectoryDetailView, TrajectoryLog, TrajectoryView, TrajectoryViewState,
+};
 
 use crate::session_history::{PAGE_MAX_BYTES, SessionHistory, TurnAnchor, TurnPage};
 
+mod detail;
 mod window_view;
 
 use super::view::project;
@@ -159,6 +163,10 @@ pub struct SessionLogTrajectory {
     pub(crate) model: String,
     history: Arc<SessionHistory>,
     state: Mutex<TrajectoryState>,
+    /// One turn's records, read when the user drills into it. Its own state: a
+    /// page read and a detail read answer different questions and must not
+    /// cancel each other.
+    detail: Mutex<detail::TrajectoryDetailRead>,
     /// Turns to load: one page at first, grown when the user walks past the
     /// oldest loaded turn.
     loaded_turns: AtomicUsize,
@@ -184,6 +192,7 @@ impl SessionLogTrajectory {
                 follow_tail: true,
                 ..TrajectoryState::default()
             }),
+            detail: Mutex::new(detail::TrajectoryDetailRead::default()),
             loaded_turns: AtomicUsize::new(TRAJECTORY_PAGE_TURNS),
         }
     }
@@ -583,6 +592,21 @@ impl TrajectoryLog for SessionLogTrajectory {
             watermark_of(&head),
             head.summary.total_turns,
         );
+    }
+
+    fn request_detail(&self, key: &TrajectoryTurnKey) {
+        detail::request(
+            &self.detail,
+            &self.state,
+            &self.history,
+            &self.session_log,
+            self.session_id,
+            key,
+        );
+    }
+
+    fn detail(&self, key: &TrajectoryTurnKey) -> Arc<TrajectoryDetailView> {
+        detail::detail(&self.detail, &self.state, key)
     }
 
     fn return_to_tail(&self) {

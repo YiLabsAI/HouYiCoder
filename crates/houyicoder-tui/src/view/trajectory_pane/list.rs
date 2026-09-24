@@ -9,20 +9,6 @@ use super::*;
 use crate::command::render::format_tokens;
 use crate::view::relative_time::{format_span_ms, format_span_secs};
 
-/// The display title for a turn: the user input when present, otherwise the
-/// first event's summary so a turn whose prompt sits outside the loaded window
-/// still names itself. When there is nothing to derive from, "(no input)"
-/// surfaces.
-pub(super) fn turn_title(turn: &TrajectoryTurn) -> String {
-    if !turn.user_input.trim().is_empty() {
-        return turn.user_input.clone();
-    }
-    match turn.records.first() {
-        Some(first) if !first.summary.trim().is_empty() => first.summary.clone(),
-        _ => "(no input)".to_string(),
-    }
-}
-
 // Rendering
 
 /// Render a boundary separator between turns, when the turn carried one.
@@ -140,7 +126,7 @@ pub(super) fn turn_row(
     let mut spans = vec![
         sp(prefix, Color::Cyan),
         sp(pad(&format!("T{}", t.n), 5), Color::Cyan),
-        sp(pad(&truncate_width(&turn_title(t), 30), 30), Color::White),
+        sp(pad(&truncate_width(&t.title, 30), 30), Color::White),
         sp(pad(&tokens, 15), Color::Gray),
         sp(pad(&cached, 12), Color::Indexed(208)),
     ];
