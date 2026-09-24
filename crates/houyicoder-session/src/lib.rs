@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use houyicoder_api::session::{TrajectoryHead, TrajectoryRevision, last_user_input_id};
+use houyicoder_api::session::TrajectoryHead;
 use houyicoder_async::PFut;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
@@ -36,40 +36,9 @@ use houyicoder_context::{
 };
 use sha2::{Digest, Sha256};
 
-mod trajectory_summary;
+mod trajectory;
 use tokio::sync::Notify;
-use trajectory_summary::TrajectorySummaryState;
-
-/// The in-process mirror of one session's durable facts: the finalized events
-/// and the whole-session summary folded from them. Both move under one lock, so
-/// a reader cannot see figures from a different revision than the events.
-#[derive(Default)]
-struct SessionMirror {
-    events: Vec<SessionLogEntry>,
-    /// Durable events in the mirror. Tracked as events are taken rather than
-    /// counted on read, which would walk the vector on every call.
-    durable_events: usize,
-    last_durable_id: Option<EventId>,
-    /// The first durable event of the mirror, which is what makes the epoch
-    /// identity: a clear resets the mirror, so its next event begins a new one.
-    epoch_event_id: Option<EventId>,
-    summary: TrajectorySummaryState,
-}
-
-impl SessionMirror {
-    fn head(&self) -> TrajectoryHead {
-        TrajectoryHead {
-            revision: TrajectoryRevision {
-                event_count: self.events.len(),
-                last_event_id: self.events.last().map(|event| event.id),
-                durable_event_count: self.durable_events,
-                last_durable_event_id: self.last_durable_id,
-                epoch_event_id: self.epoch_event_id,
-            },
-            summary: self.summary.snapshot(),
-        }
-    }
-}
+use trajectory::TrajectoryMirrors;
 
 /// The engine-facing session facade. Owns a ContextBackend and layers the
 /// hash-chain, delta counter, and view assembly on top. Construct with any
@@ -92,7 +61,7 @@ pub struct SessionStore {
     /// usage. The raw append-only log stays the source of truth; this gives
     /// trajectory a sync mirror and status a constant-time aggregate. Resume
     /// backfills both from the same durable revision.
-    mirrors: Mutex<HashMap<SessionId, SessionMirror>>,
+    mirrors: TrajectoryMirrors,
     /// Optional Notify fired on each append so a host draining mid-run wakes
     /// to push the new durable event without waiting for the run future to
     /// resolve. None when no host wires the mid-run drain; behavior is then
@@ -151,7 +120,7 @@ impl SessionStore {
             last_hashes: Mutex::new(HashMap::new()),
             append_lock: tokio::sync::Mutex::new(()),
             persisted: Mutex::new(HashMap::new()),
-            mirrors: Mutex::new(HashMap::new()),
+            mirrors: TrajectoryMirrors::default(),
             append_notify: None,
             first_durable: None,
             first_durable_fired: Mutex::new(HashSet::new()),
@@ -203,13 +172,10 @@ impl SessionStore {
         if matches!(event.event, SessionEvent::AssistantTextDelta { .. }) {
             // Delta path: mirror + notify only. No backend, no chain, no cache.
             let id = event.id;
-            let mut mirrors = self.mirrors.lock().expect("session mirrors mutex poisoned");
-            let mirror = mirrors.entry(session).or_default();
             // A delta carries no durable fact, so it moves no counter. It does
             // extend the session's span, which is what the old whole-log fold
             // reported while a generation was still streaming.
-            mirror.summary.record(&event);
-            mirror.events.push(event);
+            self.mirrors.note_delta(session, event);
             if let Some(n) = &self.append_notify {
                 n.notify_one();
             }
@@ -238,15 +204,7 @@ impl SessionStore {
             .lock()
             .expect("last_hashes mutex poisoned")
             .insert(session, new_hash);
-        let mut mirrors = self.mirrors.lock().expect("session mirrors mutex poisoned");
-        let mirror = mirrors.entry(session).or_default();
-        mirror.summary.record(&finalized);
-        if mirror.durable_events == 0 {
-            mirror.epoch_event_id = Some(finalized.id);
-        }
-        mirror.durable_events += 1;
-        mirror.last_durable_id = Some(finalized.id);
-        mirror.events.push(finalized);
+        self.mirrors.note_durable(session, finalized);
         // Retain one wake permit when the host is polling the run future, so
         // the durable event cannot remain invisible until the run completes.
         // Notify coalesces surplus permits; draining from a cursor publishes
@@ -263,55 +221,31 @@ impl SessionStore {
     /// projects this directly — SessionLogEntry already carries the id, ts, prev_hash,
     /// and kind a trajectory row needs, so no separate record type is introduced.
     pub fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
-        self.mirrors
-            .lock()
-            .expect("session mirrors mutex poisoned")
-            .get(&session)
-            .map(|mirror| mirror.events.clone())
-            .unwrap_or_default()
+        self.mirrors.snapshot(session)
     }
 
     /// The id of the latest mirrored event, or None when the session has no
     /// mirror entries. Reads the tail in place — no clone of the log.
     pub fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
-        self.mirrors
-            .lock()
-            .expect("session mirrors mutex poisoned")
-            .get(&session)
-            .and_then(|mirror| mirror.events.last())
-            .map(|event| event.id)
+        self.mirrors.last_id(session)
     }
 
     /// The id of the latest durable user input for a session, or None when
     /// the session holds none yet. Scans the mirrored events under the lock,
     /// so it costs no clone of the log.
     pub fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
-        self.mirrors
-            .lock()
-            .expect("session mirrors mutex poisoned")
-            .get(&session)
-            .and_then(|mirror| last_user_input_id(&mirror.events))
+        self.mirrors.last_user_input_id(session)
     }
 
     /// Clone only the finalized suffix beginning at start.
     pub fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
-        self.mirrors
-            .lock()
-            .expect("session mirrors mutex poisoned")
-            .get(&session)
-            .map(|mirror| mirror.events.get(start..).unwrap_or_default().to_vec())
-            .unwrap_or_default()
+        self.mirrors.since(session, start)
     }
 
     /// Read the session's trajectory revision and whole-session summary under
     /// one lock, so the two describe the same revision.
     pub fn trajectory_head(&self, session: SessionId) -> TrajectoryHead {
-        self.mirrors
-            .lock()
-            .expect("session mirrors mutex poisoned")
-            .get(&session)
-            .map(SessionMirror::head)
-            .unwrap_or_default()
+        self.mirrors.head(session)
     }
 
     /// Read a child session's full transcript from disk. Returns empty when
@@ -332,10 +266,7 @@ impl SessionStore {
     /// The backend's append-only log is untouched — this only frees the
     /// viewable mirror so /trajectory reads fresh after a clear.
     pub fn reset_trajectory(&self, session: SessionId) {
-        self.mirrors
-            .lock()
-            .expect("session mirrors mutex poisoned")
-            .remove(&session);
+        self.mirrors.reset(session);
     }
 
     /// Backfill the in-memory trajectory mirror from the backend log for a
@@ -369,34 +300,8 @@ impl SessionStore {
         }
         let events = replayed;
         let count = events.len();
-        if count == 0 {
-            return Ok(0);
-        }
-        let durable_events = events.len();
-        let last_durable_id = events.last().map(|event| event.id);
-        let epoch_event_id = events.first().map(|event| event.id);
-        let mirror = SessionMirror {
-            summary: Self::fold_summary(&events),
-            events,
-            durable_events,
-            last_durable_id,
-            epoch_event_id,
-        };
-        self.mirrors
-            .lock()
-            .expect("session mirrors mutex poisoned")
-            .insert(session, mirror);
+        self.mirrors.replace(session, events);
         Ok(count)
-    }
-
-    /// Fold a replayed log into a summary in one pass, so a resume does not
-    /// read the log once per figure.
-    fn fold_summary(events: &[SessionLogEntry]) -> TrajectorySummaryState {
-        let mut summary = TrajectorySummaryState::default();
-        for event in events {
-            summary.record(event);
-        }
-        summary
     }
 
     /// Compute the prev_hash for the next event: the cached hash of the last
