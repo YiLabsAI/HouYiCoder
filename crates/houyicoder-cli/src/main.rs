@@ -41,8 +41,7 @@ mod session_catalog;
 mod session_history;
 mod session_lock;
 mod session_log_snapshot;
-mod trajectory_reader;
-mod trajectory_view;
+mod trajectory;
 
 /// Parsed CLI invocation. Each variant maps to one entry path the binary
 /// dispatches on. Parsing is pure (no I/O, no process exit) so the full
@@ -622,7 +621,7 @@ pub(crate) fn assemble_bundle(
     ));
     // One object backs both the /trajectory view + the /export serializer:
     // both read the same durable event stream.
-    let trajectory = std::sync::Arc::new(trajectory_reader::SessionLogTrajectory::with_history(
+    let trajectory = std::sync::Arc::new(trajectory::SessionLogTrajectory::with_history(
         history,
         session_log.clone(),
         session,

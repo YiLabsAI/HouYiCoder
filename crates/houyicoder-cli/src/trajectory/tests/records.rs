@@ -1,8 +1,9 @@
 //! Tests for per-record assembly: tool merging, delegations, context and
 //! memory rows, hook verdicts, and call numbering.
 
-use super::*;
-use houyicoder_context::{EventId, SessionLogEntry};
+use super::super::view::*;
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_tui::view::trajectory_pane::{RecordOutcome, TrajectoryRecordKind, TrajectoryRow};
 
 fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {

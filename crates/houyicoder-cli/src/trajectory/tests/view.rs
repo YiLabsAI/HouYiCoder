@@ -1,8 +1,12 @@
 //! Tests for the turn fold: grouping, per-turn totals, records, and the
 //! timing and boundary facts it derives from the durable log.
 
-use super::*;
-use houyicoder_context::{EventId, SessionLogEntry};
+use super::super::view::*;
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_tui::view::trajectory_pane::{
+    CompactedBoundary, ModelSwitchBoundary, RecordOutcome, TrajectoryRecordKind, TrajectoryRow,
+    TurnBoundary,
+};
 
 fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {

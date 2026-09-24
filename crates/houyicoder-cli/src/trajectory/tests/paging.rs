@@ -1,13 +1,15 @@
 //! Tests for the loaded window: tail paging, the projection cache, and the
 //! session-level totals that the window must not narrow.
 
-use super::*;
+use super::super::reader::{RESIDENT_PAGES, SessionLogTrajectory, TRAJECTORY_PAGE_TURNS};
+use super::super::view::project;
 use crate::session_history::SessionHistory;
-use crate::trajectory_reader::{RESIDENT_PAGES, SessionLogTrajectory, TRAJECTORY_PAGE_TURNS};
-use houyicoder_context::{EventId, SessionId, SessionLogEntry};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
-use houyicoder_tui::view::trajectory_pane::TrajectoryLog as _;
+use houyicoder_tui::view::trajectory_pane::{
+    TrajectoryLog as _, TrajectoryRow, TrajectoryView, TrajectoryViewState,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 

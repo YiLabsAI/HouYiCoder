@@ -6,8 +6,8 @@
 //! path. The head's summary supplies the session's own figures: a page holds the
 //! newest turns, and its totals would report the page as the session.
 
+use super::super::view::project_rows;
 use super::{DurableWatermark, SessionLogTrajectory, TrajectoryHead, TrajectoryState};
-use crate::trajectory_view::project_rows;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{SessionTiming, SubagentUsage};
 use houyicoder_tui::view::trajectory_pane::{TrajectoryRow, TrajectoryView, TrajectoryViewState};

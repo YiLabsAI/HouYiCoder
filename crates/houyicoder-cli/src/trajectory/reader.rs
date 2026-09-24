@@ -18,7 +18,7 @@ use crate::session_history::{PAGE_MAX_BYTES, SessionHistory, TurnAnchor, TurnPag
 
 mod window_view;
 
-use crate::trajectory_view::project;
+use super::view::project;
 
 /// How many turns the pane loads by default, and how many it adds each time
 /// the user asks for older history.

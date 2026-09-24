@@ -6,17 +6,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-#[cfg(test)]
-use houyicoder_context::SessionId;
+use super::turns;
+
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
-#[path = "trajectory_turns.rs"]
-mod turns;
-
 use houyicoder_tui::view::trajectory_pane::{
-    CompactedBoundary, EventTiming, EventUsage, ModelSwitchBoundary, RecordOutcome, SessionTiming,
-    SubagentUsage, TrajectoryRecord, TrajectoryRecordKind, TrajectoryRow, TrajectoryTurn,
-    TrajectoryView, TrajectoryViewState, TurnBoundary,
+    SessionTiming, SubagentUsage, TrajectoryRow, TrajectoryTurn, TrajectoryView,
+    TrajectoryViewState, TurnBoundary,
 };
 
 /// Which tool a call id invoked, and with what input, so a later ToolResult
@@ -27,11 +23,11 @@ use houyicoder_tui::view::trajectory_pane::{
 /// whole payload the model sent (a write call carries the entire file body),
 /// and the index exists only during view assembly, so copying
 /// them would duplicate the session's writes for no gain.
-type CallIndex<'a> = HashMap<&'a str, (&'a str, &'a serde_json::Value)>;
+pub(super) type CallIndex<'a> = HashMap<&'a str, (&'a str, &'a serde_json::Value)>;
 
 /// One line of preview text for an event (truncated so the L1 row stays one
 /// line). The L2 detail carries the full content separately.
-fn preview(s: &str) -> String {
+pub(super) fn preview(s: &str) -> String {
     const MAX: usize = 80;
     if s.chars().count() <= MAX {
         s.to_string()
@@ -114,7 +110,7 @@ fn spawned_call_ids(events: &[SessionLogEntry]) -> HashSet<&str> {
 /// it red, and the pane's failure total could read zero for a session in
 /// which every command failed. The shared rule also carries the semantic-exit
 /// exception, so grep finding no matches stays a success in both places.
-fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -> bool {
+pub(super) fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -> bool {
     let (tool, input) = match calls.get(call_id) {
         Some(&(t, i)) => (t, i),
         // No matching call (a result whose call frame is outside this log
@@ -414,21 +410,10 @@ fn tail_window(events: &[SessionLogEntry], max_turns: usize) -> (&[SessionLogEnt
 }
 
 /// A byte count as a compact string for the memory row.
-fn fmt_bytes(bytes: u32) -> String {
+pub(super) fn fmt_bytes(bytes: u32) -> String {
     if bytes >= 1024 {
         format!("{:.1}KB", bytes as f64 / 1024.0)
     } else {
         format!("{bytes}B")
     }
 }
-#[cfg(test)]
-#[path = "trajectory_view_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "trajectory_records_tests.rs"]
-mod record_tests;
-
-#[cfg(test)]
-#[path = "trajectory_paging_tests.rs"]
-mod paging_tests;

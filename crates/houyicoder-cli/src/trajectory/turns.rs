@@ -5,10 +5,15 @@
 //! event of a turn — model calls, tool calls, delegations, context — into the
 //! records and totals the trajectory view renders.
 
-use houyicoder_context::HookVerdictKind;
-use houyicoder_tui::result_body::extract_body;
+use std::collections::{HashMap, HashSet};
 
-use super::*;
+use super::view::{CallIndex, fmt_bytes, preview, result_failed};
+use houyicoder_context::{HookVerdictKind, SessionEvent, SessionLogEntry};
+use houyicoder_tui::result_body::extract_body;
+use houyicoder_tui::view::trajectory_pane::{
+    CompactedBoundary, EventTiming, EventUsage, ModelSwitchBoundary, RecordOutcome,
+    TrajectoryRecord, TrajectoryRecordKind, TrajectoryTurn, TurnBoundary,
+};
 
 /// Accumulates one user turn: its records, its summed totals, and the
 /// open model call, tool call, and delegation its later events attach to.
@@ -324,34 +329,24 @@ impl TurnBuilder {
         // command shows its exit code and stderr, an edit shows its diff
         // summary. One rendering path for tool results, not two that drift.
         let body = extract_body(&output.to_string());
-        match self.open_tools.remove(call_id) {
-            Some(index) => {
-                let record = &mut self.records[index];
-                record.summary = preview(&body);
-                record.output = Some(body);
-                record.duration_ms = duration_ms;
-                record.outcome = if failed {
-                    RecordOutcome::Failed
-                } else {
-                    RecordOutcome::Ok
-                };
-            }
+        let index = match self.open_tools.remove(call_id) {
+            Some(index) => index,
             // A result whose call sits outside the loaded window: show the
             // result on its own row rather than dropping it silently.
             None => {
                 self.tool_count += 1;
-                let index =
-                    self.push(self.record(TrajectoryRecordKind::Tool, None, preview(&body), ts));
-                let record = &mut self.records[index];
-                record.output = Some(body);
-                record.duration_ms = duration_ms;
-                record.outcome = if failed {
-                    RecordOutcome::Failed
-                } else {
-                    RecordOutcome::Ok
-                };
+                self.push(self.record(TrajectoryRecordKind::Tool, None, preview(&body), ts))
             }
-        }
+        };
+        let record = &mut self.records[index];
+        record.summary = preview(&body);
+        record.output = Some(body);
+        record.duration_ms = duration_ms;
+        record.outcome = if failed {
+            RecordOutcome::Failed
+        } else {
+            RecordOutcome::Ok
+        };
         if failed {
             self.tool_fail += 1;
         }
