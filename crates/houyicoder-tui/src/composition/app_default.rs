@@ -20,7 +20,7 @@ use crate::run_state::RunState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
 use crate::state::transcript::Transcript;
-use crate::state::{ModelPickerState, ParkedKeys, QueueViewState, StatusTab};
+use crate::state::{ModelPickerState, ParkedKeys, QueueViewState, StatusTab, TrajectoryPaneState};
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub fn app() -> App {
@@ -87,11 +87,7 @@ pub fn app() -> App {
         worktree_entries: Vec::new(),
         worktree_list: ListPaneState::default(),
         worktree_level: Cell::new(0),
-        trajectory_level: Cell::new(0),
-        trajectory_cursor: Cell::new(0),
-        trajectory_list_len: Cell::new(0),
-        trajectory_turn_idx: Cell::new(0),
-        trajectory_at_bg: Cell::new(false),
+        trajectory: TrajectoryPaneState::default(),
         agents: Default::default(),
         agent_directory: None,
         artifact: ArtifactSession::stub(),

@@ -74,14 +74,14 @@ fn test_down_clamps_last_row() {
             working::draw(f, &app);
         })
         .unwrap();
-    let len = app.trajectory_list_len.get();
+    let len = app.trajectory.list_len();
     assert!(len > 0, "render must stash the list length");
     // Hammer Down past the end.
     for _ in 0..len + 5 {
         crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     assert_eq!(
-        app.trajectory_cursor.get(),
+        app.trajectory.cursor(),
         len - 1,
         "cursor must clamp to last row, not exceed it"
     );
@@ -182,8 +182,8 @@ fn test_level1_renders_row_detail() {
     // not the first turn's events. turn_idx 2 = the dream [bg] row in the mock.
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
-    app.trajectory_level.set(1);
-    app.trajectory_turn_idx.set(2);
+    app.trajectory.set_level(1);
+    app.trajectory.set_turn_idx(2);
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -192,7 +192,7 @@ fn test_level1_renders_row_detail() {
         })
         .unwrap();
     assert!(
-        app.trajectory_at_bg.get(),
+        app.trajectory.at_bg(),
         "L1 must flag the focused row as bg so Enter does not drill to L2"
     );
 }
@@ -201,7 +201,7 @@ fn test_level1_renders_row_detail() {
 fn test_level1_renders_turn_detail() {
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
-    app.trajectory_level.set(1);
+    app.trajectory.set_level(1);
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -215,7 +215,7 @@ fn test_level1_renders_turn_detail() {
 fn test_level2_renders_event_detail() {
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
-    app.trajectory_level.set(2);
+    app.trajectory.set_level(2);
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -348,7 +348,7 @@ fn test_trajectory_bar_invariants_mock() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Trajectory;
-    app.trajectory_level.set(1);
+    app.trajectory.set_level(1);
     let out = crate::test_harness::render_text(&app, 100, 40);
     assert!(
         out.contains('█'),
@@ -450,15 +450,15 @@ fn test_enter_drill_esc_back() {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| working::draw(f, &app)).unwrap();
-    assert_eq!(app.trajectory_level.get(), 0);
+    assert_eq!(app.trajectory.level(), 0);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_level.get(), 1);
+    assert_eq!(app.trajectory.level(), 1);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_level.get(), 2);
+    assert_eq!(app.trajectory.level(), 2);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_level.get(), 1);
+    assert_eq!(app.trajectory.level(), 1);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_level.get(), 0);
+    assert_eq!(app.trajectory.level(), 0);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.pane, crate::state::Pane::Transcript);
 }
@@ -468,26 +468,26 @@ fn test_up_down_move_cursor() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
-    app.trajectory_list_len.set(5);
-    assert_eq!(app.trajectory_cursor.get(), 0);
+    app.trajectory.set_list_len(5);
+    assert_eq!(app.trajectory.cursor(), 0);
     // Down advances
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_cursor.get(), 1);
+    assert_eq!(app.trajectory.cursor(), 1);
     // Up decrements
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_cursor.get(), 0);
+    assert_eq!(app.trajectory.cursor(), 0);
     // Up at the top stays at the top: the list is an audit trail with a
     // direction in time, so it does not wrap.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_cursor.get(), 0);
+    assert_eq!(app.trajectory.cursor(), 0);
     // End jumps to the newest, and Down there stays put.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_cursor.get(), 4);
+    assert_eq!(app.trajectory.cursor(), 4);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_cursor.get(), 4);
+    assert_eq!(app.trajectory.cursor(), 4);
     // Home jumps to the oldest.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_cursor.get(), 0);
+    assert_eq!(app.trajectory.cursor(), 0);
 }
 
 /// Thinking tokens render as (thinking Nk) only when Some and >0.
@@ -906,7 +906,7 @@ fn test_enter_trajectory_clamps_tail() {
     use houyicoder_protocol::frontend::SlashCommand;
     let mut app = crate::composition::app();
     app.run_command(SlashCommand::Trajectory);
-    assert_eq!(app.trajectory_cursor.get(), usize::MAX);
+    assert_eq!(app.trajectory.cursor(), usize::MAX);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
     terminal
         .draw(|f| {
@@ -914,8 +914,8 @@ fn test_enter_trajectory_clamps_tail() {
         })
         .unwrap();
     // After first draw, cursor is clamped to valid row index
-    let len = app.trajectory_list_len.get();
-    assert!(app.trajectory_cursor.get() < len);
+    let len = app.trajectory.list_len();
+    assert!(app.trajectory.cursor() < len);
     // Enter drills into Level 1 without displaying "no row data"
     crate::keys::handle_working(
         &mut app,
@@ -924,7 +924,7 @@ fn test_enter_trajectory_clamps_tail() {
             crossterm::event::KeyModifiers::NONE,
         ),
     );
-    assert_eq!(app.trajectory_level.get(), 1);
+    assert_eq!(app.trajectory.level(), 1);
 }
 
 /// Level 1 navigation properly uses events length, allowing Down to advance.
@@ -933,20 +933,20 @@ fn test_level1_navigates_events() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
-    app.trajectory_level.set(1);
-    app.trajectory_turn_idx.set(0);
-    app.trajectory_cursor.set(0);
+    app.trajectory.set_level(1);
+    app.trajectory.set_turn_idx(0);
+    app.trajectory.set_cursor(0);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
     terminal
         .draw(|f| {
             draw_content(f, f.area(), &app);
         })
         .unwrap();
-    let event_count = app.trajectory_list_len.get();
+    let event_count = app.trajectory.list_len();
     assert!(event_count > 1, "mock turn 0 has multiple events");
     // Down advances through events
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.trajectory_cursor.get(), 1);
+    assert_eq!(app.trajectory.cursor(), 1);
 }
 
 /// Latency timing spans and cache metrics in trajectory view render cleanly.

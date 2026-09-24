@@ -19,6 +19,7 @@ mod model_picker;
 mod scroll;
 mod search_view;
 mod teammate_view;
+mod trajectory;
 pub(crate) mod transcript;
 
 use crate::agent_message::{FleetState, PaneAgents, SessionMessage};
@@ -57,6 +58,7 @@ pub(crate) use crate::state::expanded_keys::ParkedKeys;
 pub use crate::state::model_picker::{
     DEFAULT_LABEL, ModelDraft, ModelPickerState, ModelSettingFocus, PendingCommit,
 };
+pub use crate::state::trajectory::TrajectoryPaneState;
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionMode, PermissionRule,
 };
@@ -267,23 +269,9 @@ pub struct App {
     pub worktree_list: ListPaneState,
     /// /worktrees pane drill-down: 0 = list, 1 = detail.
     pub worktree_level: Cell<u8>,
-    /// /trajectory pane drill-down state: 0 = turn list, 1 = turn detail
-    /// (events + ASCII bar), 2 = event detail (full data).
-    pub trajectory_level: Cell<u8>,
-    /// Cursor into the current level's list (turn list at level 0, event
-    /// list at level 1). Clamped to the list length at render time.
-    pub trajectory_cursor: Cell<usize>,
-    /// List length at the current drill level, stashed by the render path so
-    /// the Up/Down key handler can clamp the cursor in [0, len-1] — without
-    /// this the cursor grows past the last row on Down and the selection
-    /// glyph vanishes (no row matches the out-of-range index).
-    pub trajectory_list_len: Cell<usize>,
-    /// The L0-selected row index, frozen on drill so L1/L2 render the row
-    /// the user picked (not always the first turn — drilling a later turn or
-    /// a [bg] row showed the first turn's events before this field existed).
-    pub trajectory_turn_idx: Cell<usize>,
-    /// True when the L0 row is a bg event (skips L2 drill-in).
-    pub trajectory_at_bg: Cell<bool>,
+    /// The /trajectory pane's drill level, cursor, and frozen drill row. One
+    /// owner for the pane's position.
+    pub trajectory: TrajectoryPaneState,
     pub agents: PaneAgents,
     pub agent_directory: Option<String>,
     /// An opened artifact for inline review and annotation. Stub content; real

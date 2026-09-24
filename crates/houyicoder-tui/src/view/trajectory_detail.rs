@@ -44,7 +44,7 @@ pub(super) fn draw_turn_detail(
     let row = row.clone();
     match row {
         TrajectoryRow::Turn(turn) => {
-            app.trajectory_at_bg.set(false);
+            app.trajectory.set_at_bg(false);
             let clamped = cursor.min(turn.records.len().saturating_sub(1));
             let cache_str = format_turn_cache(&turn);
             header.push(line(vec![
@@ -91,7 +91,7 @@ pub(super) fn draw_turn_detail(
         TrajectoryRow::Bg(bg) => {
             // A [bg] row drilled from L0 has no event timeline — show its
             // detail directly at L1 and flag it so Enter does not drill to L2.
-            app.trajectory_at_bg.set(true);
+            app.trajectory.set_at_bg(true);
             header.push(line(vec![
                 sp(format!(" [bg] {} ", bg.kind), Color::Cyan),
                 sp(truncate_width(&bg.summary, 50), Color::White),

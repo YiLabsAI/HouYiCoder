@@ -252,7 +252,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
                 120,
                 true,
                 None,
-                Some("+ trajectory_level: Cell<u8>, trajectory_cursor: Cell<usize>"),
+                Some("+ trajectory: TrajectoryPaneState,"),
                 None,
             ),
             ev(

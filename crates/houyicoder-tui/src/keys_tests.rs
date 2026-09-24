@@ -1073,10 +1073,10 @@ fn test_esc_cancelling_backs_trajectory() {
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling());
     app.pane = Pane::Trajectory;
-    app.trajectory_level.set(1);
+    app.trajectory.set_level(1);
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
-        app.trajectory_level.get(),
+        app.trajectory.level(),
         0,
         "Esc backs the trajectory pane a level, not pops the queue"
     );
@@ -1887,10 +1887,10 @@ fn test_focus_trajectory_esc_levels() {
     let mut app = working_app();
     app.viewport = ViewportMode::Focus;
     app.pane = Pane::Trajectory;
-    app.trajectory_level.set(1);
+    app.trajectory.set_level(1);
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
-        app.trajectory_level.get(),
+        app.trajectory.level(),
         0,
         "Esc backs the pane a level instead of folding the viewport"
     );

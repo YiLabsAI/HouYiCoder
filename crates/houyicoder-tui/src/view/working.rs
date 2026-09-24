@@ -625,7 +625,7 @@ fn draw_worktree_pane(f: &mut Frame, area: Rect, app: &App) {
 /// the /search detail fullscreen pattern. Shows mock trajectory data until the
 /// observability log is wired into the agent loop.
 fn draw_trajectory_pane(f: &mut Frame, area: Rect, app: &App) {
-    if app.trajectory_level.get() >= 1 {
+    if app.trajectory.level() >= 1 {
         crate::view::pane::render(f, area, Color::Cyan, |f, inner| {
             trajectory_pane::draw_content(f, inner, app);
             stash_pane_rows(f, inner, app);

@@ -131,11 +131,11 @@ impl App {
             }
             C::Trajectory => {
                 self.pane = Pane::Trajectory;
-                self.trajectory_level.set(0);
-                self.trajectory_turn_idx.set(0);
+                self.trajectory.set_level(0);
+                self.trajectory.set_turn_idx(0);
                 // Initialize cursor to tail; draw_content will clamp and persist
                 // it to the active row count on first render.
-                self.trajectory_cursor.set(usize::MAX);
+                self.trajectory.set_cursor(usize::MAX);
             }
             C::Tools => {
                 self.pane = Pane::Tools;

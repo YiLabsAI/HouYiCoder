@@ -34,8 +34,11 @@ ACTIVE_OWNERS = {
         # card, interactive question card, permission request id, approval
         # batch, trust prompt, trust choice, trust request id) into one
         # prompt field that holds at most one live ask, net six fewer.
-        # Transcript took the ordered frame log (one field).
-        "fields": 148,
+        # Transcript took the ordered frame log (one field). The trajectory
+        # pane's five parallel fields (drill level, cursor, body length, the
+        # drilled row, the background-row flag) became one TrajectoryPaneState
+        # owner, so the pane's position has one reason to change.
+        "fields": 144,
         "mut_app": 44,
     },
 }

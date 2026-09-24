@@ -370,9 +370,9 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         .as_ref()
         .map(|l| l.trajectory())
         .unwrap_or_else(|| std::sync::Arc::new(sample_trajectory()));
-    let level = app.trajectory_level.get();
-    let cursor = app.trajectory_cursor.get();
-    let turn_idx = app.trajectory_turn_idx.get();
+    let level = app.trajectory.level();
+    let cursor = app.trajectory.cursor();
+    let turn_idx = app.trajectory.turn_idx();
     let (header, body, footer, sel_line) = match level {
         1 => detail::draw_turn_detail(&traj, turn_idx, cursor, area, app),
         2 => detail::draw_event_detail(&traj, turn_idx, cursor, area),
@@ -393,9 +393,9 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         _ => traj.rows.len(),
     };
     if active_len > 0 && cursor >= active_len {
-        app.trajectory_cursor.set(active_len.saturating_sub(1));
+        app.trajectory.set_cursor(active_len.saturating_sub(1));
     }
-    app.trajectory_list_len.set(active_len);
+    app.trajectory.set_list_len(active_len);
     render_scrolled(f, area, header, body, footer, sel_line);
 }
 
