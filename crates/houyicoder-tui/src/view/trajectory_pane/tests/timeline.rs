@@ -2,7 +2,7 @@
 //! what the ruler above them says.
 
 use super::super::*;
-use super::{detail_view, lines_text, record_of};
+use super::fixtures::{detail_view, lines_text, record_of};
 
 /// The level 1 timeline as rendered: the ruler line, a row's text, and the
 /// display column a bar starts at.

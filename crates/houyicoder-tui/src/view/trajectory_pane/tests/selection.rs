@@ -3,58 +3,13 @@
 
 use super::super::list;
 use super::super::*;
+use super::fixtures::window_view;
 use crate::view::working;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-
-/// A window of turn rows numbered first..=last, over a session of total turns.
-fn window_view(first: usize, last: usize, total: usize, generation: u64) -> TrajectoryView {
-    let rows = (first..=last)
-        .map(|n| {
-            TrajectoryRow::Turn(TrajectoryTurn {
-                boundary_before: Vec::new(),
-                n,
-                user_input: format!("prompt {n}"),
-                tokens_in: None,
-                tokens_out: None,
-                cache_read: None,
-                cache_write: None,
-                models: Vec::new(),
-                efforts: Vec::new(),
-                reasoning_tokens: None,
-                tool_count: 0,
-                tool_fail: 0,
-                retries: 0,
-                duration_ms: 0,
-                success: true,
-                records: Vec::new(),
-            })
-        })
-        .collect();
-    TrajectoryView {
-        state: TrajectoryViewState::Ready,
-        skipped_records: 0,
-        models_used: 1,
-        tool_calls: 0,
-        session_id: "scripted".into(),
-        model: "scripted".into(),
-        total_turns: total,
-        tokens_in: None,
-        tokens_out: None,
-        cache_read: None,
-        failures: 0,
-        duration_secs: 0,
-        timing: SessionTiming::default(),
-        hidden_turns: first.saturating_sub(1),
-        newer_hidden: total.saturating_sub(last),
-        history_generation: generation,
-        subagent_usage: None,
-        rows,
-    }
-}
 
 /// A TrajectoryLog that serves a scripted sequence of views and counts the
 /// window moves it was asked for, so a test can drive the cursor across a

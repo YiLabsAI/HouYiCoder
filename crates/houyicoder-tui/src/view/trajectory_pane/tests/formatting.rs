@@ -3,7 +3,7 @@
 
 use super::super::list;
 use super::super::*;
-use super::{detail_view, lines_text, record_of};
+use super::fixtures::{detail_view, lines_text, record_of};
 
 /// The session total reads as a duration: twelve days of wall time is a span,
 /// not a six-figure second count.
