@@ -2,7 +2,7 @@ use super::*;
 use crate::agent::memory::{MemoryGates, MemoryRuntime, MutationLog};
 use crate::agent::{Runner, ToolRegistry};
 use houyicoder_api::agent_event::{AgentEventHandlers, MemoryChangeOrigin, MemoryChangedEvent};
-use houyicoder_context::{MemoryEntry, MemorySummary};
+use houyicoder_context::{MemoryEntry, MemorySummary, SessionId};
 use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, LlmEvent, ModelCapabilities, ModelSettings,
@@ -387,7 +387,7 @@ async fn test_extract_skips_main_saved() {
     });
     let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
     assert!(
-        matches!(outcome, ExtractOutcome::Skipped { .. }),
+        matches!(outcome, ExtractOutcome::Skipped(_)),
         "must skip when main agent already saved"
     );
     assert!(
@@ -445,13 +445,8 @@ async fn test_primary_beats_zero_window() {
     );
     let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
     assert!(
-        matches!(
-            outcome,
-            ExtractOutcome::Skipped {
-                new_message_count: 0
-            }
-        ),
-        "zero window with primary changes still skips"
+        matches!(outcome, ExtractOutcome::Skipped(ExtractSkip::PrimaryWrote)),
+        "a range the main agent saved in skips the fork as a primary write"
     );
     assert_eq!(*provider.calls.lock().expect("calls"), 0, "no fork ran");
     assert_eq!(
@@ -484,34 +479,8 @@ async fn test_extract_keeps_cursor_error() {
     );
 }
 
-/// count_messages_since counts all model-visible messages when the cursor
-/// is None (nothing consumed or seeded yet) and when the cursor id is not
-/// in the messages (compaction removed it) — never 0, which would disable
-/// extraction.
 #[test]
-fn test_count_since_fallbacks_missing() {
-    let msgs = conversation();
-    assert_eq!(
-        count_messages_since(&msgs, None),
-        2,
-        "fresh cursor counts all model-visible messages"
-    );
-    let foreign = EventId::new(); // not in msgs
-    assert_eq!(
-        count_messages_since(&msgs, Some(&foreign)),
-        2,
-        "missing cursor id falls back to counting all, not 0"
-    );
-    let mid = msgs[0].id;
-    assert_eq!(
-        count_messages_since(&msgs, Some(&mid)),
-        1,
-        "cursor at first message counts the one after"
-    );
-}
-
-#[test]
-fn test_result_confirms_memory_change() {
+fn test_primary_writes_pairs_calls() {
     let mut msgs = conversation();
     append_event(
         &mut msgs,
@@ -521,7 +490,10 @@ fn test_result_confirms_memory_change() {
             input: serde_json::json!({}),
         },
     );
-    assert!(memory_changes_since(&msgs, None).is_empty());
+    assert!(
+        primary_writes(&msgs).is_empty(),
+        "a call without a result is no write"
+    );
     append_event(
         &mut msgs,
         SessionEvent::tool_result("c", serde_json::json!({"saved": "exact-key"})),
@@ -546,7 +518,7 @@ fn test_result_confirms_memory_change() {
         &mut msgs,
         SessionEvent::tool_result("failed", serde_json::json!({"saved": "late"})),
     );
-    let changes = memory_changes_since(&msgs, None);
+    let changes = primary_writes(&msgs);
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].key, "exact-key");
     assert_eq!(changes[0].operation, MemoryOperation::Stored);
@@ -617,17 +589,26 @@ async fn test_extract_memories_coalesces_flight() {
 
 /// The fire-and-forget body picks up a stashed trailing context in its
 /// finally: the initial pass runs, then the trailing pass runs, then
-/// in_progress clears. Deterministic — pre-stashes the context + runs
-/// the body directly (no spawn, no race). Two writes land (initial +
-/// trailing), the cursor advances past both, and in_progress ends false.
+/// in_progress clears. Deterministic — pre-stashes the context + runs the
+/// body directly (no spawn, no race). The trailing context extends the
+/// same session log as the initial, so the cursor the initial advanced still
+/// resolves in it; two writes land (initial + trailing), the cursor
+/// advances past both, and in_progress ends false.
 #[tokio::test]
 async fn test_run_extraction_picks_trailing() {
     let (ext, memory) = extractor(Arc::new(FakeProvider {
         calls: StdMutex::new(0),
     }));
-    *ext.pending_context.lock().expect("pending") = Some(conversation());
+    let session = SessionId::new();
+    let first_turn = vec![
+        user_entry(session, "first ask"),
+        assistant_entry(session, "first answer"),
+    ];
+    let mut trailing = first_turn.clone();
+    push_turn(&mut trailing, session, "second ask", "second answer");
+    *ext.pending_context.lock().expect("pending") = Some(trailing);
     *ext.in_progress.lock().expect("in_progress") = true;
-    Arc::clone(&ext).run_extraction(conversation(), false).await;
+    Arc::clone(&ext).run_extraction(first_turn, false).await;
     assert_eq!(
         memory.written.lock().expect("w").len(),
         2,
@@ -728,8 +709,9 @@ async fn test_extract_skips_no_new() {
     );
 }
 
-/// run_extraction_once must skip a zero-new-message window rather than
-/// fork: the model would still see the whole prefix and re-extract.
+/// run_extraction_once must skip a snapshot the cursor already covers
+/// rather than fork: with no query turn to read the fork would have nothing
+/// eligible to cite.
 #[tokio::test]
 async fn test_zero_window_skips_fork() {
     let provider = Arc::new(FakeProvider {
@@ -740,13 +722,8 @@ async fn test_zero_window_skips_fork() {
     *ext.cursor.lock().expect("cursor") = Some(msgs.last().expect("last").id);
     let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
     assert!(
-        matches!(
-            outcome,
-            ExtractOutcome::Skipped {
-                new_message_count: 0
-            }
-        ),
-        "a zero window skips"
+        matches!(outcome, ExtractOutcome::Skipped(ExtractSkip::NoQueryTurn)),
+        "a cursor that covers the snapshot skips with no query turn"
     );
     assert_eq!(*provider.calls.lock().expect("calls"), 0, "no fork ran");
 }
@@ -895,16 +872,17 @@ async fn test_forked_extract_receives_manifest() {
         ..RunnerConfig::default()
     };
     let prefix = conversation();
+    let window = ExactExtractionWindow::from_unconsumed(
+        ExactExtractionWindow::unconsumed(&prefix, None).expect("fresh cursor locates"),
+    )
+    .expect("a turn is present");
     let result = run_forked_extract(
         store,
         provider.clone(),
         Arc::clone(&memory) as Arc<dyn MemoryProvider>,
         &cwd,
         config,
-        ExtractionWindow {
-            prefix: &prefix,
-            new_message_count: 2,
-        },
+        &window,
         Arc::new(MutationLog::new()),
     )
     .await;
@@ -935,7 +913,233 @@ async fn test_forked_extract_receives_manifest() {
         "forked input must carry the manifest heading, got: {user_input}"
     );
     assert!(
-        user_input.contains("last 2 model-visible messages"),
-        "the cursor-derived extraction window must reach the provider: {user_input}"
+        user_input.contains("the complete evidence window"),
+        "the fork must be told its whole input is eligible: {user_input}"
+    );
+}
+
+/// One durable event in a test history.
+fn entry(session: SessionId, event: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
+        id: EventId::new(),
+        session,
+        ts: 0,
+        prev_hash: None,
+        event,
+    }
+}
+
+fn user_entry(session: SessionId, text: &str) -> SessionLogEntry {
+    entry(
+        session,
+        SessionEvent::UserInput {
+            text: text.to_string(),
+        },
+    )
+}
+
+fn assistant_entry(session: SessionId, text: &str) -> SessionLogEntry {
+    entry(
+        session,
+        SessionEvent::AssistantMessage {
+            text: text.to_string(),
+            thinking: None,
+        },
+    )
+}
+
+/// Append one query turn so a history can grow a turn at a time.
+fn push_turn(messages: &mut Vec<SessionLogEntry>, session: SessionId, ask: &str, answer: &str) {
+    messages.push(user_entry(session, ask));
+    messages.push(assistant_entry(session, answer));
+}
+
+/// Records what each forked request carried and answers the first call with
+/// a save_memory write, so a test reads back the exact evidence the forked
+/// agent could cite.
+struct EvidenceProbe {
+    requests: StdMutex<Vec<String>>,
+    calls: StdMutex<usize>,
+}
+
+impl EvidenceProbe {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            requests: StdMutex::new(Vec::new()),
+            calls: StdMutex::new(0),
+        })
+    }
+
+    fn record(&self, req: CompletionRequest) -> usize {
+        let mut calls = self.calls.lock().expect("calls");
+        *calls += 1;
+        let n = *calls;
+        drop(calls);
+        let input = serde_json::to_string(&req.input).unwrap_or_default();
+        self.requests
+            .lock()
+            .expect("requests")
+            .push(format!("{}\n{input}", req.instructions));
+        n
+    }
+
+    fn first_request(&self) -> String {
+        self.requests
+            .lock()
+            .expect("requests")
+            .first()
+            .expect("the fork made a request")
+            .clone()
+    }
+
+    fn call_count(&self) -> usize {
+        *self.calls.lock().expect("calls")
+    }
+}
+
+impl ModelProvider for EvidenceProbe {
+    fn complete(
+        &self,
+        req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        let n = self.record(req);
+        Box::pin(async move { Ok(probe_response(n)) })
+    }
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        let n = self.record(req);
+        stream_from_response(probe_response(n))
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// The first answer writes a memory keyed on a fact only an older turn
+/// states; later answers end the forked run.
+fn probe_response(n: usize) -> CompletionResponse {
+    let output = if n == 1 {
+        vec![OutputItem::ToolCall {
+            id: "probe-save".into(),
+            name: "save_memory".into(),
+            input: serde_json::json!({
+                "key": "ashford-ledger-retention",
+                "description": "The Ashford ledger stays for seven years",
+                "source": "feedback",
+                "content": "Retain the Ashford ledger for seven years."
+            }),
+        }]
+    } else {
+        vec![OutputItem::Text {
+            text: "done".into(),
+        }]
+    };
+    CompletionResponse {
+        output,
+        usage: Usage::default(),
+        model: "test".into(),
+    }
+}
+
+/// The forked extractor reads only the turn that triggered the pass. A fact
+/// from an already-consumed turn is not evidence for this pass, so it never
+/// reaches the forked request and a write keyed on it has nothing to cite.
+#[tokio::test]
+async fn test_fork_sees_new_turn() {
+    let probe = EvidenceProbe::new();
+    let (ext, _memory) = extractor(Arc::clone(&probe) as Arc<dyn ModelProvider>);
+    let session = SessionId::new();
+    let mut messages = vec![
+        user_entry(session, "Retain the Ashford ledger for seven years."),
+        assistant_entry(session, "The Ashford ledger stays for seven years."),
+    ];
+    ext.seed_cursor(messages.last().expect("last").id);
+    push_turn(
+        &mut messages,
+        session,
+        "Add the sidebar toggle.",
+        "The sidebar toggle is in.",
+    );
+
+    ext.run_extraction_once(&messages).await.expect("run ok");
+
+    let seen = probe.first_request();
+    assert!(
+        seen.contains("sidebar"),
+        "the triggering turn reaches the fork: {seen}"
+    );
+    assert!(
+        !seen.contains("Ashford"),
+        "a consumed turn is not evidence for this pass: {seen}"
+    );
+}
+
+/// A resumed session seeds the cursor to the restored tail, so the first
+/// pass reads the turn that arrived after the restore and nothing from the
+/// history the restore carried in.
+#[tokio::test]
+async fn test_resume_reads_new_turn() {
+    let probe = EvidenceProbe::new();
+    let (ext, _memory) = extractor(Arc::clone(&probe) as Arc<dyn ModelProvider>);
+    let session = SessionId::new();
+    let mut messages = vec![
+        user_entry(session, "Retain the Ashford ledger for seven years."),
+        assistant_entry(session, "The Ashford ledger stays for seven years."),
+        user_entry(session, "Which host runs the nightly build?"),
+        assistant_entry(session, "The nightly build runs on the spare host."),
+    ];
+    ext.seed_cursor(messages.last().expect("last").id);
+    push_turn(
+        &mut messages,
+        session,
+        "Add the sidebar toggle.",
+        "The sidebar toggle is in.",
+    );
+
+    ext.run_extraction_once(&messages).await.expect("run ok");
+
+    let seen = probe.first_request();
+    assert!(
+        seen.contains("sidebar"),
+        "the post-restore turn reaches the fork: {seen}"
+    );
+    assert!(
+        !seen.contains("Ashford"),
+        "restored history is not evidence: {seen}"
+    );
+    assert!(
+        !seen.contains("nightly"),
+        "a restored turn before the seed is not evidence: {seen}"
+    );
+}
+
+/// A cursor that names an event the snapshot does not hold skips the pass
+/// and re-seeds to the snapshot tail, so the fork never widens to the full
+/// history and the next pass has a located range.
+#[tokio::test]
+async fn test_lost_cursor_skips_fork() {
+    let probe = EvidenceProbe::new();
+    let (ext, _memory) = extractor(Arc::clone(&probe) as Arc<dyn ModelProvider>);
+    let session = SessionId::new();
+    let mut messages = vec![
+        user_entry(session, "Retain the Ashford ledger for seven years."),
+        assistant_entry(session, "The Ashford ledger stays for seven years."),
+    ];
+    push_turn(
+        &mut messages,
+        session,
+        "Add the sidebar toggle.",
+        "The sidebar toggle is in.",
+    );
+    *ext.cursor.lock().expect("cursor") = Some(EventId::new());
+    let outcome = ext.run_extraction_once(&messages).await.expect("run ok");
+    assert!(
+        matches!(outcome, ExtractOutcome::Skipped(ExtractSkip::CursorLost)),
+        "a lost cursor skips rather than widening to the full history"
+    );
+    assert_eq!(probe.call_count(), 0, "the fork did not run");
+    assert_eq!(
+        *ext.cursor.lock().expect("cursor"),
+        Some(messages.last().expect("last").id),
+        "the cursor re-seeds to the snapshot tail"
     );
 }

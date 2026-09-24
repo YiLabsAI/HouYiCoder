@@ -6,10 +6,11 @@
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{SessionId, SessionLogEntry};
+use houyicoder_context::SessionId;
 use std::path::Path;
 use std::sync::Arc;
 
+use super::extractor::extraction_window::ExactExtractionWindow;
 use super::memory::MutationLog;
 use super::prompt::extract::build_extraction_prompt;
 use super::runner_config::RunnerConfig;
@@ -36,32 +37,26 @@ pub(crate) fn build_forked_extract_runner(
         .with_cwd(cwd.to_path_buf())
 }
 
-/// The full cache prefix paired with its cursor-derived eligible suffix size.
-pub(crate) struct ExtractionWindow<'a> {
-    pub(crate) prefix: &'a [SessionLogEntry],
-    pub(crate) new_message_count: usize,
-}
-
-/// Drive a forked extraction run on a fresh ephemeral session. The full
-/// conversation remains the cache prefix while the window count limits which
-/// trailing messages may produce writes.
+/// Drive a forked extraction run on a fresh ephemeral session. The window's
+/// events are the whole conversation the forked agent sees; no older history
+/// is replayed, so every write cites evidence this pass can actually reach.
 pub(crate) async fn run_forked_extract(
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
     cwd: &Path,
     config: RunnerConfig,
-    window: ExtractionWindow<'_>,
+    window: &ExactExtractionWindow<'_>,
     recorder: Arc<MutationLog>,
 ) -> Result<RunResult, RunError> {
     // Inject the existing-memory manifest so the forked agent dedups by
     // reusing a key instead of re-saving the same fact each turn (a
     // formatMemoryManifest pre-inject). Built before moving memory into
     // the runner.
-    let prompt = build_extraction_prompt(window.new_message_count, &memory.list_memories());
+    let prompt = build_extraction_prompt(&memory.list_memories());
     let runner = build_forked_extract_runner(store, provider, memory, cwd, config, recorder);
     let session = SessionId::new();
-    let result = runner.run_forked(session, window.prefix, prompt).await;
+    let result = runner.run_forked(session, window.events(), prompt).await;
     // A fork that hits the turn cap did not finish extracting — treat as a
     // failure so the extractor's cursor stays and the range is reconsidered
     // next pass. The main loop's max_turns is a graceful RunOutcome; a
@@ -80,7 +75,7 @@ mod tests {
     use super::*;
     use houyicoder_api::provider::stream_from_response;
     use houyicoder_async::{PFut, PStream};
-    use houyicoder_context::{EventId, MemoryEntry, MemorySource, SessionEvent};
+    use houyicoder_context::{EventId, MemoryEntry, MemorySource, SessionEvent, SessionLogEntry};
     use houyicoder_memory::InMemoryBackend;
     use houyicoder_protocol::llm::{
         CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem,
@@ -251,16 +246,17 @@ mod tests {
 
         let prefix = main_prefix();
         let recorder = Arc::new(MutationLog::new());
+        let window = ExactExtractionWindow::from_unconsumed(
+            ExactExtractionWindow::unconsumed(&prefix, None).expect("fresh cursor locates"),
+        )
+        .expect("a turn is present");
         let result = run_forked_extract(
             ephemeral,
             provider,
             Arc::clone(&memory) as Arc<dyn MemoryProvider>,
             &cwd,
             config(),
-            ExtractionWindow {
-                prefix: &prefix,
-                new_message_count: 2,
-            },
+            &window,
             recorder,
         )
         .await
@@ -314,16 +310,17 @@ mod tests {
         std::fs::create_dir_all(&cwd).expect("mkdir cwd");
         let prefix = main_prefix();
         let recorder = Arc::new(MutationLog::new());
+        let window = ExactExtractionWindow::from_unconsumed(
+            ExactExtractionWindow::unconsumed(&prefix, None).expect("fresh cursor locates"),
+        )
+        .expect("a turn is present");
         let result = run_forked_extract(
             ephemeral,
             provider,
             Arc::clone(&memory) as Arc<dyn MemoryProvider>,
             &cwd,
             config(),
-            ExtractionWindow {
-                prefix: &prefix,
-                new_message_count: 2,
-            },
+            &window,
             recorder,
         )
         .await

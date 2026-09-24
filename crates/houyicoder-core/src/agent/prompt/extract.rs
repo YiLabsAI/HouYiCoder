@@ -23,7 +23,7 @@ The system prompt already defines the four memory types (user, feedback, project
 
 Procedure:
 1. A recalled memories manifest is appended below when the store is non-empty. Read it first so you do not save a duplicate of an existing entry. If a fact refines an existing entry, reuse its key to refresh it. If no manifest is appended, the store is empty.
-2. The exact eligible conversation window is stated below. Earlier messages remain visible only as context and MUST NOT be used as evidence for a memory write. Do not re-verify or re-read earlier history — assume earlier turns were already extracted or are derivable from the code.
+2. The conversation above is the complete evidence window for this pass. Every message in it is eligible; no earlier history is present, so there is nothing to re-read or re-verify. Do not ask for older context — earlier turns were already extracted or are derivable from the code.
 3. Decide what is worth saving. A memory must capture context NOT derivable from the current project state: code patterns, architecture, file paths, git history, and fix recipes are derivable — do NOT save them. Save only: user role or preferences you learned; corrective or validating feedback on how to work (with the why); project goals, decisions, or coordination not in git (with the why); pointers to external systems.
 4. Save each candidate via the save_memory tool with a kebab-case key, a specific one-line description naming the entities, the correct source type, and the body (with Why and How-to-apply lines for feedback and project types).
 5. You may issue multiple save_memory calls in parallel within one turn. Do not interleave reads with writes — the appended manifest (when present) is the read step; go straight to writing.
@@ -37,14 +37,15 @@ Environment assertions (a tool fails in a sandbox, a command is unavailable, a p
         .to_string()
 }
 
-/// Compose the forked extraction prompt with the cursor-derived eligible
-/// window and existing-memory manifest. The dynamic suffix rides the final
-/// user turn, leaving the cached system and conversation prefix unchanged.
-pub fn build_extraction_prompt(new_message_count: usize, memories: &[MemorySummary]) -> String {
+/// Compose the forked extraction prompt with the existing-memory manifest.
+/// The conversation prefix the forked agent already saw is the complete
+/// evidence window, so the prompt states that boundary once and appends the
+/// manifest for dedup.
+pub fn build_extraction_prompt(memories: &[MemorySummary]) -> String {
     let mut prompt = extraction_prompt();
-    prompt.push_str(&format!(
-        "\n\n## Eligible conversation window\n\nYou MUST only use content from the last {new_message_count} model-visible messages above to create or update memories. Earlier messages are context only."
-    ));
+    prompt.push_str(
+        "\n\n## Eligible conversation window\n\nThe messages above are the complete evidence window. Cite only what they contain. The manifest below names memories that already exist and is not itself evidence.",
+    );
     if memories.is_empty() {
         return prompt;
     }
@@ -123,15 +124,15 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_scopes_new_messages() {
-        let prompt = build_extraction_prompt(2, &[]);
+    fn test_prompt_states_evidence_window() {
+        let prompt = build_extraction_prompt(&[]);
         assert!(
-            prompt.contains("last 2 model-visible messages"),
-            "the cursor-derived window must reach the extraction prompt: {prompt}"
+            prompt.contains("complete evidence window"),
+            "the prompt states the boundary the host actually enforces: {prompt}"
         );
         assert!(
-            prompt.contains("MUST only use"),
-            "the eligibility boundary must be explicit: {prompt}"
+            prompt.contains("Cite only what they contain"),
+            "the eligibility rule must be explicit: {prompt}"
         );
     }
 
@@ -139,7 +140,7 @@ mod tests {
     #[test]
     fn test_build_prompt_no_manifest() {
         assert!(
-            !build_extraction_prompt(2, &[]).contains("Existing memory files"),
+            !build_extraction_prompt(&[]).contains("Existing memory files"),
             "empty store must not append a manifest block"
         );
     }
@@ -157,7 +158,7 @@ mod tests {
             scope: houyicoder_context::MemoryScope::Auto,
             origin: houyicoder_context::MemoryOrigin::Unknown,
         };
-        let p = build_extraction_prompt(2, &[mem]);
+        let p = build_extraction_prompt(&[mem]);
         assert!(p.contains("## Existing memory files"));
         assert!(p.contains("build-gate"));
         assert!(p.contains("update an existing file rather than creating a duplicate"));

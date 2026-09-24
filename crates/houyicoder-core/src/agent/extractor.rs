@@ -1,18 +1,11 @@
 //! The memory extractor: a cursor and mutual-exclusion gate around the
-//! forked extraction run. The cursor marks the last message the background
-//! extraction consumed, so the next run counts only new messages; the mutex
-//! skips the fork when the main agent already saved a memory via a
-//! save_memory tool call in this turn range (no point re-extracting what was
-//! just written). Both are recomputed by re-scanning the message log each
-//! call — no stored flag. The cursor lives for the process lifetime: a
-//! resumed session seeds it from the restored history so the first pass
-//! counts only what arrives after the restore, while a session the store
-//! cannot answer for keeps the None cursor and counts all messages.
+//! forked extraction run.
 //!
-//! The forked agent always receives the full conversation as its
-//! prompt-cache prefix; the cursor only governs the new-message count fed
-//! into the extraction prompt, the mutex scan range, and the advance that
-//! prevents re-counting.
+//! The cursor marks the last event an earlier pass consumed; the next pass
+//! cuts an exact window at query boundaries, so the fork reads only whole
+//! turns it has not yet seen. A cursor that does not resolve in the snapshot
+//! skips the pass and re-seeds to the snapshot tail, never widening to the
+//! full history.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -28,19 +21,34 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_context::{EventId, MemoryChangeId, SessionEvent, SessionLogEntry};
 use tokio::task::JoinHandle;
 
-use super::extract::{ExtractionWindow, run_forked_extract};
+use super::extract::run_forked_extract;
 use super::memory::MutationLog;
 use super::{RunError, RunResult, RunnerConfig};
+
+/// The evidence-boundary type the extractor cuts and the forked run reads.
+#[path = "extraction_window.rs"]
+pub(crate) mod extraction_window;
+use extraction_window::ExactExtractionWindow;
 
 #[derive(Debug)]
 pub enum ExtractOutcome {
     /// The forked agent ran to completion.
     Extracted(RunResult),
-    /// The fork was skipped: either the main agent already saved a memory in
-    /// this turn range (mutual exclusion — the cursor still advances past the
-    /// range), or the range held no new model-visible messages (a zero
-    /// window — nothing to advance past).
-    Skipped { new_message_count: usize },
+    /// The fork was skipped: the main agent already saved a memory in this
+    /// range, the unconsumed tail held no complete query turn, or the cursor
+    /// could not be located in the snapshot.
+    Skipped(ExtractSkip),
+}
+
+/// Why a pass wrote nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractSkip {
+    /// The main agent already saved a memory in this range.
+    PrimaryWrote,
+    /// The unconsumed tail holds no complete query turn.
+    NoQueryTurn,
+    /// The cursor names an event this snapshot does not hold.
+    CursorLost,
 }
 
 /// The memory extractor: cursor and mutex gate around the forked run. Holds
@@ -139,18 +147,37 @@ impl MemoryExtractor {
         messages: &[SessionLogEntry],
     ) -> Result<ExtractOutcome, RunError> {
         let cursor = *self.cursor.lock().expect("cursor");
-        let new_message_count = count_messages_since(messages, cursor.as_ref());
-        let primary_changes = memory_changes_since(messages, cursor.as_ref());
+        let Some(tail) = ExactExtractionWindow::unconsumed(messages, cursor.as_ref()) else {
+            // The cursor names an event this snapshot does not hold, so the
+            // consumed prefix cannot be located. Widening to the full history
+            // would hand the fork evidence an earlier pass already consumed;
+            // leaving the cursor lost would end extraction for the session.
+            // Re-seed to this snapshot's tail so the next pass has a located
+            // range.
+            tracing::warn!("extraction cursor does not resolve; skipping the pass");
+            advance_cursor(&self.cursor, messages);
+            return Ok(ExtractOutcome::Skipped(ExtractSkip::CursorLost));
+        };
+        // The mutual-exclusion scan reads the unconsumed tail rather than
+        // the window: a save the main agent landed after the last
+        // model-visible message still belongs to the range this pass covers.
+        let primary_changes = primary_writes(tail);
         if !primary_changes.is_empty() {
             advance_cursor(&self.cursor, messages);
             self.emit_changes(MemoryChangeOrigin::PrimaryAgent, primary_changes);
-            return Ok(ExtractOutcome::Skipped { new_message_count });
+            return Ok(ExtractOutcome::Skipped(ExtractSkip::PrimaryWrote));
         }
-        // The trailing drain arrives without the fire-path pre-check. A zero
-        // window must not fork: the model still sees the whole prefix.
-        if new_message_count == 0 {
-            return Ok(ExtractOutcome::Skipped { new_message_count });
-        }
+        let Some(window) = ExactExtractionWindow::from_unconsumed(tail) else {
+            return Ok(ExtractOutcome::Skipped(ExtractSkip::NoQueryTurn));
+        };
+        tracing::debug!(
+            session = %window.session(),
+            trigger = %window.trigger_user_event(),
+            from = %window.start_event(),
+            to = %window.end_event(),
+            eligible = window.model_visible_count(),
+            "cut the extraction window"
+        );
         let recorder = Arc::new(MutationLog::new());
         let result = run_forked_extract(
             Arc::clone(&self.store),
@@ -158,10 +185,7 @@ impl MemoryExtractor {
             Arc::clone(&self.memory),
             &self.cwd,
             self.config.clone(),
-            ExtractionWindow {
-                prefix: messages,
-                new_message_count,
-            },
+            &window,
             Arc::clone(&recorder),
         )
         .await;
@@ -221,15 +245,16 @@ impl MemoryExtractor {
     /// concurrent trigger would see in_progress=false between the check and
     /// the spawned task arming it.
     pub fn extract_memories(self: &Arc<Self>, messages: Vec<SessionLogEntry>) {
-        // Cheap pre-check: if there are no new messages since the cursor, do
-        // nothing — avoids the task spawn and the in-progress/stash churn
-        // when the conversation has not advanced (e.g. a re-emitted
-        // FinalOutput after a verify retry). The pass body re-checks, which
-        // is what covers the trailing drain. The cursor-missing fallback in
-        // count_messages_since counts all, so this only short-circuits when
-        // the cursor is already at the last message.
+        // Cheap pre-check: when the unconsumed tail holds no whole query
+        // turn, skip the spawn and the in-progress churn — a re-emitted
+        // FinalOutput after a verify retry, for example, has nothing new.
+        // A cursor that does not resolve is the pass body's to recover, so
+        // it never short-circuits here. The pass body re-checks, which is
+        // what covers the trailing drain.
         let cursor = *self.cursor.lock().expect("cursor");
-        if count_messages_since(&messages, cursor.as_ref()) == 0 {
+        if let Some(tail) = ExactExtractionWindow::unconsumed(&messages, cursor.as_ref())
+            && ExactExtractionWindow::from_unconsumed(tail).is_none()
+        {
             return;
         }
         let mut ip = self.in_progress.lock().expect("in_progress");
@@ -283,38 +308,14 @@ fn advance_cursor(cursor: &Mutex<Option<EventId>>, messages: &[SessionLogEntry])
     }
 }
 
-/// Count model-visible messages (user + assistant) after the cursor. If the
-/// cursor is None (nothing consumed or seeded yet) or its id is not found in
-/// the messages (compaction removed it), count all — never return 0, which
-/// would permanently disable extraction for the rest of the session.
-pub(crate) fn count_messages_since(
-    messages: &[SessionLogEntry],
-    cursor: Option<&EventId>,
-) -> usize {
-    let start = match cursor {
-        None => 0,
-        Some(id) => match messages.iter().position(|m| &m.id == id) {
-            Some(i) => i + 1,
-            None => 0,
-        },
-    };
-    messages
-        .iter()
-        .skip(start)
-        .filter(|m| is_model_visible(&m.event))
-        .count()
-}
-
-fn memory_changes_since(
-    messages: &[SessionLogEntry],
-    cursor: Option<&EventId>,
-) -> Vec<MemoryChange> {
-    let start = cursor
-        .and_then(|id| messages.iter().position(|message| &message.id == id))
-        .map_or(0, |index| index + 1);
+/// The saves the main agent landed in an unconsumed range. Reconstructed
+/// from the durable tool records because the main agent's own save tool
+/// carries no recorder, so the extractor pairs each save_memory call with its
+/// result to report the change.
+fn primary_writes(tail: &[SessionLogEntry]) -> Vec<MemoryChange> {
     let mut pending_calls = HashSet::new();
     let mut changes = Vec::new();
-    for message in messages.iter().skip(start) {
+    for message in tail {
         match &message.event {
             SessionEvent::ToolCall { call_id, tool, .. } if tool == "save_memory" => {
                 pending_calls.insert(call_id.as_str());
@@ -333,15 +334,6 @@ fn memory_changes_since(
         }
     }
     changes
-}
-
-fn is_model_visible(kind: &SessionEvent) -> bool {
-    matches!(
-        kind,
-        SessionEvent::UserInput { .. }
-            | SessionEvent::MidTurnInput { .. }
-            | SessionEvent::AssistantMessage { .. }
-    )
 }
 
 #[cfg(test)]
