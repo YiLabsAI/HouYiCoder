@@ -984,15 +984,20 @@ fn test_trajectory_older_loads_page() {
         "the older page lands and the header stops hiding turns:\n{}",
         s.screen().contents()
     );
-    // The selection sits at the top of the widened window, so the oldest turns
-    // are the ones in view once the next frame is drawn.
-    let showing_oldest = (0..80).any(|_| {
+    // The selection keeps the turn it was on across the load, so the window
+    // grew above the user rather than pulling the oldest turns into view.
+    // Walking on to the top of the widened window reaches the session's first
+    // turn.
+    let showing_oldest = (0..40).any(|_| {
+        for _ in 0..5 {
+            s.send_key(&Key::Up);
+        }
         std::thread::sleep(std::time::Duration::from_millis(100));
         s.screen().contents().contains("older prompt 0")
     });
     assert!(
         showing_oldest,
-        "and the older turns are the ones now in view:\n{}",
+        "and the walk reaches the session's oldest turn:\n{}",
         s.screen().contents()
     );
     drop(s);

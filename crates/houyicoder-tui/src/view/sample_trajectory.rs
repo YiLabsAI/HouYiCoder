@@ -225,12 +225,12 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
             ev(
                 TrajectoryRecordKind::Tool,
                 Some("read"),
-                "docs/design/feature/observability-design.md",
+                "wiki/design/feature/observability-design.md",
                 3400,
                 50,
                 true,
                 None,
-                Some("docs/design/feature/observability-design.md §5.5"),
+                Some("wiki/design/feature/observability-design.md §5.5"),
                 None,
             ),
             ev(
@@ -393,6 +393,8 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
             tool_ms: 3200,
         },
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(t1),

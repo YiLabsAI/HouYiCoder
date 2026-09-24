@@ -1,11 +1,14 @@
-//! Tests for the trajectory pane, extracted to keep the render module under
-//! the file-size gate. Included from trajectory_pane.rs via a path attribute so
-//! the tests still see the parent module's private items via super::*.
+//! Rendering tests for the trajectory pane: the turn list, the drill levels,
+//! and the time bars.
 
 use super::list;
+
+mod selection;
 use super::*;
 use crate::view::working;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
+use std::sync::{Arc, Mutex};
 
 #[test]
 fn test_sample_has_turns_events() {
@@ -63,7 +66,6 @@ fn test_down_clamps_last_row() {
     // Adversarial: the bug was Down past the last row made the selection
     // glyph vanish (no row matched the out-of-range cursor). With clamping
     // in both render and the key handler, the cursor pins to the last row.
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
     // First render stashes the list length; simulate by drawing once.
@@ -117,12 +119,12 @@ fn test_level0_renders_turn_list() {
 /// composition root attached an impl. The flag is shared via Arc so the test
 /// reads it after the draw without downcasting the trait object.
 struct StubLog {
-    called: std::sync::Arc<std::sync::Mutex<bool>>,
+    called: Arc<Mutex<bool>>,
 }
 impl TrajectoryLog for StubLog {
-    fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
+    fn trajectory(&self) -> Arc<TrajectoryView> {
         *self.called.lock().unwrap() = true;
-        std::sync::Arc::new(TrajectoryView {
+        Arc::new(TrajectoryView {
             state: TrajectoryViewState::Ready,
             skipped_records: 0,
             models_used: 2,
@@ -146,6 +148,8 @@ impl TrajectoryLog for StubLog {
                 tool_ms: 0,
             },
             hidden_turns: 0,
+            newer_hidden: 0,
+            history_generation: 0,
             subagent_usage: None,
             rows: Vec::new(),
         })
@@ -157,10 +161,10 @@ fn test_attached_seam_supplies_view() {
     // When the seam is Some, draw_content must call it (covering the Some
     // branch) rather than the mock fallback. The stub flips a shared flag on
     // call; a render pass leaves it set.
-    let flag = std::sync::Arc::new(std::sync::Mutex::new(false));
+    let flag = Arc::new(Mutex::new(false));
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
-    app.trajectory_log = Some(std::sync::Arc::new(StubLog {
+    app.trajectory_log = Some(Arc::new(StubLog {
         called: flag.clone(),
     }));
     let backend = TestBackend::new(80, 24);
@@ -271,6 +275,8 @@ fn test_level2_renders_projection_kinds() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: Vec::new(),
@@ -388,6 +394,8 @@ fn test_event_detail_redacts_secrets() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: Vec::new(),
@@ -439,8 +447,6 @@ fn test_event_detail_redacts_secrets() {
 
 #[test]
 fn test_enter_drill_esc_back() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::{Terminal, backend::TestBackend};
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
     // Render once so the turn-list length is stashed — the drill guard reads
@@ -465,7 +471,6 @@ fn test_enter_drill_esc_back() {
 
 #[test]
 fn test_up_down_move_cursor() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_list_len(5);
@@ -480,7 +485,8 @@ fn test_up_down_move_cursor() {
     // direction in time, so it does not wrap.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.trajectory.cursor(), 0);
-    // End jumps to the newest, and Down there stays put.
+    // With no paged history attached, End and Home are the ends of the list in
+    // hand, and Down at the end stays put.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert_eq!(app.trajectory.cursor(), 4);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -509,6 +515,8 @@ fn test_thinking_tokens_render_nonzero() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: Vec::new(),
@@ -557,6 +565,8 @@ fn test_thinking_tokens_hidden_zero() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: Vec::new(),
@@ -608,6 +618,8 @@ fn test_per_turn_model_two() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
@@ -678,6 +690,8 @@ fn test_per_turn_model_one() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
@@ -749,6 +763,8 @@ fn test_turn_row_cached_ratio() {
         duration_secs: 0,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(TrajectoryTurn {
@@ -930,7 +946,6 @@ fn test_enter_trajectory_clamps_tail() {
 /// Level 1 navigation properly uses events length, allowing Down to advance.
 #[test]
 fn test_level1_navigates_events() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_level(1);
@@ -976,6 +991,8 @@ fn test_timing_and_cache_render() {
             tool_ms: 0,
         },
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             boundary_before: Vec::new(),
@@ -1093,6 +1110,8 @@ fn test_detail_shows_model_facts() {
             tool_ms: 0,
         },
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
@@ -1156,6 +1175,8 @@ fn test_timeline_shows_record_names() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
@@ -1250,6 +1271,8 @@ fn test_turn_list_boundary() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(turn)],
     };
@@ -1307,6 +1330,8 @@ fn test_turn_list_column_align() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(mk(1, "short", Some(1))),
@@ -1370,6 +1395,8 @@ fn test_turn_detail_latency_split() {
             tool_ms: 0,
         },
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(TrajectoryTurn {
             n: 1,
@@ -1444,6 +1471,8 @@ fn test_turn_list_degrades() {
         cache_read: Some(2_000),
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(turn(12, "宽的标题会让列错位", "qwen3.7-max")),
@@ -1516,6 +1545,8 @@ fn test_turn_list_glyph_aligns() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(turn(1, "宽的标题")),
@@ -1580,6 +1611,8 @@ fn test_turn_list_other_boundaries() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(mk(
@@ -1655,6 +1688,8 @@ fn test_compaction_without_counts() {
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage: None,
         rows: vec![TrajectoryRow::Turn(mk(
             1,

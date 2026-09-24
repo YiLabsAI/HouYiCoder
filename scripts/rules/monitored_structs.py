@@ -37,7 +37,9 @@ ACTIVE_OWNERS = {
         # Transcript took the ordered frame log (one field). The trajectory
         # pane's five parallel fields (drill level, cursor, body length, the
         # drilled row, the background-row flag) became one TrajectoryPaneState
-        # owner, so the pane's position has one reason to change.
+        # owner, and the selected turn lives inside it rather than joining the
+        # shell: the selection and the cursor that must agree are kept
+        # consistent by the same transitions.
         "fields": 144,
         "mut_app": 44,
     },

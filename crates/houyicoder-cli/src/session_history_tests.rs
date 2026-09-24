@@ -4,6 +4,13 @@
 
 use super::*;
 use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
+use houyicoder_memory::LocalFileBackend;
+use houyicoder_session::SessionStore;
+
+/// A cancel flag no read sets: a test drives the read to its end.
+fn live() -> std::sync::atomic::AtomicBool {
+    std::sync::atomic::AtomicBool::new(false)
+}
 
 fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -17,9 +24,6 @@ fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
 
 /// A session of the given number of turns, each a user input then an answer.
 fn session_of(turns: usize) -> (SessionHistory, SessionId, std::path::PathBuf) {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
     let root = std::env::temp_dir().join(format!(
         "houyi_history_page_{}_{}",
         SessionId::new(),
@@ -78,7 +82,7 @@ fn test_tail_page_keeps_turns() {
     );
     assert!(!page.oldest_partial, "the oldest turn is whole");
     assert!(
-        page.older_anchor.is_some(),
+        page.oldest_anchor.is_some(),
         "older turns remain and the anchor points at them"
     );
 }
@@ -88,7 +92,11 @@ fn test_tail_page_keeps_turns() {
 fn test_older_page_continues() {
     let (history, _, _) = session_of(10);
     let tail = history.tail_turns(3, PAGE_MAX_BYTES);
-    let older = history.turns_before(tail.older_anchor.expect("anchor"), 3, PAGE_MAX_BYTES);
+    let older = history.turns_before(
+        tail.oldest_anchor.expect("anchor").byte_offset,
+        3,
+        PAGE_MAX_BYTES,
+    );
     let prompts: Vec<String> = older
         .events
         .iter()
@@ -100,13 +108,197 @@ fn test_older_page_continues() {
     assert_eq!(prompts, vec!["prompt 4", "prompt 5", "prompt 6"]);
 }
 
+/// The head page is read from the other end: it keeps the session's first
+/// turns, and it carries no anchor because nothing sits behind it.
+#[test]
+fn test_head_page_keeps_first() {
+    let (history, _, _) = session_of(10);
+    let page = history.head_turns(None, 3, PAGE_MAX_BYTES, &live());
+    let prompts: Vec<String> = page
+        .events
+        .iter()
+        .filter_map(|e| match &e.entry.event {
+            SessionEvent::UserInput { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        vec!["prompt 0", "prompt 1", "prompt 2"],
+        "the head page holds the oldest turns, not the newest"
+    );
+    assert_eq!(
+        page.oldest_anchor, None,
+        "nothing older than the head is readable"
+    );
+    assert!(!page.oldest_partial, "the head starts at a whole turn");
+    assert_eq!(page.turn_count(), 3);
+}
+
+/// An anchor is checkable: the id at its offset is what says the bytes still
+/// describe the turn the anchor named.
+#[test]
+fn test_anchor_holds_its_turn() {
+    let (history, _, _) = session_of(10);
+    let page = history.tail_turns(3, PAGE_MAX_BYTES);
+    let anchor = page.oldest_anchor.expect("a page behind the tail");
+    assert!(
+        history.anchor_holds(anchor),
+        "the anchor names the turn at its offset"
+    );
+    let other_id = TurnAnchor {
+        user_input_id: EventId::new(),
+        ..anchor
+    };
+    assert!(
+        !history.anchor_holds(other_id),
+        "a different id is not that turn"
+    );
+    let inside_a_line = TurnAnchor {
+        byte_offset: anchor.byte_offset + 1,
+        ..anchor
+    };
+    assert!(
+        !history.anchor_holds(inside_a_line),
+        "an offset inside a line does not open the turn"
+    );
+}
+
+/// A log smaller than the page is the whole head, and still reports no anchor.
+#[test]
+fn test_head_page_at_end() {
+    let (history, _, _) = session_of(2);
+    let page = history.head_turns(None, 5, PAGE_MAX_BYTES, &live());
+    assert_eq!(page.turn_count(), 2);
+    assert_eq!(page.oldest_anchor, None);
+}
+
+/// A cleared session counts only what came after the clear, so its head is the
+/// first turn after the event that began the epoch, not the log's first turn.
+#[test]
+fn test_head_page_after_clear() {
+    let root = std::env::temp_dir().join(format!(
+        "houyi_history_head_clear_{}_{}",
+        SessionId::new(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let session = SessionId::new();
+    for i in 0..4u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            session,
+            ..ev(
+                i * 1000,
+                SessionEvent::UserInput {
+                    text: format!("before {i}"),
+                },
+            )
+        }))
+        .expect("append before");
+    }
+    let clear = SessionLogEntry {
+        session,
+        ..ev(5000, SessionEvent::ContextCleared { prior_turn: 4 })
+    };
+    let clear_id = clear.id;
+    rt.block_on(store.append(clear)).expect("append the clear");
+    for i in 0..3u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            session,
+            ..ev(
+                6000 + i * 1000,
+                SessionEvent::UserInput {
+                    text: format!("after {i}"),
+                },
+            )
+        }))
+        .expect("append after");
+    }
+
+    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let page = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &live());
+    let prompts: Vec<String> = page
+        .events
+        .iter()
+        .filter_map(|e| match &e.entry.event {
+            SessionEvent::UserInput { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        vec!["after 0", "after 1", "after 2"],
+        "the head is the history the session counts, not the file"
+    );
+}
+
+/// An epoch the log does not hold yields no page, so a caller shows nothing
+/// rather than the wrong history.
+#[test]
+fn test_head_page_unknown_epoch() {
+    let (history, _, _) = session_of(10);
+    let page = history.head_turns(Some(EventId::new()), 3, PAGE_MAX_BYTES, &live());
+    assert!(
+        page.events.is_empty(),
+        "an epoch that cannot be located is not answered with the log's start"
+    );
+}
+
+/// A first event wider than one read step must still open the head page: the
+/// forward walk grows its step rather than returning an empty page.
+#[test]
+fn test_head_page_wide_first() {
+    let root = std::env::temp_dir().join(format!(
+        "houyi_history_head_wide_{}_{}",
+        SessionId::new(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let session = SessionId::new();
+    let mut events = vec![SessionLogEntry {
+        session,
+        ..ev(
+            0,
+            SessionEvent::AssistantMessage {
+                text: "x".repeat(300 * 1024),
+                thinking: None,
+            },
+        )
+    }];
+    for i in 0..2u64 {
+        events.push(SessionLogEntry {
+            session,
+            ..ev(
+                1000 + i * 1000,
+                SessionEvent::UserInput {
+                    text: format!("prompt {i}"),
+                },
+            )
+        });
+    }
+    for event in events {
+        rt.block_on(store.append(event)).expect("append");
+    }
+    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let page = history.head_turns(None, 2, PAGE_MAX_BYTES, &live());
+    assert!(
+        page.turn_count() == 2,
+        "the wide first event does not hide the turns after it: {}",
+        page.turn_count()
+    );
+}
+
 /// A log smaller than a page yields everything and reports no older anchor.
 #[test]
 fn test_page_at_log_start() {
     let (history, _, _) = session_of(2);
     let page = history.tail_turns(5, PAGE_MAX_BYTES);
     assert_eq!(turns_opened(&page.events), 2);
-    assert_eq!(page.older_anchor, None, "nothing older to read");
+    assert_eq!(page.oldest_anchor, None, "nothing older to read");
     assert!(!page.oldest_partial);
 }
 
@@ -115,9 +307,6 @@ fn test_page_at_log_start() {
 /// has to grow rather than the page giving up.
 #[test]
 fn test_page_reads_wide_event() {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
     let root = std::env::temp_dir().join(format!(
         "houyi_history_wide_{}_{}",
         SessionId::new(),
@@ -174,9 +363,6 @@ fn test_page_reads_wide_event() {
 /// not read past it and show turns the session no longer counts.
 #[test]
 fn test_page_stops_at_clear() {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
     let root = std::env::temp_dir().join(format!(
         "houyi_history_clear_{}_{}",
         SessionId::new(),
@@ -225,7 +411,7 @@ fn test_page_stops_at_clear() {
         .collect();
     assert_eq!(prompts, vec!["after"], "the cleared turn is not shown");
     assert_eq!(
-        page.older_anchor, None,
+        page.oldest_anchor, None,
         "nothing older than the clear is readable"
     );
 }
@@ -235,9 +421,6 @@ fn test_page_stops_at_clear() {
 /// step forever and losing the valid history behind them.
 #[test]
 fn test_page_skips_corrupt_chunk() {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
     let root = std::env::temp_dir().join(format!(
         "houyi_history_corrupt_{}_{}",
         SessionId::new(),
@@ -296,9 +479,6 @@ fn test_page_skips_corrupt_chunk() {
 /// page rather than loop or read without bound.
 #[test]
 fn test_page_caps_oversized_event() {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
     let root = std::env::temp_dir().join(format!(
         "houyi_history_huge_{}_{}",
         SessionId::new(),
@@ -361,9 +541,6 @@ fn test_page_budget_reports_partial() {
 /// chain would measure the writer instead.
 #[test]
 fn test_long_log_page_bounded() {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
     let root = std::env::temp_dir().join(format!(
         "houyi_history_long_{}_{}",
         SessionId::new(),
@@ -427,5 +604,176 @@ fn test_long_log_page_bounded() {
     assert!(
         span < PAGE_MAX_BYTES,
         "and the bytes it holds stay under the page budget: {span}"
+    );
+}
+
+/// A turn whose opening event is wider than one read step still holds its
+/// anchor: a wide prompt must not read as a stale one, which would drop the
+/// window back to the tail on the next walk.
+#[test]
+fn test_anchor_holds_wide_turn() {
+    use houyicoder_memory::LocalFileBackend;
+    use houyicoder_session::SessionStore;
+
+    let root = std::env::temp_dir().join(format!(
+        "houyi_history_anchor_wide_{}_{}",
+        SessionId::new(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let session = SessionId::new();
+    let mut events = vec![SessionLogEntry {
+        session,
+        ..ev(
+            0,
+            SessionEvent::UserInput {
+                text: "plain".into(),
+            },
+        )
+    }];
+    for (offset, text) in [
+        (1000u64, "x".repeat(300 * 1024)),
+        (2000, "last".to_string()),
+    ] {
+        events.push(SessionLogEntry {
+            session,
+            ..ev(offset, SessionEvent::UserInput { text })
+        });
+    }
+    for event in events {
+        rt.block_on(store.append(event)).expect("append");
+    }
+    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let page = history.tail_turns(2, PAGE_MAX_BYTES);
+    let anchor = page
+        .oldest_anchor
+        .expect("the page starts at the wide turn");
+    assert!(
+        history.anchor_holds(anchor),
+        "the wide turn is the turn the anchor names"
+    );
+}
+
+/// A clear further back than a few chunks is still found: the head read walks
+/// to the event that began the history however far behind it sits, one chunk at
+/// a time, and counts every chunk as a read.
+#[test]
+fn test_head_page_far_clear() {
+    use houyicoder_memory::LocalFileBackend;
+    use houyicoder_session::SessionStore;
+
+    let root = std::env::temp_dir().join(format!(
+        "houyi_history_far_clear_{}_{}",
+        SessionId::new(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let session = SessionId::new();
+    let log = root.join(session.to_string()).join("log.jsonl");
+    std::fs::create_dir_all(log.parent().expect("log parent")).expect("mkdir session");
+    // A cleared history whose clear sits well beyond one scan chunk from the
+    // end, written directly: this measures the read, not the writer.
+    let mut body = String::with_capacity(20 * 1024 * 1024);
+    // A turn before the clear, so the history's first event is not the event
+    // that began the epoch and the head read has to walk back to it.
+    let before = SessionLogEntry {
+        session,
+        ..ev(
+            0,
+            SessionEvent::UserInput {
+                text: "cleared away".into(),
+            },
+        )
+    };
+    body.push_str(&serde_json::to_string(&before).expect("serialize"));
+    body.push('\n');
+    let clear = SessionLogEntry {
+        session,
+        ..ev(1, SessionEvent::ContextCleared { prior_turn: 1 })
+    };
+    let clear_id = clear.id;
+    body.push_str(&serde_json::to_string(&clear).expect("serialize"));
+    body.push('\n');
+    for i in 0..60_000u64 {
+        let entry = SessionLogEntry {
+            session,
+            ..ev(
+                1000 + i,
+                SessionEvent::UserInput {
+                    text: format!("prompt {i} {}", "x".repeat(200)),
+                },
+            )
+        };
+        body.push_str(&serde_json::to_string(&entry).expect("serialize"));
+        body.push('\n');
+    }
+    std::fs::write(&log, body).expect("write log");
+    assert!(
+        std::fs::metadata(&log).expect("stat").len() > 8 * 1024 * 1024,
+        "the clear has to sit beyond the old scan cap for this to prove anything"
+    );
+
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
+    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let (_, _, before) = history.read_stats();
+    let page = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &live());
+    let prompts: Vec<String> = page
+        .events
+        .iter()
+        .filter_map(|e| match &e.entry.event {
+            SessionEvent::UserInput { text } => {
+                Some(text.split(' ').nth(1).unwrap_or("").to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        vec!["0", "1", "2"],
+        "the head is the first turns after the clear, however far back it sits"
+    );
+    let (_, _, after) = history.read_stats();
+    assert!(
+        after - before > PAGE_MAX_BYTES,
+        "the walk to the clear is counted as reads: {before} then {after}"
+    );
+}
+
+/// A head read nobody waits for stops at its next chunk: a superseded walk
+/// must not keep reading a long log for a page that will be dropped.
+#[test]
+fn test_head_page_cancelled() {
+    use houyicoder_memory::LocalFileBackend;
+    use houyicoder_session::SessionStore;
+
+    let root = std::env::temp_dir().join(format!(
+        "houyi_history_head_cancel_{}_{}",
+        SessionId::new(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let session = SessionId::new();
+    for i in 0..3u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            session,
+            ..ev(
+                i * 1000,
+                SessionEvent::UserInput {
+                    text: format!("prompt {i}"),
+                },
+            )
+        }))
+        .expect("append");
+    }
+    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let cancelled = std::sync::atomic::AtomicBool::new(true);
+    let page = history.head_turns(None, 3, PAGE_MAX_BYTES, &cancelled);
+    assert!(
+        page.events.is_empty(),
+        "a cancelled head read returns no page rather than reading on"
     );
 }

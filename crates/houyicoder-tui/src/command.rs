@@ -133,6 +133,9 @@ impl App {
                 self.pane = Pane::Trajectory;
                 self.trajectory.set_level(0);
                 self.trajectory.set_turn_idx(0);
+                // No turn is selected yet: the pane opens on the tail and
+                // follows it until the user picks a row.
+                self.trajectory.clear_selection();
                 // Initialize cursor to tail; draw_content will clamp and persist
                 // it to the active row count on first render.
                 self.trajectory.set_cursor(usize::MAX);

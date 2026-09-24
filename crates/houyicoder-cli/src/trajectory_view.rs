@@ -203,6 +203,10 @@ fn build_summary(
         duration_secs,
         timing: session_timing,
         hidden_turns,
+        // A whole-log projection ends at the newest turn, so nothing newer is
+        // held back.
+        newer_hidden: 0,
+        history_generation: 0,
         subagent_usage,
         state: TrajectoryViewState::Ready,
         skipped_records: 0,

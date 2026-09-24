@@ -5,7 +5,19 @@
 
 use crate::state::App;
 use crate::state::enums::Pane;
+use crate::view::trajectory_pane;
 use crossterm::event::{KeyCode, KeyEvent};
+
+/// Record the turn the L0 cursor sits on, so a page that arrives under it can
+/// put the cursor back on the same turn instead of the same row index.
+fn note_selected_turn(app: &App) {
+    if app.trajectory.level() != 0 {
+        return;
+    }
+    if let Some(log) = app.trajectory_log.as_ref() {
+        trajectory_pane::note_selected_turn(&app.trajectory, &log.trajectory());
+    }
+}
 
 /// Handle a key when the /trajectory pane is active. Returns true if the key
 /// was consumed (the caller should not fall through to generic input).
@@ -31,6 +43,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                     }
                 }
                 app.trajectory.set_cursor(c.saturating_sub(1));
+                note_selected_turn(app);
             }
             true
         }
@@ -39,21 +52,49 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                 let c = app.trajectory.cursor();
                 let last = app.trajectory.list_len().saturating_sub(1);
                 app.trajectory.set_cursor((c + 1).min(last));
+                note_selected_turn(app);
             }
             true
         }
+        // At the turn list these are the ends of the history, not the ends of
+        // the loaded window: the window slides, so its first and last rows are
+        // only the first and last turns once the pane has read the head or the
+        // tail. At the record levels they stay the ends of the list in hand,
+        // which the window moves would otherwise re-point under the drill.
         KeyCode::Home => {
+            if app.trajectory.level() == 0
+                && let Some(log) = app.trajectory_log.as_ref()
+            {
+                log.load_earliest();
+                // The history's first turn, so the cursor lands on it once the
+                // head page arrives.
+                let generation = log.trajectory().history_generation;
+                app.trajectory.select_turn(1, generation);
+            }
             if app.trajectory.level() < 2 {
                 app.trajectory.set_cursor(0);
             }
             true
         }
         KeyCode::End => {
-            if app.trajectory.level() < 2 {
-                let len = app.trajectory.list_len();
-                if len > 0 {
-                    app.trajectory.set_cursor(len.saturating_sub(1));
+            match (app.trajectory.level(), app.trajectory_log.as_ref()) {
+                (0, Some(log)) => {
+                    log.return_to_tail();
+                    // The history's newest turn, so the cursor lands on it
+                    // once the tail page arrives. The cursor itself is left
+                    // alone: until then it names a row of the window being
+                    // replaced.
+                    let view = log.trajectory();
+                    app.trajectory
+                        .select_turn(view.total_turns, view.history_generation);
                 }
+                // A record list, or a turn list with no paged history: the
+                // rows in hand are the whole list, so the last one is the end.
+                (1, _) | (0, None) => {
+                    let last = app.trajectory.list_len().saturating_sub(1);
+                    app.trajectory.set_cursor(last);
+                }
+                _ => {}
             }
             true
         }

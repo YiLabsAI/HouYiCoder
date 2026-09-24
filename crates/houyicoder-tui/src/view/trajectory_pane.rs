@@ -18,6 +18,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::state::TrajectoryPaneState;
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::{now_epoch_secs, relative_time};
@@ -235,6 +236,14 @@ pub trait TrajectoryLog: Send + Sync {
     /// walks past the oldest loaded turn; an implementation with nothing older
     /// to load does nothing.
     fn load_older(&self) {}
+
+    /// Replace the window with the session's oldest turns. Called when the user
+    /// asks for the head; an implementation with nothing to page does nothing.
+    fn load_earliest(&self) {}
+
+    /// Replace the window with the newest turns. Called when the user asks to
+    /// return to the tail; an implementation that already shows it does nothing.
+    fn return_to_tail(&self) {}
 }
 
 /// Session-wide latency and work-time facts, computed once from the durable
@@ -335,6 +344,14 @@ pub struct TrajectoryView {
     /// How many turns sit before the loaded window. Non-zero means older
     /// history exists and has not been read yet.
     pub hidden_turns: usize,
+    /// How many turns sit after the loaded window. Non-zero means the window
+    /// has been walked back from the tail and newer turns are not loaded; End
+    /// returns to them.
+    pub newer_hidden: usize,
+    /// Which history these rows belong to. It changes when a clear starts a
+    /// new one, and the turn numbers of a new history name different turns,
+    /// so a selection made under the old one must not be restored.
+    pub history_generation: u64,
     /// What delegated sub-agents spent, when the session delegated any work.
     pub subagent_usage: Option<SubagentUsage>,
     /// Whether the rows below are loaded, still loading, or unavailable.
@@ -356,6 +373,39 @@ mod list;
 mod sample;
 use sample::sample_trajectory;
 
+/// Put the cursor on the turn the selection names, when the window in hand
+/// holds that turn.
+///
+/// A row index alone would name a different turn once a page arrived under it,
+/// which is why the selection is a turn number. A selection made in another
+/// history is dropped instead of restored: a clear starts a history whose turn
+/// numbers begin again, so the number would name a turn it does not mean.
+pub(crate) fn restore_selected_cursor(state: &TrajectoryPaneState, view: &TrajectoryView) {
+    if state.selected_generation() != view.history_generation {
+        state.clear_selection();
+        return;
+    }
+    let selected = state.selected_turn();
+    if selected == 0 {
+        return;
+    }
+    if let Some(index) = view
+        .rows
+        .iter()
+        .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.n == selected))
+    {
+        state.set_cursor(index);
+    }
+}
+
+/// Record the turn the L0 cursor sits on, so a page that arrives under it can
+/// put the cursor back on the same turn instead of the same row index.
+pub(crate) fn note_selected_turn(state: &TrajectoryPaneState, view: &TrajectoryView) {
+    if let Some(TrajectoryRow::Turn(turn)) = view.rows.get(state.cursor()) {
+        state.select_turn(turn.n, view.history_generation);
+    }
+}
+
 /// Main entry: dispatch on the drill level. Each level builder returns the
 /// header and footer to pin plus a scrollable body and the body line the
 /// selection sits on; header + footer stay pinned so the key hints never scroll
@@ -371,6 +421,11 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         .map(|l| l.trajectory())
         .unwrap_or_else(|| std::sync::Arc::new(sample_trajectory()));
     let level = app.trajectory.level();
+    // The window slides, so the selection is a turn number and the row is
+    // found from it again rather than carried as an index.
+    if level == 0 {
+        restore_selected_cursor(&app.trajectory, &traj);
+    }
     let cursor = app.trajectory.cursor();
     let turn_idx = app.trajectory.turn_idx();
     let (header, body, footer, sel_line) = match level {
@@ -521,5 +576,4 @@ fn ruler_line(total_ms: u64, width: usize) -> Line<'static> {
 }
 
 #[cfg(test)]
-#[path = "trajectory_pane_tests.rs"]
 mod tests;

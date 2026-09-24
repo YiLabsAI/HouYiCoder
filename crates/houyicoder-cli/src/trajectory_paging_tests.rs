@@ -2,9 +2,14 @@
 //! session-level totals that the window must not narrow.
 
 use super::*;
-use crate::trajectory_reader::{SessionLogTrajectory, TRAJECTORY_PAGE_TURNS};
-use houyicoder_context::{EventId, SessionLogEntry};
+use crate::session_history::SessionHistory;
+use crate::trajectory_reader::{RESIDENT_PAGES, SessionLogTrajectory, TRAJECTORY_PAGE_TURNS};
+use houyicoder_context::{EventId, SessionId, SessionLogEntry};
+use houyicoder_memory::LocalFileBackend;
+use houyicoder_session::SessionStore;
 use houyicoder_tui::view::trajectory_pane::TrajectoryLog as _;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -60,9 +65,45 @@ fn test_tail_window_limits() {
     assert_eq!(unlimited.hidden_turns, 0);
 }
 
+/// Each turn row's number with the user input it names, in order.
+fn turn_rows(view: &TrajectoryView) -> Vec<(usize, String)> {
+    view.rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some((turn.n, turn.user_input.clone())),
+            TrajectoryRow::Bg(_) => None,
+        })
+        .collect()
+}
+
+/// The session turn numbers of a view's rows, in order.
+fn turn_numbers(view: &TrajectoryView) -> Vec<usize> {
+    view.rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.n),
+            TrajectoryRow::Bg(_) => None,
+        })
+        .collect()
+}
+
+/// A reader over the given store, with the history reader it pages, so a test
+/// can assert on what the reader asked the disk for.
+fn reader_of(
+    store: &std::sync::Arc<houyicoder_session::SessionStore>,
+    sid: SessionId,
+) -> (SessionLogTrajectory, std::sync::Arc<SessionHistory>) {
+    let log: std::sync::Arc<dyn houyicoder_api::session::SessionLog> = store.clone();
+    let history = std::sync::Arc::new(SessionHistory::new(log.clone(), sid));
+    (
+        SessionLogTrajectory::with_history(history.clone(), log, sid, "test".into()),
+        history,
+    )
+}
+
 /// Pump the reader until its page lands. A draw never reads the log, so the
 /// first frames after a page is asked for report that they are loading.
-fn pump(reader: &SessionLogTrajectory) -> std::sync::Arc<TrajectoryView> {
+fn pump(reader: &SessionLogTrajectory) -> Arc<TrajectoryView> {
     for _ in 0..400 {
         let view = reader.trajectory();
         if view.state == TrajectoryViewState::Ready {
@@ -78,15 +119,11 @@ fn pump(reader: &SessionLogTrajectory) -> std::sync::Arc<TrajectoryView> {
 /// re-read and re-folded per draw.
 #[test]
 fn test_reader_cache_invalidates() {
-    use houyicoder_context::{EventId, SessionLogEntry};
-    use houyicoder_session::SessionStore;
-    use std::sync::Arc;
-
     let store = Arc::new(SessionStore::new(Box::new(
         houyicoder_memory::InMemoryBackend::new(),
     )));
-    let sid = houyicoder_context::SessionId::new();
-    let reader = SessionLogTrajectory::new(store.clone(), sid, "test".into());
+    let sid = SessionId::new();
+    let (reader, _history) = reader_of(&store, sid);
 
     // Empty log: one turn-less view, stable across reads.
     let first = pump(&reader);
@@ -121,14 +158,10 @@ fn test_reader_cache_invalidates() {
 /// page appears once the user walks past the oldest loaded turn.
 #[test]
 fn test_reader_loads_older() {
-    use houyicoder_context::{EventId, SessionLogEntry};
-    use houyicoder_session::SessionStore;
-    use std::sync::Arc;
-
     let store = Arc::new(SessionStore::new(Box::new(
         houyicoder_memory::InMemoryBackend::new(),
     )));
-    let sid = houyicoder_context::SessionId::new();
+    let sid = SessionId::new();
     for i in 0..(TRAJECTORY_PAGE_TURNS + 5) {
         futures::executor::block_on(store.append(SessionLogEntry {
             id: EventId::new(),
@@ -141,7 +174,7 @@ fn test_reader_loads_older() {
         }))
         .expect("append");
     }
-    let reader = SessionLogTrajectory::new(store.clone(), sid, "test".into());
+    let (reader, _history) = reader_of(&store, sid);
     let first = pump(&reader);
     assert_eq!(first.rows.len(), TRAJECTORY_PAGE_TURNS);
     assert_eq!(
@@ -480,24 +513,32 @@ fn test_subagent_usage_unknown() {
 /// A file-backed reader, which is the path the product runs on. The
 /// in-memory store takes the mirror branch, so a bug in the page path would
 /// not show up there.
-fn disk_reader(
+fn disk_reader(turns: usize) -> (Arc<SessionStore>, SessionLogTrajectory, SessionId) {
+    let (store, reader, sid, _history, _root) = disk_reader_at(turns);
+    (store, reader, sid)
+}
+
+/// The same reader, with the directory its log lives in, so a test can change
+/// the bytes the reader will later read.
+fn disk_reader_at(
     turns: usize,
 ) -> (
-    std::sync::Arc<houyicoder_session::SessionStore>,
+    Arc<SessionStore>,
     SessionLogTrajectory,
-    houyicoder_context::SessionId,
+    SessionId,
+    Arc<SessionHistory>,
+    PathBuf,
 ) {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
     let root = std::env::temp_dir().join(format!(
         "houyi_disk_reader_{}_{}",
-        houyicoder_context::SessionId::new(),
+        SessionId::new(),
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create temp root");
-    let store = std::sync::Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(root))));
-    let sid = houyicoder_context::SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(
+        root.clone(),
+    ))));
+    let sid = SessionId::new();
     let rt = tokio::runtime::Runtime::new().expect("test runtime");
     for i in 0..turns {
         rt.block_on(store.append(SessionLogEntry {
@@ -511,8 +552,8 @@ fn disk_reader(
         }))
         .expect("append");
     }
-    let reader = SessionLogTrajectory::new(store.clone(), sid, "test".into());
-    (store, reader, sid)
+    let (reader, history) = reader_of(&store, sid);
+    (store, reader, sid, history, root)
 }
 
 /// A page read off the disk is refreshed when the session appends: the pane
@@ -580,24 +621,24 @@ fn test_disk_turn_numbers_continue() {
 /// draw path.
 #[test]
 fn test_draw_reads_nothing() {
-    let (_store, reader, _sid) = disk_reader(150);
+    let (_store, reader, _sid, history, _root) = disk_reader_at(150);
     let first = pump(&reader);
     assert_eq!(first.state, TrajectoryViewState::Ready);
     let (whole_after_load, reads_after_load) = {
-        let (whole, reads, _) = reader.history().read_stats();
+        let (whole, reads, _) = history.read_stats();
         (whole, reads)
     };
-    let mut previous = std::sync::Arc::clone(&first);
+    let mut previous = Arc::clone(&first);
     for _ in 0..1000 {
         let next = reader.trajectory();
         assert_eq!(next.state, TrajectoryViewState::Ready);
         assert!(
-            std::sync::Arc::ptr_eq(&previous, &next),
+            Arc::ptr_eq(&previous, &next),
             "a settled window is served from the cache, not rebuilt"
         );
         previous = next;
     }
-    let (whole, reads, _) = reader.history().read_stats();
+    let (whole, reads, _) = history.read_stats();
     assert_eq!(whole, whole_after_load, "no draw read the log whole");
     assert_eq!(reads, reads_after_load, "and none read the log at all");
 }
@@ -693,5 +734,647 @@ fn test_clear_drops_old_epoch() {
     assert!(
         settled,
         "the new epoch's page lands rather than loading forever"
+    );
+}
+
+/// The window slides rather than grows: walking back far enough drops the page
+/// furthest from the walk, which is the newest one. The rows that remain keep
+/// their session turn numbers, so a caller that recorded the turn it was on can
+/// still find it after the page under it moved.
+#[test]
+fn test_evict_keeps_selection() {
+    let (_store, reader, _sid) = disk_reader(500);
+    let first = pump(&reader);
+    let numbers = turn_numbers(&first);
+    assert_eq!(
+        numbers.first().copied(),
+        Some(401),
+        "the tail page opens at 401"
+    );
+    assert_eq!(numbers.last().copied(), Some(500));
+
+    // The user is on the oldest resident turn when the walk back starts, so
+    // that is the turn whose place must survive the page that arrives.
+    let selected = numbers[0];
+    reader.load_older();
+    let wider = pump(&reader);
+    let numbers = turn_numbers(&wider);
+    assert!(
+        numbers.contains(&selected),
+        "the turn the user was on is still resident: {numbers:?}"
+    );
+    assert_eq!(
+        numbers.iter().position(|n| *n == selected),
+        Some(TRAJECTORY_PAGE_TURNS),
+        "it moved by the page that arrived, not by a row count"
+    );
+
+    // The next walk starts from the oldest turn of the wider window, and that
+    // walk is the one that slides: the newest page is dropped, and every number
+    // that remains is unchanged.
+    let selected = numbers[0];
+    reader.load_older();
+    let slid = pump(&reader);
+    let numbers = turn_numbers(&slid);
+    assert_eq!(numbers.first().copied(), Some(201));
+    assert_eq!(
+        numbers.last().copied(),
+        Some(400),
+        "the newest page was dropped"
+    );
+    assert!(!numbers.contains(&500), "the far end is the one that goes");
+    assert!(
+        numbers.contains(&selected),
+        "the turn the user was on stays"
+    );
+}
+
+/// Walking back through a long session keeps the window contiguous and bounded:
+/// no gap, no repeated turn, and no more pages resident than the bound allows.
+#[test]
+fn test_scroll_beyond_two_pages() {
+    let (_store, reader, _sid) = disk_reader(500);
+    drop(pump(&reader));
+    let mut previous_first = turn_numbers(&reader.trajectory())[0];
+    for _ in 0..5 {
+        reader.load_older();
+        let view = pump(&reader);
+        let numbers = turn_numbers(&view);
+        assert!(
+            !numbers.is_empty(),
+            "the window never empties while walking back"
+        );
+        for window in numbers.windows(2) {
+            assert_eq!(
+                window[1],
+                window[0] + 1,
+                "no gap and no repeat: {numbers:?}"
+            );
+        }
+        assert!(
+            numbers.len() <= RESIDENT_PAGES * TRAJECTORY_PAGE_TURNS,
+            "the resident window stays bounded: {}",
+            numbers.len()
+        );
+        assert!(
+            numbers[0] <= previous_first,
+            "the walk only moves back: {} then {}",
+            previous_first,
+            numbers[0]
+        );
+        previous_first = numbers[0];
+    }
+    assert_eq!(
+        previous_first, 1,
+        "the walk reaches the session's first turn"
+    );
+}
+
+/// Home replaces the window with the head of the log in one step, without
+/// reading the whole log into it.
+#[test]
+fn test_home_jumps_to_earliest() {
+    let (_store, reader, _sid) = disk_reader(500);
+    let first = pump(&reader);
+    assert_eq!(turn_numbers(&first)[0], 401, "the pane opens at the tail");
+
+    reader.load_earliest();
+    let head = pump(&reader);
+    let numbers = turn_numbers(&head);
+    assert_eq!(
+        numbers.first().copied(),
+        Some(1),
+        "Home lands on the first turn"
+    );
+    assert_eq!(numbers.last().copied(), Some(TRAJECTORY_PAGE_TURNS));
+    assert_eq!(head.hidden_turns, 0, "nothing sits before the head");
+    assert_eq!(head.newer_hidden, 400, "and the rest is newer, not older");
+}
+
+/// End puts the tail back after the window has been walked away from it.
+#[test]
+fn test_end_returns_to_tail() {
+    let (_store, reader, _sid) = disk_reader(500);
+    drop(pump(&reader));
+    reader.load_earliest();
+    let head = pump(&reader);
+    assert_eq!(head.newer_hidden, 400, "the window is at the head");
+
+    reader.return_to_tail();
+    let tail = pump(&reader);
+    let numbers = turn_numbers(&tail);
+    assert_eq!(
+        numbers.last().copied(),
+        Some(500),
+        "End lands on the newest turn"
+    );
+    assert_eq!(tail.newer_hidden, 0, "nothing newer than the tail");
+    assert_eq!(tail.hidden_turns, 400);
+}
+
+/// An append must not move a window the user walked back to: the new turn is
+/// counted as newer, and the resident rows keep their place and their numbers.
+#[test]
+fn test_append_after_evict() {
+    let (store, reader, sid) = disk_reader(500);
+    drop(pump(&reader));
+    for _ in 0..2 {
+        reader.load_older();
+        drop(pump(&reader));
+    }
+    let before = turn_numbers(&pump(&reader));
+    assert_eq!(before.first().copied(), Some(201));
+    assert!(!before.contains(&500), "the slide dropped the tail page");
+    let newer_before = reader.trajectory().newer_hidden;
+    assert!(newer_before > 0, "the window is behind the tail");
+
+    futures::executor::block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 999_000,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "prompt 500".into(),
+        },
+    }))
+    .expect("append");
+
+    let after = pump(&reader);
+    assert_eq!(
+        turn_numbers(&after),
+        before,
+        "an append does not move a window the user walked back to"
+    );
+    assert_eq!(
+        after.newer_hidden,
+        newer_before + 1,
+        "the appended turn is counted as newer, not read"
+    );
+    assert_eq!(after.total_turns, 501);
+}
+
+/// An anchor whose bytes no longer describe the turn it named is refused, not
+/// paged: the window is dropped and the tail read again, because nothing
+/// resident can be trusted to abut a log whose offsets moved.
+#[test]
+fn test_stale_anchor_refused() {
+    let (_store, reader, sid, _history, root) = disk_reader_at(150);
+    let first = pump(&reader);
+    assert_eq!(
+        turn_numbers(&first)[0],
+        51,
+        "the tail page opens at turn 51"
+    );
+
+    // The bytes the anchor names are gone: the log is rewritten short, so the
+    // offset the anchor holds no longer lands on its turn.
+    let log = root.join(sid.to_string()).join("log.jsonl");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&log)
+        .expect("open the log");
+    file.set_len(1024).expect("truncate the log");
+
+    reader.load_older();
+    let after = pump(&reader);
+    let numbers = turn_numbers(&after);
+    assert!(
+        numbers.first().copied().unwrap_or(0) > 100,
+        "the refused anchor drops the window back to the tail: {numbers:?}"
+    );
+}
+
+/// A clear starts a new history whose turn numbers begin again, so the view
+/// says which history it shows: a caller compares that to tell whether a turn
+/// number it holds still names the same turn.
+#[test]
+fn test_clear_moves_history_generation() {
+    let (store, reader, sid) = disk_reader(5);
+    let first = pump(&reader);
+    let before = first.history_generation;
+
+    store.reset_trajectory(sid);
+    futures::executor::block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 999_000,
+        prev_hash: None,
+        event: SessionEvent::ContextCleared { prior_turn: 5 },
+    }))
+    .expect("append the clear");
+
+    let after = pump(&reader);
+    assert!(
+        after.history_generation > before,
+        "a clear starts a new history: {before} then {}",
+        after.history_generation
+    );
+}
+
+/// A history whose start cannot be located leaves the window where it is:
+/// Home must not replace a real window with an empty list.
+/// A reader over a history whose start cannot be named: its first line is wider
+/// than one range read, so the head read finds no event to name it with.
+fn unlocatable_head_reader() -> SessionLogTrajectory {
+    use houyicoder_memory::LocalFileBackend;
+    use houyicoder_session::SessionStore;
+
+    let root = std::env::temp_dir().join(format!(
+        "houyi_traj_head_unknown_{}_{}",
+        SessionId::new(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let store = std::sync::Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(root))));
+    let sid = SessionId::new();
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    rt.block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::AssistantMessage {
+            text: "x".repeat(1100 * 1024),
+            thinking: None,
+        },
+    }))
+    .expect("append the wide event");
+    for i in 0..3u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: 1000 + i * 1000,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: format!("prompt {i}"),
+            },
+        }))
+        .expect("append");
+    }
+    let (reader, _history) = reader_of(&store, sid);
+    reader
+}
+
+#[test]
+fn test_unlocatable_head_keeps_window() {
+    let reader = unlocatable_head_reader();
+    let before = turn_numbers(&pump(&reader));
+    assert!(!before.is_empty(), "the tail window is real");
+
+    reader.load_earliest();
+    let after = turn_numbers(&pump(&reader));
+    assert_eq!(
+        after, before,
+        "an unlocatable head leaves the window as it was"
+    );
+}
+
+/// A store whose log reads panic, so the reader's worker dies without sending a
+/// page. Nothing else about the store changes.
+fn panicking_reader() -> SessionLogTrajectory {
+    use houyicoder_context::{
+        CheckpointId, CheckpointManifest, ContextBackend, ContextError, ReverseRead, SessionId,
+        SessionLogEntry,
+    };
+
+    /// The same future type the trait spells, without depending on the crate
+    /// that defines its alias.
+    type PFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+    struct PanicReads(houyicoder_memory::InMemoryBackend);
+
+    impl ContextBackend for PanicReads {
+        fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
+            self.0.append(event)
+        }
+
+        fn read_range(
+            &self,
+            session: SessionId,
+            from: Option<EventId>,
+            to: Option<EventId>,
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+            self.0.read_range(session, from, to)
+        }
+
+        fn replay(
+            &self,
+            session: SessionId,
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+            self.0.replay(session)
+        }
+
+        fn write_checkpoint(
+            &self,
+            manifest: CheckpointManifest,
+        ) -> PFut<'_, Result<CheckpointId, ContextError>> {
+            self.0.write_checkpoint(manifest)
+        }
+
+        fn read_checkpoint(
+            &self,
+            id: CheckpointId,
+        ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
+            self.0.read_checkpoint(id)
+        }
+
+        fn list_checkpoints(
+            &self,
+            session: SessionId,
+        ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
+            self.0.list_checkpoints(session)
+        }
+
+        fn supports_log_windows(&self) -> bool {
+            true
+        }
+
+        fn log_size(&self, _session: SessionId) -> u64 {
+            // The walk only needs a non-zero size to start; the read it asks
+            // for next is the one that fails.
+            4096
+        }
+
+        fn read_lines_reverse(&self, _session: SessionId, _from: u64, _max: u64) -> ReverseRead {
+            panic!("this log read is broken")
+        }
+    }
+
+    // The log is written through the backend directly: the store's own append
+    // reads the log back to link the chain, and every read panics here.
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let sid = SessionId::new();
+    let inner = houyicoder_memory::InMemoryBackend::new();
+    for i in 0..3u64 {
+        rt.block_on(ContextBackend::append(
+            &inner,
+            SessionLogEntry {
+                id: EventId::new(),
+                session: sid,
+                ts: i * 1000,
+                prev_hash: None,
+                event: SessionEvent::UserInput {
+                    text: format!("prompt {i}"),
+                },
+            },
+        ))
+        .expect("append");
+    }
+    let store = std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(PanicReads(
+        inner,
+    ))));
+    let (reader, _history) = reader_of(&store, sid);
+    reader
+}
+
+/// A read whose worker dies is retried, and a run of them is reported: a pane
+/// that kept serving the loading view of a read that never arrived would stay
+/// on it for the rest of the session.
+#[test]
+fn test_broken_read_ends_failed() {
+    let reader = panicking_reader();
+    let mut seen = Vec::new();
+    for _ in 0..80 {
+        let view = reader.trajectory();
+        if seen.last() != Some(&view.state) {
+            seen.push(view.state);
+        }
+        if view.state == TrajectoryViewState::Failed {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        seen.contains(&TrajectoryViewState::Failed),
+        "a broken read ends in a reported failure rather than loading forever: {seen:?}"
+    );
+}
+
+/// A read serves the intent that dispatched it. Home during the first read
+/// replaces it rather than waiting for the tail the user just walked away from.
+#[test]
+fn test_home_supersedes_first_read() {
+    let (_store, reader, _sid) = disk_reader(500);
+    // One draw dispatches the tail read and leaves it in flight.
+    assert_eq!(reader.trajectory().state, TrajectoryViewState::Loading);
+    reader.load_earliest();
+
+    let head = pump(&reader);
+    assert_eq!(
+        turn_numbers(&head).first().copied(),
+        Some(1),
+        "Home's own read lands, not the tail it replaced"
+    );
+}
+
+/// End during a head read replaces it: the user asked for the newest turns, and
+/// a head page arriving later must not move the window back.
+#[test]
+fn test_end_supersedes_head_read() {
+    let (_store, reader, _sid) = disk_reader(500);
+    drop(pump(&reader));
+    reader.load_earliest();
+    reader.return_to_tail();
+
+    let tail = pump(&reader);
+    let numbers = turn_numbers(&tail);
+    assert_eq!(
+        numbers.last().copied(),
+        Some(500),
+        "the tail is what End asked for: {numbers:?}"
+    );
+    assert_eq!(tail.newer_hidden, 0, "and the window follows it");
+}
+
+/// End during an older read replaces it too: the older page must not be applied
+/// onto the window End just put back.
+#[test]
+fn test_end_supersedes_older_read() {
+    let (_store, reader, _sid) = disk_reader(500);
+    drop(pump(&reader));
+    reader.load_older();
+    reader.return_to_tail();
+
+    let tail = pump(&reader);
+    let numbers = turn_numbers(&tail);
+    assert_eq!(
+        numbers.first().copied(),
+        Some(401),
+        "the tail page: {numbers:?}"
+    );
+    assert_eq!(numbers.last().copied(), Some(500));
+}
+
+/// A walk back during a tail refresh replaces the refresh rather than waiting
+/// for it: the user's Up is not dropped because the session appended.
+#[test]
+fn test_older_supersedes_tail_refresh() {
+    let (store, reader, sid) = disk_reader(500);
+    drop(pump(&reader));
+    futures::executor::block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 999_000,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "prompt 500".into(),
+        },
+    }))
+    .expect("append");
+
+    // One draw dispatches the refresh the append called for, leaving it in
+    // flight, and the walk back then asks for the older page.
+    assert_eq!(reader.trajectory().state, TrajectoryViewState::LoadingOlder);
+    reader.load_older();
+
+    let view = pump(&reader);
+    let rows = turn_rows(&view);
+    assert!(
+        rows.len() > TRAJECTORY_PAGE_TURNS && rows.first().unwrap().0 < 401,
+        "the walk back loaded an older page instead of waiting for the refresh: {rows:?}"
+    );
+    for (n, input) in &rows {
+        assert_eq!(
+            input,
+            &format!("prompt {}", n - 1),
+            "every row still names its own turn: {rows:?}"
+        );
+    }
+    assert_eq!(
+        view.newer_hidden, 1,
+        "the appended turn is newer than the window, not folded into it"
+    );
+}
+
+/// An append while a page is in hand must not renumber it: the rows keep the
+/// numbers their page was read with, and the turn that is not loaded is
+/// reported as newer rather than taking the newest number.
+#[test]
+fn test_append_keeps_window_numbers() {
+    let (store, reader, sid) = disk_reader(500);
+    drop(pump(&reader));
+    futures::executor::block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 999_000,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "prompt 500".into(),
+        },
+    }))
+    .expect("append");
+
+    // The draw after the append asks for a refreshed page; the one in hand is
+    // the old one until it lands.
+    let stale = reader.trajectory();
+    assert_eq!(stale.state, TrajectoryViewState::LoadingOlder);
+    assert_eq!(
+        stale.newer_hidden, 1,
+        "the appended turn is newer, not renumbered into the window"
+    );
+    let last = turn_rows(&stale).pop().expect("a turn row");
+    assert_eq!(
+        last,
+        (500, "prompt 499".to_string()),
+        "the newest row keeps the number it was read with"
+    );
+
+    // Walking back keeps every number naming its own turn.
+    reader.load_older();
+    let view = pump(&reader);
+    for (n, input) in turn_rows(&view) {
+        assert_eq!(
+            input,
+            format!("prompt {}", n - 1),
+            "row {n} names its own turn"
+        );
+    }
+    assert_eq!(view.newer_hidden, 1);
+}
+
+/// A clear that lands before the next draw leaves the window describing the
+/// history it ended. Walking back from it must drop that window rather than
+/// page behind it under the new history's name.
+#[test]
+fn test_clear_drops_older_walk() {
+    let (store, reader, sid) = disk_reader(150);
+    let first = pump(&reader);
+    assert!(
+        first.hidden_turns > 0,
+        "older turns exist to be walked back to"
+    );
+
+    // The clear lands with no draw in between, so the resident window is still
+    // the one the previous history was read for.
+    store.reset_trajectory(sid);
+    futures::executor::block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 999_000,
+        prev_hash: None,
+        event: SessionEvent::ContextCleared { prior_turn: 150 },
+    }))
+    .expect("append the clear");
+    reader.load_older();
+
+    for _ in 0..200 {
+        let view = reader.trajectory();
+        let prompts: Vec<String> = view
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                TrajectoryRow::Turn(turn) => Some(turn.user_input.clone()),
+                TrajectoryRow::Bg(_) => None,
+            })
+            .collect();
+        assert!(
+            !prompts.iter().any(|p| p.starts_with("prompt ")),
+            "a cleared history's turns are never shown: {prompts:?}"
+        );
+        if view.state == TrajectoryViewState::Ready {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// A held key repeats, and a repeat asks for the same end again. Treating the
+/// repeat as a new intent would replace a read that never gets to finish, so a
+/// burst of one intent reads the log once rather than once per repeat.
+#[test]
+fn test_repeated_intent_reads_once() {
+    let (_store, reader, _sid, history, _root) = disk_reader_at(500);
+    drop(pump(&reader));
+    let (_, reads_before, _) = history.read_stats();
+    for _ in 0..100 {
+        reader.load_earliest();
+    }
+    let view = pump(&reader);
+    assert_eq!(view.state, TrajectoryViewState::Ready, "the head lands");
+    // A superseded worker stops at its next chunk; give the burst's strays a
+    // moment to do that before counting.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let (_, reads_after, _) = history.read_stats();
+    assert!(
+        reads_after - reads_before < 20,
+        "a hundred repeats of one intent read the log once, not once per repeat: {}",
+        reads_after - reads_before
+    );
+}
+
+/// Home before the first page lands, on a history whose start cannot be named:
+/// the pane falls back to the tail rather than dispatching a page it drops on
+/// every frame, which would leave it loading forever.
+#[test]
+fn test_home_before_first_page() {
+    let reader = unlocatable_head_reader();
+    reader.load_earliest();
+
+    let view = pump(&reader);
+    assert_eq!(view.state, TrajectoryViewState::Ready, "the pane settles");
+    assert!(
+        !view.rows.is_empty(),
+        "and the tail is what it has to show: {:?}",
+        turn_numbers(&view)
     );
 }

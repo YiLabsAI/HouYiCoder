@@ -191,13 +191,20 @@ pub(super) fn draw_turn_list(
         }
         _ => String::new(),
     };
-    let turns_label = if traj.hidden_turns > 0 {
-        format!(
-            "{} turns ({} older not loaded)",
-            traj.total_turns, traj.hidden_turns
-        )
-    } else {
+    // Both ends can be unloaded at once: the window is walked back from the
+    // tail, so the turns it dropped are newer than the ones it shows, not
+    // only older ones behind it.
+    let mut not_loaded = Vec::new();
+    if traj.hidden_turns > 0 {
+        not_loaded.push(format!("{} older not loaded", traj.hidden_turns));
+    }
+    if traj.newer_hidden > 0 {
+        not_loaded.push(format!("{} newer not loaded", traj.newer_hidden));
+    }
+    let turns_label = if not_loaded.is_empty() {
         format!("{} turns", traj.total_turns)
+    } else {
+        format!("{} turns ({})", traj.total_turns, not_loaded.join(", "))
     };
     let mut header = vec![line(vec![
         sp(turns_label, Color::Cyan),

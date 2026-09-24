@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{LenientRead, SessionEvent, SessionId, SessionLogEntry};
 
+mod head;
+
 /// The reverse-read chunk for the lazy index: 4 MB per index_chunk call.
 /// At 60 fps this completes a 310 MB / 90k-event log in ~1.5 s (77 chunks).
 const INDEX_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
@@ -99,19 +101,49 @@ pub(crate) const PAGE_READ_MAX_BYTES: u64 = 2 * PAGE_MAX_BYTES;
 /// time, so a page never holds more than the turns it needs.
 const PAGE_STEP_BYTES: u64 = 256 * 1024;
 
+/// The widest line one range read can name. The backend caps a single range
+/// read at a mebibyte, so a wider line cannot be read whole by growing the
+/// step: a caller that needs a whole line must give up instead of looping.
+pub(crate) const MAX_READABLE_LINE_BYTES: u64 = 1024 * 1024;
+
+/// A durable identity for one turn, and where its opening event sits.
+///
+/// The id is the identity; the offset is what makes the turn re-readable
+/// without an index. Both are needed: the id alone cannot seek, and the offset
+/// alone cannot say whether the bytes still describe the same turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TurnAnchor {
+    pub user_input_id: houyicoder_context::EventId,
+    pub byte_offset: u64,
+}
+
 /// A page of turns read backwards from a byte anchor.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct TurnPage {
     /// The page's events in log order.
     pub events: Vec<LocatedEvent>,
-    /// Where to continue reading older turns, or None at the log start.
-    pub older_anchor: Option<u64>,
+    /// The turn the page starts at, or None when it starts at the log's first
+    /// event. The anchor is what a caller holds to keep its place: a byte
+    /// offset alone cannot say whether the bytes still describe that turn.
+    pub oldest_anchor: Option<TurnAnchor>,
     /// True when the oldest turn in the page was cut short by the byte budget,
     /// so a caller must not present it as a whole turn.
     pub oldest_partial: bool,
     /// Lines in this page that did not parse. The page still holds the rest,
     /// so this is reported rather than treated as a failed read.
     pub skipped: usize,
+}
+
+impl TurnPage {
+    /// How many turns this page opens. A page is read as a count of turns, so
+    /// this is the unit a caller moves a window by: the tail page's count says
+    /// what it hides, and an older page's count says how far back it reached.
+    pub(crate) fn turn_count(&self) -> usize {
+        self.events
+            .iter()
+            .filter(|event| is_user_input(&event.entry))
+            .count()
+    }
 }
 
 /// A typed reader over one session's durable log.
@@ -280,6 +312,30 @@ impl SessionHistory {
         }
     }
 
+    /// Whether the bytes at an anchor still describe the turn the anchor names.
+    ///
+    /// A byte offset alone cannot say: the log is append-only, so only a
+    /// truncation or a rewrite moves the bytes, and a stale anchor read as if
+    /// it were the turn it named would show the wrong history. The id is what
+    /// makes the offset checkable, which is why an anchor carries both.
+    pub(crate) fn anchor_holds(&self, anchor: TurnAnchor) -> bool {
+        // The line at the anchor can be wider than one step, and a read whose
+        // budget cannot reach its end returns nothing, so the step doubles
+        // until it holds a line or the read is capped. Without this a wide
+        // turn would read as a stale anchor and drop the window to the tail.
+        let mut step = PAGE_STEP_BYTES;
+        loop {
+            let window = self.window(anchor.byte_offset, step);
+            if let Some(event) = window.events.first() {
+                return is_user_input(&event.entry) && event.entry.id == anchor.user_input_id;
+            }
+            if window.lines_read > 0 || step >= MAX_READABLE_LINE_BYTES {
+                return false;
+            }
+            step = step.saturating_mul(2);
+        }
+    }
+
     /// The newest complete turns, read backwards from the end of the log.
     ///
     /// A page is a count of turns, not a byte budget: one turn can be larger
@@ -405,17 +461,17 @@ impl SessionHistory {
         } else {
             (0, reached_start)
         };
-        let older_anchor = if at_epoch_start {
+        let oldest_anchor = if at_epoch_start {
             None
         } else {
             collected
                 .get(keep_from)
-                .map(|event| event.byte_offset)
-                .filter(|offset| *offset > 0)
+                .filter(|event| event.byte_offset > 0)
+                .and_then(anchor_of)
         };
         TurnPage {
             events: collected.split_off(keep_from),
-            older_anchor,
+            oldest_anchor,
             oldest_partial,
             skipped,
         }
@@ -532,6 +588,14 @@ fn parse_lines(lines: &[(u64, String)]) -> (Vec<LocatedEvent>, usize) {
         }
     }
     (events, skipped)
+}
+
+/// The anchor of the turn an event opens, when it opens one.
+fn anchor_of(event: &LocatedEvent) -> Option<TurnAnchor> {
+    is_user_input(&event.entry).then_some(TurnAnchor {
+        user_input_id: event.entry.id,
+        byte_offset: event.byte_offset,
+    })
 }
 
 /// Whether an event opens a user turn, the boundary a page counts.
