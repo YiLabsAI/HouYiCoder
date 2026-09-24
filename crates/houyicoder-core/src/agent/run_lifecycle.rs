@@ -287,6 +287,7 @@ impl Runner {
         let result = self
             .drive_loop(session, self.user_turn(), Usage::default(), &token)
             .await;
+        self.memory.drain_primary_changes();
         self.record_run_completion(session, Some(started), &result)
             .await;
         self.emit_run_result(&result);
