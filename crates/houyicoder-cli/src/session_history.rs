@@ -348,10 +348,6 @@ impl SessionHistory {
     /// the oldest turn it returns is whole. max_bytes bounds the walk; when
     /// it runs out the oldest turn is cut, and the page says so rather than
     /// presenting a fragment as a turn.
-    pub(crate) fn tail_turns(&self, page_turns: usize, max_bytes: u64) -> TurnPage {
-        self.turns_before(self.log_size(), page_turns, max_bytes)
-    }
-
     /// The complete turns immediately older than a byte anchor.
     ///
     /// The walk stops at the log's start and at a context clear, because a

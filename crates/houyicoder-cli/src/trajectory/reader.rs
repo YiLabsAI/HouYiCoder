@@ -20,6 +20,7 @@ use houyicoder_tui::view::trajectory_pane::{
 use crate::session_history::{PAGE_MAX_BYTES, SessionHistory, TurnAnchor, TurnPage};
 
 mod detail;
+mod drain;
 mod window_view;
 
 use super::view::project;
@@ -67,8 +68,13 @@ struct DurableWatermark {
 /// Which end of the log a page read starts from.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PageRead {
-    /// The newest turns, read backwards from EOF.
-    Tail,
+    /// The newest turns, read backwards from the byte the log ended at when
+    /// the read was dispatched.
+    ///
+    /// The end is carried for the same reason a delta carries it: a session
+    /// that appends while the read is in flight would otherwise come back with
+    /// events past the watermark the page is applied under.
+    Tail { to: u64 },
     /// What the log appended between two bytes, read forward from the first.
     ///
     /// The end is the log size when the read was dispatched, not the size at
@@ -237,7 +243,7 @@ impl SessionLogTrajectory {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let page = match read {
-                PageRead::Tail => history.tail_turns(page_turns, PAGE_MAX_BYTES),
+                PageRead::Tail { to } => history.turns_before(to, page_turns, PAGE_MAX_BYTES),
                 PageRead::Append { from, to } => {
                     let window = history.window(from, to.saturating_sub(from));
                     TurnPage {
@@ -318,149 +324,6 @@ impl SessionLogTrajectory {
     fn drop_view(state: &mut TrajectoryState) {
         state.view = None;
         state.view_state = None;
-    }
-
-    /// Take a finished page, if one is ready. Called from a draw, so it never
-    /// blocks.
-    fn drain(&self, state: &mut TrajectoryState, current: DurableWatermark) {
-        let Some(pending) = state.pending.as_ref() else {
-            return;
-        };
-        match pending.rx.try_recv() {
-            Ok(outcome) => {
-                let read = pending.read;
-                let dispatched = pending.dispatched;
-                let total_turns = pending.total_turns;
-                state.pending = None;
-                state.failed = false;
-                state.read_failures = 0;
-                if dispatched.epoch != current.epoch {
-                    // The session was cleared while this read was in flight.
-                    Self::drop_view(state);
-                    return;
-                }
-                match read {
-                    // An older page is anchored to a durable turn, so a later
-                    // append does not invalidate it: it still abuts the page it
-                    // was read behind. The window slides rather than grows, so
-                    // the page furthest from the walk, the newest one, is the
-                    // one dropped.
-                    PageRead::Older(_) => {
-                        let arrived = outcome;
-                        if arrived.events.is_empty() {
-                            // The anchor no longer names the turn it did, so
-                            // nothing resident can be trusted to abut the log:
-                            // the window is dropped and the tail read again
-                            // rather than paging the wrong history.
-                            state.pages.clear();
-                            state.follow_tail = true;
-                            state.older_hidden = 0;
-                            state.window_watermark = None;
-                            Self::drop_view(state);
-                            return;
-                        }
-                        let reached_start = arrived.oldest_anchor.is_none();
-                        let arrived_turns = arrived.turn_count();
-                        state.pages.push_front(arrived);
-                        if reached_start {
-                            // The walk reached the log's first turn, so nothing
-                            // sits before the window however the counts read.
-                            state.older_hidden = 0;
-                        } else {
-                            state.older_hidden = state.older_hidden.saturating_sub(arrived_turns);
-                        }
-                        if state.pages.len() > RESIDENT_PAGES {
-                            state.pages.pop_back();
-                            state.follow_tail = false;
-                        }
-                    }
-                    // The head is the other end of the log, so the window
-                    // becomes it and nothing sits before it.
-                    PageRead::Head => {
-                        if outcome.events.is_empty() {
-                            // The history's start could not be located, so
-                            // there is no head to show. A window in hand is
-                            // still valid and stays where it is; an empty one
-                            // falls back to the tail, which is the only end
-                            // left to read.
-                            if state.pages.is_empty() {
-                                state.follow_tail = true;
-                            }
-                            Self::drop_view(state);
-                            return;
-                        }
-                        state.pages.clear();
-                        state.pages.push_back(outcome);
-                        state.older_hidden = 0;
-                        state.follow_tail = false;
-                    }
-                    // A delta describes what the log appended after the byte
-                    // the window ends at. A read that starts anywhere else is
-                    // not that, so it is dropped rather than spliced into the
-                    // wrong place.
-                    PageRead::Append { from, to } => {
-                        if state
-                            .pages
-                            .back()
-                            .is_none_or(|page| page.end_offset != from)
-                        {
-                            Self::drop_view(state);
-                            return;
-                        }
-                        // A delta whose budget stopped short of the byte it
-                        // was dispatched for leaves a line unread: the window
-                        // keeps what arrived and its watermark stays where it
-                        // was, so the next frame reads the rest rather than
-                        // reporting a history it does not hold.
-                        let reached = outcome.end_offset >= to;
-                        if let Some(back) = state.pages.back_mut() {
-                            back.end_offset = outcome.end_offset;
-                            back.skipped += outcome.skipped;
-                            back.events.extend(outcome.events);
-                        }
-                        if !reached {
-                            Self::drop_view(state);
-                            return;
-                        }
-                    }
-                    PageRead::Tail => {
-                        // A window the user walked away from is theirs, so a
-                        // tail page read before that does not move it. An empty
-                        // window has nothing to protect: it takes the tail and
-                        // follows it, which is the only way it leaves loading.
-                        if !state.follow_tail && !state.pages.is_empty() {
-                            Self::drop_view(state);
-                            return;
-                        }
-                        state.follow_tail = true;
-                        state.pages.clear();
-                        state.pages.push_back(outcome);
-                    }
-                }
-                state.window_watermark = Some(dispatched);
-                state.window_total = total_turns;
-                Self::drop_view(state);
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                // The worker went away without sending. One such read is
-                // retried rather than reported: a transient failure must not
-                // leave the pane unusable for the rest of the session. A run of
-                // them is reported, so a broken read does not dispatch a worker
-                // on every frame either.
-                let dispatched = pending.dispatched;
-                state.pending = None;
-                state.read_failures += 1;
-                state.window_watermark = None;
-                // A read that never arrived leaves no view to serve: dropping
-                // it is what lets the next frame dispatch the retry.
-                Self::drop_view(state);
-                if state.read_failures >= READ_FAILURES_BEFORE_FAILED {
-                    state.failed = true;
-                    state.failed_watermark = Some(dispatched);
-                }
-            }
-        }
     }
 }
 
@@ -674,7 +537,13 @@ impl TrajectoryLog for SessionLogTrajectory {
             return;
         };
         let epoch = self.session_log.trajectory_head(self.session_id);
-        if Self::pending_is(&state, PageRead::Tail, epoch.revision.epoch_event_id)
+        let tail = match state.pending.as_ref().map(|pending| pending.read) {
+            Some(PageRead::Tail { to }) => PageRead::Tail { to },
+            _ => PageRead::Tail {
+                to: self.history.log_size(),
+            },
+        };
+        if Self::pending_is(&state, tail, epoch.revision.epoch_event_id)
             || (state.follow_tail && !state.pages.is_empty())
         {
             return;

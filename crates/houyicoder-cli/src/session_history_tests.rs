@@ -66,7 +66,7 @@ fn session_of(turns: usize) -> (SessionHistory, SessionId, std::path::PathBuf) {
 #[test]
 fn test_tail_page_keeps_turns() {
     let (history, _, _) = session_of(10);
-    let page = history.tail_turns(3, PAGE_MAX_BYTES);
+    let page = history.turns_before(history.log_size(), 3, PAGE_MAX_BYTES);
     let prompts: Vec<String> = page
         .events
         .iter()
@@ -91,7 +91,7 @@ fn test_tail_page_keeps_turns() {
 #[test]
 fn test_older_page_continues() {
     let (history, _, _) = session_of(10);
-    let tail = history.tail_turns(3, PAGE_MAX_BYTES);
+    let tail = history.turns_before(history.log_size(), 3, PAGE_MAX_BYTES);
     let older = history.turns_before(
         tail.oldest_anchor.expect("anchor").byte_offset,
         3,
@@ -140,7 +140,7 @@ fn test_head_page_keeps_first() {
 #[test]
 fn test_anchor_holds_its_turn() {
     let (history, _, _) = session_of(10);
-    let page = history.tail_turns(3, PAGE_MAX_BYTES);
+    let page = history.turns_before(history.log_size(), 3, PAGE_MAX_BYTES);
     let anchor = page.oldest_anchor.expect("a page behind the tail");
     assert!(
         history.anchor_holds(anchor),
@@ -296,7 +296,7 @@ fn test_head_page_wide_first() {
 #[test]
 fn test_page_at_log_start() {
     let (history, _, _) = session_of(2);
-    let page = history.tail_turns(5, PAGE_MAX_BYTES);
+    let page = history.turns_before(history.log_size(), 5, PAGE_MAX_BYTES);
     assert_eq!(turns_opened(&page.events), 2);
     assert_eq!(page.oldest_anchor, None, "nothing older to read");
     assert!(!page.oldest_partial);
@@ -343,7 +343,7 @@ fn test_page_reads_wide_event() {
         rt.block_on(store.append(event)).expect("append");
     }
     let history = SessionHistory::new(std::sync::Arc::new(store), session);
-    let page = history.tail_turns(2, PAGE_MAX_BYTES);
+    let page = history.turns_before(history.log_size(), 2, PAGE_MAX_BYTES);
     let prompts: Vec<String> = page
         .events
         .iter()
@@ -400,7 +400,7 @@ fn test_page_stops_at_clear() {
         rt.block_on(store.append(event)).expect("append");
     }
     let history = SessionHistory::new(std::sync::Arc::new(store), session);
-    let page = history.tail_turns(10, PAGE_MAX_BYTES);
+    let page = history.turns_before(history.log_size(), 10, PAGE_MAX_BYTES);
     let prompts: Vec<String> = page
         .events
         .iter()
@@ -456,7 +456,7 @@ fn test_page_skips_corrupt_chunk() {
     .expect("append new");
 
     let history = SessionHistory::new(std::sync::Arc::new(store), session);
-    let page = history.tail_turns(5, PAGE_MAX_BYTES);
+    let page = history.turns_before(history.log_size(), 5, PAGE_MAX_BYTES);
     let prompts: Vec<String> = page
         .events
         .iter()
@@ -509,7 +509,7 @@ fn test_page_caps_oversized_event() {
         rt.block_on(store.append(event)).expect("append");
     }
     let history = SessionHistory::new(std::sync::Arc::new(store), session);
-    let page = history.tail_turns(5, PAGE_MAX_BYTES);
+    let page = history.turns_before(history.log_size(), 5, PAGE_MAX_BYTES);
     assert!(
         page.oldest_partial,
         "a page that could not reach the turns it keeps reports itself partial"
@@ -525,7 +525,7 @@ fn test_page_caps_oversized_event() {
 #[test]
 fn test_page_budget_reports_partial() {
     let (history, _, _) = session_of(10);
-    let page = history.tail_turns(5, 1);
+    let page = history.turns_before(history.log_size(), 5, 1);
     assert!(
         page.oldest_partial,
         "the walk ran out of budget before finding the turns it keeps"
@@ -576,7 +576,7 @@ fn test_long_log_page_bounded() {
 
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
     let history = SessionHistory::new(std::sync::Arc::new(store), session);
-    let page = history.tail_turns(100, PAGE_MAX_BYTES);
+    let page = history.turns_before(history.log_size(), 100, PAGE_MAX_BYTES);
     let turns = page
         .events
         .iter()
@@ -646,7 +646,7 @@ fn test_anchor_holds_wide_turn() {
         rt.block_on(store.append(event)).expect("append");
     }
     let history = SessionHistory::new(std::sync::Arc::new(store), session);
-    let page = history.tail_turns(2, PAGE_MAX_BYTES);
+    let page = history.turns_before(history.log_size(), 2, PAGE_MAX_BYTES);
     let anchor = page
         .oldest_anchor
         .expect("the page starts at the wide turn");

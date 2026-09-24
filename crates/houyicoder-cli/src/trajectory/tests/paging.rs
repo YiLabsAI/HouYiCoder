@@ -940,12 +940,36 @@ fn test_stale_anchor_refused() {
     file.set_len(1024).expect("truncate the log");
 
     reader.load_older();
-    let after = pump(&reader);
-    let numbers = turn_numbers(&after);
-    assert!(
-        numbers.first().copied().unwrap_or(0) > 100,
-        "the refused anchor drops the window back to the tail: {numbers:?}"
+    let after = pump_settled(&reader);
+    // The bytes the reader was reading are gone, and the history its own
+    // watermark describes is not the one the log now holds: a window built from
+    // what is left would report a session that is not this one's.
+    assert_eq!(
+        after.state,
+        TrajectoryViewState::Failed,
+        "a log that no longer holds the history it describes is reported"
     );
+    assert!(
+        turn_numbers(&after).is_empty(),
+        "and no rows from it are shown: {:?}",
+        turn_numbers(&after)
+    );
+}
+
+/// Pump until the reader settles on something other than loading, so a test can
+/// see what it reports when its reads are refused.
+fn pump_settled(reader: &SessionLogTrajectory) -> Arc<TrajectoryView> {
+    for _ in 0..400 {
+        let view = reader.trajectory();
+        if !matches!(
+            view.state,
+            TrajectoryViewState::Loading | TrajectoryViewState::LoadingOlder
+        ) {
+            return view;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the reader never settled");
 }
 
 /// A clear starts a new history whose turn numbers begin again, so the view

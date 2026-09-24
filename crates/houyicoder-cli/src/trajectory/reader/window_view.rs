@@ -193,17 +193,17 @@ impl SessionLogTrajectory {
 /// for it. A burst bigger than the delta budget, or a window with no end to
 /// start from, is read as the tail.
 pub(super) fn append_or_tail(history: &SessionHistory, state: &TrajectoryState) -> PageRead {
+    let size = history.log_size();
     let Some(back) = state.pages.back() else {
-        return PageRead::Tail;
+        return PageRead::Tail { to: size };
     };
     let end = back.end_offset;
-    let size = history.log_size();
     if end > 0 && size > end && size - end <= DELTA_MAX_BYTES {
         PageRead::Append {
             from: end,
             to: size,
         }
     } else {
-        PageRead::Tail
+        PageRead::Tail { to: size }
     }
 }
