@@ -127,7 +127,7 @@ fn test_timeline_compact_narrow() {
     record.summary = "cargo test --workspace".into();
     record.duration_ms = 3_200;
 
-    for width in [20usize, 30, 39] {
+    for width in [1usize, 2, 5, 8, 10, 19, 20, 30, 39] {
         let detail = detail_of(record.clone());
         let app = crate::composition::app();
         let (header, body, _, _) = detail::draw_turn_detail(
@@ -143,15 +143,23 @@ fn test_timeline_compact_narrow() {
             "no ruler without a bar at {width} columns: {:?}",
             lines_text(&header)
         );
-        assert!(
-            row.contains("3.2s"),
-            "the duration stays at {width} columns: {row}"
-        );
+        if width >= 4 + 4 + 2 {
+            assert!(
+                row.contains("3.2s"),
+                "the duration stays where there is room for it, {width} columns: {row}"
+            );
+        }
         assert!(row.contains('✓'), "and so does the outcome: {row}");
         for line in body.iter() {
             assert!(
                 line.width() <= width,
                 "the row fits the terminal at {width} columns: {row}"
+            );
+        }
+        if width >= 20 {
+            assert!(
+                row.contains("tool"),
+                "a row with room names what it was, {width} columns: {row}"
             );
         }
     }

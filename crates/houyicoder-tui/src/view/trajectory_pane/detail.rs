@@ -230,12 +230,28 @@ pub(super) fn draw_drill_gone() -> (
 /// read for. The summary takes what is left, then the name gives way, and the
 /// kind last.
 fn compact_record_row(ev: &TrajectoryRecord, selected: bool, width: usize) -> Line<'static> {
-    let prefix = if selected { "▸ " } else { "  " };
     let bc = outcome_color(ev.outcome);
-    // The tail is measured rather than assumed: what it costs is what the rest
-    // of the row has to fit in.
-    let tail = format!(" {} {}", format_span_ms(ev.duration_ms), ev.outcome.glyph());
-    let mut left = width.saturating_sub(2 + UnicodeWidthStr::width(tail.as_str()));
+    let mark = ev.outcome.glyph();
+    let duration = format_span_ms(ev.duration_ms);
+    // The tail is what the row is read for, so it is the last thing to give
+    // way: the duration goes before the outcome, and the selection before that.
+    // A row is never wider than the terminal it is drawn in, however narrow.
+    let tail = if width >= 4 + UnicodeWidthStr::width(duration.as_str()) + 2 {
+        format!(" {duration} {mark}")
+    } else if width >= 2 {
+        format!(" {mark}")
+    } else if width >= 1 {
+        mark.to_string()
+    } else {
+        String::new()
+    };
+    let prefix = if UnicodeWidthStr::width(tail.as_str()) + 2 <= width {
+        if selected { "▸ " } else { "  " }
+    } else {
+        ""
+    };
+    let mut left = width
+        .saturating_sub(UnicodeWidthStr::width(prefix) + UnicodeWidthStr::width(tail.as_str()));
     let kind = ev.kind.label();
     let kind = if left > UnicodeWidthStr::width(kind) {
         left -= UnicodeWidthStr::width(kind) + 1;
