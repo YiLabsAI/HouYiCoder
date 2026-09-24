@@ -376,18 +376,17 @@ use sample::sample_trajectory;
 /// history is dropped instead of restored: a clear starts a history whose turn
 /// numbers begin again, so the number would name a turn it does not mean.
 pub(crate) fn restore_selected_cursor(state: &TrajectoryPaneState, view: &TrajectoryView) {
-    if state.selected_generation() != view.history_generation {
-        state.clear_selection();
+    let Some(selected) = state.selection() else {
         return;
-    }
-    let selected = state.selected_turn();
-    if selected == 0 {
+    };
+    if selected.history_generation != view.history_generation {
+        state.clear_selection();
         return;
     }
     if let Some(index) = view
         .rows
         .iter()
-        .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.n == selected))
+        .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.n == selected.number))
     {
         state.set_cursor(index);
     }
@@ -400,7 +399,7 @@ pub(crate) fn restore_selected_cursor(state: &TrajectoryPaneState, view: &Trajec
 /// turn the user moved off would let a later page restore the cursor onto it.
 pub(crate) fn note_selected_turn(state: &TrajectoryPaneState, view: &TrajectoryView) {
     match view.rows.get(state.cursor()) {
-        Some(TrajectoryRow::Turn(turn)) => state.select_turn(turn.n, view.history_generation),
+        Some(TrajectoryRow::Turn(turn)) => state.select(turn.n, view.history_generation),
         _ => state.clear_selection(),
     }
 }
@@ -416,17 +415,16 @@ pub(crate) fn note_selected_turn(state: &TrajectoryPaneState, view: &TrajectoryV
 /// A background row has no turn number to follow, so it keeps the row the
 /// drill froze and its own level-1 only contract.
 fn drilled_row(state: &TrajectoryPaneState, view: &TrajectoryView) -> Option<usize> {
-    let selected = state.selected_turn();
-    if selected == 0 {
+    let Some(selected) = state.selection() else {
         return Some(state.turn_idx());
-    }
-    if state.selected_generation() != view.history_generation {
+    };
+    if selected.history_generation != view.history_generation {
         return None;
     }
     let index = view
         .rows
         .iter()
-        .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.n == selected))?;
+        .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.n == selected.number))?;
     state.set_turn_idx(index);
     Some(index)
 }

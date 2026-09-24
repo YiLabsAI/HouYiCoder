@@ -58,7 +58,7 @@ pub(crate) use crate::state::expanded_keys::ParkedKeys;
 pub use crate::state::model_picker::{
     DEFAULT_LABEL, ModelDraft, ModelPickerState, ModelSettingFocus, PendingCommit,
 };
-pub use crate::state::trajectory::TrajectoryPaneState;
+pub use crate::state::trajectory::{TrajectoryPaneState, TrajectorySelection};
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionMode, PermissionRule,
 };

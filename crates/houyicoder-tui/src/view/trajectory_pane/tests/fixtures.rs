@@ -113,3 +113,9 @@ pub(super) fn lines_text(lines: &[Line<'static>]) -> String {
         .map(|s| s.content.as_ref())
         .collect()
 }
+
+/// The turn number the pane is on, for a test that is about the number rather
+/// than about the history it was read in.
+pub(super) fn selected_number(app: &crate::state::App) -> Option<usize> {
+    app.trajectory.selection().map(|s| s.number)
+}

@@ -75,7 +75,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                 // The history's first turn, so the cursor lands on it once the
                 // head page arrives.
                 let generation = log.trajectory().history_generation;
-                app.trajectory.select_turn(1, generation);
+                app.trajectory.select(1, generation);
             }
             if app.trajectory.level() < 2 {
                 app.trajectory.set_cursor(0);
@@ -92,7 +92,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                     // replaced.
                     let view = log.trajectory();
                     app.trajectory
-                        .select_turn(view.total_turns, view.history_generation);
+                        .select(view.total_turns, view.history_generation);
                 }
                 // A record list, or a turn list with no paged history: the
                 // rows in hand are the whole list, so the last one is the end.

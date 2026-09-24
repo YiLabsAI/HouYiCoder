@@ -3,7 +3,7 @@
 
 use super::super::list;
 use super::super::*;
-use super::fixtures::window_view;
+use super::fixtures::{selected_number, window_view};
 use crate::view::working;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend};
@@ -80,7 +80,7 @@ fn test_cursor_restored_by_turn() {
 
     // The user is on turn 401 when the walk back starts.
     app.trajectory.set_cursor(0);
-    app.trajectory.select_turn(401, 1);
+    app.trajectory.select(401, 1);
     terminal
         .draw(|f| {
             working::draw(f, &app);
@@ -128,14 +128,14 @@ fn test_home_end_move_window() {
         1,
         "Home reads the head"
     );
-    assert_eq!(app.trajectory.selected_turn(), 1);
+    assert_eq!(selected_number(&app), Some(1));
     assert_eq!(app.trajectory.cursor(), 0);
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert_eq!(log.tail.load(Ordering::Relaxed), 1, "End reads the tail");
     assert_eq!(
-        app.trajectory.selected_turn(),
-        500,
+        selected_number(&app),
+        Some(500),
         "End selects the session's newest turn"
     );
 }
@@ -171,12 +171,12 @@ fn test_level1_move_keeps_selection() {
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_level(1);
-    app.trajectory.select_turn(7, 1);
+    app.trajectory.select(7, 1);
     app.trajectory.set_list_len(3);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(
-        app.trajectory.selected_turn(),
-        7,
+        selected_number(&app),
+        Some(7),
         "an L1 move is not the L0 selection"
     );
 }
@@ -195,7 +195,7 @@ fn test_selection_dropped_across_history() {
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
 
     // The user selected turn 80 of the first history.
-    app.trajectory.select_turn(80, 1);
+    app.trajectory.select(80, 1);
     terminal
         .draw(|f| {
             working::draw(f, &app);
@@ -213,8 +213,8 @@ fn test_selection_dropped_across_history() {
         })
         .unwrap();
     assert_eq!(
-        app.trajectory.selected_turn(),
-        0,
+        selected_number(&app),
+        None,
         "a selection from another history is dropped"
     );
     assert_eq!(
@@ -286,11 +286,7 @@ fn test_esc_restores_turn() {
     assert_eq!(app.trajectory.cursor(), 4);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.trajectory.level(), 1);
-    assert_eq!(
-        app.trajectory.selected_turn(),
-        405,
-        "the drill is about 405"
-    );
+    assert_eq!(selected_number(&app), Some(405), "the drill is about 405");
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.trajectory.level(), 0, "Esc returns to the turn list");
@@ -299,7 +295,7 @@ fn test_esc_restores_turn() {
         4,
         "and the cursor is back on the turn it left"
     );
-    assert_eq!(app.trajectory.selected_turn(), 405);
+    assert_eq!(selected_number(&app), Some(405));
 }
 
 /// Leaving the event detail returns to the record list with the record still
@@ -384,7 +380,7 @@ fn test_esc_survives_window_move() {
         crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.selected_turn(), 405);
+    assert_eq!(selected_number(&app), Some(405));
 
     // The tail page refreshes under the drill while the user reads it.
     log.advance();
@@ -407,8 +403,8 @@ fn test_esc_survives_window_move() {
         .unwrap();
     assert_eq!(app.trajectory.level(), 0, "Esc returns to the turn list");
     assert_eq!(
-        app.trajectory.selected_turn(),
-        405,
+        selected_number(&app),
+        Some(405),
         "and the turn it named is not rewritten by the moved window"
     );
     let view = log.trajectory();
@@ -443,14 +439,14 @@ fn test_bg_row_clears_selection() {
         .unwrap();
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.selected_turn(), 402, "a turn is selected");
+    assert_eq!(selected_number(&app), Some(402), "a turn is selected");
     for _ in 0..2 {
         crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     assert_eq!(app.trajectory.cursor(), 3, "the background row");
     assert_eq!(
-        app.trajectory.selected_turn(),
-        0,
+        selected_number(&app),
+        None,
         "moving onto it drops the turn selection"
     );
 }
@@ -493,7 +489,7 @@ fn test_drill_gone_when_evicted() {
 
     // The user opens the oldest turn of the window.
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.selected_turn(), 401);
+    assert_eq!(selected_number(&app), Some(401));
     // The window moves past it.
     log.advance();
     terminal
@@ -535,7 +531,7 @@ fn test_drill_drops_across_history() {
         crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.selected_turn(), 5);
+    assert_eq!(selected_number(&app), Some(5));
 
     // The history is cleared under the drill and the new one numbers its turns
     // from the start.

@@ -15,6 +15,21 @@
 
 use std::cell::Cell;
 
+/// The turn the pane is on: the number it carries in the history in hand, and
+/// which history that is.
+///
+/// One value rather than two fields, so a caller cannot move the number
+/// without saying which history it belongs to. A clear starts a history whose
+/// turn numbers begin again, and a number from the old one names a different
+/// turn there.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TrajectorySelection {
+    /// The session turn number the selection names.
+    pub number: usize,
+    /// The history the number was read in.
+    pub history_generation: u64,
+}
+
 /// Where the trajectory pane is: which drill level, which row the cursor is
 /// on, and which session turn the selection names.
 #[derive(Default)]
@@ -35,15 +50,10 @@ pub struct TrajectoryPaneState {
     turn_idx: Cell<usize>,
     /// True when the L0 row is a background event, which skips the L2 drill.
     at_bg: Cell<bool>,
-    /// The session turn number the L0 cursor is on, or 0 for none.
-    ///
-    /// Set once the user navigates; left at 0 while the pane simply follows
-    /// the tail, so the tail keeps pulling new turns into view.
-    selected_turn: Cell<usize>,
-    /// The history the selection was made in. A clear starts a new one whose
-    /// turn numbers begin again, so a selection from another history is
-    /// dropped rather than restored onto a turn it does not name.
-    selected_generation: Cell<u64>,
+    /// The turn the pane is on, or None while it simply follows the tail. None
+    /// is not turn zero: a turn number of zero is not a turn, and a sentinel
+    /// would have to be checked at every read.
+    selection: Cell<Option<TrajectorySelection>>,
 }
 
 impl TrajectoryPaneState {
@@ -97,25 +107,21 @@ impl TrajectoryPaneState {
         self.at_bg.set(at_bg);
     }
 
-    /// The session turn the selection names, or 0 when nothing is selected.
-    pub fn selected_turn(&self) -> usize {
-        self.selected_turn.get()
+    /// The turn the pane is on, if it is on one.
+    pub fn selection(&self) -> Option<TrajectorySelection> {
+        self.selection.get()
     }
 
-    /// The history the selection belongs to.
-    pub fn selected_generation(&self) -> u64 {
-        self.selected_generation.get()
-    }
-
-    /// Select a turn of the history in hand.
-    pub fn select_turn(&self, turn: usize, generation: u64) {
-        self.selected_turn.set(turn);
-        self.selected_generation.set(generation);
+    /// Put the pane on a turn of the history in hand.
+    pub fn select(&self, number: usize, history_generation: u64) {
+        self.selection.set(Some(TrajectorySelection {
+            number,
+            history_generation,
+        }));
     }
 
     /// Drop the selection, so nothing is restored from it.
     pub fn clear_selection(&self) {
-        self.selected_turn.set(0);
-        self.selected_generation.set(0);
+        self.selection.set(None);
     }
 }
