@@ -302,15 +302,16 @@ pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec
         ) {
             continue;
         }
+        // A window can start mid-run, where the first event is content: the
+        // turn it belongs to is opened here, so it is numbered and it takes
+        // that event's id as its identity.
+        if !builder.is_open() {
+            n += 1;
+            builder.open(ev, std::mem::take(&mut pending));
+        }
         turns::dispatch::apply_turn_content(&mut builder, ev, &calls, &spawned);
     }
     if builder.is_open() {
-        // A turn opened by a non-boundary event (a windowed read that starts
-        // mid-run) still needs a number; the boundary events are the only
-        // other place one is assigned.
-        if n == 0 {
-            n = 1;
-        }
         builder.flush(&mut turn_rows, n);
     }
     turn_rows

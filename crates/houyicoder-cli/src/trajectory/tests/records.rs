@@ -717,3 +717,66 @@ fn test_turn_opened_by_content() {
     };
     assert_eq!(turn.n, 1, "a turn is never numbered zero");
 }
+
+/// A window can start mid-run, where the first event is content rather than a
+/// user input. The turn it belongs to is still opened by an event, and that
+/// event is where the turn's identity comes from: an empty key would name no
+/// turn at all.
+#[test]
+fn test_content_turn_has_key() {
+    let opening = ev(
+        100,
+        SessionEvent::AssistantMessage {
+            text: "mid-run".into(),
+            thinking: None,
+        },
+    );
+    let opening_id = opening.id.to_string();
+    let view = project(&[opening], "test", 0);
+    match &view.rows[0] {
+        TrajectoryRow::Turn(turn) => assert_eq!(
+            turn.key.as_str(),
+            opening_id,
+            "the turn takes the id of the event that opened it"
+        ),
+        _ => panic!("a turn row"),
+    }
+}
+
+/// The same holds for a tool call, which is the other way a window can open
+/// mid-run, and for a turn that a later user input flushes: the content-opened
+/// turn is numbered, not left at zero.
+#[test]
+fn test_tool_turn_is_numbered() {
+    let opening = ev(
+        100,
+        SessionEvent::ToolCall {
+            call_id: "c1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "echo hi"}),
+        },
+    );
+    let opening_id = opening.id.to_string();
+    let input = ev(
+        200,
+        SessionEvent::UserInput {
+            text: "next".into(),
+        },
+    );
+    let input_id = input.id.to_string();
+    let view = project(&[opening, input], "test", 0);
+    let turns: Vec<(usize, &str)> = view
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some((turn.n, turn.key.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        vec![(1, opening_id.as_str()), (2, input_id.as_str())],
+        "the content-opened turn is first and numbered: {:?}",
+        turns
+    );
+}

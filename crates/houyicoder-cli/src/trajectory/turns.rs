@@ -23,7 +23,9 @@ pub(super) mod dispatch;
 /// user input arrives.
 pub(super) struct TurnBuilder {
     /// The event that opened this turn, kept as the turn's durable identity.
-    key: TrajectoryTurnKey,
+    /// None until an event opens the turn, so a builder that never opened
+    /// cannot be flushed as a turn with no identity.
+    key: Option<TrajectoryTurnKey>,
     records: Vec<TrajectoryRecord>,
     boundary_before: Vec<TurnBoundary>,
     user_input: String,
@@ -55,7 +57,7 @@ pub(super) struct TurnBuilder {
 impl TurnBuilder {
     pub(super) fn new() -> Self {
         Self {
-            key: TrajectoryTurnKey::from_opening_event(""),
+            key: None,
             records: Vec::new(),
             boundary_before: Vec::new(),
             user_input: String::new(),
@@ -88,7 +90,9 @@ impl TurnBuilder {
         user_input: String,
         boundaries: Vec<TurnBoundary>,
     ) {
-        self.key = TrajectoryTurnKey::from_opening_event(&opening.id.to_string());
+        self.key = Some(TrajectoryTurnKey::from_opening_event(
+            &opening.id.to_string(),
+        ));
         let ts = opening.ts;
         self.records.clear();
         self.boundary_before = boundaries;
@@ -113,8 +117,18 @@ impl TurnBuilder {
         self.open_agents.clear();
     }
 
+    /// Whether an event has opened a turn in this builder.
     pub(super) fn is_open(&self) -> bool {
-        self.first_ts.is_some()
+        self.key.is_some()
+    }
+
+    /// Open a turn on the event that opened it.
+    ///
+    /// A window can start mid-run, where the first event is content rather
+    /// than a user input. The turn it belongs to is still opened by an event,
+    /// and that event is where the turn's identity comes from.
+    pub(super) fn open(&mut self, opening: &SessionLogEntry, boundaries: Vec<TurnBoundary>) {
+        self.reset(opening, String::new(), boundaries);
     }
 
     /// True once this turn has reported usage. The first usage of a turn is
@@ -460,6 +474,10 @@ impl TurnBuilder {
     }
 
     pub(super) fn flush(&mut self, turns: &mut Vec<TrajectoryTurn>, n: usize) {
+        // A builder that never opened holds no turn to flush.
+        let Some(key) = self.key.take() else {
+            return;
+        };
         // A delegation with no return in this window stays open: keep it
         // visible with no duration rather than inventing an end.
         let wall_ms = self
@@ -467,7 +485,7 @@ impl TurnBuilder {
             .saturating_sub(self.first_ts.unwrap_or(self.last_ts));
         turns.push(TrajectoryTurn {
             n,
-            key: self.key.clone(),
+            key,
             boundary_before: std::mem::take(&mut self.boundary_before),
             user_input: std::mem::take(&mut self.user_input),
             tokens_in: self.tokens_in.map(|v| v as usize),
