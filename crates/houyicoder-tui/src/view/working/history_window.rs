@@ -24,10 +24,8 @@ use crate::view::working::transcript::{
 /// Render the loaded history range with independent scrolling and search
 /// highlighting. Dynamic conversation-tail rows are intentionally absent.
 pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
-    // Pump one index chunk per frame while the G full-scan builds (keeps the
-    // UI responsive + lets Esc interrupt). Done before rendering so the
-    // progress cells the status bar reads are current for this frame.
-    app.pump_index_chunk();
+    // The index build advances on the loop, not here: a chunk reads the log.
+    // This path only renders the progress cells the loop published.
     const USER: u8 = crate::selection::TAG_USER;
     const SYSTEM: u8 = crate::selection::TAG_SYSTEM;
     const DIFF_ADD: u8 = crate::selection::TAG_DIFF_ADD;

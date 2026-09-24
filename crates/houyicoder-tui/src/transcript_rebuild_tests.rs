@@ -1719,12 +1719,12 @@ fn test_walk_stops_without_progress() {
     assert_eq!(app.transcript.disk_front(), DiskFront::Stopped);
 }
 
-/// A window that does not end where the walk asked leaves a gap between it and
-/// the rows already read, so the walk stops rather than join rows that do not
-/// touch. The rows here do carry the overlap, so a walk that took the window at
-/// its word would print them above a row they do not reach.
+/// The walk stops when the source holds no window for the offset it asks from,
+/// so a log whose older window is missing ends the read rather than repeating
+/// rows. The mismatch case — a window returned that does not end at the anchor
+/// — is refused by the read itself, which the read layer's own test covers.
 #[test]
-fn test_walk_stops_on_gap() {
+fn test_walk_stops_without_window() {
     let mut app = drained_app();
     let view: Vec<TranscriptLine> = app.transcript.iter().cloned().collect();
     let mut older: Vec<TranscriptLine> = vec![TranscriptLine::User("old 0".into())];
@@ -1754,7 +1754,7 @@ fn test_walk_stops_on_gap() {
     assert_eq!(
         app.transcript.disk_row_count(),
         0,
-        "the window does not reach the log tail, so no row is taken"
+        "no window answers the offset, so no row is taken"
     );
     assert_eq!(app.transcript.disk_front(), DiskFront::Stopped);
 }

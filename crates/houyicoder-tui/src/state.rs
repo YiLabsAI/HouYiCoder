@@ -15,6 +15,7 @@ mod cursors;
 pub(crate) mod enums;
 mod expanded_keys;
 pub(crate) mod history_read;
+pub(crate) mod index_read;
 mod model_picker;
 mod scroll;
 mod search_view;
@@ -199,18 +200,20 @@ pub struct App {
     /// whole-log search_skipped so window-mode chrome shows the per-window
     /// count).
     pub window_skipped: usize,
-    /// True while the G full-scan builds the event-byte-offset index across
-    /// frames (one chunk per frame keeps the UI responsive; Esc interrupts).
-    /// The flat render path drives index_chunk while this is set. Cell so the
-    /// draw borrow (&App) can flip it off when the build completes.
+    /// True while the G full-scan builds the event-byte-offset index (one
+    /// chunk at a time keeps the UI responsive; Esc interrupts). The loop
+    /// advances the build while this is set, off the draw path.
     pub indexing: Cell<bool>,
     /// Bytes of the log indexed so far (for the indexing-percent chrome),
-    /// published by the render path each frame while indexing.
+    /// published as each chunk lands.
     pub indexed_bytes: Cell<u64>,
     /// Total log bytes the index covers (the frozen file size).
     pub index_total: Cell<u64>,
     /// True when the full index is built (event_count/byte_at answer).
     pub index_done: Cell<bool>,
+    /// The index chunk running on a worker, if any. A chunk reads the log, so
+    /// the loop advances the build and the draw path never does.
+    pub pending_index_chunk: std::cell::RefCell<Option<index_read::PendingIndexChunk>>,
     /// Optional full-history disk-search seam. None in stub / unwired modes
     /// (the /search --all flag then reports no disk results). When wired, the
     /// composition root injects an impl that reads the durable session log +

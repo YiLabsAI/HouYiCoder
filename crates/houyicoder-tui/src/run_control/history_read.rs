@@ -167,3 +167,94 @@ fn overlap_cut(
     }
     best.map(|(_, cut)| cut)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcript::snapshot::{NoTranscriptSnapshot, SnapshotLoad, WindowLoad};
+
+    /// A source whose older window holds real rows but does not end where the
+    /// walk asked. The walk joins each window to the rows it already read on
+    /// that offset, so taking this one would print a gap.
+    struct FixedWindow {
+        empty: NoTranscriptSnapshot,
+        window: WindowLoad,
+    }
+
+    impl TranscriptSnapshot for FixedWindow {
+        fn log_size(&self) -> u64 {
+            self.empty.log_size()
+        }
+        fn load(&self, max_bytes: u64) -> SnapshotLoad {
+            self.empty.load(max_bytes)
+        }
+        fn window(&self, anchor: u64, max_bytes: u64) -> WindowLoad {
+            self.empty.window(anchor, max_bytes)
+        }
+        fn tail_window(&self, max_bytes: u64) -> WindowLoad {
+            self.empty.tail_window(max_bytes)
+        }
+        fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> WindowLoad {
+            self.window.clone()
+        }
+        fn index_chunk(&self) -> crate::transcript::snapshot::IndexProgress {
+            self.empty.index_chunk()
+        }
+        fn byte_at(&self, event_idx: usize) -> Option<u64> {
+            self.empty.byte_at(event_idx)
+        }
+        fn event_count(&self) -> Option<usize> {
+            self.empty.event_count()
+        }
+    }
+
+    fn window_ending_at(next_offset: u64) -> FixedWindow {
+        FixedWindow {
+            empty: NoTranscriptSnapshot,
+            window: WindowLoad {
+                lines: vec![TranscriptLine::User("older".into())],
+                start_offset: 100,
+                next_offset,
+                skipped: 0,
+                bytes_total: 5000,
+            },
+        }
+    }
+
+    /// This double models the older window only; everything else answers as a
+    /// source with no log does, which is what the delegations say.
+    #[test]
+    fn test_fixed_window_older_only() {
+        let source = window_ending_at(5000);
+        assert_eq!(source.log_size(), 0, "no log size of its own");
+        assert!(source.load(1024).lines.is_empty(), "no whole-log load");
+        assert!(source.window(0, 1024).lines.is_empty(), "no forward window");
+        assert!(source.tail_window(1024).lines.is_empty(), "no tail window");
+        assert!(!source.index_chunk().done, "no index");
+        assert!(source.byte_at(0).is_none(), "no offsets");
+        assert!(source.event_count().is_none(), "no event count");
+    }
+
+    /// A window that ends somewhere other than the anchor is refused, however
+    /// many rows it carries: joining it would leave a gap between it and the
+    /// rows already read.
+    #[test]
+    fn test_before_refuses_gap() {
+        let source = window_ending_at(5005);
+        assert!(
+            read_log_before(&source, 5000).is_none(),
+            "a window ending past the anchor is refused"
+        );
+    }
+
+    /// The same window is taken when it does end at the anchor, so the refusal
+    /// above is the mismatch and not the rows.
+    #[test]
+    fn test_before_takes_matching_window() {
+        let source = window_ending_at(5000);
+        assert!(
+            read_log_before(&source, 5000).is_some(),
+            "a window ending at the anchor is the one the walk takes"
+        );
+    }
+}

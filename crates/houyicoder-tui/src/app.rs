@@ -89,7 +89,7 @@ pub fn run_with_runner(
         // Drain a background history read outside the dirty gate: an idle
         // loop still picks the result up, and a landed result sets dirty so
         // the redraw that renders the prepended rows follows immediately.
-        if app.pump_history_read() {
+        if app.pump_background_reads() {
             dirty = true;
         }
         if dirty || app.agent_busy() {

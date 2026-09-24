@@ -59,6 +59,7 @@ pub fn app() -> App {
         indexed_bytes: Cell::new(0),
         index_total: Cell::new(0),
         index_done: Cell::new(false),
+        pending_index_chunk: std::cell::RefCell::new(None),
         trajectory_log: None,
         export_log: None,
         snapshot: None,

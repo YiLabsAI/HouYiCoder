@@ -8,6 +8,7 @@ use crate::test_harness::render_text;
 use crate::transcript::snapshot::{TranscriptSnapshot, WindowLoad};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::sync::Arc;
+use std::time::Duration;
 
 fn working() -> crate::state::App {
     crate::test_harness::working_app()
@@ -779,4 +780,121 @@ fn test_mock_has_no_index() {
     };
     assert!(mock.byte_at(0).is_none(), "the mock names no event offset",);
     assert!(mock.event_count().is_none(), "and no event count");
+}
+
+/// Drawing never reads the log for the index: a chunk is up to four megabytes
+/// and parses every line in it, so the build advances on the loop instead. A
+/// draw while the build is running leaves the chunk unread.
+#[test]
+fn test_draw_reads_no_index() {
+    let mut app = working();
+    let source = Arc::new(MockSnapshot {
+        lines: Vec::new(),
+        log_bytes: 20 * 1024 * 1024,
+        truncated: false,
+        skipped: 0,
+        window_lines: vec![TranscriptLine::User("tail".into())],
+        window_start: 0,
+        windows: Vec::new(),
+        index_steps: 3,
+        index_calls: std::sync::atomic::AtomicU32::new(0),
+    });
+    app.snapshot = Some(source.clone());
+    app.enter_search_view("tail");
+    crate::app::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
+    );
+    assert!(app.indexing.get(), "G starts the index build");
+
+    let calls_before = source
+        .index_calls
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let drawn = render_text(&app, 100, 24);
+    assert!(!drawn.is_empty(), "the frame drew");
+    let calls_after = source
+        .index_calls
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        calls_after, calls_before,
+        "a draw reads no index chunk: {calls_before} then {calls_after}"
+    );
+}
+
+/// With a runtime wired, a chunk runs on a worker: the loop advances the build
+/// and applies what the worker sent.
+#[test]
+fn test_index_runs_on_worker() {
+    let mut app = working();
+    app.snapshot = Some(Arc::new(MockSnapshot {
+        lines: Vec::new(),
+        log_bytes: 20 * 1024 * 1024,
+        truncated: false,
+        skipped: 0,
+        window_lines: vec![TranscriptLine::User("tail".into())],
+        window_start: 0,
+        windows: Vec::new(),
+        index_steps: 1,
+        index_calls: std::sync::atomic::AtomicU32::new(0),
+    }));
+    app.enter_search_view("tail");
+    app.runtime = Some(Arc::new(
+        tokio::runtime::Runtime::new().expect("test runtime"),
+    ));
+    crate::app::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
+    );
+    assert!(app.indexing.get(), "G starts the build");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if app.pump_background_reads() && app.index_done.get() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        app.index_done.get(),
+        "the worker's chunk finished the build"
+    );
+    assert!(!app.indexing.get(), "and the build stopped");
+}
+
+/// A worker that dies without sending stops the build rather than stalling it:
+/// the slot is cleared and indexing turns off, so a later G can start again.
+#[test]
+fn test_index_worker_death_stops() {
+    let mut app = working();
+    app.snapshot = Some(Arc::new(MockSnapshot {
+        lines: Vec::new(),
+        log_bytes: 20 * 1024 * 1024,
+        truncated: false,
+        skipped: 0,
+        window_lines: vec![TranscriptLine::User("tail".into())],
+        window_start: 0,
+        windows: Vec::new(),
+        index_steps: 1,
+        index_calls: std::sync::atomic::AtomicU32::new(0),
+    }));
+    app.enter_search_view("tail");
+    crate::app::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
+    );
+    // A slot whose sender is already gone stands in for a dead worker.
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(tx);
+    *app.pending_index_chunk.borrow_mut() =
+        Some(crate::state::index_read::PendingIndexChunk::new(rx));
+
+    assert!(app.pump_index_chunk(), "the dead worker is noticed");
+    assert!(
+        !app.indexing.get(),
+        "and the build stops rather than stalling"
+    );
+    assert!(
+        app.pending_index_chunk.borrow().is_none(),
+        "the slot is cleared so a later G can dispatch again"
+    );
 }

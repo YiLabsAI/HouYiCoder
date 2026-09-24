@@ -446,6 +446,16 @@ impl App {
             .set_history_read(PendingHistoryRead::new(dispatch_front, rx));
     }
 
+    /// Advance the reads that run off the draw path: the older-rows read and
+    /// the index build. Both read the log, so neither runs where the frame is
+    /// drawn; the loop calls this instead. Returns true when either moved, so
+    /// the caller redraws.
+    pub(crate) fn pump_background_reads(&mut self) -> bool {
+        let history = self.pump_history_read();
+        let index = self.pump_index_chunk();
+        history || index
+    }
+
     /// Drain the running history read without blocking and apply it when
     /// ready. Returns true when a result landed and the view must redraw.
     /// Called from the loop body every pass, not inside the dirty gate, so an

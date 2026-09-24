@@ -40,8 +40,10 @@ ACTIVE_OWNERS = {
         # owner, and the selected turn lives inside it rather than joining the
         # shell: the selection and the cursor that must agree are kept
         # consistent by the same transitions. The skills pane's level and
-        # selection moved into SkillsPaneState in the same spirit.
-        "fields": 143,
+        # selection moved into SkillsPaneState in the same spirit. The index
+        # build's pending-chunk slot joins the index fields it belongs to; the
+        # window's fields are a SearchWindowState owner waiting to be drawn.
+        "fields": 144,
         "mut_app": 44,
     },
 }

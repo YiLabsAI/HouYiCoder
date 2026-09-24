@@ -5,6 +5,7 @@
 //! preview/detail desync bugs).
 
 use super::App;
+use super::index_read::{IndexChunkPoll, PendingIndexChunk};
 
 impl App {
     /// Enter Scroll mode, remembering the current viewport so Esc/End returns
@@ -287,12 +288,13 @@ impl App {
     }
 
     /// G in byte-window mode: start the full event-byte-offset index build
-    /// (one chunk per frame; Esc interrupts). The render path pumps
-    /// index_chunk while indexing is set.
+    /// (one chunk at a time; Esc interrupts). The first chunk is dispatched
+    /// here, and the loop advances the build from there.
     pub fn start_full_index(&mut self) {
         if self.window_mode {
             self.indexing.set(true);
             self.index_done.set(false);
+            self.dispatch_index_chunk();
         }
     }
 
@@ -308,20 +310,91 @@ impl App {
         }
     }
 
-    /// Pump one index chunk (called from the flat render path each frame while
-    /// indexing). Stops when the build completes; publishes progress to the
-    /// Cells the status bar reads.
-    pub fn pump_index_chunk(&self) {
-        let Some(snap) = self.snapshot.as_ref() else {
+    /// Advance the index build by one step, on the loop rather than on a draw:
+    /// a chunk reads the log, and the draw path must not.
+    ///
+    /// A wired runtime reads the chunk on a worker and applies it when it
+    /// lands; the bare path, which has no runtime, reads it inline. Returns
+    /// true when progress moved, so the caller redraws the chrome.
+    pub fn pump_index_chunk(&mut self) -> bool {
+        let mut moved = self.apply_index_progress();
+        if !self.indexing.get() {
+            return moved;
+        }
+        if self.pending_index_chunk.borrow().is_some() {
+            // A chunk is already in flight; the next step waits for it.
+            return moved;
+        }
+        match self.runtime.clone() {
+            Some(runtime) => {
+                let Some(snap) = self.snapshot.clone() else {
+                    return moved;
+                };
+                let (tx, rx) = std::sync::mpsc::channel();
+                runtime.spawn_blocking(move || {
+                    tx.send(snap.index_chunk()).ok();
+                });
+                *self.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+            }
+            None => {
+                // No runtime: the unwired path reads the chunk where it stands,
+                // which is what the bare and test compositions exercise.
+                if let Some(snap) = self.snapshot.clone() {
+                    let p = snap.index_chunk();
+                    self.apply_index_chunk(p);
+                    moved = true;
+                }
+            }
+        }
+        moved
+    }
+
+    /// Dispatch one index chunk on a worker, when a runtime is wired.
+    fn dispatch_index_chunk(&mut self) {
+        let Some(runtime) = self.runtime.clone() else {
             return;
         };
-        if !self.indexing.get() {
+        let Some(snap) = self.snapshot.clone() else {
             return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        runtime.spawn_blocking(move || {
+            tx.send(snap.index_chunk()).ok();
+        });
+        *self.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+    }
+
+    /// Apply a chunk that landed on the worker. Returns true when it moved the
+    /// build forward.
+    fn apply_index_progress(&mut self) -> bool {
+        let polled = self
+            .pending_index_chunk
+            .borrow()
+            .as_ref()
+            .map(PendingIndexChunk::poll);
+        match polled {
+            Some(IndexChunkPoll::Ready(progress)) => {
+                *self.pending_index_chunk.borrow_mut() = None;
+                self.apply_index_chunk(progress);
+                true
+            }
+            Some(IndexChunkPoll::Disconnected) => {
+                // The worker died without sending: stop claiming to index, so
+                // a dead task cannot stall the build forever.
+                *self.pending_index_chunk.borrow_mut() = None;
+                self.indexing.set(false);
+                true
+            }
+            Some(IndexChunkPoll::Pending) | None => false,
         }
-        let p = snap.index_chunk();
-        self.indexed_bytes.set(p.indexed_bytes);
-        self.index_total.set(p.total_bytes);
-        if p.done {
+    }
+
+    /// Publish a chunk's progress to the cells the chrome reads, and finish the
+    /// build when the chunk says it is complete.
+    fn apply_index_chunk(&self, progress: crate::transcript::snapshot::IndexProgress) {
+        self.indexed_bytes.set(progress.indexed_bytes);
+        self.index_total.set(progress.total_bytes);
+        if progress.done {
             self.index_done.set(true);
             self.indexing.set(false);
         }
