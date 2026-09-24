@@ -1479,15 +1479,16 @@ fn test_detail_switch_keeps_none() {
     );
 }
 
-/// A turn whose opening event is wider than one page read is still read: the
-/// detail read is bounded by its own budget, and a turn that fits in it comes
-/// back whole however wide its opening event is.
+/// A turn whose opening event is wider than one detail read can hold is a
+/// failed read, not a key that names nothing: saying stale would blame the key
+/// for the size of the event.
 #[test]
-fn test_detail_wide_opening_reads() {
+fn test_detail_wide_opening_fails() {
     let (store, reader, sid) = disk_reader(3);
     let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let wide_id = EventId::new();
     rt.block_on(store.append(SessionLogEntry {
-        id: EventId::new(),
+        id: wide_id,
         session: sid,
         ts: 0,
         prev_hash: None,
@@ -1506,19 +1507,296 @@ fn test_detail_wide_opening_reads() {
             TrajectoryRow::Turn(turn) => Some(turn.clone()),
             _ => None,
         })
-        .next()
-        .expect("a turn row");
+        .find(|turn| turn.key.as_str() == wide_id.to_string())
+        .expect("the wide turn is in the window");
     reader.request_detail(&drill_of(&wide));
     let detail = pump_detail(&reader, &wide.key);
     assert_eq!(
         detail.state,
-        TrajectoryDetailState::Ready,
-        "a wide opening event does not stop the turn being read: {:?}",
+        TrajectoryDetailState::Failed,
+        "an unreadable opening event is a failed read: {:?}",
         detail.state
     );
+}
+
+/// A reader whose page reads work and whose detail reads panic: the window
+/// loads, and a drill's worker dies without answering.
+fn detail_panicking_reader() -> SessionLogTrajectory {
+    use houyicoder_context::{
+        CheckpointId, CheckpointManifest, ContextBackend, ContextError, LogRangeRead, ReverseRead,
+    };
+
+    type PFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+    struct PanicDetail(houyicoder_memory::LocalFileBackend);
+
+    impl ContextBackend for PanicDetail {
+        fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
+            self.0.append(event)
+        }
+        fn read_range(
+            &self,
+            session: SessionId,
+            from: Option<EventId>,
+            to: Option<EventId>,
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+            self.0.read_range(session, from, to)
+        }
+        fn replay(
+            &self,
+            session: SessionId,
+        ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+            self.0.replay(session)
+        }
+        fn write_checkpoint(
+            &self,
+            manifest: CheckpointManifest,
+        ) -> PFut<'_, Result<CheckpointId, ContextError>> {
+            self.0.write_checkpoint(manifest)
+        }
+        fn read_checkpoint(
+            &self,
+            id: CheckpointId,
+        ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
+            self.0.read_checkpoint(id)
+        }
+        fn list_checkpoints(
+            &self,
+            session: SessionId,
+        ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
+            self.0.list_checkpoints(session)
+        }
+        fn supports_log_windows(&self) -> bool {
+            true
+        }
+        fn log_size(&self, session: SessionId) -> u64 {
+            self.0.log_size(session)
+        }
+        fn read_lines_reverse(&self, session: SessionId, from: u64, max: u64) -> ReverseRead {
+            self.0.read_lines_reverse(session, from, max)
+        }
+        fn read_log_range(&self, _session: SessionId, _from: u64, _max: u64) -> LogRangeRead {
+            panic!("this detail read is broken")
+        }
+    }
+
+    let root = std::env::temp_dir().join(format!(
+        "houyi_detail_panic_{}_{}",
+        SessionId::new(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let store = Arc::new(SessionStore::new(Box::new(PanicDetail(
+        houyicoder_memory::LocalFileBackend::new(root),
+    ))));
+    let sid = SessionId::new();
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    for i in 0..3u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: i * 1000,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: format!("prompt {i}"),
+            },
+        }))
+        .expect("append");
+    }
+    let (reader, _history) = reader_of(&store, sid);
+    reader
+}
+
+/// A detail read whose worker dies is asked for again, and a run of them is
+/// reported: a pane that kept serving the loading view of a read that never
+/// arrived would stay on it for the rest of the session.
+#[test]
+fn test_detail_broken_read_fails() {
+    let reader = detail_panicking_reader();
+    let view = pump(&reader);
+    let turn = view
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.clone()),
+            _ => None,
+        })
+        .expect("a turn row");
+    reader.request_detail(&drill_of(&turn));
+    let detail = pump_detail(&reader, &turn.key);
     assert_eq!(
-        detail.turn.as_ref().map(|turn| turn.n),
-        Some(wide.n),
-        "and the turn it read carries the number the drill named"
+        detail.state,
+        TrajectoryDetailState::Failed,
+        "a run of dead workers is reported: {:?}",
+        detail.state
     );
+}
+
+/// A detail read that was in flight when the history was cleared is dropped:
+/// the records describe a turn this session no longer has.
+#[test]
+fn test_detail_stale_after_clear() {
+    let (store, reader, sid, _history, _root) = disk_reader_at(4);
+    let view = pump(&reader);
+    let turn = view
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.clone()),
+            _ => None,
+        })
+        .expect("a turn row");
+    reader.request_detail(&drill_of(&turn));
+    drop(pump_detail(&reader, &turn.key));
+
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let before = store.trajectory_head(sid).revision.epoch_event_id;
+    // A clear is a mirror reset followed by the boundary event, which is what
+    // makes the boundary the new epoch's first durable event.
+    store.reset_trajectory(sid);
+    rt.block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 9_000,
+        prev_hash: None,
+        event: SessionEvent::ContextCleared { prior_turn: 4 },
+    }))
+    .expect("clear the session");
+    let after = store.trajectory_head(sid).revision.epoch_event_id;
+    assert_ne!(before, after, "a clear starts a new epoch");
+    // The window reloads, so the history it holds is the new one.
+    reader.load_earliest();
+    drop(pump(&reader));
+
+    // The window reloads a frame or two behind the clear, so the pane notices
+    // the new history the way it does in a session: on a later draw.
+    let mut seen = TrajectoryDetailState::Ready;
+    for _ in 0..400 {
+        seen = reader.detail(&turn.key).state;
+        if seen == TrajectoryDetailState::Stale {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        seen,
+        TrajectoryDetailState::Stale,
+        "a detail read in another history is not this session's"
+    );
+}
+
+/// A turn wider than one detail read comes back with its beginning and says so,
+/// rather than showing part of a turn as the whole of it.
+#[test]
+fn test_detail_truncated() {
+    let (store, reader, sid) = disk_reader(1);
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    for i in 0..4u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: 1000 + i,
+            prev_hash: None,
+            event: SessionEvent::ToolResult {
+                call_id: "c1".into(),
+                output: serde_json::json!({ "text": "y".repeat(400 * 1024) }),
+                duration_ms: 5,
+            },
+        }))
+        .expect("append");
+    }
+    drop(pump(&reader));
+
+    let view = reader.trajectory();
+    let turn = view
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.clone()),
+            _ => None,
+        })
+        .expect("a turn row");
+    reader.request_detail(&drill_of(&turn));
+    let detail = pump_detail(&reader, &turn.key);
+    assert_eq!(detail.state, TrajectoryDetailState::Ready);
+    assert!(
+        detail.truncated,
+        "a turn wider than the read says so instead of showing part of itself"
+    );
+}
+
+/// A window that moves past the drilled turn does not take the records with it:
+/// the detail was read from the bytes the drill captured.
+#[test]
+fn test_detail_survives_disk_eviction() {
+    let (_store, reader, _sid, _history, _root) = disk_reader_at(400);
+    let view = pump(&reader);
+    let oldest = view
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.clone()),
+            _ => None,
+        })
+        .expect("a turn row");
+    reader.request_detail(&drill_of(&oldest));
+    let ready = pump_detail(&reader, &oldest.key);
+    assert_eq!(ready.state, TrajectoryDetailState::Ready);
+
+    for _ in 0..3 {
+        reader.load_older();
+        drop(pump(&reader));
+    }
+    let after = reader.detail(&oldest.key);
+    assert_eq!(
+        after.state,
+        TrajectoryDetailState::Ready,
+        "the records are still in hand after the window moved: {:?}",
+        after.state
+    );
+    assert_eq!(after.turn.as_ref().map(|turn| turn.n), Some(oldest.n));
+}
+
+/// A mirror-backed reader answers a drill from the history it holds, and keeps
+/// answering it: the same request is not re-read on every draw.
+#[test]
+fn test_detail_mirror_caches() {
+    let store = Arc::new(SessionStore::new(Box::new(
+        houyicoder_memory::InMemoryBackend::new(),
+    )));
+    let sid = SessionId::new();
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    for i in 0..3u64 {
+        rt.block_on(store.append(SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: i * 1000,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: format!("prompt {i}"),
+            },
+        }))
+        .expect("append");
+    }
+    let (reader, _history) = reader_of(&store, sid);
+    let view = pump(&reader);
+    let turn = view
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.clone()),
+            _ => None,
+        })
+        .expect("a turn row");
+
+    for _ in 0..50 {
+        reader.request_detail(&drill_of(&turn));
+        let detail = reader.detail(&turn.key);
+        assert_eq!(
+            detail.state,
+            TrajectoryDetailState::Ready,
+            "a mirror detail stays ready rather than being reported stale"
+        );
+        assert_eq!(detail.turn.as_ref().map(|turn| turn.n), Some(turn.n));
+    }
 }
