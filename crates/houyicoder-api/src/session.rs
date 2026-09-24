@@ -242,6 +242,13 @@ pub trait SessionLog: Send + Sync {
         last_user_input_id(&self.trajectory_snapshot(session))
     }
 
+    /// What the session's delegated children spent, read from the summary the
+    /// store folds as it appends. A store that maintains a summary answers in
+    /// constant time; the default reads it from the head.
+    fn subagent_usage(&self, session: SessionId) -> SubagentUsage {
+        self.trajectory_head(session).summary.usage.subagent
+    }
+
     /// Clone the finalized suffix beginning at start from the in-memory mirror.
     /// Implementations should avoid cloning the already-consumed prefix.
     fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {

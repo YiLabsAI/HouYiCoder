@@ -132,7 +132,13 @@ impl SessionLogTrajectory {
                 .then_some(summary.usage.cache_read_tokens),
             failures: summary.usage.failures,
             tool_calls: summary.usage.tool_calls,
-            duration_secs: summary.duration_ms / 1000,
+            // The span is measured between the log's first and last event, so
+            // a log with no durable event has no span to report: saying zero
+            // would claim a measurement the session never made.
+            // The span is measured between the log's first and last event, so
+            // a log with no durable event has no span to report: saying zero
+            // would claim a measurement the session never made.
+            duration_ms: (head.revision.durable_event_count > 0).then_some(summary.duration_ms),
             timing: SessionTiming {
                 ttft_samples: summary.timing.ttft_samples,
                 ttft_avg_ms: summary.timing.ttft_avg_ms,

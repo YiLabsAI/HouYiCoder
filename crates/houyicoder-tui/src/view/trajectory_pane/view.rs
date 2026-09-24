@@ -187,7 +187,9 @@ pub struct TrajectoryView {
     /// Tool calls the session issued, from the session summary rather than
     /// from the rows the window happens to hold.
     pub tool_calls: usize,
-    pub duration_secs: u64,
+    /// The session's wall time: the span between its first and last durable
+    /// event, or None when the log carried no event to measure between.
+    pub duration_ms: Option<u64>,
     pub timing: SessionTiming,
     /// How many turns sit before the loaded window. Non-zero means older
     /// history exists and has not been read yet.

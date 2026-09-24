@@ -282,8 +282,9 @@ fn test_session_totals_cover_hidden() {
     assert_eq!(view.timing.model_ms, 300);
     assert_eq!(view.timing.tool_ms, 15);
     assert_eq!(
-        view.duration_secs, 2,
-        "the session's wall time is its own event span"
+        view.duration_ms,
+        Some(2021),
+        "the session's wall time is its own event span, not the page's"
     );
     let first = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
@@ -1741,5 +1742,54 @@ fn test_append_extends_page() {
     assert!(
         titles.iter().any(|title| title == "appended 2"),
         "and the window shows them: {titles:?}"
+    );
+}
+
+/// A session with no durable event has no span to report, whichever backend
+/// reads it: an empty log is not a session that took no time, and the two
+/// backends must not disagree about the same session.
+#[test]
+fn test_empty_session_span_unknown() {
+    let (_store, reader, _sid) = disk_reader(0);
+    let view = pump(&reader);
+    assert_eq!(
+        view.duration_ms, None,
+        "an empty byte-window log has no span to report"
+    );
+
+    let store = Arc::new(SessionStore::new(Box::new(
+        houyicoder_memory::InMemoryBackend::new(),
+    )));
+    let sid = SessionId::new();
+    let (mirror_reader, _history) = reader_of(&store, sid);
+    let mirror_view = pump(&mirror_reader);
+    assert_eq!(
+        mirror_view.duration_ms, None,
+        "and neither does an empty mirror"
+    );
+}
+
+/// One durable event is a measurement of zero, which is a span the session
+/// really has: it is reported as such rather than as unknown.
+#[test]
+fn test_single_event_span_zero() {
+    let (store, reader, sid) = disk_reader(0);
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    rt.block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 1_000,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "only".into(),
+        },
+    }))
+    .expect("append");
+
+    let view = pump(&reader);
+    assert_eq!(
+        view.duration_ms,
+        Some(0),
+        "one event spans no time, and that is measured"
     );
 }

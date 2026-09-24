@@ -76,7 +76,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
         tokens_in: Some(11100),
         tokens_out: Some(4100),
         failures: 1,
-        duration_secs: 39,
+        duration_ms: Some(39_000),
         cache_read: Some(9800),
         timing: SessionTiming {
             ttft_samples: 12,

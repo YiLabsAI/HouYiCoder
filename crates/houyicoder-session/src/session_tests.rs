@@ -205,6 +205,10 @@ async fn test_usage_through_trait() {
     assert_eq!(usage.calls, 1);
     assert_eq!(usage.input_tokens, 70);
     assert_eq!(usage.output_tokens, 8);
+    // The delegated total is also its own read, so a caller that only wants it
+    // does not reach through the head.
+    let direct = log.subagent_usage(session);
+    assert_eq!(direct, usage, "the two reads report the same total");
 }
 
 /// The head reports how far the mirror has advanced, so a caller can ask for

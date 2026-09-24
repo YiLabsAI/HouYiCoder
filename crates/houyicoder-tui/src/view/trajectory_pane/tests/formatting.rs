@@ -11,7 +11,7 @@ use super::fixtures::{detail_of, lines_text, record_of, view_of};
 #[test]
 fn test_header_total_is_span() {
     let mut view = view_of(vec![turn(1, "ask")]);
-    view.duration_secs = 1_032_337;
+    view.duration_ms = Some(1_032_337_000);
     let (header, _, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 120, 25));
     let text = lines_text(&header);
     assert!(text.contains("total 11d 22h"), "{text}");

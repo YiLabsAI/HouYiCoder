@@ -70,7 +70,7 @@ fn test_totals_fold() {
         entry(0, SessionEvent::UserInput { text: "a".into() }),
         usage(10, 100, 20, "m"),
         usage(20, 50, 5, "m"),
-        entry(30, SessionEvent::RunCompleted { secs: Some(1) }),
+        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
     ];
     let summary = fold(&events);
     assert_eq!(summary.total_turns, 1);
@@ -93,7 +93,7 @@ fn test_missing_usage_unknown() {
         usage(10, 100, 20, "m"),
         usage(11, 100, 20, "m"),
         entry(20, SessionEvent::UserInput { text: "b".into() }),
-        entry(30, SessionEvent::RunCompleted { secs: Some(1) }),
+        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
     ];
     let summary = fold(&events);
     assert_eq!(summary.total_turns, 2);
@@ -329,7 +329,7 @@ fn test_late_result_keeps_exemption() {
         },
     ));
     // The turn closes before the result lands.
-    state.record(&entry(2, SessionEvent::RunCompleted { secs: Some(1) }));
+    state.record(&entry(2, SessionEvent::RunCompleted { ms: Some(1) }));
     state.record(&result(
         "c1",
         serde_json::json!({"success": false, "exit_code": 1}),
@@ -442,7 +442,7 @@ fn test_unmeasured_child_breaks_totals() {
                 reasoning_tokens: 0,
             },
         ),
-        entry(30, SessionEvent::RunCompleted { secs: Some(1) }),
+        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
     ];
     let summary = fold(&events);
     assert!(summary.usage.subagent_unmeasured);

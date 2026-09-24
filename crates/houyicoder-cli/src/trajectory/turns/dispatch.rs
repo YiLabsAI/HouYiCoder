@@ -218,8 +218,8 @@ pub(in crate::trajectory) fn apply_turn_content(
         SessionEvent::Summary { text } => {
             builder.push_signal(TrajectoryRecordKind::Compaction, None, text, ev.ts);
         }
-        SessionEvent::RunCompleted { secs: Some(secs) } => {
-            builder.run_completed_ms = (*secs as u64) * 1000;
+        SessionEvent::RunCompleted { ms: Some(ms) } => {
+            builder.run_completed_ms = *ms;
         }
         _ => {}
     }

@@ -62,7 +62,7 @@ pub(super) fn view(rows: Vec<TrajectoryRow>) -> TrajectoryView {
         tokens_in: None,
         tokens_out: None,
         failures: 0,
-        duration_secs: 0,
+        duration_ms: Some(0),
         cache_read: None,
         timing: SessionTiming::default(),
         hidden_turns: 0,
