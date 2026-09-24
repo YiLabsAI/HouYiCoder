@@ -544,6 +544,69 @@ async fn test_extract_skips_main_saved() {
     );
 }
 
+/// A save_memory call whose result reports an error does not skip the fork:
+/// the memory did not land, so the extractor must still run for the turn.
+#[tokio::test]
+async fn test_extract_failed_save_runs() {
+    let (ext, _memory) = extractor(Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    }));
+    let mut msgs = conversation();
+    msgs.push(SessionLogEntry {
+        id: EventId::new(),
+        session: msgs[0].session,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::ToolCall {
+            call_id: "main-save-fail".into(),
+            tool: "save_memory".into(),
+            input: serde_json::json!({"key": "k", "description": "d", "source": "feedback", "content": "c"}),
+        },
+    });
+    msgs.push(SessionLogEntry {
+        id: EventId::new(),
+        session: msgs[0].session,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::ToolResult {
+            call_id: "main-save-fail".into(),
+            output: serde_json::json!({"error": "save_memory: invalid key"}),
+            duration_ms: 0,
+        },
+    });
+    let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
+    assert!(
+        !matches!(outcome, ExtractOutcome::Skipped(ExtractSkip::PrimaryWrote)),
+        "a failed save must not skip extraction"
+    );
+}
+
+/// A save_memory call with no matching result does not skip the fork: an
+/// unanswered call is not a completed save.
+#[tokio::test]
+async fn test_extract_unanswered_save_runs() {
+    let (ext, _memory) = extractor(Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    }));
+    let mut msgs = conversation();
+    msgs.push(SessionLogEntry {
+        id: EventId::new(),
+        session: msgs[0].session,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::ToolCall {
+            call_id: "main-save-lost".into(),
+            tool: "save_memory".into(),
+            input: serde_json::json!({"key": "k", "description": "d", "source": "feedback", "content": "c"}),
+        },
+    });
+    let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
+    assert!(
+        !matches!(outcome, ExtractOutcome::Skipped(ExtractSkip::PrimaryWrote)),
+        "an unanswered save must not skip extraction"
+    );
+}
+
 /// On a provider error the cursor does NOT advance — the errored range
 /// is reconsidered on the next pass.
 #[tokio::test]

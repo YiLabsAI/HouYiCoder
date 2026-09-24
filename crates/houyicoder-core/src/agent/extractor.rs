@@ -197,13 +197,9 @@ impl MemoryExtractor {
             advance_cursor(&self.cursor, messages);
             return Ok(ExtractOutcome::Skipped(ExtractSkip::CursorLost));
         };
-        // Skip the fork when the main agent already saved in this range:
-        // re-extracting would duplicate work the user just triggered. The
-        // dedup at write time still catches a duplicate, but the fork is
-        // wasted, so a lightweight scan (does the tail hold any
-        // save_memory call?) gates it. Primary-save notification no longer
-        // lives here: the main runner records at call time and drains at the
-        // run boundary.
+        // Skip the fork when the primary saved successfully this range: a
+        // paired save_memory call + successful result means re-extracting
+        // would duplicate it. A failed or unanswered save does not skip.
         if primary_saved_in(tail) {
             advance_cursor(&self.cursor, messages);
             return Ok(ExtractOutcome::Skipped(ExtractSkip::PrimaryWrote));
@@ -350,15 +346,31 @@ fn advance_cursor(cursor: &Mutex<Option<EventId>>, messages: &[SessionLogEntry])
     }
 }
 
-/// Whether the tail holds any save_memory tool call from the main agent.
-/// A lightweight gate for the mutual-exclusion skip; it does not reconstruct
-/// the change (the main runner records primary saves at call time).
+/// Whether the tail holds a save_memory call that succeeded. Pairs each
+/// call with its ToolResult and requires a saved key (present on created,
+/// updated, and unchanged; absent on error or a missing result), so a
+/// failed or unanswered save does not skip extraction.
 fn primary_saved_in(tail: &[SessionLogEntry]) -> bool {
-    tail.iter().any(|m| {
-        matches!(
-            &m.event,
-            SessionEvent::ToolCall { tool, .. } if tool == "save_memory"
-        )
+    let save_call_ids: Vec<&str> = tail
+        .iter()
+        .filter_map(|m| match &m.event {
+            SessionEvent::ToolCall { tool, call_id, .. } if tool == "save_memory" => {
+                Some(call_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    if save_call_ids.is_empty() {
+        return false;
+    }
+    save_call_ids.iter().any(|cid| {
+        tail.iter().any(|m| {
+            matches!(
+                &m.event,
+                SessionEvent::ToolResult { call_id, output, .. }
+                    if call_id == cid && output.get("saved").is_some()
+            )
+        })
     })
 }
 
