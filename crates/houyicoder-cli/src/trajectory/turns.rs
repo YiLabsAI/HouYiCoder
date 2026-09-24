@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use super::view::preview;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_tui::result_body::extract_body;
+use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
     EventTiming, EventUsage, RecordOutcome, TrajectoryRecord, TrajectoryRecordKind, TrajectoryTurn,
-    TrajectoryTurnKey, TurnBoundary,
+    TurnBoundary,
 };
 
 pub(super) mod dispatch;

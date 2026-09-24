@@ -18,7 +18,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::state::TrajectoryPaneState;
+use crate::state::{TrajectoryDrill, TrajectoryPaneState, TrajectoryTurnKey};
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::{format_span_ms, now_epoch_secs, relative_time};
@@ -171,27 +171,6 @@ pub struct TrajectoryRecord {
     pub timing: Option<EventTiming>,
     /// Model calls only: length-recovery retries folded into this call.
     pub retries: usize,
-}
-
-/// A turn's identity in the durable log: the event that opened it.
-///
-/// Opaque on purpose. The pane compares keys to know which turn a row is, and
-/// the composition root resolves one back to the bytes it came from; neither
-/// needs the other's view of it. A turn number cannot do this, because numbers
-/// begin again when a session is cleared.
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
-pub struct TrajectoryTurnKey(String);
-
-impl TrajectoryTurnKey {
-    /// The key of the event that opened a turn, as its durable id reads.
-    pub fn from_opening_event(id: &str) -> Self {
-        Self(id.to_string())
-    }
-
-    /// The durable id this key was built from.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 #[derive(Clone)]
@@ -445,21 +424,35 @@ pub(crate) fn note_selected_turn(state: &TrajectoryPaneState, view: &TrajectoryV
 /// past it, or the history it belonged to was cleared. The frozen index is
 /// not a fallback there, because it names another turn by then.
 ///
-/// A background row has no turn number to follow, so it keeps the row the
-/// drill froze and its own level-1 only contract.
 fn drilled_row(state: &TrajectoryPaneState, view: &TrajectoryView) -> Option<usize> {
-    let Some(selected) = state.selection() else {
+    let Some(drill) = state.drill() else {
+        // A background row has no turn to follow, so it keeps the row the
+        // drill froze and its own level-1 only contract.
         return Some(state.turn_idx());
     };
-    if selected.history_generation != view.history_generation {
+    if drill.history_generation != view.history_generation {
         return None;
     }
     let index = view
         .rows
         .iter()
-        .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.n == selected.number))?;
+        .position(|row| matches!(row, TrajectoryRow::Turn(turn) if turn.key == drill.key))?;
     state.set_turn_idx(index);
     Some(index)
+}
+
+/// Record the turn the drill levels are about, by the key its row carries.
+///
+/// The key is the identity the detail read is asked for by, so the drill holds
+/// it rather than the row it happened to sit on.
+pub(crate) fn note_drilled_row(state: &TrajectoryPaneState, view: &TrajectoryView) {
+    match view.rows.get(state.cursor()) {
+        Some(TrajectoryRow::Turn(turn)) => state.set_drill(TrajectoryDrill {
+            key: turn.key.clone(),
+            history_generation: view.history_generation,
+        }),
+        _ => state.clear_drill(),
+    }
 }
 
 /// Main entry: dispatch on the drill level. Each level builder returns the

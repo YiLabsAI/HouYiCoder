@@ -551,3 +551,35 @@ fn test_drill_drops_across_history() {
         "and it says why it is empty: {screen}"
     );
 }
+
+/// The drill holds the turn's durable key, not the row it sat on, and stepping
+/// back drops it: the key is what a detail read is asked for by, so it must not
+/// outlive the drill.
+#[test]
+fn test_drill_holds_key() {
+    let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
+    let mut app = crate::composition::app();
+    app.pane = crate::state::Pane::Trajectory;
+    app.trajectory_log = Some(log.clone());
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+
+    for _ in 0..2 {
+        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let drill = app.trajectory.drill().expect("a drill");
+    assert_eq!(drill.key.as_str(), "t403", "the key of the row it opened");
+    assert_eq!(drill.history_generation, 1);
+
+    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(
+        app.trajectory.drill(),
+        None,
+        "stepping back drops the drill"
+    );
+}

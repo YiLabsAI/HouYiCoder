@@ -117,6 +117,11 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                 // Record the turn the drill is about, so stepping back returns
                 // to it even if a page arrives under the row index meanwhile.
                 note_selected_turn(app);
+                // The drill's identity is the row's key: a row index names
+                // another turn once the window moves.
+                if let Some(log) = app.trajectory_log.as_ref() {
+                    trajectory_pane::note_drilled_row(&app.trajectory, &log.trajectory());
+                }
                 app.trajectory.set_level(1);
                 app.trajectory.set_cursor(0);
             } else if level == 1 {
@@ -162,6 +167,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                     // recording it again here would rewrite it from whatever
                     // turn the index happens to name now.
                     app.trajectory.set_cursor(app.trajectory.turn_idx());
+                    app.trajectory.clear_drill();
                 }
                 // The record levels keep their cursor: the user was looking at
                 // one record, and stepping back shows the list it came from.

@@ -13,7 +13,43 @@
 //! is the session turn number and the row is found from it again. Mapping a row
 //! to that number is the view's business, so this type holds facts only.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+
+/// A turn's identity in the durable log: the event that opened it.
+///
+/// Opaque on purpose. The pane compares keys to know which turn a row is, and
+/// the composition root resolves one back to the bytes it came from; neither
+/// needs the other's view of it. A turn number cannot do this, because numbers
+/// begin again when a session is cleared.
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+pub struct TrajectoryTurnKey(String);
+
+impl TrajectoryTurnKey {
+    /// The key of the event that opened a turn, as its durable id reads.
+    pub fn from_opening_event(id: &str) -> Self {
+        Self(id.to_string())
+    }
+
+    /// The durable id this key was built from.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The turn the pane's drill is about: its durable key, and the history the key
+/// was read in.
+///
+/// The drill's identity is the key, not the number: a page arriving under the
+/// row moves the number's meaning, and a clear makes the number name another
+/// turn. The number is what the list shows; this is what the detail is asked
+/// for by.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TrajectoryDrill {
+    /// The turn the drill is about.
+    pub key: TrajectoryTurnKey,
+    /// The history the key was read in.
+    pub history_generation: u64,
+}
 
 /// The turn the pane is on: the number it carries in the history in hand, and
 /// which history that is.
@@ -54,6 +90,9 @@ pub struct TrajectoryPaneState {
     /// is not turn zero: a turn number of zero is not a turn, and a sentinel
     /// would have to be checked at every read.
     selection: Cell<Option<TrajectorySelection>>,
+    /// The turn the drill levels are about, or None while the pane is on the
+    /// list or on a background row.
+    drill: RefCell<Option<TrajectoryDrill>>,
 }
 
 impl TrajectoryPaneState {
@@ -123,5 +162,20 @@ impl TrajectoryPaneState {
     /// Drop the selection, so nothing is restored from it.
     pub fn clear_selection(&self) {
         self.selection.set(None);
+    }
+
+    /// The turn the drill levels are about, if the pane is on one.
+    pub fn drill(&self) -> Option<TrajectoryDrill> {
+        self.drill.borrow().clone()
+    }
+
+    /// Put the drill levels on a turn of the history in hand.
+    pub fn set_drill(&self, drill: TrajectoryDrill) {
+        *self.drill.borrow_mut() = Some(drill);
+    }
+
+    /// Drop the drill: the pane is back on the list, or on a background row.
+    pub fn clear_drill(&self) {
+        *self.drill.borrow_mut() = None;
     }
 }
