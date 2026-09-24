@@ -4,6 +4,7 @@ mod gates;
 mod mutation_log;
 mod preservation;
 mod recall;
+pub(crate) mod selector;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -11,7 +12,7 @@ use std::time::Duration;
 use houyicoder_api::agent_event::{
     AgentEventHandlers, EventHandler, MemoryChangeCausality, MemoryChangeOrigin, MemoryChangedEvent,
 };
-use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
     CheckpointManifest, EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId,
@@ -21,6 +22,7 @@ use houyicoder_context::{
 pub use gates::{MemoryGateState, MemoryGates};
 pub(crate) use mutation_log::MutationLog;
 pub(crate) use preservation::{preserve_folded_context, preserve_session};
+use selector::RecallTasks;
 
 use crate::agent::auto_dream::DreamRunner;
 use crate::agent::extractor::MemoryExtractor;
@@ -52,11 +54,13 @@ enum MemoryIndexSnapshot {
 pub struct MemoryRuntime {
     store: Arc<dyn SessionLog>,
     provider: Option<Arc<dyn MemoryProvider>>,
+    reranker: Option<Arc<dyn MemoryReranker>>,
     gates: MemoryGates,
     background: BackgroundMemory,
     index_snapshot: Mutex<MemoryIndexSnapshot>,
     primary_recorder: Option<Arc<MutationLog>>,
     memory_changed: Mutex<Option<Arc<dyn EventHandler<MemoryChangedEvent>>>>,
+    recall_tasks: RecallTasks,
 }
 
 impl MemoryRuntime {
@@ -65,11 +69,13 @@ impl MemoryRuntime {
         Self {
             store,
             provider: None,
+            reranker: None,
             gates: MemoryGates::new(true, true),
             background: BackgroundMemory::none(),
             index_snapshot: Mutex::new(MemoryIndexSnapshot::Uninitialized),
             primary_recorder: None,
             memory_changed: Mutex::new(None),
+            recall_tasks: RecallTasks::default(),
         }
     }
 
@@ -84,11 +90,13 @@ impl MemoryRuntime {
         Self {
             store,
             provider,
+            reranker: None,
             gates,
             background: BackgroundMemory { extractor, dream },
             index_snapshot: Mutex::new(MemoryIndexSnapshot::Uninitialized),
             primary_recorder: None,
             memory_changed: Mutex::new(None),
+            recall_tasks: RecallTasks::default(),
         }
     }
 
@@ -119,6 +127,17 @@ impl MemoryRuntime {
         self.invalidate_index_snapshot();
     }
 
+    /// Return the semantic selection stage, when one is installed.
+    pub(crate) fn reranker(&self) -> Option<&Arc<dyn MemoryReranker>> {
+        self.reranker.as_ref()
+    }
+
+    /// Install the semantic selection stage during composition. Without it a
+    /// weak lexical signal falls back deterministically instead of selecting.
+    pub fn install_reranker(&mut self, reranker: Arc<dyn MemoryReranker>) {
+        self.reranker = Some(reranker);
+    }
+
     /// Read the gate state snapshot.
     pub(crate) fn gate_state(&self) -> MemoryGateState {
         self.gates.state()
@@ -133,9 +152,19 @@ impl MemoryRuntime {
     }
 
     /// Recall relevant memory for the turn about to start. No-op when
-    /// auto_memory is off, no provider is configured, or recall returns nothing.
+    /// auto_memory is off, no provider is configured, or the selection
+    /// settles on nothing. A triggered semantic stage runs beside the model
+    /// call and appends its recall on completion.
     pub(crate) async fn recall(&self, session: SessionId) -> Result<(), crate::agent::RunError> {
-        recall::recall(&self.store, self.provider.as_ref(), &self.gates, session).await
+        recall::recall(
+            &self.store,
+            self.provider.as_ref(),
+            self.reranker.as_ref(),
+            &self.recall_tasks,
+            &self.gates,
+            session,
+        )
+        .await
     }
 
     /// Preserve memory candidates from events the manifest marks Summarized
@@ -287,8 +316,10 @@ impl MemoryRuntime {
         }
     }
 
-    /// Await in-flight dream tasks until they finish or the timeout expires.
+    /// Await running background tasks — recall selections first, then dream
+    /// passes — until they finish or the timeout expires.
     pub(crate) async fn join_background(&self, timeout: Duration) {
+        self.recall_tasks.drain(timeout).await;
         if let Some(dream) = self.background.dream.as_ref() {
             dream.drain_pending(timeout).await;
         }

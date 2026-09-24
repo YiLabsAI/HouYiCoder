@@ -237,6 +237,43 @@ impl MemorySummary {
     }
 }
 
+/// One scored candidate row from a recall rank. The rank scans topic
+/// frontmatter only, so a hit carries the same metadata a listing row does
+/// plus the lexical score the query earned against it. A score of zero keeps
+/// the row in the list: a zero-hit query still hands its candidates to the
+/// semantic stage, which reads the metadata, not the score.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRankHit {
+    pub key: String,
+    pub description: String,
+    pub source: MemorySource,
+    pub scope: MemoryScope,
+    pub mtime_secs: u64,
+    /// Distinct query tokens found in the key plus description. Zero means
+    /// the lexical stage found no overlap.
+    pub score: u32,
+}
+
+impl MemoryRankHit {
+    pub fn new(
+        key: impl Into<String>,
+        description: impl Into<String>,
+        source: MemorySource,
+        scope: MemoryScope,
+        mtime_secs: u64,
+        score: u32,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            description: description.into(),
+            source,
+            scope,
+            mtime_secs,
+            score,
+        }
+    }
+}
+
 /// Advisory recall-frequency counters for one memory key, persisted in a
 /// per-scope sidecar so the consolidation dream can nominate stale or
 /// high-frequency entries. Advisory: a lost or corrupt sidecar is a cold

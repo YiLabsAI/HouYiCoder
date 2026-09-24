@@ -1,7 +1,6 @@
 use super::*;
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
 use houyicoder_context::{EventId, MemoryEntry, SessionEvent, SessionId, SessionLogEntry};
-use std::collections::HashSet;
 use std::sync::Mutex;
 
 /// An in-memory capturing provider so the tool test stays deterministic
@@ -14,14 +13,6 @@ struct RecordingMemory {
 }
 
 impl MemoryProvider for RecordingMemory {
-    fn recall(
-        &self,
-        _query: &str,
-        _budget: usize,
-        _surfaced: &HashSet<String>,
-    ) -> Vec<MemoryEntry> {
-        Vec::new()
-    }
     fn add(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
         self.writes.lock().expect("writes").push(entry);
         self.scopes.lock().expect("scopes").push(MemoryScope::Auto);
@@ -44,15 +35,6 @@ fn provider() -> Arc<RecordingMemory> {
 struct UnchangedMemory;
 
 impl MemoryProvider for UnchangedMemory {
-    fn recall(
-        &self,
-        _query: &str,
-        _budget: usize,
-        _surfaced: &HashSet<String>,
-    ) -> Vec<MemoryEntry> {
-        Vec::new()
-    }
-
     fn add(&self, _entry: MemoryEntry) -> Result<(), MemoryError> {
         Ok(())
     }

@@ -387,9 +387,6 @@ fn test_memory_forget_routes_scope() {
         deletes: Arc<Mutex<Vec<(String, MemoryScope)>>>,
     }
     impl MemoryProvider for RecordingMemory {
-        fn recall(&self, _: &str, _: usize, _: &HashSet<String>) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
         fn add(&self, _: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
         }
@@ -402,8 +399,8 @@ fn test_memory_forget_routes_scope() {
     let provider = Arc::new(RecordingMemory {
         deletes: deletes.clone(),
     });
-    // Exercise the required trait methods so the mock has no dead code.
-    drop(provider.recall("", 0, &HashSet::new()));
+    // Exercise the mock methods so the stub has no dead code.
+    drop(provider.rank_candidates("", &HashSet::new()));
     drop(provider.add(MemoryEntry::new("k", "c", MemorySource::Project)));
     let mut runner = Runner::new(
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),

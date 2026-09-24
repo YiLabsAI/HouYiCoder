@@ -35,6 +35,15 @@ pub(crate) fn tokenize(query: &str) -> Vec<String> {
     out
 }
 
+/// Whether a query carries word content at all. A single CJK char or a
+/// one-letter word is a real question even though it is too short to become
+/// a keyword, so the rank still offers its candidates to the semantic stage
+/// at score zero; an empty or punctuation-only query carries no signal and
+/// ranks nothing.
+pub(crate) fn has_word_content(query: &str) -> bool {
+    query.chars().any(|c| c.is_alphanumeric())
+}
+
 /// Emit a finished run. A CJK run contributes its bigrams plus the full
 /// string when the run is longer than two characters (for a two-character
 /// run the single bigram already equals the full string, so the extra token

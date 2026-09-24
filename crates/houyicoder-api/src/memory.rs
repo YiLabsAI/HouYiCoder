@@ -4,9 +4,10 @@
 //! in-process keyword, Python sidecar) live in the memory crate; the engine
 //! depends on these traits so it does not depend on any impl crate.
 //!
-//! The shape is deliberately small. recall is deterministic (keyword overlap
-//! plus recency) so the hot path pays no per-turn model cost for ranking —
-//! no model side-query per turn. write lands a single source of truth
+//! The shape is deliberately small. Lexical ranking is deterministic
+//! (keyword overlap plus recency) so the hot path pays no per-turn model
+//! cost; the semantic reranker fires only on a weak lexical signal, off the
+//! first-token path. write lands a single source of truth
 //! (topic record lands or it does not, derived index pointer reconciled
 //! under the same lock) rather than fanning a write out to three
 //! independent paths where a crash between them leaves the store
@@ -14,7 +15,7 @@
 //!
 //! De-dup is caller-driven, not provider-internal: the caller passes the set
 //! of memory keys already in the assembled context (scanned from the projected
-//! transcript) so recall skips entries the model already sees this turn.
+//! transcript) so the rank skips entries the model already sees this turn.
 //! Compaction folds old memory-recall events out of the projection (they
 //! take the Summarized disposition), so the scanned surfaced set naturally
 //! empties at the compaction boundary — the reset happens by projection,
@@ -29,7 +30,10 @@
 //! store trait object). No Sqlite/PG impl is built — markdown-only is
 //! intentional; the seam is left open for million-scale later.
 
-use houyicoder_context::{MemoryEntry, MemoryError, MemoryRecallStats, MemoryScope, MemorySummary};
+use houyicoder_async::PFut;
+use houyicoder_context::{
+    MemoryEntry, MemoryError, MemoryRankHit, MemoryRecallStats, MemoryScope, MemorySummary,
+};
 use std::collections::HashSet;
 
 /// The observable effect of one memory upsert.
@@ -50,17 +54,24 @@ impl MemoryWriteOutcome {
     }
 }
 
-/// Engine-facing recall plus write seam. The engine holds this trait and
-/// never sees the backend. recall is budget-bounded deterministic ranking
-/// that skips any key in surfaced (a key already in the assembled context this
-/// turn); add lands a single source of truth; update rewrites; rebuild_index
-/// regenerates the derived index from the topic files (self-healing).
+/// Engine-facing rank plus write seam. The engine holds this trait and never
+/// sees the backend. rank_candidates is deterministic lexical ranking over
+/// frontmatter metadata that skips any key in surfaced (a key already in the
+/// assembled context this turn); add lands a single source of truth; update
+/// rewrites; rebuild_index regenerates the derived index from the topic
+/// files (self-healing).
 pub trait MemoryProvider: Send + Sync {
-    /// Recall entries fitting the budget, most relevant first, skipping any
-    /// key in surfaced. The caller builds surfaced by scanning the projected
-    /// transcript for already-injected memory-recall events, so the provider
-    /// holds no surfaced state across calls.
-    fn recall(&self, query: &str, budget: usize, surfaced: &HashSet<String>) -> Vec<MemoryEntry>;
+    /// Rank stored memories against the query as metadata rows, most
+    /// relevant first, skipping any key in surfaced. Zero-score rows stay in
+    /// the list, sorted last, so a query with no lexical overlap still
+    /// offers its candidates to the semantic stage. The caller builds
+    /// surfaced by scanning the projected transcript for already-injected
+    /// memory-recall events, so the provider holds no surfaced state across
+    /// calls. Default empty for providers without a rank path.
+    fn rank_candidates(&self, query: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
+        let _ = (query, surfaced);
+        Vec::new()
+    }
     /// Atomically write a new memory entry (single source of truth; the
     /// derived index pointer is reconciled under the same lock; a failed
     /// pointer triggers best-effort rollback of the topic file).
@@ -234,6 +245,36 @@ pub trait MemoryProvider: Send + Sync {
     fn record_gate_violation(&self, _key: &str) {}
 }
 
+/// The result of one semantic selection pass. Every degraded selection stays
+/// distinguishable so the host can take the matching deterministic fallback
+/// and telemetry can name the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RerankOutcome {
+    /// The keys the model chose, most relevant first. An empty vec is a
+    /// confident nothing-is-relevant verdict, not a failure.
+    Selected(Vec<String>),
+    /// The call did not complete; carries the provider's reason.
+    Unavailable(String),
+    /// The call completed but its reply was not readable as a key selection.
+    Malformed(String),
+    /// The reply did not arrive before the host's deadline.
+    Timeout,
+}
+
+/// The semantic stage of recall. An implementation makes one one-shot model
+/// call over ranked candidate metadata and returns the keys worth injecting.
+/// The host owns the deadline and the fallback when this call fails; a host
+/// without one keeps recall lexical-only.
+pub trait MemoryReranker: Send + Sync {
+    /// Select at most limit of the candidate keys for the query.
+    fn rerank(
+        &self,
+        query: &str,
+        candidates: &[MemoryRankHit],
+        limit: usize,
+    ) -> PFut<'_, RerankOutcome>;
+}
+
 /// Pluggable backend seam. markdown is the default impl; a future SqliteStore
 /// impls the same seam with zero change to the recall engine. scan returns
 /// entries (a lighter header-only type is a future refinement, deferred);
@@ -258,11 +299,24 @@ pub trait MemoryStore: Send + Sync {
 mod tests {
     use super::*;
 
-    /// Both traits must support runtime dispatch.
+    /// Every port must support runtime dispatch.
     #[test]
     fn test_traits_are_object_safe() {
         let _provider: Box<dyn MemoryProvider> = Box::new(Stub);
         let _store: Box<dyn MemoryStore> = Box::new(Stub);
+        let _reranker: Box<dyn MemoryReranker> = Box::new(StubReranker);
+    }
+
+    struct StubReranker;
+    impl MemoryReranker for StubReranker {
+        fn rerank(
+            &self,
+            _query: &str,
+            _candidates: &[MemoryRankHit],
+            _limit: usize,
+        ) -> PFut<'_, RerankOutcome> {
+            Box::pin(async { RerankOutcome::Selected(Vec::new()) })
+        }
     }
 
     /// The default delete_memory_in_scope delegates to delete_memory so a
@@ -281,14 +335,6 @@ mod tests {
 
     struct Stub;
     impl MemoryProvider for Stub {
-        fn recall(
-            &self,
-            _query: &str,
-            _budget: usize,
-            _surfaced: &HashSet<String>,
-        ) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
         fn add(&self, _entry: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
         }

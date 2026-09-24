@@ -82,6 +82,12 @@ pub(super) fn build_memory_runtime(
     if let Some(id) = store.last_trajectory_id(session) {
         extractor.seed_cursor(id);
     }
+    // The semantic selection stage shares the main model; recall fires it
+    // only on a weak lexical signal, off the first-token path.
+    let reranker = Arc::new(houyicoder_memory::SemanticReranker::new(
+        Arc::clone(&model_provider),
+        model.clone(),
+    ));
     let dream = build_dream_runner(
         model_provider,
         Arc::clone(&provider),
@@ -89,8 +95,9 @@ pub(super) fn build_memory_runtime(
         model,
         session_log_root,
     );
-    let runtime =
+    let mut runtime =
         MemoryRuntime::from_parts(store, Some(provider), gates, Some(extractor), Some(dream));
+    runtime.install_reranker(reranker);
     (runtime, settings_warnings)
 }
 

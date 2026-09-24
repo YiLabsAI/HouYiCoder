@@ -1,7 +1,7 @@
-//! Markdown memory recall, atomic writes, index repair, and boundary behavior.
+//! Markdown memory ranking, atomic writes, index repair, and boundary behavior.
 
 use super::*;
-use houyicoder_context::{MemoryOrigin, MemorySource};
+use houyicoder_context::{MemoryOrigin, MemoryScope, MemorySource};
 use std::fs::{File, FileTimes, OpenOptions};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,7 +20,7 @@ fn entry(key: &str, content: &str, source: MemorySource) -> MemoryEntry {
 }
 
 #[test]
-fn test_recall_returns_within_budget() {
+fn test_rank_orders_frontmatter_hits() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     p.add(entry(
@@ -31,17 +31,23 @@ fn test_recall_returns_within_budget() {
     .unwrap();
     p.add(entry("cat-facts", "a sleepy cat naps", MemorySource::User))
         .unwrap();
-    // "the quick brown fox" is 19 chars -> 5 tokens. Budget 5 admits
-    // exactly one entry (the fox one ranks first for a fox query).
-    let out = p.recall("fox", 5, &HashSet::new());
-    assert_eq!(out.len(), 1);
+    // The rank scores frontmatter only. The fox entry matches in both name
+    // and description; the cat entry stays listed as a zero-score candidate
+    // for the semantic stage rather than being dropped.
+    let out = p.rank_candidates("fox", &HashSet::new());
+    assert_eq!(out.len(), 2, "zero-score rows stay listed");
     assert_eq!(out[0].key, "fox-facts");
-    assert!(out[0].tokens <= 5);
+    assert!(
+        out[0].score >= 1,
+        "a matching row carries its lexical score"
+    );
+    assert_eq!(out[1].key, "cat-facts");
+    assert_eq!(out[1].score, 0);
     std::fs::remove_dir_all(&root).ok();
 }
 
 #[test]
-fn test_recall_dedups_already_surfaced() {
+fn test_rank_dedups_already_surfaced() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     p.add(entry(
@@ -50,25 +56,25 @@ fn test_recall_dedups_already_surfaced() {
         MemorySource::Project,
     ))
     .unwrap();
-    // First recall with an empty surfaced set returns the entry; the caller
+    // First rank with an empty surfaced set returns the entry; the caller
     // records its key as surfaced for the next call.
-    let first = p.recall("fox", 100, &HashSet::new());
+    let first = p.rank_candidates("fox", &HashSet::new());
     assert_eq!(first.len(), 1);
     let mut surfaced: HashSet<String> = first.iter().map(|e| e.key.clone()).collect();
-    // Second recall with the surfaced set must not return the entry.
-    let second = p.recall("fox", 100, &surfaced);
+    // Second rank with the surfaced set must not return the entry.
+    let second = p.rank_candidates("fox", &surfaced);
     assert!(second.is_empty(), "a surfaced entry must be skipped");
     // After a compaction-style reset (empty surfaced set), the entry is
     // eligible again — the natural reset the projection scan produces.
     surfaced.clear();
-    let third = p.recall("fox", 100, &surfaced);
+    let third = p.rank_candidates("fox", &surfaced);
     assert_eq!(third.len(), 1);
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// A key in the surfaced set passed to recall suppresses that entry; clearing
-/// the set re-surfaces it. Pins the caller-driven surfaced contract that
-/// replaces the old in-provider mutable de-dup seam.
+/// A key in the surfaced set passed to the rank suppresses that entry;
+/// clearing the set re-surfaces it. Pins the caller-driven surfaced contract
+/// that replaces the old in-provider mutable de-dup seam.
 #[test]
 fn test_surfaced_param_suppresses() {
     let root = temp_root();
@@ -79,17 +85,17 @@ fn test_surfaced_param_suppresses() {
         MemorySource::Project,
     ))
     .unwrap();
-    // surfaced = {fox-facts}: recall skips it.
+    // surfaced = {fox-facts}: the rank skips it.
     let mut surfaced = HashSet::new();
     surfaced.insert("fox-facts".to_string());
     assert!(
-        p.recall("fox", 100, &surfaced).is_empty(),
+        p.rank_candidates("fox", &surfaced).is_empty(),
         "surfaced key must be suppressed"
     );
     // Empty surfaced set: fox re-surfaces.
     surfaced.clear();
     assert_eq!(
-        p.recall("fox", 100, &surfaced).len(),
+        p.rank_candidates("fox", &surfaced).len(),
         1,
         "cleared surfaced set must re-surface the entry"
     );
@@ -288,21 +294,49 @@ fn test_rebuild_index_regenerates() {
 }
 
 #[test]
-fn test_recall_empty_query_returns() {
+fn test_rank_empty_query_returns() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     p.add(entry("fox", "fox body", MemorySource::Project))
         .unwrap();
-    assert!(p.recall("", 100, &HashSet::new()).is_empty());
-    assert!(p.recall("   ", 100, &HashSet::new()).is_empty());
+    assert!(p.rank_candidates("", &HashSet::new()).is_empty());
+    assert!(p.rank_candidates("   ", &HashSet::new()).is_empty());
+    assert!(
+        p.rank_candidates("!!!", &HashSet::new()).is_empty(),
+        "punctuation carries no word content"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A single CJK char is too short to become a keyword but is a real query;
+/// the rank still offers its rows to the semantic stage at score zero
+/// instead of dropping the query.
+#[test]
+fn test_rank_unsplittable_offers_rows() {
+    let root = temp_root();
+    let p = MarkdownMemoryProvider::new(root.clone());
+    p.add(entry(
+        "tea-order",
+        "how the team orders tea",
+        MemorySource::Project,
+    ))
+    .unwrap();
+    let out = p.rank_candidates("\u{8336}", &HashSet::new());
+    assert_eq!(
+        out.len(),
+        1,
+        "an unsplittable query still offers candidates"
+    );
+    assert_eq!(out[0].key, "tea-order");
+    assert_eq!(out[0].score, 0);
     std::fs::remove_dir_all(&root).ok();
 }
 
 #[test]
-fn test_recall_empty_root_returns() {
+fn test_rank_empty_root_returns() {
     let root = temp_root().join("nonexistent_subdir");
     let p = MarkdownMemoryProvider::new(root.clone());
-    assert!(p.recall("anything", 100, &HashSet::new()).is_empty());
+    assert!(p.rank_candidates("anything", &HashSet::new()).is_empty());
 }
 
 #[test]
@@ -312,18 +346,22 @@ fn test_round_trip_preserves_fields() {
     let src = MemorySource::Feedback;
     p.add(entry("round-trip", "the fox feedback here", src))
         .unwrap();
-    let out = p.recall("fox", 100, &HashSet::new());
+    let out = p.rank_candidates("fox", &HashSet::new());
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].key, "round-trip");
     assert_eq!(out[0].source, src);
-    assert_eq!(out[0].content, "the fox feedback here");
+    // The rank carries metadata only; the body reads back through show.
+    let body = p
+        .show_memory("round-trip")
+        .expect("a ranked key reads back");
+    assert_eq!(body.content, "the fox feedback here");
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// Successive recalls with an accumulating surfaced set surface different
-/// entries until exhausted: the second call skips what the first returned and
-/// returns the next match; once all matches are surfaced, recall is empty.
-/// Pins the caller-driven surfaced contract at the provider boundary.
+/// Successive ranks with an accumulating surfaced set shrink until
+/// exhausted: the second call skips what the first returned; once all
+/// matches are surfaced, the rank is empty. Pins the caller-driven surfaced
+/// contract at the provider boundary.
 #[test]
 fn test_surfaced_set_exhausts() {
     let root = temp_root();
@@ -333,35 +371,26 @@ fn test_surfaced_set_exhausts() {
     p.add(entry("fox-b", "bravo fox", MemorySource::Project))
         .unwrap();
     let mut surfaced = HashSet::new();
-    // First recall surfaces one of the two fox entries.
-    let first = p.recall("fox", 4, &surfaced);
-    assert_eq!(first.len(), 1);
+    // First rank lists both fox entries.
+    let first = p.rank_candidates("fox", &surfaced);
+    assert_eq!(first.len(), 2);
     surfaced.extend(first.iter().map(|e| e.key.clone()));
-    // Second recall skips the surfaced one and returns the other.
-    let second = p.recall("fox", 4, &surfaced);
-    assert_eq!(second.len(), 1, "the non-surfaced match must still surface");
+    // Both surfaced: the rank is empty.
     assert!(
-        !surfaced.contains(&second[0].key),
-        "second recall must not re-surface the first entry"
-    );
-    surfaced.extend(second.iter().map(|e| e.key.clone()));
-    // Both surfaced: recall is empty.
-    assert!(
-        p.recall("fox", 4, &surfaced).is_empty(),
+        p.rank_candidates("fox", &surfaced).is_empty(),
         "all matches surfaced must return empty"
     );
-    // Clear the set: an entry surfaces again.
+    // Clear the set: both entries surface again.
     surfaced.clear();
-    assert_eq!(p.recall("fox", 4, &surfaced).len(), 1);
+    assert_eq!(p.rank_candidates("fox", &surfaced).len(), 2);
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// When the result cap (5) entries are all surfaced, a fresh rank-6+
-/// candidate must still get a chance on the next recall. The surfaced
-/// filter runs BEFORE rank+truncate, so the 6th entry is not truncated
-/// off by the result cap.
+/// The rank carries no result cap and the surfaced filter runs before
+/// ranking, so entries already in context never crowd out fresh candidates:
+/// with five of six surfaced, the sixth still ranks.
 #[test]
-fn test_recall_fresh_after_surfaced() {
+fn test_rank_fresh_after_surfaced() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     for i in 0..6 {
@@ -373,20 +402,20 @@ fn test_recall_fresh_after_surfaced() {
         .unwrap();
     }
     let mut surfaced = HashSet::new();
-    // First recall surfaces up to 5 (the result cap).
-    let first = p.recall("fox", 1000, &surfaced);
-    assert_eq!(first.len(), 5, "first recall returns top 5");
-    surfaced.extend(first.iter().map(|e| e.key.clone()));
-    // Second recall must return the 6th fresh entry, not empty.
-    let second = p.recall("fox", 1000, &surfaced);
+    // First rank lists every candidate; the host caps the selection later.
+    let first = p.rank_candidates("fox", &surfaced);
+    assert_eq!(first.len(), 6, "the rank lists every candidate");
+    surfaced.extend(first.iter().take(5).map(|e| e.key.clone()));
+    // Second rank must return the one fresh entry, not empty.
+    let second = p.rank_candidates("fox", &surfaced);
     assert_eq!(
         second.len(),
         1,
-        "fresh entry beyond cap must surface after top-5 are all surfaced"
+        "the fresh entry still ranks after five are surfaced"
     );
     surfaced.extend(second.iter().map(|e| e.key.clone()));
-    // Third recall: all surfaced, returns empty.
-    let third = p.recall("fox", 1000, &surfaced);
+    // Third rank: all surfaced, returns empty.
+    let third = p.rank_candidates("fox", &surfaced);
     assert!(third.is_empty(), "all surfaced must return empty");
     std::fs::remove_dir_all(&root).ok();
 }
@@ -479,10 +508,11 @@ fn test_rollback_removes_topic() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// Recall over a multi-root provider merges every scope: an entry seeded
-/// into each of the user, project, and auto roots is returned together.
+/// The rank over a multi-root provider merges every scope: an entry seeded
+/// into each of the user, project, and auto roots is returned together,
+/// each row carrying the scope it was found in.
 #[test]
-fn test_recall_merges_scopes() {
+fn test_rank_merges_scopes() {
     let user_dir = temp_root();
     let project_dir = temp_root();
     let auto_dir = temp_root();
@@ -509,21 +539,22 @@ fn test_recall_merges_scopes() {
         project_dir.clone(),
         auto_dir.clone(),
     ]);
-    let out = p.recall("fox", 1000, &HashSet::new());
-    assert_eq!(out.len(), 3, "recall must merge all three scopes");
-    let keys: Vec<&str> = out.iter().map(|e| e.key.as_str()).collect();
-    assert!(keys.contains(&"user-fact"));
-    assert!(keys.contains(&"project-fact"));
-    assert!(keys.contains(&"auto-fact"));
+    let out = p.rank_candidates("fox", &HashSet::new());
+    assert_eq!(out.len(), 3, "the rank must merge all three scopes");
+    let scope_by_key: HashMap<&str, &MemoryScope> =
+        out.iter().map(|h| (h.key.as_str(), &h.scope)).collect();
+    assert_eq!(scope_by_key["user-fact"], &MemoryScope::User);
+    assert_eq!(scope_by_key["project-fact"], &MemoryScope::Project);
+    assert_eq!(scope_by_key["auto-fact"], &MemoryScope::Auto);
     for d in [user_dir, project_dir, auto_dir] {
         std::fs::remove_dir_all(&d).ok();
     }
 }
 
-/// The same key in two scopes dedups to one entry on recall (newest mtime
+/// The same key in two scopes dedups to one row on the rank (newest mtime
 /// wins) so the merged result never returns duplicates.
 #[test]
-fn test_recall_dedups_across_scopes() {
+fn test_rank_dedups_across_scopes() {
     let user_dir = temp_root();
     let auto_dir = temp_root();
     MarkdownMemoryProvider::new(user_dir.clone())
@@ -533,7 +564,7 @@ fn test_recall_dedups_across_scopes() {
         .add(entry("shared", "fox auto copy", MemorySource::Project))
         .unwrap();
     let p = MarkdownMemoryProvider::new_multi(vec![user_dir.clone(), auto_dir.clone()]);
-    let out = p.recall("fox", 1000, &HashSet::new());
+    let out = p.rank_candidates("fox", &HashSet::new());
     assert_eq!(out.len(), 1, "same key across scopes must dedup to one");
     for d in [user_dir, auto_dir] {
         std::fs::remove_dir_all(&d).ok();
@@ -559,8 +590,8 @@ fn test_multi_dedups_dup_roots() {
         user_dir.clone(),
         auto_dir.clone(),
     ]);
-    let out = p.recall("fox", 1000, &HashSet::new());
-    assert_eq!(out.len(), 1, "deduped roots still recall the one entry");
+    let out = p.rank_candidates("fox", &HashSet::new());
+    assert_eq!(out.len(), 1, "deduped roots still rank the one entry");
     for d in [user_dir, auto_dir] {
         std::fs::remove_dir_all(&d).ok();
     }
@@ -632,35 +663,10 @@ fn test_rebuild_heals_external_edit() {
         idx.contains("bravo"),
         "rebuild_if_stale must pick up the externally-added topic"
     );
-    let out = p.recall("bravo", 100, &HashSet::new());
+    let out = p.rank_candidates("bravo", &HashSet::new());
     assert!(
         out.iter().any(|e| e.key == "bravo"),
-        "recall must surface the healed entry"
-    );
-    std::fs::remove_dir_all(&root).ok();
-}
-
-/// An entry whose token count exactly fits the budget must be included;
-/// one token over must break the walk (not skip ahead).
-#[test]
-fn test_budget_boundary_exact_fit() {
-    let root = temp_root();
-    let p = MarkdownMemoryProvider::new(root.clone());
-    // "alpha fox" = 9 chars -> ceil(9/4) = 3 tokens.
-    p.add(entry("a", "alpha fox", MemorySource::Project))
-        .unwrap();
-    // Budget exactly 3: the entry fits.
-    let out = p.recall("fox", 3, &HashSet::new());
-    assert_eq!(
-        out.len(),
-        1,
-        "entry exactly fitting budget must be included"
-    );
-    // Budget 2: entry (3 tokens) does not fit -> break, empty result.
-    let out = p.recall("fox", 2, &HashSet::new());
-    assert!(
-        out.is_empty(),
-        "entry exceeding budget must break the walk, not skip ahead"
+        "the rank must surface the healed entry"
     );
     std::fs::remove_dir_all(&root).ok();
 }

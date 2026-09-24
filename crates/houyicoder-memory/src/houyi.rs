@@ -1,12 +1,11 @@
-//! Sidecar-backed provider stub. The real backend is not wired yet; recall
-//! returns an empty Vec and add succeeds as a no-op until that
-//! contract is implemented.
+//! Sidecar-backed provider stub. The real backend is not connected yet; the
+//! rank default returns no candidates and add succeeds as a no-op until
+//! that contract is implemented.
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::{MemoryEntry, MemoryError};
-use std::collections::HashSet;
 
-/// Empty recall provider: a placeholder for a backend not yet wired.
+/// A placeholder rank provider for a backend not yet connected.
 pub struct StubMemoryProvider;
 
 impl StubMemoryProvider {
@@ -22,15 +21,6 @@ impl Default for StubMemoryProvider {
 }
 
 impl MemoryProvider for StubMemoryProvider {
-    fn recall(
-        &self,
-        _query: &str,
-        _budget: usize,
-        _surfaced: &HashSet<String>,
-    ) -> Vec<MemoryEntry> {
-        Vec::new()
-    }
-
     fn add(&self, _entry: MemoryEntry) -> Result<(), MemoryError> {
         Ok(())
     }
@@ -40,21 +30,16 @@ impl MemoryProvider for StubMemoryProvider {
 mod tests {
     use super::*;
     use houyicoder_context::MemorySource;
+    use std::collections::HashSet;
 
     #[test]
-    fn test_stub_recall_returns_empty() {
+    fn test_stub_rank_returns_empty() {
         let provider = StubMemoryProvider::new();
         assert!(
             provider
-                .recall("anything", 1000, &HashSet::new())
+                .rank_candidates("anything", &HashSet::new())
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn test_stub_recall_empty_store() {
-        let provider = StubMemoryProvider::new();
-        assert!(provider.recall("", 0, &HashSet::new()).is_empty());
     }
 
     #[test]

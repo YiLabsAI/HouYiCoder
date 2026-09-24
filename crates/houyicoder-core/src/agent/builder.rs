@@ -91,8 +91,9 @@ impl Runner {
                     .with_origin(houyicoder_context::MemoryOrigin::MainAgent)
                     .with_recorder(recorder),
             ));
-            self.tools
-                .register(Arc::new(SearchMemoryTool::new(provider.clone())));
+            self.tools.register(Arc::new(
+                SearchMemoryTool::new(provider.clone()).with_reranker(runtime.reranker().cloned()),
+            ));
             self.tools.register(Arc::new(ShowMemoryTool::new(provider)));
         }
         self.memory = runtime;
@@ -270,11 +271,12 @@ impl Runner {
         self.provider.refresh_served_models()
     }
 
-    /// Await in-flight dream tasks (reward-dream or consolidation) until
-    /// they finish or the timeout expires. Tests use this instead of
-    /// polling dream_count on a sleep loop — the JoinHandle await is
-    /// event-driven (the scheduler wakes on task completion), and the
-    /// deadline is a safety bound, not a poll interval.
+    /// Await running background memory tasks — recall selections first,
+    /// then dream passes (reward-dream or consolidation) — until they
+    /// finish or the timeout expires. Tests use this instead of polling
+    /// dream_count on a sleep loop — the JoinHandle await is event-driven
+    /// (the scheduler wakes on task completion), and the deadline is a
+    /// safety bound, not a poll interval.
     pub async fn join_dreams(&self, timeout: std::time::Duration) {
         self.memory.join_background(timeout).await;
     }

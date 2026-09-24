@@ -213,7 +213,6 @@ impl Tool for DemoteMemoryTool {
 mod tests {
     use super::*;
     use houyicoder_context::MemoryEntry;
-    use std::collections::HashSet;
     use std::sync::Mutex;
 
     /// A recording provider that records promote / demote calls so the tool
@@ -223,9 +222,6 @@ mod tests {
         demoted: Mutex<Vec<String>>,
     }
     impl MemoryProvider for RecordingMemory {
-        fn recall(&self, _q: &str, _b: usize, _surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
         fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
         }
@@ -320,9 +316,6 @@ mod tests {
         // A provider whose promote_memory returns NotFound.
         struct NotFoundProvider;
         impl MemoryProvider for NotFoundProvider {
-            fn recall(&self, _q: &str, _b: usize, _s: &HashSet<String>) -> Vec<MemoryEntry> {
-                Vec::new()
-            }
             fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
                 Ok(())
             }

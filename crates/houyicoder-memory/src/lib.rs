@@ -21,6 +21,7 @@ pub mod local_file;
 pub mod markdown_memory;
 pub mod native;
 pub mod provider;
+pub mod reranker;
 
 pub use descriptor_store::{FileDescriptorStore, InMemoryDescriptorStore};
 pub use houyi::StubMemoryProvider;
@@ -28,6 +29,7 @@ pub use in_memory::InMemoryBackend;
 pub use local_file::LocalFileBackend;
 pub use markdown_memory::MarkdownMemoryProvider;
 pub use native::KeywordRecallProvider;
+pub use reranker::SemanticReranker;
 
 use houyicoder_context::BlockHash;
 use sha2::{Digest, Sha256};

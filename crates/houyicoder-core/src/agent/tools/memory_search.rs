@@ -1,37 +1,46 @@
 //! The structured memory-search tool the main agent calls to find a stored
 //! memory from a description of what it is about. The query goes through the
-//! same rank the turn's recall uses, minus the surfaced filter and the body
-//! budget; the provider owns the scan and the rank.
+//! same rank the turn's recall uses, minus the surfaced filter; the provider
+//! owns the scan and the rank. A weak lexical signal awaits the semantic
+//! selection inline — an explicit search is the agent's own tool call, not
+//! the first-token path, so waiting is affordable and the answer is better.
 //!
 //! Read-only by construction, so the approval gate stays off.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_async::PFut;
-use houyicoder_context::{MemorySummary, memory_age_days, memory_age_label};
+use houyicoder_context::{MemoryRankHit, memory_age_days, memory_age_label};
 use serde_json::{Map, Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
-
-/// The body budget handed to the provider's rank. The rank truncates to its
-/// own result cap before any body is packed, and the tool drops the bodies, so
-/// the budget only has to not truncate a match.
-const SEARCH_BODY_BUDGET: usize = usize::MAX;
+use crate::agent::memory::selector::{RECALL_SELECT_CAP, classify, run_semantic_selection};
 
 /// A structured memory search. The agent calls it when the memory index lists
 /// a candidate whose one-line description is not enough to judge.
 pub struct SearchMemoryTool {
     provider: Arc<dyn MemoryProvider>,
+    reranker: Option<Arc<dyn MemoryReranker>>,
 }
 
 impl SearchMemoryTool {
     /// Construct with a shared provider handle. The provider is shared with
     /// the runner memory, so a search reads the same store recall reads.
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
-        Self { provider }
+        Self {
+            provider,
+            reranker: None,
+        }
+    }
+
+    /// Install the semantic selection stage. Without it a weak lexical
+    /// signal answers with the matching rows only.
+    pub fn with_reranker(mut self, reranker: Option<Arc<dyn MemoryReranker>>) -> Self {
+        self.reranker = reranker;
+        self
     }
 }
 
@@ -60,6 +69,7 @@ impl Tool for SearchMemoryTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let provider = Arc::clone(&self.provider);
+        let reranker = self.reranker.clone();
         Box::pin(async move {
             let query = input
                 .get("query")
@@ -74,44 +84,40 @@ impl Tool for SearchMemoryTool {
             // A search looks for a memory the agent may already hold in
             // context, so the surfaced filter the turn's recall applies is
             // left off here.
-            let surfaced = HashSet::new();
-            let ranked = provider.recall(query, SEARCH_BODY_BUDGET, &surfaced);
-            if ranked.is_empty() {
+            let scored = provider.rank_candidates(query, &HashSet::new());
+            if scored.is_empty() {
                 return Ok(json!({ "matches": [] }));
             }
-            // The rank yields bodies; the reader needs the metadata that
-            // chooses one. The summary index supplies the scope, which a body
-            // does not carry.
-            let index: HashMap<String, MemorySummary> = provider
-                .list_memories()
-                .into_iter()
-                .map(|s| (s.key.clone(), s))
-                .collect();
+            // A weak lexical signal waits for the semantic verdict; its row
+            // order is the model's relevance order. A failed selection keeps
+            // the deterministic lexical answer.
+            let mut semantic_rows: Option<Vec<&MemoryRankHit>> = None;
+            if classify(&scored).needs_rerank()
+                && let Some(reranker) = reranker.as_ref()
+            {
+                let (selected, fallback) =
+                    run_semantic_selection(Arc::clone(reranker), query.to_string(), &scored).await;
+                if fallback.is_none() {
+                    semantic_rows = Some(
+                        selected
+                            .iter()
+                            .filter_map(|k| scored.iter().find(|h| &h.key == k))
+                            .collect(),
+                    );
+                }
+            }
+            let rows: Vec<&MemoryRankHit> = semantic_rows.unwrap_or_else(|| {
+                scored
+                    .iter()
+                    .filter(|h| h.score > 0)
+                    .take(RECALL_SELECT_CAP)
+                    .collect()
+            });
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let matches: Vec<Value> = ranked
-                .iter()
-                .map(|entry| match index.get(&entry.key) {
-                    Some(s) => match_object(
-                        &s.key,
-                        &s.description,
-                        s.source.as_label(),
-                        Some(s.scope.as_label()),
-                        s.mtime_secs,
-                        now,
-                    ),
-                    None => match_object(
-                        &entry.key,
-                        &entry.description,
-                        entry.source.as_label(),
-                        None,
-                        entry.mtime_secs,
-                        now,
-                    ),
-                })
-                .collect();
+            let matches: Vec<Value> = rows.iter().map(|h| match_object(h, now)).collect();
             Ok(json!({ "matches": matches }))
         })
     }
@@ -128,28 +134,20 @@ impl Tool for SearchMemoryTool {
     }
 }
 
-/// One match row. The scope is omitted when the summary index holds no row for
-/// the key, since an unnamed root is not a root and a placeholder would claim
-/// a scope the provider never reported. The age is a human-readable label
-/// because a raw timestamp makes the reader do arithmetic it does badly.
-fn match_object(
-    key: &str,
-    description: &str,
-    source: &str,
-    scope: Option<&str>,
-    mtime_secs: u64,
-    now_secs: u64,
-) -> Value {
+/// One match row. The rank hit carries every column directly — key,
+/// description, source, and the scope of the root it was found in — so no
+/// second index lookup can disagree with the rank. The age is a
+/// human-readable label because a raw timestamp makes the reader do
+/// arithmetic it does badly.
+fn match_object(hit: &MemoryRankHit, now_secs: u64) -> Value {
     let mut row = Map::new();
-    row.insert("key".to_string(), json!(key));
-    row.insert("description".to_string(), json!(description));
-    row.insert("source".to_string(), json!(source));
-    if let Some(scope) = scope {
-        row.insert("scope".to_string(), json!(scope));
-    }
+    row.insert("key".to_string(), json!(hit.key));
+    row.insert("description".to_string(), json!(hit.description));
+    row.insert("source".to_string(), json!(hit.source.as_label()));
+    row.insert("scope".to_string(), json!(hit.scope.as_label()));
     row.insert(
         "age".to_string(),
-        json!(memory_age_label(memory_age_days(mtime_secs, now_secs))),
+        json!(memory_age_label(memory_age_days(hit.mtime_secs, now_secs))),
     );
     Value::Object(row)
 }
@@ -157,13 +155,15 @@ fn match_object(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_context::{MemoryEntry, MemoryError, MemorySource};
+    use houyicoder_api::memory::RerankOutcome;
+    use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySource};
     use houyicoder_memory::MarkdownMemoryProvider;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
     use std::process;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A provider that records the surfaced set it was called with, so a test
     /// can prove the search does not inherit the turn's surfaced filter.
@@ -172,13 +172,51 @@ mod tests {
     }
 
     impl MemoryProvider for RecordingMemory {
-        fn recall(&self, _q: &str, _b: usize, surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
+        fn rank_candidates(&self, _q: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
             *self.seen.lock().expect("seen") = surfaced.iter().cloned().collect();
             Vec::new()
         }
         fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
         }
+    }
+
+    /// A reranker answering one canned outcome and counting its calls.
+    struct StubReranker {
+        outcome: RerankOutcome,
+        calls: AtomicUsize,
+    }
+
+    impl MemoryReranker for StubReranker {
+        fn rerank(&self, _q: &str, _c: &[MemoryRankHit], _limit: usize) -> PFut<'_, RerankOutcome> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let outcome = self.outcome.clone();
+            Box::pin(async move { outcome })
+        }
+    }
+
+    /// A rank stub answering fixed rows, so a test controls the lexical
+    /// verdict precisely.
+    struct RankedRows(Vec<MemoryRankHit>);
+
+    impl MemoryProvider for RankedRows {
+        fn rank_candidates(&self, _q: &str, _s: &HashSet<String>) -> Vec<MemoryRankHit> {
+            self.0.clone()
+        }
+        fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
+            Ok(())
+        }
+    }
+
+    fn hit(key: &str, score: u32) -> MemoryRankHit {
+        MemoryRankHit::new(
+            key,
+            format!("{key} description"),
+            MemorySource::Project,
+            MemoryScope::Project,
+            0,
+            score,
+        )
     }
 
     fn root(name: &str) -> PathBuf {
@@ -309,24 +347,14 @@ mod tests {
         );
     }
 
-    /// The scope comes from the summary index, and a key the index does not
-    /// hold reports no scope rather than a placeholder root.
+    /// Every row carries the scope of the root the rank found it in; no
+    /// second index lookup can leave a row without one.
     #[tokio::test]
-    async fn test_search_omits_unknown_scope() {
-        struct RankedOnly;
-        impl MemoryProvider for RankedOnly {
-            fn recall(&self, _q: &str, _b: usize, _s: &HashSet<String>) -> Vec<MemoryEntry> {
-                vec![entry("ghost", "ranked but unlisted", "body")]
-            }
-            fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
-                Ok(())
-            }
-            fn list_memories(&self) -> Vec<MemorySummary> {
-                Vec::new()
-            }
-        }
-        let tool = SearchMemoryTool::new(Arc::new(RankedOnly) as Arc<dyn MemoryProvider>);
-        let out = run(&tool, json!({ "query": "ghost" }))
+    async fn test_search_rows_carry_scope() {
+        let tool = SearchMemoryTool::new(
+            Arc::new(RankedRows(vec![hit("listed", 3)])) as Arc<dyn MemoryProvider>
+        );
+        let out = run(&tool, json!({ "query": "listed" }))
             .await
             .expect("search");
         let matches = out
@@ -334,14 +362,106 @@ mod tests {
             .and_then(|m| m.as_array())
             .expect("matches");
         assert_eq!(matches.len(), 1);
-        assert!(
-            matches[0].get("scope").is_none(),
-            "an unlisted key carries no scope: {}",
+        assert_eq!(
+            matches[0].get("scope").and_then(|v| v.as_str()),
+            Some("project"),
+            "the scope is the root the rank found: {}",
             matches[0]
         );
         assert_eq!(
             matches[0].get("description").and_then(|v| v.as_str()),
-            Some("ranked but unlisted")
+            Some("listed description")
+        );
+    }
+
+    /// A weak lexical signal goes through the semantic stage inline, and the
+    /// model's relevance order is the row order — even when it inverts the
+    /// lexical ranking.
+    #[tokio::test]
+    async fn test_search_reranks_weak_signal() {
+        let provider: Arc<dyn MemoryProvider> =
+            Arc::new(RankedRows(vec![hit("tea-order", 1), hit("deploy-gate", 1)]));
+        let reranker: Arc<dyn MemoryReranker> = Arc::new(StubReranker {
+            outcome: RerankOutcome::Selected(vec!["deploy-gate".into()]),
+            calls: AtomicUsize::new(0),
+        });
+        let tool = SearchMemoryTool::new(provider).with_reranker(Some(reranker));
+        let out = run(&tool, json!({ "query": "deploy question" }))
+            .await
+            .expect("search");
+        let matches = out
+            .get("matches")
+            .and_then(|m| m.as_array())
+            .expect("matches");
+        assert_eq!(matches.len(), 1, "the semantic verdict picks the row");
+        assert_eq!(
+            matches[0].get("key").and_then(|v| v.as_str()),
+            Some("deploy-gate")
+        );
+    }
+
+    /// A confident semantic empty verdict reports no matches; the weak
+    /// lexical rows the model rejected must not be shown.
+    #[tokio::test]
+    async fn test_search_semantic_empty() {
+        let provider: Arc<dyn MemoryProvider> = Arc::new(RankedRows(vec![hit("tea-order", 1)]));
+        let reranker: Arc<dyn MemoryReranker> = Arc::new(StubReranker {
+            outcome: RerankOutcome::Selected(Vec::new()),
+            calls: AtomicUsize::new(0),
+        });
+        let tool = SearchMemoryTool::new(provider).with_reranker(Some(reranker));
+        let out = run(&tool, json!({ "query": "kettle" }))
+            .await
+            .expect("search");
+        assert_eq!(out, json!({ "matches": [] }));
+    }
+
+    /// A failed semantic selection degrades to the deterministic lexical
+    /// rows, so an explicit search still answers when the model cannot.
+    #[tokio::test]
+    async fn test_search_rerank_failure_lexical() {
+        let provider: Arc<dyn MemoryProvider> =
+            Arc::new(RankedRows(vec![hit("tea-order", 1), hit("deploy-gate", 0)]));
+        let reranker: Arc<dyn MemoryReranker> = Arc::new(StubReranker {
+            outcome: RerankOutcome::Unavailable("no route".into()),
+            calls: AtomicUsize::new(0),
+        });
+        let tool = SearchMemoryTool::new(provider).with_reranker(Some(reranker));
+        let out = run(&tool, json!({ "query": "tea" })).await.expect("search");
+        let matches = out
+            .get("matches")
+            .and_then(|m| m.as_array())
+            .expect("matches");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].get("key").and_then(|v| v.as_str()),
+            Some("tea-order"),
+            "the lexical fallback keeps the matching row"
+        );
+    }
+
+    /// A confident lexical rank answers without spending a semantic call.
+    #[tokio::test]
+    async fn test_search_confident_no_rerank() {
+        let provider: Arc<dyn MemoryProvider> = Arc::new(RankedRows(vec![hit("deploy-gate", 3)]));
+        let reranker: Arc<StubReranker> = Arc::new(StubReranker {
+            outcome: RerankOutcome::Selected(Vec::new()),
+            calls: AtomicUsize::new(0),
+        });
+        let tool = SearchMemoryTool::new(provider)
+            .with_reranker(Some(Arc::clone(&reranker) as Arc<dyn MemoryReranker>));
+        let out = run(&tool, json!({ "query": "deploy gate" }))
+            .await
+            .expect("search");
+        let matches = out
+            .get("matches")
+            .and_then(|m| m.as_array())
+            .expect("matches");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            reranker.calls.load(Ordering::SeqCst),
+            0,
+            "a confident rank must not spend a semantic call"
         );
     }
 }

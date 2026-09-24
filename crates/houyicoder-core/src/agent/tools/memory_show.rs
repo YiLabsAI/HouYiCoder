@@ -151,7 +151,6 @@ fn read_body(
 mod tests {
     use super::*;
     use houyicoder_context::{MemoryEntry, MemoryError, MemorySource};
-    use std::collections::HashSet;
     use std::sync::Mutex;
 
     /// An in-memory provider that holds one entry the tool reads back.
@@ -159,9 +158,6 @@ mod tests {
         entry: Mutex<Option<MemoryEntry>>,
     }
     impl MemoryProvider for OneEntryMemory {
-        fn recall(&self, _q: &str, _b: usize, _surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
         fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
         }
@@ -181,9 +177,6 @@ mod tests {
     struct TwoScopeMemory;
 
     impl MemoryProvider for TwoScopeMemory {
-        fn recall(&self, _q: &str, _b: usize, _s: &HashSet<String>) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
         fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
         }
@@ -214,9 +207,6 @@ mod tests {
     struct SingleScopeMemory;
 
     impl MemoryProvider for SingleScopeMemory {
-        fn recall(&self, _q: &str, _b: usize, _s: &HashSet<String>) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
         fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
         }

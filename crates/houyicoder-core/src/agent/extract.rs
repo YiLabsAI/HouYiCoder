@@ -88,7 +88,6 @@ mod tests {
         ProviderError, Usage,
     };
     use houyicoder_session::SessionStore;
-    use std::collections::HashSet;
     use std::sync::Mutex;
 
     use crate::agent::{MemoryRuntime, RunOutcome};
@@ -107,14 +106,6 @@ mod tests {
     }
 
     impl MemoryProvider for RecordingMemory {
-        fn recall(
-            &self,
-            _query: &str,
-            _budget: usize,
-            _surfaced: &HashSet<String>,
-        ) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
         fn add(&self, entry: MemoryEntry) -> Result<(), houyicoder_context::MemoryError> {
             self.written.lock().expect("written").push(entry);
             Ok(())

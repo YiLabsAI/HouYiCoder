@@ -130,7 +130,6 @@ impl Tool for DeleteMemoryTool {
 mod tests {
     use super::*;
     use houyicoder_context::MemoryEntry;
-    use std::collections::HashSet;
     use std::sync::Mutex;
 
     /// A recording provider that records deletes so the test asserts the
@@ -139,9 +138,6 @@ mod tests {
         deleted: Mutex<Vec<String>>,
     }
     impl MemoryProvider for RecordingMemory {
-        fn recall(&self, _q: &str, _b: usize, _surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
         fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
         }
@@ -201,9 +197,6 @@ mod tests {
     async fn test_memory_skips_missing_count() {
         struct EmptyMemory;
         impl MemoryProvider for EmptyMemory {
-            fn recall(&self, _q: &str, _b: usize, _surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-                Vec::new()
-            }
             fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
                 Ok(())
             }
@@ -222,9 +215,6 @@ mod tests {
     async fn test_memory_surfaces_not_found() {
         struct EmptyMemory;
         impl MemoryProvider for EmptyMemory {
-            fn recall(&self, _q: &str, _b: usize, _surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-                Vec::new()
-            }
             fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
                 Ok(())
             }

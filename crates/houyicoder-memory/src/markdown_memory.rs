@@ -16,9 +16,11 @@ use std::sync::Mutex;
 
 use std::cmp::Reverse;
 
-use crate::provider::{hit_count, tokenize};
+use crate::provider::{has_word_content, hit_count, tokenize};
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
-use houyicoder_context::{MemoryEntry, MemoryError, MemoryRecallStats, MemoryScope, MemorySummary};
+use houyicoder_context::{
+    MemoryEntry, MemoryError, MemoryRankHit, MemoryRecallStats, MemoryScope, MemorySummary,
+};
 
 mod io;
 mod roots;
@@ -29,11 +31,8 @@ use io::{
     serialize_topic_file, show_memory_in_scope_impl, strip_rule_from_carrier, write_bytes_atomic,
 };
 
-/// Cap on candidate files scanned per recall; keeps the scan bounded.
+/// Cap on candidate files scanned per rank; keeps the scan bounded.
 const SCAN_FILE_CAP: usize = 200;
-
-/// Cap on files returned per recall (five ranked filenames).
-const RECALL_RESULT_CAP: usize = 5;
 
 /// Cap on lines in the derived MEMORY index so it never grows past a
 /// bounded number of entries even with short lines.
@@ -507,17 +506,17 @@ impl MemoryProvider for MarkdownMemoryProvider {
         self.save_stats(&stats);
     }
 
-    fn recall(&self, query: &str, budget: usize, surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-        if budget == 0 {
-            return Vec::new();
-        }
+    fn rank_candidates(&self, query: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
         let keywords = tokenize(query);
-        if keywords.is_empty() {
+        // A query with no word content ranks nothing. A query the tokenizer
+        // cannot split (a single CJK char) still scans, so its rows reach
+        // the semantic stage at score zero instead of being dropped.
+        if keywords.is_empty() && !has_word_content(query) {
             return Vec::new();
         }
         let candidates = self.scan_candidates();
         // Filter already-surfaced keys BEFORE ranking so fresh candidates
-        // beyond the result cap get a chance when the top-ranked entries are
+        // beyond the scan cap get a chance when the top-ranked entries are
         // all surfaced. Surfaced is caller-provided (the set of keys already
         // in the assembled context), so the provider holds no surfaced state
         // across calls.
@@ -526,41 +525,33 @@ impl MemoryProvider for MarkdownMemoryProvider {
             .take(SCAN_FILE_CAP)
             .filter(|t| !surfaced.contains(&t.key))
             .collect();
-        // Phase one: frontmatter-only scan (do not read full bodies yet).
-        // Rank by keyword overlap over name plus description.
-        let mut ranked: Vec<(u32, u64, ScannedTopic)> = Vec::new();
-        for t in fresh.iter() {
+        // Frontmatter-only scan (no full bodies): score keyword overlap over
+        // name plus description. Zero-score rows stay in the list, sorted
+        // last, as the semantic stage's candidate input for a query the
+        // lexical stage could not match.
+        let mut hits: Vec<MemoryRankHit> = Vec::new();
+        for t in fresh {
             let fm = match self.read_frontmatter(&t.path) {
                 Ok(fm) => fm,
                 Err(_) => continue,
             };
-            let hits = hit_count(&fm.name, &keywords) + hit_count(&fm.description, &keywords);
-            if hits == 0 {
-                continue;
-            }
-            ranked.push((hits, t.mtime, t.clone()));
+            let score = hit_count(&fm.name, &keywords) + hit_count(&fm.description, &keywords);
+            hits.push(MemoryRankHit::new(
+                t.key,
+                fm.description,
+                fm.source,
+                MemoryScope::for_root_index(t.root_index),
+                t.mtime,
+                score,
+            ));
         }
         // Relevance first, then recency (newest first).
-        ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
-        ranked.truncate(RECALL_RESULT_CAP);
-
-        // Phase two: load full bodies of the selected files only, budget pack.
-        let mut used: usize = 0;
-        let mut out = Vec::new();
-        for (_, _, t) in ranked.into_iter() {
-            let entry = match self.read_topic(&t.path) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if used + entry.tokens > budget {
-                // Stop at the first entry that would overflow the budget
-                // (rank order matters; do not skip ahead).
-                break;
-            }
-            used += entry.tokens;
-            out.push(entry);
-        }
-        out
+        hits.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| b.mtime_secs.cmp(&a.mtime_secs))
+        });
+        hits
     }
 
     fn add(&self, entry: MemoryEntry) -> Result<(), MemoryError> {

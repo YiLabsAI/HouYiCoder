@@ -16,7 +16,6 @@ use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, SessionId};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_session::SessionStore;
-use std::collections::HashSet;
 use std::sync::Mutex as StdMutex;
 
 /// MemoryProvider stub with an empty memory_root so execute_dream
@@ -24,9 +23,6 @@ use std::sync::Mutex as StdMutex;
 /// execute_dream(Some) call without spawning a forked agent.
 struct EmptyMemory;
 impl MemoryProvider for EmptyMemory {
-    fn recall(&self, _: &str, _: usize, _: &HashSet<String>) -> Vec<MemoryEntry> {
-        Vec::new()
-    }
     fn add(&self, _: MemoryEntry) -> Result<(), MemoryError> {
         Ok(())
     }

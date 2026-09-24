@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use houyicoder_api::agent_event::{
@@ -265,9 +264,6 @@ impl FsMemory {
     }
 }
 impl MemoryProvider for FsMemory {
-    fn recall(&self, _q: &str, _b: usize, _surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-        Vec::new()
-    }
     fn add(&self, e: MemoryEntry) -> Result<(), houyicoder_context::MemoryError> {
         self.written.lock().expect("w").push(e);
         Ok(())
@@ -550,9 +546,6 @@ async fn test_gate_closed_when_quiet() {
 async fn test_gate_noop_without_root() {
     struct InMemOnly;
     impl MemoryProvider for InMemOnly {
-        fn recall(&self, _q: &str, _b: usize, _surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
         fn add(&self, _e: MemoryEntry) -> Result<(), houyicoder_context::MemoryError> {
             Ok(())
         }
@@ -604,9 +597,6 @@ struct PanickingMemory {
     root: PathBuf,
 }
 impl MemoryProvider for PanickingMemory {
-    fn recall(&self, _q: &str, _b: usize, _surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-        Vec::new()
-    }
     fn add(&self, _e: MemoryEntry) -> Result<(), houyicoder_context::MemoryError> {
         Ok(())
     }

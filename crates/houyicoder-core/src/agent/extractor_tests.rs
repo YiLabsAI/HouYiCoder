@@ -12,7 +12,6 @@ use houyicoder_protocol::llm::{
     OutputItem, ProviderError, Usage,
 };
 use houyicoder_session::SessionStore;
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use houyicoder_api::provider::stream_from_response;
@@ -23,9 +22,6 @@ struct RecordingMemory {
     written: StdMutex<Vec<MemoryEntry>>,
 }
 impl MemoryProvider for RecordingMemory {
-    fn recall(&self, _q: &str, _b: usize, _surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
-        Vec::new()
-    }
     fn add(&self, e: MemoryEntry) -> Result<(), houyicoder_context::MemoryError> {
         self.written.lock().expect("w").push(e);
         Ok(())
@@ -944,9 +940,6 @@ struct SeededMemory {
     written: StdMutex<Vec<MemoryEntry>>,
 }
 impl MemoryProvider for SeededMemory {
-    fn recall(&self, _q: &str, _b: usize, _s: &HashSet<String>) -> Vec<MemoryEntry> {
-        Vec::new()
-    }
     fn add(&self, e: MemoryEntry) -> Result<(), houyicoder_context::MemoryError> {
         self.written.lock().expect("w").push(e);
         Ok(())

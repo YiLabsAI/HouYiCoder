@@ -18,7 +18,6 @@ use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_session::SessionStore;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -26,9 +25,6 @@ use std::sync::Arc;
 struct MockMemory;
 
 impl MemoryProvider for MockMemory {
-    fn recall(&self, _: &str, _: usize, _: &HashSet<String>) -> Vec<MemoryEntry> {
-        Vec::new()
-    }
     fn add(&self, _: MemoryEntry) -> Result<(), MemoryError> {
         Ok(())
     }

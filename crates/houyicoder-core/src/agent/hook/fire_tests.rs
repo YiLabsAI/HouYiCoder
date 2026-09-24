@@ -597,7 +597,6 @@ async fn test_recover_reply_not_reexecute() {
 /// enough violations for the dream to promote it into the always-on carrier.
 #[tokio::test]
 async fn test_deny_records_gate_violation() {
-    use std::collections::HashSet;
     use std::sync::Mutex;
 
     /// A recording memory that captures every record_gate_violation call
@@ -606,14 +605,6 @@ async fn test_deny_records_gate_violation() {
         violations: Mutex<Vec<String>>,
     }
     impl houyicoder_api::memory::MemoryProvider for ViolationMemory {
-        fn recall(
-            &self,
-            _q: &str,
-            _b: usize,
-            _s: &HashSet<String>,
-        ) -> Vec<houyicoder_context::MemoryEntry> {
-            Vec::new()
-        }
         fn add(
             &self,
             _e: houyicoder_context::MemoryEntry,

@@ -14,7 +14,7 @@ use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::{MemoryEntry, MemorySource, SessionId};
+use houyicoder_context::{MemoryEntry, MemoryRankHit, MemoryScope, MemorySource, SessionId};
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, ModelCapabilities, OutputItem, ProviderError,
 };
@@ -26,9 +26,10 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime, RunOutcome, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 
-/// A memory provider that returns scripted entries on recall (skipping any
-/// key in surfaced, the caller-built de-dup set) and records every call so
-/// the surfaced-state lifecycle is verifiable without a filesystem.
+/// A memory provider that ranks every stored entry as a confident lexical
+/// hit (skipping any key in surfaced, the caller-built de-dup set) so the
+/// loop injects without a semantic stage, and records every call so the
+/// surfaced-state lifecycle is verifiable without a filesystem.
 struct RecordingMemory {
     entries: Mutex<Vec<MemoryEntry>>,
     recall_count: Mutex<usize>,
@@ -58,15 +59,35 @@ impl RecordingMemory {
 }
 
 impl MemoryProvider for RecordingMemory {
-    fn recall(&self, _query: &str, _budget: usize, surfaced: &HashSet<String>) -> Vec<MemoryEntry> {
+    fn rank_candidates(&self, _query: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
         *self.recall_count.lock().expect("recall count") += 1;
         self.entries
             .lock()
             .expect("entries")
             .iter()
             .filter(|e| !surfaced.contains(&e.key))
-            .cloned()
+            .map(|e| {
+                // Score 2 is the confident-lexical floor, so recall settles
+                // synchronously and never reaches a semantic stage.
+                MemoryRankHit::new(
+                    e.key.as_str(),
+                    e.description.as_str(),
+                    e.source,
+                    MemoryScope::Auto,
+                    e.mtime_secs,
+                    2,
+                )
+            })
             .collect()
+    }
+
+    fn show_memory(&self, key: &str) -> Option<MemoryEntry> {
+        self.entries
+            .lock()
+            .expect("entries")
+            .iter()
+            .find(|e| e.key == key)
+            .cloned()
     }
 
     fn add(&self, entry: MemoryEntry) -> Result<(), houyicoder_context::MemoryError> {

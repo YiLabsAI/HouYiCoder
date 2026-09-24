@@ -1,18 +1,26 @@
 //! Recalls memory once per user query.
 //!
 //! Surfaced keys come from the projected context, so compaction naturally
-//! permits relevant memories to appear again.
+//! permits relevant memories to appear again. A confident lexical selection
+//! injects synchronously; a weak signal runs the semantic stage alongside
+//! the main model call and appends its recall on completion, so the first
+//! token never waits on a model-backed selection.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    CheckpointManifest, ContextBackend, SessionEvent, SessionId, SessionLogEntry,
+    CheckpointManifest, ContextBackend, MemoryRankHit, SessionEvent, SessionId, SessionLogEntry,
 };
 
 use super::gates::MemoryGates;
+use super::selector::{
+    RecallFallback, RecallTasks, RecallTelemetry, RecallVerdict, classify, lexical_keys,
+    materialize, run_semantic_selection,
+};
+use crate::agent::RunError;
 use crate::agent::append::new_event;
 use crate::agent::context;
 
@@ -23,21 +31,40 @@ const MAX_SESSION_BYTES: usize = 60 * 1024;
 pub(crate) async fn recall(
     store: &Arc<dyn SessionLog>,
     provider: Option<&Arc<dyn MemoryProvider>>,
+    reranker: Option<&Arc<dyn MemoryReranker>>,
+    tasks: &RecallTasks,
     gates: &MemoryGates,
     session: SessionId,
-) -> Result<(), crate::agent::RunError> {
+) -> Result<(), RunError> {
     if !gates.auto_memory_enabled() {
         return Ok(());
     }
     let Some(memory) = provider else {
         return Ok(());
     };
+    // The reservation is sampled before the view snapshot. A selection that
+    // finishes after this point stays reserved here, and one that finished
+    // earlier has its append in the snapshot, so no key escapes both nets.
+    let reserved = tasks.pending_keys(session);
     let view = store.current_view(session).await?;
-    let (surfaced, surfaced_bytes) =
+    let (mut surfaced, surfaced_bytes) =
         surfaced_memory_scan(&view.events, view.manifest.as_ref(), Some(store.backend()));
     if surfaced_bytes >= MAX_SESSION_BYTES {
+        RecallTelemetry {
+            candidate_count: 0,
+            lexical_hits: 0,
+            rerank_triggered: false,
+            selected_keys: Vec::new(),
+            fallback: Some(RecallFallback::ByteCap),
+            injected_bytes: 0,
+        }
+        .log();
         return Ok(());
     }
+    // Candidates a still-running selection holds are treated as surfaced,
+    // so a second recall in the same turn neither re-selects nor
+    // double-injects them.
+    surfaced.extend(reserved);
     let query = view
         .events
         .iter()
@@ -47,25 +74,121 @@ pub(crate) async fn recall(
             _ => None,
         })
         .unwrap_or("");
-    // The provider's tokenizer drops a no-signal query to zero keywords and
-    // returns empty, so the gate lives there. A whitespace word count would
-    // reject a no-space CJK query that carries real signal, so it is not used
-    // here.
-    let entries = memory.recall(query, context::MEMORY_RECALL_BUDGET, &surfaced);
-    if entries.is_empty() {
+    // The signal gate lives in the provider. A query with no word content
+    // ranks nothing; a query the tokenizer cannot split (one CJK char) still
+    // offers its scanned rows to the semantic stage at score zero.
+    let scored = memory.rank_candidates(query, &surfaced);
+    let verdict = classify(&scored);
+    let lexical_hits = scored.iter().filter(|h| h.score > 0).count();
+    if verdict.needs_rerank()
+        && let Some(reranker) = reranker
+    {
+        spawn_selection(
+            Arc::clone(store),
+            Arc::clone(memory),
+            Arc::clone(reranker),
+            query.to_string(),
+            scored,
+            lexical_hits,
+            session,
+            tasks,
+        );
         return Ok(());
     }
+    // Synchronous when the lexical selection is confident, or when no
+    // reranker is installed and the deterministic answer is the best
+    // available.
+    let (keys, fallback) = match verdict {
+        RecallVerdict::NoCandidates => (Vec::new(), None),
+        RecallVerdict::Confident => (lexical_keys(&scored), None),
+        _ => {
+            let keys = lexical_keys(&scored);
+            let fallback = if keys.is_empty() {
+                RecallFallback::NoSignal
+            } else {
+                RecallFallback::NoReranker
+            };
+            (keys, Some(fallback))
+        }
+    };
+    let (injected, bytes) = inject_selected(store, memory, session, &keys).await?;
+    RecallTelemetry {
+        candidate_count: scored.len(),
+        lexical_hits,
+        rerank_triggered: false,
+        selected_keys: injected,
+        fallback,
+        injected_bytes: bytes,
+    }
+    .log();
+    Ok(())
+}
+
+/// Run the semantic selection beside the main model call and append its
+/// recall on completion. The per-step view assembly picks the append up at
+/// the next model step of the same turn.
+#[allow(clippy::too_many_arguments)]
+fn spawn_selection(
+    store: Arc<dyn SessionLog>,
+    memory: Arc<dyn MemoryProvider>,
+    reranker: Arc<dyn MemoryReranker>,
+    query: String,
+    scored: Vec<MemoryRankHit>,
+    lexical_hits: usize,
+    session: SessionId,
+    tasks: &RecallTasks,
+) {
+    let candidate_count = scored.len();
+    let reserved: HashSet<String> = scored.iter().map(|h| h.key.clone()).collect();
+    let handle = tokio::spawn(async move {
+        let (keys, fallback) = run_semantic_selection(reranker, query, &scored).await;
+        let (injected, bytes) = match inject_selected(&store, &memory, session, &keys).await {
+            Ok(pair) => pair,
+            Err(error) => {
+                tracing::warn!("background recall injection failed: {error}");
+                (Vec::new(), 0)
+            }
+        };
+        RecallTelemetry {
+            candidate_count,
+            lexical_hits,
+            rerank_triggered: true,
+            selected_keys: injected,
+            fallback,
+            injected_bytes: bytes,
+        }
+        .log();
+    });
+    tasks.track(handle, session, reserved);
+}
+
+/// Read the selected bodies under the budget and append the recall event.
+/// Returns the keys actually injected and the attachment size in bytes.
+async fn inject_selected(
+    store: &Arc<dyn SessionLog>,
+    memory: &Arc<dyn MemoryProvider>,
+    session: SessionId,
+    keys: &[String],
+) -> Result<(Vec<String>, usize), RunError> {
+    let entries = materialize(memory.as_ref(), keys, context::MEMORY_RECALL_BUDGET);
+    if entries.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
     let text = context::render_recall_text(&entries);
-    let keys: Vec<String> = entries.iter().map(|e| e.key.clone()).collect();
-    memory.record_recall_hits(&keys);
-    let bytes = text.len() as u32;
+    let injected: Vec<String> = entries.iter().map(|e| e.key.clone()).collect();
+    memory.record_recall_hits(&injected);
+    let bytes = text.len();
     store
         .append(new_event(
             session,
-            SessionEvent::MemoryRecall { text, keys, bytes },
+            SessionEvent::MemoryRecall {
+                text,
+                keys: injected.clone(),
+                bytes: bytes as u32,
+            },
         ))
         .await?;
-    Ok(())
+    Ok((injected, bytes))
 }
 
 /// Collect surfaced keys and bytes from the projected context.
@@ -99,221 +222,5 @@ fn surfaced_memory_scan(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use houyicoder_context::{Disposition, EventId, SessionId};
-
-    fn ev(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
-        SessionLogEntry {
-            id,
-            session,
-            ts: 0,
-            prev_hash: None,
-            event: kind,
-        }
-    }
-
-    fn recall(keys: &[&str]) -> SessionEvent {
-        let text = "<system-reminder>...</system-reminder>";
-        SessionEvent::MemoryRecall {
-            text: text.into(),
-            keys: keys.iter().map(|s| s.to_string()).collect(),
-            bytes: text.len() as u32,
-        }
-    }
-
-    fn user(text: &str) -> SessionEvent {
-        SessionEvent::UserInput { text: text.into() }
-    }
-
-    fn assistant(text: &str) -> SessionEvent {
-        SessionEvent::AssistantMessage {
-            text: text.into(),
-            thinking: None,
-        }
-    }
-
-    fn ids(n: usize) -> Vec<EventId> {
-        (0..n).map(|_| EventId::new()).collect()
-    }
-
-    #[test]
-    fn test_scan_collects_all() {
-        let s = SessionId::new();
-        let ids = ids(3);
-        let events = vec![
-            ev(s, ids[0], recall(&["alpha"])),
-            ev(s, ids[1], recall(&["bravo", "charlie"])),
-            ev(s, ids[2], user("query")),
-        ];
-        let (keys, bytes) = surfaced_memory_scan(&events, None, None);
-        assert!(keys.contains("alpha"));
-        assert!(keys.contains("bravo"));
-        assert!(keys.contains("charlie"));
-        assert_eq!(keys.len(), 3);
-        let one = "<system-reminder>...</system-reminder>".len();
-        assert_eq!(bytes, one * 2);
-    }
-
-    #[test]
-    fn test_scan_log_falls_back() {
-        let s = SessionId::new();
-        let text = "<system-reminder>old log recall</system-reminder>";
-        let event = SessionLogEntry {
-            id: EventId::new(),
-            session: s,
-            ts: 0,
-            prev_hash: None,
-            event: SessionEvent::MemoryRecall {
-                text: text.into(),
-                keys: vec!["old".into()],
-                bytes: 0,
-            },
-        };
-        let (keys, bytes) = surfaced_memory_scan(&[event], None, None);
-        assert!(keys.contains("old"));
-        assert_eq!(
-            bytes,
-            text.len(),
-            "old log (bytes=0) falls back to text.len()"
-        );
-    }
-
-    #[test]
-    fn test_scan_excludes_folded() {
-        let s = SessionId::new();
-        let ids = ids(4);
-        let events = vec![
-            ev(s, ids[0], recall(&["folded"])),
-            ev(s, ids[1], assistant("old")),
-            ev(s, ids[2], assistant("boundary")),
-            ev(s, ids[3], recall(&["kept"])),
-        ];
-        let manifest = {
-            use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, TurnGroup};
-            CheckpointManifest {
-                id: CheckpointId::new(),
-                session: s,
-                last_event: ids[3],
-                summary: Some("summary".into()),
-                plan: vec![
-                    TurnGroup {
-                        turn_id: ids[0],
-                        disposition: Disposition::Summarized,
-                        event_ids: vec![ids[0], ids[1]],
-                    },
-                    TurnGroup {
-                        turn_id: ids[2],
-                        disposition: Disposition::Verbatim,
-                        event_ids: vec![ids[2], ids[3]],
-                    },
-                ],
-                ts: 0,
-            }
-        };
-        let (keys, bytes) = surfaced_memory_scan(&events, Some(&manifest), None);
-        assert!(
-            !keys.contains("folded"),
-            "a Summarized memory-recall must drop out of the surfaced set"
-        );
-        assert!(
-            keys.contains("kept"),
-            "a Verbatim memory-recall must stay in the surfaced set"
-        );
-        let one = "<system-reminder>...</system-reminder>".len();
-        assert_eq!(bytes, one, "a folded recall's bytes drop out of the total");
-    }
-
-    #[tokio::test]
-    async fn test_planner_folds_recall() {
-        use crate::agent::manifest::{CompressPolicy, HeuristicSummarizer, build_manifest};
-        let s = SessionId::new();
-        let ids = ids(4);
-        let events = vec![
-            ev(s, ids[0], recall(&["folded"])),
-            ev(s, ids[1], assistant("old turn")),
-            ev(s, ids[2], assistant("boundary turn")),
-            ev(s, ids[3], assistant("latest turn")),
-        ];
-        let policy = CompressPolicy {
-            tail_turns: 2,
-            preserve_recent_tokens: 0,
-            large_output_bytes: 0,
-        };
-        let manifest = build_manifest(&events, &policy, &HeuristicSummarizer, None).await;
-        let disp = manifest
-            .plan
-            .iter()
-            .find(|g| g.event_ids.contains(&ids[0]))
-            .map(|g| g.disposition)
-            .expect("memory-recall event must be in the plan");
-        assert_eq!(
-            disp,
-            Disposition::Summarized,
-            "an old memory-recall must take Summarized so compaction folds it"
-        );
-    }
-
-    /// A no-space CJK query must reach the provider and produce a MemoryRecall
-    /// event. A whitespace word-count gate would reject it before the provider;
-    /// this test goes red if that gate returns.
-    #[tokio::test]
-    async fn test_cjk_query_reaches_recall() {
-        use houyicoder_api::memory::MemoryProvider;
-        use houyicoder_context::{MemoryEntry, MemoryError, MemorySource};
-        use houyicoder_memory::InMemoryBackend;
-        struct CjkProvider;
-        impl MemoryProvider for CjkProvider {
-            fn recall(&self, _q: &str, _b: usize, _s: &HashSet<String>) -> Vec<MemoryEntry> {
-                vec![
-                    MemoryEntry::new(
-                        String::from("\u{90E8}\u{7F72}"),
-                        String::from("body"),
-                        MemorySource::Feedback,
-                    )
-                    .with_meta("desc", 0),
-                ]
-            }
-            fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
-                Ok(())
-            }
-            fn update(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
-                Ok(())
-            }
-            fn memory_root(&self) -> String {
-                String::new()
-            }
-        }
-        let store: Arc<dyn houyicoder_api::session::SessionLog> = Arc::new(
-            houyicoder_session::SessionStore::new(Box::new(InMemoryBackend::new())),
-        );
-        let session = SessionId::new();
-        store
-            .append(new_event(
-                session,
-                SessionEvent::UserInput {
-                    text: "\u{90E8}\u{7F72}\u{670D}\u{52A1}".into(),
-                },
-            ))
-            .await
-            .expect("append user input");
-        let provider: Arc<dyn MemoryProvider> = Arc::new(CjkProvider);
-        let dummy = MemoryEntry::new("x", "y", MemorySource::Feedback);
-        let _added = provider.add(dummy.clone());
-        let _updated = provider.update(dummy);
-        let _root = provider.memory_root();
-        let gates = MemoryGates::new(true, false);
-        super::recall(&store, Some(&provider), &gates, session)
-            .await
-            .expect("recall ok");
-        let view = store.current_view(session).await.expect("view");
-        let has_recall = view
-            .events
-            .iter()
-            .any(|e| matches!(e.event, SessionEvent::MemoryRecall { .. }));
-        assert!(
-            has_recall,
-            "a no-space CJK query must reach the provider, not be dropped by a whitespace gate"
-        );
-    }
-}
+#[path = "recall_tests.rs"]
+mod recall_tests;

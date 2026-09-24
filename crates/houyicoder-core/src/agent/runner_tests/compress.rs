@@ -411,14 +411,6 @@ struct RecordingClearMemory {
     existing_keys: std::sync::Mutex<Vec<String>>,
 }
 impl houyicoder_api::memory::MemoryProvider for RecordingClearMemory {
-    fn recall(
-        &self,
-        _q: &str,
-        _b: usize,
-        _surfaced: &std::collections::HashSet<String>,
-    ) -> Vec<houyicoder_context::MemoryEntry> {
-        Vec::new()
-    }
     fn add(
         &self,
         e: houyicoder_context::MemoryEntry,

@@ -1500,13 +1500,16 @@ dependencies = [
 name = "houyicoder-memory"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "houyicoder-api",
  "houyicoder-async",
  "houyicoder-context",
+ "houyicoder-protocol",
  "pollster",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tokio",
  "tracing",
  "unicode-normalization",
 ]
