@@ -17,8 +17,11 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
+#[cfg(test)]
+use houyicoder_context::SessionId;
+use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_service::protocol_adapter::{map_acpx_notification, map_session_update};
 use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::transcript::snapshot::{
@@ -26,7 +29,7 @@ use houyicoder_tui::transcript::snapshot::{
 };
 use houyicoder_tui::transcript::{TranscriptFrame, bounds_turn_in, transcript_from_frames};
 
-use crate::session_history::{EventWindow, SessionHistory};
+use crate::session_history::{EventWindow, LocatedEvent, SessionHistory};
 
 /// The window read budget: 256 KB per screen (~70 events at 3.6 KB avg).
 #[cfg(test)]
@@ -35,14 +38,23 @@ const WINDOW_MAX_BYTES: u64 = 256 * 1024;
 /// The session-log implementation of the TranscriptSnapshot port: holds the
 /// shared history reader and projects its windows to rendered lines.
 pub struct SessionLogSnapshot {
-    history: SessionHistory,
+    history: Arc<SessionHistory>,
 }
 
 impl SessionLogSnapshot {
+    /// Convenience for tests, which build a snapshot without a shared reader.
+    #[cfg(test)]
     pub fn new(session_log: Arc<dyn SessionLog>, session_id: SessionId) -> Self {
         Self {
-            history: SessionHistory::new(session_log, session_id),
+            history: Arc::new(SessionHistory::new(session_log, session_id)),
         }
+    }
+
+    /// Build the snapshot over a history reader the caller already owns, so
+    /// the transcript and the trajectory share one set of byte windows and one
+    /// offset index instead of each walking the log on its own.
+    pub fn with_history(history: Arc<SessionHistory>) -> Self {
+        Self { history }
     }
 
     /// Map a durable event to the frames the projection reads, through the
@@ -82,8 +94,8 @@ impl SessionLogSnapshot {
     /// Whether a step of events holds where a turn begins or ends, in the
     /// sense the projection reads: a message that opened a turn, or the record
     /// that closed one.
-    fn holds_boundary(events: &[SessionLogEntry]) -> bool {
-        bounds_turn_in(&Self::frames_of_events(events))
+    fn holds_boundary(events: &[LocatedEvent]) -> bool {
+        bounds_turn_in(&Self::frames_of_events(events.iter().map(|e| &e.entry)))
     }
 
     /// Project one window: the window's own events, folded against the events
@@ -92,15 +104,17 @@ impl SessionLogSnapshot {
     /// keeps the summary row the fold derives at the frame that closed the
     /// turn. Only the window's events become rows.
     fn project_window(&self, window: &EventWindow) -> (Vec<TranscriptLine>, usize) {
-        let ahead = if window.start_offset > 0 {
+        let ahead = if window.lines_start_offset > 0 {
             self.history
-                .lookback_until(window.start_offset, Self::holds_boundary)
+                .lookback_until(window.lines_start_offset, Self::holds_boundary)
         } else {
             Vec::new()
         };
-        let mut frames = Self::frames_of_events(&ahead);
+        let mut frames = Self::frames_of_events(ahead.iter().map(|e| &e.entry));
         let start = frames.len();
-        frames.extend(Self::frames_of_events(&window.events));
+        frames.extend(Self::frames_of_events(
+            window.events.iter().map(|e| &e.entry),
+        ));
         let lines = transcript_from_frames(&frames, start..frames.len(), true);
         (lines, window.skipped)
     }
@@ -134,7 +148,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
         let (lines, skipped) = self.project_window(&window);
         WindowLoad {
             lines,
-            start_offset: window.start_offset,
+            start_offset: window.lines_start_offset,
             next_offset: window.next_offset,
             skipped,
             bytes_total: window.bytes_total,
@@ -146,7 +160,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
         let (lines, skipped) = self.project_window(&window);
         WindowLoad {
             lines,
-            start_offset: window.start_offset,
+            start_offset: window.lines_start_offset,
             next_offset: window.next_offset,
             skipped,
             bytes_total: window.bytes_total,
@@ -158,7 +172,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
         let (lines, skipped) = self.project_window(&window);
         WindowLoad {
             lines,
-            start_offset: window.start_offset,
+            start_offset: window.lines_start_offset,
             next_offset: window.next_offset,
             skipped,
             bytes_total: window.bytes_total,

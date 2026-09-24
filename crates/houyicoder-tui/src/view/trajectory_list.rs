@@ -179,14 +179,6 @@ pub(super) fn draw_turn_list(
     Vec<Line<'static>>,
     usize,
 ) {
-    let total_calls: usize = traj
-        .rows
-        .iter()
-        .map(|r| match r {
-            TrajectoryRow::Turn(t) => t.tool_count,
-            _ => 0,
-        })
-        .sum();
     let tokens_summary = match (traj.tokens_in, traj.tokens_out) {
         (Some(tin), Some(tout)) => format!("{} in {} out", fmt_k(tin), fmt_k(tout)),
         (Some(tin), None) => format!("{} in", fmt_k(tin)),
@@ -212,10 +204,20 @@ pub(super) fn draw_turn_list(
         sp(" · ", Color::DarkGray),
         sp(tokens_summary, Color::Gray),
         sp(cache_hit_str, Color::Indexed(208)),
-        sp(format!(" · {} calls", total_calls), Color::Gray),
+        sp(format!(" · {} calls", traj.tool_calls), Color::Gray),
         sp(format!(" · {} fail", traj.failures), Color::Red),
         sp(format!(" · total {}s", traj.duration_secs), Color::Gray),
     ])];
+    if traj.skipped_records > 0 {
+        header.push(line(vec![sp(
+            format!(
+                "  {} unreadable record{} skipped",
+                traj.skipped_records,
+                if traj.skipped_records == 1 { "" } else { "s" }
+            ),
+            Color::Yellow,
+        )]));
+    }
     let mut timing_spans = Vec::new();
     if let Some(avg) = traj.timing.ttft_avg_ms {
         timing_spans.push(sp(
@@ -257,19 +259,36 @@ pub(super) fn draw_turn_list(
     // Per-turn model/effort attribution: render only when the session saw
     // ≥2 distinct model ids (otherwise every row would repeat the same id
     // — noise, not signal). When ≥2, each turn that used a model shows them.
-    let show_per_turn_model = traj
-        .rows
-        .iter()
-        .filter_map(|r| match r {
-            TrajectoryRow::Turn(t) => Some(t.models.iter().map(String::as_str)),
-            _ => None,
-        })
-        .flatten()
-        .collect::<HashSet<_>>()
-        .len()
-        >= 2;
+    // From the session's own model count, not from the rows in hand: a window
+    // holding one model would otherwise hide the column on a session that
+    // switched, while the header says how many it used.
+    let show_per_turn_model = traj.models_used >= 2;
     let mut body = Vec::new();
     let mut sel_line = 0usize;
+    // A read that has not landed is its own state. Rendering an empty list
+    // would say the session has no turns, and the demonstration rows would say
+    // it has turns it does not.
+    match traj.state {
+        // Nothing truthful to list yet, so the body says so instead of showing
+        // an empty table or the demonstration rows.
+        TrajectoryViewState::Loading => {
+            body.push(line(vec![sp("  loading trajectory...", Color::DarkGray)]));
+            return (header, body, vec![blank(), key_hint(&[("Esc", "back")])], 0);
+        }
+        TrajectoryViewState::Failed => {
+            body.push(line(vec![sp(
+                "  could not read trajectory history",
+                Color::Red,
+            )]));
+            return (header, body, vec![blank(), key_hint(&[("Esc", "back")])], 0);
+        }
+        // Older turns are on their way and the rows already loaded stay: the
+        // line is an addition to the list, not a replacement for it.
+        TrajectoryViewState::LoadingOlder => {
+            body.push(line(vec![sp("  loading older turns...", Color::DarkGray)]));
+        }
+        TrajectoryViewState::Ready => {}
+    }
     let clamped = cursor.min(traj.rows.len().saturating_sub(1));
     let now_secs = now_epoch_secs();
     let width = area.width as usize;

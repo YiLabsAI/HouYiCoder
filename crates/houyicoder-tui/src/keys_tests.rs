@@ -1807,3 +1807,101 @@ fn test_agents_enter_follows_list() {
         "Enter opens the selected fleet child"
     );
 }
+
+/// The pane's contract says an ordinary character key is not intercepted: it
+/// closes the pane and lands in the input box, which is visible by then. The
+/// shared pane policy would otherwise drop it into a box the pane covers.
+#[test]
+fn test_char_closes_trajectory_pane() {
+    let mut app = working_app();
+    app.pane = Pane::Trajectory;
+    handle_working(&mut app, key(KeyCode::Char('h')));
+    assert_eq!(
+        app.pane,
+        Pane::Transcript,
+        "a character key closes the trajectory pane"
+    );
+    assert_eq!(
+        app.viewport,
+        ViewportMode::Working,
+        "and leaves the viewport that drew the pane"
+    );
+    assert_eq!(
+        app.input.value(),
+        "h",
+        "and the character lands in the visible input box"
+    );
+}
+
+/// Focus draws the pane full screen, so the pane's keys must reach it there
+/// too: a pane rendered but dead would take no character, no Enter, no
+/// Home/End, and its Esc would fold the viewport instead of closing.
+#[test]
+fn test_focus_routes_trajectory_char() {
+    let mut app = working_app();
+    app.viewport = ViewportMode::Focus;
+    app.pane = Pane::Trajectory;
+    handle_working(&mut app, key(KeyCode::Char('h')));
+    assert_eq!(
+        app.pane,
+        Pane::Transcript,
+        "a character closes the pane in Focus too"
+    );
+    assert_eq!(
+        app.viewport,
+        ViewportMode::Working,
+        "and the viewport it was drawn in goes back to the working one, or the
+         editor the character lands in would not be on screen"
+    );
+    assert_eq!(
+        app.input.value(),
+        "h",
+        "and lands in the editor rather than being dropped"
+    );
+}
+
+/// Focus must not steal the pane's Esc: the pane returns a level instead of
+/// the viewport folding away from under it.
+/// Esc at the pane's root closes it, and closing it must leave the viewport
+/// that drew it, exactly as a character does.
+#[test]
+fn test_focus_trajectory_esc_closes() {
+    let mut app = working_app();
+    app.viewport = ViewportMode::Focus;
+    app.pane = Pane::Trajectory;
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(
+        app.pane,
+        Pane::Transcript,
+        "Esc at the root closes the pane"
+    );
+    assert_eq!(
+        app.viewport,
+        ViewportMode::Working,
+        "and the viewport goes back to the working one"
+    );
+}
+
+#[test]
+fn test_focus_trajectory_esc_levels() {
+    let mut app = working_app();
+    app.viewport = ViewportMode::Focus;
+    app.pane = Pane::Trajectory;
+    app.trajectory_level.set(1);
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(
+        app.trajectory_level.get(),
+        0,
+        "Esc backs the pane a level instead of folding the viewport"
+    );
+    assert_eq!(
+        app.pane,
+        Pane::Trajectory,
+        "the pane stays open one level down"
+    );
+    assert_eq!(
+        app.viewport,
+        ViewportMode::Focus,
+        "the viewport is untouched"
+    );
+}

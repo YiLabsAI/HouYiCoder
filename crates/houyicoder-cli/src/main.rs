@@ -41,6 +41,7 @@ mod session_catalog;
 mod session_history;
 mod session_lock;
 mod session_log_snapshot;
+mod trajectory_reader;
 mod trajectory_view;
 
 /// Parsed CLI invocation. Each variant maps to one entry path the binary
@@ -608,14 +609,21 @@ pub(crate) fn assemble_bundle(
     // snapshot for the search view (read-whole path under the threshold).
     // Shares the same SessionLog as the trajectory and export views (an Arc
     // clone, so each view still takes ownership of its slot).
+    // One reader owns the byte windows and the offset index for this session;
+    // the transcript and the trajectory project what it returns.
+    let history = std::sync::Arc::new(session_history::SessionHistory::new(
+        session_log.clone(),
+        session,
+    ));
     let snapshot: Option<
         std::sync::Arc<dyn houyicoder_tui::transcript::snapshot::TranscriptSnapshot>,
     > = Some(std::sync::Arc::new(
-        session_log_snapshot::SessionLogSnapshot::new(session_log.clone(), session),
+        session_log_snapshot::SessionLogSnapshot::with_history(history.clone()),
     ));
     // One object backs both the /trajectory view + the /export serializer:
     // both read the same durable event stream.
-    let trajectory = std::sync::Arc::new(trajectory_view::SessionLogTrajectory::new(
+    let trajectory = std::sync::Arc::new(trajectory_reader::SessionLogTrajectory::with_history(
+        history,
         session_log.clone(),
         session,
         model.clone(),

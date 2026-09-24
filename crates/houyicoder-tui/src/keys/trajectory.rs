@@ -78,10 +78,24 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             }
             true
         }
+        // An ordinary character is not the pane's to keep: it closes the pane
+        // and falls through to the input box. The shared pane policy would
+        // otherwise drop it, and this pane's contract says a character key is
+        // not intercepted. Closing first is what keeps that from typing into a
+        // box the pane is covering.
+        KeyCode::Char(_) => {
+            app.pane = Pane::Transcript;
+            // Closing the pane must also leave the viewport that drew it: a
+            // pane closed while Focus still owns the screen would send the
+            // character to a box the user cannot see.
+            app.fold_to_working();
+            false
+        }
         KeyCode::Esc => {
             let level = app.trajectory_level.get();
             if level == 0 {
                 app.pane = Pane::Transcript;
+                app.fold_to_working();
             } else {
                 app.trajectory_level.set(level - 1);
                 app.trajectory_cursor.set(0);

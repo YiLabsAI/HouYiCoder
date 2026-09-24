@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_tui::view::export_log::{ExportLog, ExportPayload};
 
-use crate::trajectory_view::SessionLogTrajectory;
+use crate::trajectory_reader::SessionLogTrajectory;
 
 /// One per-tool aggregate row: call count, failure count, total + max
 /// wall-clock latency. Failures are ToolResults whose output carries an

@@ -321,6 +321,116 @@ async fn test_head_model_interned() {
     );
 }
 
+/// A cleared session's trajectory is what came after the last clear. The
+/// durable log keeps everything, so a resume must start at the boundary or it
+/// would restore the turns and the spend the session no longer counts.
+#[tokio::test]
+async fn test_restore_respects_last_clear() {
+    let root = std::env::temp_dir().join(format!(
+        "usage-clear-{}-{}",
+        std::process::id(),
+        EventId::new()
+    ));
+    std::fs::create_dir_all(&root).expect("mkdir root");
+    let session = SessionId::new();
+    {
+        let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+        appended_event(
+            &store,
+            session,
+            SessionEvent::UserInput { text: "old".into() },
+        )
+        .await;
+        appended_event(
+            &store,
+            session,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 900,
+                output_tokens: 90,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: "old-model".into(),
+                recovery: false,
+                effort: None,
+            },
+        )
+        .await;
+        appended_event(
+            &store,
+            session,
+            SessionEvent::ContextCleared { prior_turn: 1 },
+        )
+        .await;
+        appended_event(
+            &store,
+            session,
+            SessionEvent::UserInput { text: "new".into() },
+        )
+        .await;
+        appended_event(
+            &store,
+            session,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 10,
+                output_tokens: 1,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: "new-model".into(),
+                recovery: false,
+                effort: None,
+            },
+        )
+        .await;
+    }
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
+    assert_eq!(store.restore_trajectory(session).await.unwrap(), 3);
+    let head = store.trajectory_head(session);
+    assert_eq!(head.summary.total_turns, 1, "only the turn after the clear");
+    assert_eq!(head.summary.usage.input_tokens, 10, "and only its spend");
+    assert_eq!(head.summary.single_model.as_deref(), Some("new-model"));
+}
+
+/// A streaming delta moves the mirror revision but not the durable one, so a
+/// reader that re-reads the log on revision change keys on the durable count
+/// and does not re-read once per token.
+#[tokio::test]
+async fn test_durable_revision_ignores_delta() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let session = SessionId::new();
+    appended_event(
+        &store,
+        session,
+        SessionEvent::UserInput { text: "a".into() },
+    )
+    .await;
+    let before = store.trajectory_head(session).revision;
+    assert_eq!(before.durable_event_count, 1);
+
+    appended_event(
+        &store,
+        session,
+        SessionEvent::AssistantTextDelta { text: "hi".into() },
+    )
+    .await;
+    let after = store.trajectory_head(session).revision;
+    assert_eq!(
+        after.event_count,
+        before.event_count + 1,
+        "the mirror moved"
+    );
+    assert_eq!(
+        after.durable_event_count, before.durable_event_count,
+        "and the durable history did not"
+    );
+    assert_eq!(after.last_durable_event_id, before.last_durable_event_id);
+}
+
 #[tokio::test]
 async fn test_last_id_tracks_mirror() {
     let store = SessionStore::new(Box::new(InMemoryBackend::new()));

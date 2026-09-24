@@ -2,7 +2,9 @@
 //! session-level totals that the window must not narrow.
 
 use super::*;
+use crate::trajectory_reader::{SessionLogTrajectory, TRAJECTORY_PAGE_TURNS};
 use houyicoder_context::{EventId, SessionLogEntry};
+use houyicoder_tui::view::trajectory_pane::TrajectoryLog as _;
 
 fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -58,6 +60,19 @@ fn test_tail_window_limits() {
     assert_eq!(unlimited.hidden_turns, 0);
 }
 
+/// Pump the reader until its page lands. A draw never reads the log, so the
+/// first frames after a page is asked for report that they are loading.
+fn pump(reader: &SessionLogTrajectory) -> std::sync::Arc<TrajectoryView> {
+    for _ in 0..400 {
+        let view = reader.trajectory();
+        if view.state == TrajectoryViewState::Ready {
+            return view;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the page never landed");
+}
+
 /// The reader reuses its projection while the log has not changed, and rebuilds
 /// it when it has: the pane draws every frame, so an unchanged log must not be
 /// re-read and re-folded per draw.
@@ -74,7 +89,7 @@ fn test_reader_cache_invalidates() {
     let reader = SessionLogTrajectory::new(store.clone(), sid, "test".into());
 
     // Empty log: one turn-less view, stable across reads.
-    let first = reader.trajectory();
+    let first = pump(&reader);
     assert_eq!(first.total_turns, 0);
 
     futures::executor::block_on(store.append(SessionLogEntry {
@@ -88,12 +103,17 @@ fn test_reader_cache_invalidates() {
     }))
     .expect("append");
 
-    let after = reader.trajectory();
+    let after = pump(&reader);
     assert_eq!(after.total_turns, 1, "the append is picked up");
     let again = reader.trajectory();
     assert_eq!(
         again.total_turns, 1,
         "a second read of an unchanged log gives the same view"
+    );
+    assert_eq!(
+        again.state,
+        TrajectoryViewState::Ready,
+        "and it is served from the page already in hand"
     );
 }
 
@@ -122,7 +142,7 @@ fn test_reader_loads_older() {
         .expect("append");
     }
     let reader = SessionLogTrajectory::new(store.clone(), sid, "test".into());
-    let first = reader.trajectory();
+    let first = pump(&reader);
     assert_eq!(first.rows.len(), TRAJECTORY_PAGE_TURNS);
     assert_eq!(
         first.total_turns,
@@ -135,7 +155,7 @@ fn test_reader_loads_older() {
     );
 
     reader.load_older();
-    let wider = reader.trajectory();
+    let wider = pump(&reader);
     assert_eq!(
         wider.total_turns,
         TRAJECTORY_PAGE_TURNS + 5,
@@ -454,5 +474,224 @@ fn test_subagent_usage_unknown() {
         delegated.cache_hit_pct(),
         None,
         "an unknown share is absent, not zero"
+    );
+}
+
+/// A file-backed reader, which is the path the product runs on. The
+/// in-memory store takes the mirror branch, so a bug in the page path would
+/// not show up there.
+fn disk_reader(
+    turns: usize,
+) -> (
+    std::sync::Arc<houyicoder_session::SessionStore>,
+    SessionLogTrajectory,
+    houyicoder_context::SessionId,
+) {
+    use houyicoder_memory::LocalFileBackend;
+    use houyicoder_session::SessionStore;
+
+    let root = std::env::temp_dir().join(format!(
+        "houyi_disk_reader_{}_{}",
+        houyicoder_context::SessionId::new(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let store = std::sync::Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(root))));
+    let sid = houyicoder_context::SessionId::new();
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    for i in 0..turns {
+        rt.block_on(store.append(SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: (i as u64) * 1000,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: format!("prompt {i}"),
+            },
+        }))
+        .expect("append");
+    }
+    let reader = SessionLogTrajectory::new(store.clone(), sid, "test".into());
+    (store, reader, sid)
+}
+
+/// A page read off the disk is refreshed when the session appends: the pane
+/// stays open across turns, so a reader that kept its first page would never
+/// show anything new.
+#[test]
+fn test_disk_reader_refreshes_tail() {
+    let (store, reader, sid) = disk_reader(3);
+    let first = pump(&reader);
+    assert_eq!(first.rows.len(), 3);
+    futures::executor::block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 9000,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "prompt 3".into(),
+        },
+    }))
+    .expect("append");
+    let after = pump(&reader);
+    assert_eq!(
+        after.rows.len(),
+        4,
+        "the appended turn appears once the page is re-read"
+    );
+    assert_eq!(after.total_turns, 4);
+}
+
+/// The header reports the session, not the page: a page holds the newest
+/// turns, and its own totals would report the page as the session.
+#[test]
+fn test_disk_header_uses_summary() {
+    let (_store, reader, _sid) = disk_reader(150);
+    let view = pump(&reader);
+    assert_eq!(
+        view.total_turns, 150,
+        "the session's turn count, not the page's"
+    );
+    assert_eq!(
+        view.hidden_turns, 50,
+        "and the turns before the page are counted as hidden"
+    );
+}
+
+/// Numbering continues from where the hidden turns left off, so the oldest
+/// visible turn keeps the number it has in the session.
+#[test]
+fn test_disk_turn_numbers_continue() {
+    let (_store, reader, _sid) = disk_reader(150);
+    let view = pump(&reader);
+    let first = view
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.n),
+            TrajectoryRow::Bg(_) => None,
+        })
+        .expect("a turn row");
+    assert_eq!(first, 51, "the page starts at the session's 51st turn");
+}
+
+/// A settled window costs nothing to draw: the pane draws every frame, so a
+/// frame that re-read the log or re-projected the page would put both on the
+/// draw path.
+#[test]
+fn test_draw_reads_nothing() {
+    let (_store, reader, _sid) = disk_reader(150);
+    let first = pump(&reader);
+    assert_eq!(first.state, TrajectoryViewState::Ready);
+    let (whole_after_load, reads_after_load) = {
+        let (whole, reads, _) = reader.history().read_stats();
+        (whole, reads)
+    };
+    let mut previous = std::sync::Arc::clone(&first);
+    for _ in 0..1000 {
+        let next = reader.trajectory();
+        assert_eq!(next.state, TrajectoryViewState::Ready);
+        assert!(
+            std::sync::Arc::ptr_eq(&previous, &next),
+            "a settled window is served from the cache, not rebuilt"
+        );
+        previous = next;
+    }
+    let (whole, reads, _) = reader.history().read_stats();
+    assert_eq!(whole, whole_after_load, "no draw read the log whole");
+    assert_eq!(reads, reads_after_load, "and none read the log at all");
+}
+
+/// Asking for older history keeps the newest turns: the window widens behind
+/// the tail rather than being replaced by the older page.
+#[test]
+fn test_disk_older_keeps_tail() {
+    let (_store, reader, _sid) = disk_reader(150);
+    let first = pump(&reader);
+    let newest = first
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.n),
+            TrajectoryRow::Bg(_) => None,
+        })
+        .max()
+        .expect("turn rows");
+    assert_eq!(newest, 150);
+
+    reader.load_older();
+    let wider = pump(&reader);
+    let numbers: Vec<usize> = wider
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(turn) => Some(turn.n),
+            TrajectoryRow::Bg(_) => None,
+        })
+        .collect();
+    assert!(
+        numbers.contains(&150),
+        "the newest turn is still in the window: {numbers:?}"
+    );
+    assert_eq!(
+        numbers.first().copied(),
+        Some(1),
+        "and the older page widened it rather than replacing it"
+    );
+}
+
+/// A clear starts a new epoch. A page read in the old one describes turns the
+/// session no longer counts, so it is dropped rather than shown and corrected
+/// a frame later — and the rows already resident from that epoch go with it.
+#[test]
+fn test_clear_drops_old_epoch() {
+    // More than one page, so the tail really has older turns behind it and
+    // load_older dispatches a read instead of returning at the log's start.
+    let (store, reader, sid) = disk_reader(150);
+    let first = pump(&reader);
+    assert_eq!(first.rows.len(), TRAJECTORY_PAGE_TURNS);
+    assert!(first.hidden_turns > 0, "older turns exist to be read");
+
+    // An older read is genuinely in flight when the clear lands. A clear is a
+    // mirror reset followed by the boundary event, which is what makes the
+    // boundary the new epoch's first durable event.
+    reader.load_older();
+    store.reset_trajectory(sid);
+    futures::executor::block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 999_000,
+        prev_hash: None,
+        event: SessionEvent::ContextCleared { prior_turn: 150 },
+    }))
+    .expect("append the clear");
+
+    // Whatever the pump observes, the cleared epoch's turns must never appear,
+    // and the new epoch's page must actually land: a pane that stayed on
+    // loading would satisfy "never shows the old turns" while showing nothing.
+    let mut settled = false;
+    for _ in 0..200 {
+        let view = reader.trajectory();
+        let prompts: Vec<String> = view
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                TrajectoryRow::Turn(turn) => Some(turn.user_input.clone()),
+                TrajectoryRow::Bg(_) => None,
+            })
+            .collect();
+        assert!(
+            !prompts.iter().any(|p| p.starts_with("prompt ")),
+            "a cleared epoch's turns are never shown: {prompts:?}"
+        );
+        if view.state == TrajectoryViewState::Ready {
+            settled = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        settled,
+        "the new epoch's page lands rather than loading forever"
     );
 }

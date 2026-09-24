@@ -21,7 +21,6 @@ use ratatui::widgets::Paragraph;
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::{now_epoch_secs, relative_time};
-use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
 // Data types
@@ -230,7 +229,7 @@ pub trait TrajectoryLog: Send + Sync {
     /// Project the session's durable event log into the view. Called on every
     /// draw, so an implementation reuses its last projection while the log has
     /// not changed.
-    fn trajectory(&self) -> TrajectoryView;
+    fn trajectory(&self) -> std::sync::Arc<TrajectoryView>;
 
     /// Widen the loaded window by one page of older turns. Called when the user
     /// walks past the oldest loaded turn; an implementation with nothing older
@@ -293,6 +292,25 @@ impl SubagentUsage {
     }
 }
 
+/// What the pane can say about its data right now.
+///
+/// The rows come from a bounded page read, so the first frame after a session
+/// is opened has nothing to show yet. That is a state of its own: a pane that
+/// rendered an empty list, or fell back to the demonstration rows, would tell
+/// the user the session has no turns when the read simply has not landed.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum TrajectoryViewState {
+    /// The first page is being read.
+    Loading,
+    /// A page is loaded and the rows below it are real.
+    #[default]
+    Ready,
+    /// Older turns are being read; the rows already shown stay.
+    LoadingOlder,
+    /// The read failed, so there is nothing truthful to show.
+    Failed,
+}
+
 #[derive(Clone)]
 pub struct TrajectoryView {
     pub session_id: String,
@@ -301,11 +319,17 @@ pub struct TrajectoryView {
     /// construction-time string snapshot so a mid-session model switch
     /// surfaces immediately.
     pub model: String,
+    /// Distinct model ids the session used, so a row can decide whether to
+    /// name its own model from a session fact rather than from the window.
+    pub models_used: usize,
     pub total_turns: usize,
     pub tokens_in: Option<usize>,
     pub tokens_out: Option<usize>,
     pub cache_read: Option<u64>,
     pub failures: usize,
+    /// Tool calls the session issued, from the session summary rather than
+    /// from the rows the window happens to hold.
+    pub tool_calls: usize,
     pub duration_secs: u64,
     pub timing: SessionTiming,
     /// How many turns sit before the loaded window. Non-zero means older
@@ -313,6 +337,12 @@ pub struct TrajectoryView {
     pub hidden_turns: usize,
     /// What delegated sub-agents spent, when the session delegated any work.
     pub subagent_usage: Option<SubagentUsage>,
+    /// Whether the rows below are loaded, still loading, or unavailable.
+    pub state: TrajectoryViewState,
+    /// Log lines in the loaded window that could not be read. The rest of the
+    /// window is still shown; a surface that stayed silent about them would
+    /// report a session as smaller than it is.
+    pub skipped_records: usize,
     pub rows: Vec<TrajectoryRow>,
 }
 
@@ -339,7 +369,7 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         .trajectory_log
         .as_ref()
         .map(|l| l.trajectory())
-        .unwrap_or_else(sample_trajectory);
+        .unwrap_or_else(|| std::sync::Arc::new(sample_trajectory()));
     let level = app.trajectory_level.get();
     let cursor = app.trajectory_cursor.get();
     let turn_idx = app.trajectory_turn_idx.get();

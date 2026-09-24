@@ -216,6 +216,105 @@ fn test_trajectory_session_no_crash() {
     drop(s);
 }
 
+/// PTY test: the turn list is read off the disk by a worker, so the pane has a
+/// moment where it has nothing to show. That moment must say so and must end:
+/// a pane stuck on loading, or one that fell back to the demonstration rows,
+/// would misreport the session.
+#[test]
+#[ignore]
+fn test_trajectory_read_settles() {
+    let mut s = pty_session();
+    s.send_str("/trajectory");
+    s.send_key(&Key::Enter);
+    let t = std::time::Duration::from_secs(10);
+    // A session with no turns settles: the read lands and the pane reports the
+    // session's own count rather than staying on its loading line.
+    assert!(
+        s.wait_for_plain("0 turns", t),
+        "the header reports the session's count:
+{}",
+        s.output()
+    );
+    // The buffer holds every frame written so far, so the loading line from
+    // the first frames is cleared before the settled screen is read.
+    s.clear_output();
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let plain = s.output_plain();
+    assert!(
+        !plain.contains("loading trajectory"),
+        "the read settles rather than staying on its loading line: {plain}"
+    );
+    // The demonstration rows describe three turns; a session with none must
+    // never be shown them, so the sample's own count is the thing to look for.
+    assert!(
+        !plain.contains("3 turns"),
+        "an empty session is never shown the demonstration rows: {plain}"
+    );
+    assert!(
+        !plain.contains("wire the trajectory pane"),
+        "nor the demonstration turns: {plain}"
+    );
+    // An ordinary character is not the pane's to keep: typing it closes the
+    // pane and the character lands in the input box, visible. The alternative
+    // (the shared pane policy dropping it) is what the pane's own contract
+    // rules out.
+    // An ordinary character is not the pane's to keep: typing it closes the
+    // pane, in Focus as well as Working. This PTY is what found the Focus gap
+    // (the pane was drawn but its keys never arrived).
+    s.clear_output();
+    s.send_str("hello");
+    // The renderer emits only the cells that changed, so the screen is what the
+    // user reads: the character must be visible in the editor, not merely
+    // present in the app's state.
+    assert!(
+        s.wait_for_screen("hello", t),
+        "an ordinary character reaches the visible editor:
+{}",
+        s.output_plain()
+    );
+    assert!(
+        !s.output_plain().contains("Up/Down to select"),
+        "and closes the pane"
+    );
+    drop(s);
+}
+
+/// PTY test: reading older turns keeps the rows already loaded. The window
+/// widens behind the tail, so the turns on screen must stay while the older
+/// page is on its way.
+#[test]
+#[ignore]
+fn test_trajectory_older_keeps_rows() {
+    let mut s = pty_session();
+    s.send_str("/trajectory");
+    s.send_key(&Key::Enter);
+    let t = std::time::Duration::from_secs(10);
+    assert!(
+        s.wait_for_plain("0 turns", t),
+        "the pane opens on the session's own count:
+{}",
+        s.output()
+    );
+    // Up at the top of the loaded window asks for older turns. With none to
+    // read, the pane must settle rather than stay on the older-loading line.
+    s.clear_output();
+    s.send_key(&Key::Up);
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let plain = s.output_plain();
+    assert!(
+        !plain.contains("loading older turns"),
+        "an older read with nothing behind it settles: {plain}"
+    );
+    s.clear_output();
+    s.send_key(&Key::Esc);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        !s.output_plain().contains("turns"),
+        "Esc still closes the pane"
+    );
+    drop(s);
+}
+
 /// A grep whose path is outside the workspace raises the path-bounds approval
 /// card (Detection, mode-immune — fires under the default-open posture too,
 /// not just Manual). The card fires before the tool runs. Approving

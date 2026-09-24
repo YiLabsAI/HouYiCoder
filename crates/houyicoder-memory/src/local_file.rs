@@ -493,6 +493,10 @@ impl LogWindow<'_> {
 }
 
 impl ContextBackend for LocalFileBackend {
+    fn supports_log_windows(&self) -> bool {
+        true
+    }
+
     fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
         let id = self.append_sync(event);
         Box::pin(async move { id })

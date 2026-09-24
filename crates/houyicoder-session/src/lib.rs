@@ -46,6 +46,13 @@ use trajectory_summary::TrajectorySummaryState;
 #[derive(Default)]
 struct SessionMirror {
     events: Vec<SessionLogEntry>,
+    /// Durable events in the mirror. Tracked as events are taken rather than
+    /// counted on read, which would walk the vector on every call.
+    durable_events: usize,
+    last_durable_id: Option<EventId>,
+    /// The first durable event of the mirror, which is what makes the epoch
+    /// identity: a clear resets the mirror, so its next event begins a new one.
+    epoch_event_id: Option<EventId>,
     summary: TrajectorySummaryState,
 }
 
@@ -55,6 +62,9 @@ impl SessionMirror {
             revision: TrajectoryRevision {
                 event_count: self.events.len(),
                 last_event_id: self.events.last().map(|event| event.id),
+                durable_event_count: self.durable_events,
+                last_durable_event_id: self.last_durable_id,
+                epoch_event_id: self.epoch_event_id,
             },
             summary: self.summary.snapshot(),
         }
@@ -231,6 +241,11 @@ impl SessionStore {
         let mut mirrors = self.mirrors.lock().expect("session mirrors mutex poisoned");
         let mirror = mirrors.entry(session).or_default();
         mirror.summary.record(&finalized);
+        if mirror.durable_events == 0 {
+            mirror.epoch_event_id = Some(finalized.id);
+        }
+        mirror.durable_events += 1;
+        mirror.last_durable_id = Some(finalized.id);
         mirror.events.push(finalized);
         // Retain one wake permit when the host is polling the run future, so
         // the durable event cannot remain invisible until the run completes.
@@ -327,14 +342,34 @@ impl SessionStore {
     /// any append for the session: one landing mid-replay is dropped by the
     /// insert that follows.
     pub async fn restore_trajectory(&self, session: SessionId) -> Result<usize, ContextError> {
-        let events = self.backend.replay(session).await?;
+        let mut replayed = self.backend.replay(session).await?;
+        // A cleared session's trajectory is what came after the last clear. The
+        // durable log keeps everything, so the view starts at the boundary
+        // rather than at the first event: without this, resuming a cleared
+        // session would restore the turns and the spend it no longer counts.
+        let epoch_start = replayed
+            .iter()
+            .rposition(|entry| matches!(entry.event, SessionEvent::ContextCleared { .. }))
+            .unwrap_or(0);
+        // Dropped in place: an event carries tool payloads and message text, so
+        // slicing to a new vector would copy the whole suffix.
+        if epoch_start > 0 {
+            replayed.drain(..epoch_start);
+        }
+        let events = replayed;
         let count = events.len();
         if count == 0 {
             return Ok(0);
         }
+        let durable_events = events.len();
+        let last_durable_id = events.last().map(|event| event.id);
+        let epoch_event_id = events.first().map(|event| event.id);
         let mirror = SessionMirror {
             summary: Self::fold_summary(&events),
             events,
+            durable_events,
+            last_durable_id,
+            epoch_event_id,
         };
         self.mirrors
             .lock()

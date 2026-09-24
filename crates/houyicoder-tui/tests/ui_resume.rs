@@ -932,3 +932,68 @@ fn test_trajectory_no_wrap_nav() {
     );
     drop(s);
 }
+
+/// Walking to the top of the loaded window reads the older page behind it: the
+/// window widens rather than replacing the tail, and the header stops saying
+/// turns are not loaded. Driven through the real terminal, so the pane's own
+/// key routing and the worker read are what is under test.
+#[test]
+#[ignore]
+fn test_trajectory_older_loads_page() {
+    let sessions_dir = fresh_temp_dir("sessions-traj-older");
+    let sid = "16161616-1616-1616-1616-161616161616";
+    let prompts: Vec<String> = (0..150).map(|i| format!("older prompt {i}")).collect();
+    let refs: Vec<&str> = prompts.iter().map(String::as_str).collect();
+    common::seed_session_turns_on_disk(&sessions_dir, sid, "traj-model", &refs);
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), sid.to_string()],
+        sessions_dir.clone(),
+    );
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen after sid resume:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    run_slash_command(&mut s, "trajectory");
+    // The first page holds the newest hundred turns, so fifty are not loaded.
+    assert!(
+        s.wait_for_screen("150 turns (50 older not loaded)", RENDER_TIMEOUT),
+        "the first page reports the turns it has not read:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        s.screen().contents().contains("older prompt 149"),
+        "and it holds the newest turn:\n{}",
+        s.screen().contents()
+    );
+    // Walk to the top of the window, where Up reads the older page.
+    for _ in 0..110 {
+        s.send_key(&Key::Up);
+    }
+    let loaded = (0..80).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        !s.screen().contents().contains("older not loaded")
+    });
+    assert!(
+        loaded,
+        "the older page lands and the header stops hiding turns:\n{}",
+        s.screen().contents()
+    );
+    // The selection sits at the top of the widened window, so the oldest turns
+    // are the ones in view once the next frame is drawn.
+    let showing_oldest = (0..80).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        s.screen().contents().contains("older prompt 0")
+    });
+    assert!(
+        showing_oldest,
+        "and the older turns are the ones now in view:\n{}",
+        s.screen().contents()
+    );
+    drop(s);
+}

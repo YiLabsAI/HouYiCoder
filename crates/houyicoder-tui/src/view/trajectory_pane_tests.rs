@@ -120,9 +120,13 @@ struct StubLog {
     called: std::sync::Arc<std::sync::Mutex<bool>>,
 }
 impl TrajectoryLog for StubLog {
-    fn trajectory(&self) -> TrajectoryView {
+    fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
         *self.called.lock().unwrap() = true;
-        TrajectoryView {
+        std::sync::Arc::new(TrajectoryView {
+            state: TrajectoryViewState::Ready,
+            skipped_records: 0,
+            models_used: 2,
+            tool_calls: 0,
             session_id: "stub-session".into(),
             model: "stub-model".into(),
             total_turns: 0,
@@ -144,7 +148,7 @@ impl TrajectoryLog for StubLog {
             hidden_turns: 0,
             subagent_usage: None,
             rows: Vec::new(),
-        }
+        })
     }
 }
 
@@ -253,6 +257,10 @@ fn test_level2_renders_projection_kinds() {
         }
     }
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 1,
@@ -366,6 +374,10 @@ fn test_trajectory_bar_invariants_mock() {
 fn test_event_detail_redacts_secrets() {
     let secret = "sk-abcd1234efgh5678ijkl9012mnop3456qrst";
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 1,
@@ -483,6 +495,10 @@ fn test_up_down_move_cursor() {
 fn test_thinking_tokens_render_nonzero() {
     use super::*;
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 1,
@@ -527,6 +543,10 @@ fn test_thinking_tokens_render_nonzero() {
 fn test_thinking_tokens_hidden_zero() {
     use super::*;
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 1,
@@ -574,6 +594,10 @@ fn test_thinking_tokens_hidden_zero() {
 fn test_per_turn_model_two() {
     use super::*;
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "2 models".into(),
         total_turns: 2,
@@ -640,6 +664,10 @@ fn test_per_turn_model_two() {
 fn test_per_turn_model_one() {
     use super::*;
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "qwen3.7-max".into(),
         total_turns: 2,
@@ -707,6 +735,10 @@ fn test_per_turn_model_one() {
 fn test_turn_row_cached_ratio() {
     use super::*;
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 2,
@@ -921,6 +953,10 @@ fn test_level1_navigates_events() {
 #[test]
 fn test_timing_and_cache_render() {
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s1".into(),
         model: "m".into(),
         total_turns: 1,
@@ -1034,6 +1070,10 @@ fn test_detail_shows_model_facts() {
     });
     record.retries = 1;
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "qwen3.7-max".into(),
         total_turns: 1,
@@ -1102,6 +1142,10 @@ fn test_detail_shows_model_facts() {
 #[test]
 fn test_timeline_shows_record_names() {
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 1,
@@ -1192,6 +1236,10 @@ fn test_turn_list_boundary() {
         records: vec![],
     };
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 1,
@@ -1245,6 +1293,10 @@ fn test_turn_list_column_align() {
         records: vec![],
     };
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 2,
@@ -1295,6 +1347,10 @@ fn test_turn_detail_latency_split() {
         reasoning: None,
     });
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "qwen3.7-max".into(),
         total_turns: 1,
@@ -1374,6 +1430,10 @@ fn test_turn_list_degrades() {
     };
     // Two distinct models, so the per-turn model column is drawn at all.
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "2 models".into(),
         total_turns: 2,
@@ -1442,6 +1502,10 @@ fn test_turn_list_glyph_aligns() {
         records: vec![],
     };
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 2,
@@ -1502,6 +1566,10 @@ fn test_turn_list_other_boundaries() {
         records: vec![],
     };
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "2 models".into(),
         total_turns: 2,
@@ -1573,6 +1641,10 @@ fn test_compaction_without_counts() {
         records: vec![],
     };
     let view = TrajectoryView {
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 0,
         session_id: "s".into(),
         model: "m".into(),
         total_turns: 1,
@@ -1607,5 +1679,53 @@ fn test_compaction_without_counts() {
     assert!(
         !text.contains("→"),
         "and claims no fold it cannot show: {text}"
+    );
+}
+
+/// A page that has not landed is its own state: the list must say so rather
+/// than render an empty table, which would read as a session with no turns.
+#[test]
+fn test_list_renders_read_states() {
+    let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+    for (state, needle) in [
+        (TrajectoryViewState::Loading, "loading trajectory"),
+        (TrajectoryViewState::LoadingOlder, "loading older turns"),
+        (
+            TrajectoryViewState::Failed,
+            "could not read trajectory history",
+        ),
+    ] {
+        let mut view = sample_trajectory();
+        view.state = state;
+        view.rows.clear();
+        let (_header, body, _footer, _sel) = list::draw_turn_list(&view, 0, area);
+        let text: String = body.iter().map(|line| line.to_string()).collect();
+        assert!(
+            text.contains(needle),
+            "{state:?} renders its own line: {text:?}"
+        );
+        // Only the states with nothing to list replace the body; a read of
+        // older turns adds a line above the rows already loaded.
+        if state != TrajectoryViewState::LoadingOlder {
+            assert_eq!(body.len(), 1, "{state:?} shows only its line");
+        }
+    }
+}
+
+/// A read of older turns must not hide the rows already loaded: the window
+/// keeps what it has and the pane adds a line saying more is on its way.
+#[test]
+fn test_loading_older_keeps_rows() {
+    let mut view = sample_trajectory();
+    view.state = TrajectoryViewState::LoadingOlder;
+    let rows_before = view.rows.len();
+    let area = ratatui::layout::Rect::new(0, 0, 120, 40);
+    let (_header, body, _footer, _sel) = list::draw_turn_list(&view, 0, area);
+    let text: String = body.iter().map(|line| line.to_string()).collect();
+    assert!(text.contains("loading older turns"), "{text:?}");
+    assert!(
+        body.len() > rows_before,
+        "the loaded rows are still rendered: {} lines for {rows_before} rows",
+        body.len()
     );
 }

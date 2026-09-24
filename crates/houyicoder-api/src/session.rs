@@ -103,6 +103,24 @@ pub struct TrajectoryRevision {
     pub event_count: usize,
     /// The newest event's id, or None for an empty mirror.
     pub last_event_id: Option<EventId>,
+    /// Durable events in the mirror, streaming deltas excluded.
+    ///
+    /// A delta arrives many times per second while a model streams, so a
+    /// caller that re-reads the log whenever the revision moves has to key on
+    /// this instead: the durable history is what a disk read would return, and
+    /// a delta does not change it.
+    pub durable_event_count: usize,
+    /// The newest durable event's id, or None when none has been appended.
+    pub last_durable_event_id: Option<EventId>,
+    /// The durable event that began the current epoch: the first event of the
+    /// mirror, which after a clear is the clear itself.
+    ///
+    /// A reader holding a page needs this to tell two cases apart. An append
+    /// moves the count but leaves the epoch alone, so a page read before it is
+    /// still the same session and may be shown. A clear starts a new epoch, so
+    /// a page read before it describes turns the session no longer counts and
+    /// must never be shown.
+    pub epoch_event_id: Option<EventId>,
 }
 
 /// The session's token account.
@@ -115,6 +133,9 @@ pub struct TrajectoryUsageSummary {
     /// token figures are a lower bound rather than the session's cost.
     pub totals_known: bool,
     pub failures: usize,
+    /// Tool calls the session issued, counted from the calls themselves so a
+    /// header can report the session rather than the page it has loaded.
+    pub tool_calls: usize,
     /// What the session's delegated children spent.
     pub subagent: SubagentUsage,
     /// True when a child reached a terminal without reporting usage.

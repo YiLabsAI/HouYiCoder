@@ -5,19 +5,18 @@
 //! CLI layer so the TUI stays a presentation-only consumer.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
-use houyicoder_api::session::SessionLog;
-use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
+#[cfg(test)]
+use houyicoder_context::SessionId;
+use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
 #[path = "trajectory_turns.rs"]
 mod turns;
 
 use houyicoder_tui::view::trajectory_pane::{
     CompactedBoundary, EventTiming, EventUsage, ModelSwitchBoundary, RecordOutcome, SessionTiming,
-    SubagentUsage, TrajectoryLog, TrajectoryRecord, TrajectoryRecordKind, TrajectoryRow,
-    TrajectoryTurn, TrajectoryView, TurnBoundary,
+    SubagentUsage, TrajectoryRecord, TrajectoryRecordKind, TrajectoryRow, TrajectoryTurn,
+    TrajectoryView, TrajectoryViewState, TurnBoundary,
 };
 
 /// Which tool a call id invoked, and with what input, so a later ToolResult
@@ -127,7 +126,7 @@ fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -
 }
 
 fn build_summary(
-    turns: Vec<TrajectoryTurn>,
+    rows: Vec<TrajectoryRow>,
     acc: &AccTotals,
     model: &str,
     hidden_turns: usize,
@@ -143,14 +142,9 @@ fn build_summary(
     // left its own usage unmeasured. A turn with no usage is a hole in the sum,
     // and a child's tokens do not fill it: they are the child's own spend.
     let any_unknown = acc.usage_events == 0 || acc.usage_events < acc.turns || subagent_unknown;
-    let total_turns = turns.len() + hidden_turns;
+    let total_turns = rows.len() + hidden_turns;
     let duration_secs = acc.duration_ms / 1000;
-    let distinct_models: Vec<&str> = turns
-        .iter()
-        .flat_map(|t| t.models.iter().map(String::as_str))
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
+    let distinct_models: Vec<&str> = acc.models.iter().map(String::as_str).collect();
     let header_model = match distinct_models.len() {
         0 => model.to_string(),
         1 => distinct_models[0].to_string(),
@@ -183,11 +177,12 @@ fn build_summary(
         model_ms: acc.model_ms,
         tool_ms: acc.tool_ms,
     };
-    let rows = turns.into_iter().map(TrajectoryRow::Turn).collect();
+
     TrajectoryView {
         session_id: String::new(),
         model: header_model,
         total_turns,
+        models_used: acc.models.len(),
         tokens_in: if any_unknown {
             None
         } else {
@@ -204,10 +199,13 @@ fn build_summary(
             None
         },
         failures: acc.failures,
+        tool_calls: acc.tool_calls,
         duration_secs,
         timing: session_timing,
         hidden_turns,
         subagent_usage,
+        state: TrajectoryViewState::Ready,
+        skipped_records: 0,
         rows,
     }
 }
@@ -219,6 +217,10 @@ struct AccTotals {
     total_in: u64,
     total_out: u64,
     failures: usize,
+    tool_calls: usize,
+    /// Model ids the whole log used, so the header names the session's models
+    /// rather than the window's.
+    models: HashSet<String>,
     ttfts: Vec<u64>,
     decode_samples: usize,
     decode_tokens: u64,
@@ -268,18 +270,28 @@ fn process_event_timing(ev: &SessionEvent, acc: &mut AccTotals) {
 pub(crate) fn project(events: &[SessionLogEntry], model: &str, max_turns: usize) -> TrajectoryView {
     let (window, first_turn) = tail_window(events, max_turns);
     let hidden_turns = first_turn.saturating_sub(1);
+    let rows = project_rows(window, first_turn);
+    // Session-level totals: read once from the whole log, never from the page.
+    let mut acc = AccTotals::default();
+    accumulate_session(events, &mut acc);
+    build_summary(rows, &acc, model, hidden_turns)
+}
+
+/// Fold a slice of events into rows, numbering the first turn as first_turn.
+///
+/// A windowed read starts mid-session, so the number its oldest turn carries
+/// comes from the caller rather than from the slice: numbering from the slice
+/// would restart every page at the session's first turn.
+pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec<TrajectoryRow> {
     let mut turn_rows: Vec<TrajectoryTurn> = Vec::new();
     let mut builder = turns::TurnBuilder::new();
-    // Numbering continues from where the hidden turns left off, so the oldest
-    // visible turn keeps the number it has in the whole session.
-    let mut n: usize = hidden_turns;
-    let mut acc = AccTotals::default();
-    let calls = index_calls(window);
-    let spawned = spawned_call_ids(window);
+    let mut n: usize = first_turn.saturating_sub(1);
+    let calls = index_calls(events);
+    let spawned = spawned_call_ids(events);
     let mut pending: Vec<TurnBoundary> = Vec::new();
     let mut last_model: Option<String> = None;
 
-    for ev in window {
+    for ev in events {
         if turns::apply_turn_boundary(
             &mut builder,
             ev,
@@ -301,9 +313,10 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str, max_turns: usize)
         }
         builder.flush(&mut turn_rows, n);
     }
-    // Session-level totals: read once from the whole log, never from the page.
-    accumulate_session(events, &mut acc);
-    build_summary(turn_rows, &acc, model, hidden_turns)
+    turn_rows
+        .into_iter()
+        .map(TrajectoryRow::Turn)
+        .collect::<Vec<_>>()
 }
 
 /// Fold the whole log's token, failure, duration, and timing totals. This is
@@ -318,6 +331,7 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
                 input_tokens,
                 output_tokens,
                 cache_read_input_tokens,
+                model,
                 ..
             } => {
                 acc.total_in += *input_tokens;
@@ -325,8 +339,12 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
                 acc.cache_read += *cache_read_input_tokens;
                 acc.decode_tokens += *output_tokens;
                 acc.usage_events += 1;
+                if !model.is_empty() {
+                    acc.models.insert(model.clone());
+                }
             }
             SessionEvent::UserInput { .. } => acc.turns += 1,
+            SessionEvent::ToolCall { .. } => acc.tool_calls += 1,
             SessionEvent::ToolResult {
                 output,
                 call_id,
@@ -399,81 +417,6 @@ fn fmt_bytes(bytes: u32) -> String {
         format!("{bytes}B")
     }
 }
-/// How many turns the pane loads by default, and how many it adds each time
-/// the user asks for older history.
-const TRAJECTORY_PAGE_TURNS: usize = 100;
-
-/// The projection the pane last asked for, keyed by the durable revision it was
-/// built from. The pane draws every frame, so re-projecting an unchanged log on
-/// each draw would burn the whole log read and fold per frame for a screen that
-/// is not changing.
-struct CachedView {
-    /// The last durable event id in the log the view was built from. Ids are
-    /// monotonic, so an unchanged id means nothing was appended since.
-    revision: Option<houyicoder_context::EventId>,
-    /// How many turns the caller asked for when this view was built.
-    max_turns: usize,
-    view: TrajectoryView,
-}
-
-/// Session log trajectory reader: reads a session's durable log and returns the
-/// current TrajectoryView on request, reusing the last projection while the log
-/// has not changed.
-pub struct SessionLogTrajectory {
-    pub(crate) session_log: Arc<dyn SessionLog>,
-    pub(crate) session_id: SessionId,
-    pub(crate) model: String,
-    cache: Mutex<Option<CachedView>>,
-    /// Turns to load: one page at first, grown when the user walks past the
-    /// oldest loaded turn.
-    loaded_turns: AtomicUsize,
-}
-
-impl SessionLogTrajectory {
-    pub fn new(session_log: Arc<dyn SessionLog>, session_id: SessionId, model: String) -> Self {
-        Self {
-            session_log,
-            session_id,
-            model,
-            cache: Mutex::new(None),
-            loaded_turns: AtomicUsize::new(TRAJECTORY_PAGE_TURNS),
-        }
-    }
-
-    fn max_turns(&self) -> usize {
-        self.loaded_turns.load(Ordering::Relaxed)
-    }
-}
-
-impl TrajectoryLog for SessionLogTrajectory {
-    fn trajectory(&self) -> TrajectoryView {
-        let revision = self.session_log.last_trajectory_id(self.session_id);
-        let max_turns = self.max_turns();
-        if let Ok(cache) = self.cache.lock()
-            && let Some(cached) = cache.as_ref()
-            && cached.revision == revision
-            && cached.max_turns == max_turns
-        {
-            return cached.view.clone();
-        }
-        let events = self.session_log.trajectory_snapshot(self.session_id);
-        let view = project(&events, &self.model, max_turns);
-        if let Ok(mut cache) = self.cache.lock() {
-            *cache = Some(CachedView {
-                revision,
-                max_turns,
-                view: view.clone(),
-            });
-        }
-        view
-    }
-
-    fn load_older(&self) {
-        self.loaded_turns
-            .fetch_add(TRAJECTORY_PAGE_TURNS, Ordering::Relaxed);
-    }
-}
-
 #[cfg(test)]
 #[path = "trajectory_view_tests.rs"]
 mod tests;

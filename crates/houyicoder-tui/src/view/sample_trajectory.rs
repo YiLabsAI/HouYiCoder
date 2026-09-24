@@ -370,6 +370,10 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
         ],
     };
     TrajectoryView {
+        state: super::TrajectoryViewState::Ready,
+        skipped_records: 0,
+        models_used: 2,
+        tool_calls: 4,
         session_id: "a1b2c3".into(),
         model: "qwen3.7-max".into(),
         total_turns: 3,

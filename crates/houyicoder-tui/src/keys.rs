@@ -91,6 +91,22 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         app.abort_viewed_child_turn();
         return;
     }
+    // A pane owns its keys wherever it is drawn, and Focus draws it full
+    // screen. Without this the pane is rendered but dead: its characters,
+    // Enter, and Home/End never arrive, and Esc would fold the viewport
+    // instead of closing the pane.
+    if app.viewport == ViewportMode::Focus && app.pane == Pane::Trajectory {
+        if trajectory::handle(app, k) {
+            return;
+        }
+        if app.pane != Pane::Trajectory {
+            // The key closed the pane (an ordinary character), which also
+            // unfolded the viewport: it goes on to the editor, which is on
+            // screen by now.
+            input::handle_input(app, k);
+            return;
+        }
+    }
     if app.viewport == ViewportMode::Focus {
         handle_focus(app, k);
         return;

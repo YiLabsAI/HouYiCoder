@@ -139,6 +139,17 @@ pub trait ContextBackend: Send + Sync {
         Box::pin(async move { Err(ContextError::Unsupported) })
     }
 
+    /// Whether this backend can serve byte-anchored windows of the log.
+    ///
+    /// A caller that pages history has to know whether windows are available
+    /// before it reads one, and the answer is a property of the backend rather
+    /// than of the session: a file backend serves windows for a session whose
+    /// log is still empty, and an in-memory backend never does. Deciding this
+    /// from log_size would confuse the two and cost a stat per call.
+    fn supports_log_windows(&self) -> bool {
+        false
+    }
+
     /// The raw on-disk log size in bytes for a session, for the cheap
     /// threshold check the search snapshot does before deciding to load the
     /// whole log vs degrade. A backend with no on-disk log (in-memory) returns

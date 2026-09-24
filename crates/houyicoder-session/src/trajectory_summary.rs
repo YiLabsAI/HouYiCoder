@@ -150,6 +150,7 @@ pub(crate) struct TrajectorySummaryState {
     output_tokens: u64,
     cache_read_tokens: u64,
     failures: usize,
+    tool_calls: usize,
     subagent: SubagentUsage,
 
     first_ts: Option<u64>,
@@ -174,7 +175,21 @@ impl TrajectorySummaryState {
     /// are not durable, so counting them would make a live session's figures
     /// differ from the same session read back.
     pub(crate) fn record(&mut self, entry: &SessionLogEntry) {
-        if !self.seen_any_event {
+        // A boundary event is not turn content, so it does not decide whether
+        // the log opens mid-run: the first content event does. A view that
+        // starts at a context clear would otherwise be numbered one turn high.
+        if !self.seen_any_event
+            && !matches!(
+                entry.event,
+                SessionEvent::ContextCleared { .. }
+                    | SessionEvent::CompactionBoundary { .. }
+                    // A delta is not durable and not turn content: a mirror that
+                    // saw one before any durable event must not take it for a
+                    // turn that reported no usage, or the session total would
+                    // read as incomplete for the rest of its life.
+                    | SessionEvent::AssistantTextDelta { .. }
+            )
+        {
             self.seen_any_event = true;
             self.leading_partial_turn = !matches!(entry.event, SessionEvent::UserInput { .. });
             if self.leading_partial_turn {
@@ -220,7 +235,10 @@ impl TrajectorySummaryState {
                 call_id,
                 tool,
                 input,
-            } => self.fold_tool_call(call_id, tool, input),
+            } => {
+                self.tool_calls = self.tool_calls.saturating_add(1);
+                self.fold_tool_call(call_id, tool, input);
+            }
             SessionEvent::ToolResult {
                 call_id,
                 output,
@@ -370,6 +388,7 @@ impl TrajectorySummaryState {
                 cache_read_tokens: self.cache_read_tokens,
                 totals_known: self.totals_known() && !subagent_unmeasured,
                 failures: self.failures,
+                tool_calls: self.tool_calls,
                 subagent: self.subagent,
                 subagent_unmeasured,
             },
