@@ -82,7 +82,7 @@ impl TrajectoryRecordKind {
 
 /// Token facts for one model call. Every field is optional: a provider that
 /// omits usage leaves the value unknown, never zero.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct EventUsage {
     pub input: Option<u64>,
     pub output: Option<u64>,
@@ -94,7 +94,7 @@ pub struct EventUsage {
 /// Latency facts for one model call, as measured by the agent loop. A call
 /// that produced no first token (aborted or failed) leaves the split unknown
 /// while still carrying its total wall time.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct EventTiming {
     pub total_ms: u64,
     pub ttft_ms: Option<u64>,

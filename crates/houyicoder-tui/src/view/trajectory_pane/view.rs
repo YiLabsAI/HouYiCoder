@@ -7,7 +7,7 @@ use crate::state::TrajectoryTurnKey;
 
 use super::{EventTiming, EventUsage, RecordOutcome, TrajectoryRecordKind, TurnBoundary};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct TrajectoryRecord {
     pub kind: TrajectoryRecordKind,
     /// The record's own name: tool name, agent type, or model id. None when the

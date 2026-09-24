@@ -1409,31 +1409,8 @@ fn test_detail_matches_projection() {
     let events = store.trajectory_snapshot(sid);
     let expected = records_of(&events, turn.n);
     assert!(!expected.is_empty(), "the turn has records to compare");
-    let shown: Vec<(String, String, u64, u64)> = detail
-        .records
-        .iter()
-        .map(|r| {
-            (
-                r.kind.label().to_string(),
-                r.summary.clone(),
-                r.start_ms,
-                r.duration_ms,
-            )
-        })
-        .collect();
-    let want: Vec<(String, String, u64, u64)> = expected
-        .iter()
-        .map(|r| {
-            (
-                r.kind.label().to_string(),
-                r.summary.clone(),
-                r.start_ms,
-                r.duration_ms,
-            )
-        })
-        .collect();
     assert_eq!(
-        shown, want,
+        detail.records, expected,
         "the detail is the turn's records, field for field"
     );
 }
