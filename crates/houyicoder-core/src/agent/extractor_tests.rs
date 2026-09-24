@@ -421,65 +421,12 @@ async fn test_extract_skips_main_saved() {
         Some(msgs.last().expect("last").id),
         "cursor still advances on skip"
     );
-    // The Skipped path is the one the user directly triggered (the main agent
-    // saved), so it still fires a notice — one Extracted, count = the saves
-    // the main agent emitted.
-    assert_eq!(
-        recording.summaries(),
-        vec![(1, MemoryChangeOrigin::PrimaryAgent)],
-        "the successful primary save emits its exact change"
-    );
-}
-
-/// The mutual-exclusion branch must run before the zero-window guard: a
-/// save_memory suffix is not model-visible, so the window can be zero
-/// while primary changes exist — the notice and the advance must survive.
-#[tokio::test]
-async fn test_primary_beats_zero_window() {
-    let provider = Arc::new(FakeProvider {
-        calls: StdMutex::new(0),
-    });
-    let (ext, _memory) = extractor(Arc::clone(&provider) as Arc<dyn ModelProvider>);
-    let (sink, recording) = RecordingChanges::new();
-    ext.set_memory_changed_handler(sink.memory_changed_handler());
-    let mut msgs = conversation();
-    // Cursor at the last model-visible message; the save pair that follows
-    // is invisible to the count but visible to the mutex scan.
-    *ext.cursor.lock().expect("cursor") = Some(msgs.last().expect("last").id);
-    append_event(
-        &mut msgs,
-        SessionEvent::ToolCall {
-            call_id: "main-save".into(),
-            tool: "save_memory".into(),
-            input: serde_json::json!({
-                "key": "k", "description": "d",
-                "source": "feedback", "content": "c"
-            }),
-        },
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::ToolResult {
-            call_id: "main-save".into(),
-            output: serde_json::json!({"saved": "k"}),
-            duration_ms: 0,
-        },
-    );
-    let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
+    // The extractor no longer reconstructs primary saves from the durable
+    // log: the main runner records them at call time and drains at the run
+    // boundary. So this pass emits no notice from the extractor side.
     assert!(
-        matches!(outcome, ExtractOutcome::Skipped(ExtractSkip::PrimaryWrote)),
-        "a range the main agent saved in skips the fork as a primary write"
-    );
-    assert_eq!(*provider.calls.lock().expect("calls"), 0, "no fork ran");
-    assert_eq!(
-        *ext.cursor.lock().expect("cursor"),
-        Some(msgs.last().expect("last").id),
-        "the primary branch still advances the cursor"
-    );
-    assert_eq!(
-        recording.summaries(),
-        vec![(1, MemoryChangeOrigin::PrimaryAgent)],
-        "the primary save still emits its notice"
+        recording.summaries().is_empty(),
+        "the extractor does not emit primary notices; the runtime drain does"
     );
 }
 
@@ -498,128 +445,6 @@ async fn test_extract_keeps_cursor_error() {
     assert!(
         ext.cursor.lock().expect("cursor").is_none(),
         "cursor must not advance on error"
-    );
-}
-
-#[test]
-fn test_primary_writes_pairs_calls() {
-    let mut msgs = conversation();
-    append_event(
-        &mut msgs,
-        SessionEvent::ToolCall {
-            call_id: "c".into(),
-            tool: "save_memory".into(),
-            input: serde_json::json!({}),
-        },
-    );
-    assert!(
-        primary_writes(&msgs).is_empty(),
-        "a call without a result is no write"
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::tool_result("c", serde_json::json!({"saved": "exact-key"})),
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::tool_result("c", serde_json::json!({"saved": "duplicate"})),
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::ToolCall {
-            call_id: "failed".into(),
-            tool: "save_memory".into(),
-            input: serde_json::json!({}),
-        },
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::tool_result("failed", serde_json::json!({"error": "write failed"})),
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::tool_result("failed", serde_json::json!({"saved": "late"})),
-    );
-    let changes = primary_writes(&msgs);
-    assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].key, "exact-key");
-    assert_eq!(changes[0].operation, MemoryOperation::Created);
-}
-
-/// primary_writes reads the outcome field on the save_memory tool result:
-/// created maps to Created, updated to Updated, unchanged is dropped. A
-/// legacy result without the outcome field defaults to Created.
-#[test]
-fn test_primary_writes_reads_outcome() {
-    let mut msgs = conversation();
-    append_event(
-        &mut msgs,
-        SessionEvent::ToolCall {
-            call_id: "created".into(),
-            tool: "save_memory".into(),
-            input: serde_json::json!({}),
-        },
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::tool_result(
-            "created",
-            serde_json::json!({"saved": "k1", "outcome": "created"}),
-        ),
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::ToolCall {
-            call_id: "updated".into(),
-            tool: "save_memory".into(),
-            input: serde_json::json!({}),
-        },
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::tool_result(
-            "updated",
-            serde_json::json!({"saved": "k2", "outcome": "updated"}),
-        ),
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::ToolCall {
-            call_id: "unchanged".into(),
-            tool: "save_memory".into(),
-            input: serde_json::json!({}),
-        },
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::tool_result(
-            "unchanged",
-            serde_json::json!({"saved": "k3", "outcome": "unchanged"}),
-        ),
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::ToolCall {
-            call_id: "legacy".into(),
-            tool: "save_memory".into(),
-            input: serde_json::json!({}),
-        },
-    );
-    append_event(
-        &mut msgs,
-        SessionEvent::tool_result("legacy", serde_json::json!({"saved": "k4"})),
-    );
-    let changes = primary_writes(&msgs);
-    assert_eq!(changes.len(), 3, "unchanged is dropped, the rest notify");
-    assert_eq!(changes[0].key, "k1");
-    assert_eq!(changes[0].operation, MemoryOperation::Created);
-    assert_eq!(changes[1].key, "k2");
-    assert_eq!(changes[1].operation, MemoryOperation::Updated);
-    assert_eq!(changes[2].key, "k4");
-    assert_eq!(
-        changes[2].operation,
-        MemoryOperation::Created,
-        "legacy result without outcome defaults to Created"
     );
 }
 

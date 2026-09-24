@@ -7,13 +7,12 @@
 //! skips the pass and re-seeds to the snapshot tail, never widening to the
 //! full history.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use houyicoder_api::agent_event::{
-    EventHandler, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent, MemoryOperation,
+    EventHandler, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent,
 };
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
@@ -158,13 +157,15 @@ impl MemoryExtractor {
             advance_cursor(&self.cursor, messages);
             return Ok(ExtractOutcome::Skipped(ExtractSkip::CursorLost));
         };
-        // The mutual-exclusion scan reads the unconsumed tail rather than
-        // the window: a save the main agent landed after the last
-        // model-visible message still belongs to the range this pass covers.
-        let primary_changes = primary_writes(tail);
-        if !primary_changes.is_empty() {
+        // Skip the fork when the main agent already saved in this range:
+        // re-extracting would duplicate work the user just triggered. The
+        // dedup at write time still catches a duplicate, but the fork is
+        // wasted, so a lightweight scan (does the tail hold any
+        // save_memory call?) gates it. Primary-save notification no longer
+        // lives here: the main runner records at call time and drains at the
+        // run boundary.
+        if primary_saved_in(tail) {
             advance_cursor(&self.cursor, messages);
-            self.emit_changes(MemoryChangeOrigin::PrimaryAgent, primary_changes);
             return Ok(ExtractOutcome::Skipped(ExtractSkip::PrimaryWrote));
         }
         let Some(window) = ExactExtractionWindow::from_unconsumed(tail) else {
@@ -308,54 +309,16 @@ fn advance_cursor(cursor: &Mutex<Option<EventId>>, messages: &[SessionLogEntry])
     }
 }
 
-/// The saves the main agent landed in an unconsumed range. Reconstructed
-/// from the durable tool records because the main agent's own save tool
-/// carries no recorder, so the extractor pairs each save_memory call with its
-/// result to report the change.
-fn primary_writes(tail: &[SessionLogEntry]) -> Vec<MemoryChange> {
-    let mut pending_calls = HashSet::new();
-    let mut changes = Vec::new();
-    for message in tail {
-        match &message.event {
-            SessionEvent::ToolCall { call_id, tool, .. } if tool == "save_memory" => {
-                pending_calls.insert(call_id.as_str());
-            }
-            SessionEvent::ToolResult {
-                call_id, output, ..
-            } if pending_calls.remove(call_id.as_str()) => {
-                let Some(key) = output.get("saved").and_then(serde_json::Value::as_str) else {
-                    continue;
-                };
-                let operation = match output.get("outcome").and_then(serde_json::Value::as_str) {
-                    Some("created") => Some(MemoryOperation::Created),
-                    Some("updated") => Some(MemoryOperation::Updated),
-                    Some("unchanged") => None,
-                    // Legacy records predate the outcome field. The old
-                    // shape carried an unchanged flag for no-op saves; a
-                    // missing flag means a changed write.
-                    _ => {
-                        let unchanged = output
-                            .get("unchanged")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false);
-                        if unchanged {
-                            None
-                        } else {
-                            Some(MemoryOperation::Created)
-                        }
-                    }
-                };
-                if let Some(operation) = operation {
-                    changes.push(MemoryChange {
-                        key: key.to_string(),
-                        operation,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-    changes
+/// Whether the tail holds any save_memory tool call from the main agent.
+/// A lightweight gate for the mutual-exclusion skip; it does not reconstruct
+/// the change (the main runner records primary saves at call time).
+fn primary_saved_in(tail: &[SessionLogEntry]) -> bool {
+    tail.iter().any(|m| {
+        matches!(
+            &m.event,
+            SessionEvent::ToolCall { tool, .. } if tool == "save_memory"
+        )
+    })
 }
 
 #[cfg(test)]

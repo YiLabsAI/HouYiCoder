@@ -1,9 +1,13 @@
 use super::*;
 use crate::agent::auto_dream::DreamRunner;
 use crate::agent::memory::{MemoryGates, MemoryRuntime};
+use houyicoder_api::agent_event::{
+    AgentEventHandlers, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent, MemoryOperation,
+};
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::{MemoryEntry, MemoryError, SessionId};
 use std::collections::HashSet;
+use std::sync::Mutex as StdMutex;
 
 /// MemoryProvider stub with an empty memory_root so execute_dream
 /// returns early — enough to cover the reward projection + the
@@ -115,6 +119,81 @@ async fn test_join_dreams_no_inflight() {
 async fn test_fire_background_drives_dream() {
     let runner = runner_with_empty_dream();
     runner.fire_background_memory(SessionId::new()).await;
+}
+
+/// fire_background_memory is the run-boundary call site that drains the
+/// primary recorder before firing the background extractor. With no
+/// extractor or dream wired the drain still runs: a recorded save lands
+/// as one PrimaryAgent event. Guards the drain call site in
+/// fire_background_memory (a mutation dropping the drain call turns this red).
+#[tokio::test]
+async fn test_fire_background_drains_primary() {
+    let mut runner = runner_with_empty_dream();
+    let recorder = runner.memory.install_primary_recorder();
+    let captured = Arc::new(StdMutex::new(Vec::<MemoryChangedEvent>::new()));
+    let sink = Arc::clone(&captured);
+    let mut handlers = AgentEventHandlers::default();
+    handlers.set_memory_changed(Arc::new(move |event| {
+        sink.lock().expect("captured").push(event);
+    }));
+    runner.memory.set_event_handlers(&handlers);
+    recorder.record("alpha", MemoryOperation::Created);
+    runner.fire_background_memory(SessionId::new()).await;
+    let events = captured.lock().expect("captured").clone();
+    assert_eq!(
+        events.len(),
+        1,
+        "fire_background_memory drained the recorder"
+    );
+    assert_eq!(events[0].origin, MemoryChangeOrigin::PrimaryAgent);
+    assert_eq!(events[0].changes.len(), 1);
+}
+
+/// The main runner records primary saves at call time and drains at the run
+/// boundary. drain_primary_changes emits one PrimaryAgent event carrying
+/// every recorded change; an empty recorder emits nothing.
+#[test]
+fn test_primary_recorder_drains_changes() {
+    let store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
+        houyicoder_memory::InMemoryBackend::new(),
+    )));
+    let mut runtime = MemoryRuntime::new(store);
+    let recorder = runtime.install_primary_recorder();
+    let captured = Arc::new(StdMutex::new(Vec::<MemoryChangedEvent>::new()));
+    let sink = Arc::clone(&captured);
+    let mut handlers = AgentEventHandlers::default();
+    handlers.set_memory_changed(Arc::new(move |event| {
+        sink.lock().expect("captured").push(event);
+    }));
+    runtime.set_event_handlers(&handlers);
+    recorder.record("alpha", MemoryOperation::Created);
+    recorder.record("beta", MemoryOperation::Updated);
+    runtime.drain_primary_changes();
+    let events = captured.lock().expect("captured").clone();
+    assert_eq!(events.len(), 1, "one event carries both changes");
+    assert_eq!(events[0].origin, MemoryChangeOrigin::PrimaryAgent);
+    assert_eq!(events[0].changes.len(), 2);
+    assert_eq!(
+        events[0].changes[0],
+        MemoryChange {
+            key: "alpha".into(),
+            operation: MemoryOperation::Created
+        }
+    );
+    assert_eq!(
+        events[0].changes[1],
+        MemoryChange {
+            key: "beta".into(),
+            operation: MemoryOperation::Updated
+        }
+    );
+    // A second drain with no new records emits nothing.
+    runtime.drain_primary_changes();
+    assert_eq!(
+        captured.lock().expect("captured").len(),
+        1,
+        "an empty drain emits no event"
+    );
 }
 
 #[tokio::test]

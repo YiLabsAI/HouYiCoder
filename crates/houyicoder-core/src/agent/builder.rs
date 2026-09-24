@@ -80,12 +80,14 @@ impl Runner {
     /// save_memory tool sharing the runtime's provider so main-agent saves
     /// and forked-extract saves land under the same lock. Consumes and
     /// returns self for chaining at the composition root.
-    pub fn install_memory(mut self, runtime: MemoryRuntime) -> Self {
+    pub fn install_memory(mut self, mut runtime: MemoryRuntime) -> Self {
         runtime.set_event_handlers(&self.events);
-        if let Some(provider) = runtime.provider() {
+        if let Some(provider) = runtime.provider().cloned() {
+            let recorder = runtime.install_primary_recorder();
             self.tools.register(Arc::new(
-                MemoryAddTool::new(provider.clone())
-                    .with_origin(houyicoder_context::MemoryOrigin::MainAgent),
+                MemoryAddTool::new(provider)
+                    .with_origin(houyicoder_context::MemoryOrigin::MainAgent)
+                    .with_recorder(recorder),
             ));
         }
         self.memory = runtime;

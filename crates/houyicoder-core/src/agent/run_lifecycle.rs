@@ -340,10 +340,13 @@ impl Runner {
         );
     }
 
-    /// Fire background memory at the run boundary. The extractor always runs;
-    /// reward capture is withheld when the operator sets
-    /// HOUYICODER_REWARD_OFF, which suppresses the dream reward signal only.
+    /// Fire background memory at the run boundary. Drain the primary
+    /// recorder so a main-agent save emits its notice now, then run the
+    /// extractor and dream. Reward capture is withheld when the operator
+    /// sets HOUYICODER_REWARD_OFF, which suppresses the dream reward signal
+    /// only.
     pub(crate) async fn fire_background_memory(&self, session: SessionId) {
+        self.memory.drain_primary_changes();
         let reward_off = std::env::var("HOUYICODER_REWARD_OFF").is_ok();
         let reward = if reward_off {
             None

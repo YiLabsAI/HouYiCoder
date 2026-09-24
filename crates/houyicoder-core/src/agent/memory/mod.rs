@@ -8,7 +8,9 @@ mod recall;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use houyicoder_api::agent_event::AgentEventHandlers;
+use houyicoder_api::agent_event::{
+    AgentEventHandlers, EventHandler, MemoryChangeOrigin, MemoryChangedEvent,
+};
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
@@ -53,6 +55,8 @@ pub struct MemoryRuntime {
     gates: MemoryGates,
     background: BackgroundMemory,
     index_snapshot: Mutex<MemoryIndexSnapshot>,
+    primary_recorder: Option<Arc<MutationLog>>,
+    memory_changed: Mutex<Option<Arc<dyn EventHandler<MemoryChangedEvent>>>>,
 }
 
 impl MemoryRuntime {
@@ -64,6 +68,8 @@ impl MemoryRuntime {
             gates: MemoryGates::new(true, true),
             background: BackgroundMemory::none(),
             index_snapshot: Mutex::new(MemoryIndexSnapshot::Uninitialized),
+            primary_recorder: None,
+            memory_changed: Mutex::new(None),
         }
     }
 
@@ -81,6 +87,8 @@ impl MemoryRuntime {
             gates,
             background: BackgroundMemory { extractor, dream },
             index_snapshot: Mutex::new(MemoryIndexSnapshot::Uninitialized),
+            primary_recorder: None,
+            memory_changed: Mutex::new(None),
         }
     }
 
@@ -283,6 +291,41 @@ impl MemoryRuntime {
         }
         if let Some(dream) = self.background.dream.as_ref() {
             dream.set_memory_changed_handler(events.memory_changed_handler());
+        }
+        if let Some(handler) = events.memory_changed_handler() {
+            *self.memory_changed.lock().expect("memory_changed") = Some(handler);
+        }
+    }
+
+    /// Create and install the primary recorder the main-agent save tool
+    /// records into. The returned Arc is threaded into MemoryAddTool so a
+    /// main-agent save is captured at call time, then drained at the run
+    /// boundary by drain_primary_changes. Replaces the post-hoc durable-log
+    /// scan for primary saves.
+    pub(crate) fn install_primary_recorder(&mut self) -> Arc<MutationLog> {
+        let recorder = Arc::new(MutationLog::new());
+        self.primary_recorder = Some(Arc::clone(&recorder));
+        recorder
+    }
+
+    /// Drain the primary recorder and emit a PrimaryAgent change event for
+    /// every save the main agent landed since the last drain. The drain is
+    /// best-effort: no handler or no recorder means no emission.
+    pub(crate) fn drain_primary_changes(&self) {
+        let Some(recorder) = self.primary_recorder.as_ref() else {
+            return;
+        };
+        let changes = recorder.take();
+        if changes.is_empty() {
+            return;
+        }
+        let handler = self.memory_changed.lock().expect("memory_changed").clone();
+        if let Some(handler) = handler {
+            handler.handle(MemoryChangedEvent {
+                id: houyicoder_context::MemoryChangeId::new(),
+                origin: MemoryChangeOrigin::PrimaryAgent,
+                changes,
+            });
         }
     }
 
